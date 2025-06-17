@@ -51,8 +51,102 @@ async def handle_add_text_command(message: types.Message):
             except OSError as e:
                 logging.error(f"Не удалось удалить временный файл modified_image.jpg: {e}")
 
-# ... (остальные функции остаются без изменений) ...
+# =============================================================================
+# ФУНКЦИИ ДЛЯ КОМАНДЫ "ОПИШИ"
+# =============================================================================
+async def process_image_description(bot, message: types.Message) -> tuple[bool, str]:
+    """
+    Основная функция для обработки команды "опиши"
+    """
+    try:
+        # Отправляем действие в чат
+        await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+        
+        # Получаем изображение из сообщения
+        photo = await get_photo_from_message(message)
+        if not photo:
+            return False, "Изображение для описания не найдено."
+        
+        # Загружаем изображение
+        image_data = await download_image(bot, photo.file_id)
+        if not image_data:
+            return False, "Не удалось загрузить изображение."
+        
+        # Генерируем описание
+        success, description = await generate_image_description(image_data)
+        
+        if success:
+            return True, description
+        else:
+            return False, description
+            
+    except Exception as e:
+        logging.error(f"Ошибка в process_image_description: {e}", exc_info=True)
+        return False, "Произошла ошибка при обработке изображения."
 
+async def download_image(bot, file_id: str) -> bytes | None:
+    """
+    Загружает изображение по file_id
+    """
+    try:
+        file = await bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
+        logging.info(f"Загружаем изображение с URL: {file_url}")
+        
+        response = requests.get(file_url)
+        if response.status_code == 200:
+            return response.content
+        else:
+            logging.error(f"Ошибка загрузки изображения: статус {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logging.error(f"Ошибка в download_image: {e}", exc_info=True)
+        return None
+
+async def generate_image_description(image_data: bytes) -> tuple[bool, str]:
+    """
+    Генерирует описание изображения с помощью AI модели
+    """
+    try:
+        response = model.generate_content([
+            PROMPT_DESCRIBE,
+            {"mime_type": "image/jpeg", "data": image_data}
+        ])
+        
+        description = response.text
+        logging.info(f"Сгенерированное описание: {description}")
+        return True, description
+        
+    except Exception as e:
+        logging.error(f"Ошибка генерации описания: {e}", exc_info=True)
+        return False, f"Ошибка генерации описания: {str(e)}"
+
+async def extract_image_info(message: types.Message) -> str | None:
+    """
+    Извлекает информацию об изображении из сообщения
+    """
+    try:
+        if message.photo:
+            photo = message.photo[-1]  # Берем самое большое разрешение
+            return photo.file_id
+        elif message.reply_to_message:
+            if message.reply_to_message.photo:
+                photo = message.reply_to_message.photo[-1]
+                return photo.file_id
+            elif message.reply_to_message.document:
+                doc = message.reply_to_message.document
+                if doc.mime_type and doc.mime_type.startswith('image/'):
+                    return doc.file_id
+        return None
+        
+    except Exception as e:
+        logging.error(f"Ошибка в extract_image_info: {e}", exc_info=True)
+        return None
+
+# =============================================================================
+# ОБЩИЕ ФУНКЦИИ (используются и для "добавь" и для "опиши")
+# =============================================================================
 async def get_photo_from_message(message: types.Message):
     if message.photo:
         return message.photo[-1]
@@ -73,7 +167,7 @@ async def download_telegram_image(bot, photo):
 
 async def process_image(image_bytes: bytes) -> str:
     """
-    Обрабатывает изображение и генерирует текст.
+    Обрабатывает изображение и генерирует текст для команды "добавь".
     """
     try:
         response = model.generate_content([
@@ -119,17 +213,3 @@ def overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     output_path = "modified_image.jpg"
     image.save(output_path)
     return output_path
-
-# Функции, относящиеся к "опиши", если они есть в этом файле
-async def extract_image_info(message: types.Message) -> str | None:
-    # ...
-    pass
-async def download_image(bot, file_id: str) -> bytes | None:
-    # ...
-    pass
-async def generate_image_description(image_data: bytes) -> tuple[bool, str]:
-    # ...
-    pass
-async def process_image_description(bot, message: types.Message) -> tuple[bool, str]:
-    # ...
-    pass
