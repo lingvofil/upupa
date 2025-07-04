@@ -32,17 +32,22 @@ class FusionBrainAPI:
         }
 
     def get_pipeline(self):
-        response = requests.get(self.URL + 'key/api/v1/pipelines', headers=self.AUTH_HEADERS)
-        response.raise_for_status()
-        data = response.json()
-        if not data:
-            raise RuntimeError("Empty pipelines response")
-        return data[0]['id']
+        """Получает ID модели (pipeline) для генерации."""
+        try:
+            response = requests.get(self.URL + 'key/api/v1/pipelines', headers=self.AUTH_HEADERS)
+            response.raise_for_status()
+            data = response.json()
+            if data and 'id' in data[0]:
+                return data[0]['id']
+            else:
+                logging.error("API не вернул ожидаемую структуру для pipeline.")
+                return None
+        except requests.RequestException as e:
+            logging.error(f"Ошибка при получении pipeline: {e}")
+            return None
 
-    def generate(self, prompt, pipeline_id, images=1, width=1024, height=1024):
-        if len(prompt) > 900:
-            raise ValueError("Prompt too long for FusionBrain API (limit ~1000 chars with JSON overhead)")
-
+    def generate(self, prompt, pipeline, images=1, width=1024, height=1024):
+        """Отправляет запрос на генерацию изображения."""
         params = {
             "type": "GENERATE",
             "numImages": images,
@@ -52,70 +57,67 @@ class FusionBrainAPI:
                 "query": f'{prompt}'
             }
         }
-
         data = {
-            'pipeline_id': (None, pipeline_id),
+            'pipeline_id': (None, pipeline),
             'params': (None, json.dumps(params), 'application/json')
         }
-
-        response = requests.post(
-            self.URL + 'key/api/v1/pipeline/run',
-            headers=self.AUTH_HEADERS,
-            files=data
-        )
-
-        if response.status_code == 413:
-            raise RuntimeError("FusionBrain API error: Request Entity Too Large. Try a shorter prompt.")
-
         try:
-            response.raise_for_status()
-        except requests.HTTPError as e:
-            raise RuntimeError(f"HTTP error from FusionBrain: {response.status_code} {response.text}") from e
+            response = requests.post(self.URL + 'key/api/v1/pipeline/run', headers=self.AUTH_HEADERS, files=data)
+            response.raise_for_status() # Проверка на HTTP ошибки (4xx, 5xx)
+            data = response.json()
+            
+            # Ключевая проверка: есть ли 'uuid' в ответе?
+            if 'uuid' in data:
+                return data['uuid'], None  # Возвращаем uuid и отсутствие ошибки
+            
+            # Если uuid нет, значит, API вернуло ошибку или статус
+            error_message = data.get('errorDescription') or data.get('message') or data.get('pipeline_status') or json.dumps(data)
+            logging.error(f"Kandinsky API не вернул UUID. Ответ: {error_message}")
+            return None, error_message # Возвращаем отсутствие uuid и сообщение об ошибке
 
-        data = response.json()
-        print("FusionBrain generate() response:", data)
+        except requests.RequestException as e:
+            logging.error(f"HTTP ошибка при запуске генерации: {e}")
+            return None, str(e)
+        except json.JSONDecodeError:
+            logging.error(f"Ошибка декодирования JSON ответа: {response.text}")
+            return None, "API вернул некорректный JSON."
 
-        if 'uuid' in data:
-            return data['uuid']
-
-        if 'pipeline_status' in data:
-            raise RuntimeError(f"Pipeline unavailable: {data['pipeline_status']}")
-
-        if 'error' in data:
-            raise RuntimeError(f"API error: {data['error']}")
-
-        raise RuntimeError(f"Unexpected response from FusionBrain: {data}")
 
     def check_generation(self, request_id, attempts=10, delay=10):
+        """Проверяет статус генерации изображения."""
         while attempts > 0:
-            response = requests.get(self.URL + 'key/api/v1/pipeline/status/' + request_id, headers=self.AUTH_HEADERS)
-
-            if response.status_code == 413:
-                raise RuntimeError("FusionBrain API error: Status request too large or invalid UUID.")
-
             try:
+                response = requests.get(self.URL + 'key/api/v1/pipeline/status/' + request_id, headers=self.AUTH_HEADERS)
                 response.raise_for_status()
-            except requests.HTTPError as e:
-                raise RuntimeError(f"HTTP error in check_generation: {response.status_code} {response.text}") from e
+                data = response.json()
 
-            data = response.json()
-            print("FusionBrain check_generation() response:", data)
+                if data.get('status') == 'DONE':
+                    # Проверка на цензуру
+                    if data.get('result', {}).get('censored', False):
+                        logging.warning(f"Генерация {request_id} была зацензурена.")
+                        return None, "Изображение было зацензурено."
+                    return data.get('result', {}).get('files'), None # Возвращаем файлы и отсутствие ошибки
 
-            if data.get('status') == 'DONE':
-                if 'result' in data and 'files' in data['result']:
-                    return data['result']['files']
-                else:
-                    raise RuntimeError(f"DONE status but no files in result: {data}")
+                if data.get('status') == 'FAIL':
+                    error_desc = data.get('errorDescription', 'Неизвестная ошибка выполнения.')
+                    logging.error(f"Генерация {request_id} провалена с ошибкой: {error_desc}")
+                    return None, error_desc # Возвращаем отсутствие файлов и ошибку
 
-            if data.get('status') == 'FAIL':
-                error_description = data.get('errorDescription', 'Unknown error')
-                raise RuntimeError(f"Generation failed: {error_description}")
+                attempts -= 1
+                time.sleep(delay)
 
-            attempts -= 1
-            time.sleep(delay)
+            except requests.RequestException as e:
+                logging.error(f"HTTP ошибка при проверке статуса: {e}")
+                return None, str(e)
+            except json.JSONDecodeError:
+                 logging.error(f"Ошибка декодирования JSON при проверке статуса: {response.text}")
+                 # Продолжаем попытки, возможно, это временная ошибка
+                 attempts -= 1
+                 time.sleep(delay)
 
-        raise TimeoutError("Generation timed out after all attempts")
+        return None, "Превышено время ожидания ответа от API." # Возвращаем отсутствие файлов и ошибку таймаута
 
+# --- Инициализация API ---
 api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
 pipeline_id = api.get_pipeline()
 
@@ -124,86 +126,82 @@ async def process_image_generation(prompt):
     Основная логика генерации изображения через API.
     Возвращает (Успех, Сообщение об ошибке, Данные изображения)
     """
+    if not pipeline_id:
+        return False, "Не удалось получить ID модели от API. Проверьте ключи или доступность сервиса.", None
+
     try:
         loop = asyncio.get_event_loop()
-        uuid = await loop.run_in_executor(None, api.generate, prompt, pipeline_id)
-        files = await loop.run_in_executor(None, api.check_generation, uuid)
         
+        # 1. Запускаем генерацию
+        uuid, error = await loop.run_in_executor(None, api.generate, prompt, pipeline_id)
+        
+        if error:
+            return False, f"Не удалось запустить генерацию: {error}", None
+        
+        # 2. Проверяем статус
+        files, check_error = await loop.run_in_executor(None, api.check_generation, uuid)
+        
+        if check_error:
+            return False, f"Ошибка при генерации: {check_error}", None
+
         if not files:
-            return False, "Не получилось сгенерировать изображение (таймаут API)", None
+            return False, "Не получилось сгенерировать изображение (API не вернул файлы)", None
             
-        image_data_or_url = files[0]
+        image_data_base64 = files[0]
         
-        # Проверяем, является ли результат base64 строкой
-        if image_data_or_url.startswith('data:image') or image_data_or_url.startswith('/9j/'):
-            # Это base64 данные
-            try:
-                # Если есть префикс data:image, убираем его
-                if image_data_or_url.startswith('data:image'):
-                    base64_data = image_data_or_url.split(',')[1]
-                else:
-                    base64_data = image_data_or_url
-                
-                # Декодируем base64
-                image_data = base64.b64decode(base64_data)
-                return True, None, image_data
-                
-            except Exception as e:
-                return False, f"Ошибка декодирования base64: {str(e)}", None
-        
-        else:
-            # Это URL, пытаемся загрузить
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(image_data_or_url) as resp:
-                        if resp.status == 200:
-                            return True, None, await resp.read()
-                        else:
-                            return False, f"Не смог забрать картинку с URL: {resp.status}", None
-            except Exception as e:
-                return False, f"Ошибка загрузки по URL: {str(e)}", None
+        # 3. Декодируем изображение из base64
+        try:
+            # Убираем префикс, если он есть
+            if ',' in image_data_base64:
+                base64_data = image_data_base64.split(',')[1]
+            else:
+                base64_data = image_data_base64
+            
+            image_data = base64.b64decode(base64_data)
+            return True, None, image_data
+            
+        except Exception as e:
+            logging.error(f"Ошибка декодирования base64: {e}")
+            return False, f"Ошибка декодирования полученного изображения: {str(e)}", None
                 
     except Exception as e:
         import traceback
         error_traceback = traceback.format_exc()
-        logging.error(f"Ошибка в process_image_generation: {error_traceback}")
-        return False, f"Ошибка генерации: {repr(e)[:300]}", None
+        logging.error(f"Критическая ошибка в process_image_generation: {error_traceback}")
+        return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 async def save_and_send_generated_image(message: types.Message, image_data: bytes):
     """Сохраняет данные изображения во временный файл и отправляет его."""
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-            tmp_file.write(image_data)
-            tmp_path = tmp_file.name
-        
-        await message.reply_photo(FSInputFile(tmp_path))
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        # Используем BufferedInputFile для отправки из памяти без сохранения на диск
+        buffered_image = types.BufferedInputFile(image_data, filename="generated_image.png")
+        await message.reply_photo(buffered_image)
+    except Exception as e:
+        logging.error(f"Ошибка при отправке фото: {e}")
+        await message.reply("Не смог отправить картинку, что-то пошло не так.")
+
 
 # =============================================================================
-# Вспомогательные функции для работы с изображениями
+# Вспомогательные функции (остаются без изменений)
 # =============================================================================
 
 def _get_text_size(font, text):
-    """(Внутренняя) Вычисляет размер текста для заданного шрифта."""
     try:
         bbox = font.getbbox(text)
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
         return width, height
-    except AttributeError: # Для старых версий Pillow
+    except AttributeError:
         return font.getsize(text)
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
-    """(Внутренняя) Накладывает текст на изображение."""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
 
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if not os.path.exists(font_path):
-        font_path = "arial.ttf" # Fallback for local/Windows
+        font_path = "arial.ttf"
     font_size = 48
     font = ImageFont.truetype(font_path, font_size)
 
@@ -235,14 +233,10 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     return output_path
 
 # =============================================================================
-# ГЛАВНЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ
+# ГЛАВНЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ (логика остается прежней, но теперь получает более точные ошибки)
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
-    """
-    Полностью обрабатывает команду "скаламбурь": генерирует каламбур,
-    парсит его, создает изображение, накладывает текст и отправляет.
-    """
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Генерирую хуйню...")
 
@@ -254,7 +248,6 @@ async def handle_pun_image_command(message: types.Message):
     
     modified_image_path = None
     try:
-        # --- Генерация и парсинг каламбура ---
         def sync_call():
             return model.generate_content(pun_prompt).text.strip()
 
@@ -263,16 +256,15 @@ async def handle_pun_image_command(message: types.Message):
 
         parts = pun_word.split('=')
         if len(parts) != 2:
-            logging.warning(f"Неверный формат каламбура: {pun_word}. Пробуем повтор.")
-            pun_word = await asyncio.to_thread(sync_call)
-            logging.info(f"Сгенерированный каламбур (повторно): {pun_word}")
-            parts = pun_word.split('=')
-
-        original_words = parts[0].strip() if len(parts) == 2 else pun_word
-        final_word = parts[1].strip() if len(parts) == 2 else pun_word
+            logging.warning(f"Неверный формат каламбура: {pun_word}.")
+            original_words = pun_word
+            final_word = pun_word
+        else:
+            original_words = parts[0].strip()
+            final_word = parts[1].strip()
+        
         logging.info(f"Попытка сочетания слов: {original_words} => {final_word}")
 
-        # --- Генерация изображения ---
         success, error_message, image_data = await process_image_generation(original_words)
 
         if not success or not image_data:
@@ -280,7 +272,6 @@ async def handle_pun_image_command(message: types.Message):
             await processing_msg.edit_text(error_text)
             return
 
-        # --- Наложение текста и отправка ---
         modified_image_path = _overlay_text_on_image(image_data, final_word)
         await message.reply_photo(FSInputFile(modified_image_path))
         
@@ -290,24 +281,16 @@ async def handle_pun_image_command(message: types.Message):
         logging.error(f"Ошибка в handle_pun_image_command: {str(e)}", exc_info=True)
         await processing_msg.edit_text(f"Произошла непредвиденная ошибка: {str(e)[:200]}")
     finally:
-        # --- Очистка временных файлов ---
         if modified_image_path and os.path.exists(modified_image_path):
             os.remove(modified_image_path)
 
 
 async def handle_image_generation_command(message: types.Message):
-    """
-    Полностью обрабатывает команду "нарисуй": извлекает промпт,
-    общается с пользователем, генерирует изображение и отправляет результат.
-    """
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
 
     prompt = None
     if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
-        if message.reply_to_message.text:
-            prompt = message.reply_to_message.text.strip()
-        elif message.reply_to_message.caption:
-            prompt = message.reply_to_message.caption.strip()
+        prompt = message.reply_to_message.text or message.reply_to_message.caption
     elif message.text.lower().startswith("нарисуй "):
         prompt = message.text[len("нарисуй "):].strip()
 
@@ -321,60 +304,33 @@ async def handle_image_generation_command(message: types.Message):
     if success and image_data:
         await processing_message.delete()
         await save_and_send_generated_image(message, image_data)
-    elif error_message:
+    else:
         logging.error(f"[Kandinsky Error] {error_message}")
-        short_message = "Бля, не получилось нарисовать. " + (error_message[:3500] + '...' if len(error_message) > 3500 else error_message)
+        short_message = "Бля, не получилось нарисовать. " + (error_message or "Неизвестная ошибка.")
         await processing_message.edit_text(short_message)
         
 async def handle_redraw_command(message: types.Message):
-    """
-    Обрабатывает команду "перерисуй" для фото с подписью и реплая на изображение
-    """
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Анализирую тваю мазню...")
     
     try:
-        # Определяем источник изображения
         photo = None
-        
-        # Случай 1: Фото/документ с подписью "перерисуй"
         if message.photo:
             photo = message.photo[-1]
-            logging.info("Обрабатываем фото с подписью 'перерисуй'")
         elif message.document:
             photo = message.document
-            logging.info("Обрабатываем документ с подписью 'перерисуй'")
-        # Случай 2: Реплай на сообщение с изображением
-        elif message.reply_to_message:
-            if message.reply_to_message.photo:
-                photo = message.reply_to_message.photo[-1]
-                logging.info("Обрабатываем реплай на фото")
-            elif message.reply_to_message.document:
-                photo = message.reply_to_message.document
-                logging.info("Обрабатываем реплай на документ")
+        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
         
         if not photo:
             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
             return
         
-        # Загружаем изображение
-        from adddescribe import download_telegram_image
         image_bytes = await download_telegram_image(bot, photo)
         
-        # Создаем детальный промпт для описания изображения
         detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
-Укажи:
-- Основные объекты и их расположение
-- Цвета и освещение
-- Стиль и атмосферу
-- Фон и детали
-- Людей (если есть) - их позы, одежду, выражения лиц
-- Архитектуру или пейзаж
-- Любые особенности и мелкие детали
-
-Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
+Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
         
-        # Анализируем изображение с помощью Gemini
         def sync_describe():
             return model.generate_content([
                 detailed_prompt,
@@ -384,17 +340,15 @@ async def handle_redraw_command(message: types.Message):
         description = await asyncio.to_thread(sync_describe)
         logging.info(f"Детальное описание для перерисовки: {description}")
         
-        # Обновляем статус
         await processing_msg.edit_text("Готовим рамачку...")
         
-        # Генерируем новое изображение по описанию
         success, error_message, new_image_data = await process_image_generation(description)
         
         if success and new_image_data:
             await processing_msg.delete()
             await save_and_send_generated_image(message, new_image_data)
         else:
-            error_text = f"Ошибка блядь: {error_message}"
+            error_text = f"Ошибка блядь: {error_message or 'Неизвестная ошибка.'}"
             await processing_msg.edit_text(error_text)
             logging.error(f"[Redraw Error] {error_text}")
     
