@@ -108,6 +108,9 @@ from nameinfo import process_name_info
 
 # ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО ==================
 from summarize import summarize_chat_history
+
+# ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
+from egra import start_egra, handle_egra_answer
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(CommandStart())
@@ -247,9 +250,22 @@ async def start_quiz(message: Message, bot: Bot):
     if not success:
         await message.reply(error_message)
 
+# ================== НОВОЕ: Хэндлер для команды "егра" ==================
+@router.message(F.text.lower() == "егра")
+async def egra_command_handler(message: types.Message):
+    await start_egra(message, bot)
+
+# ================== ИЗМЕНЕНО: Универсальный обработчик опросов ==================
 @router.poll_answer()
-async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
-    await process_poll_answer(poll_answer, bot)
+async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
+    # Сначала пытаемся обработать как ответ в "егре"
+    # Функция вернет True, если ответ был успешно обработан
+    is_egra_handled = await handle_egra_answer(poll_answer, bot)
+    
+    # Если это был не ответ в "егре", пытаемся обработать как ответ в викторине
+    if not is_egra_handled:
+        await process_poll_answer(poll_answer, bot)
+
 
 @router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
 async def send_random_media(message: types.Message):
