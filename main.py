@@ -111,6 +111,9 @@ from summarize import summarize_chat_history
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
 from egra import start_egra, handle_egra_answer, handle_final_button_press
+
+# ================== БЛОК 3.18: НАСТРОЙКА ПРОФЕССИЙ ==================
+from profession import get_random_okved_and_commentary 
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(CommandStart())
@@ -281,6 +284,11 @@ async def send_random_media(message: types.Message):
     message.from_user and  # Убедимся, что у сообщения есть отправитель
     message.from_user.id not in BLOCKED_USERS
 )
+
+@router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР
+async def choose_profession_command(message: types.Message):
+    await get_random_okved_and_commentary(message)
+    
 async def handle_name_info(message: types.Message):
     random_action = random.choice(actions)
     success, response = await process_name_info(message)
