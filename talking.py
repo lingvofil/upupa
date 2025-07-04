@@ -289,7 +289,7 @@ async def _create_user_style_prompt(messages: list, display_name: str) -> str:
 def update_chat_settings(chat_id: str) -> None:
     if chat_id not in chat_settings:
         chat_settings[chat_id] = {
-            "dialog_enabled": True, "prompt": PROMPTS_DICT["летописец"],
+            "dialog_enabled": True, "prompt": PROMPTS_DICT["врач"],
             "prompt_name": "летописец", "prompt_source": "daily"
         }
 
