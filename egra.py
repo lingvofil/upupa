@@ -66,7 +66,7 @@ async def send_final_button(chat_id: int, bot: Bot):
 
     msg = await bot.send_message(
         chat_id,
-        "Осталась последняя кнопка! Кто ее нажмет?",
+        "А ЕТУ КНОПАЧЬКУ))0)",
         reply_markup=builder.as_markup()
     )
     game["final_button_message_id"] = msg.message_id
