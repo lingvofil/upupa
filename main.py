@@ -266,6 +266,10 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     if not is_egra_handled:
         await process_poll_answer(poll_answer, bot)
 
+# ================== НОВОЕ: Хэндлер для нажатия инлайн-кнопки в игре ==================
+@router.callback_query(F.data == "egra_final_choice")
+async def egra_callback_handler(callback_query: types.CallbackQuery):
+    await handle_final_button_press(callback_query, bot)
 
 @router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
 async def send_random_media(message: types.Message):
