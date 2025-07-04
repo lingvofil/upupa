@@ -17,7 +17,7 @@ async def get_random_okved_and_commentary(message):
     """
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Ищу, кем бы тебе стать, оборванец...")
+    processing_msg = await message.reply("Ищу, кем бы тебе стать, обоссанец...")
 
     try:
         # 1. Скачиваем файл ОКВЭД
