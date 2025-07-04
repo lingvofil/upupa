@@ -40,6 +40,9 @@ class FusionBrainAPI:
         return data[0]['id']
 
     def generate(self, prompt, pipeline_id, images=1, width=1024, height=1024):
+        if len(prompt) > 900:
+            raise ValueError("Prompt too long for FusionBrain API (limit ~1000 chars with JSON overhead)")
+
         params = {
             "type": "GENERATE",
             "numImages": images,
@@ -49,6 +52,7 @@ class FusionBrainAPI:
                 "query": f'{prompt}'
             }
         }
+
         data = {
             'pipeline_id': (None, pipeline_id),
             'params': (None, json.dumps(params), 'application/json')
@@ -59,6 +63,9 @@ class FusionBrainAPI:
             headers=self.AUTH_HEADERS,
             files=data
         )
+
+        if response.status_code == 413:
+            raise RuntimeError("FusionBrain API error: Request Entity Too Large. Try a shorter prompt.")
 
         try:
             response.raise_for_status()
@@ -82,6 +89,10 @@ class FusionBrainAPI:
     def check_generation(self, request_id, attempts=10, delay=10):
         while attempts > 0:
             response = requests.get(self.URL + 'key/api/v1/pipeline/status/' + request_id, headers=self.AUTH_HEADERS)
+
+            if response.status_code == 413:
+                raise RuntimeError("FusionBrain API error: Status request too large or invalid UUID.")
+
             try:
                 response.raise_for_status()
             except requests.HTTPError as e:
