@@ -110,7 +110,7 @@ from nameinfo import process_name_info
 from summarize import summarize_chat_history
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
-from egra import start_egra, handle_egra_answer
+from egra import start_egra, handle_egra_answer, handle_final_button_press
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(CommandStart())
