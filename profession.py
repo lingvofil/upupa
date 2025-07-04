@@ -4,7 +4,8 @@ import io
 import codecs
 import re
 import random
-from Config import model, actions # Импортируем модель Gemini и список действий из Config.py
+from Config import model # Импортируем модель Gemini из Config.py
+from Prompts import actions # <--- ИЗМЕНЕНО: Импортируем actions из Prompts.py
 
 # URL для загрузки файла ОКВЭД
 OKVED_URL = "https://classifikators.ru/assets/downloads/okved/okved.csv"
