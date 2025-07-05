@@ -116,16 +116,11 @@ from egra import start_egra, handle_egra_answer, handle_final_button_press
 from profession import get_random_okved_and_commentary 
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
-from statistics import log_message, init_db, get_total_messages_per_chat, get_activity_by_hour
+from statistics import init_db, get_total_messages_per_chat, get_activity_by_hour
+from middlewares import StatisticsMiddleware
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-@dp.message(F.chat.type.in_(['private', 'group', 'supergroup']))
-async def message_statistics_handler(message: Message):
-    is_private = message.chat.type == 'private'
-    content_type = message.content_type
-    asyncio.create_task(log_message(message.chat.id, message.from_user.id, content_type, is_private))
-
-@dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
+@@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
 async def get_stats_command(message: Message):
     chat_stats = await get_total_messages_per_chat()
     hour_stats = await get_activity_by_hour()
@@ -140,8 +135,11 @@ async def get_stats_command(message: Message):
         response_text += f" • `ID {chat_id}`: {count} сообщений\n"
 
     response_text += "\n**Активность по часам (UTC):**\n"
-    for hour in sorted(hour_stats.keys()):
-        response_text += f" • `{hour}:00 - {hour+1}:00`: {hour_stats[hour]} сообщ.\n"
+    if hour_stats:
+        for hour in sorted(hour_stats.keys()):
+            response_text += f" • `{hour:02d}:00 - {hour:02d}:59`: {hour_stats[hour]} сообщ.\n"
+    else:
+        response_text += "Данных по часам пока нет.\n"
 
     await message.answer(response_text, parse_mode='Markdown')
 
@@ -540,11 +538,17 @@ async def process_message(message: types.Message):
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
+    # ✅ Инициализируем базу данных перед запуском
+    init_db()
+
     # Сначала создаём задачи для викторин
     chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
     for chat_id in chat_ids:
         chat_id_int = int(chat_id)
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
+
+    # ✅ Регистрируем middleware для всех сообщений
+    dp.message.middleware(StatisticsMiddleware())
 
     # Настраиваем и запускаем бота
     dp.include_router(router)
