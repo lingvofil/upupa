@@ -114,8 +114,37 @@ from egra import start_egra, handle_egra_answer, handle_final_button_press
 
 # ================== БЛОК 3.18: НАСТРОЙКА ПРОФЕССИЙ ==================
 from profession import get_random_okved_and_commentary 
+
+# ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
+from statistics import log_message, init_db, get_total_messages_per_chat, get_activity_by_hour
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
+@dp.message(F.chat.type.in_(['private', 'group', 'supergroup']))
+async def message_statistics_handler(message: Message):
+    is_private = message.chat.type == 'private'
+    content_type = message.content_type
+    asyncio.create_task(log_message(message.chat.id, message.from_user.id, content_type, is_private))
+
+@dp.message(Command("stats"), F.from_user.id == ADMIN_ID)
+async def get_stats_command(message: Message):
+    chat_stats = await get_total_messages_per_chat()
+    hour_stats = await get_activity_by_hour()
+
+    response_text = "📊 **Статистика по боту**\n\n"
+    response_text += "**Топ-5 самых активных чатов:**\n"
+    
+    # Сортируем и берем топ-5
+    sorted_chats = sorted(chat_stats.items(), key=lambda item: item[1], reverse=True)[:5]
+
+    for chat_id, count in sorted_chats:
+        response_text += f" • `ID {chat_id}`: {count} сообщений\n"
+
+    response_text += "\n**Активность по часам (UTC):**\n"
+    for hour in sorted(hour_stats.keys()):
+        response_text += f" • `{hour}:00 - {hour+1}:00`: {hour_stats[hour]} сообщ.\n"
+
+    await message.answer(response_text, parse_mode='Markdown')
+
 @router.message(CommandStart())
 async def process_start_command(message: types.Message):
     await message.reply("Я пидорас")
