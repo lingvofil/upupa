@@ -120,7 +120,7 @@ from statistics import init_db, get_total_messages_per_chat, get_activity_by_hou
 from middlewares import StatisticsMiddleware
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-@@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
+@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
 async def get_stats_command(message: Message):
     chat_stats = await get_total_messages_per_chat()
     hour_stats = await get_activity_by_hour()
