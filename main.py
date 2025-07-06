@@ -124,6 +124,7 @@ from birthday_calendar import (
     handle_birthday_command,
     handle_birthday_list_command,
     handle_test_greeting_command,
+    handle_admin_birthday_list_command,
     birthday_scheduler
 )
 
@@ -503,25 +504,25 @@ async def handle_weather_command(message: types.Message):
 async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
     
-@router.message(lambda message: message.text and 
-                (message.text.lower().startswith("упупа запомни: мой др") or 
-                 message.text.lower().startswith("упупа запомни мой др")) and 
-                message.from_user.id not in BLOCKED_USERS)
-async def handle_birthday_save_command(message: types.Message):
+# Запоминание дня рождения
+@router.message(lambda message: message.text and "упупа запомни:" in message.text.lower() and "мой др" in message.text.lower() and message.from_user.id not in BLOCKED_USERS)
+async def birthday_command(message: types.Message):
     await handle_birthday_command(message)
 
-@router.message(lambda message: message.text and 
-                message.text.lower() == "упупа дни рождения" and 
-                message.from_user.id == ADMIN_ID)
-async def handle_birthday_list_admin_command(message: types.Message):
+# Просмотр дней рождения в чате
+@router.message(lambda message: message.text and message.text.lower() == "упупа дни рождения" and message.from_user.id not in BLOCKED_USERS)
+async def birthday_list_command(message: types.Message):
     await handle_birthday_list_command(message)
 
-@router.message(lambda message: message.text and 
-                (message.text.lower().startswith("упупа поздравь ") or 
-                 message.text.lower().startswith("поздравь ")) and 
-                message.from_user.id == ADMIN_ID)
-async def handle_test_greeting_admin_command(message: types.Message):
+# Тестовое поздравление (только для админа)
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа поздравь ") and message.from_user.id not in BLOCKED_USERS)
+async def test_greeting_command(message: types.Message):
     await handle_test_greeting_command(message)
+
+# Все дни рождения (только для админа)
+@router.message(lambda message: message.text and message.text.lower() == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
+async def admin_birthday_list_command(message: types.Message):
+    await handle_admin_birthday_list_command(message)
 
 @router.message(F.text.lower() == "чобыло")
 async def handle_chobylo(message: types.Message):
