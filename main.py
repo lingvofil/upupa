@@ -126,6 +126,9 @@ from birthday_calendar import (
     handle_test_greeting_command,
     birthday_scheduler
 )
+
+# ================== БЛОК РАССЫЛКИ ==================
+from broadcast import handle_broadcast_command, is_broadcast_command
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(Command("stats"), F.from_user.id == ADMIN_ID)
@@ -164,6 +167,10 @@ async def process_clear_command(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower() == "чоумееш" and message.from_user.id not in BLOCKED_USERS)
 async def handle_chooumeesh(message: types.Message):
     await message.reply(HELP_TEXT)
+    
+@router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)
+async def handle_broadcast(message: types.Message):
+    await handle_broadcast_command(message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
 async def leave_chat(message: types.Message):
