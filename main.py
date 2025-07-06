@@ -118,6 +118,14 @@ from profession import get_random_okved_and_commentary
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
 from statistics import init_db, get_total_messages_per_chat, get_activity_by_hour
 from middlewares import StatisticsMiddleware
+
+# ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
+from birthday_calendar import (
+    handle_birthday_command,
+    handle_birthday_list_command,
+    handle_test_greeting_command,
+    birthday_scheduler
+)
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(Command("stats"), F.from_user.id == ADMIN_ID)
@@ -487,6 +495,24 @@ async def handle_weather_command(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
 async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
+    
+@router.message(lambda message: message.text and 
+                message.text.lower().startswith("упупа запомни: мой др") and 
+                message.from_user.id not in BLOCKED_USERS)
+async def handle_birthday_save_command(message: types.Message):
+    await handle_birthday_command(message)
+
+@router.message(lambda message: message.text and 
+                message.text.lower() == "упупа дни рождения" and 
+                message.from_user.id == ADMIN_ID)
+async def handle_birthday_list_admin_command(message: types.Message):
+    await handle_birthday_list_command(message)
+
+@router.message(lambda message: message.text and 
+                message.text.lower().startswith("упупа поздравь ") and 
+                message.from_user.id == ADMIN_ID)
+async def handle_test_greeting_admin_command(message: types.Message):
+    await handle_test_greeting_command(message)
 
 @router.message(F.text.lower() == "чобыло")
 async def handle_chobylo(message: types.Message):
@@ -540,16 +566,17 @@ async def process_message(message: types.Message):
 async def main():
     # ✅ Инициализируем базу данных перед запуском
     init_db()
-
     # Сначала создаём задачи для викторин
     chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
     for chat_id in chat_ids:
         chat_id_int = int(chat_id)
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
-
+    
+    # Запуск планировщика дней рождения
+    asyncio.create_task(birthday_scheduler(bot))
+    
     # ✅ Регистрируем middleware для всех сообщений
     dp.message.middleware(StatisticsMiddleware())
-
     # Настраиваем и запускаем бота
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
