@@ -130,7 +130,7 @@ async def handle_birthday_command(message: Message):
         # Парсинг даты
         birthday_date = parse_birthday_date(message.text)
         if not birthday_date:
-            await message.reply("Не понял дату, пиши нормально: 'упупа запомни: мой др 12 июля'")
+            await message.reply("Да пошел ты нахуй, пиши нормально: 'упупа запомни: мой др 1 апреля'")
             return
         
         day, month = birthday_date
