@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from config import ADMIN_ID, LOG_FILE
+from Config import ADMIN_ID, LOG_FILE
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
