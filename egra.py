@@ -9,19 +9,21 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 game_states = {}
 
 async def start_egra(message: types.Message, bot: Bot):
-    """Начинает новую игру в чате."""
+    """Начинает или перезапускает игру в чате."""
     chat_id = message.chat.id
     
+    # Если игра уже идет, сообщаем о перезапуске.
+    # Это решает проблему "зависшей" игры, если сообщение с опросом было удалено.
     if chat_id in game_states and game_states[chat_id].get("is_active", False):
-        await message.reply("Мы уже и так играем, ебана!")
-        return
-        
+        await message.reply("Ай, похуй, перезапускаем егру!")
+    
+    # Инициализация нового состояния игры (или перезапись старого)
     game_states[chat_id] = {
         "is_active": True,
         "options": ["1", "2", "3"],
         "poll_message_id": None,
         "poll_id": None,
-        "final_button_message_id": None, # Для ID сообщения с последней кнопкой
+        "final_button_message_id": None,
     }
     
     await message.answer("Внеманее! Наченаем играть в прекольную егру!")
@@ -58,7 +60,6 @@ async def send_final_button(chat_id: int, bot: Bot):
 
     last_option = game["options"][0]
     builder = InlineKeyboardBuilder()
-    # callback_data поможет нам опознать нажатие именно этой кнопки
     builder.add(types.InlineKeyboardButton(
         text=last_option,
         callback_data=f"egra_final_choice"
@@ -82,29 +83,39 @@ async def handle_egra_answer(poll_answer: types.PollAnswer, bot: Bot):
             chat_id = cid
             break
             
-    if not game:
+    # Если игра не найдена или уже неактивна (например, была перезапущена)
+    if not game or not game.get("is_active", False):
         return False
 
     user = poll_answer.user
     chosen_option_index = poll_answer.option_ids[0]
+
+    # Защита от неверного индекса (может случиться при быстрой перезагрузке игры)
+    if chosen_option_index >= len(game["options"]):
+        logging.warning(f"Получен неверный индекс опции {chosen_option_index} в игре для чата {chat_id}.")
+        return False
+
     chosen_option_text = game["options"][chosen_option_index]
 
     try:
-        await bot.delete_message(chat_id, game["poll_message_id"])
+        # Проверяем, что ID сообщения существует перед удалением
+        if game.get("poll_message_id"):
+            await bot.delete_message(chat_id, game["poll_message_id"])
     except TelegramBadRequest as e:
-        logging.warning(f"Не удалось удалить сообщение с опросом {game['poll_message_id']} в чате {chat_id}: {e}")
+        logging.warning(f"Не удалось удалить сообщение с опросом {game.get('poll_message_id')} в чате {chat_id}: {e}")
 
     game["options"].pop(chosen_option_index)
 
     await bot.send_message(chat_id, f"{user.full_name} ножало \"{chosen_option_text}\".., прадолжаем..))00")
 
-    # ИСПРАВЛЕННАЯ ЛОГИКА
     if len(game["options"]) > 1:
-        # Если осталось больше одной кнопки, создаем новый опрос
         await send_game_poll(chat_id, bot)
     elif len(game["options"]) == 1:
-        # Если осталась одна кнопка, переключаемся на инлайн-кнопку
         await send_final_button(chat_id, bot)
+    else: # На случай, если что-то пошло не так
+        await bot.send_message(chat_id, "Ой, чота сломалось, все кнопки кончились. Начните заново.")
+        if chat_id in game_states:
+            del game_states[chat_id]
         
     return True
 
@@ -114,8 +125,14 @@ async def handle_final_button_press(callback_query: types.CallbackQuery, bot: Bo
     chat_id = callback_query.message.chat.id
     game = game_states.get(chat_id)
 
-    if not game or not game["is_active"]:
-        await callback_query.answer("Игра уже закончилась, поздняк метаться.")
+    # Проверяем, что кнопка относится к текущей активной игре
+    if not game or not game.get("is_active") or callback_query.message.message_id != game.get("final_button_message_id"):
+        await callback_query.answer("Игра уже закончилась или перезапущена, поздняк метаться.")
+        # Пытаемся удалить старое сообщение с кнопкой, чтобы не смущать пользователей
+        try:
+            await callback_query.message.delete()
+        except TelegramBadRequest:
+            pass # Ничего страшного, если не получилось
         return
 
     user = callback_query.from_user
