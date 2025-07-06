@@ -253,7 +253,7 @@ def get_birthday_list(chat_id: int) -> str:
         
         result += f"{name}"
         if username:
-            result += f" (@{username})"
+            result += f" ({username})"
         result += f" - {day} {month_names[month]}\n"
     
     return result
