@@ -12,12 +12,9 @@ async def start_egra(message: types.Message, bot: Bot):
     """Начинает или перезапускает игру в чате."""
     chat_id = message.chat.id
     
-    # Если игра уже идет, сообщаем о перезапуске.
-    # Это решает проблему "зависшей" игры, если сообщение с опросом было удалено.
-    if chat_id in game_states and game_states[chat_id].get("is_active", False):
-        await message.reply("Ай, похуй, перезапускаем егру!")
+    # Старая проверка полностью удалена. 
+    # Команда "егра" теперь всегда начинает новую игру, перезаписывая любое "зависшее" состояние.
     
-    # Инициализация нового состояния игры (или перезапись старого)
     game_states[chat_id] = {
         "is_active": True,
         "options": ["1", "2", "3"],
@@ -83,14 +80,12 @@ async def handle_egra_answer(poll_answer: types.PollAnswer, bot: Bot):
             chat_id = cid
             break
             
-    # Если игра не найдена или уже неактивна (например, была перезапущена)
     if not game or not game.get("is_active", False):
         return False
 
     user = poll_answer.user
     chosen_option_index = poll_answer.option_ids[0]
 
-    # Защита от неверного индекса (может случиться при быстрой перезагрузке игры)
     if chosen_option_index >= len(game["options"]):
         logging.warning(f"Получен неверный индекс опции {chosen_option_index} в игре для чата {chat_id}.")
         return False
@@ -98,7 +93,6 @@ async def handle_egra_answer(poll_answer: types.PollAnswer, bot: Bot):
     chosen_option_text = game["options"][chosen_option_index]
 
     try:
-        # Проверяем, что ID сообщения существует перед удалением
         if game.get("poll_message_id"):
             await bot.delete_message(chat_id, game["poll_message_id"])
     except TelegramBadRequest as e:
@@ -112,7 +106,7 @@ async def handle_egra_answer(poll_answer: types.PollAnswer, bot: Bot):
         await send_game_poll(chat_id, bot)
     elif len(game["options"]) == 1:
         await send_final_button(chat_id, bot)
-    else: # На случай, если что-то пошло не так
+    else:
         await bot.send_message(chat_id, "Ой, чота сломалось, все кнопки кончились. Начните заново.")
         if chat_id in game_states:
             del game_states[chat_id]
@@ -125,28 +119,24 @@ async def handle_final_button_press(callback_query: types.CallbackQuery, bot: Bo
     chat_id = callback_query.message.chat.id
     game = game_states.get(chat_id)
 
-    # Проверяем, что кнопка относится к текущей активной игре
     if not game or not game.get("is_active") or callback_query.message.message_id != game.get("final_button_message_id"):
         await callback_query.answer("Игра уже закончилась или перезапущена, поздняк метаться.")
-        # Пытаемся удалить старое сообщение с кнопкой, чтобы не смущать пользователей
         try:
             await callback_query.message.delete()
         except TelegramBadRequest:
-            pass # Ничего страшного, если не получилось
+            pass
         return
 
     user = callback_query.from_user
     
     await bot.send_message(chat_id, f"УРА! У НАС ПОБЕДИТЕЛЬ! ИГРА ОКОНЧЕНА! ПОЗДРАВЛЯЕМ, ТЫ КОНЧЕНЫ ХУЕСОС, {user.full_name}!")
     
-    # Удаляем сообщение с кнопкой
     try:
         if game.get("final_button_message_id"):
             await bot.delete_message(chat_id, game["final_button_message_id"])
     except Exception as e:
         logging.warning(f"Не удалось удалить сообщение с финальной кнопкой: {e}")
 
-    # Очищаем состояние игры
     if chat_id in game_states:
         del game_states[chat_id]
     
