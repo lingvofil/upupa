@@ -504,7 +504,8 @@ async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
     
 @router.message(lambda message: message.text and 
-                message.text.lower().startswith("упупа запомни: мой др") and 
+                (message.text.lower().startswith("упупа запомни: мой др") or 
+                 message.text.lower().startswith("упупа запомни мой др")) and 
                 message.from_user.id not in BLOCKED_USERS)
 async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
