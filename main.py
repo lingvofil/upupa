@@ -509,7 +509,8 @@ async def handle_birthday_list_admin_command(message: types.Message):
     await handle_birthday_list_command(message)
 
 @router.message(lambda message: message.text and 
-                message.text.lower().startswith("упупа поздравь ") and 
+                (message.text.lower().startswith("упупа поздравь ") or 
+                 message.text.lower().startswith("поздравь ")) and 
                 message.from_user.id == ADMIN_ID)
 async def handle_test_greeting_admin_command(message: types.Message):
     await handle_test_greeting_command(message)

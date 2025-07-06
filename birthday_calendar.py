@@ -183,10 +183,14 @@ async def check_birthdays_and_send_greetings(bot):
                 else:
                     greeting = await generate_birthday_greeting(user_data['name'], user_messages)
                 
+                # Создаем тег пользователя
+                user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
+                
                 # Отправляем поздравление в тот же чат, где пользователь записал свой ДР
                 chat_id = user_data.get('chat_id')
                 if chat_id:
-                    await bot.send_message(chat_id, greeting)
+                    final_greeting = f"{user_tag}\n\n{greeting}"
+                    await bot.send_message(chat_id, final_greeting, parse_mode="Markdown")
                 
                 # Помечаем, что поздравили сегодня
                 user_data[last_greeting_key] = today_str
@@ -259,33 +263,38 @@ async def handle_test_greeting_command(message: Message):
     
     try:
         # Извлекаем имя/username из команды
-        text = message.text.lower()
-        if text.startswith("поздравь "):
+        text = message.text
+        if text.lower().startswith("упупа поздравь "):
+            identifier = text[15:].strip()  # Убираем "упупа поздравь "
+        elif text.lower().startswith("поздравь "):
             identifier = text[9:].strip()  # Убираем "поздравь "
-            
-            # Ищем пользователя
-            user_info = find_user_in_birthdays(identifier)
-            if not user_info:
-                await message.reply(f"Пользователь '{identifier}' не найден в базе дней рождения")
-                return
-            
-            user_id, user_data = user_info
-            
-            # Получаем сообщения пользователя
-            user_messages = get_user_messages_from_log(int(user_id))
-            
-            if not user_messages:
-                greeting = f"С днюхой, {user_data['name']}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
-            else:
-                greeting = await generate_birthday_greeting(user_data['name'], user_messages)
-            
-            # Отправляем тестовое поздравление
-            test_message = f"🧪 **ТЕСТОВОЕ ПОЗДРАВЛЕНИЕ** 🧪\n\n{greeting}"
-            await message.reply(test_message)
-            
         else:
-            await message.reply("Используй: поздравь [имя/username]")
+            await message.reply("Используй: упупа поздравь [имя/username]")
+            return
             
+        # Ищем пользователя
+        user_info = find_user_in_birthdays(identifier)
+        if not user_info:
+            await message.reply(f"Пользователь '{identifier}' не найден в базе дней рождения")
+            return
+        
+        user_id, user_data = user_info
+        
+        # Получаем сообщения пользователя
+        user_messages = get_user_messages_from_log(int(user_id))
+        
+        if not user_messages:
+            greeting = f"С днюхой, {user_data['name']}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
+        else:
+            greeting = await generate_birthday_greeting(user_data['name'], user_messages)
+        
+        # Создаем тег пользователя
+        user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
+        
+        # Отправляем тестовое поздравление
+        test_message = f"🧪 **ТЕСТОВОЕ ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
+        await message.reply(test_message, parse_mode="Markdown")
+        
     except Exception as e:
         logging.error(f"Ошибка в handle_test_greeting_command: {e}")
         await message.reply("Ошибка при генерации тестового поздравления")
