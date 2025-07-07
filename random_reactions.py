@@ -1015,7 +1015,7 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         if success:
             return True
             
-      if message.from_user.id == 1399269377 and random.random() < 0.05 and message.text:
+    if message.from_user.id == 1399269377 and random.random() < 0.05 and message.text:
         success = await generate_insult_for_lis(message, model)
         if success:
             return True   
