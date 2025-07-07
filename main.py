@@ -12,6 +12,7 @@ import json
 import nest_asyncio
 from datetime import datetime, timedelta
 import re
+from typing import Dict
 
 nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
@@ -116,8 +117,7 @@ from egra import start_egra, handle_egra_answer, handle_final_button_press
 from profession import get_random_okved_and_commentary 
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
-from statistics import init_db, get_total_messages_per_chat, get_activity_by_hour
-from middlewares import StatisticsMiddleware
+import statistics
 
 # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
 from birthday_calendar import (
@@ -132,28 +132,50 @@ from birthday_calendar import (
 from broadcast import handle_broadcast_command, is_broadcast_command
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
-async def get_stats_command(message: Message):
-    chat_stats = await get_total_messages_per_chat()
-    hour_stats = await get_activity_by_hour()
+def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
+    """Вспомогательная функция для красивого форматирования статистики."""
+    parts = [f"📊 *{title}*"]
 
-    response_text = "📊 **Статистика по боту**\n\n"
-    response_text += "**Топ-5 самых активных чатов:**\n"
-    
-    # Сортируем и берем топ-5
-    sorted_chats = sorted(chat_stats.items(), key=lambda item: item[1], reverse=True)[:5]
-
-    for chat_id, count in sorted_chats:
-        response_text += f" • `ID {chat_id}`: {count} сообщений\n"
-
-    response_text += "\n**Активность по часам (UTC):**\n"
-    if hour_stats:
-        for hour in sorted(hour_stats.keys()):
-            response_text += f" • `{hour:02d}:00 - {hour:02d}:59`: {hour_stats[hour]} сообщ.\n"
+    if stats.get("groups"):
+        parts.append("\n*Чаты:*")
+        # Сортируем по убыванию количества сообщений
+        sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
+        for chat_title, count in sorted_groups:
+            parts.append(f"  • `{chat_title}`: {count} сообщ.")
     else:
-        response_text += "Данных по часам пока нет.\n"
+        parts.append("\n_Нет активности в групповых чатах._")
 
-    await message.answer(response_text, parse_mode='Markdown')
+    if stats.get("private"):
+        parts.append("\n*Личные сообщения:*")
+        # Сортируем по убыванию количества сообщений
+        sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)
+        for user_display, count in sorted_private:
+            parts.append(f"  • `{user_display}`: {count} сообщ.")
+    else:
+        parts.append("\n_Нет активности в личных сообщениях._")
+
+    return "\n".join(parts)
+
+@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
+async def cmd_stats_total(message: Message):
+    """Статистика за все время."""
+    stats_data = await statistics.get_total_messages()
+    reply_text = format_stats_message(stats_data, "Общая статистика")
+    await message.answer(reply_text, parse_mode="Markdown")
+
+@router.message(Command("stats24"), F.from_user.id == ADMIN_ID)
+async def cmd_stats_24h(message: Message):
+    """Статистика за последние 24 часа."""
+    stats_data = await statistics.get_messages_last_24_hours()
+    reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
+    await message.answer(reply_text, parse_mode="Markdown")
+
+@router.message(Command("statshour"), F.from_user.id == ADMIN_ID)
+async def cmd_stats_1h(message: Message):
+    """Статистика за последний час."""
+    stats_data = await statistics.get_messages_last_hour()
+    reply_text = format_stats_message(stats_data, "Статистика за час")
+    await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(CommandStart())
 async def process_start_command(message: types.Message):
@@ -573,14 +595,32 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
+    # Сначала основная обработка сообщения
     await process_general_message(message)
     
+    # ✅ ПОСЛЕ обработки, логируем сообщение для статистики
+    try:
+        if message.from_user: # Убедимся, что есть отправитель
+            is_private = message.chat.type == 'private'
+            await statistics.log_message(
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                message_type=message.content_type,
+                is_private=is_private,
+                chat_title=message.chat.title if not is_private else None,
+                user_name=message.from_user.full_name,
+                user_username=message.from_user.username
+            )
+    except Exception as e:
+        logging.error(f"Failed to log message stats: {e}")
+    
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
-async def main():
+sync def main():
     # ✅ Инициализируем базу данных перед запуском
-    init_db()
+    statistics.init_db()
+    
     # Сначала создаём задачи для викторин
-    chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
+    chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
         chat_id_int = int(chat_id)
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
@@ -588,8 +628,6 @@ async def main():
     # Запуск планировщика дней рождения
     asyncio.create_task(birthday_scheduler(bot))
     
-    # ✅ Регистрируем middleware для всех сообщений
-    dp.message.middleware(StatisticsMiddleware())
     # Настраиваем и запускаем бота
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
@@ -597,4 +635,5 @@ async def main():
 
 # Запуск бота
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
