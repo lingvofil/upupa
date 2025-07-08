@@ -16,11 +16,10 @@ except ImportError:
 CHAT_REGEX = re.compile(r"Chat (-?\d+) \((.*?)\)")
 USER_REGEX = re.compile(r"User (\d+) \((.*?)\)")
 
-def _parse_log_file():
-    """Парсит лог-файл для извлечения названий чатов и имен пользователей."""
+def _update_db_from_log():
+    """Обновляет пустые записи в БД статистики данными из лог-файла."""
     chat_titles = {}
     user_names = {}
-    logging.info(f"Парсинг лог-файла: {LOG_FILE}")
     try:
         with open(LOG_FILE, 'r', encoding='utf-8') as f:
             for line in f:
@@ -34,48 +33,32 @@ def _parse_log_file():
                 if user_match:
                     user_id, username = int(user_match.group(1)), user_match.group(2).strip()
                     if user_id and username:
-                        # Используем юзернейм как основное имя для простоты
                         user_names[user_id] = username
-    except FileNotFoundError:
-        logging.error(f"Лог-файл не найден: {LOG_FILE}")
-    except Exception as e:
-        logging.error(f"Ошибка при парсинге лог-файла: {e}", exc_info=True)
-    
-    logging.info(f"Из лога извлечено: {len(chat_titles)} чатов, {len(user_names)} пользователей.")
-    return chat_titles, user_names
+    except Exception:
+        pass  # Игнорируем ошибки, если лог-файл недоступен
 
-def _update_db_from_log():
-    """Обновляет пустые записи в БД статистики данными из лог-файла."""
-    chat_titles, user_names = _parse_log_file()
     if not chat_titles and not user_names:
-        logging.warning("Нет данных для обновления из лога.")
         return
 
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
-            
-            # Обновляем названия чатов там, где они пустые
             for chat_id, title in chat_titles.items():
                 cursor.execute(
                     "UPDATE message_stats SET chat_title = ? WHERE chat_id = ? AND (chat_title IS NULL OR chat_title = '')",
                     (title, chat_id)
                 )
-            
-            # Обновляем имена пользователей (поле username) там, где они пустые
             for user_id, username in user_names.items():
                 cursor.execute(
                     "UPDATE message_stats SET user_username = ? WHERE user_id = ? AND (user_username IS NULL OR user_username = '')",
                     (username, user_id)
                 )
-            
             conn.commit()
-            logging.info("БД статистики успешно обновлена данными из лога.")
     except Exception as e:
         logging.error(f"Не удалось обновить БД статистики: {e}", exc_info=True)
 
 def init_db():
-    """Инициализирует БД и обновляет схему таблицы, если это необходимо."""
+    """Инициализирует БД."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -98,32 +81,40 @@ def init_db():
                 pass
         conn.commit()
 
-async def log_message(chat_id: int, user_id: int, message_type: str, is_private: bool,
-                      chat_title: Optional[str], user_name: str, user_username: Optional[str]):
-    """Записывает информацию о сообщении в базу данных."""
+async def log_activity(message: types.Message):
+    """
+    Универсальная функция для логирования активности, создающей нагрузку.
+    """
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
+            is_private = message.chat.type == 'private'
             timestamp = datetime.now()
             cursor.execute(
                 """INSERT INTO message_stats 
                    (chat_id, user_id, message_timestamp, message_type, is_private, chat_title, user_name, user_username) 
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (chat_id, user_id, timestamp, message_type, is_private, chat_title, user_name, user_username)
+                (
+                    message.chat.id,
+                    message.from_user.id,
+                    timestamp,
+                    message.content_type,
+                    is_private,
+                    message.chat.title if not is_private else None,
+                    message.from_user.full_name,
+                    message.from_user.username
+                )
             )
             conn.commit()
     except Exception as e:
-        logging.error(f"Error logging message: {e}", exc_info=True)
+        logging.error(f"Error logging activity: {e}", exc_info=True)
 
 def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
     """
     Сначала обновляет данные из лога, затем получает статистику из БД.
     """
-    logging.info("Запрос статистики. Запускаю обновление из лога...")
-    # ✅ ГЛАВНОЕ ИЗМЕНЕНИЕ: автоматический вызов обновления
     _update_db_from_log()
     
-    logging.info("Обновление завершено. Получаю данные из БД.")
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         
@@ -133,6 +124,7 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
             time_filter = "WHERE message_timestamp >= ?"
             params.append(datetime.now() - timedelta(hours=period_hours))
 
+        # Статистика по групповым чатам (теперь здесь только команды)
         query_groups = f"""
             SELECT chat_id, MAX(chat_title), COUNT(*)
             FROM message_stats 
@@ -140,11 +132,12 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
             GROUP BY chat_id
         """
         cursor.execute(query_groups, params)
-        group_stats = {}
-        for chat_id, chat_title, count in cursor.fetchall():
-            display_name = chat_title if chat_title else f"Чат ({chat_id})"
-            group_stats[display_name] = count
+        group_stats = {
+            (chat_title if chat_title else f"Чат ({chat_id})"): count
+            for chat_id, chat_title, count in cursor.fetchall()
+        }
 
+        # Статистика по личным сообщениям (здесь все сообщения)
         query_private = f"""
             SELECT user_id, MAX(user_name), MAX(user_username), COUNT(*)
             FROM message_stats 
