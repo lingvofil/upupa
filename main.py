@@ -132,7 +132,7 @@ from birthday_calendar import (
 from broadcast import handle_broadcast_command, is_broadcast_command
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
+ddef format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     """Вспомогательная функция для красивого форматирования статистики."""
     parts = [f"📊 *{title}*"]
     if stats.get("groups"):
@@ -154,6 +154,7 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
     """Статистика за все время."""
+    await statistics.log_activity(message)
     processing_msg = await message.reply("⏳ Собираю и обновляю статистику... Пожалуйста, подождите.")
     stats_data = await statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
@@ -162,6 +163,7 @@ async def cmd_stats_total(message: Message):
 @router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
     """Статистика за последние 24 часа."""
+    await statistics.log_activity(message)
     processing_msg = await message.reply("⏳ Собираю и обновляю статистику за сутки... Пожалуйста, подождите.")
     stats_data = await statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
@@ -170,6 +172,7 @@ async def cmd_stats_24h(message: Message):
 @router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
+    await statistics.log_activity(message)
     processing_msg = await message.reply("⏳ Собираю и обновляю статистику за час... Пожалуйста, подождите.")
     stats_data = await statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
@@ -180,14 +183,14 @@ async def process_start_command(message: types.Message):
     await statistics.log_activity(message)
     await message.reply("Я пидорас")
 
-@router.message(lambda message: message.text is not None and message.text.lower() == "очистка" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "очистка", F.from_user.id.not_in(BLOCKED_USERS))
 async def process_clear_command(message: types.Message):
     await statistics.log_activity(message)
     user_id = message.from_user.id
     conversation_history[user_id] = []
     await message.reply("Смыто всё говно")
 
-@router.message(lambda message: message.text and message.text.lower() == "чоумееш" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "чоумееш", F.from_user.id.not_in(BLOCKED_USERS))
 async def handle_chooumeesh(message: types.Message):
     await statistics.log_activity(message)
     await message.reply(HELP_TEXT)
@@ -197,7 +200,7 @@ async def handle_broadcast(message: types.Message):
     await statistics.log_activity(message)
     await handle_broadcast_command(message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
+@router.message(F.text.lower().startswith("упупа выйди из "))
 async def leave_chat(message: types.Message):
     await statistics.log_activity(message)
     if message.from_user.id != ADMIN_ID:
@@ -206,7 +209,7 @@ async def leave_chat(message: types.Message):
     chat_identifier = message.text[14:].strip()  # Убираем "упупа выйди из "
     await process_leave_chat(message, chat_identifier)
 
-@router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
+@router.message(F.text.lower() == "обновить чаты")
 async def update_all_chats(message: types.Message):
     await statistics.log_activity(message)
     if message.from_user.id != ADMIN_ID:
@@ -214,14 +217,14 @@ async def update_all_chats(message: types.Message):
         return
     await process_update_all_chats(message, bot)
 
-@router.message(lambda message: message.text and message.text.lower() == "где сидишь")
+@router.message(F.text.lower() == "где сидишь")
 async def handle_where_sits(message: types.Message):
     await statistics.log_activity(message)
     global chat_list
     response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
     await message.reply(response)
 
-@router.message(lambda message: message.text and message.text.lower() == "отключи смс")
+@router.message(F.text.lower() == "отключи смс")
 async def disable_sms(message: types.Message):
     await statistics.log_activity(message)
     chat_id = str(message.chat.id)
@@ -229,7 +232,7 @@ async def disable_sms(message: types.Message):
     response = await process_disable_sms(chat_id, user_id, bot)
     await message.reply(response)
 
-@router.message(lambda message: message.text and message.text.lower() == "включи смс")
+@router.message(F.text.lower() == "включи смс")
 async def enable_sms(message: types.Message):
     await statistics.log_activity(message)
     chat_id = str(message.chat.id)
@@ -243,7 +246,7 @@ async def check_sms_mms_permission(message: types.Message):
     chat_id = str(message.chat.id)
     await process_check_sms_mms_permission(chat_id, message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("смс "))
+@router.message(F.text.lower().startswith("смс "))
 async def handle_send_sms(message: types.Message):
     await statistics.log_activity(message)
     from SMS_settings import process_send_sms
@@ -257,7 +260,7 @@ async def handle_send_mms(message: types.Message):
     from SMS_settings import process_send_mms
     await process_send_mms(message, chat_list, bot, sms_disabled_chats)
 
-@router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
+@router.message(F.text.lower() == "мой лексикон")
 async def handle_my_lexicon(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -266,7 +269,7 @@ async def handle_my_lexicon(message: types.Message):
     chat_id = message.chat.id  # Ограничиваем статистику этим чатом
     await process_my_lexicon(user_id, chat_id, message)
 
-@router.message(lambda message: message.text and message.text.lower() == "лексикон чат")
+@router.message(F.text.lower() == "лексикон чат")
 async def handle_chat_lexicon(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -274,7 +277,7 @@ async def handle_chat_lexicon(message: types.Message):
     response_text = await process_chat_lexicon(message)
     await message.reply(response_text)
     
-@router.message(lambda message: message.text and message.text.lower().startswith("лексикон "))
+@router.message(F.text.lower().startswith("лексикон "))
 async def handle_user_lexicon(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -304,12 +307,12 @@ async def show_chat_stats(message: types.Message):
     reply_text = report if report else "В этом чате нет корректных статистических данных."
     await message.reply(reply_text, parse_mode="HTML")
 
-@router.message(lambda message: message.text and message.text.lower() == "что за чат")
+@router.message(F.text.lower() == "что за чат")
 async def handle_chat_profile(message: types.Message):
     await statistics.log_activity(message)
     await process_chat_profile(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "кто я")
+@router.message(F.text.lower() == "кто я")
 async def handle_user_profile(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -318,13 +321,13 @@ async def handle_user_profile(message: types.Message):
     chat_id = message.chat.id  # Ограничиваем анализ этим чатом
     await process_user_profile(user_id, chat_id, message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("пародия"))
+@router.message(F.text.lower().startswith("пародия"))
 async def handle_parody(message: types.Message):
-   await statistics.log_activity(message)
-   random_action = random.choice(actions)
-   await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-   chat_id = message.chat.id  # Ограничиваем выбор фраз этим чатом
-   await process_parody(message, chat_id)
+    await statistics.log_activity(message)
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    chat_id = message.chat.id  # Ограничиваем выбор фраз этим чатом
+    await process_parody(message, chat_id)
 
 @router.message(F.text.lower().contains("викторина"))
 async def start_quiz(message: Message, bot: Bot):
@@ -344,14 +347,14 @@ async def egra_command_handler(message: types.Message):
 
 @router.poll_answer()
 async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
-    await statistics.log_activity(message)
+    # Для poll_answer нет message, поэтому пропускаем логирование активности
     is_egra_handled = await handle_egra_answer(poll_answer, bot)
     if not is_egra_handled:
         await process_poll_answer(poll_answer, bot)
 
 @router.callback_query(F.data == "egra_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
-    await statistics.log_activity(message)
+    # Для callback_query нет message, поэтому пропускаем логирование активности
     await handle_final_button_press(callback_query, bot)
 
 @router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
@@ -359,25 +362,19 @@ async def send_random_media(message: types.Message):
     await statistics.log_activity(message)
     await process_channel_command(message, CHANNEL_SETTINGS)
 
-@router.message(lambda message: 
-    message.text and 
-    message.text.lower().startswith("имя ") and 
-    message.from_user and  # Убедимся, что у сообщения есть отправитель
-    message.from_user.id not in BLOCKED_USERS
-)
-
-@router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР
-async def choose_profession_command(message: types.Message):
-    await statistics.log_activity(message)
-    await get_random_okved_and_commentary(message)
-    
+@router.message(F.text.lower().startswith("имя "), F.from_user.id.not_in(BLOCKED_USERS))
 async def handle_name_info(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
     success, response = await process_name_info(message)
     await message.reply(response)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "кем стать")
+async def choose_profession_command(message: types.Message):
+    await statistics.log_activity(message)
+    await get_random_okved_and_commentary(message)
+
+@router.message(F.text.lower().startswith("найди"), F.from_user.id.not_in(BLOCKED_USERS))
 async def handle_image_search(message: Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -395,7 +392,7 @@ async def universal_handler(message: types.Message):
     query, temp_img_path, error_msg = queries[keyword]
     await handle_message(message, query, temp_img_path, error_msg)
 
-@router.message(lambda message: message.text and message.text.lower().replace(" ", "") == "котогиф" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower().replace(" ", "") == "котогиф", F.from_user.id.not_in(BLOCKED_USERS))
 async def send_kotogif(message: types.Message):
     await statistics.log_activity(message)
     random_action = random.choice(actions)
@@ -409,12 +406,14 @@ async def send_kotogif(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.audio or message.voice) and message.caption and "чотам" in message.caption.lower()
-    ) 
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        (message.reply_to_message.audio or message.reply_to_message.voice)
+        (
+            (message.audio or message.voice) and message.caption and "чотам" in message.caption.lower()
+        ) 
+        or 
+        (
+            message.text and "чотам" in message.text.lower() and message.reply_to_message and 
+            (message.reply_to_message.audio or message.reply_to_message.voice)
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_audio_description(message: types.Message):
@@ -428,12 +427,14 @@ async def handle_audio_description(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.video and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.video
+        (
+            message.video and message.caption and "чотам" in message.caption.lower()
+        )
+        or 
+        (
+            message.text and "чотам" in message.text.lower() and message.reply_to_message and 
+            message.reply_to_message.video
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_video_description(message: types.Message):
@@ -445,15 +446,16 @@ async def handle_video_description(message: types.Message):
     await processing_msg.delete()
     await message.reply(response)
 
-# НОВЫЙ хэндлер для "чотам" с картинкой
 @router.message(lambda message: 
     (
-        (message.photo and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.photo
+        (
+            message.photo and message.caption and "чотам" in message.caption.lower()
+        )
+        or 
+        (
+            message.text and "чотам" in message.text.lower() and message.reply_to_message and 
+            message.reply_to_message.photo
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_image_whatisthere(message: types.Message):
@@ -465,15 +467,16 @@ async def handle_image_whatisthere(message: types.Message):
     await processing_msg.delete()
     await message.reply(response)
 
-# НОВЫЙ хэндлер для "чотам" с гифкой
 @router.message(lambda message: 
     (
-        (message.animation and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.animation
+        (
+            message.animation and message.caption and "чотам" in message.caption.lower()
+        )
+        or 
+        (
+            message.text and "чотам" in message.text.lower() and message.reply_to_message and 
+            message.reply_to_message.animation
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_gif_whatisthere(message: types.Message):
@@ -487,9 +490,14 @@ async def handle_gif_whatisthere(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.photo and message.caption and "опиши" in message.caption.lower())
+        (
+            message.photo and message.caption and "опиши" in message.caption.lower()
+        )
         or 
-        (message.text and "опиши" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
+        (
+            message.text and "опиши" in message.text.lower() and message.reply_to_message and 
+            (message.reply_to_message.photo or message.reply_to_message.document)
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def describe_image(message: types.Message):
@@ -498,31 +506,35 @@ async def describe_image(message: types.Message):
     success, response = await process_image_description(bot, message)
     await message.reply(response)
 
-@router.message(
-    lambda message: (
-        (message.photo and message.caption and "добавь" in message.caption.lower()) or 
-        (message.text and "добавь" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
+@router.message(lambda message: 
+    (
+        (
+            message.photo and message.caption and "добавь" in message.caption.lower()
+        ) 
+        or 
+        (
+            message.text and "добавь" in message.text.lower() and message.reply_to_message and 
+            (message.reply_to_message.photo or message.reply_to_message.document)
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def add_text_to_image(message: types.Message):
     await statistics.log_activity(message)
     await handle_add_text_command(message)
 
-@router.message(
-    lambda message: (
-        message.from_user.id not in BLOCKED_USERS and
-        message.text and (
-            message.text.lower().startswith("нарисуй") or
-            (message.text.lower().strip() == "нарисуй" and message.reply_to_message)
-        )
+@router.message(lambda message: 
+    message.from_user.id not in BLOCKED_USERS and
+    message.text and (
+        message.text.lower().startswith("нарисуй") or
+        (message.text.lower().strip() == "нарисуй" and message.reply_to_message)
     )
 )
 async def generate_image(message: types.Message):
     await statistics.log_activity(message)
     await handle_image_generation_command(message)
 
-@router.message(
-    lambda message: (
+@router.message(lambda message: 
+    (
         (
             # Вариант 1: Фото с подписью "перерисуй"
             (message.photo and message.caption and "перерисуй" in message.caption.lower()) or
@@ -539,21 +551,17 @@ async def redraw_image(message: types.Message):
     from Picgeneration import handle_redraw_command
     await handle_redraw_command(message)
 
-@router.message(
-    lambda message: message.text and 
-    message.text.lower().strip() == "скаламбурь" and 
-    message.from_user.id not in BLOCKED_USERS
-)
+@router.message(F.text.lower().strip() == "скаламбурь", F.from_user.id.not_in(BLOCKED_USERS))
 async def generate_pun_with_image(message: types.Message):
     await statistics.log_activity(message)
     await handle_pun_image_command(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "упупа погода", F.from_user.id.not_in(BLOCKED_USERS))
 async def handle_weather_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_current_weather_command(message)
         
-@router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower().startswith("погода неделя"), F.from_user.id.not_in(BLOCKED_USERS))
 async def handle_weekly_forecast(message: types.Message):
     await statistics.log_activity(message)
     await handle_weekly_forecast_command(message)
@@ -568,19 +576,19 @@ async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
 
 # Просмотр дней рождения в чате
-@router.message(lambda message: message.text and message.text.lower() == "упупа дни рождения" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "упупа дни рождения", F.from_user.id.not_in(BLOCKED_USERS))
 async def birthday_list_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_birthday_list_command(message)
 
 # Тестовое поздравление (только для админа)
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа поздравь ") and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower().startswith("упупа поздравь "), F.from_user.id.not_in(BLOCKED_USERS))
 async def test_greeting_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_test_greeting_command(message)
 
 # Все дни рождения (только для админа)
-@router.message(lambda message: message.text and message.text.lower() == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
+@router.message(F.text.lower() == "упупа все дни рождения", F.from_user.id.not_in(BLOCKED_USERS))
 async def admin_birthday_list_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_admin_birthday_list_command(message)
@@ -591,7 +599,7 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
-@router.message(F.text.lower() == "упупа не болтай")
+@router.message(lambda message: message.text and message.text.lower() == "упупа не болтай" and message.from_user.id not in BLOCKED_USERS)
 async def disable_dialog(message: types.Message):
     await statistics.log_activity(message)
     chat_id = str(message.chat.id)
@@ -601,7 +609,7 @@ async def disable_dialog(message: types.Message):
     save_chat_settings()
     await message.reply("Лана отъебитесь.")
 
-@router.message(F.text.lower() == "упупа говори")
+@router.message(lambda message: message.text and message.text.lower() == "упупа говори" and message.from_user.id not in BLOCKED_USERS)
 async def enable_dialog(message: types.Message):
     await statistics.log_activity(message)
     chat_id = str(message.chat.id)
@@ -611,27 +619,27 @@ async def enable_dialog(message: types.Message):
     save_chat_settings()
     await message.reply("Дратути")
 
-@router.message(F.text.lower() == "промпты")
+@router.message(lambda message: message.text and message.text.lower() == "промпты" and message.from_user.id not in BLOCKED_USERS)
 async def list_prompts_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_list_prompts_command(message)
 
-@router.message(F.text.lower() == "какой промпт")
+@router.message(lambda message: message.text and message.text.lower() == "какой промпт" and message.from_user.id not in BLOCKED_USERS)
 async def current_prompt_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_current_prompt_command(message)
 
-@router.message(F.text.lower().startswith("промпт "))
+@router.message(lambda message: message.text and message.text.lower().startswith("промпт ") and message.from_user.id not in BLOCKED_USERS)
 async def set_prompt_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_set_prompt_command(message)
 
-@router.message(F.text.lower() == "поменяй промпт")
+@router.message(lambda message: message.text and message.text.lower() == "поменяй промпт" and message.from_user.id not in BLOCKED_USERS)
 async def change_prompt_randomly_command(message: types.Message):
     await statistics.log_activity(message)
     await handle_change_prompt_randomly_command(message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith(("пирожок", "порошок")))
+@router.message(lambda message: message.text and message.text.lower().startswith(("пирожок", "порошок")) and message.from_user.id not in BLOCKED_USERS)
 async def handle_poem(message: types.Message):
     await statistics.log_activity(message)
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
