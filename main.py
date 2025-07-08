@@ -138,7 +138,6 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     if stats.get("groups"):
         parts.append("\n*Чаты:*")
-        # Сортируем по убыванию количества сообщений
         sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
         for chat_title, count in sorted_groups:
             parts.append(f"  • `{chat_title}`: {count} сообщ.")
@@ -147,7 +146,6 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     if stats.get("private"):
         parts.append("\n*Личные сообщения:*")
-        # Сортируем по убыванию количества сообщений
         sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)
         for user_display, count in sorted_private:
             parts.append(f"  • `{user_display}`: {count} сообщ.")
@@ -156,22 +154,21 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     return "\n".join(parts)
 
-
-@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
     """Статистика за все время."""
     stats_data = await statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(Command("stats24"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
     """Статистика за последние 24 часа."""
     stats_data = await statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(Command("statshour"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
     stats_data = await statistics.get_messages_last_hour()
@@ -599,7 +596,7 @@ async def process_message(message: types.Message):
     # Сначала основная обработка сообщения
     await process_general_message(message)
     
-    # ✅ ПОСЛЕ обработки, логируем сообщение для статистики
+    # После обработки логируем сообщение для статистики
     try:
         if message.from_user: # Убедимся, что есть отправитель
             is_private = message.chat.type == 'private'
@@ -613,26 +610,42 @@ async def process_message(message: types.Message):
                 user_username=message.from_user.username
             )
     except Exception as e:
-        logging.error(f"Failed to log message stats: {e}")
+        logging.error(f"Failed to log message stats: {e}", exc_info=True)
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
-    # ✅ Инициализируем базу данных перед запуском
+    # Настройка логирования для вывода подробной информации
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    
+    logging.info("Initializing database...")
     statistics.init_db()
-    # Сначала создаём задачи для викторин
-    chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
-    for chat_id in chat_ids:
-        chat_id_int = int(chat_id)
-        asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
     
-    # Запуск планировщика дней рождения
-    asyncio.create_task(birthday_scheduler(bot))
-    
-    # Настраиваем и запускаем бота
-    dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, skip_updates=True)
+    logging.info("Setting up schedulers...")
+    try:
+        # Задачи для викторин
+        chat_ids = ['-1001707530786', '-1001781970364']
+        for chat_id in chat_ids:
+            chat_id_int = int(chat_id)
+            asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
+        
+        # Планировщик дней рождения
+        asyncio.create_task(birthday_scheduler(bot))
+        logging.info("Schedulers started successfully.")
+    except Exception as e:
+        # Если планировщики не запустятся, бот всё равно продолжит работу, но в лог запишется ошибка
+        logging.error(f"Error starting schedulers: {e}", exc_info=True)
 
-# Запуск бота
+    dp.include_router(router)
+    
+    logging.info("Starting bot polling...")
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot, skip_updates=True)
+    except Exception as e:
+        logging.error(f"An error occurred during polling: {e}", exc_info=True)
+    finally:
+        logging.warning("Polling has been stopped.")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
