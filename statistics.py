@@ -1,16 +1,78 @@
-# statistics.py
 import sqlite3
+import re
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
-# Убедитесь, что в Config.py добавлена переменная DB_FILE
-# Например: DB_FILE = 'bot_stats.db'
+# Попытка импорта из Config, с запасным вариантом на случай отсутствия
 try:
-    from Config import DB_FILE
+    from Config import LOG_FILE, DB_FILE
 except ImportError:
+    logging.warning("Не удалось импортировать LOG_FILE, DB_FILE из Config.py. Используются значения по умолчанию.")
+    LOG_FILE = "user_messages.log"
     DB_FILE = "bot_stats.db"
 
-# --- Инициализация Базы Данных ---
+# Регулярные выражения для парсинга лога
+CHAT_REGEX = re.compile(r"Chat (-?\d+) \((.*?)\)")
+USER_REGEX = re.compile(r"User (\d+) \((.*?)\)")
+
+def _parse_log_file():
+    """Парсит лог-файл для извлечения названий чатов и имен пользователей."""
+    chat_titles = {}
+    user_names = {}
+    logging.info(f"Парсинг лог-файла: {LOG_FILE}")
+    try:
+        with open(LOG_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                chat_match = CHAT_REGEX.search(line)
+                if chat_match:
+                    chat_id, chat_title = int(chat_match.group(1)), chat_match.group(2).strip()
+                    if chat_id and chat_title:
+                        chat_titles[chat_id] = chat_title
+
+                user_match = USER_REGEX.search(line)
+                if user_match:
+                    user_id, username = int(user_match.group(1)), user_match.group(2).strip()
+                    if user_id and username:
+                        # Используем юзернейм как основное имя для простоты
+                        user_names[user_id] = username
+    except FileNotFoundError:
+        logging.error(f"Лог-файл не найден: {LOG_FILE}")
+    except Exception as e:
+        logging.error(f"Ошибка при парсинге лог-файла: {e}", exc_info=True)
+    
+    logging.info(f"Из лога извлечено: {len(chat_titles)} чатов, {len(user_names)} пользователей.")
+    return chat_titles, user_names
+
+def _update_db_from_log():
+    """Обновляет пустые записи в БД статистики данными из лог-файла."""
+    chat_titles, user_names = _parse_log_file()
+    if not chat_titles and not user_names:
+        logging.warning("Нет данных для обновления из лога.")
+        return
+
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # Обновляем названия чатов там, где они пустые
+            for chat_id, title in chat_titles.items():
+                cursor.execute(
+                    "UPDATE message_stats SET chat_title = ? WHERE chat_id = ? AND (chat_title IS NULL OR chat_title = '')",
+                    (title, chat_id)
+                )
+            
+            # Обновляем имена пользователей (поле username) там, где они пустые
+            for user_id, username in user_names.items():
+                cursor.execute(
+                    "UPDATE message_stats SET user_username = ? WHERE user_id = ? AND (user_username IS NULL OR user_username = '')",
+                    (username, user_id)
+                )
+            
+            conn.commit()
+            logging.info("БД статистики успешно обновлена данными из лога.")
+    except Exception as e:
+        logging.error(f"Не удалось обновить БД статистики: {e}", exc_info=True)
 
 def init_db():
     """Инициализирует БД и обновляет схему таблицы, если это необходимо."""
@@ -29,16 +91,12 @@ def init_db():
                 user_username TEXT
             )
         ''')
-        
-        # Добавляем новые столбцы, если они отсутствуют
         for column in ["chat_title", "user_name", "user_username"]:
             try:
                 cursor.execute(f"ALTER TABLE message_stats ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError:
-                pass  # Столбец уже существует
+                pass
         conn.commit()
-
-# --- Логирование Сообщений ---
 
 async def log_message(chat_id: int, user_id: int, message_type: str, is_private: bool,
                       chat_title: Optional[str], user_name: str, user_username: Optional[str]):
@@ -55,15 +113,17 @@ async def log_message(chat_id: int, user_id: int, message_type: str, is_private:
             )
             conn.commit()
     except Exception as e:
-        print(f"Error logging message: {e}")
-
-# --- Получение Статистики ---
+        logging.error(f"Error logging message: {e}", exc_info=True)
 
 def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
     """
-    Получает статистику сообщений за указанный период.
-    Группирует по ID, но для отображения использует последнее известное имя/название.
+    Сначала обновляет данные из лога, затем получает статистику из БД.
     """
+    logging.info("Запрос статистики. Запускаю обновление из лога...")
+    # ✅ ГЛАВНОЕ ИЗМЕНЕНИЕ: автоматический вызов обновления
+    _update_db_from_log()
+    
+    logging.info("Обновление завершено. Получаю данные из БД.")
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         
@@ -73,40 +133,31 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
             time_filter = "WHERE message_timestamp >= ?"
             params.append(datetime.now() - timedelta(hours=period_hours))
 
-        # Статистика по групповым чатам
         query_groups = f"""
-            SELECT 
-                t.chat_id,
-                (SELECT chat_title FROM message_stats WHERE chat_id = t.chat_id AND chat_title IS NOT NULL ORDER BY message_timestamp DESC LIMIT 1) as last_title,
-                COUNT(*)
-            FROM message_stats as t
-            WHERE t.is_private = 0 
-            {'AND t.message_timestamp >= ?' if period_hours is not None else ''}
-            GROUP BY t.chat_id
+            SELECT chat_id, MAX(chat_title), COUNT(*)
+            FROM message_stats 
+            WHERE is_private = 0 {time_filter.replace('WHERE', 'AND')}
+            GROUP BY chat_id
         """
-        cursor.execute(query_groups, params if period_hours is not None else [])
+        cursor.execute(query_groups, params)
         group_stats = {}
         for chat_id, chat_title, count in cursor.fetchall():
             display_name = chat_title if chat_title else f"Чат ({chat_id})"
             group_stats[display_name] = count
 
-        # Статистика по личным сообщениям
         query_private = f"""
-            SELECT 
-                t.user_id,
-                (SELECT user_name FROM message_stats WHERE user_id = t.user_id AND user_name IS NOT NULL ORDER BY message_timestamp DESC LIMIT 1) as last_user_name,
-                (SELECT user_username FROM message_stats WHERE user_id = t.user_id ORDER BY message_timestamp DESC LIMIT 1) as last_user_username,
-                COUNT(*)
-            FROM message_stats as t
-            WHERE t.is_private = 1 
-            {'AND t.message_timestamp >= ?' if period_hours is not None else ''}
-            GROUP BY t.user_id
+            SELECT user_id, MAX(user_name), MAX(user_username), COUNT(*)
+            FROM message_stats 
+            WHERE is_private = 1 {time_filter.replace('WHERE', 'AND')}
+            GROUP BY user_id
         """
-        cursor.execute(query_private, params if period_hours is not None else [])
+        cursor.execute(query_private, params)
         private_stats = {}
         for user_id, user_name, user_username, count in cursor.fetchall():
-            if user_name:
+            if user_name and user_name != user_username:
                 display_name = f"{user_name} (@{user_username})" if user_username else user_name
+            elif user_username:
+                 display_name = f"@{user_username}"
             else:
                 display_name = f"Пользователь ({user_id})"
             private_stats[display_name] = count
@@ -114,32 +165,10 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
     return {"groups": group_stats, "private": private_stats}
 
 async def get_total_messages() -> Dict[str, Dict]:
-    """Возвращает статистику сообщений за все время."""
     return get_stats()
 
 async def get_messages_last_24_hours() -> Dict[str, Dict]:
-    """Возвращает статистику сообщений за последние 24 часа."""
     return get_stats(period_hours=24)
 
 async def get_messages_last_hour() -> Dict[str, Dict]:
-    """Возвращает статистику сообщений за последний час."""
     return get_stats(period_hours=1)
-
-async def get_activity_by_hour(period_hours: Optional[int] = None) -> Dict[int, int]:
-    """Возвращает активность по часам."""
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        
-        params = []
-        time_filter = ""
-        if period_hours is not None:
-            time_filter = "WHERE message_timestamp >= ?"
-            params.append(datetime.now() - timedelta(hours=period_hours))
-
-        query = f"SELECT strftime('%H', message_timestamp), COUNT(*) FROM message_stats {time_filter} GROUP BY strftime('%H', message_timestamp)"
-        cursor.execute(query, params)
-        data = {hour: 0 for hour in range(24)}
-        for row in cursor.fetchall():
-            data[int(row[0])] = row[1]
-            
-    return data
