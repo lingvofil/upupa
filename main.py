@@ -135,7 +135,6 @@ from broadcast import handle_broadcast_command, is_broadcast_command
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     """Вспомогательная функция для красивого форматирования статистики."""
     parts = [f"📊 *{title}*"]
-
     if stats.get("groups"):
         parts.append("\n*Чаты:*")
         sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
@@ -143,7 +142,6 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
             parts.append(f"  • `{chat_title}`: {count} сообщ.")
     else:
         parts.append("\n_Нет активности в групповых чатах._")
-
     if stats.get("private"):
         parts.append("\n*Личные сообщения:*")
         sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)
@@ -151,29 +149,31 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
             parts.append(f"  • `{user_display}`: {count} сообщ.")
     else:
         parts.append("\n_Нет активности в личных сообщениях._")
-
     return "\n".join(parts)
 
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
     """Статистика за все время."""
+    processing_msg = await message.reply("⏳ Собираю и обновляю статистику... Пожалуйста, подождите.")
     stats_data = await statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
-    await message.answer(reply_text, parse_mode="Markdown")
+    await processing_msg.edit_text(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
     """Статистика за последние 24 часа."""
+    processing_msg = await message.reply("⏳ Собираю и обновляю статистику за сутки... Пожалуйста, подождите.")
     stats_data = await statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
-    await message.answer(reply_text, parse_mode="Markdown")
+    await processing_msg.edit_text(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
+    processing_msg = await message.reply("⏳ Собираю и обновляю статистику за час... Пожалуйста, подождите.")
     stats_data = await statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
-    await message.answer(reply_text, parse_mode="Markdown")
+    await processing_msg.edit_text(reply_text, parse_mode="Markdown")
 
 @router.message(CommandStart())
 async def process_start_command(message: types.Message):
