@@ -350,6 +350,10 @@ async def send_random_media(message: types.Message):
     message.from_user and  # Убедимся, что у сообщения есть отправитель
     message.from_user.id not in BLOCKED_USERS
 )
+async def handle_name_info(message: types.Message):
+    random_action = random.choice(actions)
+    success, response = await process_name_info(message)
+    await message.reply(response)
 
 @router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР
 async def choose_profession_command(message: types.Message):
