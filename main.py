@@ -7,7 +7,6 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart
 from aiogram.filters.command import Command
-from gigachat import GigaChat
 import json
 import nest_asyncio
 from datetime import datetime, timedelta
@@ -116,6 +115,7 @@ from profession import get_random_okved_and_commentary
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
 import statistics
+from statistics import PrivateRateLimitMiddleware
 
 # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
 from birthday_calendar import (
@@ -154,27 +154,26 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     return "\n".join(parts)
 
-
-@router.message(Command("stats"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
     """Статистика за все время."""
     stats_data = await statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(Command("stats24"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
     """Статистика за последние 24 часа."""
     stats_data = await statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(Command("statshour"), F.from_user.id == ADMIN_ID)
+@router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
     stats_data = await statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
-    await message.answer(reply_text, parse_mode="Markdown")
+    await message.answer(reply_text, parse_mode="Markdown"
 
 @router.message(CommandStart())
 async def process_start_command(message: types.Message):

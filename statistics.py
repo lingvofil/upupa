@@ -1,11 +1,57 @@
 # statistics.py
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, Awaitable
 
-# Убедитесь, что в Config.py добавлена переменная DB_FILE
-# Например: DB_FILE = 'bot_stats.db'
-from Config import DB_FILE
+# --- НОВЫЕ ИМПОРТЫ ДЛЯ MIDDLEWARE ---
+from aiogram import BaseMiddleware
+from aiogram.types import Message
+# ------------------------------------
+
+# Убедитесь, что в Config.py добавлена переменная DB_FILE и ADMIN_ID
+from Config import DB_FILE, ADMIN_ID
+
+# --- НОВЫЙ БЛОК: MIDDLEWARE ДЛЯ ОГРАНИЧЕНИЯ В ЛС ---
+
+# Словарь для отслеживания времени последнего сообщения от пользователя в ЛС
+private_message_timestamps: Dict[int, datetime] = {}
+PRIVATE_MESSAGE_COOLDOWN = timedelta(hours=1)
+
+class PrivateRateLimitMiddleware(BaseMiddleware):
+    """
+    Middleware для ограничения частоты сообщений в личных чатах.
+    Проверяет каждое сообщение. Если оно в ЛС, не от админа и слишком частое,
+    то отправляет предупреждение и блокирует дальнейшую обработку.
+    """
+    async def __call__(
+        self,
+        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: Dict[str, Any]
+    ) -> Any:
+        # Проверяем, что это личный чат и сообщение от пользователя
+        if event.chat.type == 'private' and event.from_user:
+            user_id = event.from_user.id
+            
+            # Админа не ограничиваем
+            if user_id == ADMIN_ID:
+                return await handler(event, data)
+
+            now = datetime.now()
+            last_message_time = private_message_timestamps.get(user_id)
+
+            if last_message_time:
+                # Если с момента последнего сообщения прошло меньше часа
+                if now - last_message_time < PRIVATE_MESSAGE_COOLDOWN:
+                    # Отвечаем и прерываем дальнейшую обработку
+                    await event.reply("иди общайся в чат, хитрый педераст")
+                    return
+            
+            # Если ограничение не сработало, обновляем время последнего сообщения для этого пользователя
+            private_message_timestamps[user_id] = now
+
+        # Если это не личный чат или ограничение не сработало, пропускаем сообщение дальше
+        return await handler(event, data)
 
 # --- Инициализация Базы Данных ---
 
