@@ -398,13 +398,20 @@ async def send_kotogif(message: types.Message):
             message.caption and "чотам" in message.caption.lower()
         )
         or
-        # Текст "чотам" в ответ на медиа
+        # Текст "чотам" в ответ на медиа или текст
         (
             message.text and "чотам" in message.text.lower() and 
             message.reply_to_message and 
             (message.reply_to_message.audio or message.reply_to_message.voice or 
              message.reply_to_message.video or message.reply_to_message.photo or 
-             message.reply_to_message.animation or message.reply_to_message.sticker)
+             message.reply_to_message.animation or message.reply_to_message.sticker or
+             message.reply_to_message.text)
+        )
+        or
+        # Просто текст с "чотам" (без реплая)
+        (
+            message.text and "чотам" in message.text.lower() and 
+            not message.reply_to_message
         )
     ) and message.from_user.id not in BLOCKED_USERS
 )

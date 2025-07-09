@@ -192,10 +192,39 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
         logging.error(f"Ошибка при обработке стикера 'чотам': {e}")
         return False, "Ошибка при анализе стикера."
 
+# ================== TEXT ==================
+async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
+    """
+    Обработка текста по команде 'чотам'
+    """
+    try:
+        # Получаем текст для анализа
+        if message.reply_to_message and message.reply_to_message.text:
+            text_to_analyze = message.reply_to_message.text
+        else:
+            # Убираем "чотам" из текста сообщения
+            text_to_analyze = message.text.replace("чотам", "").strip()
+        
+        if not text_to_analyze:
+            return False, "Нет текста для анализа."
+        
+        # Используем единый список промптов для анализа текста
+        content_prompt = random.choice(PROMPTS_MEDIA)
+        
+        # Формируем запрос для анализа текста
+        prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
+        
+        response = model.generate_content(prompt)
+        return True, response.text
+        
+    except Exception as e:
+        logging.error(f"Ошибка при обработке текста 'чотам': {e}")
+        return False, "Ошибка при анализе текста."
+
 # ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
     """
-    Универсальная функция для обработки всех типов медиа по команде 'чотам'
+    Универсальная функция для обработки всех типов медиа и текста по команде 'чотам'
     """
     target_message = message.reply_to_message if message.reply_to_message else message
     
@@ -210,8 +239,10 @@ async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str
         return await process_gif_whatisthere(message)
     elif target_message.sticker:
         return await process_sticker_whatisthere(message)
+    elif target_message.text or (message.text and "чотам" in message.text.lower()):
+        return await process_text_whatisthere(message)
     else:
-        return False, "Не найдено медиа для анализа."
+        return False, "Не найдено контента для анализа."
 
 def get_processing_message(message: types.Message) -> str:
     """
@@ -228,6 +259,8 @@ def get_processing_message(message: types.Message) -> str:
     elif target_message.animation:
         return "Да не дергайся ты..."
     elif target_message.sticker:
-        return "Изучаю стикер..."
+        return "Стикер-шмикер..."
+    elif target_message.text or (message.text and "чотам" in message.text.lower()):
+        return "Понаписали ебанарот..."
     else:
         return "Анализирую..."
