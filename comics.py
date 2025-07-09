@@ -6,7 +6,7 @@ from aiogram import types
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import os
-from config import LOG_FILE
+from Config import LOG_FILE
 
 # Шаблоны комиксов (можно расширить)
 COMIC_TEMPLATES = [
