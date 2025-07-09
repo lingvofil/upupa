@@ -259,8 +259,8 @@ def get_processing_message(message: types.Message) -> str:
     elif target_message.animation:
         return "Да не дергайся ты..."
     elif target_message.sticker:
-        return "Изучаю стикер..."
+        return "Стикер-шмикер..."
     elif target_message.text or (message.text and "чотам" in message.text.lower()):
-        return "Анализирую текст..."
+        return "Понаписали ебанарот..."
     else:
         return "Анализирую..."
