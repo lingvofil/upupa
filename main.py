@@ -58,10 +58,8 @@ from adddescribe import (
 
 # ================== БЛОК 3.9: НАСТРОЙКА ЧОТАМ ==================
 from whatisthere import (
-    process_audio_description, 
-    process_video_description,
-    process_image_whatisthere,
-    process_gif_whatisthere
+    process_whatisthere_unified,
+    get_processing_message
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
@@ -350,6 +348,10 @@ async def send_random_media(message: types.Message):
     message.from_user and  # Убедимся, что у сообщения есть отправитель
     message.from_user.id not in BLOCKED_USERS
 )
+async def handle_name_info(message: types.Message):
+    random_action = random.choice(actions)
+    success, response = await process_name_info(message)
+    await message.reply(response)
 
 @router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР
 async def choose_profession_command(message: types.Message):
@@ -389,75 +391,38 @@ async def send_kotogif(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.audio or message.voice) and message.caption and "чотам" in message.caption.lower()
-    ) 
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        (message.reply_to_message.audio or message.reply_to_message.voice)
+        # Медиа с подписью "чотам"
+        (
+            (message.audio or message.voice or message.video or message.photo or 
+             message.animation or message.sticker) and 
+            message.caption and "чотам" in message.caption.lower()
+        )
+        or
+        # Текст "чотам" в ответ на медиа или текст
+        (
+            message.text and "чотам" in message.text.lower() and 
+            message.reply_to_message and 
+            (message.reply_to_message.audio or message.reply_to_message.voice or 
+             message.reply_to_message.video or message.reply_to_message.photo or 
+             message.reply_to_message.animation or message.reply_to_message.sticker or
+             message.reply_to_message.text)
+        )
+        or
+        # Просто текст с "чотам" (без реплая)
+        (
+            message.text and "чотам" in message.text.lower() and 
+            not message.reply_to_message
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
-async def handle_audio_description(message: types.Message):
+async def handle_whatisthere_unified(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Слушою...")
-    success, response = await process_audio_description(message)
-    await processing_msg.delete()
-    await message.reply(response)
-
-@router.message(lambda message: 
-    (
-        (message.video and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.video
-    ) and message.from_user.id not in BLOCKED_USERS
-)
-async def handle_video_description(message: types.Message):
-    random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Сматрю...")
-    success, response = await process_video_description(message)
-    await processing_msg.delete()
-    await message.reply(response)
-
-# НОВЫЙ хэндлер для "чотам" с картинкой
-@router.message(lambda message: 
-    (
-        (message.photo and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.photo
-    ) and message.from_user.id not in BLOCKED_USERS
-)
-async def handle_image_whatisthere(message: types.Message):
-    random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Рассматриваю ето художество...")
-    success, response = await process_image_whatisthere(message)
-    await processing_msg.delete()
-    await message.reply(response)
-
-# НОВЫЙ хэндлер для "чотам" с гифкой
-@router.message(lambda message: 
-    (
-        (message.animation and message.caption and "чотам" in message.caption.lower())
-    )
-    or 
-    (
-        message.text and "чотам" in message.text.lower() and message.reply_to_message and 
-        message.reply_to_message.animation
-    ) and message.from_user.id not in BLOCKED_USERS
-)
-async def handle_gif_whatisthere(message: types.Message):
-    random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Да не дергайся ты...")
-    success, response = await process_gif_whatisthere(message)
+    
+    processing_text = get_processing_message(message)
+    processing_msg = await message.reply(processing_text)
+    
+    success, response = await process_whatisthere_unified(message)
     await processing_msg.delete()
     await message.reply(response)
 
