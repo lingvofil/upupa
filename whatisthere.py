@@ -158,3 +158,76 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
     except Exception as e:
         logging.error(f"Ошибка при обработке GIF 'чотам': {e}")
         return False, "Ошибка при анализе гифки."
+
+# ================== STICKER ==================
+def extract_sticker_info(message: types.Message) -> tuple[str | None, str, str | None]:
+    target_message = message.reply_to_message if message.reply_to_message else message
+    if target_message.sticker:
+        sticker = target_message.sticker
+        file_id = sticker.file_id
+        # Стикеры могут быть в формате webp или tgs (анимированные)
+        if sticker.is_animated:
+            file_name = f"sticker_{file_id}.tgs"
+            mime_type = "application/x-tgsticker"
+        else:
+            file_name = f"sticker_{file_id}.webp"
+            mime_type = "image/webp"
+        return file_id, file_name, mime_type
+    return None, "", None
+
+async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str]:
+    try:
+        file_id, file_name, mime_type = extract_sticker_info(message)
+        if not file_id:
+            return False, "Ошибка: нет стикера для анализа."
+        if not await download_file(file_id, file_name):
+            return False, "Не удалось загрузить стикер."
+        try:
+            description = await analyze_media(file_name, mime_type)
+            return True, description
+        finally:
+            if os.path.exists(file_name):
+                os.remove(file_name)
+    except Exception as e:
+        logging.error(f"Ошибка при обработке стикера 'чотам': {e}")
+        return False, "Ошибка при анализе стикера."
+
+# ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
+async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
+    """
+    Универсальная функция для обработки всех типов медиа по команде 'чотам'
+    """
+    target_message = message.reply_to_message if message.reply_to_message else message
+    
+    # Определяем тип медиа и вызываем соответствующую функцию
+    if target_message.audio or target_message.voice:
+        return await process_audio_description(message)
+    elif target_message.video:
+        return await process_video_description(message)
+    elif target_message.photo:
+        return await process_image_whatisthere(message)
+    elif target_message.animation:
+        return await process_gif_whatisthere(message)
+    elif target_message.sticker:
+        return await process_sticker_whatisthere(message)
+    else:
+        return False, "Не найдено медиа для анализа."
+
+def get_processing_message(message: types.Message) -> str:
+    """
+    Возвращает подходящее сообщение о процессе в зависимости от типа медиа
+    """
+    target_message = message.reply_to_message if message.reply_to_message else message
+    
+    if target_message.audio or target_message.voice:
+        return "Слушою..."
+    elif target_message.video:
+        return "Сматрю..."
+    elif target_message.photo:
+        return "Рассматриваю ето художество..."
+    elif target_message.animation:
+        return "Да не дергайся ты..."
+    elif target_message.sticker:
+        return "Изучаю стикер..."
+    else:
+        return "Анализирую..."
