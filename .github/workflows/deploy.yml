@@ -29,6 +29,7 @@ jobs:
             # --- Добавляем эту команду, чтобы настроить origin на SSH URL ---
             git remote set-url origin git@github.com:lingvofil/upupa.git && \
             # Теперь git pull будет использовать SSH-ключ для аутентификации с GitHub
-            git pull origin main && \
+            git fetch origin && \
+            git reset --hard origin/main && \
             sudo systemctl restart upupa_bot.service"
           echo "Deployment complete."
