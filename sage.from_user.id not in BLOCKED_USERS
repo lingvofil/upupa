@@ -1,0 +1,330 @@
+[1mdiff --git a/main.py b/main.py[m
+[1mindex 6c53d1d..10a243a 100644[m
+[1m--- a/main.py[m
+[1m+++ b/main.py[m
+[36m@@ -12,6 +12,7 @@[m [mimport json[m
+ import nest_asyncio[m
+ from datetime import datetime, timedelta[m
+ import re[m
+[32m+[m[32mfrom typing import Dict[m
+ [m
+ nest_asyncio.apply()[m
+ # ================== БЛОК 1: Конфигурация ==================[m
+[36m@@ -116,8 +117,7 @@[m [mfrom egra import start_egra, handle_egra_answer, handle_final_button_press[m
+ from profession import get_random_okved_and_commentary [m
+ [m
+ # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================[m
+[31m-from statistics import init_db, get_total_messages_per_chat, get_activity_by_hour[m
+[31m-from middlewares import StatisticsMiddleware[m
+[32m+[m[32mimport statistics[m
+ [m
+ # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================[m
+ from birthday_calendar import ([m
+[36m@@ -132,49 +132,74 @@[m [mfrom birthday_calendar import ([m
+ from broadcast import handle_broadcast_command, is_broadcast_command[m
+         [m
+ # ================== БЛОК 4: ХЭНДЛЕРЫ ==================[m
+[31m-@router.message(Command("stats"), F.from_user.id == ADMIN_ID)[m
+[31m-async def get_stats_command(message: Message):[m
+[31m-    chat_stats = await get_total_messages_per_chat()[m
+[31m-    hour_stats = await get_activity_by_hour()[m
+[31m-[m
+[31m-    response_text = "📊 **Статистика по боту**\n\n"[m
+[31m-    response_text += "**Топ-5 самых активных чатов:**\n"[m
+[31m-    [m
+[31m-    # Сортируем и берем топ-5[m
+[31m-    sorted_chats = sorted(chat_stats.items(), key=lambda item: item[1], reverse=True)[:5][m
+[31m-[m
+[31m-    for chat_id, count in sorted_chats:[m
+[31m-        response_text += f" • `ID {chat_id}`: {count} сообщений\n"[m
+[31m-[m
+[31m-    response_text += "\n**Активность по часам (UTC):**\n"[m
+[31m-    if hour_stats:[m
+[31m-        for hour in sorted(hour_stats.keys()):[m
+[31m-            response_text += f" • `{hour:02d}:00 - {hour:02d}:59`: {hour_stats[hour]} сообщ.\n"[m
+[32m+[m[32mdef format_stats_message(stats: Dict[str, Dict], title: str) -> str:[m
+[32m+[m[32m    """Вспомогательная функция для красивого форматирования статистики."""[m
+[32m+[m[32m    parts = [f"📊 *{title}*"][m
+[32m+[m[32m    if stats.get("groups"):[m
+[32m+[m[32m        parts.append("\n*Чаты:*")[m
+[32m+[m[32m        sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)[m
+[32m+[m[32m        for chat_title, count in sorted_groups:[m
+[32m+[m[32m            parts.append(f"  • `{chat_title}`: {count} сообщ.")[m
+     else:[m
+[31m-        response_text += "Данных по часам пока нет.\n"[m
+[31m-[m
+[31m-    await message.answer(response_text, parse_mode='Markdown')[m
+[32m+[m[32m        parts.append("\n_Нет активности в групповых чатах._")[m
+[32m+[m[32m    if stats.get("private"):[m
+[32m+[m[32m        parts.append("\n*Личные сообщения:*")[m
+[32m+[m[32m        sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)[m
+[32m+[m[32m        for user_display, count in sorted_private:[m
+[32m+[m[32m            parts.append(f"  • `{user_display}`: {count} сообщ.")[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        parts.append("\n_Нет активности в личных сообщениях._")[m
+[32m+[m[32m    return "\n".join(parts)[m
+[32m+[m
+[32m+[m[32m@router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)[m
+[32m+[m[32masync def cmd_stats_total(message: Message):[m
+[32m+[m[32m    """Статистика за все время."""[m
+[32m+[m[32m    processing_msg = await message.reply("⏳ Собираю и обновляю статистику... Пожалуйста, подождите.")[m
+[32m+[m[32m    stats_data = await statistics.get_total_messages()[m
+[32m+[m[32m    reply_text = format_stats_message(stats_data, "Общая статистика")[m
+[32m+[m[32m    await processing_msg.edit_text(reply_text, parse_mode="Markdown")[m
+[32m+[m
+[32m+[m[32m@router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)[m
+[32m+[m[32masync def cmd_stats_24h(message: Message):[m
+[32m+[m[32m    """Статистика за последние 24 часа."""[m
+[32m+[m[32m    processing_msg = await message.reply("⏳ Собираю и обновляю статистику за сутки... Пожалуйста, подождите.")[m
+[32m+[m[32m    stats_data = await statistics.get_messages_last_24_hours()[m
+[32m+[m[32m    reply_text = format_stats_message(stats_data, "Статистика за 24 часа")[m
+[32m+[m[32m    await processing_msg.edit_text(reply_text, parse_mode="Markdown")[m
+[32m+[m
+[32m+[m[32m@router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)[m
+[32m+[m[32masync def cmd_stats_1h(message: Message):[m
+[32m+[m[32m    """Статистика за последний час."""[m
+[32m+[m[32m    processing_msg = await message.reply("⏳ Собираю и обновляю статистику за час... Пожалуйста, подождите.")[m
+[32m+[m[32m    stats_data = await statistics.get_messages_last_hour()[m
+[32m+[m[32m    reply_text = format_stats_message(stats_data, "Статистика за час")[m
+[32m+[m[32m    await processing_msg.edit_text(reply_text, parse_mode="Markdown")[m
+ [m
+ @router.message(CommandStart())[m
+ async def process_start_command(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await message.reply("Я пидорас")[m
+ [m
+ @router.message(lambda message: message.text is not None and message.text.lower() == "очистка" and message.from_user.id not in BLOCKED_USERS)[m
+ async def process_clear_command(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     user_id = message.from_user.id[m
+     conversation_history[user_id] = [][m
+     await message.reply("Смыто всё говно")[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "чоумееш" and message.from_user.id not in BLOCKED_USERS)[m
+ async def handle_chooumeesh(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await message.reply(HELP_TEXT)[m
+     [m
+ @router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)[m
+ async def handle_broadcast(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await handle_broadcast_command(message)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))[m
+ async def leave_chat(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     if message.from_user.id != ADMIN_ID:[m
+         await message.reply("Еще чо сделать?")[m
+         return[m
+[36m@@ -183,6 +208,7 @@[m [masync def leave_chat(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")[m
+ async def update_all_chats(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     if message.from_user.id != ADMIN_ID:[m
+         await message.reply("Иди нахуй, у тебя нет прав на это.")[m
+         return[m
+[36m@@ -190,12 +216,14 @@[m [masync def update_all_chats(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "где сидишь")[m
+ async def handle_where_sits(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     global chat_list[m
+     response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)[m
+     await message.reply(response)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "отключи смс")[m
+ async def disable_sms(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     chat_id = str(message.chat.id)[m
+     user_id = message.from_user.id  # ID отправителя[m
+     response = await process_disable_sms(chat_id, user_id, bot)[m
+[36m@@ -203,6 +231,7 @@[m [masync def disable_sms(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "включи смс")[m
+ async def enable_sms(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     chat_id = str(message.chat.id)[m
+     user_id = message.from_user.id[m
+     response = await process_enable_sms(chat_id, user_id, bot)[m
+[36m@@ -210,11 +239,13 @@[m [masync def enable_sms(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and (message.text.lower().startswith("смс ") or message.text.lower().startswith("ммс ")))[m
+ async def check_sms_mms_permission(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     chat_id = str(message.chat.id)[m
+     await process_check_sms_mms_permission(chat_id, message)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower().startswith("смс "))[m
+ async def handle_send_sms(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     from SMS_settings import process_send_sms[m
+     global chat_list[m
+     await process_send_sms(message, chat_list, bot, sms_disabled_chats)[m
+[36m@@ -222,11 +253,13 @@[m [masync def handle_send_sms(message: types.Message):[m
+ @router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or [m
+                                 (message.caption and message.caption.lower().startswith("ммс ")))[m
+ async def handle_send_mms(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     from SMS_settings import process_send_mms[m
+     await process_send_mms(message, chat_list, bot, sms_disabled_chats)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")[m
+ async def handle_my_lexicon(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     user_id = message.from_user.id[m
+[36m@@ -235,6 +268,7 @@[m [masync def handle_my_lexicon(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "лексикон чат")[m
+ async def handle_chat_lexicon(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     response_text = await process_chat_lexicon(message)[m
+[36m@@ -242,6 +276,7 @@[m [masync def handle_chat_lexicon(message: types.Message):[m
+     [m
+ @router.message(lambda message: message.text and message.text.lower().startswith("лексикон "))[m
+ async def handle_user_lexicon(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     username_or_name = message.text[len("лексикон "):].strip()[m
+[36m@@ -252,6 +287,7 @@[m [masync def handle_user_lexicon(message: types.Message):[m
+ [m
+ @router.message(F.text.lower() == "моя статистика")[m
+ async def show_personal_stats(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     logging.info(f"Команда 'моя статистика' вызвана пользователем {message.from_user.id} в чате {message.chat.id}")[m
+[36m@@ -262,6 +298,7 @@[m [masync def show_personal_stats(message: types.Message):[m
+ [m
+ @router.message(F.text.lower() == "статистика чат")[m
+ async def show_chat_stats(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))[m
+     report = await generate_chat_stats_report(str(message.chat.id))[m
+     reply_text = report if report else "В этом чате нет корректных статистических данных."[m
+[36m@@ -269,10 +306,12 @@[m [masync def show_chat_stats(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "что за чат")[m
+ async def handle_chat_profile(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await process_chat_profile(message)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() == "кто я")[m
+ async def handle_user_profile(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     user_id = message.from_user.id[m
+[36m@@ -281,6 +320,7 @@[m [masync def handle_user_profile(message: types.Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower().startswith("пародия"))[m
+ async def handle_parody(message: types.Message):[m
+[32m+[m[32m   await statistics.log_activity(message)[m
+    random_action = random.choice(actions)[m
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+    chat_id = message.chat.id  # Ограничиваем выбор фраз этим чатом[m
+[36m@@ -288,6 +328,7 @@[m [masync def handle_parody(message: types.Message):[m
+ [m
+ @router.message(F.text.lower().contains("викторина"))[m
+ async def start_quiz(message: Message, bot: Bot):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     processing_msg = await message.reply("Генерирую вапросики...")[m
+[36m@@ -296,29 +337,26 @@[m [masync def start_quiz(message: Message, bot: Bot):[m
+     if not success:[m
+         await message.reply(error_message)[m
+ [m
+[31m-# ================== НОВОЕ: Хэндлер для команды "егра" ==================[m
+ @router.message(F.text.lower() == "егра")[m
+ async def egra_command_handler(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await start_egra(message, bot)[m
+ [m
+[31m-# ================== ИЗМЕНЕНО: Универсальный обработчик опросов ==================[m
+ @router.poll_answer()[m
+ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):[m
+[31m-    # Сначала пытаемся обработать как ответ в "егре"[m
+[31m-    # Функция вернет True, если ответ был успешно обработан[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     is_egra_handled = await handle_egra_answer(poll_answer, bot)[m
+[31m-    [m
+[31m-    # Если это был не ответ в "егре", пытаемся обработать как ответ в викторине[m
+     if not is_egra_handled:[m
+         await process_poll_answer(poll_answer, bot)[m
+ [m
+[31m-# ================== НОВОЕ: Хэндлер для нажатия инлайн-кнопки в игре ==================[m
+ @router.callback_query(F.data == "egra_final_choice")[m
+ async def egra_callback_handler(callback_query: types.CallbackQuery):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await handle_final_button_press(callback_query, bot)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())[m
+ async def send_random_media(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await process_channel_command(message, CHANNEL_SETTINGS)[m
+ [m
+ @router.message(lambda message: [m
+[36m@@ -330,15 +368,18 @@[m [masync def send_random_media(message: types.Message):[m
+ [m
+ @router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР[m
+ async def choose_profession_command(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     await get_random_okved_and_commentary(message)[m
+     [m
+ async def handle_name_info(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     success, response = await process_name_info(message)[m
+     await message.reply(response)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)[m
+ async def handle_image_search(message: Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     query = message.text[len("найди"):].strip()[m
+     success, response_message, image_data = await process_image_search(query)[m
+[36m@@ -349,12 +390,14 @@[m [masync def handle_image_search(message: Message):[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)[m
+ async def universal_handler(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     keyword = message.text.lower()[m
+     query, temp_img_path, error_msg = queries[keyword][m
+     await handle_message(message, query, temp_img_path, error_msg)[m
+ [m
+ @router.message(lambda message: message.text and message.text.lower().replace(" ", "") == "котогиф" and message.from_user.id not in BLOCKED_USERS)[m
+ async def send_kotogif(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     await message.reply("Ща ща")[m
+[36m@@ -375,6 +418,7 @@[m [masync def send_kotogif(message: types.Message):[m
+     ) and message.from_user.id not in BLOCKED_USERS[m
+ )[m
+ async def handle_audio_description(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     processing_msg = await message.reply("Слушою...")[m
+[36m@@ -393,6 +437,7 @@[m [masync def handle_audio_description(message: types.Message):[m
+     ) and message.from_user.id not in BLOCKED_USERS[m
+ )[m
+ async def handle_video_description(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+     processing_msg = await message.reply("Сматрю...")[m
+[36m@@ -412,6 +457,7 @@[m [masync def handle_video_description(message: types.Message):[m
+     ) and message.from_user.id not in BLOCKED_USERS[m
+ )[m
+ async def handle_image_whatisthere(message: types.Message):[m
+[32m+[m[32m    await statistics.log_activity(message)[m
+     random_action = random.choice(actions)[m
+     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)[m
+  
