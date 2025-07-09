@@ -173,7 +173,7 @@ async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
     stats_data = await statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
-    await message.answer(reply_text, parse_mode="Markdown"
+    await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(CommandStart())
 async def process_start_command(message: types.Message):
