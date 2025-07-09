@@ -126,6 +126,13 @@ from birthday_calendar import (
     birthday_scheduler
 )
 
+# ================== БЛОК 3.20 КОМИКСЫ ==================
+from comics import (
+    handle_comic_command,
+    handle_comic_history_command,
+    get_comic_stats
+)
+
 # ================== БЛОК РАССЫЛКИ ==================
 from broadcast import handle_broadcast_command, is_broadcast_command
         
@@ -514,6 +521,14 @@ async def test_greeting_command(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower() == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
 async def admin_birthday_list_command(message: types.Message):
     await handle_admin_birthday_list_command(message)
+    
+@router.message(lambda message: message.text and message.text.lower() == "комикс" and message.from_user.id not in BLOCKED_USERS)
+async def handle_comic(message: types.Message):
+    await handle_comic_command(message)
+
+@router.message(lambda message: message.text and message.text.lower() == "комикс история" and message.from_user.id not in BLOCKED_USERS)
+async def handle_comic_history(message: types.Message):
+    await handle_comic_history_command(message)
 
 @router.message(F.text.lower() == "чобыло")
 async def handle_chobylo(message: types.Message):
