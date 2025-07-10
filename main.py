@@ -130,6 +130,7 @@ from birthday_calendar import (
 from broadcast import handle_broadcast_command, is_broadcast_command
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
+router.message.middleware(PrivateRateLimitMiddleware())
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     """Вспомогательная функция для красивого форматирования статистики."""
     parts = [f"📊 *{title}*"]
