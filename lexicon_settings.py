@@ -6,8 +6,8 @@ import collections
 from collections import defaultdict
 from nltk.util import ngrams
 from aiogram import types
-from Config import LOG_FILE
-from Prompts import STOPWORDS
+from config import LOG_FILE
+from prompts import STOPWORDS
 
 # Запись сообщений всех пользователей в файл
 async def save_user_message(message: types.Message):

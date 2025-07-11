@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from aiogram import Bot, types
-from Config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID
+from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID
 
 # ✅ Функция загрузки списка чатов с отключёнными смс
 def load_sms_disabled_chats():

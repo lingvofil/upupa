@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from aiogram import types
 import random # Needed for random actions
 
-from Config import LOG_FILE, model # Make sure model is imported/available
-from Prompts import actions # Make sure actions list is available
+from config import LOG_FILE, model # Make sure model is imported/available
+from prompts import actions # Make sure actions list is available
 
 async def summarize_chat_history(message: types.Message, chat_model, log_file_path: str, action_list: list):
     chat_id = str(message.chat.id)

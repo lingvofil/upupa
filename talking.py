@@ -6,27 +6,27 @@ import json
 from aiogram import types
 
 # Обновленные импорты
-from Config import (
+from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
     conversation_history, model, bot
 )
 # Функции для работы с файлами и промптами
-from Chat_settings import save_chat_settings, add_chat
-from Prompts import (
+from chat_settings import save_chat_settings, add_chat
+from prompts import (
     PROMPTS_TEXT, PROMPTS_DICT, get_available_prompts,
     get_prompts_list_text, actions, get_prompt_by_name,
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
     KEYWORDS
 )
 # Функции для извлечения сообщений (предполагается, что они в Lexicon_settings.py)
-from Lexicon_settings import (save_user_message,
+from lexicon_settings import (save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
     get_frequent_phrases_from_text
 )
 # Импорт для реакций и статистики
 from random_reactions import process_random_reactions
-from Stat_rank_settings import track_message_statistics
+from stat_rank_settings import track_message_statistics
 
 
 # =============================================================================

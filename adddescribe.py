@@ -11,8 +11,8 @@ from aiogram.types import FSInputFile
 
 # Убедитесь, что actions и bot импортируются или передаются корректно
 # Предполагаем, что actions есть в Common_settings
-from Config import API_TOKEN, model, bot 
-from Prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
+from config import API_TOKEN, model, bot 
+from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 # =============================================================================
 # НОВАЯ ФУНКЦИЯ-ОБРАБОТЧИК

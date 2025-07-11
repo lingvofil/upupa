@@ -5,7 +5,7 @@ import requests
 from googleapiclient.discovery import build
 from aiogram import types
 from aiogram.types import FSInputFile, Message
-from Config import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
+from config import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
 
 # Функция поиска изображений через Google Custom Search API
 def get_google_service():
