@@ -15,25 +15,35 @@ from typing import Dict
 
 nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
-from config import *
+from config import (
+    bot, dp, router, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
+    chat_settings, save_chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+)
 
 # ================== БЛОК 2: СПРАвКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
-from prompts import *
+from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
-from common_settings import *
+from common_settings import process_leave_chat
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
-from chat_settings import *
+rom chat_settings import (
+    process_update_all_chats, get_chats_list, add_chat
+)
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
-from stat_rank_settings import *
+from stat_rank_settings import get_user_statistics, generate_chat_stats_report
 
 # ================== БЛОК 3.4: НАСТРОЙКА ЛЕКСИКОНА ==================
-from lexicon_settings import *
+from lexicon_settings import (
+    process_my_lexicon, process_chat_lexicon, process_user_lexicon
+)
 
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
-from sms_settings import *
+from sms_settings import (
+    process_disable_sms, process_enable_sms, process_check_sms_mms_permission,
+    process_send_sms, process_send_mms
+)
 
 # ================== БЛОК 3.6: НАСТРОЙКА КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
 from whoparody import (

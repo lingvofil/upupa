@@ -4,8 +4,6 @@ import random
 import logging
 import asyncio
 from aiogram.types import FSInputFile
-from common_settings import *
-from chat_settings import *
 
 # Рифма
 async def generate_rhyme_reaction(message, model):
