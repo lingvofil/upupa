@@ -27,7 +27,7 @@ from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 from common_settings import process_leave_chat
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
-rom chat_settings import (
+from chat_settings import (
     process_update_all_chats, get_chats_list, add_chat
 )
 
