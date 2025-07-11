@@ -2,7 +2,6 @@ import base64
 import logging
 from aiogram import types
 from config import chat_list, bot
-from chat_settings import chat_list
 
 # Функция для обрезки истории разговора
 def trim_history(history, max_length=4096):

@@ -20,7 +20,7 @@ from config import (
     chat_settings, save_chat_settings, chat_list, sms_disabled_chats, LOG_FILE
 )
 
-# ================== БЛОК 2: СПРАвКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
+# ================== БЛОК 2: СПРАВКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
 from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
@@ -58,10 +58,6 @@ from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz
 # ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
 from adddescribe import (
     process_image_description,
-    get_photo_from_message,
-    download_telegram_image,
-    process_image,
-    overlay_text_on_image,
     handle_add_text_command
 )
 
@@ -88,20 +84,11 @@ from picgeneration import handle_image_generation_command, handle_pun_image_comm
 
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
-    get_weather_with_fallback, 
-    get_mock_weather, 
-    format_weekly_forecast, 
     handle_current_weather_command, 
     handle_weekly_forecast_command
 )
 # ================== БЛОК 3.11: НАСТРОЙКА ГОВОРИЛКИ ==================
 from talking import (
-    update_chat_settings,
-    update_conversation_history,
-    format_chat_history,
-    generate_response,
-    handle_bot_conversation,
-    get_current_chat_prompt,
     handle_list_prompts_command,
     handle_current_prompt_command,
     handle_set_prompt_command,
@@ -124,7 +111,7 @@ from egra import start_egra, handle_egra_answer, handle_final_button_press
 from profession import get_random_okved_and_commentary 
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
-import statistics
+import statistics as bot_statistics
 from statistics import PrivateRateLimitMiddleware
 
 # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
@@ -168,21 +155,21 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
     """Статистика за все время."""
-    stats_data = await statistics.get_total_messages()
+    stats_data = await bot_statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
     await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
     """Статистика за последние 24 часа."""
-    stats_data = await statistics.get_messages_last_24_hours()
+    stats_data = await bot_statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
     await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
     """Статистика за последний час."""
-    stats_data = await statistics.get_messages_last_hour()
+    stats_data = await bot_statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
     await message.answer(reply_text, parse_mode="Markdown")
 
@@ -221,7 +208,6 @@ async def update_all_chats(message: types.Message):
 
 @router.message(lambda message: message.text and message.text.lower() == "где сидишь")
 async def handle_where_sits(message: types.Message):
-    global chat_list
     response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
     await message.reply(response)
 
@@ -246,14 +232,11 @@ async def check_sms_mms_permission(message: types.Message):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("смс "))
 async def handle_send_sms(message: types.Message):
-    from SMS_settings import process_send_sms
-    global chat_list
     await process_send_sms(message, chat_list, bot, sms_disabled_chats)
 
 @router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
                                 (message.caption and message.caption.lower().startswith("ммс ")))
 async def handle_send_mms(message: types.Message):
-    from SMS_settings import process_send_mms
     await process_send_mms(message, chat_list, bot, sms_disabled_chats)
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
@@ -367,11 +350,6 @@ async def handle_name_info(message: types.Message):
 async def choose_profession_command(message: types.Message):
     await get_random_okved_and_commentary(message)
     
-async def handle_name_info(message: types.Message):
-    random_action = random.choice(actions)
-    success, response = await process_name_info(message)
-    await message.reply(response)
-
 @router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
 async def handle_image_search(message: Message):
     random_action = random.choice(actions)
@@ -483,7 +461,6 @@ async def generate_image(message: types.Message):
     )
 )
 async def redraw_image(message: types.Message):
-    from Picgeneration import handle_redraw_command
     await handle_redraw_command(message)
 
 @router.message(
@@ -578,7 +555,7 @@ async def process_message(message: types.Message):
     try:
         if message.from_user: # Убедимся, что есть отправитель
             is_private = message.chat.type == 'private'
-            await statistics.log_message(
+            await bot_statistics.log_message(
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
                 message_type=message.content_type,
@@ -593,7 +570,7 @@ async def process_message(message: types.Message):
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
     # ✅ Инициализируем базу данных перед запуском
-    statistics.init_db()
+    bot_statistics.init_db()
     # Сначала создаём задачи для викторин
     chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
     for chat_id in chat_ids:
