@@ -61,20 +61,6 @@ async def process_enable_sms(chat_id, user_id, bot):
     else:
         return "СМС и ММС уже разрешены в этом чате."
 
-# Вынесенная логика проверки разрешения на СМС/ММС
-async def process_check_sms_mms_permission(chat_id, message):
-    if chat_id in sms_disabled_chats:
-        await message.reply("СМС и ММС отключены в этом чате.")
-        return False
-    if message.text and message.text.lower().startswith("смс "):
-        from main import handle_send_sms
-        await handle_send_sms(message)
-    elif (message.text and message.text.lower().startswith("ммс ")) or \
-         (message.caption and message.caption.lower().startswith("ммс ")):
-        from main import handle_send_mms
-        await handle_send_mms(message)
-    return True
-
 # Вынесенная логика отправки СМС
 async def process_send_sms(message, chat_list, bot, sms_disabled_chats):
     chat_id = str(message.chat.id)
