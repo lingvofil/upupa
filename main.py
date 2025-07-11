@@ -17,7 +17,7 @@ nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
 from config import (
     bot, dp, router, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, save_chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
 )
 
 # ================== БЛОК 2: СПРАВКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
@@ -28,7 +28,7 @@ from common_settings import process_leave_chat
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
 from chat_settings import (
-    process_update_all_chats, get_chats_list, add_chat
+    process_update_all_chats, get_chats_list, add_chat, save_chat_settings
 )
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
@@ -41,7 +41,7 @@ from lexicon_settings import (
 
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
 from sms_settings import (
-    process_disable_sms, process_enable_sms, process_check_sms_mms_permission,
+    process_disable_sms, process_enable_sms,
     process_send_sms, process_send_mms
 )
 
@@ -225,18 +225,21 @@ async def enable_sms(message: types.Message):
     response = await process_enable_sms(chat_id, user_id, bot)
     await message.reply(response)
 
-@router.message(lambda message: message.text and (message.text.lower().startswith("смс ") or message.text.lower().startswith("ммс ")))
-async def check_sms_mms_permission(message: types.Message):
-    chat_id = str(message.chat.id)
-    await process_check_sms_mms_permission(chat_id, message)
-
 @router.message(lambda message: message.text and message.text.lower().startswith("смс "))
 async def handle_send_sms(message: types.Message):
+    chat_id = str(message.chat.id)
+    if chat_id in sms_disabled_chats:
+        await message.reply("СМС и ММС отключены в этом чате.")
+        return
     await process_send_sms(message, chat_list, bot, sms_disabled_chats)
 
 @router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
                                 (message.caption and message.caption.lower().startswith("ммс ")))
 async def handle_send_mms(message: types.Message):
+    chat_id = str(message.chat.id)
+    if chat_id in sms_disabled_chats:
+        await message.reply("СМС и ММС отключены в этом чате.")
+        return
     await process_send_mms(message, chat_list, bot, sms_disabled_chats)
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
