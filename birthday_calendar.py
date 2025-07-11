@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from aiogram import types
 from aiogram.types import Message
 import logging
-from Config import model, LOG_FILE, ADMIN_ID
+from config import model, LOG_FILE, ADMIN_ID
 
 # Файл для хранения дней рождения
 BIRTHDAY_FILE = "birthdays.json"

@@ -15,25 +15,25 @@ from typing import Dict
 
 nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
-from Config import *
+from config import *
 
 # ================== БЛОК 2: СПРАвКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
-from Prompts import *
+from prompts import *
 
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
-from Common_settings import *
+from common_settings import *
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
-from Chat_settings import *
+from chat_settings import *
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
-from Stat_rank_settings import *
+from stat_rank_settings import *
 
 # ================== БЛОК 3.4: НАСТРОЙКА ЛЕКСИКОНА ==================
-from Lexicon_settings import *
+from lexicon_settings import *
 
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
-from SMS_settings import *
+from sms_settings import *
 
 # ================== БЛОК 3.6: НАСТРОЙКА КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
 from whoparody import (
@@ -62,7 +62,7 @@ from whatisthere import (
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
-from Channels_settings import process_channel_command
+from channels_settings import process_channel_command
 
 # ================== БЛОК 3.8: НАСТРОЙКА ПОИСКА ==================
 from search import (
@@ -74,7 +74,7 @@ from search import (
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
-from Picgeneration import handle_image_generation_command, handle_pun_image_command, handle_redraw_command
+from picgeneration import handle_image_generation_command, handle_pun_image_command, handle_redraw_command
 
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (

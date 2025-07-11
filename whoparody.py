@@ -1,14 +1,14 @@
 import random
 import logging
 from aiogram import types
-from Lexicon_settings import (
+from lexicon_settings import (
     extract_user_messages,
     extract_messages_by_username,
     extract_messages_by_full_name,
     extract_chat_messages  # Используем существующую функцию
 )
-from Config import model, LOG_FILE
-from Prompts import actions, PARODY_PROMPT
+from config import model, LOG_FILE
+from prompts import actions, PARODY_PROMPT
 
 # --- ПРОМПТЫ ---
 

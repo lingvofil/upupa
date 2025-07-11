@@ -4,9 +4,9 @@ import logging
 import requests
 import subprocess
 from aiogram import types
-from Config import bot, API_TOKEN, model
+from config import bot, API_TOKEN, model
 # Импортируем новый единый список промптов
-from Prompts import PROMPTS_MEDIA
+from prompts import PROMPTS_MEDIA
 
 # Общая функция для скачивания файлов
 async def download_file(file_id: str, file_name: str) -> bool:

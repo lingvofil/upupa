@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 from aiogram import types
 
 # Убедитесь, что все зависимости импортированы
-from Config import bot
-from Prompts import actions
+from config import bot
+from prompts import actions
 
 # Настройка логирования для отладки
 logging.basicConfig(level=logging.INFO)

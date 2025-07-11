@@ -9,7 +9,7 @@ from aiogram.types import Message
 # ------------------------------------
 
 # Убедитесь, что в Config.py добавлена переменная DB_FILE и ADMIN_ID
-from Config import DB_FILE, ADMIN_ID
+from config import DB_FILE, ADMIN_ID
 
 # --- НОВЫЙ БЛОК: MIDDLEWARE ДЛЯ ОГРАНИЧЕНИЯ В ЛС ---
 

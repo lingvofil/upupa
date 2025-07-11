@@ -12,7 +12,7 @@ from aiogram.types import Message, PollAnswer
 from aiogram import Bot
 
 # Обновленные импорты для Gemini
-from Config import LOG_FILE, quiz_questions, quiz_states, model
+from config import LOG_FILE, quiz_questions, quiz_states, model
 # Удалены импорты GigaChat
 
 
