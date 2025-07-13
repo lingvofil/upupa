@@ -313,12 +313,10 @@ async def start_quiz(message: Message, bot: Bot):
     if not success:
         await message.reply(error_message)
 
-# ================== НОВОЕ: Хэндлер для команды "егра" ==================
 @router.message(F.text.lower() == "егра")
 async def egra_command_handler(message: types.Message):
     await start_egra(message, bot)
 
-# ================== ИЗМЕНЕНО: Универсальный обработчик опросов ==================
 @router.poll_answer()
 async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     # Сначала пытаемся обработать как ответ в "егре"
@@ -329,7 +327,6 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     if not is_egra_handled:
         await process_poll_answer(poll_answer, bot)
 
-# ================== НОВОЕ: Хэндлер для нажатия инлайн-кнопки в игре ==================
 @router.callback_query(F.data == "egra_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
     await handle_final_button_press(callback_query, bot)
@@ -349,7 +346,7 @@ async def handle_name_info(message: types.Message):
     success, response = await process_name_info(message)
     await message.reply(response)
 
-@router.message(F.text.lower() == "кем стать") # <--- ДОБАВЬТЕ ЭТОТ ХЭНДЛЕР
+@router.message(F.text.lower() == "кем стать") 
 async def choose_profession_command(message: types.Message):
     await get_random_okved_and_commentary(message)
     
