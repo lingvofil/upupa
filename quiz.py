@@ -174,13 +174,16 @@ async def send_question(bot, chat_id, question_index):
         
         logging.info(f"Отправка вопроса {question_index + 1} в чат {chat_id}")
         
+        # Определяем, должна ли викторина быть анонимной
+        is_anonymous_quiz = True if chat_id_str == '-1001781970364' else False
+        
         poll = await bot.send_poll(
             chat_id=chat_id,
             question=f"Вопрос {question_index + 1}/{len(questions)}\n{question['text']}",
             options=question['options'],
             type='quiz',
             correct_option_id=question['options'].index(question['correct_answer']),
-            is_anonymous=False,
+            is_anonymous=is_anonymous_quiz, # Используем переменную для установки анонимности
             allows_multiple_answers=False
         )
         
