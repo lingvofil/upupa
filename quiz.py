@@ -207,7 +207,8 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     logging.info(f"Получена команда викторины в чате {chat_id}")
     
     # Проверяем, не идет ли уже викторина в этом чате
-    if quiz_states.get(chat_id_str):
+    # Для чата -1001781970364 разрешаем запускать новую викторину поверх старой
+    if quiz_states.get(chat_id_str) and chat_id_str != '-1001781970364':
         return False, "В этом чате уже идет викторина! Отъебись"
     
     try:
@@ -217,8 +218,11 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         if not messages:
             return False, "Недостаточно сообщений для создания викторины. Общайтесь больше!"
 
+        # Для чата -1001781970364 всегда генерируем только 1 вопрос
+        num_questions = 1 if chat_id_str == '-1001781970364' else 5
+        
         # Генерируем вопросы
-        questions = await generate_quiz_with_gemini(messages)
+        questions = await generate_quiz_with_gemini(messages, num_questions)
         logging.info(f"Сгенерировано {len(questions)} вопросов")
         
         if not questions:
