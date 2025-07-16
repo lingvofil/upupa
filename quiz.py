@@ -8,11 +8,12 @@ from datetime import datetime, timedelta
 import pytz
 import aiofiles
 
-from aiogram.types import Message, Poll
+from aiogram.types import Message, PollAnswer
 from aiogram import Bot
 
 # Обновленные импорты для Gemini
 from config import LOG_FILE, quiz_questions, quiz_states, model
+# Удалены импорты GigaChat
 
 
 # Функция для получения временного диапазона
@@ -93,17 +94,21 @@ async def generate_quiz_with_gemini(messages, num_questions=1):
     """
     
     try:
+        # Вызов Gemini API через асинхронную обертку
         def sync_model_call():
             response = model.generate_content(prompt)
             return response.text
 
+        # Асинхронный вызов
         response_text = await asyncio.to_thread(sync_model_call)
         
+        # Парсинг ответа
         json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
         json_str = json_match.group(1) if json_match else response_text.strip()
         
         questions = json.loads(json_str)
         
+        # Валидация вопросов
         validated_questions = [
             q for q in questions
             if isinstance(q, dict)
@@ -144,22 +149,24 @@ async def schedule_daily_quiz(bot: Bot, chat_id: int):
         moscow_tz = pytz.timezone('Europe/Moscow')
         now = datetime.now().astimezone(moscow_tz)
         
+        # Устанавливаем время следующей викторины на полночь
         target_time = now.replace(hour=23, minute=0, second=0, microsecond=0)
         if now >= target_time:
             target_time += timedelta(days=1)
         
+        # Ждем до назначенного времени
         wait_seconds = (target_time - now).total_seconds()
         await asyncio.sleep(wait_seconds)
         
+        # Отправляем викторину
         await send_daily_quiz(bot, chat_id)
 
 # Обновленная функция send_question
-async def send_question(bot: Bot, chat_id: int, question_index: int):
+async def send_question(bot, chat_id, question_index):
     try:
         chat_id_str = str(chat_id)
         if chat_id_str not in quiz_questions or question_index >= len(quiz_questions[chat_id_str]):
-            if quiz_states.get(chat_id_str):
-                quiz_states[chat_id_str] = None
+            quiz_states[chat_id_str] = None
             return
         
         questions = quiz_questions[chat_id_str]
@@ -167,26 +174,26 @@ async def send_question(bot: Bot, chat_id: int, question_index: int):
         
         logging.info(f"Отправка вопроса {question_index + 1} в чат {chat_id}")
         
+        # Определяем, должна ли викторина быть анонимной
         is_anonymous_quiz = True if chat_id_str == '-1001781970364' else False
         
-        poll_message = await bot.send_poll(
+        poll = await bot.send_poll(
             chat_id=chat_id,
             question=f"Вопрос {question_index + 1}/{len(questions)}\n{question['text']}",
             options=question['options'],
             type='quiz',
             correct_option_id=question['options'].index(question['correct_answer']),
-            is_anonymous=is_anonymous_quiz,
+            is_anonymous=is_anonymous_quiz, # Используем переменную для установки анонимности
             allows_multiple_answers=False
         )
         
+        # Сохраняем состояние текущей викторины
         quiz_states[chat_id_str] = {
             'current_question': question_index,
-            'poll_id': poll_message.poll.id,
-            'message_id': poll_message.message_id,
-            'advanced': False
+            'poll_id': poll.poll.id
         }
         
-        logging.info(f"Вопрос успешно отправлен, poll_id: {poll_message.poll.id}")
+        logging.info(f"Вопрос успешно отправлен, poll_id: {poll.poll.id}")
         
     except Exception as e:
         logging.error(f"Ошибка при отправке вопроса: {e}")
@@ -199,17 +206,9 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     
     logging.info(f"Получена команда викторины в чате {chat_id}")
     
+    # Проверяем, не идет ли уже викторина в этом чате
     if quiz_states.get(chat_id_str):
-        logging.info(f"Прерывание существующей викторины в чате {chat_id_str}")
-        try:
-            old_quiz_state = quiz_states.get(chat_id_str)
-            if old_quiz_state and old_quiz_state.get('message_id'):
-                await bot.stop_poll(chat_id=chat_id, message_id=old_quiz_state['message_id'])
-        except Exception as e:
-            logging.warning(f"Не удалось остановить старый опрос в чате {chat_id_str}: {e}")
-        
-        quiz_states[chat_id_str] = None
-        await message.reply("Текущая викторина прервана. Начинаю новую.")
+        return False, "В этом чате уже идет викторина! Отъебись"
     
     try:
         messages = await extract_messages(LOG_FILE, chat_id, days=4)
@@ -218,14 +217,17 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         if not messages:
             return False, "Недостаточно сообщений для создания викторины. Общайтесь больше!"
 
+        # Генерируем вопросы
         questions = await generate_quiz_with_gemini(messages)
         logging.info(f"Сгенерировано {len(questions)} вопросов")
         
         if not questions:
             return False, "Не удалось создать вопросы для викторины."
 
+        # Сохраняем вопросы
         quiz_questions[chat_id_str] = questions
         
+        # Отправляем первый вопрос
         await send_question(bot, chat_id, 0)
         return True, ""
         
@@ -233,34 +235,29 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         logging.error(f"Ошибка при запуске викторины: {e}")
         return False, "Произошла ошибка при создании викторины."
 
-# Новая функция для обработки обновлений опросов (заменяет process_poll_answer)
-async def process_poll_update(poll: Poll, bot: Bot) -> None:
+# Вынесенная обработка ответов
+async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
     try:
-        logging.debug(f"Получено обновление опроса: {poll.id}, voters: {poll.total_voter_count}")
-
+        logging.info(f"Получен ответ на опрос: {poll_answer.poll_id}")
+        
+        # Ищем викторину, которой принадлежит этот опрос
         chat_id_str = None
         quiz_state = None
         
         for current_chat_id, state in quiz_states.items():
-            if state and state.get('poll_id') == poll.id:
+            if state and state.get('poll_id') == poll_answer.poll_id:
                 chat_id_str = current_chat_id
                 quiz_state = state
                 break
         
-        if not (chat_id_str and quiz_state):
-            return
-
-        if quiz_state.get('advanced', False):
-            return
-
-        if poll.total_voter_count > 0:
-            logging.info(f"Обнаружен голос в опросе {poll.id} в чате {chat_id_str}. Переход к следующему вопросу.")
+        if chat_id_str and quiz_state:
+            logging.info(f"Найдена активная викторина в чате {chat_id_str}")
             
-            quiz_states[chat_id_str]['advanced'] = True
-            
+            # Ждем небольшую паузу
             await asyncio.sleep(3)
             
+            # Отправляем следующий вопрос
             await send_question(bot, int(chat_id_str), quiz_state['current_question'] + 1)
                 
     except Exception as e:
-        logging.error(f"Ошибка при обработке обновления опроса: {e}")
+        logging.error(f"Ошибка при обработке ответа на опрос: {e}")
