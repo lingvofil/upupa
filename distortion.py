@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import random
 import logging
 import subprocess
@@ -15,40 +16,42 @@ from whatisthere import download_file # Переиспользуем функц�
 
 async def distort_image(input_path: str, output_path: str) -> bool:
     """
-    Применяет случайные эффекты искажения к изображению с помощью Pillow.
+    Применяет liquid rescale искажение к изображению с помощью Pillow.
+    Имитирует эффект ImageMagick liquid-rescale.
     """
     try:
         with Image.open(input_path) as img:
-            # Конвертируем в RGB для совместимости с эффектами
+            # Конвертируем в RGB для совместимости
             img = img.convert("RGB")
+            original_size = img.size
             
-            # 1. Сдвиг каналов для "глючного" эффекта
-            r, g, b = img.split()
-            r_offset = random.randint(-10, 10)
-            g_offset = random.randint(-10, 10)
+            # Получаем размеры для liquid rescale (60-80% от оригинала)
+            scale_factor = random.uniform(0.6, 0.8)
+            liquid_width = int(original_size[0] * scale_factor)
+            liquid_height = int(original_size[1] * scale_factor)
             
-            # Создаем пустые изображения для сдвинутых каналов
-            r = r.transform(img.size, Image.AFFINE, (1, 0, r_offset, 0, 1, 0))
-            g = g.transform(img.size, Image.AFFINE, (1, 0, g_offset, 0, 1, 0))
+            # Этап 1: Сжимаем изображение (имитация liquid rescale)
+            # Используем LANCZOS для лучшего качества при уменьшении
+            img_small = img.resize((liquid_width, liquid_height), Image.LANCZOS)
             
-            img = Image.merge("RGB", (r, g, b))
-
-            # 2. Добавление случайных горизонтальных линий
-            for _ in range(random.randint(5, 15)):
-                y = random.randint(0, img.height - 1)
-                for x in range(img.width):
-                    if random.random() > 0.95: # Не сплошная линия
-                         img.putpixel((x, y), (random.randint(0,255), random.randint(0,255), random.randint(0,255)))
-
-            # 3. Применение случайного фильтра
+            # Этап 2: Растягиваем обратно до оригинального размера
+            # Используем NEAREST для создания "квадратного" эффекта
+            img_distorted = img_small.resize(original_size, Image.NEAREST)
+            
+            # Дополнительные эффекты для усиления искажения
             if random.random() > 0.5:
-                img = img.filter(ImageFilter.SHARPEN)
-            else:
-                enhancer = ImageEnhance.Contrast(img)
-                img = enhancer.enhance(random.uniform(1.2, 1.8))
-
-            # 4. Сохраняем с небольшим сжатием для артефактов
-            img.save(output_path, "JPEG", quality=random.randint(60, 85))
+                # Случайное изменение контраста
+                enhancer = ImageEnhance.Contrast(img_distorted)
+                img_distorted = enhancer.enhance(random.uniform(1.1, 1.4))
+            
+            if random.random() > 0.7:
+                # Случайное изменение насыщенности
+                enhancer = ImageEnhance.Color(img_distorted)
+                img_distorted = enhancer.enhance(random.uniform(0.8, 1.3))
+            
+            # Сохраняем с качеством 85-95% для минимальных артефактов
+            img_distorted.save(output_path, "JPEG", quality=random.randint(85, 95))
+            
         return True
     except Exception as e:
         logging.error(f"Ошибка при искажении изображения: {e}")
@@ -56,30 +59,70 @@ async def distort_image(input_path: str, output_path: str) -> bool:
 
 async def distort_video(input_path: str, output_path: str) -> bool:
     """
-    Искажает видео или GIF с помощью ffmpeg.
+    Искажает видео или GIF с помощью ffmpeg, используя liquid rescale эффект.
     ВАЖНО: ffmpeg должен быть установлен на сервере, где работает бот.
     """
     try:
-        # Набор случайных фильтров для ffmpeg
-        filters = [
-            # Добавляет шум и сдвигает цвета
-            "noise=alls=10:allf=t,hue=H='2*PI*t':s=2", 
-            # Пикселизация
-            "scale=iw/4:ih/4,scale=iw*4:ih*4:flags=neighbor",
-            # Изменение контраста и гаммы
-            "eq=contrast=1.5:gamma=1.5",
-            # Случайные сдвиги полей
-            "il=l=random(1,2)*mod(n,2):c=random(1,2)*mod(n,2)"
+        # Получаем размеры видео
+        probe_command = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', input_path
         ]
-        chosen_filter = random.choice(filters)
+        
+        probe_process = await asyncio.create_subprocess_exec(
+            *probe_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = await probe_process.communicate()
+        
+        if probe_process.returncode != 0:
+            logging.error(f"Ошибка получения информации о видео: {stderr.decode()}")
+            return False
+        
+        import json
+        probe_data = json.loads(stdout.decode())
+        
+        # Ищем видео поток
+        video_stream = None
+        for stream in probe_data['streams']:
+            if stream['codec_type'] == 'video':
+                video_stream = stream
+                break
+        
+        if not video_stream:
+            logging.error("Не найден видео поток")
+            return False
+        
+        original_width = video_stream['width']
+        original_height = video_stream['height']
+        
+        # Случайный коэффициент сжатия для liquid rescale
+        scale_factor = random.uniform(0.6, 0.8)
+        liquid_width = int(original_width * scale_factor)
+        liquid_height = int(original_height * scale_factor)
+        
+        # Фильтр для liquid rescale эффекта
+        # Сначала уменьшаем, потом увеличиваем обратно
+        liquid_filter = f"scale={liquid_width}:{liquid_height},scale={original_width}:{original_height}:flags=neighbor"
+        
+        # Дополнительные эффекты
+        additional_effects = [
+            f"eq=contrast={random.uniform(1.1, 1.4)}",
+            f"eq=saturation={random.uniform(0.8, 1.3)}",
+            f"unsharp=5:5:{random.uniform(0.5, 1.0)}:5:5:0.0"
+        ]
+        
+        # Случайно добавляем один из дополнительных эффектов
+        if random.random() > 0.5:
+            liquid_filter += f",{random.choice(additional_effects)}"
         
         # Команда для ffmpeg
         command = [
             'ffmpeg',
             '-i', input_path,
-            '-vf', chosen_filter,
-            '-y',  # Перезаписать выходной файл, если он существует
-            '-c:a', 'copy', # Копировать аудиодорожку без перекодирования
+            '-vf', liquid_filter,
+            '-y',  # Перезаписать выходной файл
+            '-c:a', 'copy',  # Копировать аудио без изменений
             output_path
         ]
         
@@ -102,7 +145,44 @@ async def distort_video(input_path: str, output_path: str) -> bool:
         logging.error(f"Ошибка при искажении видео: {e}")
         return False
 
-# --- Главная функция-обработчик ---
+# --- Альтернативный метод liquid rescale ---
+
+async def simple_liquid_rescale(input_path: str, output_path: str) -> bool:
+    """
+    Простой liquid rescale эффект только с помощью Pillow.
+    Может использоваться как для изображений, так и для первого кадра видео.
+    """
+    try:
+        with Image.open(input_path) as img:
+            img = img.convert("RGB")
+            original_size = img.size
+            
+            # Более агрессивное сжатие для ярко выраженного эффекта
+            scale_factors = [0.5, 0.6, 0.7, 0.8]
+            scale_factor = random.choice(scale_factors)
+            
+            # Первый этап - сжатие по горизонтали
+            h_compressed_width = int(original_size[0] * scale_factor)
+            img_h_compressed = img.resize((h_compressed_width, original_size[1]), Image.LANCZOS)
+            
+            # Второй этап - сжатие по вертикали
+            v_compressed_height = int(original_size[1] * scale_factor)
+            img_hv_compressed = img_h_compressed.resize((h_compressed_width, v_compressed_height), Image.LANCZOS)
+            
+            # Возвращаем к исходному размеру
+            img_final = img_hv_compressed.resize(original_size, Image.NEAREST)
+            
+            # Дополнительные эффекты для усиления
+            if random.random() > 0.3:
+                # Добавляем легкую резкость
+                img_final = img_final.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
+            
+            img_final.save(output_path, "JPEG", quality=90)
+            
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка в simple_liquid_rescale: {e}")
+        return False
 
 async def process_distortion(message: types.Message) -> tuple[bool, str | None, str | None]:
     """
@@ -155,12 +235,20 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
     success = False
     try:
         if media_type in ['photo', 'sticker']:
+            # Для изображений используем liquid rescale
             success = await distort_image(input_path, output_path)
             # Для стикеров меняем тип на фото, т.к. отправляем как jpg
             if success: media_type = 'photo'
         elif media_type in ['video', 'animation']:
             output_path = f"temp_distort_out_{file_id}.mp4"
+            # Сначала пробуем ffmpeg для видео
             success = await distort_video(input_path, output_path)
+            # Если ffmpeg не работает, пробуем простой метод на первом кадре
+            if not success:
+                logging.info("FFmpeg не сработал, пробуем простой метод")
+                output_path = f"temp_distort_out_{file_id}.jpg"
+                success = await simple_liquid_rescale(input_path, output_path)
+                if success: media_type = 'photo'  # Меняем тип на фото
     
     finally:
         # Удаляем исходный скачанный файл
