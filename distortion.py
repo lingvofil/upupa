@@ -6,233 +6,128 @@ import logging
 import subprocess
 import numpy as np
 from aiogram import types
-from aiogram.types import FSInputFile, BufferedInputFile
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps
-from scipy.ndimage import map_coordinates
+from aiogram.types import FSInputFile
+from PIL import Image
+import seam_carving
 
 # Импортируем общие функции и переменные из других модулей
 from config import bot
 from whatisthere import download_file # Переиспользуем функцию скачивания
 
-# --- Функции искажения ---
+# Настройки дисторшн
+DEFAULT_DISTORT_PERCENT = 50  # Процент сжатия по умолчанию
+MIN_DISTORT_PERCENT = 20      # Минимальный процент сжатия
+MAX_DISTORT_PERCENT = 80      # Максимальный процент сжатия
 
-def create_distortion_map(width: int, height: int, intensity: float = 0.3) -> tuple[np.ndarray, np.ndarray]:
+async def apply_seam_carving_distortion(input_path: str, output_path: str, distort_percent: int = DEFAULT_DISTORT_PERCENT) -> bool:
     """
-    Создает карту искажений для нелинейного преобразования изображения.
-    """
-    # Создаем сетку координат
-    x, y = np.meshgrid(np.arange(width), np.arange(height))
+    Применяет дисторшн через seam carving к изображению.
     
-    # Нормализуем координаты к диапазону [-1, 1]
-    x_norm = (x / width - 0.5) * 2
-    y_norm = (y / height - 0.5) * 2
+    Args:
+        input_path: Путь к исходному изображению
+        output_path: Путь для сохранения результата
+        distort_percent: Процент сжатия (чем больше, тем больше искажение)
     
-    # Создаем радиальные координаты
-    r = np.sqrt(x_norm**2 + y_norm**2)
-    
-    # Различные типы искажений
-    distortion_type = random.choice(['liquid', 'wave', 'swirl', 'bulge', 'pinch'])
-    
-    if distortion_type == 'liquid':
-        # Liquid-эффект с волнами
-        wave_freq = random.uniform(3, 8)
-        wave_amp = intensity * random.uniform(0.8, 1.5)
-        
-        x_distorted = x + wave_amp * width * np.sin(wave_freq * y_norm) * np.cos(wave_freq * x_norm)
-        y_distorted = y + wave_amp * height * np.cos(wave_freq * x_norm) * np.sin(wave_freq * y_norm)
-        
-    elif distortion_type == 'wave':
-        # Волновое искажение
-        wave_length = random.uniform(0.1, 0.3)
-        wave_amp = intensity * random.uniform(20, 50)
-        
-        x_distorted = x + wave_amp * np.sin(2 * np.pi * y / (height * wave_length))
-        y_distorted = y + wave_amp * np.cos(2 * np.pi * x / (width * wave_length))
-        
-    elif distortion_type == 'swirl':
-        # Закручивающее искажение
-        angle = intensity * random.uniform(1, 3) * r
-        cos_a, sin_a = np.cos(angle), np.sin(angle)
-        
-        x_centered = x - width/2
-        y_centered = y - height/2
-        
-        x_distorted = x_centered * cos_a - y_centered * sin_a + width/2
-        y_distorted = x_centered * sin_a + y_centered * cos_a + height/2
-        
-    elif distortion_type == 'bulge':
-        # Выпуклое искажение
-        strength = intensity * random.uniform(0.3, 0.7)
-        bulge_factor = 1 + strength * np.exp(-r * 2)
-        
-        x_distorted = (x - width/2) * bulge_factor + width/2
-        y_distorted = (y - height/2) * bulge_factor + height/2
-        
-    else:  # pinch
-        # Сжимающее искажение
-        strength = intensity * random.uniform(0.5, 1.0)
-        pinch_factor = 1 - strength * np.exp(-r * 3)
-        
-        x_distorted = (x - width/2) * pinch_factor + width/2
-        y_distorted = (y - height/2) * pinch_factor + height/2
-    
-    return x_distorted, y_distorted
-
-def apply_advanced_distortion(image: Image.Image, intensity: float = 0.4) -> Image.Image:
-    """
-    Применяет продвинутое искажение к изображению.
-    """
-    # Конвертируем в numpy array
-    img_array = np.array(image)
-    height, width = img_array.shape[:2]
-    
-    # Создаем карту искажений
-    x_distorted, y_distorted = create_distortion_map(width, height, intensity)
-    
-    # Применяем искажение к каждому каналу
-    if len(img_array.shape) == 3:  # RGB
-        distorted_array = np.zeros_like(img_array)
-        for channel in range(img_array.shape[2]):
-            distorted_array[:, :, channel] = map_coordinates(
-                img_array[:, :, channel], 
-                [y_distorted, x_distorted], 
-                order=1, 
-                mode='reflect'
-            )
-    else:  # Grayscale
-        distorted_array = map_coordinates(
-            img_array, 
-            [y_distorted, x_distorted], 
-            order=1, 
-            mode='reflect'
-        )
-    
-    return Image.fromarray(distorted_array.astype(np.uint8))
-
-def apply_compression_artifacts(image: Image.Image) -> Image.Image:
-    """
-    Добавляет артефакты сжатия для более реалистичного эффекта.
-    """
-    # Случайное сжатие JPEG с низким качеством
-    import io
-    
-    # Первое сжатие
-    quality1 = random.randint(15, 35)
-    buffer1 = io.BytesIO()
-    image.save(buffer1, format='JPEG', quality=quality1)
-    buffer1.seek(0)
-    compressed1 = Image.open(buffer1)
-    
-    # Второе сжатие для усиления артефактов
-    quality2 = random.randint(25, 45)
-    buffer2 = io.BytesIO()
-    compressed1.save(buffer2, format='JPEG', quality=quality2)
-    buffer2.seek(0)
-    compressed2 = Image.open(buffer2)
-    
-    return compressed2
-
-async def distort_image(input_path: str, output_path: str) -> bool:
-    """
-    Применяет агрессивное искажение к изображению.
+    Returns:
+        bool: True если успешно, False если ошибка
     """
     try:
+        # Открываем изображение
         with Image.open(input_path) as img:
             # Конвертируем в RGB для совместимости
             img = img.convert("RGB")
             
-            # Применяем несколько этапов искажения
+            # Преобразуем в numpy array
+            src = np.array(img)
+            src_h, src_w, _ = src.shape
             
-            # Этап 1: Изменение размера для создания пиксельного эффекта
-            original_size = img.size
+            logging.info(f"Исходное изображение: {src_w}x{src_h}")
             
-            # Случайное сжатие (более агрессивное)
-            compression_factors = [0.3, 0.4, 0.5, 0.6]
-            compression_factor = random.choice(compression_factors)
+            # Проверяем минимальные размеры
+            if src_w < 50 or src_h < 50:
+                logging.warning("Изображение слишком маленькое для seam carving")
+                return False
             
-            small_size = (
-                int(original_size[0] * compression_factor),
-                int(original_size[1] * compression_factor)
+            # Вычисляем новые размеры
+            new_width = int(src_w - (src_w / 100 * distort_percent))
+            new_height = int(src_h - (src_h / 100 * distort_percent))
+            
+            # Проверяем, что новые размеры не слишком малы
+            new_width = max(new_width, 20)
+            new_height = max(new_height, 20)
+            
+            logging.info(f"Новые размеры: {new_width}x{new_height} (сжатие {distort_percent}%)")
+            
+            # Применяем seam carving
+            dst = seam_carving.resize(
+                src, 
+                (new_width, new_height),
+                energy_mode='backward',    # Более качественный режим
+                order='width-first',       # Сначала уменьшаем ширину
+                keep_mask=None
             )
             
-            # Сжимаем с размытием
-            img_small = img.resize(small_size, Image.LANCZOS)
+            # Сохраняем результат
+            result_img = Image.fromarray(dst)
+            result_img.save(output_path, "JPEG", quality=85)
             
-            # Возвращаем к оригинальному размеру с пиксельным эффектом
-            img_pixelated = img_small.resize(original_size, Image.NEAREST)
+            logging.info(f"Дисторшн применен успешно, сохранен в {output_path}")
+            return True
             
-            # Этап 2: Продвинутое геометрическое искажение
-            distortion_intensity = random.uniform(0.3, 0.6)
-            img_distorted = apply_advanced_distortion(img_pixelated, distortion_intensity)
-            
-            # Этап 3: Дополнительные эффекты
-            effects_to_apply = random.randint(2, 4)
-            
-            for _ in range(effects_to_apply):
-                effect = random.choice([
-                    'contrast', 'saturation', 'sharpness', 'blur', 'noise', 'hue'
-                ])
-                
-                if effect == 'contrast':
-                    enhancer = ImageEnhance.Contrast(img_distorted)
-                    img_distorted = enhancer.enhance(random.uniform(0.5, 2.0))
-                
-                elif effect == 'saturation':
-                    enhancer = ImageEnhance.Color(img_distorted)
-                    img_distorted = enhancer.enhance(random.uniform(0.3, 2.5))
-                
-                elif effect == 'sharpness':
-                    enhancer = ImageEnhance.Sharpness(img_distorted)
-                    img_distorted = enhancer.enhance(random.uniform(0.5, 3.0))
-                
-                elif effect == 'blur':
-                    blur_radius = random.uniform(0.5, 2.0)
-                    img_distorted = img_distorted.filter(ImageFilter.GaussianBlur(blur_radius))
-                
-                elif effect == 'noise':
-                    # Добавляем шум
-                    img_array = np.array(img_distorted)
-                    noise = np.random.normal(0, random.uniform(5, 20), img_array.shape)
-                    img_noisy = np.clip(img_array + noise, 0, 255).astype(np.uint8)
-                    img_distorted = Image.fromarray(img_noisy)
-                
-                elif effect == 'hue':
-                    # Изменяем цветовые каналы
-                    img_array = np.array(img_distorted)
-                    if len(img_array.shape) == 3:
-                        # Случайно переставляем каналы
-                        channels = [0, 1, 2]
-                        random.shuffle(channels)
-                        img_distorted = Image.fromarray(img_array[:, :, channels])
-            
-            # Этап 4: Артефакты сжатия
-            if random.random() > 0.3:
-                img_distorted = apply_compression_artifacts(img_distorted)
-            
-            # Этап 5: Финальная обработка
-            if random.random() > 0.5:
-                # Инвертируем цвета с определенной вероятностью
-                if random.random() > 0.8:
-                    img_distorted = ImageOps.invert(img_distorted)
-                
-                # Эквализация гистограммы
-                if random.random() > 0.6:
-                    img_distorted = ImageOps.equalize(img_distorted)
-            
-            # Сохраняем с низким качеством для дополнительных артефактов
-            save_quality = random.randint(40, 70)
-            img_distorted.save(output_path, "JPEG", quality=save_quality)
-            
-        return True
     except Exception as e:
-        logging.error(f"Ошибка при искажении изображения: {e}")
+        logging.error(f"Ошибка при применении seam carving: {e}")
         return False
 
-async def distort_video(input_path: str, output_path: str) -> bool:
+async def apply_random_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Искажает видео с помощью ffmpeg с более агрессивными фильтрами.
+    Применяет seam carving со случайным процентом искажения.
+    """
+    # Случайный процент искажения
+    distort_percent = random.randint(MIN_DISTORT_PERCENT, MAX_DISTORT_PERCENT)
+    
+    # Иногда применяем более экстремальные значения
+    if random.random() < 0.2:  # 20% шанс
+        distort_percent = random.randint(60, 90)
+    
+    logging.info(f"Применяем случайный дисторшн с процентом: {distort_percent}%")
+    
+    return await apply_seam_carving_distortion(input_path, output_path, distort_percent)
+
+async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
+    """
+    Применяет двойной seam carving для более экстремального эффекта.
     """
     try:
+        # Временный файл для промежуточного результата
+        temp_path = f"temp_seam_{random.randint(1000, 9999)}.jpg"
+        
+        # Первый проход - средний уровень искажения
+        first_distort = random.randint(30, 50)
+        if not await apply_seam_carving_distortion(input_path, temp_path, first_distort):
+            return False
+        
+        # Второй проход - добавляем еще искажения
+        second_distort = random.randint(20, 40)
+        success = await apply_seam_carving_distortion(temp_path, output_path, second_distort)
+        
+        # Удаляем временный файл
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        return success
+        
+    except Exception as e:
+        logging.error(f"Ошибка при двойном seam carving: {e}")
+        return False
+
+async def distort_video_with_seam_carving(input_path: str, output_path: str) -> bool:
+    """
+    Пытается применить дисторшн к видео через ffmpeg, если не получается - извлекает кадр.
+    """
+    try:
+        # Сначала пробуем обычный ffmpeg с простыми фильтрами
+        distort_percent = random.randint(MIN_DISTORT_PERCENT, MAX_DISTORT_PERCENT)
+        
         # Получаем размеры видео
         probe_command = [
             'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', input_path
@@ -246,8 +141,8 @@ async def distort_video(input_path: str, output_path: str) -> bool:
         stdout, stderr = await probe_process.communicate()
         
         if probe_process.returncode != 0:
-            logging.error(f"Ошибка получения информации о видео: {stderr.decode()}")
-            return False
+            logging.error(f"Не удалось получить информацию о видео: {stderr.decode()}")
+            return await extract_frame_and_distort(input_path, output_path)
         
         probe_data = json.loads(stdout.decode())
         
@@ -260,54 +155,25 @@ async def distort_video(input_path: str, output_path: str) -> bool:
         
         if not video_stream:
             logging.error("Не найден видео поток")
-            return False
+            return await extract_frame_and_distort(input_path, output_path)
         
         original_width = video_stream['width']
         original_height = video_stream['height']
         
-        # Создаем более агрессивные фильтры
-        filters = []
+        # Вычисляем новые размеры
+        new_width = int(original_width - (original_width / 100 * distort_percent))
+        new_height = int(original_height - (original_height / 100 * distort_percent))
         
-        # Пиксельный эффект
-        scale_factor = random.uniform(0.2, 0.5)
-        pixel_width = int(original_width * scale_factor)
-        pixel_height = int(original_height * scale_factor)
-        
-        filters.append(f"scale={pixel_width}:{pixel_height}")
-        filters.append(f"scale={original_width}:{original_height}:flags=neighbor")
-        
-        # Искажение цветов
-        filters.append(f"eq=contrast={random.uniform(0.5, 2.0)}:saturation={random.uniform(0.3, 2.5)}:brightness={random.uniform(-0.2, 0.2)}")
-        
-        # Добавляем шум
-        filters.append(f"noise=alls={random.randint(20, 60)}:allf=t")
-        
-        # Размытие или резкость
-        if random.random() > 0.5:
-            filters.append(f"gblur=sigma={random.uniform(0.5, 2.0)}")
-        else:
-            filters.append(f"unsharp=5:5:{random.uniform(1.0, 3.0)}:5:5:0.0")
-        
-        # Искажение геометрии (если поддерживается)
-        if random.random() > 0.5:
-            # Волновое искажение
-            wave_strength = random.uniform(5, 20)
-            wave_freq = random.uniform(0.1, 0.3)
-            filters.append(f"delogo=x={int(original_width*0.1)}:y={int(original_height*0.1)}:w={int(original_width*0.8)}:h={int(original_height*0.8)}:show=0")
-        
-        # Объединяем фильтры
-        video_filter = ",".join(filters)
-        
-        # Команда для ffmpeg
+        # Команда для ffmpeg с изменением размера и улучшенными фильтрами
         command = [
             'ffmpeg',
             '-i', input_path,
-            '-vf', video_filter,
+            '-vf', f'scale={new_width}:{new_height},scale={original_width}:{original_height}:flags=neighbor',
             '-c:v', 'libx264',
-            '-crf', str(random.randint(28, 35)),  # Высокое сжатие
+            '-crf', '28',
             '-preset', 'fast',
-            '-y',  # Перезаписать выходной файл
-            '-c:a', 'copy',  # Копировать аудио без изменений
+            '-y',
+            '-c:a', 'copy',
             output_path
         ]
         
@@ -321,73 +187,57 @@ async def distort_video(input_path: str, output_path: str) -> bool:
 
         if process.returncode != 0:
             logging.error(f"Ошибка ffmpeg: {stderr.decode()}")
-            return False
+            return await extract_frame_and_distort(input_path, output_path)
+        
         return True
+        
     except FileNotFoundError:
-        logging.error("ffmpeg не найден. Убедитесь, что он установлен и доступен в PATH.")
-        return False
+        logging.error("ffmpeg не найден")
+        return await extract_frame_and_distort(input_path, output_path)
     except Exception as e:
-        logging.error(f"Ошибка при искажении видео: {e}")
-        return False
+        logging.error(f"Ошибка при обработке видео: {e}")
+        return await extract_frame_and_distort(input_path, output_path)
 
-# --- Альтернативный метод для экстремального искажения ---
-
-async def extreme_distortion(input_path: str, output_path: str) -> bool:
+async def extract_frame_and_distort(input_path: str, output_path: str) -> bool:
     """
-    Экстремальное искажение изображения с максимальными эффектами.
+    Извлекает кадр из видео и применяет к нему seam carving.
     """
     try:
-        with Image.open(input_path) as img:
-            img = img.convert("RGB")
-            original_size = img.size
-            
-            # Множественные циклы искажения
-            for cycle in range(random.randint(2, 4)):
-                # Очень агрессивное сжатие
-                compression_factor = random.uniform(0.15, 0.4)
-                small_size = (
-                    max(1, int(original_size[0] * compression_factor)),
-                    max(1, int(original_size[1] * compression_factor))
-                )
-                
-                # Сжимаем и растягиваем
-                img = img.resize(small_size, Image.LANCZOS)
-                img = img.resize(original_size, Image.NEAREST)
-                
-                # Применяем геометрическое искажение
-                distortion_intensity = random.uniform(0.5, 0.8)
-                img = apply_advanced_distortion(img, distortion_intensity)
-                
-                # Случайные эффекты
-                for _ in range(random.randint(3, 5)):
-                    effect_type = random.choice(['contrast', 'color', 'invert', 'equalize', 'compress'])
-                    
-                    if effect_type == 'contrast':
-                        enhancer = ImageEnhance.Contrast(img)
-                        img = enhancer.enhance(random.uniform(0.3, 3.0))
-                    
-                    elif effect_type == 'color':
-                        enhancer = ImageEnhance.Color(img)
-                        img = enhancer.enhance(random.uniform(0.1, 3.0))
-                    
-                    elif effect_type == 'invert':
-                        if random.random() > 0.7:
-                            img = ImageOps.invert(img)
-                    
-                    elif effect_type == 'equalize':
-                        if random.random() > 0.5:
-                            img = ImageOps.equalize(img)
-                    
-                    elif effect_type == 'compress':
-                        img = apply_compression_artifacts(img)
-            
-            # Финальное сохранение с низким качеством
-            save_quality = random.randint(20, 50)
-            img.save(output_path, "JPEG", quality=save_quality)
-            
-        return True
+        # Временный файл для кадра
+        frame_path = f"temp_frame_{random.randint(1000, 9999)}.jpg"
+        
+        # Извлекаем случайный кадр
+        extract_command = [
+            'ffmpeg',
+            '-i', input_path,
+            '-ss', '00:00:01',  # Берем кадр с первой секунды
+            '-vframes', '1',
+            '-y',
+            frame_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *extract_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            logging.error(f"Не удалось извлечь кадр: {stderr.decode()}")
+            return False
+        
+        # Применяем seam carving к кадру
+        success = await apply_random_seam_carving(frame_path, output_path)
+        
+        # Удаляем временный файл
+        if os.path.exists(frame_path):
+            os.remove(frame_path)
+        
+        return success
+        
     except Exception as e:
-        logging.error(f"Ошибка в extreme_distortion: {e}")
+        logging.error(f"Ошибка при извлечении кадра: {e}")
         return False
 
 async def process_distortion(message: types.Message) -> tuple[bool, str | None, str | None]:
@@ -416,7 +266,7 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
     elif target_message.animation:
         media_type = 'animation'
         file_id = target_message.animation.file_id
-        original_extension = ".mp4" # GIF-ки в telegram это mp4 без звука
+        original_extension = ".mp4"
         logging.info(f"Найдена анимация: {file_id}")
     elif target_message.sticker:
         if target_message.sticker.is_animated or target_message.sticker.is_video:
@@ -433,7 +283,7 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
 
     # Скачиваем файл
     input_path = f"temp_distort_in_{file_id}{original_extension}"
-    output_path = f"temp_distort_out_{file_id}.jpg" # Искаженные фото и стикеры будут jpg
+    output_path = f"temp_distort_out_{file_id}.jpg"
     
     if not await download_file(file_id, input_path):
         return False, "Не смог скачать файл для искажения.", None
@@ -441,26 +291,33 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
     success = False
     try:
         if media_type in ['photo', 'sticker']:
-            # Выбираем уровень искажения
-            if random.random() > 0.3:
-                # Обычное агрессивное искажение
-                success = await distort_image(input_path, output_path)
-            else:
-                # Экстремальное искажение
-                success = await extreme_distortion(input_path, output_path)
+            # Выбираем метод искажения для изображений
+            distortion_method = random.choice(['normal', 'double', 'extreme'])
             
-            # Для стикеров меняем тип на фото, т.к. отправляем как jpg
-            if success: media_type = 'photo'
+            if distortion_method == 'normal':
+                success = await apply_random_seam_carving(input_path, output_path)
+            elif distortion_method == 'double':
+                success = await apply_double_seam_carving(input_path, output_path)
+            else:  # extreme
+                # Экстремальный дисторшн
+                extreme_percent = random.randint(70, 95)
+                success = await apply_seam_carving_distortion(input_path, output_path, extreme_percent)
+            
+            # Для стикеров меняем тип на фото
+            if success and media_type == 'sticker':
+                media_type = 'photo'
+                
         elif media_type in ['video', 'animation']:
+            # Для видео сначала пробуем обработать как видео
             output_path = f"temp_distort_out_{file_id}.mp4"
-            # Сначала пробуем ffmpeg для видео
-            success = await distort_video(input_path, output_path)
-            # Если ffmpeg не работает, пробуем экстремальное искажение на первом кадре
+            success = await distort_video_with_seam_carving(input_path, output_path)
+            
+            # Если не получилось, извлекаем кадр и искажаем его
             if not success:
-                logging.info("FFmpeg не сработал, пробуем экстремальный метод")
                 output_path = f"temp_distort_out_{file_id}.jpg"
-                success = await extreme_distortion(input_path, output_path)
-                if success: media_type = 'photo'  # Меняем тип на фото
+                success = await extract_frame_and_distort(input_path, output_path)
+                if success:
+                    media_type = 'photo'
     
     finally:
         # Удаляем исходный скачанный файл
@@ -528,6 +385,10 @@ async def handle_distortion_request(message: types.Message):
             logging.warning("Не найдено медиа для дисторшна")
             await message.answer("Не нашел медиафайл для искажения. Отправь фото, видео, GIF или стикер с подписью 'дисторшн' или ответь на медиа текстом 'дисторшн'.")
             return
+        
+        # Отправляем сообщение о начале обработки
+        await message.answer("🌀 Обрабатываю твою фотку...")
+        
         # Обрабатываем запрос на искажение
         logging.info("Начинаем обработку дисторшна")
         success, result_path_or_error, media_type = await process_distortion(message)
