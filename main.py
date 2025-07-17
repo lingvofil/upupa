@@ -380,6 +380,29 @@ async def send_kotogif(message: types.Message):
     elif error_message:
         await message.reply(error_message)
 
+router.message(lambda message:
+    (
+        # Медиа с подписью "дисторшн"
+        (
+            (message.photo or message.video or message.animation or message.sticker) and
+            message.caption and "дисторшн" in message.caption.lower()
+        )
+        or
+        # Текст "дисторшн" в ответ на медиа
+        (
+            message.text and "дисторшн" in message.text.lower() and
+            message.reply_to_message and
+            (message.reply_to_message.photo or message.reply_to_message.video or
+             message.reply_to_message.animation or message.reply_to_message.sticker)
+        )
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_distortion(message: types.Message):
+    """
+    Обрабатывает команду 'дисторшн', вызывая основной обработчик.
+    """
+    await handle_distortion_request(message)
+
 @router.message(lambda message: 
     (
         # Медиа с подписью "чотам"
@@ -473,29 +496,6 @@ async def redraw_image(message: types.Message):
 )
 async def generate_pun_with_image(message: types.Message):
     await handle_pun_image_command(message)
-
-router.message(lambda message:
-    (
-        # Медиа с подписью "дисторшн"
-        (
-            (message.photo or message.video or message.animation or message.sticker) and
-            message.caption and "дисторшн" in message.caption.lower()
-        )
-        or
-        # Текст "дисторшн" в ответ на медиа
-        (
-            message.text and "дисторшн" in message.text.lower() and
-            message.reply_to_message and
-            (message.reply_to_message.photo or message.reply_to_message.video or
-             message.reply_to_message.animation or message.reply_to_message.sticker)
-        )
-    ) and message.from_user.id not in BLOCKED_USERS
-)
-async def handle_distortion(message: types.Message):
-    """
-    Обрабатывает команду 'дисторшн', вызывая основной обработчик.
-    """
-    await handle_distortion_request(message)
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
