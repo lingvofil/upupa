@@ -5,14 +5,13 @@ import random
 import logging
 import subprocess
 from aiogram import types
-from aiogram.types import FSInputFile, BufferedInputFile
-from PIL import Image, ImageFilter, ImageEnhance
+from aiogram.types import FSInputFile
+from PIL import Image, ImageFilter, ImageEnhance, ImageChops
 
-# Импортируем общие функции и переменные из других модулей
 from config import bot
-from whatisthere import download_file # Переиспользуем функцию скачивания
+from whatisthere import download_file  # Используем уже имеющуюся функцию
 
-# --- Функции искажения ---
+# --- Основное искажение изображения ---
 
 async def distort_image(input_path: str, output_path: str) -> bool:
     try:
@@ -22,30 +21,27 @@ async def distort_image(input_path: str, output_path: str) -> bool:
 
             # Агрессивное сжатие
             scale_factor = random.uniform(0.3, 0.5)
-            liquid_width = int(original_size[0] * scale_factor)
-            liquid_height = int(original_size[1] * scale_factor)
-
-            img_small = img.resize((liquid_width, liquid_height), Image.LANCZOS)
+            small_size = (int(original_size[0] * scale_factor), int(original_size[1] * scale_factor))
+            img_small = img.resize(small_size, Image.LANCZOS)
             img_distorted = img_small.resize(original_size, Image.NEAREST)
 
             # RGB Split (глитч)
             r, g, b = img_distorted.split()
-            r = r.offset(random.randint(-10, 10), 0)
-            g = g.offset(0, random.randint(-10, 10))
+            r = ImageChops.offset(r, random.randint(-10, 10), 0)
+            g = ImageChops.offset(g, 0, random.randint(-10, 10))
             img_distorted = Image.merge("RGB", (r, g, b))
 
-            # Контраст + насыщенность
+            # Контраст и цвет
             if random.random() > 0.3:
                 img_distorted = ImageEnhance.Contrast(img_distorted).enhance(random.uniform(1.3, 1.6))
             if random.random() > 0.5:
                 img_distorted = ImageEnhance.Color(img_distorted).enhance(random.uniform(0.7, 1.5))
 
-            # Легкое искажение формы (Affine)
-            width, height = original_size
+            # Афинное искажение
             x_shift = random.uniform(-0.2, 0.2)
             y_shift = random.uniform(-0.2, 0.2)
             img_distorted = img_distorted.transform(
-                (width, height),
+                original_size,
                 Image.AFFINE,
                 (1, x_shift, 0, y_shift, 1, 0),
                 resample=Image.BICUBIC
@@ -60,6 +56,8 @@ async def distort_image(input_path: str, output_path: str) -> bool:
     except Exception as e:
         logging.error(f"Ошибка при искажении изображения: {e}")
         return False
+
+# --- Искажение видео через ffmpeg ---
 
 async def distort_video(input_path: str, output_path: str) -> bool:
     try:
@@ -118,40 +116,28 @@ async def distort_video(input_path: str, output_path: str) -> bool:
         logging.error(f"Ошибка при искажении видео: {e}")
         return False
 
-# --- Альтернативный метод liquid rescale ---
+# --- Простой liquid rescale на Pillow ---
 
 async def simple_liquid_rescale(input_path: str, output_path: str) -> bool:
-    """
-    Простой liquid rescale эффект только с помощью Pillow.
-    Может использоваться как для изображений, так и для первого кадра видео.
-    """
     try:
         with Image.open(input_path) as img:
             img = img.convert("RGB")
             original_size = img.size
-            
-            # Более агрессивное сжатие для ярко выраженного эффекта
-            scale_factors = [0.5, 0.6, 0.7, 0.8]
-            scale_factor = random.choice(scale_factors)
-            
-            # Первый этап - сжатие по горизонтали
-            h_compressed_width = int(original_size[0] * scale_factor)
-            img_h_compressed = img.resize((h_compressed_width, original_size[1]), Image.LANCZOS)
-            
-            # Второй этап - сжатие по вертикали
-            v_compressed_height = int(original_size[1] * scale_factor)
-            img_hv_compressed = img_h_compressed.resize((h_compressed_width, v_compressed_height), Image.LANCZOS)
-            
-            # Возвращаем к исходному размеру
-            img_final = img_hv_compressed.resize(original_size, Image.NEAREST)
-            
-            # Дополнительные эффекты для усиления
+
+            scale_factor = random.choice([0.5, 0.6, 0.7, 0.8])
+            compressed_width = int(original_size[0] * scale_factor)
+            img_h = img.resize((compressed_width, original_size[1]), Image.LANCZOS)
+
+            compressed_height = int(original_size[1] * scale_factor)
+            img_hv = img_h.resize((compressed_width, compressed_height), Image.LANCZOS)
+
+            img_final = img_hv.resize(original_size, Image.NEAREST)
+
             if random.random() > 0.3:
-                # Добавляем легкую резкость
                 img_final = img_final.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
-            
+
             img_final.save(output_path, "JPEG", quality=90)
-            
+
         return True
     except Exception as e:
         logging.error(f"Ошибка в simple_liquid_rescale: {e}")
