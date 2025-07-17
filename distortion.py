@@ -494,15 +494,15 @@ async def handle_distortion_request(message: types.Message):
             return
         
         file_path = result_path_or_error
-        logging.info(f"Дисторшн готов, отправляем файл: {file_path}, тип: {media_type}")
+        logging.info(f"твоя хуйня готова, отправляем файл: {file_path}, тип: {media_type}")
         
         try:
             file_to_send = FSInputFile(file_path)
             
             if media_type == 'photo':
-                await message.answer_photo(file_to_send, caption="🌀 Дисторшн готов!")
+                await message.answer_photo(file_to_send, caption="🌀 твоя хуйня готова!")
             elif media_type in ['video', 'animation']:
-                await message.answer_video(file_to_send, caption="🌀 Дисторшн готов!")
+                await message.answer_video(file_to_send, caption="🌀 твоя хуйня готова!")
             
         except Exception as e:
             logging.error(f"Ошибка при отправке искаженного файла: {e}")
