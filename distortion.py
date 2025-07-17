@@ -23,9 +23,9 @@ from config import bot
 from whatisthere import download_file # Переиспользуем функцию скачивания
 
 # Настройки дисторшн
-DEFAULT_DISTORT_PERCENT = 50  # Процент сжатия по умолчанию для seam carving
-MIN_DISTORT_PERCENT = 20      # Минимальный процент сжатия для seam carving
-MAX_DISTORT_PERCENT = 80      # Максимальный процент сжатия для seam carving
+DEFAULT_DISTORT_PERCENT = 60  # Процент сжатия по умолчанию для seam carving
+MIN_DISTORT_PERCENT = 40      # Минимальный процент сжатия для seam carving
+MAX_DISTORT_PERCENT = 85      # Максимальный процент сжатия для seam carving
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -162,7 +162,7 @@ async def apply_random_seam_carving(input_path: str, output_path: str) -> bool:
 
     distort_percent = random.randint(MIN_DISTORT_PERCENT, MAX_DISTORT_PERCENT)
     if random.random() < 0.2:
-        distort_percent = random.randint(60, 90)
+        distort_percent = random.randint(65, 95)
     
     logging.info(f"Применяем случайный дисторшн seam carving с процентом: {distort_percent}%")
     return await apply_seam_carving_distortion(input_path, output_path, distort_percent)
@@ -206,22 +206,23 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bo
         return False
 
     filters = []
-    # Выбираем случайные фильтры для применения
-    if random.random() < 0.7: # 70% шанс применить scale для пикселизации/размытия
-        scale_factor = random.uniform(0.5, 1.5)
-        # Применяем масштаб, затем масштабируем обратно для пикселизации/размытия
+    # Выбираем случайные фильтры для применения с повышенной вероятностью и экстремальными значениями
+    if random.random() < 0.8: # 80% шанс применить scale для пикселизации/размытия
+        scale_factor = random.uniform(0.3, 1.7) # Расширяем диапазон
         filters.append(f"scale=iw*{scale_factor}:ih*{scale_factor},scale={original_width}:{original_height}:flags=neighbor")
-    if random.random() < 0.5: # 50% шанс применить colorchannelmixer
+    if random.random() < 0.7: # 70% шанс применить colorchannelmixer
         filters.append("colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0")
-    if random.random() < 0.4: # 40% шанс применить hue
-        filters.append(f"hue=h={random.uniform(-180, 180)}:s={random.uniform(0.5, 2.0)}")
-    if random.random() < 0.3: # 30% шанс применить vignette
-        filters.append("vignette=angle=PI/4")
-    if random.random() < 0.2: # 20% шанс применить noise
-        filters.append("noise=alls=20:allf=t+n")
+    if random.random() < 0.6: # 60% шанс применить hue
+        filters.append(f"hue=h={random.uniform(-360, 360)}:s={random.uniform(0.1, 3.0)}") # Расширяем диапазон
+    if random.random() < 0.5: # 50% шанс применить vignette
+        filters.append("vignette=angle=PI/3") # Более сильный эффект
+    if random.random() < 0.4: # 40% шанс применить noise
+        filters.append("noise=alls=30:allf=t+n") # Увеличиваем шум
+    if random.random() < 0.3: # 30% шанс применить eq (яркость/контраст)
+        filters.append(f"eq=brightness={random.uniform(-0.3, 0.3)}:contrast={random.uniform(0.5, 2.0)}:saturation={random.uniform(0.5, 2.0)}")
     
-    if not filters: # Если фильтры не выбраны, добавляем базовый
-        filters.append("eq=brightness=0.1:saturation=1.5")
+    if not filters: # Если фильтры не выбраны, добавляем базовый, но заметный
+        filters.append("eq=brightness=0.2:saturation=1.8")
 
     vf_string = ",".join(filters)
     
