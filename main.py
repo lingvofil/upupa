@@ -124,7 +124,7 @@ from birthday_calendar import (
 )
 
 # ================== БЛОК 3.20: НАСТРОЙКИ ДИСТОРШН ==================
-from distortion import handle_distortion_request, is_distortion_command
+from distortion import is_distortion_command, handle_distortion_request
 
 # ================== БЛОК РАССЫЛКИ ==================
 from broadcast import handle_broadcast_command, is_broadcast_command
@@ -381,10 +381,7 @@ async def send_kotogif(message: types.Message):
         await message.reply(error_message)
 
 @router.message(is_distortion_command)
-async def handle_distortion(message: types.Message):
-    """
-    Обрабатывает команду 'дисторшн', вызывая основной обработчик.
-    """
+async def handle_distortion_command(message: types.Message):
     await handle_distortion_request(message)
 
 @router.message(lambda message: 
