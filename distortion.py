@@ -15,132 +15,105 @@ from whatisthere import download_file # Переиспользуем функц�
 # --- Функции искажения ---
 
 async def distort_image(input_path: str, output_path: str) -> bool:
-    """
-    Применяет liquid rescale искажение к изображению с помощью Pillow.
-    Имитирует эффект ImageMagick liquid-rescale.
-    """
     try:
         with Image.open(input_path) as img:
-            # Конвертируем в RGB для совместимости
             img = img.convert("RGB")
             original_size = img.size
-            
-            # Получаем размеры для liquid rescale (60-80% от оригинала)
-            scale_factor = random.uniform(0.6, 0.8)
+
+            # Агрессивное сжатие
+            scale_factor = random.uniform(0.3, 0.5)
             liquid_width = int(original_size[0] * scale_factor)
             liquid_height = int(original_size[1] * scale_factor)
-            
-            # Этап 1: Сжимаем изображение (имитация liquid rescale)
-            # Используем LANCZOS для лучшего качества при уменьшении
+
             img_small = img.resize((liquid_width, liquid_height), Image.LANCZOS)
-            
-            # Этап 2: Растягиваем обратно до оригинального размера
-            # Используем NEAREST для создания "квадратного" эффекта
             img_distorted = img_small.resize(original_size, Image.NEAREST)
-            
-            # Дополнительные эффекты для усиления искажения
+
+            # RGB Split (глитч)
+            r, g, b = img_distorted.split()
+            r = r.offset(random.randint(-10, 10), 0)
+            g = g.offset(0, random.randint(-10, 10))
+            img_distorted = Image.merge("RGB", (r, g, b))
+
+            # Контраст + насыщенность
+            if random.random() > 0.3:
+                img_distorted = ImageEnhance.Contrast(img_distorted).enhance(random.uniform(1.3, 1.6))
             if random.random() > 0.5:
-                # Случайное изменение контраста
-                enhancer = ImageEnhance.Contrast(img_distorted)
-                img_distorted = enhancer.enhance(random.uniform(1.1, 1.4))
-            
-            if random.random() > 0.7:
-                # Случайное изменение насыщенности
-                enhancer = ImageEnhance.Color(img_distorted)
-                img_distorted = enhancer.enhance(random.uniform(0.8, 1.3))
-            
-            # Сохраняем с качеством 85-95% для минимальных артефактов
+                img_distorted = ImageEnhance.Color(img_distorted).enhance(random.uniform(0.7, 1.5))
+
+            # Легкое искажение формы (Affine)
+            width, height = original_size
+            x_shift = random.uniform(-0.2, 0.2)
+            y_shift = random.uniform(-0.2, 0.2)
+            img_distorted = img_distorted.transform(
+                (width, height),
+                Image.AFFINE,
+                (1, x_shift, 0, y_shift, 1, 0),
+                resample=Image.BICUBIC
+            )
+
+            # Резкость
+            img_distorted = img_distorted.filter(ImageFilter.UnsharpMask(radius=2, percent=200))
+
             img_distorted.save(output_path, "JPEG", quality=random.randint(85, 95))
-            
         return True
+
     except Exception as e:
         logging.error(f"Ошибка при искажении изображения: {e}")
         return False
 
 async def distort_video(input_path: str, output_path: str) -> bool:
-    """
-    Искажает видео или GIF с помощью ffmpeg, используя liquid rescale эффект.
-    ВАЖНО: ffmpeg должен быть установлен на сервере, где работает бот.
-    """
     try:
-        # Получаем размеры видео
         probe_command = [
             'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', input_path
         ]
-        
         probe_process = await asyncio.create_subprocess_exec(
             *probe_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await probe_process.communicate()
-        
         if probe_process.returncode != 0:
-            logging.error(f"Ошибка получения информации о видео: {stderr.decode()}")
+            logging.error(f"FFprobe error: {stderr.decode()}")
             return False
-        
-        import json
-        probe_data = json.loads(stdout.decode())
-        
-        # Ищем видео поток
-        video_stream = None
-        for stream in probe_data['streams']:
-            if stream['codec_type'] == 'video':
-                video_stream = stream
-                break
-        
+
+        data = json.loads(stdout.decode())
+        video_stream = next((s for s in data['streams'] if s['codec_type'] == 'video'), None)
         if not video_stream:
             logging.error("Не найден видео поток")
             return False
-        
-        original_width = video_stream['width']
-        original_height = video_stream['height']
-        
-        # Случайный коэффициент сжатия для liquid rescale
-        scale_factor = random.uniform(0.6, 0.8)
-        liquid_width = int(original_width * scale_factor)
-        liquid_height = int(original_height * scale_factor)
-        
-        # Фильтр для liquid rescale эффекта
-        # Сначала уменьшаем, потом увеличиваем обратно
-        liquid_filter = f"scale={liquid_width}:{liquid_height},scale={original_width}:{original_height}:flags=neighbor"
-        
-        # Дополнительные эффекты
-        additional_effects = [
-            f"eq=contrast={random.uniform(1.1, 1.4)}",
-            f"eq=saturation={random.uniform(0.8, 1.3)}",
-            f"unsharp=5:5:{random.uniform(0.5, 1.0)}:5:5:0.0"
-        ]
-        
-        # Случайно добавляем один из дополнительных эффектов
-        if random.random() > 0.5:
-            liquid_filter += f",{random.choice(additional_effects)}"
-        
-        # Команда для ffmpeg
+
+        w, h = video_stream['width'], video_stream['height']
+        scale_factor = random.uniform(0.4, 0.6)
+        lw, lh = int(w * scale_factor), int(h * scale_factor)
+
+        distort_filter = (
+            f"scale={lw}:{lh},"
+            f"scale={w}:{h}:flags=neighbor,"
+            f"noise=alls=30:allf=t+u,"
+            f"eq=contrast={random.uniform(1.3,1.6)}:saturation={random.uniform(1.3,2.0)},"
+            f"fps=10"
+        )
+
         command = [
-            'ffmpeg',
-            '-i', input_path,
-            '-vf', liquid_filter,
-            '-y',  # Перезаписать выходной файл
-            '-c:a', 'copy',  # Копировать аудио без изменений
-            output_path
+            'ffmpeg', '-i', input_path,
+            '-vf', distort_filter,
+            '-c:a', 'copy',
+            '-y', output_path
         ]
-        
-        # Запускаем процесс
+
         process = await asyncio.create_subprocess_exec(
             *command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        _, stderr = await process.communicate()
 
         if process.returncode != 0:
-            logging.error(f"Ошибка ffmpeg: {stderr.decode()}")
+            logging.error(f"FFmpeg error: {stderr.decode()}")
             return False
+
         return True
-    except FileNotFoundError:
-        logging.error("ffmpeg не найден. Убедитесь, что он установлен и доступен в PATH.")
-        return False
+
     except Exception as e:
         logging.error(f"Ошибка при искажении видео: {e}")
         return False
