@@ -24,9 +24,9 @@ from whatisthere import download_file # Переиспользуем функц�
 
 # Фиксированные настройки дисторшн
 SEAM_CARVING_NORMAL_PERCENT = 10    # Процент сжатия для обычного seam carving
-SEAM_CARVING_DOUBLE_FIRST = 35      # Первый проход двойного seam carving
-SEAM_CARVING_DOUBLE_SECOND = 25     # Второй проход двойного seam carving
-SEAM_CARVING_EXTREME_PERCENT = 80   # Процент сжатия для экстремального seam carving
+SEAM_CARVING_DOUBLE_FIRST = 10      # Первый проход двойного seam carving
+SEAM_CARVING_DOUBLE_SECOND = 10     # Второй проход двойного seam carving
+SEAM_CARVING_EXTREME_PERCENT = 10   # Процент сжатия для экстремального seam carving
 
 # Фиксированные настройки FFmpeg для изображений
 FFMPEG_IMAGE_SCALE_FACTOR = 0.7     # Фактор масштабирования для пикселизации
