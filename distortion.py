@@ -51,6 +51,30 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
         return False, f"Ошибка FFmpeg: {error_message}"
     return True, "Success"
 
+async def get_media_info(file_path: str) -> dict | None:
+    """
+    ИСПРАВЛЕНО: Функция возвращена на место.
+    Получает информацию о медиафайле с помощью ffprobe.
+    """
+    command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format']
+    
+    # Добавляем кодек для .webm, чтобы ffprobe их правильно читал
+    if file_path.lower().endswith('.webm'):
+        command.extend(['-vcodec', 'libvpx-vp9'])
+        
+    command.append(file_path)
+
+    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        error_message = stderr.decode(errors='ignore').strip()
+        logging.error(f"Не удалось получить информацию о медиафайле: {error_message}")
+        return None
+    try:
+        return json.loads(stdout.decode(errors='ignore'))
+    except json.JSONDecodeError:
+        return None
+
 # --- Функции искажения изображений (для кадров) ---
 
 async def distort_single_image(input_path: str, output_path: str, intensity: int):
@@ -110,9 +134,7 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
     os.makedirs(distorted_frames_dir, exist_ok=True)
 
     try:
-        # 1. Извлечение кадров
         extract_cmd = ['ffmpeg']
-        # ИСПРАВЛЕНО: Добавляем кодек для анимированных стикеров
         if is_sticker:
             extract_cmd.extend(['-vcodec', 'libvpx-vp9'])
         extract_cmd.extend(['-i', input_path, os.path.join(frames_dir, 'f-%04d.png')])
@@ -122,14 +144,12 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
             logging.error(f"Ошибка извлечения кадров: {msg}")
             return False
 
-        # 2. Параллельное искажение
         tasks = [
             distort_single_image(os.path.join(frames_dir, f), os.path.join(distorted_frames_dir, f), intensity)
             for f in sorted(os.listdir(frames_dir))
         ]
         await asyncio.gather(*tasks)
 
-        # 3. Сборка кадров
         input_pattern = os.path.join(distorted_frames_dir, 'f-%04d.png')
         if is_sticker:
             collect_cmd = ['ffmpeg', '-r', frame_rate, '-i', input_pattern, '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '256k', '-an', '-y', output_path]
@@ -160,10 +180,6 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
 # --- Фоновая задача и основной обработчик ---
 
 async def run_distortion_in_background(message: types.Message, intensity: int):
-    """
-    Эта функция выполняется в фоне, чтобы не блокировать бота.
-    Она делает всю тяжелую работу и отправляет результат.
-    """
     target_message = message.reply_to_message or message
     media_type, file_id, original_extension, is_animated_sticker = None, None, "", False
 
@@ -217,7 +233,6 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
             
             final_media_type = 'sticker' if is_animated_sticker else 'video'
 
-        # Отправка результата
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo':
@@ -252,18 +267,11 @@ def is_distortion_command(message: types.Message) -> bool:
         return False
 
 async def handle_distortion_request(message: types.Message):
-    """
-    Основной обработчик. Запускает искажение в фоновом режиме.
-    """
     try:
         text_for_parsing = message.text if message.text else message.caption
         intensity = parse_intensity_from_text(text_for_parsing)
-        
         await message.answer("🌀 ща, сука...")
-        
-        # ИСПРАВЛЕНО: Запускаем тяжелую задачу в фоне и не ждем ее завершения
         asyncio.create_task(run_distortion_in_background(message, intensity))
-        
     except Exception as e:
         logging.error(f"Ошибка в handle_distortion_request: {e}", exc_info=True)
         await message.answer("Не удалось запустить обработку.")
