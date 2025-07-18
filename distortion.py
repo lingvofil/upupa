@@ -23,7 +23,7 @@ from config import bot
 from whatisthere import download_file # Переиспользуем функцию скачивания
 
 # Фиксированные настройки дисторшн
-SEAM_CARVING_NORMAL_PERCENT = 60    # Процент сжатия для обычного seam carving
+SEAM_CARVING_NORMAL_PERCENT = 50    # Процент сжатия для обычного seam carving
 SEAM_CARVING_DOUBLE_FIRST = 35      # Первый проход двойного seam carving
 SEAM_CARVING_DOUBLE_SECOND = 25     # Второй проход двойного seam carving
 SEAM_CARVING_EXTREME_PERCENT = 80   # Процент сжатия для экстремального seam carving
