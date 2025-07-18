@@ -22,10 +22,30 @@ except ImportError:
 from config import bot
 from whatisthere import download_file # Переиспользуем функцию скачивания
 
-# Настройки дисторшн
-DEFAULT_DISTORT_PERCENT = 60  # Процент сжатия по умолчанию для seam carving
-MIN_DISTORT_PERCENT = 40      # Минимальный процент сжатия для seam carving
-MAX_DISTORT_PERCENT = 85      # Максимальный процент сжатия для seam carving
+# Фиксированные настройки дисторшн
+SEAM_CARVING_NORMAL_PERCENT = 60    # Процент сжатия для обычного seam carving
+SEAM_CARVING_DOUBLE_FIRST = 35      # Первый проход двойного seam carving
+SEAM_CARVING_DOUBLE_SECOND = 25     # Второй проход двойного seam carving
+SEAM_CARVING_EXTREME_PERCENT = 80   # Процент сжатия для экстремального seam carving
+
+# Фиксированные настройки FFmpeg для изображений
+FFMPEG_IMAGE_SCALE_FACTOR = 0.7     # Фактор масштабирования для пикселизации
+FFMPEG_IMAGE_HUE_SHIFT = 45         # Сдвиг оттенка в градусах
+FFMPEG_IMAGE_SATURATION = 1.8       # Насыщенность цвета
+
+# Фиксированные настройки FFmpeg для видео
+FFMPEG_VIDEO_SPEED_FACTOR = 0.8     # Фактор скорости воспроизведения
+FFMPEG_VIDEO_SCALE_FACTOR = 0.6     # Фактор масштабирования
+FFMPEG_VIDEO_HUE_SHIFT = 90         # Сдвиг оттенка в градусах
+FFMPEG_VIDEO_SATURATION = 1.5       # Насыщенность цвета
+
+# Фиксированные настройки FFmpeg для аудио
+FFMPEG_AUDIO_RATE_FACTOR = 0.75     # Фактор изменения скорости аудио
+FFMPEG_AUDIO_ECHO_DELAY = 500       # Задержка эха в миллисекундах
+FFMPEG_AUDIO_ECHO_DECAY = 0.4       # Затухание эха
+
+# Фиксированные настройки извлечения кадров
+FRAME_EXTRACT_TIME = 1.0            # Время извлечения кадра в секундах
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -92,7 +112,7 @@ async def get_media_info(file_path: str) -> dict | None:
         logging.error(f"Ошибка декодирования JSON из ffprobe: {e}")
         return None
 
-async def apply_seam_carving_distortion(input_path: str, output_path: str, distort_percent: int = DEFAULT_DISTORT_PERCENT) -> bool:
+async def apply_seam_carving_distortion(input_path: str, output_path: str, distort_percent: int) -> bool:
     """
     Применяет дисторшн через seam carving к изображению, затем масштабирует обратно до исходного размера.
     
@@ -152,24 +172,20 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, disto
         logging.error(f"Ошибка при применении seam carving: {e}")
         return False
 
-async def apply_random_seam_carving(input_path: str, output_path: str) -> bool:
+async def apply_normal_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Применяет seam carving со случайным процентом искажения.
+    Применяет обычный seam carving с фиксированным процентом искажения.
     """
     if not SEAM_CARVING_AVAILABLE:
         logging.error("Seam carving недоступен, пропуск.")
         return False
 
-    distort_percent = random.randint(MIN_DISTORT_PERCENT, MAX_DISTORT_PERCENT)
-    if random.random() < 0.2:
-        distort_percent = random.randint(65, 95)
-    
-    logging.info(f"Применяем случайный дисторшн seam carving с процентом: {distort_percent}%")
-    return await apply_seam_carving_distortion(input_path, output_path, distort_percent)
+    logging.info(f"Применяем обычный дисторшн seam carving с процентом: {SEAM_CARVING_NORMAL_PERCENT}%")
+    return await apply_seam_carving_distortion(input_path, output_path, SEAM_CARVING_NORMAL_PERCENT)
 
 async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Применяет двойной seam carving для более экстремального эффекта.
+    Применяет двойной seam carving с фиксированными параметрами.
     """
     if not SEAM_CARVING_AVAILABLE:
         logging.error("Seam carving недоступен, пропуск.")
@@ -178,12 +194,10 @@ async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
     try:
         temp_path = f"temp_seam_double_{random.randint(1000, 9999)}.jpg"
         
-        first_distort = random.randint(30, 50)
-        if not await apply_seam_carving_distortion(input_path, temp_path, first_distort):
+        if not await apply_seam_carving_distortion(input_path, temp_path, SEAM_CARVING_DOUBLE_FIRST):
             return False
         
-        second_distort = random.randint(20, 40)
-        success = await apply_seam_carving_distortion(temp_path, output_path, second_distort)
+        success = await apply_seam_carving_distortion(temp_path, output_path, SEAM_CARVING_DOUBLE_SECOND)
         
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -194,9 +208,20 @@ async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
         logging.error(f"Ошибка при двойном seam carving: {e}")
         return False
 
+async def apply_extreme_seam_carving(input_path: str, output_path: str) -> bool:
+    """
+    Применяет экстремальный seam carving с фиксированным процентом искажения.
+    """
+    if not SEAM_CARVING_AVAILABLE:
+        logging.error("Seam carving недоступен, пропуск.")
+        return False
+
+    logging.info(f"Применяем экстремальный дисторшн seam carving с процентом: {SEAM_CARVING_EXTREME_PERCENT}%")
+    return await apply_seam_carving_distortion(input_path, output_path, SEAM_CARVING_EXTREME_PERCENT)
+
 async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет различные фильтры FFmpeg для искажения изображения, сохраняя исходное разрешение.
+    Применяет фиксированные фильтры FFmpeg для искажения изображения.
     """
     try:
         with Image.open(input_path) as img:
@@ -205,23 +230,13 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bo
         logging.error(f"Не удалось получить размеры изображения для FFmpeg искажения: {e}")
         return False
 
-    filters = []
-    # Выбираем случайные фильтры для применения
-    if random.random() < 0.7: # 70% шанс применить scale для пикселизации/размытия
-        scale_factor = random.uniform(0.5, 1.5)
-        # Применяем масштаб, затем масштабируем обратно для пикселизации/размытия
-        filters.append(f"scale=iw*{scale_factor}:ih*{scale_factor},scale={original_width}:{original_height}:flags=neighbor")
-    if random.random() < 0.5: # 50% шанс применить colorchannelmixer
-        filters.append("colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0")
-    if random.random() < 0.4: # 40% шанс применить hue
-        filters.append(f"hue=h={random.uniform(-180, 180)}:s={random.uniform(0.5, 2.0)}")
-    if random.random() < 0.3: # 30% шанс применить vignette
-        filters.append("vignette=angle=PI/4")
-    if random.random() < 0.2: # 20% шанс применить noise
-        filters.append("noise=alls=20:allf=t+n")
-    
-    if not filters: # Если фильтры не выбраны, добавляем базовый
-        filters.append("eq=brightness=0.1:saturation=1.5")
+    # Фиксированные фильтры
+    filters = [
+        f"scale=iw*{FFMPEG_IMAGE_SCALE_FACTOR}:ih*{FFMPEG_IMAGE_SCALE_FACTOR},scale={original_width}:{original_height}:flags=neighbor",
+        f"hue=h={FFMPEG_IMAGE_HUE_SHIFT}:s={FFMPEG_IMAGE_SATURATION}",
+        "colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0",
+        "eq=brightness=0.1:saturation=1.5"
+    ]
 
     vf_string = ",".join(filters)
     
@@ -240,7 +255,7 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bo
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет различные фильтры FFmpeg для искажения видео, сохраняя исходное разрешение.
+    Применяет фиксированные фильтры FFmpeg для искажения видео.
     """
     media_info = await get_media_info(input_path)
     if not media_info:
@@ -257,25 +272,14 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bo
         logging.error("Не удалось получить размеры видео для FFmpeg искажения.")
         return False
 
-    filters = []
-    # Выбираем случайные фильтры для применения
-    if random.random() < 0.8: # 80% шанс применить setpts для изменения скорости
-        filters.append(f"setpts={random.uniform(0.5, 2.0)}*PTS")
-    if random.random() < 0.6: # 60% шанс применить scale для изменения разрешения
-        scale_factor = random.choice([0.5, 0.75, 1.25, 1.5])
-        # Применяем масштаб, затем масштабируем обратно для пикселизации/размытия
-        filters.append(f"scale=iw*{scale_factor}:ih*{scale_factor},scale={original_width}:{original_height}:flags=neighbor")
-    if random.random() < 0.5: # 50% шанс применить colorchannelmixer
-        filters.append("colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0")
-    if random.random() < 0.4: # 40% шанс применить hue
-        filters.append(f"hue=h={random.uniform(-180, 180)}:s={random.uniform(0.5, 2.0)}")
-    if random.random() < 0.3: # 30% шанс применить noise
-        filters.append("noise=alls=20:allf=t+n")
-    if random.random() < 0.2: # 20% шанс применить vignette
-        filters.append("vignette=angle=PI/4")
-    
-    if not filters:
-        filters.append("eq=brightness=0.1:saturation=1.5")
+    # Фиксированные фильтры
+    filters = [
+        f"setpts={FFMPEG_VIDEO_SPEED_FACTOR}*PTS",
+        f"scale=iw*{FFMPEG_VIDEO_SCALE_FACTOR}:ih*{FFMPEG_VIDEO_SCALE_FACTOR},scale={original_width}:{original_height}:flags=neighbor",
+        f"hue=h={FFMPEG_VIDEO_HUE_SHIFT}:s={FFMPEG_VIDEO_SATURATION}",
+        "colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0",
+        "eq=brightness=0.1:saturation=1.5"
+    ]
 
     vf_string = ",".join(filters)
     
@@ -285,7 +289,7 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bo
         '-vf', vf_string,
         '-c:v', 'libx264',
         '-crf', '28', # Качество видео
-        '-preset', 'random.choice(["ultrafast", "superfast", "fast"])', # Случайный пресет
+        '-preset', 'fast',
         '-y',
         '-c:a', 'copy', # Копируем аудио без изменений
         output_path
@@ -298,22 +302,15 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bo
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет различные фильтры FFmpeg для искажения аудио.
+    Применяет фиксированные фильтры FFmpeg для искажения аудио.
     """
-    filters = []
-    # Выбираем случайные фильтры для применения
-    if random.random() < 0.7: # 70% шанс применить asetrate/atempo
-        rate_factor = random.choice([0.5, 0.75, 1.25, 1.5, 2.0])
-        filters.append(f"asetrate=44100*{rate_factor},atempo=1/{rate_factor}")
-    if random.random() < 0.5: # 50% шанс применить acrusher
-        filters.append("acrusher=bits=8:mix=0.5")
-    if random.random() < 0.4: # 40% шанс применить flanger
-        filters.append("flanger")
-    if random.random() < 0.3: # 30% шанс применить echo
-        filters.append("aecho=0.8:0.9:1000:0.3")
-    
-    if not filters:
-        filters.append("volume=0.8") # Базовое изменение громкости
+    # Фиксированные фильтры
+    filters = [
+        f"asetrate=44100*{FFMPEG_AUDIO_RATE_FACTOR},atempo=1/{FFMPEG_AUDIO_RATE_FACTOR}",
+        "acrusher=bits=8:mix=0.5",
+        f"aecho=0.8:0.9:{FFMPEG_AUDIO_ECHO_DELAY}:{FFMPEG_AUDIO_ECHO_DECAY}",
+        "flanger"
+    ]
 
     af_string = ",".join(filters)
     
@@ -333,16 +330,16 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str) -> bo
 
 async def extract_frame_and_distort(input_path: str, output_path: str) -> bool:
     """
-    Извлекает кадр из видео и применяет к нему seam carving или FFmpeg искажение.
+    Извлекает кадр из видео и применяет к нему искажение.
     """
     try:
         frame_path = f"temp_frame_{random.randint(1000, 9999)}.jpg"
         
-        # Извлекаем случайный кадр
+        # Извлекаем кадр в фиксированное время
         extract_command = [
             'ffmpeg',
             '-i', input_path,
-            '-ss', str(random.uniform(0, 5)), # Берем кадр со случайной секунды в начале
+            '-ss', str(FRAME_EXTRACT_TIME),
             '-vframes', '1',
             '-y',
             frame_path
@@ -353,11 +350,10 @@ async def extract_frame_and_distort(input_path: str, output_path: str) -> bool:
             logging.error(f"Не удалось извлечь кадр: {message}")
             return False
         
-        # Выбираем метод искажения для кадра
-        distortion_method = random.choice(['seam_carving', 'ffmpeg_image'])
-        if distortion_method == 'seam_carving' and SEAM_CARVING_AVAILABLE:
-            success = await apply_random_seam_carving(frame_path, output_path)
-        else: # ffmpeg_image или seam_carving недоступен
+        # Применяем обычный seam carving к кадру, если доступен
+        if SEAM_CARVING_AVAILABLE:
+            success = await apply_normal_seam_carving(frame_path, output_path)
+        else:
             success = await apply_ffmpeg_image_distortion(frame_path, output_path)
         
         if os.path.exists(frame_path):
@@ -419,21 +415,11 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
     try:
         if media_type in ['photo', 'sticker']:
             output_path = f"temp_distort_out_{file_id}.jpg"
-            # Выбираем метод искажения для изображений
-            # Если seam_carving недоступен, всегда используем ffmpeg_image
-            if SEAM_CARVING_AVAILABLE:
-                distortion_method = random.choice(['seam_carving_normal', 'seam_carving_double', 'seam_carving_extreme', 'ffmpeg_image'])
-            else:
-                distortion_method = 'ffmpeg_image'
             
-            if distortion_method == 'seam_carving_normal':
-                success = await apply_random_seam_carving(input_path, output_path)
-            elif distortion_method == 'seam_carving_double':
-                success = await apply_double_seam_carving(input_path, output_path)
-            elif distortion_method == 'seam_carving_extreme':
-                extreme_percent = random.randint(70, 95)
-                success = await apply_seam_carving_distortion(input_path, output_path, extreme_percent)
-            else: # ffmpeg_image
+            # Используем обычный seam carving для изображений, если доступен
+            if SEAM_CARVING_AVAILABLE:
+                success = await apply_normal_seam_carving(input_path, output_path)
+            else:
                 success = await apply_ffmpeg_image_distortion(input_path, output_path)
             
             if success and media_type == 'sticker':
