@@ -17,35 +17,74 @@ except ImportError:
     logging.warning("Модуль 'seam_carving' не найден. Функции seam carving будут недоступны.")
     SEAM_CARVING_AVAILABLE = False
 
-
 # Импортируем общие функции и переменные из других модулей
 from config import bot
 from whatisthere import download_file # Переиспользуем функцию скачивания
 
-# Фиксированные настройки дисторшн
-SEAM_CARVING_NORMAL_PERCENT = 60    # Процент сжатия для обычного seam carving
-SEAM_CARVING_DOUBLE_FIRST = 10      # Первый проход двойного seam carving
-SEAM_CARVING_DOUBLE_SECOND = 25     # Второй проход двойного seam carving
-SEAM_CARVING_EXTREME_PERCENT = 80   # Процент сжатия для экстремального seam carving
+# ================== ОСНОВНОЙ ПАРАМЕТР ИНТЕНСИВНОСТИ ИСКАЖЕНИЯ ==================
+# Меняйте это значение для управления общей интенсивностью всех искажений
+# Диапазон: 0.1 (минимальное) - 2.0 (максимальное)
+DISTORTION_INTENSITY = 0.8
 
-# Фиксированные настройки FFmpeg для изображений
-FFMPEG_IMAGE_SCALE_FACTOR = 0.7     # Фактор масштабирования для пикселизации
-FFMPEG_IMAGE_HUE_SHIFT = 45         # Сдвиг оттенка в градусах
-FFMPEG_IMAGE_SATURATION = 1.8       # Насыщенность цвета
+# ================== БАЗОВЫЕ НАСТРОЙКИ (не трогать) ==================
+# Базовые настройки seam carving
+BASE_SEAM_CARVING_NORMAL = 60
+BASE_SEAM_CARVING_DOUBLE_FIRST = 35
+BASE_SEAM_CARVING_DOUBLE_SECOND = 25
+BASE_SEAM_CARVING_EXTREME = 80
 
-# Фиксированные настройки FFmpeg для видео
-FFMPEG_VIDEO_SPEED_FACTOR = 0.8     # Фактор скорости воспроизведения
-FFMPEG_VIDEO_SCALE_FACTOR = 0.6     # Фактор масштабирования
-FFMPEG_VIDEO_HUE_SHIFT = 90         # Сдвиг оттенка в градусах
-FFMPEG_VIDEO_SATURATION = 1.5       # Насыщенность цвета
+# Базовые настройки FFmpeg для изображений
+BASE_FFMPEG_IMAGE_SCALE = 0.7
+BASE_FFMPEG_IMAGE_HUE = 45
+BASE_FFMPEG_IMAGE_SATURATION = 1.8
 
-# Фиксированные настройки FFmpeg для аудио
-FFMPEG_AUDIO_RATE_FACTOR = 0.75     # Фактор изменения скорости аудио
-FFMPEG_AUDIO_ECHO_DELAY = 500       # Задержка эха в миллисекундах
-FFMPEG_AUDIO_ECHO_DECAY = 0.4       # Затухание эха
+# Базовые настройки FFmpeg для видео
+BASE_FFMPEG_VIDEO_SPEED = 0.8
+BASE_FFMPEG_VIDEO_SCALE = 0.6
+BASE_FFMPEG_VIDEO_HUE = 90
+BASE_FFMPEG_VIDEO_SATURATION = 1.5
 
-# Фиксированные настройки извлечения кадров
-FRAME_EXTRACT_TIME = 1.0            # Время извлечения кадра в секундах
+# Базовые настройки FFmpeg для аудио
+BASE_FFMPEG_AUDIO_RATE = 0.75
+BASE_FFMPEG_AUDIO_ECHO_DELAY = 500
+BASE_FFMPEG_AUDIO_ECHO_DECAY = 0.4
+
+# Базовые настройки извлечения кадров
+BASE_FRAME_EXTRACT_TIME = 1.0
+
+# ================== ВЫЧИСЛЯЕМЫЕ ПАРАМЕТРЫ (обновляются автоматически) ==================
+def get_distortion_params():
+    """
+    Вычисляет параметры искажения на основе общей интенсивности.
+    """
+    intensity = max(0.1, min(2.0, DISTORTION_INTENSITY))  # Ограничиваем диапазон
+    
+    return {
+        # Seam carving параметры
+        'seam_normal': int(BASE_SEAM_CARVING_NORMAL * intensity),
+        'seam_double_first': int(BASE_SEAM_CARVING_DOUBLE_FIRST * intensity),
+        'seam_double_second': int(BASE_SEAM_CARVING_DOUBLE_SECOND * intensity),
+        'seam_extreme': int(BASE_SEAM_CARVING_EXTREME * intensity),
+        
+        # FFmpeg изображения
+        'ffmpeg_img_scale': max(0.1, BASE_FFMPEG_IMAGE_SCALE * (2 - intensity)),  # Инвертируем для масштаба
+        'ffmpeg_img_hue': BASE_FFMPEG_IMAGE_HUE * intensity,
+        'ffmpeg_img_saturation': BASE_FFMPEG_IMAGE_SATURATION * intensity,
+        
+        # FFmpeg видео
+        'ffmpeg_vid_speed': max(0.1, BASE_FFMPEG_VIDEO_SPEED * (2 - intensity)),  # Инвертируем для скорости
+        'ffmpeg_vid_scale': max(0.1, BASE_FFMPEG_VIDEO_SCALE * (2 - intensity)),  # Инвертируем для масштаба
+        'ffmpeg_vid_hue': BASE_FFMPEG_VIDEO_HUE * intensity,
+        'ffmpeg_vid_saturation': BASE_FFMPEG_VIDEO_SATURATION * intensity,
+        
+        # FFmpeg аудио
+        'ffmpeg_audio_rate': max(0.1, BASE_FFMPEG_AUDIO_RATE * (2 - intensity)),  # Инвертируем для скорости
+        'ffmpeg_audio_echo_delay': int(BASE_FFMPEG_AUDIO_ECHO_DELAY * intensity),
+        'ffmpeg_audio_echo_decay': min(0.9, BASE_FFMPEG_AUDIO_ECHO_DECAY * intensity),
+        
+        # Кадры
+        'frame_extract_time': BASE_FRAME_EXTRACT_TIME
+    }
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -140,6 +179,9 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, disto
                 logging.warning("Изображение слишком маленькое для seam carving")
                 return False
             
+            # Ограничиваем процент искажения
+            distort_percent = min(distort_percent, 90)
+            
             new_width = int(original_width * (100 - distort_percent) / 100)
             new_height = int(original_height * (100 - distort_percent) / 100)
             
@@ -159,8 +201,6 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, disto
             result_img = Image.fromarray(dst)
             
             # Масштабируем изображение обратно до исходного разрешения
-            # Это может привести к некоторому размытию или пикселизации,
-            # но сохранит размер файла.
             result_img = result_img.resize((original_width, original_height), Image.LANCZOS)
             
             result_img.save(output_path, "JPEG", quality=85)
@@ -174,30 +214,35 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, disto
 
 async def apply_normal_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Применяет обычный seam carving с фиксированным процентом искажения.
+    Применяет обычный seam carving с вычисляемым процентом искажения.
     """
     if not SEAM_CARVING_AVAILABLE:
         logging.error("Seam carving недоступен, пропуск.")
         return False
 
-    logging.info(f"Применяем обычный дисторшн seam carving с процентом: {SEAM_CARVING_NORMAL_PERCENT}%")
-    return await apply_seam_carving_distortion(input_path, output_path, SEAM_CARVING_NORMAL_PERCENT)
+    params = get_distortion_params()
+    percent = params['seam_normal']
+    logging.info(f"Применяем обычный дисторшн seam carving с процентом: {percent}% (интенсивность: {DISTORTION_INTENSITY})")
+    return await apply_seam_carving_distortion(input_path, output_path, percent)
 
 async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Применяет двойной seam carving с фиксированными параметрами.
+    Применяет двойной seam carving с вычисляемыми параметрами.
     """
     if not SEAM_CARVING_AVAILABLE:
         logging.error("Seam carving недоступен, пропуск.")
         return False
 
     try:
+        params = get_distortion_params()
         temp_path = f"temp_seam_double_{random.randint(1000, 9999)}.jpg"
         
-        if not await apply_seam_carving_distortion(input_path, temp_path, SEAM_CARVING_DOUBLE_FIRST):
+        logging.info(f"Двойной seam carving: первый проход {params['seam_double_first']}%, второй проход {params['seam_double_second']}%")
+        
+        if not await apply_seam_carving_distortion(input_path, temp_path, params['seam_double_first']):
             return False
         
-        success = await apply_seam_carving_distortion(temp_path, output_path, SEAM_CARVING_DOUBLE_SECOND)
+        success = await apply_seam_carving_distortion(temp_path, output_path, params['seam_double_second'])
         
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -210,18 +255,20 @@ async def apply_double_seam_carving(input_path: str, output_path: str) -> bool:
 
 async def apply_extreme_seam_carving(input_path: str, output_path: str) -> bool:
     """
-    Применяет экстремальный seam carving с фиксированным процентом искажения.
+    Применяет экстремальный seam carving с вычисляемым процентом искажения.
     """
     if not SEAM_CARVING_AVAILABLE:
         logging.error("Seam carving недоступен, пропуск.")
         return False
 
-    logging.info(f"Применяем экстремальный дисторшн seam carving с процентом: {SEAM_CARVING_EXTREME_PERCENT}%")
-    return await apply_seam_carving_distortion(input_path, output_path, SEAM_CARVING_EXTREME_PERCENT)
+    params = get_distortion_params()
+    percent = params['seam_extreme']
+    logging.info(f"Применяем экстремальный дисторшн seam carving с процентом: {percent}% (интенсивность: {DISTORTION_INTENSITY})")
+    return await apply_seam_carving_distortion(input_path, output_path, percent)
 
 async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет фиксированные фильтры FFmpeg для искажения изображения.
+    Применяет вычисляемые фильтры FFmpeg для искажения изображения.
     """
     try:
         with Image.open(input_path) as img:
@@ -230,21 +277,25 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bo
         logging.error(f"Не удалось получить размеры изображения для FFmpeg искажения: {e}")
         return False
 
-    # Фиксированные фильтры
+    params = get_distortion_params()
+    
+    # Вычисляемые фильтры на основе интенсивности
     filters = [
-        f"scale=iw*{FFMPEG_IMAGE_SCALE_FACTOR}:ih*{FFMPEG_IMAGE_SCALE_FACTOR},scale={original_width}:{original_height}:flags=neighbor",
-        f"hue=h={FFMPEG_IMAGE_HUE_SHIFT}:s={FFMPEG_IMAGE_SATURATION}",
+        f"scale=iw*{params['ffmpeg_img_scale']}:ih*{params['ffmpeg_img_scale']},scale={original_width}:{original_height}:flags=neighbor",
+        f"hue=h={params['ffmpeg_img_hue']}:s={params['ffmpeg_img_saturation']}",
         "colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0",
-        "eq=brightness=0.1:saturation=1.5"
+        f"eq=brightness={0.1 * DISTORTION_INTENSITY}:saturation={1.5 * DISTORTION_INTENSITY}"
     ]
 
     vf_string = ",".join(filters)
+    
+    logging.info(f"FFmpeg фильтры для изображения (интенсивность {DISTORTION_INTENSITY}): {vf_string}")
     
     command = [
         'ffmpeg',
         '-i', input_path,
         '-vf', vf_string,
-        '-q:v', '2', # Качество выходного изображения
+        '-q:v', '2',
         '-y', output_path
     ]
     
@@ -255,7 +306,7 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str) -> bo
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет фиксированные фильтры FFmpeg для искажения видео.
+    Применяет вычисляемые фильтры FFmpeg для искажения видео.
     """
     media_info = await get_media_info(input_path)
     if not media_info:
@@ -272,26 +323,30 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bo
         logging.error("Не удалось получить размеры видео для FFmpeg искажения.")
         return False
 
-    # Фиксированные фильтры
+    params = get_distortion_params()
+    
+    # Вычисляемые фильтры на основе интенсивности
     filters = [
-        f"setpts={FFMPEG_VIDEO_SPEED_FACTOR}*PTS",
-        f"scale=iw*{FFMPEG_VIDEO_SCALE_FACTOR}:ih*{FFMPEG_VIDEO_SCALE_FACTOR},scale={original_width}:{original_height}:flags=neighbor",
-        f"hue=h={FFMPEG_VIDEO_HUE_SHIFT}:s={FFMPEG_VIDEO_SATURATION}",
+        f"setpts={params['ffmpeg_vid_speed']}*PTS",
+        f"scale=iw*{params['ffmpeg_vid_scale']}:ih*{params['ffmpeg_vid_scale']},scale={original_width}:{original_height}:flags=neighbor",
+        f"hue=h={params['ffmpeg_vid_hue']}:s={params['ffmpeg_vid_saturation']}",
         "colorchannelmixer=.5:.5:.5:0:.5:.5:.5:0:.5:.5:.5:0",
-        "eq=brightness=0.1:saturation=1.5"
+        f"eq=brightness={0.1 * DISTORTION_INTENSITY}:saturation={1.5 * DISTORTION_INTENSITY}"
     ]
 
     vf_string = ",".join(filters)
+    
+    logging.info(f"FFmpeg фильтры для видео (интенсивность {DISTORTION_INTENSITY}): {vf_string}")
     
     command = [
         'ffmpeg',
         '-i', input_path,
         '-vf', vf_string,
         '-c:v', 'libx264',
-        '-crf', '28', # Качество видео
+        '-crf', '28',
         '-preset', 'fast',
         '-y',
-        '-c:a', 'copy', # Копируем аудио без изменений
+        '-c:a', 'copy',
         output_path
     ]
     
@@ -302,24 +357,28 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str) -> bo
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str) -> bool:
     """
-    Применяет фиксированные фильтры FFmpeg для искажения аудио.
+    Применяет вычисляемые фильтры FFmpeg для искажения аудио.
     """
-    # Фиксированные фильтры
+    params = get_distortion_params()
+    
+    # Вычисляемые фильтры на основе интенсивности
     filters = [
-        f"asetrate=44100*{FFMPEG_AUDIO_RATE_FACTOR},atempo=1/{FFMPEG_AUDIO_RATE_FACTOR}",
-        "acrusher=bits=8:mix=0.5",
-        f"aecho=0.8:0.9:{FFMPEG_AUDIO_ECHO_DELAY}:{FFMPEG_AUDIO_ECHO_DECAY}",
+        f"asetrate=44100*{params['ffmpeg_audio_rate']},atempo=1/{params['ffmpeg_audio_rate']}",
+        f"acrusher=bits={max(4, int(8 * (2 - DISTORTION_INTENSITY)))}:mix=0.5",
+        f"aecho=0.8:0.9:{params['ffmpeg_audio_echo_delay']}:{params['ffmpeg_audio_echo_decay']}",
         "flanger"
     ]
 
     af_string = ",".join(filters)
     
+    logging.info(f"FFmpeg фильтры для аудио (интенсивность {DISTORTION_INTENSITY}): {af_string}")
+    
     command = [
         'ffmpeg',
         '-i', input_path,
         '-af', af_string,
-        '-c:a', 'aac', # Кодек для аудио
-        '-b:a', '128k', # Битрейт аудио
+        '-c:a', 'aac',
+        '-b:a', '128k',
         '-y', output_path
     ]
     
@@ -333,13 +392,14 @@ async def extract_frame_and_distort(input_path: str, output_path: str) -> bool:
     Извлекает кадр из видео и применяет к нему искажение.
     """
     try:
+        params = get_distortion_params()
         frame_path = f"temp_frame_{random.randint(1000, 9999)}.jpg"
         
-        # Извлекаем кадр в фиксированное время
+        # Извлекаем кадр в вычисляемое время
         extract_command = [
             'ffmpeg',
             '-i', input_path,
-            '-ss', str(FRAME_EXTRACT_TIME),
+            '-ss', str(params['frame_extract_time']),
             '-vframes', '1',
             '-y',
             frame_path
@@ -370,6 +430,9 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
     Обрабатывает запрос на искажение, определяет тип медиа и запускает нужную функцию.
     Возвращает: (успех, путь к файлу, тип медиа)
     """
+    # Логируем текущую интенсивность
+    logging.info(f"Обработка дисторшна с интенсивностью: {DISTORTION_INTENSITY}")
+    
     target_message = message.reply_to_message if message.reply_to_message else message
     media_type = None
     file_id = None
@@ -449,12 +512,12 @@ async def process_distortion(message: types.Message) -> tuple[bool, str | None, 
                     output_path = final_output_path
                 else:
                     logging.error(f"Не удалось объединить видео и аудио: {msg}")
-            elif video_success: # Если только видео искажено
+            elif video_success:
                 output_path = output_path_video
                 success = True
-            elif audio_success: # Если только аудио искажено, но видео нет - это не то, что нужно.
+            elif audio_success:
                 logging.warning("Аудио искажено, но видео нет. Попробуем извлечь кадр.")
-                success = False # Сбрасываем успех, чтобы перейти к извлечению кадра
+                success = False
             
             # Если не получилось исказить видео или объединить, извлекаем кадр и искажаем его
             if not success:
