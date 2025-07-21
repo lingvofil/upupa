@@ -36,10 +36,10 @@ def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
     return out_min + (intensity / 100.0) * (out_max - out_min)
 
 def parse_intensity_from_text(text: str | None) -> int:
-    if not text: return 35
+    if not text: return 45
     match = re.search(r'\b(\d+)\b', text)
     if match: return max(0, min(100, int(match.group(1))))
-    return 35
+    return 45
 
 async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
     logging.info(f"Запуск FFmpeg: {' '.join(command)}")
