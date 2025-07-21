@@ -20,8 +20,8 @@ except ImportError:
     logging.warning("Модуль 'seam_carving' не найден. Функции seam carving будут недоступны.")
     SEAM_CARVING_AVAILABLE = False
 
-# Импортируем общие функции
-from config import bot
+# Импортируем общие функции из вашего проекта
+from config import bot as main_bot_instance # Переименовываем, чтобы не было путаницы
 from whatisthere import download_file
 
 # Настройка логирования
@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- ОГРАНИЧЕНИЯ РЕСУРСОВ ---
 MAX_VIDEO_DURATION = 15
 MAX_STICKER_DURATION = 3
-MAX_AUDIO_DURATION = 180 # 3 минуты
+MAX_AUDIO_DURATION = 180
 PREPROCESS_RESOLUTION = 480
 
 # --- Вспомогательные функции ---
@@ -59,7 +59,7 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
 async def get_media_info(file_path: str, is_sticker: bool) -> dict | None:
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format']
     if is_sticker:
-        command.extend(['-vcodec', 'libvpx-vp9'])
+        command.extend(['-c:v', 'libvpx-vp9'])
     command.extend(['-i', file_path])
     
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -68,39 +68,18 @@ async def get_media_info(file_path: str, is_sticker: bool) -> dict | None:
     try: return json.loads(stdout.decode(errors='ignore'))
     except json.JSONDecodeError: return None
 
-# --- НОВЫЕ ФУНКЦИИ ИСКАЖЕНИЯ ---
+# --- Функции искажения ---
 
 def distort_text(text: str, intensity: int) -> str:
-    """Искажает текст с заданной интенсивностью."""
     chars = list(text)
     num_changes = int(len(chars) * (intensity / 100.0))
-
     for _ in range(num_changes):
         idx = random.randint(0, len(chars) - 1)
-        char = chars[idx]
-        
-        # Пропускаем пробелы
-        if char.isspace():
-            continue
-
-        action = random.randint(0, 4)
-        if action == 0 and intensity > 20: # Смена регистра
-            chars[idx] = char.swapcase()
-        elif action == 1 and intensity > 40: # Добавление диакритики (Zalgo)
-            combining_chars = [chr(c) for c in range(0x0300, 0x036F)]
-            chars[idx] += random.choice(combining_chars)
-        elif action == 2 and intensity > 60: # Замена на похожий символ
-            replacements = {'о': 'o', 'е': 'e', 'а': 'a', 'р': 'p', 'с': 'c'}
-            if char.lower() in replacements:
-                chars[idx] = replacements[char.lower()]
-        elif action == 3 and intensity > 80: # Вставка случайного символа
-            chars.insert(idx, random.choice("!@#$%^&*()"))
-        else: # Небольшое изменение регистра
-             if random.random() > 0.5:
-                 chars[idx] = char.upper()
-             else:
-                 chars[idx] = char.lower()
-
+        if chars[idx].isspace(): continue
+        action = random.randint(0, 2)
+        if action == 0: chars[idx] = chars[idx].swapcase()
+        elif action == 1: chars[idx] += random.choice([chr(c) for c in range(0x0300, 0x036F)])
+        else: chars.insert(idx, random.choice("!@#$%^&*()_+-=[]{}|;:,.<>?"))
     return "".join(chars)
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
@@ -114,8 +93,6 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
     cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '5', '-y', output_path]
     success, _ = await run_ffmpeg_command(cmd)
     return success
-
-# --- Функции искажения изображений (для кадров) ---
 
 async def distort_single_image(input_path: str, output_path: str, intensity: int):
     # ... (код без изменений)
@@ -157,8 +134,6 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str, inten
     success, _ = await run_ffmpeg_command(cmd)
     return success
 
-# --- Покадровая обработка видео ---
-
 async def process_video_frame_by_frame(input_path: str, output_path: str, intensity: int, is_sticker: bool, frame_rate: str) -> bool:
     # ... (код без изменений)
     base_id = f"distort_{random.randint(1000, 9999)}"
@@ -170,7 +145,7 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
     try:
         extract_cmd = ['ffmpeg']
         if is_sticker:
-            extract_cmd.extend(['-vcodec', 'libvpx-vp9'])
+            extract_cmd.extend(['-c:v', 'libvpx-vp9'])
         extract_cmd.extend(['-i', input_path, os.path.join(frames_dir, 'f-%04d.png')])
         
         success, msg = await run_ffmpeg_command(extract_cmd)
@@ -202,17 +177,10 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     """Асинхронная часть воркера, которая выполняет всю работу."""
     bot_instance = Bot(token=bot_token)
     
-    file_id = media_info['file_id']
     media_type = media_info['media_type']
-    ext = media_info['ext']
+    input_path = media_info.get('local_path')
     is_animated_sticker = media_type == 'sticker_animated'
     
-    input_path = f"temp_distort_in_{file_id}{ext}"
-    if not await download_file(file_id, input_path, bot_instance):
-        await bot_instance.send_message(chat_id, "Не смог скачать файл.")
-        return
-
-    temp_files = [input_path]
     output_path = None
     
     try:
@@ -229,17 +197,17 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                 await bot_instance.send_message(chat_id, f"Слишком длинный файл ({duration:.1f}с > {limit}с). Я такое не потяну.")
                 raise Exception("Duration limit exceeded")
             
-            # Препроцессинг для видео/гиф
             if media_type in ['video', 'animation']:
                 logging.info(f"Препроцессинг видео до {PREPROCESS_RESOLUTION}p...")
                 preprocessed_path = f"{input_path}_preprocessed.mp4"
-                temp_files.append(preprocessed_path)
                 vf_filter = f"scale=-2:'min(ih,{PREPROCESS_RESOLUTION})'"
                 cmd = ['ffmpeg', '-i', input_path, '-vf', vf_filter, '-c:v', 'libx264', '-an', '-y', preprocessed_path]
                 if not (await run_ffmpeg_command(cmd))[0]:
                     await bot_instance.send_message(chat_id, "Ошибка при подготовке видео.")
                     raise Exception("Preprocessing failed")
-                input_path = preprocessed_path # Дальше работаем с уменьшенной версией
+                # Исходный файл больше не нужен, работаем с уменьшенной версией
+                os.remove(input_path)
+                input_path = preprocessed_path
 
         # --- ОСНОВНАЯ ОБРАБОТКА ---
         success, final_media_type = False, None
@@ -247,15 +215,15 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
         if media_type == 'text':
             distorted_text = distort_text(media_info['text'], intensity)
             await bot_instance.send_message(chat_id, distorted_text)
-            return # Текст обработан, выходим
+            return
 
         elif media_type in ['photo', 'sticker_static']:
-            output_path = f"temp_out_{file_id}.jpg"
+            output_path = f"{input_path}_out.jpg"
             success = await distort_single_image(input_path, output_path, intensity)
             final_media_type = 'photo'
 
         elif media_type in ['audio', 'voice']:
-            output_path = f"temp_out_{file_id}.mp3"
+            output_path = f"{input_path}_out.mp3"
             success = await apply_ffmpeg_audio_distortion(input_path, output_path, intensity)
             final_media_type = media_type
 
@@ -267,14 +235,13 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                     break
             
             video_ext = ".webm" if is_animated_sticker else ".mp4"
-            output_path_video = f"temp_vid_{file_id}{video_ext}"
+            output_path_video = f"{input_path}_vid{video_ext}"
             
             success = await process_video_frame_by_frame(input_path, output_path_video, intensity, is_animated_sticker, frame_rate)
             
             if success and not is_animated_sticker:
-                output_path_audio = f"temp_aud_{file_id}.aac"
-                output_path_final = f"temp_final_{file_id}.mp4"
-                temp_files.extend([output_path_audio, output_path_final])
+                output_path_audio = f"{input_path}_aud.aac"
+                output_path_final = f"{input_path}_final.mp4"
                 if await apply_ffmpeg_audio_distortion(media_info['original_input_path'], output_path_audio, intensity):
                     await run_ffmpeg_command(['ffmpeg', '-i', output_path_video, '-i', output_path_audio, '-c', 'copy', '-y', output_path_final])
                     output_path = output_path_final
@@ -298,9 +265,11 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     except Exception as e:
         logging.error(f"Ошибка в воркере: {e}", exc_info=True)
     finally:
-        temp_files.append(output_path)
-        for f in temp_files:
-            if f and os.path.exists(f): os.remove(f)
+        # Очистка всех временных файлов
+        if input_path and os.path.exists(input_path): os.remove(input_path)
+        if output_path and os.path.exists(output_path): os.remove(output_path)
+        if media_info.get('original_input_path') and os.path.exists(media_info['original_input_path']):
+            os.remove(media_info['original_input_path'])
         await bot_instance.session.close()
 
 def distortion_worker_proc(bot_token: str, chat_id: int, media_info: dict, intensity: int):
@@ -323,7 +292,7 @@ def is_distortion_command(message: types.Message) -> bool:
 
 async def handle_distortion_request(message: types.Message):
     """
-    Основной обработчик. Собирает информацию и запускает искажение в отдельном процессе.
+    Основной обработчик. Скачивает файл и запускает искажение в отдельном процессе.
     """
     try:
         target_message = message.reply_to_message or message
@@ -331,25 +300,56 @@ async def handle_distortion_request(message: types.Message):
         intensity = parse_intensity_from_text(text_for_parsing)
         
         media_info = {}
+        file_to_download = None
+        
         if target_message.sticker:
             if target_message.sticker.is_animated or target_message.sticker.is_video:
-                media_info = {'media_type': 'sticker_animated', 'file_id': target_message.sticker.file_id, 'ext': '.webm'}
-            else: media_info = {'media_type': 'sticker_static', 'file_id': target_message.sticker.file_id, 'ext': '.webp'}
-        elif target_message.photo: media_info = {'media_type': 'photo', 'file_id': target_message.photo[-1].file_id, 'ext': '.jpg'}
-        elif target_message.video: media_info = {'media_type': 'video', 'file_id': target_message.video.file_id, 'ext': '.mp4'}
-        elif target_message.animation: media_info = {'media_type': 'animation', 'file_id': target_message.animation.file_id, 'ext': '.mp4'}
-        elif target_message.audio: media_info = {'media_type': 'audio', 'file_id': target_message.audio.file_id, 'ext': '.mp3'}
-        elif target_message.voice: media_info = {'media_type': 'voice', 'file_id': target_message.voice.file_id, 'ext': '.ogg'}
-        elif target_message.text: media_info = {'media_type': 'text', 'text': target_message.text}
+                media_info = {'media_type': 'sticker_animated'}
+                file_to_download = target_message.sticker
+            else: 
+                media_info = {'media_type': 'sticker_static'}
+                file_to_download = target_message.sticker
+        elif target_message.photo: 
+            media_info = {'media_type': 'photo'}
+            file_to_download = target_message.photo[-1]
+        elif target_message.video: 
+            media_info = {'media_type': 'video'}
+            file_to_download = target_message.video
+        elif target_message.animation: 
+            media_info = {'media_type': 'animation'}
+            file_to_download = target_message.animation
+        elif target_message.audio: 
+            media_info = {'media_type': 'audio'}
+            file_to_download = target_message.audio
+        elif target_message.voice: 
+            media_info = {'media_type': 'voice'}
+            file_to_download = target_message.voice
+        elif target_message.text: 
+            media_info = {'media_type': 'text', 'text': target_message.text}
         
         if not media_info:
             await message.answer("Не нашел, что искажать.")
             return
 
+        # Если есть файл, скачиваем его в основном процессе
+        if file_to_download:
+            # Создаем временную папку для изоляции файлов каждого запроса
+            temp_dir = f"temp_worker_{random.randint(1000, 9999)}"
+            os.makedirs(temp_dir, exist_ok=True)
+            file_ext = os.path.splitext(file_to_download.file_name or 'file.bin')[1] if file_to_download.file_name else ''
+            local_path = os.path.join(temp_dir, f"input{file_ext}")
+            
+            if not await download_file(file_to_download.file_id, local_path):
+                 await message.answer("Не смог скачать файл.")
+                 shutil.rmtree(temp_dir, ignore_errors=True)
+                 return
+            media_info['local_path'] = local_path
+            media_info['original_input_path'] = local_path # Сохраняем путь для извлечения аудио
+
         await message.answer("🌀 ща, сука...")
         
         # Запускаем тяжелую задачу в отдельном процессе
-        proc = multiprocessing.Process(target=distortion_worker_proc, args=(bot.token, message.chat.id, media_info, intensity))
+        proc = multiprocessing.Process(target=distortion_worker_proc, args=(main_bot_instance.token, message.chat.id, media_info, intensity))
         proc.start()
 
     except Exception as e:
