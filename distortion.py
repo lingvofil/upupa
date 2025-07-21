@@ -104,17 +104,17 @@ def distort_text(text: str, intensity: int) -> str:
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
     """Искажает аудио, используя vibrato как основной эффект."""
     vibrato_freq = map_intensity(intensity, 4.0, 12.0)
-    vibrato_depth = map_intensity(intensity, 0.2, 2.0)
-    
+    # Глубина вибрато (сила эффекта) от 0.1 до 1.0 (максимум)
+    vibrato_depth = map_intensity(intensity, 0.1, 1.0)
     filters = [f"vibrato=f={vibrato_freq:.2f}:d={vibrato_depth:.2f}"]
     
     if intensity > 50:
-        crush = map_intensity(intensity, 0.2, 1.0)
+        crush = map_intensity(intensity, 0.1, 0.5)
         filters.append(f"acrusher=bits=8:mode=log:mix={crush}")
         
     if intensity > 75:
         decay = map_intensity(intensity, 0.1, 0.4)
-        delay = map_intensity(intensity, 20, 200)
+        delay = map_intensity(intensity, 20, 100)
         filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
 
     cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
