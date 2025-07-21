@@ -26,6 +26,10 @@ from whatisthere import download_file
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- ОГРАНИЧЕНИЯ ---
+MAX_VIDEO_DURATION = 60  # Максимальная длительность видео/гиф в секундах
+MAX_STICKER_DURATION = 5 # Максимальная длительность стикера в секундах
+
 # --- Вспомогательные функции ---
 
 def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
@@ -48,27 +52,19 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
     if process.returncode != 0:
         error_message = stderr.decode(errors='ignore').strip()
         logging.error(f"FFmpeg ошибка: {error_message}")
-        return False, f"Ошибка FFmpeg: {error_message}"
+        return False, error_message
     return True, "Success"
 
-async def get_media_info(file_path: str) -> dict | None:
-    """
-    ИСПРАВЛЕНО: Функция возвращена на место.
-    Получает информацию о медиафайле с помощью ffprobe.
-    """
+async def get_media_info(file_path: str, is_sticker: bool) -> dict | None:
+    """Получает информацию о медиафайле с помощью ffprobe."""
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format']
-    
-    # Добавляем кодек для .webm, чтобы ffprobe их правильно читал
-    if file_path.lower().endswith('.webm'):
+    if is_sticker:
         command.extend(['-vcodec', 'libvpx-vp9'])
-        
     command.append(file_path)
 
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = await process.communicate()
+    stdout, _ = await process.communicate()
     if process.returncode != 0:
-        error_message = stderr.decode(errors='ignore').strip()
-        logging.error(f"Не удалось получить информацию о медиафайле: {error_message}")
         return None
     try:
         return json.loads(stdout.decode(errors='ignore'))
@@ -83,7 +79,6 @@ async def distort_single_image(input_path: str, output_path: str, intensity: int
     return await apply_ffmpeg_image_distortion(input_path, output_path, intensity)
 
 def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, out_path):
-    """Синхронная, блокирующая функция для выполнения в отдельном потоке."""
     dst = seam_carving.resize(src_np, (new_w, new_h), energy_mode='backward', order='width-first')
     Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "PNG")
 
@@ -118,15 +113,7 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str, inten
 
 # --- Покадровая обработка видео ---
 
-async def process_video_frame_by_frame(input_path: str, output_path: str, intensity: int, is_sticker: bool) -> bool:
-    media_info = await get_media_info(input_path)
-    frame_rate = "25"
-    if media_info:
-        for stream in media_info.get('streams', []):
-            if stream.get('codec_type') == 'video' and stream.get('avg_frame_rate') != "0/0":
-                frame_rate = stream['avg_frame_rate']
-                break
-    
+async def process_video_frame_by_frame(input_path: str, output_path: str, intensity: int, is_sticker: bool, frame_rate: str) -> bool:
     base_id = f"distort_{random.randint(1000, 9999)}"
     frames_dir = f"temp_{base_id}_frames"
     distorted_frames_dir = f"temp_{base_id}_distorted"
@@ -134,6 +121,7 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
     os.makedirs(distorted_frames_dir, exist_ok=True)
 
     try:
+        # ИСПРАВЛЕНО: Порядок аргументов для стикеров
         extract_cmd = ['ffmpeg']
         if is_sticker:
             extract_cmd.extend(['-vcodec', 'libvpx-vp9'])
@@ -181,7 +169,7 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
 
 async def run_distortion_in_background(message: types.Message, intensity: int):
     target_message = message.reply_to_message or message
-    media_type, file_id, original_extension, is_animated_sticker = None, None, "", False
+    media_type, file_id, ext, is_animated_sticker = None, None, "", False
 
     if target_message.sticker:
         if target_message.sticker.is_animated or target_message.sticker.is_video:
@@ -202,6 +190,21 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
         await message.answer("Не смог скачать файл.")
         return
 
+    # ИСПРАВЛЕНО: Проверка длительности медиафайла
+    if media_type in ['video', 'animation', 'sticker_animated']:
+        media_info = await get_media_info(input_path, is_animated_sticker)
+        if media_info and 'format' in media_info and 'duration' in media_info['format']:
+            duration = float(media_info['format']['duration'])
+            limit = MAX_STICKER_DURATION if is_animated_sticker else MAX_VIDEO_DURATION
+            if duration > limit:
+                await message.answer(f"Слишком длинный файл ({duration:.1f}с > {limit}с). Я такое не потяну.")
+                os.remove(input_path)
+                return
+        elif media_info is None:
+             await message.answer("Не удалось прочитать информацию о файле. Возможно, он поврежден.")
+             os.remove(input_path)
+             return
+
     output_path, success, final_media_type = None, False, None
     temp_files = [input_path]
     
@@ -213,11 +216,18 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
             if success: final_media_type = 'photo'
 
         elif media_type in ['video', 'animation', 'sticker_animated']:
+            frame_rate = "25"
+            if media_info:
+                for stream in media_info.get('streams', []):
+                    if stream.get('codec_type') == 'video' and stream.get('avg_frame_rate') != "0/0":
+                        frame_rate = stream['avg_frame_rate']
+                        break
+            
             video_ext = ".webm" if is_animated_sticker else ".mp4"
             output_path_video = f"temp_vid_{file_id}{video_ext}"
             temp_files.append(output_path_video)
             
-            success = await process_video_frame_by_frame(input_path, output_path_video, intensity, is_animated_sticker)
+            success = await process_video_frame_by_frame(input_path, output_path_video, intensity, is_animated_sticker, frame_rate)
             
             if success and not is_animated_sticker:
                 output_path_audio = f"temp_aud_{file_id}.aac"
