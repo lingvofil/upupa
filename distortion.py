@@ -36,7 +36,6 @@ def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
     return out_min + (intensity / 100.0) * (out_max - out_min)
 
 def parse_intensity_from_text(text: str | None) -> int:
-    # ИЗМЕНЕНО: значение по умолчанию 35
     if not text: return 35
     match = re.search(r'\b(\d+)\b', text)
     if match: return max(0, min(100, int(match.group(1))))
@@ -77,7 +76,6 @@ def distort_text(text: str, intensity: int) -> str:
     return "".join(chars)
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    # ИЗМЕНЕНО: параметры "выкручены" для более сильного эффекта
     rate = map_intensity(intensity, 1.0, 0.2)
     crush = map_intensity(intensity, 0.2, 1.0)
     decay = map_intensity(intensity, 0.3, 0.9)
@@ -92,7 +90,8 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
 
 def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, out_path):
     dst = seam_carving.resize(src_np, (new_w, new_h), energy_mode='backward', order='width-first')
-    Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "JPG", quality=85)
+    # ИСПРАВЛЕНО: 'JPG' заменено на 'JPEG'
+    Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "JPEG", quality=85)
 
 async def apply_seam_carving_distortion(input_path: str, output_path: str, intensity: int) -> bool:
     if not SEAM_CARVING_AVAILABLE: return False
@@ -101,6 +100,7 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, inten
         with Image.open(input_path) as img:
             if img.width < 50 or img.height < 50: return False
             original_width, original_height = img.size
+            # Конвертируем в RGB, чтобы избежать проблем с прозрачностью (RGBA)
             src = np.array(img.convert("RGB"))
         new_width = max(int(original_width * (100 - distort_percent) / 100), 20)
         new_height = max(int(original_height * (100 - distort_percent) / 100), 20)
@@ -122,7 +122,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     output_path = None
     
     try:
-        # --- Проверка длительности для аудио ---
         if media_type in ['audio', 'voice']:
             info = await get_media_info(input_path)
             if not info or 'format' not in info or 'duration' not in info['format']:
@@ -134,7 +133,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                 await bot_instance.send_message(chat_id, f"Слишком длинный аудиофайл ({duration:.1f}с > {MAX_AUDIO_DURATION}с).")
                 raise Exception("Duration limit exceeded")
 
-        # --- ОСНОВНАЯ ОБРАБОТКА ---
         success, final_media_type = False, None
         
         if media_type == 'text':
@@ -152,7 +150,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             success = await apply_ffmpeg_audio_distortion(input_path, output_path, intensity)
             final_media_type = media_type
 
-        # --- ОТПРАВКА РЕЗУЛЬТАТА ---
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo': await bot_instance.send_photo(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
@@ -168,8 +165,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             try: await bot_instance.send_message(chat_id, "Произошла внутренняя ошибка при обработке.")
             except Exception as send_e: logging.error(f"Не удалось отправить сообщение об ошибке: {send_e}")
     finally:
-        # Очистка временной папки с файлами
-        if input_path:
+        if input_path and os.path.dirname(input_path).startswith("temp_worker_"):
             shutil.rmtree(os.path.dirname(input_path), ignore_errors=True)
         await bot_instance.session.close()
 
@@ -187,7 +183,6 @@ def is_distortion_command(message: types.Message) -> bool:
         text_to_check = message.caption or message.text
         if text_to_check and "дисторшн" in text_to_check.lower():
             target = message.reply_to_message or message
-            # Убраны видео, гиф, видеостикеры
             return bool(target.photo or target.sticker or target.audio or target.voice or target.text)
         return False
     except Exception: return False
@@ -204,13 +199,12 @@ async def handle_distortion_request(message: types.Message):
         media_info = {}
         file_to_download = None
         
-        # ИСПРАВЛЕНО: Надежное определение типа медиа и расширения
         if target_message.photo: 
             media_info = {'media_type': 'photo', 'ext': '.jpg'}
             file_to_download = target_message.photo[-1]
         elif target_message.sticker:
             if target_message.sticker.is_animated or target_message.sticker.is_video:
-                await message.answer("Извини, анимированные стикеры и видео-стикеры я больше не искажаю, чтобы не падать.")
+                await message.answer("Извини, анимированные стикеры и видео-стикеры я больше не искажаю.")
                 return
             else: 
                 media_info = {'media_type': 'sticker_static', 'ext': '.webp'}
@@ -223,10 +217,8 @@ async def handle_distortion_request(message: types.Message):
             file_to_download = target_message.voice
         elif target_message.text: 
             media_info = {'media_type': 'text', 'text': target_message.text}
-        
-        # Убрана обработка видео и гиф
         elif target_message.video or target_message.animation:
-            await message.answer("Извини, видео и гифки я больше не искажаю, чтобы не падать.")
+            await message.answer("Извини, видео и гифки я больше не искажаю.")
             return
 
         if not media_info:
@@ -234,7 +226,6 @@ async def handle_distortion_request(message: types.Message):
             return
 
         if file_to_download:
-            # Создаем временную папку для изоляции файлов каждого запроса
             temp_dir = f"temp_worker_{random.randint(1000, 9999)}"
             os.makedirs(temp_dir, exist_ok=True)
             local_path = os.path.join(temp_dir, f"input{media_info['ext']}")
@@ -247,11 +238,17 @@ async def handle_distortion_request(message: types.Message):
 
         await message.answer("🌀 ща, сука...")
         
-        # Запускаем тяжелую задачу в отдельном процессе
+        # ИСПРАВЛЕНО: Устанавливаем метод 'spawn' для полной изоляции
+        # Это должно быть вызвано до первого создания процесса
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+        except RuntimeError:
+            # Метод уже был установлен, это нормально
+            pass
+            
         proc = multiprocessing.Process(target=distortion_worker_proc, args=(main_bot_instance.token, message.chat.id, media_info, intensity))
         proc.start()
 
     except Exception as e:
         logging.error(f"Ошибка в handle_distortion_request: {e}", exc_info=True)
         await message.answer("Не удалось запустить обработку.")
-
