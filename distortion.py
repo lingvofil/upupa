@@ -26,9 +26,10 @@ from whatisthere import download_file
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- ОГРАНИЧЕНИЯ ---
-MAX_VIDEO_DURATION = 60  # Максимальная длительность видео/гиф в секундах
-MAX_STICKER_DURATION = 5 # Максимальная длительность стикера в секундах
+# --- ОГРАНИЧЕНИЯ РЕСУРСОВ ---
+MAX_VIDEO_DURATION = 15      # Макс. длительность видео/гиф в секундах
+MAX_STICKER_DURATION = 3     # Макс. длительность стикера в секундах (лимит Telegram)
+PREPROCESS_RESOLUTION = 480  # Разрешение для препроцессинга (по короткой стороне)
 
 # --- Вспомогательные функции ---
 
@@ -36,11 +37,9 @@ def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
     return out_min + (intensity / 100.0) * (out_max - out_min)
 
 def parse_intensity_from_text(text: str | None) -> int:
-    if not text:
-        return 25
+    if not text: return 25
     match = re.search(r'\b(\d+)\b', text)
-    if match:
-        return max(0, min(100, int(match.group(1))))
+    if match: return max(0, min(100, int(match.group(1))))
     return 25
 
 async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
@@ -56,20 +55,17 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
     return True, "Success"
 
 async def get_media_info(file_path: str, is_sticker: bool) -> dict | None:
-    """Получает информацию о медиафайле с помощью ffprobe."""
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format']
     if is_sticker:
+        # ИСПРАВЛЕНО: Кодек указывается до входного файла
         command.extend(['-vcodec', 'libvpx-vp9'])
-    command.append(file_path)
-
+    command.extend(['-i', file_path])
+    
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, _ = await process.communicate()
-    if process.returncode != 0:
-        return None
-    try:
-        return json.loads(stdout.decode(errors='ignore'))
-    except json.JSONDecodeError:
-        return None
+    if process.returncode != 0: return None
+    try: return json.loads(stdout.decode(errors='ignore'))
+    except json.JSONDecodeError: return None
 
 # --- Функции искажения изображений (для кадров) ---
 
@@ -83,6 +79,7 @@ def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, ou
     Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "PNG")
 
 async def apply_seam_carving_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    # ... (код без изменений)
     if not SEAM_CARVING_AVAILABLE: return False
     try:
         distort_percent = max(0, min(intensity, 95))
@@ -102,6 +99,7 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, inten
         return False
 
 async def apply_ffmpeg_image_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    # ... (код без изменений)
     scale = map_intensity(intensity, 1.0, 0.2)
     hue = map_intensity(intensity, 0, 180)
     sat = map_intensity(intensity, 1.0, 3.0)
@@ -114,6 +112,7 @@ async def apply_ffmpeg_image_distortion(input_path: str, output_path: str, inten
 # --- Покадровая обработка видео ---
 
 async def process_video_frame_by_frame(input_path: str, output_path: str, intensity: int, is_sticker: bool, frame_rate: str) -> bool:
+    # ... (код без изменений)
     base_id = f"distort_{random.randint(1000, 9999)}"
     frames_dir = f"temp_{base_id}_frames"
     distorted_frames_dir = f"temp_{base_id}_distorted"
@@ -121,7 +120,6 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
     os.makedirs(distorted_frames_dir, exist_ok=True)
 
     try:
-        # ИСПРАВЛЕНО: Порядок аргументов для стикеров
         extract_cmd = ['ffmpeg']
         if is_sticker:
             extract_cmd.extend(['-vcodec', 'libvpx-vp9'])
@@ -154,6 +152,7 @@ async def process_video_frame_by_frame(input_path: str, output_path: str, intens
         shutil.rmtree(distorted_frames_dir, ignore_errors=True)
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    # ... (код без изменений)
     rate = map_intensity(intensity, 1.0, 0.5)
     crush = map_intensity(intensity, 0.0, 0.7)
     decay = map_intensity(intensity, 0.0, 0.5)
@@ -174,14 +173,10 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
     if target_message.sticker:
         if target_message.sticker.is_animated or target_message.sticker.is_video:
             media_type, file_id, ext, is_animated_sticker = 'sticker_animated', target_message.sticker.file_id, ".webm", True
-        else:
-            media_type, file_id, ext = 'sticker_static', target_message.sticker.file_id, ".webp"
-    elif target_message.photo:
-        media_type, file_id, ext = 'photo', target_message.photo[-1].file_id, ".jpg"
-    elif target_message.video:
-        media_type, file_id, ext = 'video', target_message.video.file_id, ".mp4"
-    elif target_message.animation:
-        media_type, file_id, ext = 'animation', target_message.animation.file_id, ".mp4"
+        else: media_type, file_id, ext = 'sticker_static', target_message.sticker.file_id, ".webp"
+    elif target_message.photo: media_type, file_id, ext = 'photo', target_message.photo[-1].file_id, ".jpg"
+    elif target_message.video: media_type, file_id, ext = 'video', target_message.video.file_id, ".mp4"
+    elif target_message.animation: media_type, file_id, ext = 'animation', target_message.animation.file_id, ".mp4"
     
     if not file_id: return
 
@@ -190,25 +185,38 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
         await message.answer("Не смог скачать файл.")
         return
 
-    # ИСПРАВЛЕНО: Проверка длительности медиафайла
-    if media_type in ['video', 'animation', 'sticker_animated']:
-        media_info = await get_media_info(input_path, is_animated_sticker)
-        if media_info and 'format' in media_info and 'duration' in media_info['format']:
+    temp_files = [input_path]
+    preprocessed_path = None
+    
+    try:
+        # --- БЛОК ПРОВЕРКИ И ПРЕПРОЦЕССИНГА ---
+        if media_type in ['video', 'animation', 'sticker_animated']:
+            media_info = await get_media_info(input_path, is_animated_sticker)
+            if not media_info or 'format' not in media_info or 'duration' not in media_info['format']:
+                await message.answer("Не удалось прочитать информацию о файле. Возможно, он поврежден.")
+                raise Exception("Failed to get media info")
+
             duration = float(media_info['format']['duration'])
             limit = MAX_STICKER_DURATION if is_animated_sticker else MAX_VIDEO_DURATION
             if duration > limit:
                 await message.answer(f"Слишком длинный файл ({duration:.1f}с > {limit}с). Я такое не потяну.")
-                os.remove(input_path)
-                return
-        elif media_info is None:
-             await message.answer("Не удалось прочитать информацию о файле. Возможно, он поврежден.")
-             os.remove(input_path)
-             return
+                raise Exception("Duration limit exceeded")
 
-    output_path, success, final_media_type = None, False, None
-    temp_files = [input_path]
-    
-    try:
+            # Препроцессинг для видео/гиф, чтобы избежать падения по памяти
+            if not is_animated_sticker:
+                logging.info(f"Препроцессинг видео до {PREPROCESS_RESOLUTION}p...")
+                preprocessed_path = f"{input_path}_preprocessed.mp4"
+                temp_files.append(preprocessed_path)
+                vf_filter = f"scale=-2:'min(ih,{PREPROCESS_RESOLUTION})'"
+                cmd = ['ffmpeg', '-i', input_path, '-vf', vf_filter, '-c:v', 'libx264', '-an', '-y', preprocessed_path]
+                success, _ = await run_ffmpeg_command(cmd)
+                if not success:
+                    await message.answer("Ошибка при подготовке видео.")
+                    raise Exception("Preprocessing failed")
+        # --- КОНЕЦ БЛОКА ПРОВЕРКИ ---
+
+        output_path, success, final_media_type = None, False, None
+        
         if media_type in ['photo', 'sticker_static']:
             output_path = f"temp_out_{file_id}.jpg"
             temp_files.append(output_path)
@@ -217,17 +225,19 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
 
         elif media_type in ['video', 'animation', 'sticker_animated']:
             frame_rate = "25"
-            if media_info:
-                for stream in media_info.get('streams', []):
-                    if stream.get('codec_type') == 'video' and stream.get('avg_frame_rate') != "0/0":
-                        frame_rate = stream['avg_frame_rate']
-                        break
+            for stream in media_info.get('streams', []):
+                if stream.get('codec_type') == 'video' and stream.get('avg_frame_rate') != "0/0":
+                    frame_rate = stream['avg_frame_rate']
+                    break
+            
+            # Используем препроцессированный файл для извлечения кадров
+            path_for_frames = preprocessed_path or input_path
             
             video_ext = ".webm" if is_animated_sticker else ".mp4"
             output_path_video = f"temp_vid_{file_id}{video_ext}"
             temp_files.append(output_path_video)
             
-            success = await process_video_frame_by_frame(input_path, output_path_video, intensity, is_animated_sticker, frame_rate)
+            success = await process_video_frame_by_frame(path_for_frames, output_path_video, intensity, is_animated_sticker, frame_rate)
             
             if success and not is_animated_sticker:
                 output_path_audio = f"temp_aud_{file_id}.aac"
@@ -236,27 +246,22 @@ async def run_distortion_in_background(message: types.Message, intensity: int):
                 if await apply_ffmpeg_audio_distortion(input_path, output_path_audio, intensity):
                     await run_ffmpeg_command(['ffmpeg', '-i', output_path_video, '-i', output_path_audio, '-c', 'copy', '-y', output_path_final])
                     output_path = output_path_final
-                else:
-                    output_path = output_path_video
-            elif success:
-                output_path = output_path_video
+                else: output_path = output_path_video
+            elif success: output_path = output_path_video
             
             final_media_type = 'sticker' if is_animated_sticker else 'video'
 
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
-            if final_media_type == 'photo':
-                await message.answer_photo(file_to_send, caption="🌀 твоя хуйня готова")
-            elif final_media_type == 'video':
-                await message.answer_video(file_to_send, caption="🌀 твоя хуйня готова")
-            elif final_media_type == 'sticker':
-                await message.answer_sticker(file_to_send)
+            if final_media_type == 'photo': await message.answer_photo(file_to_send, caption="🌀 твоя хуйня готова")
+            elif final_media_type == 'video': await message.answer_video(file_to_send, caption="🌀 твоя хуйня готова")
+            elif final_media_type == 'sticker': await message.answer_sticker(file_to_send)
         else:
-            await message.answer("Что-то пошло не так во время искажения.")
+            if not (media_type in ['video', 'animation', 'sticker_animated'] and duration > limit):
+                 await message.answer("Что-то пошло не так во время искажения.")
 
     except Exception as e:
-        logging.error(f"Критическая ошибка в фоновой задаче: {e}", exc_info=True)
-        await message.answer("Произошла критическая ошибка при обработке.")
+        logging.error(f"Ошибка в фоновой задаче: {e}", exc_info=True)
     finally:
         for f in temp_files:
             if os.path.exists(f): os.remove(f)
@@ -273,8 +278,7 @@ def is_distortion_command(message: types.Message) -> bool:
             target = message.reply_to_message or message
             return bool(target.photo or target.video or target.animation or target.sticker)
         return False
-    except Exception:
-        return False
+    except Exception: return False
 
 async def handle_distortion_request(message: types.Message):
     try:
