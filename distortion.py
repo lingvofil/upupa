@@ -76,21 +76,32 @@ def distort_text(text: str, intensity: int) -> str:
     return "".join(chars)
 
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    rate = map_intensity(intensity, 1.0, 0.2)
-    crush = map_intensity(intensity, 0.2, 1.0)
-    decay = map_intensity(intensity, 0.3, 0.9)
-    delay = map_intensity(intensity, 100, 1800)
-    filters = [f"asetrate=44100*{rate},atempo=1/{rate}", f"acrusher=bits=8:mode=log:mix={crush}"]
-    if intensity > 25: filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
-    if intensity > 50: filters.append("flanger")
-    if intensity > 75: filters.append("vibrato=f=7:d=0.5")
+    """
+    Искажает аудио, используя vibrato как основной эффект.
+    """
+    # Частота вибрато (дрожания) от 4 до 12 Гц
+    vibrato_freq = map_intensity(intensity, 4.0, 12.0)
+    # Глубина вибрато (сила эффекта) от 0.1 до 1.0 (максимум)
+    vibrato_depth = map_intensity(intensity, 0.1, 1.0)
+    
+    filters = [f"vibrato=f={vibrato_freq:.2f}:d={vibrato_depth:.2f}"]
+    
+    # Добавляем другие эффекты на высоких значениях интенсивности
+    if intensity > 50:
+        crush = map_intensity(intensity, 0.1, 0.5)
+        filters.append(f"acrusher=bits=8:mode=log:mix={crush}")
+        
+    if intensity > 75:
+        decay = map_intensity(intensity, 0.1, 0.4)
+        delay = map_intensity(intensity, 20, 100)
+        filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
+
     cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
     success, _ = await run_ffmpeg_command(cmd)
     return success
 
 def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, out_path):
     dst = seam_carving.resize(src_np, (new_w, new_h), energy_mode='backward', order='width-first')
-    # ИСПРАВЛЕНО: 'JPG' заменено на 'JPEG'
     Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "JPEG", quality=85)
 
 async def apply_seam_carving_distortion(input_path: str, output_path: str, intensity: int) -> bool:
@@ -100,7 +111,6 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, inten
         with Image.open(input_path) as img:
             if img.width < 50 or img.height < 50: return False
             original_width, original_height = img.size
-            # Конвертируем в RGB, чтобы избежать проблем с прозрачностью (RGBA)
             src = np.array(img.convert("RGB"))
         new_width = max(int(original_width * (100 - distort_percent) / 100), 20)
         new_height = max(int(original_height * (100 - distort_percent) / 100), 20)
@@ -238,12 +248,9 @@ async def handle_distortion_request(message: types.Message):
 
         await message.answer("🌀 ща, сука...")
         
-        # ИСПРАВЛЕНО: Устанавливаем метод 'spawn' для полной изоляции
-        # Это должно быть вызвано до первого создания процесса
         try:
             multiprocessing.set_start_method("spawn", force=True)
         except RuntimeError:
-            # Метод уже был установлен, это нормально
             pass
             
         proc = multiprocessing.Process(target=distortion_worker_proc, args=(main_bot_instance.token, message.chat.id, media_info, intensity))
