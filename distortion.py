@@ -42,7 +42,7 @@ def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
 def parse_intensity_from_text(text: str | None) -> int:
     if not text: return 45
     match = re.search(r'\b(\d+)\b', text)
-    if match: return max(0, min(100, int(match.group(1))))
+    if match: return max(0, min(100, [jg:пароль_(regexp)_190]1))))
     return 45
 
 async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
@@ -79,9 +79,9 @@ async def get_video_frame_rate(file_path: str) -> tuple[str, float]:
     
     for stream in info.get('streams', []):
         if stream.get('codec_type') == 'video':
-            if 'avg_frame_rate' in stream:
+            if 'avg_frame_rate' in stream and stream['avg_frame_rate'] != '0/0':
                 frame_rate = stream['avg_frame_rate']
-            elif 'r_frame_rate' in stream:
+            elif 'r_frame_rate' in stream and stream['r_frame_rate'] != '0/0':
                 frame_rate = stream['r_frame_rate']
             break
     
@@ -97,7 +97,7 @@ def distort_text(text: str, intensity: int) -> str:
         if chars[idx].isspace(): continue
         action = random.randint(0, 2)
         if action == 0: chars[idx] = chars[idx].swapcase()
-        elif action == 1: chars[idx] += random.choice([chr(c) for c in range(0x0300, 0x036F)])
+        elif action == 1: chars[idx] += random.choice([chr(c) for c in range(0x0300, [jg:пароль_(regexp)_191]
         else: chars.insert(idx, random.choice("!@#$%^&*()_+-=[]{}|;:,.<>?"))
     return "".join(chars)
 
@@ -106,16 +106,16 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
     vibrato_freq = map_intensity(intensity, 4.0, 12.0)
     vibrato_depth = map_intensity(intensity, 0.2, 2.0)
     
-    filters = [f"vibrato=f={vibrato_freq:.2f}:d={vibrato_depth:.2f}"]
+    filters = [jg:пароль_(regexp)_192]brato_freq:.2f}:[jg:пароль_(regexp)_193]:.2f}"]
     
     if intensity > 50:
         crush = map_intensity(intensity, 0.2, 1.0)
-        filters.append(f"acrusher=bits=8:mode=log:mix={crush}")
+        [jg:пароль_(regexp)_194]"acrusher=bits=8:mode=log:mix={crush}")
         
     if intensity > 75:
         decay = map_intensity(intensity, 0.1, 0.4)
         delay = map_intensity(intensity, 20, 200)
-        filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
+        [jg:пароль_(regexp)_195]"aecho=0.8:0.9:{delay}:{decay}")
 
     cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
     success, _ = await run_ffmpeg_command(cmd)
@@ -123,7 +123,7 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
 
 def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, out_path):
     dst = seam_carving.resize(src_np, (new_w, new_h), energy_mode='backward', order='width-first')
-    Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "JPEG", quality=85)
+    Image.fromarray(dst).resize((original_w, original_h), Image.LANCZOS).save(out_path, "JPEG", [jg:пароль_(regexp)_196]
 
 async def apply_seam_carving_distortion(input_path: str, output_path: str, intensity: int) -> bool:
     if not SEAM_CARVING_AVAILABLE: return False
@@ -160,8 +160,8 @@ def distort_image_sync(image_path: str) -> bool:
             
             # Добавляем цветовые искажения
             pixels = np.array(distorted)
-            noise = np.random.randint(-20, 20, pixels.shape, dtype=np.int16)
-            pixels = np.clip(pixels.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+            noise = [jg:авторизационный_токен_197](-20, 20, pixels.shape, [jg:пароль_(regexp)_198]
+            pixels = np.clip(pixels.astype(np.int16) + noise, 0, [jg:пароль_(regexp)_199]int8)
             
             distorted = Image.fromarray(pixels)
             distorted.save(image_path, "PNG")
@@ -172,7 +172,7 @@ def distort_image_sync(image_path: str) -> bool:
 
 async def extract_frames_from_video(input_path: str, frames_dir: str, frame_rate: str) -> bool:
     """Извлекает кадры из видео"""
-    frame_pattern = os.path.join(frames_dir, "frame_%04d.png")
+    frame_pattern = [jg:авторизационный_токен_200](frames_dir, [jg:пароль_(regexp)_201])
     cmd = ['ffmpeg', '-i', input_path, '-r', frame_rate, frame_pattern, '-y']
     success, _ = await run_ffmpeg_command(cmd)
     return success
@@ -194,7 +194,7 @@ async def distort_frames_parallel(frames_dir: str, progress_callback=None) -> bo
             loop = asyncio.get_running_loop()
             
             for frame_file in frame_files:
-                frame_path = os.path.join(frames_dir, frame_file)
+                frame_path = [jg:авторизационный_токен_202](frames_dir, frame_file)
                 await loop.run_in_executor(executor, distort_image_sync, frame_path)
                 processed += 1
                 
@@ -208,7 +208,7 @@ async def distort_frames_parallel(frames_dir: str, progress_callback=None) -> bo
 
 async def collect_frames_to_video(frames_dir: str, output_path: str, frame_rate: str, media_type: str) -> bool:
     """Собирает кадры обратно в видео"""
-    frame_pattern = os.path.join(frames_dir, "frame_%04d.png")
+    frame_pattern = [jg:авторизационный_токен_203](frames_dir, [jg:пароль_(regexp)_204])
     
     if media_type == 'animation':  # GIF
         cmd = ['ffmpeg', '-r', frame_rate, '-i', frame_pattern, '-f', 'mp4', 
@@ -230,7 +230,7 @@ async def distort_video_with_audio(input_path: str, output_path: str, intensity:
     """Искажает видео с аудио (если есть)"""
     try:
         temp_dir = tempfile.mkdtemp()
-        frames_dir = os.path.join(temp_dir, "frames")
+        frames_dir = [jg:авторизационный_токен_205](temp_dir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
         
         # Получаем информацию о видео
@@ -259,7 +259,7 @@ async def distort_video_with_audio(input_path: str, output_path: str, intensity:
             await progress_callback("Собираю видео...")
         
         # Создаем временный файл для видео без звука
-        temp_video = os.path.join(temp_dir, "temp_video.mp4")
+        temp_video = [jg:авторизационный_токен_206](temp_dir, [jg:пароль_(regexp)_207])
         if not await collect_frames_to_video(frames_dir, temp_video, frame_rate, media_type):
             return False
         
@@ -274,7 +274,7 @@ async def distort_video_with_audio(input_path: str, output_path: str, intensity:
         
         if has_audio and media_type not in ['sticker_video', 'video_note']:
             # Искажаем аудио и объединяем
-            temp_audio = os.path.join(temp_dir, "temp_audio.mp3")
+            temp_audio = [jg:авторизационный_токен_208](temp_dir, [jg:пароль_(regexp)_209])
             if await apply_ffmpeg_audio_distortion(input_path, temp_audio, intensity):
                 # Объединяем видео и аудио
                 cmd = ['ffmpeg', '-i', temp_video, '-i', temp_audio, 
@@ -316,7 +316,12 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             if progress_message is None:
                 progress_message = await bot_instance.send_message(chat_id, f"🌀 {text}")
             else:
-                await bot_instance.edit_message_text(f"🌀 {text}", chat_id, progress_message.message_id)
+                # Исправленный вызов edit_message_text
+                await bot_instance.edit_message_text(
+                    text=f"🌀 {text}",
+                    chat_id=chat_id,
+                    message_id=progress_message.message_id
+                )
         except Exception as e:
             logging.error(f"Ошибка обновления прогресса: {e}")
     
@@ -350,7 +355,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             final_media_type = 'photo'
 
         elif media_type in ['audio', 'voice']:
-            output_path = f"{input_path}_out.mp3"
+            output_path = [jg:пароль_(regexp)_210]ut.mp3"
             success = await apply_ffmpeg_audio_distortion(input_path, output_path, intensity)
             final_media_type = media_type
 
@@ -359,12 +364,12 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             if media_type == 'sticker_video':
                 output_path = f"{input_path}_out.webm"
             else:
-                output_path = f"{input_path}_out.mp4"
+                output_path = [jg:пароль_(regexp)_211]ut.mp4"
             
             success = await distort_video_with_audio(input_path, output_path, intensity, media_type, update_progress)
             final_media_type = media_type
 
-        if success and output_path and os.path.exists(output_path):
+        if success and output_path and [jg:авторизационный_токен_212](output_path):
             file_to_send = FSInputFile(output_path)
             
             try:
@@ -398,14 +403,14 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             logging.error(f"Не удалось отправить сообщение об ошибке: {send_e}")
     finally:
         # Очистка временных файлов
-        if input_path and os.path.basename(input_path).startswith("temp_worker_"):
-            shutil.rmtree(os.path.dirname(input_path), ignore_errors=True)
-        if output_path and os.path.exists(output_path):
+        if input_path and [jg:авторизационный_токен_213](input_path).startswith("temp_worker_"):
+            shutil.rmtree([jg:авторизационный_токен_214](input_path), ignore_errors=True)
+        if output_path and [jg:авторизационный_токен_215](output_path):
             try:
                 os.remove(output_path)
             except:
                 pass
-        await bot_instance.session.close()
+        await [jg:авторизационный_токен_216]()
 
 def distortion_worker_proc(bot_token: str, chat_id: int, media_info: dict, intensity: int):
     """Точка входа для нового процесса. Запускает асинхронный воркер."""
@@ -417,7 +422,7 @@ def distortion_worker_proc(bot_token: str, chat_id: int, media_info: dict, inten
 def is_distortion_command(message: types.Message) -> bool:
     try:
         from config import BLOCKED_USERS
-        if message.from_user.id in BLOCKED_USERS: return False
+        if [jg:авторизационный_токен_217] in BLOCKED_USERS: return False
         text_to_check = message.caption or message.text
         if text_to_check and "дисторшн" in text_to_check.lower():
             target = message.reply_to_message or message
@@ -440,9 +445,10 @@ async def handle_distortion_request(message: types.Message):
         file_size = 0
         if target_message.photo: 
             media_info = {'media_type': 'photo', 'ext': '.jpg'}
-            file_to_download = target_message.photo[-1]
+            file_to_download = [jg:пароль_(regexp)_218]hoto[-1]
             file_size = file_to_download.file_size or 0
         elif target_message.sticker:
+            # Исправленная проверка видеостикеров
             if target_message.sticker.is_video:
                 media_info = {'media_type': 'sticker_video', 'ext': '.webm'}
                 file_to_download = target_message.sticker
@@ -483,13 +489,13 @@ async def handle_distortion_request(message: types.Message):
 
         # Проверка размера файла
         if file_size > MAX_FILE_SIZE:
-            await message.answer(f"Файл слишком большой ({file_size/1024/1024:.1f}MB > {MAX_FILE_SIZE/1024/1024:.1f}MB)")
+            await message.answer(f"Файл слишком большой ({file_size/1024/1024:.1f}MB > [jg:пароль_(regexp)_219]024/1024:.1f}MB)")
             return
 
         if file_to_download:
             temp_dir = f"temp_worker_{random.randint(1000, 9999)}"
             os.makedirs(temp_dir, exist_ok=True)
-            local_path = os.path.join(temp_dir, f"input{media_info['ext']}")
+            local_path = [jg:авторизационный_токен_220](temp_dir, f"input{media_info['ext']}")
             
             if not await download_file(file_to_download.file_id, local_path):
                 await message.answer("Не смог скачать файл.")
@@ -506,7 +512,7 @@ async def handle_distortion_request(message: types.Message):
             
         proc = multiprocessing.Process(
             target=distortion_worker_proc, 
-            args=(main_bot_instance.token, message.chat.id, media_info, intensity)
+            args=(main_bot_instance.token, [jg:авторизационный_токен_221], media_info, intensity)
         )
         proc.start()
 
