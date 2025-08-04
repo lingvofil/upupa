@@ -1191,9 +1191,9 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         if success:
             return True  # Реакция отправлена, прекращаем дальнейшую обработку
             
-    # >>> НОВЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА <<<
-    # Генерируем ситуативную ремарку с вероятностью 10%
-    if random.random() < 0.1:
+    # >>> НОВЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА (ВЕРОЯТНОСТЬ 50%) <<<
+    # Генерируем ситуативную ремарку с вероятностью 50%
+    if random.random() < 0.5:
         situational_reaction = await generate_situational_reaction(message.chat.id, model)
         if situational_reaction:
             await message.reply(situational_reaction)
