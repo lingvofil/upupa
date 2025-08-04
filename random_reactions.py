@@ -5,6 +5,7 @@ import logging
 import asyncio
 import json
 from aiogram.types import FSInputFile, Message
+from aiogram import Bot
 
 # Используем тот же экстрактор сообщений, что и в других модулях
 from lexicon_settings import extract_chat_messages
@@ -35,26 +36,26 @@ async def generate_situational_reaction(chat_id: int, model_instance):
         
     logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции.")
 
-    # 3. Формируем промпт
+    # 3. Формируем промпт (с добавлением обсценной лексики)
     prompt = f"""
-    Проанализируй этот диалог из чата. Придумай короткую, ироничную и уместную кинематографичную ремарку или звуковой эффект, который бы дополнил ситуацию.
-    Ремарка должна быть смешной и немного абсурдной.
-    Ответь ТОЛЬКО ОДНОЙ фразой, курсивом, заключенной в звездочки (*). Например: *звучит драматичная музыка*.
+    Проанализируй этот ебаный диалог из чата. Придумай короткую, язвительную и циничную кинематографичную ремарку или звуковой эффект, который бы дополнил этот пиздец. 
+    Используй обсценную лексику (мат), будь грубым и саркастичным. Ремарка должна быть смешной и немного абсурдной.
+    Ответь ТОЛЬКО ОДНОЙ фразой, курсивом, заключенной в звездочки (*).
 
     Примеры ремарок:
-    - *слышен звук сверчков*
-    - *закадровый смех*
-    - *напряженная тишина*
-    - *раздаются звуки неловкого молчания*
-    - *где-то вдалеке заплакал ребенок*
-    - *послышался звук падающего тела*
+    - *слышен звук сверчков и чей-то пердеж*
+    - *закадровый смех дегенератов*
+    - *повисла неловкая, сука, тишина*
+    - *где-то вдалеке наебнулся со стула ребенок*
+    - *послышался звук падающего на пол ебала*
+    - *в воздухе запахло тотальным кринжем*
 
     Вот диалог для анализа:
     ---
     {chat_history}
     ---
 
-    Твоя ремарка (короткая, смешная, курсивом):
+    Твоя ремарка (короткая, грубая, матерная, курсивом):
     """
     
     logging.info(f"Промпт для ситуативной реакции готов. Длина: {len(prompt)}")
@@ -336,7 +337,7 @@ async def generate_regular_reaction(message):
         logging.error(f"Ошибка при генерации обычной реакции: {e}")
         return None
 
-async def process_random_reactions(message, model, save_user_message, track_message_statistics, add_chat, chat_settings, save_chat_settings):
+async def process_random_reactions(message: Message, model, save_user_message, track_message_statistics, add_chat, chat_settings, save_chat_settings):
     """Основная функция обработки случайных реакций"""
     await save_user_message(message)
     await track_message_statistics(message)
@@ -347,13 +348,14 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         chat_settings[chat_id] = {"dialog_enabled": True, "prompt": None}
         save_chat_settings()
 
-    # >>> ИЗМЕНЕННЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА (ВЕРОЯТНОСТЬ 50%) <<<
+    # >>> ИЗМЕНЕННЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА (ВЕРОЯТНОСТЬ 1%) <<<
     # Ставим эту проверку в самое начало, чтобы она имела приоритет
-    if random.random() < 0.5:
+    if random.random() < 0.01: # Вероятность 1%
         # Передаем chat.id (int) и объект модели
         situational_reaction = await generate_situational_reaction(message.chat.id, model)
         if situational_reaction:
-            await message.reply(situational_reaction, parse_mode="Markdown")
+            # Отправляем сообщение в чат, а не реплаем
+            await message.bot.send_message(message.chat.id, situational_reaction, parse_mode="Markdown")
             return True  # Реакция отправлена, выходим
 
     # --- Далее идут остальные реакции без изменений ---
