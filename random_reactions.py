@@ -3,7 +3,96 @@ import os
 import random
 import logging
 import asyncio
+import json
 from aiogram.types import FSInputFile
+from config import LOG_FILE # Убедимся, что LOG_FILE импортируется
+
+# Новая функция для получения недавней истории чата
+async def get_recent_chat_history(chat_id: int, n: int = 10) -> str:
+    """
+    Извлекает последние n сообщений для заданного чата из лог-файла.
+    """
+    history = []
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            # Читаем все строки, чтобы потом легко взять последние N
+            all_lines = f.readlines()
+
+        # Фильтруем сообщения для нужного чата
+        chat_messages = []
+        for line in all_lines:
+            try:
+                record = json.loads(line)
+                # Убедимся, что сообщение из нужного чата и содержит текст
+                if record.get("chat_id") == chat_id and record.get("text"):
+                    user_name = record.get('first_name', 'User')
+                    text = record.get('text')
+                    chat_messages.append(f"{user_name}: {text}")
+            except (json.JSONDecodeError, AttributeError):
+                continue # Пропускаем поврежденные или некорректные строки
+
+        # Возвращаем последние n сообщений, объединенных в одну строку
+        return "\n".join(chat_messages[-n:])
+    except FileNotFoundError:
+        logging.warning(f"Лог-файл {LOG_FILE} не найден.")
+        return ""
+    except Exception as e:
+        logging.error(f"Ошибка при чтении истории чата из {LOG_FILE}: {e}")
+        return ""
+
+# Новая функция для генерации ситуативных реакций
+async def generate_situational_reaction(chat_id, model):
+    """
+    Генерирует ироничную кинематографичную ремарку на основе истории чата.
+    """
+    chat_history = await get_recent_chat_history(chat_id, 15)
+    if not chat_history:
+        return None # Не можем работать без истории
+
+    prompt = f"""
+    Проанализируй этот диалог из чата. Придумай короткую, ироничную и уместную кинематографичную ремарку или звуковой эффект, который бы дополнил ситуацию.
+    Ремарка должна быть смешной и немного абсурдной.
+    Ответь ТОЛЬКО ОДНОЙ фразой, курсивом, заключенной в звездочки (*). Например: *звучит драматичная музыка*.
+
+    Примеры ремарок:
+    - *слышен звук сверчков*
+    - *закадровый смех*
+    - *напряженная тишина*
+    - *раздаются звуки неловкого молчания*
+    - *где-то вдалеке заплакал ребенок*
+    - *послышался звук падающего тела*
+
+    Вот диалог для анализа:
+    ---
+    {chat_history}
+    ---
+
+    Твоя ремарка (короткая, смешная, курсивом):
+    """
+    try:
+        def sync_llm_call():
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    'temperature': 1.0,
+                    'max_output_tokens': 60,
+                    'top_p': 1.0,
+                }
+            )
+            return getattr(response, 'text', '').strip()
+
+        reaction_text = await asyncio.to_thread(sync_llm_call)
+
+        # Проверяем, что ответ соответствует формату *ремарка*
+        if reaction_text and reaction_text.startswith('*') and reaction_text.endswith('*'):
+            return reaction_text
+        else:
+            logging.warning(f"Ситуативная реакция от модели не соответствует формату: {reaction_text}")
+            return None # Возвращаем None, если формат неверный
+
+    except Exception as e:
+        logging.error(f"Ошибка при генерации ситуативной реакции: {e}")
+        return None
 
 # Рифма
 async def generate_rhyme_reaction(message, model):
@@ -1101,6 +1190,14 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         success = await send_sobesedovan_voice_reaction(message)
         if success:
             return True  # Реакция отправлена, прекращаем дальнейшую обработку
+            
+    # >>> НОВЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА <<<
+    # Генерируем ситуативную ремарку с вероятностью 10%
+    if random.random() < 0.1:
+        situational_reaction = await generate_situational_reaction(message.chat.id, model)
+        if situational_reaction:
+            await message.reply(situational_reaction)
+            return True  # Реакция отправлена, выходим
 
     # Проверяем вопросительное слово с вероятностью 0.001
     if message.text and is_single_question_word(message.text) and random.random() < 0.001:
@@ -1108,7 +1205,7 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         if success:
             return True
 
-    # Проверяем слова братан/педик/пледик с вероятностью 0.01
+    # Проверяем слова братан/педик/пледик с вероятностью 0.1
     if message.text and contains_pledik_words(message.text) and random.random() < 0.1:
         success = await send_pledik_voice_reaction(message)
         if success:
@@ -1120,7 +1217,7 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         if success:
             return True
 
-    # Проверяем рифмованную реакцию с вероятностью 0.01
+    # Проверяем рифмованную реакцию с вероятностью 0.008
     if random.random() < 0.008 and message.text:
         rhyme_reaction = await generate_rhyme_reaction(message, model)
         if rhyme_reaction:
@@ -1157,7 +1254,7 @@ async def process_random_reactions(message, model, save_user_message, track_mess
         if success:
             return True
 
-    # Обычная реакция "у тебя в штанах" с вероятностью 0.02
+    # Обычная реакция "у тебя в штанах" с вероятностью 0.008
     if random.random() < 0.008 and message.text:
         regular_reaction = await generate_regular_reaction(message)
         if regular_reaction:
