@@ -360,12 +360,12 @@ async def process_random_reactions(message: Message, model, save_user_message, t
 
     # --- Далее идут остальные реакции без изменений ---
 
-    if message.from_user.id == 1399269377 and random.random() < 0.1 and message.text:
+    if message.from_user.id == 1399269377 and random.random() < 0.3 and message.text:
         success = await generate_insult_for_lis(message, model)
         if success:
             return True
 
-    if random.random() < 0.001:
+    if random.random() < 0.0001:
         success = await send_random_common_voice_reaction(message)
         if success:
             return True
@@ -375,7 +375,7 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         if success:
             return True
 
-    if message.voice and random.random() < 0.01:
+    if message.voice and random.random() < 0.001:
         success = await send_random_voice_reaction(message)
         if success:
             return True
