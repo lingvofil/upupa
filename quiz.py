@@ -13,7 +13,6 @@ from aiogram import Bot
 
 # Обновленные импорты для Gemini
 from config import LOG_FILE, quiz_questions, quiz_states, model
-# Удалены импорты GigaChat
 
 
 # Функция для получения временного диапазона
@@ -51,11 +50,15 @@ async def extract_messages(log_file, chat_id=None, limit=100, days=1):
                     if not text or text.startswith('/') or (chat_id and str(chat_id) != str(msg_chat_id)):
                         continue
 
+                    # Используем full_name, если оно не "NoName", иначе username
+                    display_name = full_name if full_name != "NoName" else username
+                    if display_name == "NoUsername": continue # Пропускаем, если нет имени
+
                     messages.append({
                         "text": text,
                         "user_id": user_id,
-                        "username": username if username != "NoUsername" else None,
-                        "full_name": full_name if full_name != "NoName" else None,
+                        "username": username,
+                        "full_name": display_name,
                         "chat_id": msg_chat_id,
                         "chat_title": chat_title,
                         "timestamp": timestamp_str
@@ -94,21 +97,17 @@ async def generate_quiz_with_gemini(messages, num_questions=1):
     """
     
     try:
-        # Вызов Gemini API через асинхронную обертку
         def sync_model_call():
             response = model.generate_content(prompt)
             return response.text
 
-        # Асинхронный вызов
         response_text = await asyncio.to_thread(sync_model_call)
         
-        # Парсинг ответа
         json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
         json_str = json_match.group(1) if json_match else response_text.strip()
         
         questions = json.loads(json_str)
         
-        # Валидация вопросов
         validated_questions = [
             q for q in questions
             if isinstance(q, dict)
@@ -149,16 +148,13 @@ async def schedule_daily_quiz(bot: Bot, chat_id: int):
         moscow_tz = pytz.timezone('Europe/Moscow')
         now = datetime.now().astimezone(moscow_tz)
         
-        # Устанавливаем время следующей викторины на полночь
         target_time = now.replace(hour=23, minute=0, second=0, microsecond=0)
         if now >= target_time:
             target_time += timedelta(days=1)
         
-        # Ждем до назначенного времени
         wait_seconds = (target_time - now).total_seconds()
         await asyncio.sleep(wait_seconds)
         
-        # Отправляем викторину
         await send_daily_quiz(bot, chat_id)
 
 # Обновленная функция send_question
@@ -174,7 +170,6 @@ async def send_question(bot, chat_id, question_index):
         
         logging.info(f"Отправка вопроса {question_index + 1} в чат {chat_id}")
         
-        # Определяем, должна ли викторина быть анонимной
         is_anonymous_quiz = True if chat_id_str == '-1001781970364' else False
         
         poll = await bot.send_poll(
@@ -183,11 +178,10 @@ async def send_question(bot, chat_id, question_index):
             options=question['options'],
             type='quiz',
             correct_option_id=question['options'].index(question['correct_answer']),
-            is_anonymous=is_anonymous_quiz, # Используем переменную для установки анонимности
+            is_anonymous=is_anonymous_quiz,
             allows_multiple_answers=False
         )
         
-        # Сохраняем состояние текущей викторины
         quiz_states[chat_id_str] = {
             'current_question': question_index,
             'poll_id': poll.poll.id
@@ -206,8 +200,6 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     
     logging.info(f"Получена команда викторины в чате {chat_id}")
     
-    # Проверяем, не идет ли уже викторина в этом чате
-    # Для чата -1001781970364 разрешаем запускать новую викторину поверх старой
     if quiz_states.get(chat_id_str) and chat_id_str != '-1001781970364':
         return False, "В этом чате уже идет викторина! Отъебись"
     
@@ -218,20 +210,16 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         if not messages:
             return False, "Недостаточно сообщений для создания викторины. Общайтесь больше!"
 
-        # Для чата -1001781970364 всегда генерируем только 1 вопрос
         num_questions = 1 if chat_id_str == '-1001781970364' else 5
         
-        # Генерируем вопросы
         questions = await generate_quiz_with_gemini(messages, num_questions)
         logging.info(f"Сгенерировано {len(questions)} вопросов")
         
         if not questions:
             return False, "Не удалось создать вопросы для викторины."
 
-        # Сохраняем вопросы
         quiz_questions[chat_id_str] = questions
         
-        # Отправляем первый вопрос
         await send_question(bot, chat_id, 0)
         return True, ""
         
@@ -244,7 +232,6 @@ async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
     try:
         logging.info(f"Получен ответ на опрос: {poll_answer.poll_id}")
         
-        # Ищем викторину, которой принадлежит этот опрос
         chat_id_str = None
         quiz_state = None
         
@@ -257,10 +244,8 @@ async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
         if chat_id_str and quiz_state:
             logging.info(f"Найдена активная викторина в чате {chat_id_str}")
             
-            # Ждем небольшую паузу
             await asyncio.sleep(3)
             
-            # Отправляем следующий вопрос
             await send_question(bot, int(chat_id_str), quiz_state['current_question'] + 1)
                 
     except Exception as e:
@@ -271,15 +256,12 @@ async def generate_participant_quiz(messages, num_questions=5):
     if not messages:
         return []
 
-    # Собираем уникальных участников, отдавая предпочтение full_name
     participants = {}
     for msg in messages:
-        # Используем full_name как ключ, чтобы избежать дублей по user_id с разными именами
         participants[msg['full_name']] = True 
     
     unique_participants = list(participants.keys())
     
-    # Проверяем, достаточно ли у нас участников для создания викторины
     if len(unique_participants) < 2:
         return []
 
@@ -291,12 +273,9 @@ async def generate_participant_quiz(messages, num_questions=5):
     Проанализируй эти сообщения из чата:
     {messages_text}
 
-    А вот список активных участников этого чата: {', '.join(unique_participants)}.
-
     Твоя задача - создать викторину из {num_questions} вопросов.
     Каждый вопрос должен быть реальной, характерной, смешной или тупой фразой одного из участников.
-    Варианты ответа - это имена 4-х участников чата. Один из них должен быть настоящим автором фразы.
-    Если участников меньше 4, можешь дополнить список вымышленными смешными именами.
+    Для каждого вопроса создай от 2 до 4 вариантов ответа. Все варианты ответа ДОЛЖНЫ быть именами из этого списка: {', '.join(unique_participants)}. Не выдумывай несуществующих участников. Один из вариантов должен быть настоящим автором фразы.
     Вопрос должен быть в формате: "Кто из этих долбоёбов сказал: '[цитата]'?".
     Будь максимально дерзким, используй мат, если это уместно для стиля чата.
 
@@ -304,7 +283,7 @@ async def generate_participant_quiz(messages, num_questions=5):
     [
       {{
         "text": "Текст вопроса с цитатой",
-        "options": ["Имя участника 1", "Имя участника 2", "Имя участника 3", "Имя реального автора"],
+        "options": ["Имя участника 1", "Имя участника 2", "Имя реального автора"],
         "correct_answer": "Имя реального автора"
       }}
     ]
@@ -322,7 +301,6 @@ async def generate_participant_quiz(messages, num_questions=5):
         
         questions = json.loads(json_str)
         
-        # Валидация, чтобы убедиться, что правильный ответ есть среди опций
         validated_questions = [
             q for q in questions
             if isinstance(q, dict)
@@ -349,10 +327,10 @@ async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bo
         return False, "Угомонись, тут уже идет другая викторина. Отъебись."
 
     try:
-        messages = await extract_messages(LOG_FILE, chat_id, days=7) # Берем сообщения за неделю для лучшей выборки
+        messages = await extract_messages(LOG_FILE, chat_id, days=7)
         logging.info(f"Извлечено {len(messages)} сообщений для викторины по участникам")
 
-        if len(messages) < 20: # Ставим минимальный порог сообщений
+        if len(messages) < 20:
             return False, "Слишком мало сообщений в чате, чтобы понять, кто тут что высирает. Общайтесь больше, далбаёбы!"
 
         questions = await generate_participant_quiz(messages, num_questions=5)

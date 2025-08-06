@@ -137,7 +137,6 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     if stats.get("groups"):
         parts.append("\n*Чаты:*")
-        # Сортируем по убыванию количества сообщений
         sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
         for chat_title, count in sorted_groups:
             parts.append(f"  • `{chat_title}`: {count} сообщ.")
@@ -146,7 +145,6 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
     if stats.get("private"):
         parts.append("\n*Личные сообщения:*")
-        # Сортируем по убыванию количества сообщений
         sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)
         for user_display, count in sorted_private:
             parts.append(f"  • `{user_display}`: {count} сообщ.")
@@ -157,21 +155,18 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):
-    """Статистика за все время."""
     stats_data = await bot_statistics.get_total_messages()
     reply_text = format_stats_message(stats_data, "Общая статистика")
     await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика сутки", F.from_user.id == ADMIN_ID)
 async def cmd_stats_24h(message: Message):
-    """Статистика за последние 24 часа."""
     stats_data = await bot_statistics.get_messages_last_24_hours()
     reply_text = format_stats_message(stats_data, "Статистика за 24 часа")
     await message.answer(reply_text, parse_mode="Markdown")
 
 @router.message(F.text.lower() == "стотистика час", F.from_user.id == ADMIN_ID)
 async def cmd_stats_1h(message: Message):
-    """Статистика за последний час."""
     stats_data = await bot_statistics.get_messages_last_hour()
     reply_text = format_stats_message(stats_data, "Статистика за час")
     await message.answer(reply_text, parse_mode="Markdown")
@@ -199,7 +194,7 @@ async def leave_chat(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("Еще чо сделать?")
         return
-    chat_identifier = message.text[14:].strip()  # Убираем "упупа выйди из "
+    chat_identifier = message.text[14:].strip()
     await process_leave_chat(message, chat_identifier)
 
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
@@ -217,7 +212,7 @@ async def handle_where_sits(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower() == "отключи смс")
 async def disable_sms(message: types.Message):
     chat_id = str(message.chat.id)
-    user_id = message.from_user.id  # ID отправителя
+    user_id = message.from_user.id
     response = await process_disable_sms(chat_id, user_id, bot)
     await message.reply(response)
 
@@ -250,7 +245,7 @@ async def handle_my_lexicon(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     user_id = message.from_user.id
-    chat_id = message.chat.id  # Ограничиваем статистику этим чатом
+    chat_id = message.chat.id
     await process_my_lexicon(user_id, chat_id, message)
 
 @router.message(lambda message: message.text and message.text.lower() == "лексикон чат")
@@ -296,21 +291,21 @@ async def handle_user_profile(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     user_id = message.from_user.id
-    chat_id = message.chat.id  # Ограничиваем анализ этим чатом
+    chat_id = message.chat.id
     await process_user_profile(user_id, chat_id, message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("пародия"))
 async def handle_parody(message: types.Message):
    random_action = random.choice(actions)
    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-   chat_id = message.chat.id  # Ограничиваем выбор фраз этим чатом
+   chat_id = message.chat.id
    await process_parody(message, chat_id)
 
 @router.message(F.text.lower() == "викторина участники")
 async def start_participant_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    processing_msg = await message.reply("Собираю сплетни и высеры участников...")
+    processing_msg = await message.reply("ищем цитаты великих людей...")
     
     success, error_message = await process_participant_quiz_start(message, bot)
     
@@ -334,11 +329,8 @@ async def egra_command_handler(message: types.Message):
 
 @router.poll_answer()
 async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
-    # Сначала пытаемся обработать как ответ в "егре"
-    # Функция вернет True, если ответ был успешно обработан
     is_egra_handled = await handle_egra_answer(poll_answer, bot)
     
-    # Если это был не ответ в "егре", пытаемся обработать как ответ в викторине
     if not is_egra_handled:
         await process_poll_answer(poll_answer, bot)
 
@@ -353,7 +345,7 @@ async def send_random_media(message: types.Message):
 @router.message(lambda message: 
     message.text and 
     message.text.lower().startswith("имя ") and 
-    message.from_user and  # Убедимся, что у сообщения есть отправитель
+    message.from_user and
     message.from_user.id not in BLOCKED_USERS
 )
 async def handle_name_info(message: types.Message):
@@ -398,14 +390,12 @@ async def handle_distortion_command(message: types.Message):
 
 @router.message(lambda message: 
     (
-        # Медиа с подписью "чотам"
         (
             (message.audio or message.voice or message.video or message.photo or 
              message.animation or message.sticker) and 
             message.caption and "чотам" in message.caption.lower()
         )
         or
-        # Текст "чотам" в ответ на медиа или текст
         (
             message.text and "чотам" in message.text.lower() and 
             message.reply_to_message and 
@@ -415,7 +405,6 @@ async def handle_distortion_command(message: types.Message):
              message.reply_to_message.text)
         )
         or
-        # Просто текст с "чотам" (без реплая)
         (
             message.text and "чотам" in message.text.lower() and 
             not message.reply_to_message
@@ -469,11 +458,8 @@ async def generate_image(message: types.Message):
 @router.message(
     lambda message: (
         (
-            # Вариант 1: Фото с подписью "перерисуй"
             (message.photo and message.caption and "перерисуй" in message.caption.lower()) or
-            # Вариант 2: Документ с подписью "перерисуй"  
             (message.document and message.caption and "перерисуй" in message.caption.lower()) or
-            # Вариант 3: Реплай на фото/документ с текстом "перерисуй"
             (message.text and "перерисуй" in message.text.lower() and message.reply_to_message and 
              (message.reply_to_message.photo or message.reply_to_message.document))
         ) and message.from_user.id not in BLOCKED_USERS
@@ -498,7 +484,6 @@ async def handle_weather_command(message: types.Message):
 async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
     
-# Запоминание дня рождения
 @router.message(lambda message: message.text and 
                 (message.text.lower().startswith("упупа запомни: мой др") or 
                  message.text.lower().startswith("упупа запомни мой др")) and 
@@ -506,17 +491,14 @@ async def handle_weekly_forecast(message: types.Message):
 async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
 
-# Просмотр дней рождения в чате
 @router.message(lambda message: message.text and message.text.lower() == "упупа дни рождения" and message.from_user.id not in BLOCKED_USERS)
 async def birthday_list_command(message: types.Message):
     await handle_birthday_list_command(message)
 
-# Тестовое поздравление (только для админа)
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа поздравь ") and message.from_user.id not in BLOCKED_USERS)
 async def test_greeting_command(message: types.Message):
     await handle_test_greeting_command(message)
 
-# Все дни рождения (только для админа)
 @router.message(lambda message: message.text and message.text.lower() == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
 async def admin_birthday_list_command(message: types.Message):
     await handle_admin_birthday_list_command(message)
@@ -567,12 +549,10 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
-    # Сначала основная обработка сообщения
     await process_general_message(message)
     
-    # ✅ ПОСЛЕ обработки, логируем сообщение для статистики
     try:
-        if message.from_user: # Убедимся, что есть отправитель
+        if message.from_user:
             is_private = message.chat.type == 'private'
             await bot_statistics.log_message(
                 chat_id=message.chat.id,
@@ -588,22 +568,17 @@ async def process_message(message: types.Message):
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
-    # ✅ Инициализируем базу данных перед запуском
     bot_statistics.init_db()
-    # Сначала создаём задачи для викторин
-    chat_ids = ['-1001707530786', '-1001781970364']  # Список ID чатов для ежедневной викторины
+    chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
         chat_id_int = int(chat_id)
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
     
-    # Запуск планировщика дней рождения
     asyncio.create_task(birthday_scheduler(bot))
     
-    # Настраиваем и запускаем бота
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, skip_updates=True)
 
-# Запуск бота
 if __name__ == "__main__":
     asyncio.run(main())
