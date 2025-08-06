@@ -380,13 +380,13 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         if success:
             return True
 
-    if random.random() < 0.0008 and message.text:
+    if random.random() < 0.008 and message.text:
         rhyme_reaction = await generate_rhyme_reaction(message, model)
         if rhyme_reaction:
             await message.reply(rhyme_reaction)
             return True
 
-    if random.random() < 0.0008 and message.text:
+    if random.random() < 0.008 and message.text:
         regular_reaction = await generate_regular_reaction(message)
         if regular_reaction:
             await message.reply(regular_reaction)
