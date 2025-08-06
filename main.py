@@ -53,7 +53,7 @@ from whoparody import (
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ВИКТОРИНА ==================
-from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz
+from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
 
 # ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
 from adddescribe import (
@@ -305,6 +305,18 @@ async def handle_parody(message: types.Message):
    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
    chat_id = message.chat.id  # Ограничиваем выбор фраз этим чатом
    await process_parody(message, chat_id)
+
+@router.message(F.text.lower() == "викторина участники")
+async def start_participant_quiz(message: Message, bot: Bot):
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    processing_msg = await message.reply("Собираю сплетни и высеры участников...")
+    
+    success, error_message = await process_participant_quiz_start(message, bot)
+    
+    await processing_msg.delete()
+    if not success:
+        await message.reply(error_message)
 
 @router.message(F.text.lower().contains("викторина"))
 async def start_quiz(message: Message, bot: Bot):
