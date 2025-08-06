@@ -265,3 +265,106 @@ async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
                 
     except Exception as e:
         logging.error(f"Ошибка при обработке ответа на опрос: {e}")
+
+# Новая функция для генерации викторины по участникам
+async def generate_participant_quiz(messages, num_questions=5):
+    if not messages:
+        return []
+
+    # Собираем уникальных участников, отдавая предпочтение full_name
+    participants = {}
+    for msg in messages:
+        # Используем full_name как ключ, чтобы избежать дублей по user_id с разными именами
+        participants[msg['full_name']] = True 
+    
+    unique_participants = list(participants.keys())
+    
+    # Проверяем, достаточно ли у нас участников для создания викторины
+    if len(unique_participants) < 2:
+        return []
+
+    sample_messages = random.sample(messages, min(500, len(messages)))
+    messages_text = "\n".join([f"{msg['full_name']}: {msg['text']}" for msg in sample_messages])
+
+    prompt = f"""
+    Ты - ехидный и саркастичный создатель викторин.
+    Проанализируй эти сообщения из чата:
+    {messages_text}
+
+    А вот список активных участников этого чата: {', '.join(unique_participants)}.
+
+    Твоя задача - создать викторину из {num_questions} вопросов.
+    Каждый вопрос должен быть реальной, характерной, смешной или тупой фразой одного из участников.
+    Варианты ответа - это имена 4-х участников чата. Один из них должен быть настоящим автором фразы.
+    Если участников меньше 4, можешь дополнить список вымышленными смешными именами.
+    Вопрос должен быть в формате: "Кто из этих долбоёбов сказал: '[цитата]'?".
+    Будь максимально дерзким, используй мат, если это уместно для стиля чата.
+
+    Верни результат СТРОГО в формате JSON:
+    [
+      {{
+        "text": "Текст вопроса с цитатой",
+        "options": ["Имя участника 1", "Имя участника 2", "Имя участника 3", "Имя реального автора"],
+        "correct_answer": "Имя реального автора"
+      }}
+    ]
+    """
+
+    try:
+        def sync_model_call():
+            response = model.generate_content(prompt)
+            return response.text
+
+        response_text = await asyncio.to_thread(sync_model_call)
+        
+        json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
+        json_str = json_match.group(1) if json_match else response_text.strip()
+        
+        questions = json.loads(json_str)
+        
+        # Валидация, чтобы убедиться, что правильный ответ есть среди опций
+        validated_questions = [
+            q for q in questions
+            if isinstance(q, dict)
+            and all(key in q for key in ('text', 'options', 'correct_answer'))
+            and isinstance(q['options'], list) and len(q['options']) > 0
+            and q['correct_answer'] in q['options']
+        ]
+        
+        return validated_questions
+        
+    except Exception as e:
+        logging.error(f"Ошибка при генерации викторины по участникам: {e}")
+        return []
+
+
+# Новая функция-обработчик для запуска викторины по участникам
+async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
+    chat_id = message.chat.id
+    chat_id_str = str(chat_id)
+
+    logging.info(f"Получена команда 'викторина участники' в чате {chat_id}")
+
+    if quiz_states.get(chat_id_str) and chat_id_str != '-1001781970364':
+        return False, "Угомонись, тут уже идет другая викторина. Отъебись."
+
+    try:
+        messages = await extract_messages(LOG_FILE, chat_id, days=7) # Берем сообщения за неделю для лучшей выборки
+        logging.info(f"Извлечено {len(messages)} сообщений для викторины по участникам")
+
+        if len(messages) < 20: # Ставим минимальный порог сообщений
+            return False, "Слишком мало сообщений в чате, чтобы понять, кто тут что высирает. Общайтесь больше, далбаёбы!"
+
+        questions = await generate_participant_quiz(messages, num_questions=5)
+        
+        if not questions:
+            logging.error("Не удалось сгенерировать вопросы для викторины по участникам.")
+            return False, "Не смог придумать вопросы. Видимо, вы все одинаково скучные."
+
+        quiz_questions[chat_id_str] = questions
+        await send_question(bot, chat_id, 0)
+        return True, ""
+        
+    except Exception as e:
+        logging.error(f"Критическая ошибка при запуске викторины по участникам: {e}")
+        return False, "Что-то пошло по пизде при создании викторины."
