@@ -21,7 +21,7 @@ OPENWEATHER_API_KEY = "7cf485d99b222b17e90f6d57df6c2d7d"
 CITIES = [
     "Moscow", "Odintsovo", "Saint Petersburg", "Vladikavkaz", "Kazan", 
     "Omsk", "Irkutsk", "Slyudyanka", "Baykalsk", "Kyakhta",
-    "Angarsk", "Minsk", "Sochi", "Samara", "Tambov"
+    "Angarsk", "Minsk", "Sochi", "Samara"
 ]
 
 # =============================================================================
@@ -97,7 +97,7 @@ async def get_all_cities_weather() -> List[Tuple[str, int, str]]:
         "Vladikavkaz": "Владикавказ", "Kazan": "Казань", "Omsk": "Омск",
         "Irkutsk": "Иркутск", "Slyudyanka": "Слюдянка", "Baykalsk": "Байкальск",
         "Kyakhta": "Кяхта", "Angarsk": "Ангарск", "Minsk": "Минск",
-        "Sochi": "Сочи", "Samara": "Самара", "Tambov": "Тамбов"
+        "Sochi": "Сочи", "Samara": "Самара"
     }
     for city_en in CITIES:
         temp, desc = await get_weather(city_en)
@@ -161,7 +161,7 @@ async def format_weekly_forecast(city: str) -> str:
 async def get_mock_weather() -> str:
     # ... (код функции без изменений)
     mock_data = [
-        ("Омск", 33), ("Сочи", 15), ("Владикавказ", 12), ("Тамбов", 6),
+        ("Омск", 33), ("Сочи", 15), ("Владикавказ", 12),
         ("Самара", 5), ("Москва", 4), ("Казань", 3), ("Минск", 2),
         ("Кяхта", 0), ("Одинцово", -2), ("Слюдянка", -3), ("Ангарск", -5),
         ("Байкальск", -22), ("Иркутск", -23)
