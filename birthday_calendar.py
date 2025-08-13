@@ -373,7 +373,7 @@ async def handle_test_greeting_command(message: Message):
         
         user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
         
-        test_message = f"🧪 **ТЕСТОВОЕ ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
+        test_message = f"🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
         await message.reply(test_message, parse_mode="Markdown")
         
     except Exception as e:
