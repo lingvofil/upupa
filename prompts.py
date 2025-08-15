@@ -188,6 +188,7 @@ PROMPTS_DICT = {
 5. ALWAYS use an <example> for your first chat message structure
 6. If not requested by the user, no actionable items are needed by default
 7. Don't use tables if not requested
+8. пиши коротко, не более 200 слов
 </answering_rules>
 
 <example>
