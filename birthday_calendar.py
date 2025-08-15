@@ -7,7 +7,8 @@ from typing import Dict, List, Optional, Tuple
 from aiogram import types
 from aiogram.types import Message
 import logging
-from Config import model, LOG_FILE, ADMIN_ID
+import traceback
+from config import model, LOG_FILE, ADMIN_ID
 
 # Файл для хранения дней рождения
 BIRTHDAY_FILE = "birthdays.json"
@@ -89,16 +90,13 @@ def get_user_messages_from_log(user_id: int, chat_id: int, limit: int = 100) -> 
         with open(LOG_FILE, 'r', encoding='utf-8') as f:
             lines = f.readlines()
             
-        # Ищем все сообщения пользователя в конкретном чате
         user_messages = []
         for line in lines:
             if f"Chat {chat_id}" in line and f"User {user_id}" in line and "]:" in line:
-                # Извлекаем текст сообщения после "]:"
                 message_text = line.split("]:")[1].strip()
-                if message_text and len(message_text) > 10:  # Игнорируем очень короткие сообщения
+                if message_text and len(message_text) > 10:
                     user_messages.append(message_text)
         
-        # Если сообщений больше лимита, берем случайные
         if len(user_messages) > limit:
             messages = random.sample(user_messages, limit)
         else:
@@ -111,9 +109,7 @@ def get_user_messages_from_log(user_id: int, chat_id: int, limit: int = 100) -> 
 
 async def generate_birthday_greeting(user_name: str, user_messages: List[str]) -> str:
     """Генерация саркастичного поздравления с использованием Gemini"""
-    
-    # Создаем контекст из сообщений пользователя
-    messages_context = "\n".join(user_messages[:80])  # Берем 80 сообщений для контекста
+    messages_context = "\n".join(user_messages[:80])
     
     prompt = f"""
     Создай саркастичное, но веселое поздравление с днем рождения для пользователя {user_name}.
@@ -145,7 +141,6 @@ async def generate_birthday_greeting(user_name: str, user_messages: List[str]) -
 async def handle_birthday_command(message: Message):
     """Обработка команды запоминания дня рождения"""
     try:
-        # Парсинг даты
         birthday_date = parse_birthday_date(message.text)
         if not birthday_date:
             await message.reply("Да пошел ты нахуй, пиши нормально: 'упупа запомни: мой др 1 апреля'")
@@ -153,7 +148,6 @@ async def handle_birthday_command(message: Message):
         
         day, month = birthday_date
         
-        # Подготовка данных пользователя
         birthday_data = {
             "day": day,
             "month": month,
@@ -161,7 +155,6 @@ async def handle_birthday_command(message: Message):
             "username": message.from_user.username or "",
         }
         
-        # Сохранение в конкретном чате
         save_chat_birthday(message.chat.id, message.from_user.id, birthday_data)
         
         await message.reply("Записал в календарике этого чата 📅")
@@ -178,106 +171,152 @@ async def check_birthdays_and_send_greetings(bot):
         current_month = now.month
         today_str = now.strftime("%Y-%m-%d")
         
+        logging.info(f"Проверка дней рождения на {today_str}")
+        
         all_birthdays = load_birthdays()
         
-        # Проходим по всем чатам
-        for chat_id, chat_birthdays in all_birthdays.items():
-            chat_id_int = int(chat_id)
-            
-            # Проходим по всем пользователям в чате
-            for user_id, user_data in chat_birthdays.items():
-                if user_data["day"] == current_day and user_data["month"] == current_month:
-                    # Проверяем, не поздравляли ли уже сегодня
-                    last_greeting_key = f"last_greeting_{today_str}"
-                    
-                    if user_data.get(last_greeting_key):
-                        continue  # Уже поздравляли сегодня
-                    
-                    # Получаем сообщения пользователя из конкретного чата
-                    user_messages = get_user_messages_from_log(int(user_id), chat_id_int)
-                    
-                    if not user_messages:
-                        greeting = f"С днюхой, {user_data['name']}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
-                    else:
-                        greeting = await generate_birthday_greeting(user_data['name'], user_messages)
-                    
-                    # Создаем тег пользователя
-                    user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
-                    
-                    # Отправляем поздравление в чат
-                    final_greeting = f"{user_tag}\n\n{greeting}"
-                    await bot.send_message(chat_id_int, final_greeting, parse_mode="Markdown")
-                    
-                    # Помечаем, что поздравили сегодня
-                    user_data[last_greeting_key] = True
+        if not all_birthdays:
+            logging.info("Нет записанных дней рождения")
+            return
         
-        # Сохраняем обновленные данные
+        for chat_id, chat_birthdays in all_birthdays.items():
+            try:
+                chat_id_int = int(chat_id)
+                
+                if not isinstance(chat_birthdays, dict):
+                    logging.error(f"Неверный формат данных для чата {chat_id}: {type(chat_birthdays)}")
+                    continue
+                
+                for user_id, user_data in chat_birthdays.items():
+                    try:
+                        if not isinstance(user_data, dict):
+                            logging.error(f"Неверный формат данных для пользователя {user_id} в чате {chat_id}: {type(user_data)}")
+                            continue
+                        
+                        if "day" not in user_data or "month" not in user_data:
+                            logging.error(f"Отсутствуют обязательные поля для пользователя {user_id} в чате {chat_id}: {user_data}")
+                            continue
+                        
+                        user_day = user_data["day"]
+                        user_month = user_data["month"]
+                        
+                        if not isinstance(user_day, int) or not isinstance(user_month, int):
+                            logging.error(f"Неверный формат даты для пользователя {user_id} в чате {chat_id}: day={user_day}, month={user_month}")
+                            continue
+                        
+                        if user_day == current_day and user_month == current_month:
+                            last_greeting_key = f"last_greeting_{today_str}"
+                            
+                            if user_data.get(last_greeting_key):
+                                logging.info(f"Пользователь {user_id} в чате {chat_id} уже поздравлен сегодня")
+                                continue
+                            
+                            logging.info(f"Поздравляем пользователя {user_id} в чате {chat_id}")
+                            
+                            user_messages = get_user_messages_from_log(int(user_id), chat_id_int)
+                            user_name = user_data.get('name', 'Неизвестный')
+                            
+                            if not user_messages:
+                                greeting = f"С днюхой, {user_name}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
+                            else:
+                                greeting = await generate_birthday_greeting(user_name, user_messages)
+                            
+                            user_tag = f"[{user_name}](tg://user?id={user_id})"
+                            final_greeting = f"{user_tag}\n\n{greeting}"
+                            
+                            try:
+                                await bot.send_message(chat_id_int, final_greeting, parse_mode="Markdown")
+                                logging.info(f"Поздравление отправлено в чат {chat_id} для пользователя {user_id}")
+                                user_data[last_greeting_key] = True
+                                
+                            except Exception as e:
+                                logging.error(f"Ошибка отправки поздравления в чат {chat_id}: {e}")
+                                
+                    except Exception as e:
+                        logging.error(f"Ошибка обработки пользователя {user_id} в чате {chat_id}: {e}")
+                        continue
+                        
+            except Exception as e:
+                logging.error(f"Ошибка обработки чата {chat_id}: {e}")
+                continue
+        
         save_birthdays(all_birthdays)
         
     except Exception as e:
         logging.error(f"Ошибка в check_birthdays_and_send_greetings: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
 
 async def birthday_scheduler(bot):
     """Планировщик проверки дней рождения"""
     while True:
         try:
             now = datetime.now()
-            # Проверяем каждый день в 12:00
             if now.hour == 12 and now.minute == 0:
                 await check_birthdays_and_send_greetings(bot)
-                # Ждем минуту, чтобы не выполнять несколько раз
                 await asyncio.sleep(60)
             else:
-                # Проверяем каждую минуту
                 await asyncio.sleep(60)
         except Exception as e:
             logging.error(f"Ошибка в birthday_scheduler: {e}")
             await asyncio.sleep(60)
 
 def get_birthday_list(chat_id: int) -> str:
-    """Получение списка дней рождения для конкретного чата"""
+    """Получение списка дней рождения для конкретного чата (отсортировано по дате)"""
     chat_birthdays = get_chat_birthdays(chat_id)
     
     if not chat_birthdays:
         return "В этом чате дни рождения не записаны"
     
+    # Сортируем дни рождения по месяцу и дню
+    sorted_birthdays = sorted(chat_birthdays.items(), key=lambda item: (item[1]['month'], item[1]['day']))
+    
     result = "📅 Дни рождения в этом чате:\n\n"
-    for user_id, data in chat_birthdays.items():
+    month_names = ["", "января", "февраля", "марта", "апреля", "мая", "июня", 
+                  "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+    
+    for user_id, data in sorted_birthdays:
         name = data.get('name', 'Неизвестно')
         username = data.get('username', '')
         day = data['day']
         month = data['month']
         
-        month_names = ["", "января", "февраля", "марта", "апреля", "мая", "июня", 
-                      "июля", "августа", "сентября", "октября", "ноября", "декабря"]
-        
         result += f"{name}"
         if username:
-            result += f" ({username})"
+            result += f" (@{username})"
         result += f" - {day} {month_names[month]}\n"
     
     return result
 
 def get_all_birthdays_list() -> str:
-    """Получение списка всех дней рождения из всех чатов (только для админа)"""
+    """Получение списка всех дней рождения из всех чатов (только для админа, отсортировано)"""
     all_birthdays = load_birthdays()
     
     if not all_birthdays:
         return "Дни рождения не записаны"
     
-    result = "📅 Все записанные дни рождения:\n\n"
+    result = "📅 Все записанные дни рождения (отсортировано по дате в каждом чате):\n\n"
+    month_names = ["", "января", "февраля", "марта", "апреля", "мая", "июня", 
+                  "июля", "августа", "сентября", "октября", "ноября", "декабря"]
     
-    for chat_id, chat_birthdays in all_birthdays.items():
+    # Сортируем чаты по ID для консистентности вывода
+    sorted_chat_ids = sorted(all_birthdays.keys(), key=int)
+
+    for chat_id in sorted_chat_ids:
+        chat_birthdays = all_birthdays[chat_id]
         result += f"🔹 Чат {chat_id}:\n"
         
-        for user_id, data in chat_birthdays.items():
+        # Сортируем дни рождения внутри чата по месяцу и дню
+        sorted_birthdays = sorted(chat_birthdays.items(), key=lambda item: (item[1]['month'], item[1]['day']))
+        
+        if not sorted_birthdays:
+            result += "   Нет записанных дней рождения\n"
+        
+        for user_id, data in sorted_birthdays:
             name = data.get('name', 'Неизвестно')
             username = data.get('username', '')
             day = data['day']
             month = data['month']
-            
-            month_names = ["", "января", "февраля", "марта", "апреля", "мая", "июня", 
-                          "июля", "августа", "сентября", "октября", "ноября", "декабря"]
             
             result += f"   {name}"
             if username:
@@ -285,7 +324,7 @@ def get_all_birthdays_list() -> str:
             result += f" - {day} {month_names[month]}\n"
         
         result += "\n"
-    
+        
     return result
 
 def find_user_in_chat_birthdays(chat_id: int, identifier: str) -> Optional[Tuple[str, Dict]]:
@@ -309,17 +348,15 @@ async def handle_test_greeting_command(message: Message):
         return
     
     try:
-        # Извлекаем имя/username из команды
         text = message.text
         if text.lower().startswith("упупа поздравь "):
-            identifier = text[15:].strip()  # Убираем "упупа поздравь "
+            identifier = text[15:].strip()
         elif text.lower().startswith("поздравь "):
-            identifier = text[9:].strip()  # Убираем "поздравь "
+            identifier = text[9:].strip()
         else:
             await message.reply("Используй: упупа поздравь [имя/username]")
             return
             
-        # Ищем пользователя в текущем чате
         user_info = find_user_in_chat_birthdays(message.chat.id, identifier)
         if not user_info:
             await message.reply(f"Пользователь '{identifier}' не найден в базе дней рождения этого чата")
@@ -327,7 +364,6 @@ async def handle_test_greeting_command(message: Message):
         
         user_id, user_data = user_info
         
-        # Получаем сообщения пользователя из текущего чата
         user_messages = get_user_messages_from_log(int(user_id), message.chat.id)
         
         if not user_messages:
@@ -335,11 +371,9 @@ async def handle_test_greeting_command(message: Message):
         else:
             greeting = await generate_birthday_greeting(user_data['name'], user_messages)
         
-        # Создаем тег пользователя
         user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
         
-        # Отправляем тестовое поздравление
-        test_message = f"🧪 **ТЕСТОВОЕ ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
+        test_message = f"🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
         await message.reply(test_message, parse_mode="Markdown")
         
     except Exception as e:

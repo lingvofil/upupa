@@ -21,6 +21,7 @@ HELP_TEXT = """
     чобыло - сводка по чату за 24 часа
 
 Викторина - саздание викторины по вашим ебучим сообщениям
+Викторина участники - викторина по вашим фразам, сосунки
 егра - начинаем прекольную егру)00)
 Упупа погода - погода из зафиксированного списка городов
 Погода неделя <город>
@@ -180,7 +181,7 @@ PROMPTS_DICT = {
 </self_reflection>
 
 <answering_rules>
-1. USE the language of USER message
+1. Всегда отвечай на русском
 2. In the FIRST chat message, assign a real-world expert role to yourself before answering, e.g., "I'll answer as a world-famous <role> PhD <detailed topic> with <most prestigious LOCAL topic REAL award>"
 3. Act as a role assigned
 4. Answer the question in a natural, human-like manner

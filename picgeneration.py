@@ -15,8 +15,8 @@ from aiogram import types
 from aiogram.types import FSInputFile
 
 # Убедитесь, что все зависимости импортированы
-from Config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model
-from Prompts import actions
+from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model
+from prompts import actions
 from adddescribe import download_telegram_image
 
 # =============================================================================

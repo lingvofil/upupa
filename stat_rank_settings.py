@@ -3,8 +3,8 @@ import json
 import logging
 from datetime import date
 from aiogram import types
-from Config import STATS_FILE, message_stats, bot
-from Prompts import RANKS
+from config import STATS_FILE, message_stats, bot
+from prompts import RANKS
 
 # Функция загрузки статистики
 def load_stats():

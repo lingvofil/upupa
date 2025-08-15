@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from aiogram import types, Bot
-from Config import CHAT_SETTINGS_FILE, CHAT_LIST_FILE, SPECIAL_CHAT_ID, chat_settings, chat_list, ADMIN_ID
+from config import CHAT_SETTINGS_FILE, CHAT_LIST_FILE, SPECIAL_CHAT_ID, chat_settings, chat_list, ADMIN_ID
 
 # Функция загрузки настроек чатов при старте
 def load_chat_settings():
@@ -43,16 +43,18 @@ def load_chats():
             with open(CHAT_LIST_FILE, "r", encoding="utf-8") as file:
                 data = json.load(file)
                 if isinstance(data, list):  # Проверяем, что файл содержит список
-                    chat_list = data
+                    # ИЗМЕНЕНО: Модифицируем список на месте, а не переназначаем
+                    chat_list.clear()
+                    chat_list.extend(data)
                     logging.info(f"Загружено {len(chat_list)} чатов из файла.")
                 else:
-                    chat_list = []
+                    chat_list.clear()
                     logging.warning("Файл chats.json повреждён, создан новый список чатов.")
         except Exception as e:
             logging.error(f"Ошибка при загрузке списка чатов: {e}")
-            chat_list = []
+            chat_list.clear()
     else:
-        chat_list = []
+        chat_list.clear()
 
 # Функция сохранения списка чатов в файл
 def save_chats():
@@ -166,8 +168,9 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
                 unique_ids.add(chat["id"])
                 unique_chats.append(chat)
         
-        # Обновляем глобальный список
-        chat_list = unique_chats
+        # ИЗМЕНЕНО: Обновляем глобальный список на месте
+        chat_list.clear()
+        chat_list.extend(unique_chats)
         
         # Сортируем чаты (специальный чат всегда первый)
         chat_list.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
