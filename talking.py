@@ -143,6 +143,8 @@ async def handle_current_prompt_command(message: types.Message):
             imitated_user = current_settings.get("imitated_user", {})
             display_name = imitated_user.get("display_name", current_prompt_name)
             reply_text = f"Я сейчас косплею {display_name} и разговариваю в его стиле."
+        elif prompt_type == "custom":
+            reply_text = "У меня сейчас кастомный промпт. Хотите, поменяем?"
         else:
             reply_text = f"Я {current_prompt_name}."
     else:
@@ -166,27 +168,46 @@ async def handle_current_prompt_command(message: types.Message):
 
 async def handle_set_prompt_command(message: types.Message):
     """
-    Обрабатывает установку нового промпта, включая имитацию пользователя.
+    Обрабатывает установку нового промпта.
+    Приоритет:
+    1. Готовые промпты по названию.
+    2. Имитация пользователя по имени или никнейму.
+    3. Любой произвольный текст в качестве кастомного промпта.
     """
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
 
-    command_part = message.text.lower().replace("промпт ", "").strip()
+    # 1. Извлекаем текст после команды
+    command_part = message.text[len("промпт "):].strip()
     if not command_part:
-        await message.reply("Дебил, укажи 'промпт '. Например: промпт хуеплет или промпт @username")
+        await message.reply("Нужно указать название промпта, имя/ник пользователя или просто написать свой текст после команды 'промпт'.")
         return
 
-    is_user_imitation = command_part.startswith("@") or not get_prompt_by_name(command_part)
+    # 2. Проверяем, есть ли такой готовый промпт
+    predefined_prompt_text = get_prompt_by_name(command_part.lower())
+    if predefined_prompt_text:
+        update_chat_settings(chat_id)
+        current_settings = chat_settings[chat_id]
+        current_settings["prompt"] = predefined_prompt_text
+        current_settings["prompt_name"] = command_part.lower()
+        current_settings["prompt_source"] = "user"
+        current_settings["prompt_type"] = "standard"
+        if "imitated_user" in current_settings:
+            del current_settings["imitated_user"]
+        save_chat_settings()
+        await message.reply(f"{command_part.capitalize()} в здании.")
+        return
 
-    if is_user_imitation:
-        display_name = command_part[1:] if command_part.startswith("@") else command_part
-        messages = (await extract_messages_by_username(display_name, chat_id) if command_part.startswith("@")
-                    else await extract_messages_by_full_name(display_name, chat_id))
+    # 3. Проверяем, является ли это именем/ником пользователя для имитации
+    display_name = command_part.lstrip('@')
+    
+    # Сначала ищем по никнейму, потом по полному имени
+    messages = await extract_messages_by_username(display_name, chat_id)
+    if not messages:
+        messages = await extract_messages_by_full_name(display_name, chat_id)
 
-        if not messages:
-            await message.reply(f"Не найдено ни сообщений от пользователя '{display_name}', ни стандартного промпта с таким именем.")
-            return
-
+    if messages:
+        # Пользователь найден, запускаем имитацию
         user_prompt = await _create_user_style_prompt(messages, display_name)
         update_chat_settings(chat_id)
         current_settings = chat_settings[chat_id]
@@ -195,24 +216,25 @@ async def handle_set_prompt_command(message: types.Message):
         current_settings["prompt_source"] = "user_imitation"
         current_settings["prompt_type"] = "user_style"
         current_settings["imitated_user"] = {
-            "username": display_name if command_part.startswith("@") else None,
-            "full_name": display_name if not command_part.startswith("@") else None,
+            "username": display_name if '@' in command_part else None,
+            "full_name": display_name if '@' not in command_part else None,
             "display_name": display_name
         }
-        await message.reply(f"Теперь я буду разговаривать как {display_name}! Готов косплеить этого долбоеба.")
-    else:
-        new_prompt_text = get_prompt_by_name(command_part)
-        update_chat_settings(chat_id)
-        current_settings = chat_settings[chat_id]
-        current_settings["prompt"] = new_prompt_text
-        current_settings["prompt_name"] = command_part
-        current_settings["prompt_source"] = "user"
-        current_settings["prompt_type"] = "standard"
-        if "imitated_user" in current_settings:
-            del current_settings["imitated_user"]
-        await message.reply(f"{command_part.capitalize()} в здании.")
-    
+        save_chat_settings()
+        await message.reply(f"Теперь я буду разговаривать как {display_name}!")
+        return
+
+    # 4. Если это не готовый промпт и не пользователь - это кастомный промпт
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    current_settings["prompt"] = command_part
+    current_settings["prompt_name"] = "кастомный"
+    current_settings["prompt_source"] = "user"
+    current_settings["prompt_type"] = "custom"
+    if "imitated_user" in current_settings:
+        del current_settings["imitated_user"]
     save_chat_settings()
+    await message.reply("Принято! Установлен новый кастомный промпт.")
 
 
 async def handle_change_prompt_randomly_command(message: types.Message):
