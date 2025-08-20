@@ -16,9 +16,9 @@ from prompts import (
     PROMPTS_TEXT, PROMPTS_DICT, get_available_prompts,
     get_prompts_list_text, actions, get_prompt_by_name,
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
-    KEYWORDS
+    KEYWORDS, CUSTOM_PROMPT_TEMPLATE # <-- ДОБАВЛЕНО
 )
-# Функции для извлечения сообщений (предполагается, что они в Lexicon_settings.py)
+# Функции для извлечения сообщений
 from lexicon_settings import (save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
@@ -30,7 +30,7 @@ from stat_rank_settings import track_message_statistics
 
 
 # =============================================================================
-# НОВЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ
+# ОБРАБОТЧИКИ КОМАНД
 # =============================================================================
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -43,7 +43,6 @@ async def handle_poem_command(message: types.Message, poem_type: str):
     parts = message.text.lower().split(maxsplit=1)
     characters = parts[1] if len(parts) > 1 else "случайные русские имена"
 
-    # Выбираем нужный промпт и сообщение об ошибке
     if poem_type == "пирожок":
         base_prompt = PROMPT_PIROZHOK1[0] if message.chat.id == -1001707530786 and len(parts) == 1 else PROMPT_PIROZHOK[0]
         error_response = "🔥 Пирожок сгорел в духовке!"
@@ -63,58 +62,6 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     await message.reply(response_text[:4000])
 
-
-async def process_general_message(message: types.Message):
-    """
-    Главная функция, обрабатывающая все сообщения, которые не были перехвачены
-    другими хэндлерами. Определяет, нужно ли вступать в диалог,
-    реагировать или ничего не делать.
-    """
-    chat_id = str(message.chat.id)
-    update_chat_settings(chat_id)
-    current_settings = chat_settings.get(chat_id, {})
-
-    # 1. Определяем, является ли это прямым обращением к боту
-    is_direct_appeal = False
-    is_private_chat = message.chat.type == "private"
-    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
-    
-    if message.text:
-        text_lower = message.text.lower()
-        # Проверка на ключевые слова, упоминания и прямые обращения
-        if (text_lower.startswith("пися ") or
-            any(kw in text_lower.split() for kw in KEYWORDS if kw not in ["пирожок", "порошок"])):
-            is_direct_appeal = True
-        if not is_direct_appeal and message.entities:
-            for entity in message.entities:
-                if entity.type == "mention" and message.text[entity.offset:entity.offset + entity.length] == "@" + (await bot.get_me()).username:
-                    is_direct_appeal = True
-                    break
-
-    # 2. Если это прямое обращение (или ЛС, или ответ боту), вступаем в диалог
-    if (is_private_chat or is_reply_to_bot or is_direct_appeal) and current_settings.get("dialog_enabled", True):
-        user_first_name = message.from_user.first_name or "Пользователь"
-        await bot.send_chat_action(chat_id=chat_id, action="typing")
-        response = await handle_bot_conversation(message, user_first_name)
-        await message.reply(response)
-        return
-
-    # 3. Если это не прямое обращение, пытаемся случайно среагировать
-    if current_settings.get("dialog_enabled", True):
-        reaction_sent = await process_random_reactions(
-            message, model, save_user_message, track_message_statistics,
-            add_chat, chat_settings, save_chat_settings
-        )
-        if reaction_sent:
-            return
-
-    # 4. Если ничего из вышеперечисленного не сработало
-    logging.info(f"Сообщение от {message.from_user.full_name} в чате {chat_id} не вызвало реакции: '{message.text}'")
-
-
-# =============================================================================
-# СУЩЕСТВУЮЩИЕ ФУНКЦИИ УПРАВЛЕНИЯ ПРОМПТАМИ
-# =============================================================================
 
 async def handle_list_prompts_command(message: types.Message):
     """
@@ -144,97 +91,99 @@ async def handle_current_prompt_command(message: types.Message):
             display_name = imitated_user.get("display_name", current_prompt_name)
             reply_text = f"Я сейчас косплею {display_name} и разговариваю в его стиле."
         elif prompt_type == "custom":
-            reply_text = "У меня сейчас кастомный промпт. Хотите, поменяем?"
+            reply_text = "У меня сейчас кастомный промпт."
         else:
             reply_text = f"Я {current_prompt_name}."
     else:
-        current_prompt_text = current_settings.get("prompt")
-        found_name = None
-        if current_prompt_text:
-            for name_key, text_val in PROMPTS_DICT.items():
-                if text_val == current_prompt_text:
-                    found_name = name_key
-                    chat_settings[chat_id]["prompt_name"] = found_name
-                    chat_settings[chat_id]["prompt_type"] = "standard"
-                    save_chat_settings()
-                    break
-        if found_name:
-            reply_text = f"Текущий промпт: {found_name} (имя восстановлено)."
-        else:
-            reply_text = "Текущий промпт не установлен. Можете установить его командой 'промпт <название>'."
+        reply_text = "Текущий промпт не установлен."
 
     await message.reply(reply_text)
 
-
 async def handle_set_prompt_command(message: types.Message):
     """
-    Обрабатывает установку нового промпта.
-    Приоритет:
-    1. Готовые промпты по названию.
-    2. Имитация пользователя по имени или никнейму.
-    3. Любой произвольный текст в качестве кастомного промпта.
+    Обрабатывает установку нового промпта (готового или кастомного).
+    Эта функция быстрая, так как не ищет пользователей в истории.
     """
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
 
-    # 1. Извлекаем текст после команды
+    # Извлекаем текст после "промпт "
     command_part = message.text[len("промпт "):].strip()
     if not command_part:
-        await message.reply("Нужно указать название промпта, имя/ник пользователя или просто написать свой текст после команды 'промпт'.")
+        await message.reply("Нужно указать название готового промпта или написать свой текст.")
         return
 
-    # 2. Проверяем, есть ли такой готовый промпт
+    # 1. Проверяем, есть ли такой готовый промпт
     predefined_prompt_text = get_prompt_by_name(command_part.lower())
+    
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    
     if predefined_prompt_text:
-        update_chat_settings(chat_id)
-        current_settings = chat_settings[chat_id]
+        # Это готовый промпт
         current_settings["prompt"] = predefined_prompt_text
         current_settings["prompt_name"] = command_part.lower()
-        current_settings["prompt_source"] = "user"
         current_settings["prompt_type"] = "standard"
-        if "imitated_user" in current_settings:
-            del current_settings["imitated_user"]
-        save_chat_settings()
-        await message.reply(f"{command_part.capitalize()} в здании.")
+        reply_message = f"{command_part.capitalize()} в здании."
+    else:
+        # 2. Если не готовый - это кастомный промпт
+        # <-- НАЧАЛО ИЗМЕНЕНИЙ -->
+        # Собираем полный промпт из шаблона и текста пользователя
+        full_custom_prompt = CUSTOM_PROMPT_TEMPLATE.format(personality=command_part)
+        current_settings["prompt"] = full_custom_prompt
+        # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
+        current_settings["prompt_name"] = "кастомный"
+        current_settings["prompt_type"] = "custom"
+        reply_message = "Пошел нахуй! Ладно, принято"
+
+    # Общие действия по сохранению
+    current_settings["prompt_source"] = "user"
+    if "imitated_user" in current_settings:
+        del current_settings["imitated_user"]
+    save_chat_settings()
+    await message.reply(reply_message)
+
+
+async def handle_set_participant_prompt_command(message: types.Message):
+    """
+    Обрабатывает установку промпта для имитации участника чата.
+    Эта функция может быть медленной из-за поиска по истории сообщений.
+    """
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
+
+    # Извлекаем имя/ник после "промпт участник "
+    command_part = message.text[len("промпт участник "):].strip()
+    if not command_part:
+        await message.reply("Нужно указать имя или никнейм участника после команды.")
         return
 
-    # 3. Проверяем, является ли это именем/ником пользователя для имитации
     display_name = command_part.lstrip('@')
     
-    # Сначала ищем по никнейму, потом по полному имени
+    # Ищем сообщения пользователя
     messages = await extract_messages_by_username(display_name, chat_id)
     if not messages:
         messages = await extract_messages_by_full_name(display_name, chat_id)
 
-    if messages:
-        # Пользователь найден, запускаем имитацию
-        user_prompt = await _create_user_style_prompt(messages, display_name)
-        update_chat_settings(chat_id)
-        current_settings = chat_settings[chat_id]
-        current_settings["prompt"] = user_prompt
-        current_settings["prompt_name"] = display_name
-        current_settings["prompt_source"] = "user_imitation"
-        current_settings["prompt_type"] = "user_style"
-        current_settings["imitated_user"] = {
-            "username": display_name if '@' in command_part else None,
-            "full_name": display_name if '@' not in command_part else None,
-            "display_name": display_name
-        }
-        save_chat_settings()
-        await message.reply(f"Теперь я буду разговаривать как {display_name}!")
+    if not messages:
+        await message.reply(f"Не могу найти сообщения от пользователя '{display_name}', чтобы ему подражать.")
         return
 
-    # 4. Если это не готовый промпт и не пользователь - это кастомный промпт
+    # Создаем и устанавливаем промпт для имитации
+    user_prompt = await _create_user_style_prompt(messages, display_name)
     update_chat_settings(chat_id)
     current_settings = chat_settings[chat_id]
-    current_settings["prompt"] = command_part
-    current_settings["prompt_name"] = "кастомный"
-    current_settings["prompt_source"] = "user"
-    current_settings["prompt_type"] = "custom"
-    if "imitated_user" in current_settings:
-        del current_settings["imitated_user"]
+    current_settings["prompt"] = user_prompt
+    current_settings["prompt_name"] = display_name
+    current_settings["prompt_source"] = "user_imitation"
+    current_settings["prompt_type"] = "user_style"
+    current_settings["imitated_user"] = {
+        "username": display_name if '@' in command_part else None,
+        "full_name": display_name if '@' not in command_part else None,
+        "display_name": display_name
+    }
     save_chat_settings()
-    await message.reply("Принято! Установлен новый кастомный промпт.")
+    await message.reply(f"Теперь я буду разговаривать как {display_name}!")
 
 
 async def handle_change_prompt_randomly_command(message: types.Message):
@@ -271,7 +220,50 @@ async def handle_change_prompt_randomly_command(message: types.Message):
     await message.reply(f"Теперь я {new_prompt_name} нахуй!")
 
 
-# === Вспомогательные и основные функции диалога ===
+# =============================================================================
+# ОСНОВНАЯ ЛОГИКА ДИАЛОГА И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =============================================================================
+
+async def process_general_message(message: types.Message):
+    """
+    Главная функция, обрабатывающая все сообщения, которые не были перехвачены
+    другими хэндлерами.
+    """
+    chat_id = str(message.chat.id)
+    update_chat_settings(chat_id)
+    current_settings = chat_settings.get(chat_id, {})
+
+    is_direct_appeal = False
+    is_private_chat = message.chat.type == "private"
+    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    
+    if message.text:
+        text_lower = message.text.lower()
+        if (text_lower.startswith("пися ") or
+            any(kw in text_lower.split() for kw in KEYWORDS if kw not in ["пирожок", "порошок"])):
+            is_direct_appeal = True
+        if not is_direct_appeal and message.entities:
+            for entity in message.entities:
+                if entity.type == "mention" and message.text[entity.offset:entity.offset + entity.length] == "@" + (await bot.get_me()).username:
+                    is_direct_appeal = True
+                    break
+
+    if (is_private_chat or is_reply_to_bot or is_direct_appeal) and current_settings.get("dialog_enabled", True):
+        user_first_name = message.from_user.first_name or "Пользователь"
+        await bot.send_chat_action(chat_id=chat_id, action="typing")
+        response = await handle_bot_conversation(message, user_first_name)
+        await message.reply(response)
+        return
+
+    if current_settings.get("dialog_enabled", True):
+        reaction_sent = await process_random_reactions(
+            message, model, save_user_message, track_message_statistics,
+            add_chat, chat_settings, save_chat_settings
+        )
+        if reaction_sent:
+            return
+
+    logging.info(f"Сообщение от {message.from_user.full_name} в чате {chat_id} не вызвало реакции: '{message.text}'")
 
 async def _create_user_style_prompt(messages: list, display_name: str) -> str:
     """

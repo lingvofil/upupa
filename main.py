@@ -92,6 +92,7 @@ from talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
     handle_set_prompt_command,
+    handle_set_participant_prompt_command, # <-- ДОБАВЛЕНО
     handle_change_prompt_randomly_command,
     handle_poem_command,
     process_general_message
@@ -534,9 +535,18 @@ async def list_prompts_command(message: types.Message):
 async def current_prompt_command(message: types.Message):
     await handle_current_prompt_command(message)
 
+# <-- НАЧАЛО ИЗМЕНЕНИЙ -->
+# Новый, более конкретный хэндлер для имитации участников
+@router.message(F.text.lower().startswith("промпт участник "))
+async def set_participant_prompt_command(message: types.Message):
+    await handle_set_participant_prompt_command(message)
+
+# Старый хэндлер теперь обрабатывает только готовые и кастомные промпты
+# Он должен идти ПОСЛЕ более конкретного хэндлера
 @router.message(F.text.lower().startswith("промпт "))
 async def set_prompt_command(message: types.Message):
     await handle_set_prompt_command(message)
+# <-- КОНЕЦ ИЗМЕНЕНИЙ -->
 
 @router.message(F.text.lower() == "поменяй промпт")
 async def change_prompt_randomly_command(message: types.Message):
