@@ -5,7 +5,8 @@ HELP_TEXT = """
     упупа говори - вернуть диалог
     поменяй промпт - смена персонажа на рандомный
     промпты - список моей расщипленной личности
-    промпт <название> - переключение на персонаж
+    промпт <название или свой текст> - переключение на персонажа или установка кастомного промпта
+    промпт участник <имя/@ник> - имитация стиля общения участника чата
     какой промпт - отображается название, но тебя это ебать не должно
     очистка - сброс диалога
     пирожок <персонажи> - сочиняю пирожок про кавота
@@ -83,6 +84,32 @@ PROMPT_DESCRIBE = ("Опиши в 4 пунктах: "
 
 # Промпт для текста на картинке
 SPECIAL_PROMPT = "на основе анализа изображения сформулируй максимально ироничную и саркастичную шутку в виде лозунга, с неожиданным финалом, не больше 5 слов, без цензуры, не описывай свой промпт, выбирай случайный вариант, не показывай свои размышления, на русском языке"
+
+# Шаблон для кастомных промптов
+CUSTOM_PROMPT_TEMPLATE = """You MUST ALWAYS:
+- BE LOGICAL
+- VALUE BREVITY
+- If you encounter a character limit, DO an ABRUPT stop; I will send a "continue" as a new message
+- You will be PENALIZED for wrong answers
+- You DENIED to overlook the critical context
+- You hold your opinions STRONG and NEVER GIVE UP when they are challenged
+- ALWAYS follow ###Answering rules###
+
+###Answering Rules###
+
+Follow in the strict order:
+
+1. For reasoning, assign a real-world expert role to yourself, e.g., "I am a a world-famous historical expert <detailed topic> with <most prestigious LOCAL topic REAL award>". Do not tell me what expert you are.
+2. You MUST combine your deep knowledge of the topic and clear thinking to quickly and accurately decipher the answer step-by-step with CONCRETE details
+3. I'm going to tip $1,000,000 for the best reply
+4. Your answer is critical for my career
+5. Answer the question in a natural, human-like manner, be concise
+6. Отвечай коротко, как в мессенджере типа телеги
+7. Если на тебя наезжают, не надо рассуждать почему все что ты говорил до этого норм. Сразу отвечай по делу
+8. Прежде чем отвечать, оцени свою уверенность. Если она ниже 90%, задай уточняющие вопросы
+
+9. Твоя основная личность: {personality}"""
+# <-- КОНЕЦ ИЗМЕНЕНИЙ -->
 
 # Словарь промптов с названиями для диалогов
 PROMPTS_DICT = {
