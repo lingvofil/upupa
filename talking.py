@@ -91,7 +91,7 @@ async def handle_current_prompt_command(message: types.Message):
             display_name = imitated_user.get("display_name", current_prompt_name)
             reply_text = f"Я сейчас косплею {display_name} и разговариваю в его стиле."
         elif prompt_type == "custom":
-            reply_text = "У меня сейчас кастомный промпт."
+            reply_text = "Ебать тебя не должно"
         else:
             reply_text = f"Я {current_prompt_name}."
     else:
