@@ -213,75 +213,74 @@ async def handle_redraw_command(message: types.Message):
         logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
-async def handle_edit_command(message: types.Message):
+async def handle_edit_command(message, bot):
     try:
-        edit_prompt = message.text.replace("отредактируй", "").strip()
-        if not edit_prompt:
-            await message.reply("Пожалуйста, укажите изменения после слова 'отредактируй'.")
-            return
-
-        # 1. Определяем, откуда брать картинку (прямое вложение или reply)
+        # Определяем, откуда брать картинку
         if message.photo:
+            # Картинка загружена вместе с командой
             file_id = message.photo[-1].file_id
+            text_input = message.caption.replace("отредактируй", "").strip() if message.caption else ""
         elif message.reply_to_message and message.reply_to_message.photo:
+            # Реплай на картинку
             file_id = message.reply_to_message.photo[-1].file_id
+            text_input = message.text.replace("отредактируй", "").strip() if message.text else ""
         else:
-            await message.reply("Пожалуйста, прикрепите изображение или ответьте на сообщение с картинкой.")
+            await message.reply("❌ Нужно загрузить картинку или ответить на картинку командой 'отредактируй ...'")
             return
 
-        # 2. Скачиваем картинку
+        # Скачиваем картинку с серверов Telegram
         file = await bot.get_file(file_id)
         file_path = file.file_path
         file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
         logging.info(f"[EDIT] Загружаем изображение с URL: {file_url}")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                if resp.status != 200:
-                    await message.reply("Не удалось скачать изображение.")
-                    return
-                image_bytes = await resp.read()
-                logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+        response = requests.get(file_url)
+        image_bytes = response.content
+        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
 
-        # 3. Запрос к Gemini (TEXT + IMAGE в одном parts)
+        # Вызов Gemini для редактирования
         def sync_edit():
             return image_model.generate_content(
-                contents=[
+                [
+                    text_input,
                     {
-                        "role": "user",
-                        "parts": [
-                            {"text": edit_prompt},
-                            {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
-                        ]
+                        "mime_type": "image/png",
+                        "data": image_bytes,
                     }
-                ]
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.7,
+                )
             )
 
         response = await asyncio.to_thread(sync_edit)
 
-        # 4. Логируем содержимое parts
-        for idx, part in enumerate(response.candidates[0].content.parts):
-            logging.info(f"[EDIT] Part {idx}: keys={list(vars(part).keys())}")
+        # Извлекаем результат (ищем картинку в parts)
+        edited_image = None
+        for candidate in response.candidates:
+            for part in candidate.content.parts:
+                if part.inline_data:
+                    edited_image = part.inline_data.data
+                    break
 
-        # 5. Достаём картинку
-        image_data = None
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, "inline_data") and part.inline_data and getattr(part.inline_data, "data", None):
-                image_data = part.inline_data.data
-                logging.info("[EDIT] Извлекли картинку из inline_data")
-                break
-
-        if not image_data:
+        if not edited_image:
             logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
             await message.reply("Не удалось получить изменённое изображение.")
             return
 
-        # 6. Отправляем пользователю
-        await message.reply_photo(photo=io.BytesIO(image_data))
+        # Сохраняем картинку во временный файл
+        img = Image.open(BytesIO(edited_image))
+        output = BytesIO()
+        img.save(output, format="PNG")
+        output.seek(0)
+
+        # Отправляем результат обратно пользователю
+        await bot.send_photo(message.chat.id, photo=output, caption="✅ Вот отредактированное изображение")
 
     except Exception as e:
-        logging.exception(f"[EDIT] Ошибка в handle_edit_command: {e}")
-        await message.reply("Произошла ошибка при редактировании изображения.")
+        logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
+        await message.reply("⚠️ Ошибка при обработке команды 'отредактируй'.")
+
 
 
 # =============================================================================
