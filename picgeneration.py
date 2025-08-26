@@ -219,6 +219,7 @@ async def handle_edit_command(message: types.Message):
         logging.info("[EDIT] Получен запрос на редактирование изображения")
 
         bot = message.bot
+        processing_msg = await message.reply("Применяю магию...")
 
         # Получаем фото
         if message.photo:
@@ -231,7 +232,7 @@ async def handle_edit_command(message: types.Message):
             else:
                 file_id = message.reply_to_message.document.file_id
         else:
-            await message.reply("Не удалось найти изображение для редактирования.")
+            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
             return
 
         file = await bot.get_file(file_id)
@@ -243,7 +244,7 @@ async def handle_edit_command(message: types.Message):
         async with aiohttp.ClientSession() as session:
             async with session.get(file_url) as resp:
                 if resp.status != 200:
-                    await message.reply("Не удалось загрузить изображение.")
+                    await processing_msg.edit_text("Не удалось загрузить изображение.")
                     return
                 image_bytes = await resp.read()
 
@@ -254,36 +255,45 @@ async def handle_edit_command(message: types.Message):
             prompt = message.text.replace("отредактируй", "").strip()
 
         def sync_edit():
+            # ИСПРАВЛЕНИЕ: Добавлен generation_config для указания модальности ответа
             return image_model.generate_content(
-                [
+                contents=[
                     {"role": "user", "parts": [
                         {"text": prompt},
                         {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
                     ]}
-                ]
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    response_modalities=['IMAGE', 'TEXT']
+                )
             )
 
         response = await asyncio.to_thread(sync_edit)
+        
+        await processing_msg.delete()
 
         image_found = False
-        for idx, part in enumerate(response.candidates[0].content.parts):
-            logging.info(f"[EDIT] Part {idx}: {part}")
-            if hasattr(part, "inline_data") and part.inline_data:
-                image_data = part.inline_data.data
-                image_bytes_out = base64.b64decode(image_data)
-                image_found = True
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            for idx, part in enumerate(response.candidates[0].content.parts):
+                logging.info(f"[EDIT] Part {idx}: {part}")
+                if hasattr(part, "inline_data") and part.inline_data:
+                    image_data = part.inline_data.data
+                    image_bytes_out = base64.b64decode(image_data)
+                    image_found = True
 
-                output_file = BytesIO(image_bytes_out)
-                output_file.name = "edited.png"
-                await message.reply_photo(photo=output_file)
-                break
+                    output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+                    await message.reply_photo(photo=output_file)
+                    break
 
         if not image_found:
             logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
-            await message.reply("Не удалось получить изменённое изображение.")
+            await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.")
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
+        # Проверяем, существует ли processing_msg перед тем, как его использовать
+        if 'processing_msg' in locals() and processing_msg:
+            await processing_msg.delete()
         await message.reply("Произошла ошибка при редактировании изображения.")
 
 
