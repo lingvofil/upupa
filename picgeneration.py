@@ -214,55 +214,77 @@ async def handle_redraw_command(message: types.Message):
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # ✨ Редактирование изображения через Gemini
-async def handle_edit_command(message):
-    bot = message.bot  # теперь берём bot прямо из message
-
+async def handle_edit_command(message: types.Message):
     try:
-        if not message.photo:
-            await message.reply("Пожалуйста, приложите изображение для редактирования.")
+        logging.info("[EDIT] Получен запрос на редактирование изображения")
+
+        bot = message.bot
+
+        # Получаем фото
+        if message.photo:
+            file_id = message.photo[-1].file_id
+        elif message.document:
+            file_id = message.document.file_id
+        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+            if message.reply_to_message.photo:
+                file_id = message.reply_to_message.photo[-1].file_id
+            else:
+                file_id = message.reply_to_message.document.file_id
+        else:
+            await message.reply("Не удалось найти изображение для редактирования.")
             return
 
-        prompt = message.caption or "Измени изображение"
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        file_path = file_info.file_path
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
         file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
 
-        logging.info(f"[EDIT] Загружаем изображение с URL: {file_url}")
+        logging.info(f"Загружаем изображение с URL: {file_url}")
 
         async with aiohttp.ClientSession() as session:
             async with session.get(file_url) as resp:
                 if resp.status != 200:
-                    await message.reply("Не удалось загрузить изображение с серверов Telegram.")
+                    await message.reply("Не удалось загрузить изображение.")
                     return
                 image_bytes = await resp.read()
-                logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+
+        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+
+        prompt = message.caption.replace("отредактируй", "").strip() if message.caption else ""
+        if not prompt and message.text:
+            prompt = message.text.replace("отредактируй", "").strip()
 
         def sync_edit():
             return image_model.generate_content(
                 [
-                    {"role": "user", "parts": [prompt]},
-                    {"role": "user", "parts": [genai.Image.from_bytes(image_bytes)]},
+                    {"role": "user", "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
+                    ]}
                 ]
             )
 
         response = await asyncio.to_thread(sync_edit)
 
-        # ищем картинку в ответе Gemini
-        for idx, candidate in enumerate(response.candidates):
-            for part in candidate.content.parts:
-                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                    image_data = part.inline_data.data
-                    await message.reply_photo(io.BytesIO(image_data))
-                    return
+        image_found = False
+        for idx, part in enumerate(response.candidates[0].content.parts):
+            logging.info(f"[EDIT] Part {idx}: {part}")
+            if hasattr(part, "inline_data") and part.inline_data:
+                image_data = part.inline_data.data
+                image_bytes_out = base64.b64decode(image_data)
+                image_found = True
 
-        logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
-        await message.reply("Не удалось получить изменённое изображение.")
+                output_file = BytesIO(image_bytes_out)
+                output_file.name = "edited.png"
+                await message.reply_photo(photo=output_file)
+                break
+
+        if not image_found:
+            logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
+            await message.reply("Не удалось получить изменённое изображение.")
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
-        await message.reply("Произошла ошибка при обработке изображения.")
-
+        await message.reply("Произошла ошибка при редактировании изображения.")
 
 
 # =============================================================================
