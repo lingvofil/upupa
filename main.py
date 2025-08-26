@@ -80,9 +80,8 @@ from search import (
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
-from picgeneration import handle_generate_command
-from gemini_generation import handle_draw_command, handle_redraw_command, handle_pun_image_command
-
+from picgeneration import handle_image_generation_command, handle_pun_image_command, handle_redraw_command
+from gemini_generation import handle_gemini_generation_command
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
     handle_current_weather_command, 
@@ -467,9 +466,8 @@ async def add_text_to_image(message: types.Message):
         )
     )
 )
-async def draw_image_gemini(message: types.Message):
-    # "Нарисуй" вызывает Gemini
-    await handle_draw_command(message)
+async def generate_image(message: types.Message):
+    await handle_image_generation_command(message)
     
 @router.message(
     lambda message: (
@@ -480,9 +478,8 @@ async def draw_image_gemini(message: types.Message):
         )
     )
 )
-async def generate_image_kandinsky(message: types.Message):
-    # "Сгенерируй" вызывает Kandinsky
-    await handle_generate_command(message)
+async def generate_image_gemini(message: types.Message):
+    await handle_gemini_generation_command(message)
 
 @router.message(
     lambda message: (
@@ -494,8 +491,7 @@ async def generate_image_kandinsky(message: types.Message):
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
-async def redraw_image_gemini(message: types.Message):
-    # "Перерисуй" вызывает Gemini
+async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
 
 @router.message(
@@ -503,8 +499,7 @@ async def redraw_image_gemini(message: types.Message):
     message.text.lower().strip() == "скаламбурь" and 
     message.from_user.id not in BLOCKED_USERS
 )
-async def pun_image_gemini(message: types.Message):
-    # "Скаламбурь" вызывает Gemini
+async def generate_pun_with_image(message: types.Message):
     await handle_pun_image_command(message)
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
