@@ -161,9 +161,8 @@ async def handle_pun_image_command(message: types.Message):
         source_words = parts[0].strip()
         final_word = parts[1].strip()
 
-        # ИЗМЕНЕНИЕ: Создаем промпт для генерации изображения, который описывает концепцию,
-        # но явно запрещает добавлять текст, чтобы избежать наложения.
-        image_gen_prompt = f"Нарисуй сюрреалистичное изображение, которое является визуальной метафорой для слова '{final_word}', образованного из '{source_words}'. Изображение не должно содержать никаких букв или текста."
+        # ИЗМЕНЕНИЕ: Промпт сделан более прямым и "машинным", чтобы модель гарантированно генерировала изображение, а не текст.
+        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль."
         
         status, data = await process_gemini_generation(image_gen_prompt)
 
@@ -175,7 +174,14 @@ async def handle_pun_image_command(message: types.Message):
             os.remove(modified_path)
             await processing_msg.delete()
         else:
-            await processing_msg.edit_text(f"Ошибка генерации: {data.get('error')}")
+            # Если data содержит текст ответа, покажем его пользователю
+            error_text = data.get('error')
+            if "Gemini не вернул изображение, но вернул текст" in error_text:
+                text_response = error_text.split(":", 1)[1].strip()
+                await processing_msg.edit_text(f"Модель не смогла сгенерировать картинку, но вот что она ответила:\n\n_{text_response}_", parse_mode="Markdown")
+            else:
+                await processing_msg.edit_text(f"Ошибка генерации: {error_text}")
+
     except Exception as e:
         logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
