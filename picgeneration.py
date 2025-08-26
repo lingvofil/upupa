@@ -212,6 +212,10 @@ async def handle_redraw_command(message: types.Message):
         logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
+# =============================================================================
+# Отредактируй -> Gemini (image editing)
+# =============================================================================
+
 async def handle_edit_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
     processing_msg = await message.reply("Редактирую картинку... ✏️")
@@ -246,15 +250,15 @@ async def handle_edit_command(message: types.Message):
         # 4. Запрос к Gemini image-generation
         def sync_edit():
             return image_model.generate_content(
-                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
-                generation_config={"response_modalities": ["IMAGE", "TEXT"]}
+                [edit_prompt, {"mime_type": "image/png", "data": image_bytes}],
+                generation_config={"response_modalities": ["TEXT", "IMAGE"]}
             )
 
         response = await asyncio.to_thread(sync_edit)
 
         # 5. Логируем все части ответа
         for idx, part in enumerate(response.candidates[0].content.parts):
-            logging.info(f"[EDIT] Part {idx}: {part}")
+            logging.info(f"[EDIT] Part {idx}: type={type(part)}, keys={dir(part)}")
 
         # 6. Пытаемся достать картинку
         image_data = None
@@ -262,17 +266,33 @@ async def handle_edit_command(message: types.Message):
             if getattr(part, "inline_data", None) is not None:
                 image_data = part.inline_data.data
                 break
+            elif getattr(part, "data", None) is not None:
+                image_data = part.data
+                break
+
+        # fallback: иногда байты лежат в raw_response
+        if not image_data and hasattr(response, "_raw_response"):
+            try:
+                # ищем "image/png;base64," внутри raw
+                raw_str = str(response._raw_response)
+                if "image/png;base64," in raw_str:
+                    b64data = raw_str.split("image/png;base64,")[1].split('"')[0]
+                    image_data = base64.b64decode(b64data)
+                    logging.info("[EDIT] Извлекли картинку из raw_response")
+            except Exception as e:
+                logging.warning(f"[EDIT] Не удалось извлечь из raw_response: {e}")
 
         if image_data:
             await processing_msg.delete()
             await save_and_send_gemini(message, image_data)
         else:
-            await processing_msg.edit_text("Не удалось получить изменённое изображение. Лог смотри.")
+            await processing_msg.edit_text("Не удалось получить изменённое изображение (см. логи).")
             logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
 
 # =============================================================================
 # Сгенерируй -> Kandinsky
