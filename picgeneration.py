@@ -250,13 +250,12 @@ async def handle_edit_command(message: types.Message):
         # --- Генерация через image_model ---
         def sync_edit():
             return image_model.generate_content(
-                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
-                generation_config={"response_mime_type": "image/png"}
+                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}]
             )
 
         response = await asyncio.to_thread(sync_edit)
 
-        # --- Поиск картинки в ответе ---
+        # --- Достаём картинку из ответа ---
         image_data = None
         for part in response.candidates[0].content.parts:
             if hasattr(part, "inline_data") and part.inline_data:
