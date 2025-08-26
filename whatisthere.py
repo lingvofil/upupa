@@ -2,11 +2,23 @@ import os
 import random
 import logging
 import requests
-import subprocess
+import re
 from aiogram import types
 from config import bot, API_TOKEN, model
 # Импортируем новый единый список промптов
 from prompts import PROMPTS_MEDIA
+
+def get_custom_prompt(message: types.Message) -> str | None:
+    """
+    Извлекает кастомный промпт из сообщения, который идет после 'чотам'.
+    """
+    text = message.text or message.caption or ""
+    if "чотам" in text.lower():
+        # Используем re.split для регистронезависимого разделения, чтобы отделить команду от промпта
+        parts = re.split(r'чотам', text, 1, re.IGNORECASE)
+        if len(parts) > 1 and parts[1].strip():
+            return parts[1].strip()
+    return None
 
 # Общая функция для скачивания файлов
 async def download_file(file_id: str, file_name: str) -> bool:
@@ -31,14 +43,17 @@ async def download_file(file_id: str, file_name: str) -> bool:
         return False
 
 # Общая функция анализа для всех медиа
-async def analyze_media(file_path: str, mime_type: str) -> str:
+async def analyze_media(file_path: str, mime_type: str, custom_prompt: str | None = None) -> str:
     """Анализирует медиафайл и возвращает текстовое описание."""
     try:
         with open(file_path, "rb") as media_file:
             media_data = media_file.read()
 
-        # Используем единый список промптов
-        content_prompt = random.choice(PROMPTS_MEDIA)
+        # Используем кастомный промпт если он есть, иначе случайный
+        if custom_prompt:
+            content_prompt = custom_prompt
+        else:
+            content_prompt = random.choice(PROMPTS_MEDIA)
         
         contents = [
             {"mime_type": mime_type, "data": media_data},
@@ -67,7 +82,8 @@ async def process_audio_description(message: types.Message) -> tuple[bool, str]:
         if not await download_file(file_id, file_name):
             return False, "Не удалось загрузить аудио."
         try:
-            description = await analyze_media(file_name, mime_type)
+            custom_prompt = get_custom_prompt(message)
+            description = await analyze_media(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -94,7 +110,8 @@ async def process_video_description(message: types.Message) -> tuple[bool, str]:
         if not await download_file(file_id, file_name):
             return False, "Не удалось загрузить видео."
         try:
-            description = await analyze_media(file_name, mime_type)
+            custom_prompt = get_custom_prompt(message)
+            description = await analyze_media(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -122,7 +139,8 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
         if not await download_file(file_id, file_name):
             return False, "Не удалось загрузить картинку."
         try:
-            description = await analyze_media(file_name, mime_type)
+            custom_prompt = get_custom_prompt(message)
+            description = await analyze_media(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -150,7 +168,8 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
         if not await download_file(file_id, file_name):
             return False, "Не удалось загрузить гифку."
         try:
-            description = await analyze_media(file_name, mime_type)
+            custom_prompt = get_custom_prompt(message)
+            description = await analyze_media(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -183,7 +202,8 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
         if not await download_file(file_id, file_name):
             return False, "Не удалось загрузить стикер."
         try:
-            description = await analyze_media(file_name, mime_type)
+            custom_prompt = get_custom_prompt(message)
+            description = await analyze_media(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -198,18 +218,18 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
     Обработка текста по команде 'чотам'
     """
     try:
-        # Получаем текст для анализа
-        if message.reply_to_message and message.reply_to_message.text:
-            text_to_analyze = message.reply_to_message.text
+        # Текст для анализа должен быть в отвеченном сообщении
+        if not (message.reply_to_message and message.reply_to_message.text):
+            return False, "Для анализа текста ответьте на сообщение командой 'чотам'."
+        
+        text_to_analyze = message.reply_to_message.text
+        custom_prompt = get_custom_prompt(message)
+        
+        # Выбираем промпт
+        if custom_prompt:
+            content_prompt = custom_prompt
         else:
-            # Убираем "чотам" из текста сообщения
-            text_to_analyze = message.text.replace("чотам", "").strip()
-        
-        if not text_to_analyze:
-            return False, "Нет текста для анализа."
-        
-        # Используем единый список промптов для анализа текста
-        content_prompt = random.choice(PROMPTS_MEDIA)
+            content_prompt = random.choice(PROMPTS_MEDIA)
         
         # Формируем запрос для анализа текста
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
@@ -239,6 +259,7 @@ async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str
         return await process_gif_whatisthere(message)
     elif target_message.sticker:
         return await process_sticker_whatisthere(message)
+    # Проверяем, есть ли текст для анализа (в реплае или в самом сообщении, если нет реплая)
     elif target_message.text or (message.text and "чотам" in message.text.lower()):
         return await process_text_whatisthere(message)
     else:
