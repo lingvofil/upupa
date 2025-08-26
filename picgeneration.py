@@ -215,6 +215,7 @@ async def handle_redraw_command(message: types.Message):
 
 # ✨ Редактирование изображения через Gemini
 async def handle_edit_command(message: types.Message):
+    processing_msg = None
     try:
         logging.info("[EDIT] Получен запрос на редактирование изображения")
 
@@ -222,6 +223,7 @@ async def handle_edit_command(message: types.Message):
         processing_msg = await message.reply("Применяю магию...")
 
         # Получаем фото
+        file_id = None
         if message.photo:
             file_id = message.photo[-1].file_id
         elif message.document:
@@ -231,7 +233,8 @@ async def handle_edit_command(message: types.Message):
                 file_id = message.reply_to_message.photo[-1].file_id
             else:
                 file_id = message.reply_to_message.document.file_id
-        else:
+        
+        if not file_id:
             await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
             return
 
@@ -250,32 +253,26 @@ async def handle_edit_command(message: types.Message):
 
         logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
 
-        prompt = message.caption.replace("отредактируй", "").strip() if message.caption else ""
-        if not prompt and message.text:
-            prompt = message.text.replace("отредактируй", "").strip()
+        prompt = ""
+        if message.caption:
+            prompt = message.caption.replace("отредактируй", "", 1).strip()
+        elif message.text:
+            prompt = message.text.replace("отредактируй", "", 1).strip()
 
         def sync_edit():
-            # ИСПРАВЛЕНИЕ: Добавлен generation_config для указания модальности ответа
-            return image_model.generate_content(
-                contents=[
-                    {"role": "user", "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
-                    ]}
-                ],
-                generation_config=genai.types.GenerationConfig(
-                    response_modalities=['IMAGE', 'TEXT']
-                )
-            )
+            # ИСПРАВЛЕНИЕ: Упрощаем структуру 'contents' и убираем 'generation_config'.
+            # Это позволяет библиотеке самой определить нужный тип запроса.
+            image_part = {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
+            return image_model.generate_content([prompt, image_part])
 
         response = await asyncio.to_thread(sync_edit)
         
         await processing_msg.delete()
+        processing_msg = None
 
         image_found = False
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
             for idx, part in enumerate(response.candidates[0].content.parts):
-                logging.info(f"[EDIT] Part {idx}: {part}")
                 if hasattr(part, "inline_data") and part.inline_data:
                     image_data = part.inline_data.data
                     image_bytes_out = base64.b64decode(image_data)
@@ -291,8 +288,7 @@ async def handle_edit_command(message: types.Message):
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
-        # Проверяем, существует ли processing_msg перед тем, как его использовать
-        if 'processing_msg' in locals() and processing_msg:
+        if processing_msg:
             await processing_msg.delete()
         await message.reply("Произошла ошибка при редактировании изображения.")
 
