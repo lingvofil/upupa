@@ -214,10 +214,10 @@ async def handle_redraw_command(message: types.Message):
 
 async def handle_edit_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    processing_msg = await message.reply("Редактирую картинку...")
+    processing_msg = await message.reply("Редактирую изображение...")
 
     try:
-        # --- Определяем картинку ---
+        # Получаем изображение
         photo = None
         if message.photo:
             photo = message.photo[-1]
@@ -236,48 +236,39 @@ async def handle_edit_command(message: types.Message):
 
         image_bytes = await download_telegram_image(bot, photo)
 
-        # --- Определяем текст изменений ---
-        edit_prompt = None
+        # Извлекаем текст изменений
         if message.text.lower().startswith("отредактируй "):
             edit_prompt = message.text[len("отредактируй "):].strip()
-        elif message.text.lower().strip() == "отредактируй" and message.reply_to_message:
-            edit_prompt = message.reply_to_message.caption or message.reply_to_message.text
+        else:
+            edit_prompt = "Отредактируй это изображение."
 
-        if not edit_prompt:
-            await processing_msg.edit_text("Что именно нужно отредактировать? Напиши после команды.")
-            return
-
-        # --- Генерация через image_model ---
+        # Синхронный вызов Gemini image model
         def sync_edit():
             return image_model.generate_content(
                 [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
-                generation_config=genai.types.GenerationConfig(
-                    response_modalities=["TEXT", "IMAGE"]
-                )
+                generation_config={
+                    "response_modalities": ["TEXT", "IMAGE"]
+                }
             )
 
         response = await asyncio.to_thread(sync_edit)
 
-        # --- Достаём картинку из ответа ---
+        # Обработка результата
         image_data = None
         for part in response.candidates[0].content.parts:
-            if hasattr(part, "inline_data") and part.inline_data:
-                raw_data = part.inline_data.data
-                if isinstance(raw_data, str):
-                    image_data = base64.b64decode(raw_data)
-                elif isinstance(raw_data, bytes):
-                    image_data = raw_data
+            if part.inline_data is not None:
+                image_data = part.inline_data.data
+                break
 
         if image_data:
             await processing_msg.delete()
             await save_and_send_gemini(message, image_data)
         else:
-            await processing_msg.edit_text("Gemini не вернул изображение при редактировании.")
+            await processing_msg.edit_text("Не удалось получить изменённое изображение.")
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
 
 
 # =============================================================================
