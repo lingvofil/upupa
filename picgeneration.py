@@ -250,7 +250,10 @@ async def handle_edit_command(message: types.Message):
         # --- Генерация через image_model ---
         def sync_edit():
             return image_model.generate_content(
-                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}]
+                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
+                generation_config=genai.types.GenerationConfig(
+                    response_modalities=["TEXT", "IMAGE"]
+                )
             )
 
         response = await asyncio.to_thread(sync_edit)
@@ -272,8 +275,9 @@ async def handle_edit_command(message: types.Message):
             await processing_msg.edit_text("Gemini не вернул изображение при редактировании.")
 
     except Exception as e:
-        logging.error(f"Ошибка в handle_edit_command: {e}", exc_info=True)
+        logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
 
 
 # =============================================================================
