@@ -194,7 +194,8 @@ async def handle_redraw_command(message: types.Message):
             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
             return
         image_bytes = await download_telegram_image(bot, photo)
-        detailed_prompt = "Опиши детально все, что видишь..."
+        detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
+Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
         def sync_describe():
             return model.generate_content([
                 detailed_prompt,
