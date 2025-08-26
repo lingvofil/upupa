@@ -81,7 +81,7 @@ from search import (
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
 from picgeneration import handle_image_generation_command, handle_pun_image_command, handle_redraw_command
-
+from gemini_generation import handle_gemini_generation_command
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
     handle_current_weather_command, 
@@ -468,6 +468,18 @@ async def add_text_to_image(message: types.Message):
 )
 async def generate_image(message: types.Message):
     await handle_image_generation_command(message)
+    
+@router.message(
+    lambda message: (
+        message.from_user.id not in BLOCKED_USERS and
+        message.text and (
+            message.text.lower().startswith("сгенерируй") or
+            (message.text.lower().strip() == "сгенерируй" and message.reply_to_message)
+        )
+    )
+)
+async def generate_image_gemini(message: types.Message):
+    await handle_gemini_generation_command(message)
 
 @router.message(
     lambda message: (
