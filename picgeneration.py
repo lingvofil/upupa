@@ -222,7 +222,7 @@ async def handle_edit_command(message: types.Message):
     processing_msg = await message.reply("Редактирую картинку...")
 
     try:
-        # 1. Находим фото (или в сообщении, или в reply)
+        # 1. Находим фото
         photo = None
         if message.photo:
             photo = message.photo[-1]
@@ -239,33 +239,31 @@ async def handle_edit_command(message: types.Message):
         image_bytes = await download_telegram_image(bot, photo)
         logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
 
-        # 3. Достаём описание (что изменить)
+        # 3. Достаём описание
         if message.text.lower().startswith("отредактируй "):
             edit_prompt = message.text[len("отредактируй "):].strip()
         else:
             edit_prompt = "Отредактируй это изображение"
 
-        # 4. Синхронный вызов Gemini
+        # 4. Вызов Gemini
         def sync_edit():
             return image_model.generate_content(
-                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
-                response_modalities=["TEXT", "IMAGE"]
+                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}]
             )
 
         response = await asyncio.to_thread(sync_edit)
 
-        # 5. Логируем структуру ответа
+        # 5. Логируем части
         for idx, part in enumerate(response.candidates[0].content.parts):
             logging.info(f"[EDIT] Part {idx}: {type(part)}, keys={dir(part)}")
 
         # 6. Извлекаем картинку
         image_data = None
         for part in response.candidates[0].content.parts:
-            if hasattr(part, "inline_data") and part.inline_data:
-                if hasattr(part.inline_data, "data") and part.inline_data.data:
-                    image_data = part.inline_data.data
-                    logging.info("[EDIT] Извлекли картинку из inline_data")
-                    break
+            if getattr(part, "inline_data", None) and getattr(part.inline_data, "data", None):
+                image_data = part.inline_data.data
+                logging.info("[EDIT] Извлекли картинку из inline_data")
+                break
 
         if not image_data:
             logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
