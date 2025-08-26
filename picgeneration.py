@@ -151,11 +151,25 @@ async def handle_pun_image_command(message: types.Message):
         def sync_call():
             return model.generate_content(pun_prompt).text.strip()
         pun_word = await asyncio.to_thread(sync_call)
+        
         parts = pun_word.split('=')
-        final_word = parts[1].strip() if len(parts) == 2 else pun_word
-        status, data = await process_gemini_generation(parts[0] if len(parts) == 2 else pun_word)
+        
+        if len(parts) != 2:
+            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+            return
+
+        source_words = parts[0].strip()
+        final_word = parts[1].strip()
+
+        # ИЗМЕНЕНИЕ: Создаем промпт для генерации изображения, который описывает концепцию,
+        # но явно запрещает добавлять текст, чтобы избежать наложения.
+        image_gen_prompt = f"Нарисуй сюрреалистичное изображение, которое является визуальной метафорой для слова '{final_word}', образованного из '{source_words}'. Изображение не должно содержать никаких букв или текста."
+        
+        status, data = await process_gemini_generation(image_gen_prompt)
+
         if status == 'SUCCESS':
             image_data = data['image_data']
+            # Накладываем на чистое изображение только итоговое слово
             modified_path = _overlay_text_on_image(image_data, final_word)
             await message.reply_photo(FSInputFile(modified_path))
             os.remove(modified_path)
@@ -165,6 +179,7 @@ async def handle_pun_image_command(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
 
 async def handle_image_generation_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
