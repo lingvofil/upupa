@@ -7,12 +7,11 @@ from io import BytesIO
 from aiogram import types
 from PIL import Image
 
-# Импортируем модель Gemini и бот из конфига
-from config import model, bot 
+# V-- ИМПОРТИРУЕМ СПЕЦИАЛЬНУЮ МОДЕЛЬ ДЛЯ ГЕНЕРАЦИИ КАРТИНОК --V
+from config import image_model, bot 
 from prompts import actions
 
-# Эта функция у вас уже может быть в другом модуле, 
-# если да - импортируйте ее оттуда. Если нет - можно оставить здесь.
+# ... функция save_and_send_generated_image ...
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
     """Отправляет данные изображения пользователю как фото."""
     try:
@@ -22,6 +21,7 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
         logging.error(f"Ошибка при отправке фото от Gemini: {e}")
         await message.reply("Не смог отправить картинку, что-то пошло не так.")
 
+
 async def process_gemini_generation(prompt: str):
     """
     Основная логика генерации изображения через Gemini API.
@@ -30,15 +30,14 @@ async def process_gemini_generation(prompt: str):
     try:
         logging.info(f"Запрос к Gemini с промптом: {prompt}")
         
-        # Запускаем синхронную функцию генерации в отдельном потоке, чтобы не блокировать бота
+        # Теперь используем специальную модель image_model напрямую, это более правильно
         response = await asyncio.to_thread(
-            model.generate_content,
+            image_model.generate_content, # <-- ИЗМЕНЕНО
             contents=prompt,
             generation_config={
                 'response_modalities': ['TEXT', 'IMAGE']
-            },
-            # Указываем нужную модель явно
-            model="models/gemini-2.0-flash-preview-image-generation"
+            }
+            # Больше не нужно указывать модель здесь в параметрах
         )
         
         image_data = None
