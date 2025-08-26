@@ -16,7 +16,7 @@ from prompts import (
     PROMPTS_TEXT, PROMPTS_DICT, get_available_prompts,
     get_prompts_list_text, actions, get_prompt_by_name,
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
-    KEYWORDS, CUSTOM_PROMPT_TEMPLATE # <-- ДОБАВЛЕНО
+    KEYWORDS, CUSTOM_PROMPT_TEMPLATE
 )
 # Функции для извлечения сообщений
 from lexicon_settings import (save_user_message,
@@ -127,11 +127,8 @@ async def handle_set_prompt_command(message: types.Message):
         reply_message = f"{command_part.capitalize()} в здании."
     else:
         # 2. Если не готовый - это кастомный промпт
-        # <-- НАЧАЛО ИЗМЕНЕНИЙ -->
-        # Собираем полный промпт из шаблона и текста пользователя
         full_custom_prompt = CUSTOM_PROMPT_TEMPLATE.format(personality=command_part)
         current_settings["prompt"] = full_custom_prompt
-        # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
         current_settings["prompt_name"] = "кастомный"
         current_settings["prompt_type"] = "custom"
         reply_message = "Пошел нахуй! Ладно, принято"
@@ -255,13 +252,13 @@ async def process_general_message(message: types.Message):
         await message.reply(response)
         return
 
-    if current_settings.get("dialog_enabled", True):
-        reaction_sent = await process_random_reactions(
-            message, model, save_user_message, track_message_statistics,
-            add_chat, chat_settings, save_chat_settings
-        )
-        if reaction_sent:
-            return
+    # Вызываем обработчик случайных реакций, который теперь внутри себя проверяет, включены ли они
+    reaction_sent = await process_random_reactions(
+        message, model, save_user_message, track_message_statistics,
+        add_chat, chat_settings, save_chat_settings
+    )
+    if reaction_sent:
+        return
 
     logging.info(f"Сообщение от {message.from_user.full_name} в чате {chat_id} не вызвало реакции: '{message.text}'")
 
@@ -301,10 +298,14 @@ async def _create_user_style_prompt(messages: list, display_name: str) -> str:
 
 
 def update_chat_settings(chat_id: str) -> None:
+    """Инициализирует настройки для нового чата, если они отсутствуют."""
     if chat_id not in chat_settings:
         chat_settings[chat_id] = {
-            "dialog_enabled": True, "prompt": PROMPTS_DICT["врач"],
-            "prompt_name": "летописец", "prompt_source": "daily"
+            "dialog_enabled": True, 
+            "reactions_enabled": True, # <-- ДОБАВЛЕНО
+            "prompt": PROMPTS_DICT["врач"],
+            "prompt_name": "летописец", 
+            "prompt_source": "daily"
         }
 
 def get_current_chat_prompt(chat_id: str) -> tuple:

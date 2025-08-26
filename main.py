@@ -92,7 +92,7 @@ from talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
     handle_set_prompt_command,
-    handle_set_participant_prompt_command, # <-- ДОБАВЛЕНО
+    handle_set_participant_prompt_command,
     handle_change_prompt_randomly_command,
     handle_poem_command,
     process_general_message
@@ -129,6 +129,9 @@ from distortion import is_distortion_command, handle_distortion_request
 
 # ================== БЛОК РАССЫЛКИ ==================
 from broadcast import handle_broadcast_command, is_broadcast_command
+
+# ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ (НОВОЕ) ==================
+from interactive_settings import send_settings_menu, handle_settings_callback
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 router.message.middleware(PrivateRateLimitMiddleware())
@@ -189,6 +192,16 @@ async def handle_chooumeesh(message: types.Message):
 @router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)
 async def handle_broadcast(message: types.Message):
     await handle_broadcast_command(message)
+
+# ================== НАЧАЛО БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК (НОВОЕ) ==================
+@router.message(F.text.lower() == "упупа настройки")
+async def settings_command_handler(message: types.Message):
+    await send_settings_menu(message)
+
+@router.callback_query(F.data.startswith("settings:"))
+async def settings_callback_handler(query: types.CallbackQuery):
+    await handle_settings_callback(query)
+# ================== КОНЕЦ БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК ==================
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
 async def leave_chat(message: types.Message):
@@ -535,18 +548,13 @@ async def list_prompts_command(message: types.Message):
 async def current_prompt_command(message: types.Message):
     await handle_current_prompt_command(message)
 
-# <-- НАЧАЛО ИЗМЕНЕНИЙ -->
-# Новый, более конкретный хэндлер для имитации участников
 @router.message(F.text.lower().startswith("промпт участник "))
 async def set_participant_prompt_command(message: types.Message):
     await handle_set_participant_prompt_command(message)
 
-# Старый хэндлер теперь обрабатывает только готовые и кастомные промпты
-# Он должен идти ПОСЛЕ более конкретного хэндлера
 @router.message(F.text.lower().startswith("промпт "))
 async def set_prompt_command(message: types.Message):
     await handle_set_prompt_command(message)
-# <-- КОНЕЦ ИЗМЕНЕНИЙ -->
 
 @router.message(F.text.lower() == "поменяй промпт")
 async def change_prompt_randomly_command(message: types.Message):
