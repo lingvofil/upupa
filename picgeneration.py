@@ -142,7 +142,11 @@ async def process_image_generation(prompt):
 async def handle_pun_image_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Генерирую хуйню...")
-    pun_prompt = """составь каламбурное сочетание слов..."""
+    pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
+    Совпадать должны как минимум две буквы. 
+    Не комментируй генерацию.
+    Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
+    Например: "манго+голубь = манголубь" """
     try:
         def sync_call():
             return model.generate_content(pun_prompt).text.strip()
