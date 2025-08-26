@@ -16,7 +16,7 @@ from aiogram import types
 from aiogram.types import FSInputFile
 
 # Убедитесь, что все зависимости импортированы
-from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model
+from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
 from gemini_generation import process_gemini_generation, save_and_send_generated_image as save_and_send_gemini
@@ -232,7 +232,7 @@ async def handle_edit_command(message: types.Message):
         # 2. Скачиваем картинку
         file = await bot.get_file(file_id)
         file_path = file.file_path
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
         logging.info(f"[EDIT] Загружаем изображение с URL: {file_url}")
 
         async with aiohttp.ClientSession() as session:
