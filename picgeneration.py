@@ -215,43 +215,67 @@ async def handle_redraw_command(message: types.Message):
 async def handle_edit_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Редактирую картинку...")
+
     try:
+        # --- Определяем картинку ---
         photo = None
         if message.photo:
             photo = message.photo[-1]
         elif message.document:
             photo = message.document
         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+            photo = (
+                message.reply_to_message.photo[-1]
+                if message.reply_to_message.photo
+                else message.reply_to_message.document
+            )
+
         if not photo:
             await processing_msg.edit_text("Изображение для редактирования не найдено.")
             return
+
         image_bytes = await download_telegram_image(bot, photo)
-        if message.caption and message.caption.lower().startswith("отредактируй"):
-            edit_text = message.caption[len("отредактируй"):].strip()
-        elif message.text and message.text.lower().startswith("отредактируй"):
-            edit_text = message.text[len("отредактируй"):].strip()
-        else:
-            await processing_msg.edit_text("Опиши, что нужно изменить после команды 'отредактируй'.")
+
+        # --- Определяем текст изменений ---
+        edit_prompt = None
+        if message.text.lower().startswith("отредактируй "):
+            edit_prompt = message.text[len("отредактируй "):].strip()
+        elif message.text.lower().strip() == "отредактируй" and message.reply_to_message:
+            edit_prompt = message.reply_to_message.caption or message.reply_to_message.text
+
+        if not edit_prompt:
+            await processing_msg.edit_text("Что именно нужно отредактировать? Напиши после команды.")
             return
+
+        # --- Генерация через image_model ---
         def sync_edit():
-            return model.generate_content([
-                edit_text,
-                {"mime_type": "image/jpeg", "data": image_bytes}
-            ], generation_config={"response_modalities": ["TEXT", "IMAGE"]})
+            return image_model.generate_content(
+                [edit_prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
+                generation_config={"response_mime_type": "image/png"}
+            )
+
         response = await asyncio.to_thread(sync_edit)
+
+        # --- Поиск картинки в ответе ---
         image_data = None
         for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
-                image_data = part.inline_data.data
+            if hasattr(part, "inline_data") and part.inline_data:
+                raw_data = part.inline_data.data
+                if isinstance(raw_data, str):
+                    image_data = base64.b64decode(raw_data)
+                elif isinstance(raw_data, bytes):
+                    image_data = raw_data
+
         if image_data:
             await processing_msg.delete()
-            await save_and_send_gemini(message, base64.b64decode(image_data))
+            await save_and_send_gemini(message, image_data)
         else:
-            await processing_msg.edit_text("Не удалось отредактировать изображение.")
+            await processing_msg.edit_text("Gemini не вернул изображение при редактировании.")
+
     except Exception as e:
         logging.error(f"Ошибка в handle_edit_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
 
 # =============================================================================
 # Сгенерируй -> Kandinsky
