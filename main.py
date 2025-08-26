@@ -464,7 +464,9 @@ async def describe_image(message: types.Message):
     )
 )
 async def edit_image(message: types.Message):
+    # теперь handle_edit_command сам берёт bot из message
     await handle_edit_command(message)
+
 
 @router.message(
     lambda message: (
