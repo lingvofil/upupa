@@ -135,7 +135,7 @@ async def process_image_generation(prompt):
         return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 # =============================================================================
-# Каламбур, Нарисуй, Перерисуй -> Gemini
+# Каламбур, Нарисуй, Перерисуй, Отредактируй -> Gemini
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
@@ -194,7 +194,8 @@ async def handle_redraw_command(message: types.Message):
             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
             return
         image_bytes = await download_telegram_image(bot, photo)
-        detailed_prompt = "Опиши детально все, что видишь..."
+        detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
+Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
         def sync_describe():
             return model.generate_content([
                 detailed_prompt,
@@ -209,6 +210,47 @@ async def handle_redraw_command(message: types.Message):
             await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
     except Exception as e:
         logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
+        await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
+async def handle_edit_command(message: types.Message):
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    processing_msg = await message.reply("Редактирую картинку...")
+    try:
+        photo = None
+        if message.photo:
+            photo = message.photo[-1]
+        elif message.document:
+            photo = message.document
+        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+        if not photo:
+            await processing_msg.edit_text("Изображение для редактирования не найдено.")
+            return
+        image_bytes = await download_telegram_image(bot, photo)
+        if message.caption and message.caption.lower().startswith("отредактируй"):
+            edit_text = message.caption[len("отредактируй"):].strip()
+        elif message.text and message.text.lower().startswith("отредактируй"):
+            edit_text = message.text[len("отредактируй"):].strip()
+        else:
+            await processing_msg.edit_text("Опиши, что нужно изменить после команды 'отредактируй'.")
+            return
+        def sync_edit():
+            return model.generate_content([
+                edit_text,
+                {"mime_type": "image/jpeg", "data": image_bytes}
+            ], generation_config={"response_modalities": ["TEXT", "IMAGE"]})
+        response = await asyncio.to_thread(sync_edit)
+        image_data = None
+        for part in response.candidates[0].content.parts:
+            if part.inline_data is not None:
+                image_data = part.inline_data.data
+        if image_data:
+            await processing_msg.delete()
+            await save_and_send_gemini(message, base64.b64decode(image_data))
+        else:
+            await processing_msg.edit_text("Не удалось отредактировать изображение.")
+    except Exception as e:
+        logging.error(f"Ошибка в handle_edit_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # =============================================================================
