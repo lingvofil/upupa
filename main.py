@@ -80,7 +80,13 @@ from search import (
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
-from picgeneration import handle_image_generation_command, handle_pun_image_command, handle_redraw_command, handle_kandinsky_generation_command
+from picgeneration import (
+    handle_image_generation_command, 
+    handle_pun_image_command, 
+    handle_redraw_command, 
+    handle_kandinsky_generation_command, 
+    handle_edit_command
+)
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
     handle_current_weather_command, 
@@ -492,6 +498,19 @@ async def generate_image_kandinsky(message: types.Message):
 )
 async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
+
+@router.message(
+    lambda message: (
+        (
+            (message.photo and message.caption and "отредактируй" in message.caption.lower()) or
+            (message.document and message.caption and "отредактируй" in message.caption.lower()) or
+            (message.text and "отредактируй" in message.text.lower() and message.reply_to_message and 
+             (message.reply_to_message.photo or message.reply_to_message.document))
+        ) and message.from_user.id not in BLOCKED_USERS
+    )
+)
+async def edit_image(message: types.Message):
+    await handle_edit_command(message)
 
 @router.message(
     lambda message: message.text and 
