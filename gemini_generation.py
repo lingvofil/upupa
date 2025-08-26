@@ -14,12 +14,19 @@ from prompts import actions
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
     """
     Обрабатывает и отправляет данные изображения пользователю как фото.
-    Добавлена обработка через PIL для предотвращения ошибки IMAGE_PROCESS_FAILED.
+    Добавлена обработка через PIL и дополнительная проверка на ошибки распознавания.
     """
     try:
-        # Создаем объект изображения из байтов
-        image = Image.open(BytesIO(image_data))
-        
+        # Вложенный try-except для отлова ошибки "cannot identify image file"
+        try:
+            # Создаем объект изображения из байтов
+            image = Image.open(BytesIO(image_data))
+        except Exception as pil_error:
+            logging.error(f"Pillow не смог распознать изображение: {pil_error}")
+            logging.error(f"Первые 100 байт данных, которые не удалось распознать: {image_data[:100]}")
+            await message.reply("Не удалось обработать сгенерированное изображение. Похоже, оно пришло в некорректном формате от API.")
+            return
+
         # Сохраняем изображение в буфер в формате PNG, чтобы "нормализовать" его
         output_buffer = BytesIO()
         output_buffer.name = 'gemini_image.png'
@@ -31,7 +38,7 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
         await message.reply_photo(buffered_image, caption=caption)
         
     except Exception as e:
-        logging.error(f"Ошибка при отправке фото от Gemini: {e}")
+        logging.error(f"Критическая ошибка при отправке фото от Gemini: {e}")
         await message.reply("Не смог отправить картинку, что-то пошло не так.")
 
 
