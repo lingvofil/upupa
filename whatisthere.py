@@ -51,9 +51,10 @@ async def analyze_media(file_path: str, mime_type: str, custom_prompt: str | Non
 
         # Используем кастомный промпт если он есть, иначе случайный
         if custom_prompt:
-            content_prompt = custom_prompt
+            content_prompt = f"{custom_prompt}, не более 80 слов"
         else:
-            content_prompt = random.choice(PROMPTS_MEDIA)
+            base_prompt = random.choice(PROMPTS_MEDIA)
+            content_prompt = f"{base_prompt}, не более 80 слов"
         
         contents = [
             {"mime_type": mime_type, "data": media_data},
@@ -227,9 +228,10 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         
         # Выбираем промпт
         if custom_prompt:
-            content_prompt = custom_prompt
+            content_prompt = f"{custom_prompt}, не более 80 слов"
         else:
-            content_prompt = random.choice(PROMPTS_MEDIA)
+            base_prompt = random.choice(PROMPTS_MEDIA)
+            content_prompt = f"{base_prompt}, не более 80 слов"
         
         # Формируем запрос для анализа текста
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
