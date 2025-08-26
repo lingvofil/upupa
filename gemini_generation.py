@@ -5,6 +5,7 @@ import base64
 from io import BytesIO
 
 from aiogram import types
+from aiogram.exceptions import TelegramBadRequest
 from PIL import Image
 
 # V-- ИМПОРТИРУЕМ СПЕЦИАЛЬНУЮ МОДЕЛЬ ДЛЯ ГЕНЕРАЦИИ КАРТИНОК --V
@@ -14,29 +15,35 @@ from prompts import actions
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
     """
     Обрабатывает и отправляет данные изображения пользователю как фото.
-    Добавлена обработка через PIL и дополнительная проверка на ошибки распознавания.
+    Сначала пытается отправить "как есть", при ошибке - обрабатывает через Pillow.
     """
     try:
-        # Вложенный try-except для отлова ошибки "cannot identify image file"
-        try:
-            # Создаем объект изображения из байтов
-            image = Image.open(BytesIO(image_data))
-        except Exception as pil_error:
-            logging.error(f"Pillow не смог распознать изображение: {pil_error}")
-            logging.error(f"Первые 100 байт данных, которые не удалось распознать: {image_data[:100]}")
-            await message.reply("Не удалось обработать сгенерированное изображение. Похоже, оно пришло в некорректном формате от API.")
-            return
+        # --- Попытка 1: Отправить необработанные данные напрямую ---
+        logging.info("Попытка №1: отправка необработанных данных изображения...")
+        raw_buffered_image = types.BufferedInputFile(image_data, filename="gemini_image_raw.png")
+        await message.reply_photo(raw_buffered_image, caption=caption)
+        logging.info("Необработанные данные успешно отправлены.")
 
-        # Сохраняем изображение в буфер в формате PNG, чтобы "нормализовать" его
-        output_buffer = BytesIO()
-        output_buffer.name = 'gemini_image.png'
-        image.save(output_buffer, 'PNG')
-        output_buffer.seek(0) # Перемещаем курсор в начало файла
+    except TelegramBadRequest:
+        logging.warning("Попытка №1 не удалась. Telegram не смог обработать изображение. Запускаю попытку №2 с обработкой через Pillow.")
         
-        # Отправляем обработанное изображение из буфера
-        buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image.png")
-        await message.reply_photo(buffered_image, caption=caption)
-        
+        # --- Попытка 2: Обработка через Pillow как запасной вариант ---
+        try:
+            image = Image.open(BytesIO(image_data))
+            
+            output_buffer = BytesIO()
+            image.save(output_buffer, 'PNG')
+            output_buffer.seek(0)
+            
+            processed_buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image_processed.png")
+            await message.reply_photo(processed_buffered_image, caption=caption)
+            logging.info("Обработанное через Pillow изображение успешно отправлено.")
+
+        except Exception as pil_error:
+            logging.error(f"Попытка №2 (Pillow) также не удалась: {pil_error}")
+            logging.error(f"Первые 100 байт данных, которые не удалось распознать: {image_data[:100]}")
+            await message.reply("Не удалось обработать сгенерированное изображение. API вернуло данные в неизвестном формате.")
+            
     except Exception as e:
         logging.error(f"Критическая ошибка при отправке фото от Gemini: {e}")
         await message.reply("Не смог отправить картинку, что-то пошло не так.")
