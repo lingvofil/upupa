@@ -260,10 +260,10 @@ async def handle_edit_command(message: types.Message):
             prompt = message.text.replace("отредактируй", "", 1).strip()
 
         def sync_edit():
-            # ИСПРАВЛЕНИЕ: Упрощаем структуру 'contents' и убираем 'generation_config'.
-            # Это позволяет библиотеке самой определить нужный тип запроса.
-            image_part = {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
-            return image_model.generate_content([prompt, image_part])
+            # ИСПРАВЛЕНИЕ: Самая строгая и явная структура запроса.
+            # Мы создаем объект PIL Image, чтобы библиотека точно знала, с чем работает.
+            img = Image.open(BytesIO(image_bytes))
+            return image_model.generate_content([prompt, img])
 
         response = await asyncio.to_thread(sync_edit)
         
@@ -271,17 +271,33 @@ async def handle_edit_command(message: types.Message):
         processing_msg = None
 
         image_found = False
-        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-            for idx, part in enumerate(response.candidates[0].content.parts):
-                if hasattr(part, "inline_data") and part.inline_data:
-                    image_data = part.inline_data.data
-                    image_bytes_out = base64.b64decode(image_data)
-                    image_found = True
-
-                    output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+        # Ответ теперь может быть в другом формате, ищем изображение в .parts
+        if response.parts:
+            for part in response.parts:
+                if 'image' in part:
+                    # Если нашли, извлекаем и отправляем
+                    edited_image_bytes = BytesIO()
+                    part.image.save(edited_image_bytes, format='PNG')
+                    edited_image_bytes.seek(0)
+                    
+                    output_file = types.BufferedInputFile(edited_image_bytes.read(), filename="edited.png")
                     await message.reply_photo(photo=output_file)
+                    image_found = True
                     break
 
+        if not image_found:
+             # Проверяем старый формат ответа на всякий случай
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                for idx, part in enumerate(response.candidates[0].content.parts):
+                    if hasattr(part, "inline_data") and part.inline_data:
+                        image_data = part.inline_data.data
+                        image_bytes_out = base64.b64decode(image_data)
+                        image_found = True
+
+                        output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+                        await message.reply_photo(photo=output_file)
+                        break
+        
         if not image_found:
             logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
             await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.")
