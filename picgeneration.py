@@ -9,6 +9,7 @@ import logging
 import random
 import textwrap
 import base64
+import google.generativeai as genai
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
