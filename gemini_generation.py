@@ -16,7 +16,7 @@ def is_valid_image_data(data: bytes) -> bool:
     """
     Проверяет, начинаются ли байты с сигнатур известных форматов изображений.
     """
-    if data.startswith(b'\x89PNG') or data.startswith(b'\xff\xd8'):
+    if data.startswith(b'\x89PNG') or data.startswith(b'\xff\xd8') or data.startswith(b'RIFF'):
         return True
     return False
 
@@ -58,20 +58,23 @@ async def process_gemini_generation(prompt: str):
         for part in response.candidates[0].content.parts:
             if hasattr(part, "inline_data") and part.inline_data:
                 mime_type = getattr(part.inline_data, "mime_type", "")
-                if mime_type.startswith("image/"):
-                    raw_data = part.inline_data.data
+                logging.info(f"Gemini вернул MIME-тип: {mime_type}")
+                raw_data = part.inline_data.data
+                if isinstance(raw_data, str):
                     try:
                         image_data = base64.b64decode(raw_data)
                     except Exception:
-                        logging.error("Ошибка декодирования base64. Возможно API уже вернуло бинарные данные.")
-                        image_data = raw_data if isinstance(raw_data, bytes) else None
+                        logging.warning("Ошибка base64-декодирования, пробую как бинарь.")
+                        image_data = raw_data.encode("latin1", errors="ignore")
+                elif isinstance(raw_data, bytes):
+                    image_data = raw_data
             elif hasattr(part, "text") and part.text:
                 text_response += part.text.strip()
 
         if image_data:
             if not is_valid_image_data(image_data):
                 logging.error(f"API вернуло невалидные данные изображения. Первые 100 байт: {image_data[:100]}")
-                return 'FAILURE', {"error": "API сгенерировало некорректные данные, которые не являются изображением."}
+                return 'FAILURE', {"error": "API сгенерировало данные без стандартных сигнатур PNG/JPEG/WebP."}
             logging.info("Изображение от Gemini успешно сгенерировано.")
             return 'SUCCESS', {"image_data": image_data, "caption": text_response}
         elif text_response:
