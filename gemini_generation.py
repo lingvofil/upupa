@@ -12,6 +12,16 @@ from PIL import Image
 from config import image_model, bot 
 from prompts import actions
 
+def is_valid_image_data(data: bytes) -> bool:
+    """
+    Проверяет, начинаются ли байты с сигнатур известных форматов изображений.
+    """
+    # Сигнатура PNG: b'\x89PNG\r\n\x1a\n'
+    # Сигнатура JPEG: b'\xff\xd8'
+    if data.startswith(b'\x89PNG') or data.startswith(b'\xff\xd8'):
+        return True
+    return False
+
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
     """
     Обрабатывает и отправляет данные изображения пользователю как фото.
@@ -76,7 +86,12 @@ async def process_gemini_generation(prompt: str):
                 text_response += part.text.strip()
         
         if image_data:
-            logging.info("Изображение от Gemini успешно сгенерировано.")
+            # *** НОВАЯ ПРОВЕРКА ВАЛИДНОСТИ ДАННЫХ ***
+            if not is_valid_image_data(image_data):
+                logging.error(f"API вернуло невалидные данные изображения. Первые 100 байт: {image_data[:100]}")
+                return 'FAILURE', {"error": "API сгенерировало некорректные данные, которые не являются изображением."}
+            
+            logging.info("Изображение от Gemini успешно сгенерировано и прошло проверку.")
             return 'SUCCESS', {"image_data": image_data, "caption": text_response}
         elif text_response:
             logging.warning(f"Gemini не вернул изображение, но вернул текст (возможно, уточненный промпт): {text_response}")
