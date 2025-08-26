@@ -20,11 +20,11 @@ def is_valid_image_data(data: bytes) -> bool:
         return True
     return False
 
-async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
+async def save_and_send_generated_image(message: types.Message, image_data: bytes):
     try:
         logging.info("Попытка №1: отправка необработанных данных изображения...")
         raw_buffered_image = types.BufferedInputFile(image_data, filename="gemini_image_raw.png")
-        await message.reply_photo(raw_buffered_image, caption=caption)
+        await message.reply_photo(raw_buffered_image)
         logging.info("Необработанные данные успешно отправлены.")
 
     except TelegramBadRequest:
@@ -35,7 +35,7 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
             image.save(output_buffer, 'PNG')
             output_buffer.seek(0)
             processed_buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image_processed.png")
-            await message.reply_photo(processed_buffered_image, caption=caption)
+            await message.reply_photo(processed_buffered_image)
             logging.info("Обработанное через Pillow изображение успешно отправлено.")
         except Exception as pil_error:
             logging.error(f"Pillow не смог обработать: {pil_error}")
@@ -76,7 +76,7 @@ async def process_gemini_generation(prompt: str):
                 logging.error(f"API вернуло невалидные данные изображения. Первые 100 байт: {image_data[:100]}")
                 return 'FAILURE', {"error": "API сгенерировало данные без стандартных сигнатур PNG/JPEG/WebP."}
             logging.info("Изображение от Gemini успешно сгенерировано.")
-            return 'SUCCESS', {"image_data": image_data, "caption": text_response}
+            return 'SUCCESS', {"image_data": image_data}
         elif text_response:
             logging.warning(f"Gemini не вернул изображение, но вернул текст: {text_response}")
             return 'REFINED_PROMPT', {"new_prompt": text_response}
@@ -106,7 +106,7 @@ async def handle_gemini_generation_command(message: types.Message):
 
     if status == 'SUCCESS':
         await processing_message.delete()
-        await save_and_send_generated_image(message, data['image_data'], caption=data.get('caption'))
+        await save_and_send_generated_image(message, data['image_data'])
         return
 
     if status == 'REFINED_PROMPT':
@@ -115,7 +115,7 @@ async def handle_gemini_generation_command(message: types.Message):
         status, data = await process_gemini_generation(new_prompt)
         if status == 'SUCCESS':
             await processing_message.delete()
-            await save_and_send_generated_image(message, data['image_data'], caption=data.get('caption'))
+            await save_and_send_generated_image(message, data['image_data'])
             return
 
     await processing_message.delete()
