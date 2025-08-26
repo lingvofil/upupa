@@ -455,12 +455,16 @@ async def describe_image(message: types.Message):
 
 @router.message(
     lambda message: (
-        (message.photo and message.caption and "добавь" in message.caption.lower()) or 
-        (message.text and "добавь" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
-    ) and message.from_user.id not in BLOCKED_USERS
+        (
+            (message.photo and message.caption and "отредактируй" in message.caption.lower()) or
+            (message.document and message.caption and "отредактируй" in message.caption.lower()) or
+            (message.text and "отредактируй" in message.text.lower() and message.reply_to_message and 
+             (message.reply_to_message.photo or message.reply_to_message.document))
+        ) and message.from_user.id not in BLOCKED_USERS
+    )
 )
-async def add_text_to_image(message: types.Message):
-    await handle_add_text_command(message)
+async def edit_image(message: types.Message):
+    await handle_edit_command(message)
 
 @router.message(
     lambda message: (
@@ -500,25 +504,21 @@ async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
 
 @router.message(
-    lambda message: (
-        (
-            (message.photo and message.caption and "отредактируй" in message.caption.lower()) or
-            (message.document and message.caption and "отредактируй" in message.caption.lower()) or
-            (message.text and "отредактируй" in message.text.lower() and message.reply_to_message and 
-             (message.reply_to_message.photo or message.reply_to_message.document))
-        ) and message.from_user.id not in BLOCKED_USERS
-    )
-)
-async def edit_image(message: types.Message):
-    await handle_edit_command(message)
-
-@router.message(
     lambda message: message.text and 
     message.text.lower().strip() == "скаламбурь" and 
     message.from_user.id not in BLOCKED_USERS
 )
 async def generate_pun_with_image(message: types.Message):
     await handle_pun_image_command(message)
+    
+@router.message(
+    lambda message: (
+        (message.photo and message.caption and "добавь" in message.caption.lower()) or 
+        (message.text and "добавь" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def add_text_to_image(message: types.Message):
+    await handle_add_text_command(message)
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
