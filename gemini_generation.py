@@ -11,12 +11,25 @@ from PIL import Image
 from config import image_model, bot 
 from prompts import actions
 
-# ... функция save_and_send_generated_image ...
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, caption: str = None):
-    """Отправляет данные изображения пользователю как фото."""
+    """
+    Обрабатывает и отправляет данные изображения пользователю как фото.
+    Добавлена обработка через PIL для предотвращения ошибки IMAGE_PROCESS_FAILED.
+    """
     try:
-        buffered_image = types.BufferedInputFile(image_data, filename="gemini_image.png")
+        # Создаем объект изображения из байтов
+        image = Image.open(BytesIO(image_data))
+        
+        # Сохраняем изображение в буфер в формате PNG, чтобы "нормализовать" его
+        output_buffer = BytesIO()
+        output_buffer.name = 'gemini_image.png'
+        image.save(output_buffer, 'PNG')
+        output_buffer.seek(0) # Перемещаем курсор в начало файла
+        
+        # Отправляем обработанное изображение из буфера
+        buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image.png")
         await message.reply_photo(buffered_image, caption=caption)
+        
     except Exception as e:
         logging.error(f"Ошибка при отправке фото от Gemini: {e}")
         await message.reply("Не смог отправить картинку, что-то пошло не так.")
