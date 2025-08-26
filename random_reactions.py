@@ -344,21 +344,27 @@ async def process_random_reactions(message: Message, model, save_user_message, t
     add_chat(message.chat.id, message.chat.title, message.chat.username)    
     
     chat_id = str(message.chat.id)
+    # Инициализируем настройки, если их нет, с новым параметром
     if chat_id not in chat_settings:
-        chat_settings[chat_id] = {"dialog_enabled": True, "prompt": None}
+        chat_settings[chat_id] = {
+            "dialog_enabled": True, 
+            "prompt": None,
+            "reactions_enabled": True # <-- ДОБАВЛЕНО
+        }
         save_chat_settings()
 
-    # >>> ИЗМЕНЕННЫЙ БЛОК: СИТУАТИВНАЯ РЕМАРКА (ВЕРОЯТНОСТЬ 1%) <<<
-    # Ставим эту проверку в самое начало, чтобы она имела приоритет
-    if random.random() < 0.01: # Вероятность 1%
-        # Передаем chat.id (int) и объект модели
+    # <-- НАЧАЛО ИЗМЕНЕНИЙ -->
+    # Проверяем, включены ли реакции в этом чате.
+    # .get() используется для обратной совместимости со старыми записями в chat_settings.json
+    if not chat_settings.get(chat_id, {}).get("reactions_enabled", True):
+        return False # Если реакции выключены, прекращаем обработку
+    # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
+
+    if random.random() < 0.01: 
         situational_reaction = await generate_situational_reaction(message.chat.id, model)
         if situational_reaction:
-            # Отправляем сообщение в чат, а не реплаем
             await message.bot.send_message(message.chat.id, situational_reaction, parse_mode="Markdown")
-            return True  # Реакция отправлена, выходим
-
-    # --- Далее идут остальные реакции без изменений ---
+            return True
 
     if message.from_user.id == 1399269377 and random.random() < 0.3 and message.text:
         success = await generate_insult_for_lis(message, model)
