@@ -135,10 +135,14 @@ from distortion import is_distortion_command, handle_distortion_request
 # ================== БЛОК РАССЫЛКИ ==================
 from broadcast import handle_broadcast_command, is_broadcast_command
 
-# ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ (НОВОЕ) ==================
+# ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
 from interactive_settings import send_settings_menu, handle_settings_callback
+
+# ================== БЛОК КОНТЕНТ-ФИЛЬТРА (НОВОЕ) ==================
+from content_filter import ContentFilterMiddleware
         
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
+router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     """Вспомогательная функция для красивого форматирования статистики."""
