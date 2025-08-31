@@ -590,6 +590,8 @@ async def process_message(message: types.Message):
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
+    from content_filter import load_antispam_settings
+    load_antispam_settings() # <--- Вот она
     bot_statistics.init_db()
     chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
