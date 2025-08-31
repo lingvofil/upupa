@@ -112,7 +112,7 @@ class ContentFilterMiddleware(BaseMiddleware):
                 )
                 await event.answer(
                     f"Пользователь @{event.from_user.username} ({event.from_user.full_name}) "
-                    f"получает временное ограничение на {MUTE_DURATION_SECONDS} секунд. Причина: {reason}."
+                    f"временно идет нахуй на {MUTE_DURATION_SECONDS} секунд. Причина: {reason} и пидорас."
                 )
             except Exception as e:
                 print(f"Не удалось обработать спам от {user_id} в чате {chat_id}: {e}")
