@@ -14,7 +14,7 @@ from config import ADMIN_ID
 MUTE_DURATION_SECONDS = 60
 STOP_WORDS = [
     "халтура", "оплата каждый день", "нужны деньги", "подробности в лс", 
-    "sanya_rf_work", "требуются", "заработок", "работа на дому"
+    "sanya_rf_work", "требуются", "заработок", "подработка", "подработку", "доход", "работа на дому"
 ]
 REPETITION_LIMIT = {
     "max_repetitions": 3,
