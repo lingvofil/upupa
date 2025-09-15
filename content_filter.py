@@ -13,8 +13,9 @@ from config import ADMIN_ID
 # --- НАСТРОЙКИ ФИЛЬТРА ---
 MUTE_DURATION_SECONDS = 60
 STOP_WORDS = [
-    "халтура", "оплата каждый день", "нужны деньги", "подробности в лс", 
-    "sanya_rf_work", "требуются", "заработок", "подработка", "подработку", "доход", "работа на дому"
+    "халтура", "оплата каждый день", "оплата по факту", "нужны деньги", "подробности в лс", 
+    "sanya_rf_work", "требуются", "заработок", "подработка", "подработку", "доход", "работа на дому",
+    "нужна работа"
 ]
 REPETITION_LIMIT = {
     "max_repetitions": 3,
@@ -110,10 +111,10 @@ class ContentFilterMiddleware(BaseMiddleware):
                     permissions=ChatPermissions(can_send_messages=False),
                     until_date=now + mute_duration
                 )
-                await event.answer(
-                    f"Пользователь @{event.from_user.username} ({event.from_user.full_name}) "
-                    f"временно идет нахуй на {MUTE_DURATION_SECONDS} секунд. Причина: {reason} и пидорас."
-                )
+                #await event.answer(
+                    #f"Пользователь @{event.from_user.username} ({event.from_user.full_name}) "
+                    #f"временно идет нахуй на {MUTE_DURATION_SECONDS} секунд. Причина: {reason} и пидорас."
+                #)
             except Exception as e:
                 print(f"Не удалось обработать спам от {user_id} в чате {chat_id}: {e}")
             return
