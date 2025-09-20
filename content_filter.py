@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import asyncio
 from typing import Callable, Dict, Any, Awaitable
 from collections import defaultdict
@@ -13,24 +14,20 @@ from config import ADMIN_ID
 # --- НАСТРОЙКИ ФИЛЬТРА ---
 MUTE_DURATION_SECONDS = 60
 STOP_WORDS = [
-    "халтура", "оплата каждый день", "оплата по факту", "нужны деньги", "подробности в лс", 
+    "халтура", "оплата каждый день", "оплата по факту", "нужны деньги", "подробности в лс",
     "sanya_rf_work", "требуются", "заработок", "подработка", "подработку", "доход", "работа на дому",
     "нужна работа", "в лс", "в личные сообщения", "в личные сообщение", "в личку", "расскажу подробно"
 ]
 REPETITION_LIMIT = {
     "max_repetitions": 3,
-    "time_window": 60 
+    "time_window": 60
 }
 # --- КОНЕЦ НАСТРОЕК ---
 
-# --- УПРАВЛЕНИЕ СОСТОЯНИЕМ ФИЛЬТРА (ИЗМЕНЕНО) ---
-# Имя файла изменено, чтобы отразить новую логику
 ANTISPAM_SETTINGS_FILE = "antispam_enabled.json"
-# Теперь здесь хранятся ID чатов, где фильтр ВКЛЮЧЕН
-ANTISPAM_ENABLED_CHATS = set() 
+ANTISPAM_ENABLED_CHATS = set()
 
 def load_antispam_settings():
-    """Загружает ID чатов с ВКЛЮЧЕННЫМ антиспамом из файла."""
     if os.path.exists(ANTISPAM_SETTINGS_FILE):
         try:
             with open(ANTISPAM_SETTINGS_FILE, "r") as f:
@@ -42,16 +39,31 @@ def load_antispam_settings():
         print("Файл настроек антиспама не найден. Фильтр отключен везде по умолчанию.")
 
 def save_antispam_settings():
-    """Сохраняет ID чатов с ВКЛЮЧЕННЫМ антиспамом в файл."""
     with open(ANTISPAM_SETTINGS_FILE, "w") as f:
         json.dump(list(ANTISPAM_ENABLED_CHATS), f)
-# --- КОНЕЦ БЛОКА УПРАВЛЕНИЯ ---
 
 user_recent_messages = defaultdict(list)
-NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
+
+# Расширенная таблица нормализации: латиница, греческие буквы, похожие символы
+NORMALIZATION_TABLE = str.maketrans({
+    # латиница на кириллицу
+    "a": "а", "A": "А",
+    "e": "е", "E": "Е",
+    "o": "о", "O": "О",
+    "p": "р", "P": "Р",
+    "c": "с", "C": "С",
+    "x": "х", "X": "Х",
+    # греческие варианты
+    "ο": "о",  # греческая омикрон
+    "р": "р",  # иногда копируется, оставим для ясности
+    "с": "с",
+})
 
 def normalize_text(text: str) -> str:
-    return text.lower().translate(NORMALIZATION_TABLE)
+    # Убираем невидимые символы и лишние пробелы, приводим к нижнему регистру с casefold
+    cleaned = re.sub(r"[\u200B-\u200D\uFEFF]", "", text)  # zero-width chars
+    cleaned = re.sub(r"\s+", " ", cleaned)                # схлопываем пробелы
+    return cleaned.casefold().translate(NORMALIZATION_TABLE)
 
 class ContentFilterMiddleware(BaseMiddleware):
     async def __call__(
@@ -60,17 +72,13 @@ class ContentFilterMiddleware(BaseMiddleware):
         event: Message,
         data: Dict[str, Any]
     ) -> Any:
-        
-        # --- ЛОГИКА ИНВЕРТИРОВАНА ---
-        # Теперь фильтр срабатывает, только если ID чата есть в списке ВКЛЮЧЕННЫХ.
-        # Если его нет в списке, просто пропускаем сообщение дальше.
+
         if event.chat.id not in ANTISPAM_ENABLED_CHATS:
             return await handler(event, data)
-        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         if not (event.text or event.caption):
             return await handler(event, data)
-        
+
         if event.from_user.id == ADMIN_ID:
             return await handler(event, data)
 
@@ -80,15 +88,16 @@ class ContentFilterMiddleware(BaseMiddleware):
         now = event.date
         text = event.text or event.caption
         normalized_text = normalize_text(text)
-        
+
         reason = ""
 
-        # Проверка по стоп-словам
+        # Проверка по стоп-словам (регулярка с гибкими пробелами)
         for stop_word in STOP_WORDS:
-            if stop_word in normalized_text:
+            pattern = re.sub(r"\\s+", r"\\s+", stop_word)  # разрешаем любые пробелы
+            if re.search(pattern, normalized_text):
                 reason = "обнаружение спама в сообщении"
                 break
-        
+
         # Проверка на повторения
         if not reason:
             time_window = timedelta(seconds=REPETITION_LIMIT['time_window'])
@@ -97,10 +106,10 @@ class ContentFilterMiddleware(BaseMiddleware):
             ]
             user_recent_messages[user_id].append((now, normalized_text))
             repetitions = sum(1 for _, msg in user_recent_messages[user_id] if msg == normalized_text)
-            
+
             if repetitions >= REPETITION_LIMIT['max_repetitions']:
                 reason = "повторяющиеся сообщения (флуд)"
-        
+
         if reason:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=event.message_id)
@@ -111,13 +120,8 @@ class ContentFilterMiddleware(BaseMiddleware):
                     permissions=ChatPermissions(can_send_messages=False),
                     until_date=now + mute_duration
                 )
-                #await event.answer(
-                    #f"Пользователь @{event.from_user.username} ({event.from_user.full_name}) "
-                    #f"временно идет нахуй на {MUTE_DURATION_SECONDS} секунд. Причина: {reason} и пидорас."
-                #)
             except Exception as e:
                 print(f"Не удалось обработать спам от {user_id} в чате {chat_id}: {e}")
             return
 
         return await handler(event, data)
-
