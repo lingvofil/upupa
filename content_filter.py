@@ -1,7 +1,7 @@
 import json
 import os
-import re
 import asyncio
+import re
 from typing import Callable, Dict, Any, Awaitable
 from collections import defaultdict
 from datetime import timedelta
@@ -22,8 +22,16 @@ REPETITION_LIMIT = {
     "max_repetitions": 3,
     "time_window": 60
 }
-# --- КОНЕЦ НАСТРОЕК ---
 
+# Регулярные выражения для продвинутой проверки
+SPAM_PATTERNS = [
+    re.compile(r"@Amofitlifebot", re.IGNORECASE),  # конкретное упоминание бота
+    re.compile(r"(заработок|доход|подработ\w+).{0,20}(\d+\$|\d+\s*доллар|\d+\s*\$)", re.IGNORECASE),
+    re.compile(r"(обучени[ея].{0,20}0\s*до\s*результата)", re.IGNORECASE),
+    re.compile(r"(в\s*лс|в\s*личн(ые|ку|ые\s*сообщения))", re.IGNORECASE)
+]
+
+# --- УПРАВЛЕНИЕ СОСТОЯНИЕМ ФИЛЬТРА ---
 ANTISPAM_SETTINGS_FILE = "antispam_enabled.json"
 ANTISPAM_ENABLED_CHATS = set()
 
@@ -43,27 +51,10 @@ def save_antispam_settings():
         json.dump(list(ANTISPAM_ENABLED_CHATS), f)
 
 user_recent_messages = defaultdict(list)
-
-# Расширенная таблица нормализации: латиница, греческие буквы, похожие символы
-NORMALIZATION_TABLE = str.maketrans({
-    # латиница на кириллицу
-    "a": "а", "A": "А",
-    "e": "е", "E": "Е",
-    "o": "о", "O": "О",
-    "p": "р", "P": "Р",
-    "c": "с", "C": "С",
-    "x": "х", "X": "Х",
-    # греческие варианты
-    "ο": "о",  # греческая омикрон
-    "р": "р",  # иногда копируется, оставим для ясности
-    "с": "с",
-})
+NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
 
 def normalize_text(text: str) -> str:
-    # Убираем невидимые символы и лишние пробелы, приводим к нижнему регистру с casefold
-    cleaned = re.sub(r"[\u200B-\u200D\uFEFF]", "", text)  # zero-width chars
-    cleaned = re.sub(r"\s+", " ", cleaned)                # схлопываем пробелы
-    return cleaned.casefold().translate(NORMALIZATION_TABLE)
+    return text.lower().translate(NORMALIZATION_TABLE)
 
 class ContentFilterMiddleware(BaseMiddleware):
     async def __call__(
@@ -72,7 +63,6 @@ class ContentFilterMiddleware(BaseMiddleware):
         event: Message,
         data: Dict[str, Any]
     ) -> Any:
-
         if event.chat.id not in ANTISPAM_ENABLED_CHATS:
             return await handler(event, data)
 
@@ -91,12 +81,18 @@ class ContentFilterMiddleware(BaseMiddleware):
 
         reason = ""
 
-        # Проверка по стоп-словам (регулярка с гибкими пробелами)
+        # Проверка по стоп-словам
         for stop_word in STOP_WORDS:
-            pattern = re.sub(r"\\s+", r"\\s+", stop_word)  # разрешаем любые пробелы
-            if re.search(pattern, normalized_text):
+            if stop_word in normalized_text:
                 reason = "обнаружение спама в сообщении"
                 break
+
+        # Проверка по регулярным выражениям
+        if not reason:
+            for pattern in SPAM_PATTERNS:
+                if pattern.search(text):  # используем исходный текст, но с re.IGNORECASE
+                    reason = "обнаружение спама по паттерну"
+                    break
 
         # Проверка на повторения
         if not reason:
@@ -106,7 +102,6 @@ class ContentFilterMiddleware(BaseMiddleware):
             ]
             user_recent_messages[user_id].append((now, normalized_text))
             repetitions = sum(1 for _, msg in user_recent_messages[user_id] if msg == normalized_text)
-
             if repetitions >= REPETITION_LIMIT['max_repetitions']:
                 reason = "повторяющиеся сообщения (флуд)"
 
