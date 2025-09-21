@@ -18,10 +18,10 @@ STOP_WORDS = [
     "sanya_rf_work", "требуются", "заработок", "подработка", "подработку", "доход", "работа на дому",
     "нужна работа", "в лс", "в личные сообщения", "в личные сообщение", "в личку", "расскажу подробно"
 ]
-REPETITION_LIMIT = {
-    "max_repetitions": 3,
-    "time_window": 60
-}
+# REPETITION_LIMIT = {
+#     "max_repetitions": 3,
+#     "time_window": 60
+# }
 
 # Регулярные выражения для продвинутой проверки
 SPAM_PATTERNS = [
@@ -50,7 +50,7 @@ def save_antispam_settings():
     with open(ANTISPAM_SETTINGS_FILE, "w") as f:
         json.dump(list(ANTISPAM_ENABLED_CHATS), f)
 
-user_recent_messages = defaultdict(list)
+# user_recent_messages = defaultdict(list)
 NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
 
 def normalize_text(text: str) -> str:
@@ -94,16 +94,16 @@ class ContentFilterMiddleware(BaseMiddleware):
                     reason = "обнаружение спама по паттерну"
                     break
 
-        # Проверка на повторения
-        if not reason:
-            time_window = timedelta(seconds=REPETITION_LIMIT['time_window'])
-            user_recent_messages[user_id] = [
-                (ts, msg) for ts, msg in user_recent_messages[user_id] if now - ts < time_window
-            ]
-            user_recent_messages[user_id].append((now, normalized_text))
-            repetitions = sum(1 for _, msg in user_recent_messages[user_id] if msg == normalized_text)
-            if repetitions >= REPETITION_LIMIT['max_repetitions']:
-                reason = "повторяющиеся сообщения (флуд)"
+        # Проверка на повторения (ЗАКОММЕНТИРОВАНО)
+        # if not reason:
+        #     time_window = timedelta(seconds=REPETITION_LIMIT['time_window'])
+        #     user_recent_messages[user_id] = [
+        #         (ts, msg) for ts, msg in user_recent_messages[user_id] if now - ts < time_window
+        #     ]
+        #     user_recent_messages[user_id].append((now, normalized_text))
+        #     repetitions = sum(1 for _, msg in user_recent_messages[user_id] if msg == normalized_text)
+        #     if repetitions >= REPETITION_LIMIT['max_repetitions']:
+        #         reason = "повторяющиеся сообщения (флуд)"
 
         if reason:
             try:
