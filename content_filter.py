@@ -24,9 +24,13 @@ STOP_WORDS = [
 #     "time_window": 60
 # }
 
+# Исключения для ботов (не фильтруются)
+ALLOWED_BOTS = ["@expertyebaniebot"]
+
 # Регулярные выражения для продвинутой проверки
 SPAM_PATTERNS = [
     re.compile(r"@Amofitlifebot", re.IGNORECASE),  # конкретное упоминание бота
+    re.compile(r"@\w+bot\b", re.IGNORECASE),  # любое упоминание бота (@...bot)
     re.compile(r"(заработок|доход|подработ\w+).{0,20}(\d+\$|\d+\s*доллар|\d+\s*\$)", re.IGNORECASE),
     re.compile(r"(обучени[ея].{0,20}0\s*до\s*результата)", re.IGNORECASE),
     re.compile(r"(в\s*лс|в\s*личн(ые|ку|ые\s*сообщения))", re.IGNORECASE)
@@ -56,6 +60,11 @@ NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
 
 def normalize_text(text: str) -> str:
     return text.lower().translate(NORMALIZATION_TABLE)
+
+def contains_allowed_bot(text: str) -> bool:
+    """Проверяет, содержит ли текст разрешенного бота из списка исключений"""
+    text_lower = text.lower()
+    return any(allowed_bot.lower() in text_lower for allowed_bot in ALLOWED_BOTS)
 
 class ContentFilterMiddleware(BaseMiddleware):
     async def __call__(
@@ -92,6 +101,9 @@ class ContentFilterMiddleware(BaseMiddleware):
         if not reason:
             for pattern in SPAM_PATTERNS:
                 if pattern.search(text):  # используем исходный текст, но с re.IGNORECASE
+                    # Проверяем, не содержит ли сообщение разрешенного бота
+                    if pattern == SPAM_PATTERNS[1] and contains_allowed_bot(text):  # SPAM_PATTERNS[1] - это паттерн @\w+bot
+                        continue
                     reason = "обнаружение спама по паттерну"
                     break
 
