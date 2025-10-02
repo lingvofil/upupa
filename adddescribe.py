@@ -3,14 +3,12 @@ import logging
 import os
 import textwrap
 import requests
-import random # <--- Добавлен импорт
+import random
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.types import FSInputFile
 
-# Убедитесь, что actions и bot импортируются или передаются корректно
-# Предполагаем, что actions есть в Common_settings
 from config import API_TOKEN, model, bot 
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
@@ -19,11 +17,11 @@ from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 # =============================================================================
 async def handle_add_text_command(message: types.Message):
     """
-    Полностью обрабатывает команду "добавь": находит фото, генерирует текст,
-    накладывает его на изображение, отправляет результат и обрабатывает ошибки.
+    Полностью обрабатывает команду "добавь": находит фото, генерирует текст
+    или использует пользовательский текст, накладывает его на изображение,
+    отправляет результат и обрабатывает ошибки.
     """
     try:
-        # Отправка действия в чат теперь здесь
         await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
 
         photo = await get_photo_from_message(message)
@@ -31,9 +29,18 @@ async def handle_add_text_command(message: types.Message):
             await message.reply("Изображение для обработки не найдено.")
             return
 
-        # Основная логика в блоке try/except/finally
+        # Извлекаем пользовательский текст
+        user_text = extract_user_text(message)
+        
         image_bytes = await download_telegram_image(bot, photo)
-        generated_text = await process_image(image_bytes)
+        
+        # Если есть пользовательский текст, используем его, иначе генерируем
+        if user_text:
+            logging.info(f"Используем пользовательский текст: {user_text}")
+            generated_text = user_text
+        else:
+            logging.info("Генерируем текст через AI")
+            generated_text = await process_image(image_bytes)
         
         modified_image_path = overlay_text_on_image(image_bytes, generated_text)
         
@@ -44,12 +51,40 @@ async def handle_add_text_command(message: types.Message):
         logging.error(f"Ошибка в handle_add_text_command: {e}", exc_info=True)
         await message.reply(f"Произошла непредвиденная ошибка при обработке изображения.")
     finally:
-        # Очистка временного файла
         if os.path.exists("modified_image.jpg"):
             try:
                 os.remove("modified_image.jpg")
             except OSError as e:
                 logging.error(f"Не удалось удалить временный файл modified_image.jpg: {e}")
+
+def extract_user_text(message: types.Message) -> str | None:
+    """
+    Извлекает текст после команды "добавь".
+    Возвращает None, если текст не найден.
+    """
+    try:
+        # Случай 1: текст в caption (фото с подписью)
+        if message.caption:
+            text = message.caption.lower()
+            if "добавь" in text:
+                # Находим позицию слова "добавь" и берем все после него
+                idx = text.find("добавь")
+                user_text = message.caption[idx + 6:].strip()
+                return user_text if user_text else None
+        
+        # Случай 2: текст в message.text (ответ на фото)
+        elif message.text:
+            text = message.text.lower()
+            if "добавь" in text:
+                idx = text.find("добавь")
+                user_text = message.text[idx + 6:].strip()
+                return user_text if user_text else None
+        
+        return None
+        
+    except Exception as e:
+        logging.error(f"Ошибка в extract_user_text: {e}", exc_info=True)
+        return None
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ КОМАНДЫ "ОПИШИ"
@@ -59,20 +94,16 @@ async def process_image_description(bot, message: types.Message) -> tuple[bool, 
     Основная функция для обработки команды "опиши"
     """
     try:
-        # Отправляем действие в чат
         await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
         
-        # Получаем изображение из сообщения
         photo = await get_photo_from_message(message)
         if not photo:
             return False, "Изображение для описания не найдено."
         
-        # Загружаем изображение
         image_data = await download_image(bot, photo.file_id)
         if not image_data:
             return False, "Не удалось загрузить изображение."
         
-        # Генерируем описание
         success, description = await generate_image_description(image_data)
         
         if success:
@@ -128,7 +159,7 @@ async def extract_image_info(message: types.Message) -> str | None:
     """
     try:
         if message.photo:
-            photo = message.photo[-1]  # Берем самое большое разрешение
+            photo = message.photo[-1]
             return photo.file_id
         elif message.reply_to_message:
             if message.reply_to_message.photo:
