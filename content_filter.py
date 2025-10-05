@@ -19,10 +19,6 @@ STOP_WORDS = [
     "нужна работа", "в лс", "в личные сообщения", "в личные сообщение", "в личку", "расскажу подробно", "оплата", "деньги тут", "пиши сюда",
     "нужны ребята", "нужны люди"
 ]
-# REPETITION_LIMIT = {
-#     "max_repetitions": 3,
-#     "time_window": 60
-# }
 
 # Исключения для ботов (не фильтруются)
 ALLOWED_BOTS = ["@expertyebaniebot"]
@@ -55,7 +51,6 @@ def save_antispam_settings():
     with open(ANTISPAM_SETTINGS_FILE, "w") as f:
         json.dump(list(ANTISPAM_ENABLED_CHATS), f)
 
-# user_recent_messages = defaultdict(list)
 NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
 
 def normalize_text(text: str) -> str:
@@ -89,6 +84,27 @@ class ContentFilterMiddleware(BaseMiddleware):
         text = event.text or event.caption
         normalized_text = normalize_text(text)
 
+        # --- НОВЫЕ УСЛОВИЯ ---
+        # 1. Пропускаем команды, начинающиеся с "/"
+        if text.strip().startswith("/"):
+            return await handler(event, data)
+
+        # 2. Блокируем сообщения с английскими словами и ссылкой
+        if re.search(r"https?://\S+|www\.\S+", text, re.IGNORECASE):
+            if re.search(r"[a-zA-Z]", text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=event.message_id)
+                    mute_duration = timedelta(seconds=MUTE_DURATION_SECONDS)
+                    await bot.restrict_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        permissions=ChatPermissions(can_send_messages=False),
+                        until_date=now + mute_duration
+                    )
+                except Exception as e:
+                    print(f"Не удалось обработать спам (ссылка+EN) от {user_id} в чате {chat_id}: {e}")
+                return
+
         reason = ""
 
         # Проверка по стоп-словам
@@ -100,23 +116,11 @@ class ContentFilterMiddleware(BaseMiddleware):
         # Проверка по регулярным выражениям
         if not reason:
             for pattern in SPAM_PATTERNS:
-                if pattern.search(text):  # используем исходный текст, но с re.IGNORECASE
-                    # Проверяем, не содержит ли сообщение разрешенного бота
-                    if pattern == SPAM_PATTERNS[1] and contains_allowed_bot(text):  # SPAM_PATTERNS[1] - это паттерн @\w+bot
+                if pattern.search(text):
+                    if pattern == SPAM_PATTERNS[1] and contains_allowed_bot(text):
                         continue
                     reason = "обнаружение спама по паттерну"
                     break
-
-        # Проверка на повторения (ЗАКОММЕНТИРОВАНО)
-        # if not reason:
-        #     time_window = timedelta(seconds=REPETITION_LIMIT['time_window'])
-        #     user_recent_messages[user_id] = [
-        #         (ts, msg) for ts, msg in user_recent_messages[user_id] if now - ts < time_window
-        #     ]
-        #     user_recent_messages[user_id].append((now, normalized_text))
-        #     repetitions = sum(1 for _, msg in user_recent_messages[user_id] if msg == normalized_text)
-        #     if repetitions >= REPETITION_LIMIT['max_repetitions']:
-        #         reason = "повторяющиеся сообщения (флуд)"
 
         if reason:
             try:
