@@ -239,84 +239,28 @@ async def handle_redraw_command(message: types.Message):
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # ✨ Редактирование изображения через Gemini
-
-async def handle_edit_command(message: types.Message):
-    processing_msg = None
+def edit_image(image_bytes: bytes, prompt: str):
     try:
-        logging.info("[EDIT] Получен запрос на редактирование изображения")
+        print("[EDIT] Получен запрос на редактирование изображения")
+        # Используем правильные модальности: IMAGE + TEXT
+        response = image_model.generate_content(
+            [
+                content_types.Image.from_bytes(image_bytes),
+                prompt,
+            ],
+            generation_config={
+                "response_modalities": ["IMAGE", "TEXT"],  # важно указать IMAGE + TEXT
+            }
+        )
 
-        bot = message.bot
-        processing_msg = await message.reply("Применяю магию...")
+        if not response or not hasattr(response, "image"):
+            raise ValueError("Ответ не содержит изображения.")
 
-        # Получаем фото
-        file_id = None
-        if message.photo:
-            file_id = message.photo[-1].file_id
-        elif message.document:
-            file_id = message.document.file_id
-        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-            if message.reply_to_message.photo:
-                file_id = message.reply_to_message.photo[-1].file_id
-            else:
-                file_id = message.reply_to_message.document.file_id
-
-        if not file_id:
-            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
-            return
-
-        file = await bot.get_file(file_id)
-        file_path = file.file_path
-        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                if resp.status != 200:
-                    await processing_msg.edit_text("Не удалось загрузить изображение.")
-                    return
-                image_bytes = await resp.read()
-
-        prompt = ""
-        if message.caption:
-            prompt = message.caption.replace("отредактируй", "", 1).strip()
-        elif message.text:
-            prompt = message.text.replace("отредактируй", "", 1).strip()
-
-        # Прямой вызов модели Gemini
-        img = Image.open(BytesIO(image_bytes))
-        response = image_model.generate_content([
-            {"role": "user", "parts": [
-                {"text": prompt},
-                {"mime_type": "image/png", "data": image_bytes}
-            ]}
-        ])
-
-        await processing_msg.delete()
-
-        image_found = False
-
-        if hasattr(response, "candidates"):
-            for candidate in response.candidates:
-                for part in candidate.content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        image_data = part.inline_data.data
-                        image_bytes_out = base64.b64decode(image_data)
-
-                        output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
-                        await message.reply_photo(photo=output_file)
-                        image_found = True
-                        break
-                if image_found:
-                    break
-
-        if not image_found:
-            await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.")
+        return response.image
 
     except Exception as e:
-        logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
-        if processing_msg:
-            await processing_msg.delete()
-        await message.reply("Произошла ошибка при редактировании изображения.")
-
+        print(f"[EDIT] Ошибка при редактировании изображения: {e}")
+        return None
 
 
 # =============================================================================
