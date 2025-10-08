@@ -317,7 +317,20 @@ async def handle_edit_command(message: types.Message):
                 f"Ответ модели: _{text_feedback}_",
                 parse_mode="Markdown"
             )
-
+    # ИЗМЕНЕНИЕ: Отлавливаем ошибку 'Not Found' и даем пользователю четкую инструкцию
+    except google_exceptions.NotFound as e:
+        logging.error(f"[EDIT] Ошибка 'Модель не найдена': {e}", exc_info=True)
+        error_message = (
+            "**Ошибка: Модель для редактирования не найдена!**\n\n"
+            "Похоже, что в `config.py` указано неверное имя модели.\n"
+            "Пожалуйста, замените строку в `config.py` на:\n"
+            "`edit_model = genai.GenerativeModel(\"models/gemini-pro-vision\")`\n\n"
+            "Это специальная модель для работы с изображениями."
+        )
+        if processing_msg:
+            await processing_msg.edit_text(error_message, parse_mode="Markdown")
+        else:
+            await message.reply(error_message, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"[EDIT] Критическая ошибка в handle_edit_command: {e}", exc_info=True)
         if processing_msg:
