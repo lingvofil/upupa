@@ -277,60 +277,78 @@ async def handle_edit_command(message: types.Message):
             await processing_msg.edit_text("Укажите, что именно нужно отредактировать.")
             return
 
-        # Формируем запрос к Gemini с использованием edit_model
+        # Формируем запрос к Gemini
         def sync_edit():
             img = Image.open(BytesIO(image_bytes))
+            # Используем правильный формат для редактирования
             return edit_model.generate_content(
                 [
-                    {"mime_type": "image/jpeg", "data": image_bytes},
-                    f"Edit this image: {prompt}"
-                ]
+                    img,
+                    f"Edit this image: {prompt}. Generate a new edited version of the image based on this instruction."
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.4,
+                )
             )
 
         response = await asyncio.to_thread(sync_edit)
         
+        logging.info(f"[EDIT] Получен ответ от Gemini. Candidates: {len(response.candidates) if response.candidates else 0}")
+        
+        # Проверяем, есть ли candidates
+        if not response.candidates or len(response.candidates) == 0:
+            # Проверяем причину блокировки
+            if hasattr(response, 'prompt_feedback'):
+                feedback = response.prompt_feedback
+                logging.error(f"[EDIT] Промпт заблокирован: {feedback}")
+                await processing_msg.edit_text(f"Запрос заблокирован системой безопасности. Попробуйте переформулировать.")
+                return
+            else:
+                logging.error("[EDIT] Пустой ответ от модели без информации о блокировке")
+                await processing_msg.edit_text("Модель не вернула результат. Попробуйте другое изображение или формулировку.")
+                return
+
         await processing_msg.delete()
         processing_msg = None
 
         # Проверяем наличие изображения в ответе
         image_found = False
         
-        # Новый формат ответа (parts с изображениями)
-        if hasattr(response, 'parts') and response.parts:
-            for part in response.parts:
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    image_data = part.inline_data.data
-                    image_bytes_out = base64.b64decode(image_data)
-                    
-                    output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
-                    await message.reply_photo(photo=output_file)
+        # Проверяем candidates
+        for candidate in response.candidates:
+            if not candidate.content or not candidate.content.parts:
+                continue
+                
+            for part in candidate.content.parts:
+                # Проверяем inline_data (base64 изображение)
+                if hasattr(part, "inline_data") and part.inline_data:
+                    try:
+                        image_data = part.inline_data.data
+                        image_bytes_out = base64.b64decode(image_data)
+                        
+                        output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+                        await message.reply_photo(photo=output_file)
+                        image_found = True
+                        logging.info("[EDIT] Изображение успешно отправлено")
+                        break
+                    except Exception as e:
+                        logging.error(f"[EDIT] Ошибка декодирования изображения: {e}")
+                        continue
+                
+                # Проверяем текстовый ответ
+                if hasattr(part, "text") and part.text:
+                    text_response = part.text
+                    await message.reply(f"Модель ответила текстом вместо изображения:\n\n_{text_response}_", parse_mode="Markdown")
                     image_found = True
+                    logging.info("[EDIT] Получен текстовый ответ вместо изображения")
                     break
-        
-        # Старый формат (candidates)
-        if not image_found and response.candidates:
-            for candidate in response.candidates:
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "inline_data") and part.inline_data:
-                            image_data = part.inline_data.data
-                            image_bytes_out = base64.b64decode(image_data)
-                            
-                            output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
-                            await message.reply_photo(photo=output_file)
-                            image_found = True
-                            break
-                if image_found:
-                    break
+            
+            if image_found:
+                break
         
         if not image_found:
-            # Проверяем, может быть Gemini вернул текстовый ответ
-            text_response = response.text if hasattr(response, 'text') else None
-            if text_response:
-                await message.reply(f"Модель не смогла отредактировать изображение, но ответила:\n\n_{text_response}_", parse_mode="Markdown")
-            else:
-                logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
-                await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос или использовать другое изображение.")
+            logging.error("[EDIT] Не найдено ни изображения, ни текста в ответе")
+            await message.reply("Не удалось получить результат редактирования. Gemini 2.0 Flash Exp может не поддерживать редактирование изображений в текущей конфигурации.\n\nПопробуйте команду 'нарисуй' для генерации нового изображения.")
 
     except Exception as e:
         logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
@@ -339,7 +357,7 @@ async def handle_edit_command(message: types.Message):
                 await processing_msg.delete()
             except:
                 pass
-        await message.reply(f"Произошла ошибка при редактировании изображения: {str(e)[:200]}")
+        await message.reply(f"Произошла ошибка: {str(e)[:200]}")
 # =============================================================================
 # Сгенерируй -> Kandinsky
 # =============================================================================
