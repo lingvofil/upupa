@@ -239,7 +239,7 @@ async def handle_redraw_command(message: types.Message):
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # ✨ Редактирование изображения через Gemini
-def handle_edit_image(image_bytes: bytes, prompt: str):
+async def handle_edit_command(image_bytes: bytes, prompt: str):
     try:
         print("[EDIT] Получен запрос на редактирование изображения")
         # Используем правильные модальности: IMAGE + TEXT
