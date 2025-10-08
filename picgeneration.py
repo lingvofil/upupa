@@ -16,7 +16,7 @@ from aiogram import types
 from aiogram.types import FSInputFile
 
 # Убедитесь, что все зависимости импортированы
-from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, API_TOKEN
+from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
 from gemini_generation import process_gemini_generation, save_and_send_generated_image as save_and_send_gemini
@@ -239,30 +239,107 @@ async def handle_redraw_command(message: types.Message):
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # ✨ Редактирование изображения через Gemini
-async def handle_edit_command(image_bytes: bytes, prompt: str):
+async def handle_edit_command(message: types.Message):
+    processing_msg = None
     try:
-        print("[EDIT] Получен запрос на редактирование изображения")
-        # Используем правильные модальности: IMAGE + TEXT
-        response = image_model.generate_content(
-            [
-                content_types.Image.from_bytes(image_bytes),
-                prompt,
-            ],
-            generation_config={
-                "response_modalities": ["IMAGE", "TEXT"],  # важно указать IMAGE + TEXT
-            }
-        )
+        logging.info("[EDIT] Получен запрос на редактирование изображения")
 
-        if not response or not hasattr(response, "image"):
-            raise ValueError("Ответ не содержит изображения.")
+        processing_msg = await message.reply("Применяю магию...")
 
-        return response.image
+        # Получаем фото
+        photo = None
+        if message.photo:
+            photo = message.photo[-1]
+        elif message.document:
+            photo = message.document
+        elif message.reply_to_message:
+            if message.reply_to_message.photo:
+                photo = message.reply_to_message.photo[-1]
+            elif message.reply_to_message.document:
+                photo = message.reply_to_message.document
+
+        if not photo:
+            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
+            return
+
+        # Загружаем изображение
+        image_bytes = await download_telegram_image(bot, photo)
+        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+
+        # Получаем промпт редактирования
+        prompt = ""
+        if message.caption:
+            prompt = message.caption.replace("отредактируй", "", 1).strip()
+        elif message.text:
+            prompt = message.text.replace("отредактируй", "", 1).strip()
+
+        if not prompt:
+            await processing_msg.edit_text("Укажите, что именно нужно отредактировать.")
+            return
+
+        # Формируем запрос к Gemini с использованием edit_model
+        def sync_edit():
+            img = Image.open(BytesIO(image_bytes))
+            return edit_model.generate_content(
+                [
+                    {"mime_type": "image/jpeg", "data": image_bytes},
+                    f"Edit this image: {prompt}"
+                ]
+            )
+
+        response = await asyncio.to_thread(sync_edit)
+        
+        await processing_msg.delete()
+        processing_msg = None
+
+        # Проверяем наличие изображения в ответе
+        image_found = False
+        
+        # Новый формат ответа (parts с изображениями)
+        if hasattr(response, 'parts') and response.parts:
+            for part in response.parts:
+                if hasattr(part, 'inline_data') and part.inline_data:
+                    image_data = part.inline_data.data
+                    image_bytes_out = base64.b64decode(image_data)
+                    
+                    output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+                    await message.reply_photo(photo=output_file)
+                    image_found = True
+                    break
+        
+        # Старый формат (candidates)
+        if not image_found and response.candidates:
+            for candidate in response.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "inline_data") and part.inline_data:
+                            image_data = part.inline_data.data
+                            image_bytes_out = base64.b64decode(image_data)
+                            
+                            output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
+                            await message.reply_photo(photo=output_file)
+                            image_found = True
+                            break
+                if image_found:
+                    break
+        
+        if not image_found:
+            # Проверяем, может быть Gemini вернул текстовый ответ
+            text_response = response.text if hasattr(response, 'text') else None
+            if text_response:
+                await message.reply(f"Модель не смогла отредактировать изображение, но ответила:\n\n_{text_response}_", parse_mode="Markdown")
+            else:
+                logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
+                await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос или использовать другое изображение.")
 
     except Exception as e:
-        print(f"[EDIT] Ошибка при редактировании изображения: {e}")
-        return None
-
-
+        logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
+        if processing_msg:
+            try:
+                await processing_msg.delete()
+            except:
+                pass
+        await message.reply(f"Произошла ошибка при редактировании изображения: {str(e)[:200]}")
 # =============================================================================
 # Сгенерируй -> Kandinsky
 # =============================================================================
