@@ -45,6 +45,15 @@ GIGACHAT_MODEL_PRO = 'GigaChat-2-Pro'
 GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # Настройка клиента Gemini (Google Generative AI)
+genai.configure(api_key=GENERIC_API_KEY)
+model = genai.GenerativeModel('gemini-2.0-flash')
+advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
+image_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
+edit_model = genai.GenerativeModel("models/gemini-2.5-flash-image")
+
+model2 = OpenRouterModel('openai/gpt-3.5-turbo')
+advanced_model2 = OpenRouterModel('anthropic/claude-3-haiku')
+
 # Класс для работы с OpenRouter, имитирующий интерфейс genai.GenerativeModel
 class OpenRouterModel:
     def __init__(self, model_name: str):
@@ -164,15 +173,6 @@ class OpenRouterResponse:
         
         message = choices[0].get("message", {})
         return message.get("content", "")
-
-genai.configure(api_key=GENERIC_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
-advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
-image_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-edit_model = genai.GenerativeModel("models/gemini-pro-vision")
-
-model2 = OpenRouterModel('openai/gpt-3.5-turbo')
-advanced_model2 = OpenRouterModel('anthropic/claude-3-haiku')
 
 # Чаты, юзеры
 BLOCKED_USERS = [354145389]  # Список заблокированных пользователей
