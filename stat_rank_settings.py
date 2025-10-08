@@ -6,6 +6,41 @@ from aiogram import types
 from config import STATS_FILE, message_stats, bot
 from prompts import RANKS
 
+# Файл для хранения настроек уведомлений о рангах
+RANK_NOTIFICATIONS_FILE = "rank_notifications_settings.json"
+
+# Множество чатов, где уведомления о рангах ОТКЛЮЧЕНЫ
+rank_notifications_disabled_chats = set()
+
+def load_rank_notifications_settings():
+    """Загрузка настроек уведомлений о рангах"""
+    global rank_notifications_disabled_chats
+    if os.path.exists(RANK_NOTIFICATIONS_FILE):
+        try:
+            with open(RANK_NOTIFICATIONS_FILE, "r", encoding="utf-8") as file:
+                data = json.load(file)
+                rank_notifications_disabled_chats = set(data.get("disabled_chats", []))
+                logging.info(f"🔕 Загружены настройки уведомлений о рангах для {len(rank_notifications_disabled_chats)} чатов.")
+        except Exception as e:
+            logging.error(f"Ошибка при загрузке настроек уведомлений о рангах: {e}")
+            rank_notifications_disabled_chats = set()
+    else:
+        rank_notifications_disabled_chats = set()
+
+def save_rank_notifications_settings():
+    """Сохранение настроек уведомлений о рангах"""
+    try:
+        with open(RANK_NOTIFICATIONS_FILE, "w", encoding="utf-8") as file:
+            json.dump({
+                "disabled_chats": list(rank_notifications_disabled_chats)
+            }, file, ensure_ascii=False, indent=4)
+        logging.info("💾 Настройки уведомлений о рангах сохранены.")
+    except Exception as e:
+        logging.error(f"Ошибка при сохранении настроек уведомлений о рангах: {e}")
+
+# Загружаем настройки при импорте модуля
+load_rank_notifications_settings()
+
 # Функция загрузки статистики
 def load_stats():
     global message_stats
@@ -99,7 +134,8 @@ async def track_message_statistics(message: types.Message):
             new_rank = rank
             break
     
-    if new_rank:
+    # Отправляем уведомление только если они включены для этого чата
+    if new_rank and chat_id not in rank_notifications_disabled_chats:
         await message.reply(f"🎉 Паздравляю, ты получил ранг **{new_rank}**!")
     
     # Save statistics
