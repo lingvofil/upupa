@@ -20,6 +20,7 @@ from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_mo
 from prompts import actions
 from adddescribe import download_telegram_image
 from gemini_generation import process_gemini_generation, save_and_send_generated_image as save_and_send_gemini
+from google.generativeai.types import Part, GenerateContentConfig, Modality
 
 # =============================================================================
 # Класс и функции для работы с API Kandinsky (FusionBrain)
@@ -239,99 +240,51 @@ async def handle_redraw_command(message: types.Message):
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 # ✨ Редактирование изображения через Gemini
-async def handle_edit_command(message: types.Message):
-    processing_msg = None
+
+def handle_edit_command(prompt: str, input_image: Image.Image):
     try:
-        logging.info("[EDIT] Получен запрос на редактирование изображения")
+        # Настраиваем клиент Gemini
+        genai.configure(api_key=GEMINI_API_KEY)
 
-        bot = message.bot
-        processing_msg = await message.reply("Применяю магию...")
+        # Конвертируем изображение в байты
+        image_bytes = io.BytesIO()
+        input_image.save(image_bytes, format="PNG")
+        image_bytes = image_bytes.getvalue()
 
-        # Получаем фото
-        file_id = None
-        if message.photo:
-            file_id = message.photo[-1].file_id
-        elif message.document:
-            file_id = message.document.file_id
-        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-            if message.reply_to_message.photo:
-                file_id = message.reply_to_message.photo[-1].file_id
-            else:
-                file_id = message.reply_to_message.document.file_id
-        
-        if not file_id:
-            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
-            return
+        # Создаем image part
+        image_part = Part.from_bytes(data=image_bytes, mime_type="image/png")
 
-        file = await bot.get_file(file_id)
-        file_path = file.file_path
-        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
+        # Формируем запрос: сначала изображение, потом текст
+        response = genai.generate_content(
+            model=image_model,
+            contents=[image_part, prompt],
+            generation_config=GenerateContentConfig(
+                response_modalities=[Modality.IMAGE, Modality.TEXT]
+            )
+        )
 
-        logging.info(f"Загружаем изображение с URL: {file_url}")
+        # Проверяем, вернулась ли картинка
+        if not response or not getattr(response, "candidates", None):
+            raise ValueError("Модель не вернула ответ.")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                if resp.status != 200:
-                    await processing_msg.edit_text("Не удалось загрузить изображение.")
-                    return
-                image_bytes = await resp.read()
+        parts = response.candidates[0].content.parts
+        if not parts:
+            raise ValueError("Ответ пустой.")
 
-        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+        # Ищем изображение среди parts
+        for part in parts:
+            if hasattr(part, "inline_data") and hasattr(part.inline_data, "data"):
+                img_data = base64.b64decode(part.inline_data.data)
+                return Image.open(io.BytesIO(img_data))
 
-        prompt = ""
-        if message.caption:
-            prompt = message.caption.replace("отредактируй", "", 1).strip()
-        elif message.text:
-            prompt = message.text.replace("отредактируй", "", 1).strip()
-
-        def sync_edit():
-            # ИСПРАВЛЕНИЕ: Самая строгая и явная структура запроса.
-            # Мы создаем объект PIL Image, чтобы библиотека точно знала, с чем работает.
-            img = Image.open(BytesIO(image_bytes))
-            return image_model.generate_content([prompt, img])
-
-        response = await asyncio.to_thread(sync_edit)
-        
-        await processing_msg.delete()
-        processing_msg = None
-
-        image_found = False
-        # Ответ теперь может быть в другом формате, ищем изображение в .parts
-        if response.parts:
-            for part in response.parts:
-                if 'image' in part:
-                    # Если нашли, извлекаем и отправляем
-                    edited_image_bytes = BytesIO()
-                    part.image.save(edited_image_bytes, format='PNG')
-                    edited_image_bytes.seek(0)
-                    
-                    output_file = types.BufferedInputFile(edited_image_bytes.read(), filename="edited.png")
-                    await message.reply_photo(photo=output_file)
-                    image_found = True
-                    break
-
-        if not image_found:
-             # Проверяем старый формат ответа на всякий случай
-            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-                for idx, part in enumerate(response.candidates[0].content.parts):
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        image_data = part.inline_data.data
-                        image_bytes_out = base64.b64decode(image_data)
-                        image_found = True
-
-                        output_file = types.BufferedInputFile(image_bytes_out, filename="edited.png")
-                        await message.reply_photo(photo=output_file)
-                        break
-        
-        if not image_found:
-            logging.error("[EDIT] Картинка не найдена в ответе Gemini.")
-            await message.reply("Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.")
+        # Если дошли сюда — картинки не нашли, но, возможно, есть текстовый ответ
+        text_response = parts[0].text if hasattr(parts[0], "text") else None
+        raise ValueError(f"Модель не вернула изображение. Ответ: {text_response}")
 
     except Exception as e:
-        logging.error(f"[EDIT] Ошибка в handle_edit_command: {e}", exc_info=True)
-        if processing_msg:
-            await processing_msg.delete()
-        await message.reply("Произошла ошибка при редактировании изображения.")
+        print(f"Ошибка при обработке команды /edit: {e}")
+        return None
+
 
 
 # =============================================================================
