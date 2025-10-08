@@ -169,7 +169,7 @@ genai.configure(api_key=GENERIC_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
 image_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-edit_model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+edit_model = genai.GenerativeModel("models/gemini-pro-vision")
 
 model2 = OpenRouterModel('openai/gpt-3.5-turbo')
 advanced_model2 = OpenRouterModel('anthropic/claude-3-haiku')
