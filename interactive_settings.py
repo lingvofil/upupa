@@ -6,8 +6,8 @@ from config import chat_settings, sms_disabled_chats, bot, ADMIN_ID
 from chat_settings import save_chat_settings
 from sms_settings import save_sms_disabled_chats
 from prompts import PROMPTS_DICT
-# --- ИМПОРТ ИЗМЕНЕН ---
 from content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
+from stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
 
 async def has_settings_permission(chat_id: int, user_id: int) -> bool:
     if user_id == ADMIN_ID:
@@ -24,17 +24,16 @@ async def get_main_settings_markup(chat_id: str):
     dialog_enabled = settings.get("dialog_enabled", True)
     reactions_enabled = settings.get("reactions_enabled", True)
     sms_enabled = chat_id not in sms_disabled_chats
-    
-    # --- ЛОГИКА СТАТУСА ИНВЕРТИРОВАНА ---
-    # Проверяем, есть ли ID чата в списке ВКЛЮЧЕННЫХ
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
+    rank_notifications_enabled = chat_id not in rank_notifications_disabled_chats
     current_prompt_name = settings.get("prompt_name", "Не установлен")
 
     text = "⚙️ *Настройки чата*\n\n"
     text += f"🗣️ *Болталка:* {'Вкл. ✅' if dialog_enabled else 'Выкл. ❌'}\n"
     text += f"🎉 *Случайные реакции:* {'Вкл. ✅' if reactions_enabled else 'Выкл. ❌'}\n"
     text += f"💬 *СМС/ММС:* {'Вкл. ✅' if sms_enabled else 'Выкл. ❌'}\n"
-    text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n\n"
+    text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
+    text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`"
 
     builder = InlineKeyboardBuilder()
@@ -53,6 +52,10 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(
         text=f"{'Выключить' if antispam_enabled else 'Включить'} антиспам",
         callback_data="settings:toggle:antispam"
+    )
+    builder.button(
+        text=f"{'Выключить' if rank_notifications_enabled else 'Включить'} уведомления о рангах",
+        callback_data="settings:toggle:rank_notifications"
     )
     builder.button(
         text="🎭 Выбрать промпт",
@@ -144,7 +147,6 @@ async def handle_settings_callback(query: types.CallbackQuery):
                 sms_disabled_chats.add(chat_id)
             save_sms_disabled_chats()
         
-        # --- ЛОГИКА ПЕРЕКЛЮЧЕНИЯ ИНВЕРТИРОВАНА ---
         elif value == "antispam":
             chat_id_int = int(chat_id)
             if chat_id_int in ANTISPAM_ENABLED_CHATS:
@@ -152,6 +154,13 @@ async def handle_settings_callback(query: types.CallbackQuery):
             else:
                 ANTISPAM_ENABLED_CHATS.add(chat_id_int)
             save_antispam_settings()
+        
+        elif value == "rank_notifications":
+            if chat_id in rank_notifications_disabled_chats:
+                rank_notifications_disabled_chats.remove(chat_id)
+            else:
+                rank_notifications_disabled_chats.add(chat_id)
+            save_rank_notifications_settings()
         
         else:
             await query.answer("Неизвестное действие.")
@@ -164,4 +173,3 @@ async def handle_settings_callback(query: types.CallbackQuery):
             logging.info(f"Не удалось обновить сообщение настроек (возможно, оно не изменилось): {e}")
         
         await query.answer()
-
