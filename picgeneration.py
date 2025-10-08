@@ -10,6 +10,7 @@ import random
 import textwrap
 import base64
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
