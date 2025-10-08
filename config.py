@@ -51,9 +51,6 @@ advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-0
 image_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 edit_model = genai.GenerativeModel("models/gemini-2.5-flash-image")
 
-model2 = OpenRouterModel('openai/gpt-3.5-turbo')
-advanced_model2 = OpenRouterModel('anthropic/claude-3-haiku')
-
 # Класс для работы с OpenRouter, имитирующий интерфейс genai.GenerativeModel
 class OpenRouterModel:
     def __init__(self, model_name: str):
@@ -173,6 +170,8 @@ class OpenRouterResponse:
         
         message = choices[0].get("message", {})
         return message.get("content", "")
+model2 = OpenRouterModel('openai/gpt-3.5-turbo')
+advanced_model2 = OpenRouterModel('anthropic/claude-3-haiku')
 
 # Чаты, юзеры
 BLOCKED_USERS = [354145389]  # Список заблокированных пользователей
