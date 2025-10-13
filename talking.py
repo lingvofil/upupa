@@ -18,7 +18,6 @@ from prompts import (
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
     KEYWORDS, CUSTOM_PROMPT_TEMPLATE,
     DIALOG_TRIGGER_KEYWORDS  # <<< ДОБАВЛЕН ИМПОРТ
-)_TEMPLATE
 )
 # Функции для извлечения сообщений
 from lexicon_settings import (save_user_message,
