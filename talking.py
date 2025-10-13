@@ -16,7 +16,9 @@ from prompts import (
     PROMPTS_TEXT, PROMPTS_DICT, get_available_prompts,
     get_prompts_list_text, actions, get_prompt_by_name,
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
-    KEYWORDS, CUSTOM_PROMPT_TEMPLATE
+    KEYWORDS, CUSTOM_PROMPT_TEMPLATE,
+    DIALOG_TRIGGER_KEYWORDS  # <<< ДОБАВЛЕН ИМПОРТ
+)_TEMPLATE
 )
 # Функции для извлечения сообщений
 from lexicon_settings import (save_user_message,
@@ -214,91 +216,71 @@ async def handle_change_prompt_randomly_command(message: types.Message):
 # =============================================================================
 
 def update_conversation_history(chat_id: str, name: str, message_text: str, role: str):
-    """
-    Обновляет общую историю диалога для конкретного чата.
-    Ключ - chat_id. В историю добавляется имя пользователя.
-    """
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
-    
-    # Добавляем новое сообщение с указанием роли и имени
     conversation_history[chat_id].append({"role": role, "name": name, "content": message_text})
-    
-    # Обрезаем историю, если она стала слишком длинной
     if len(conversation_history[chat_id]) > MAX_HISTORY_LENGTH:
         conversation_history[chat_id] = conversation_history[chat_id][-MAX_HISTORY_LENGTH:]
 
-
 def format_chat_history(chat_id: str) -> str:
-    """
-    Форматирует общую историю диалога чата в одну строку для промпта.
-    """
     if chat_id not in conversation_history or not conversation_history[chat_id]:
         return "Диалог только начинается."
-    
-    # Составляем историю, где каждая реплика начинается с имени участника
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
 
-
 async def generate_response(prompt: str, chat_id: str, bot_name: str) -> str:
-    """
-    Генерирует ответ от модели и обновляет историю диалога ответа от лица бота.
-    """
     try:
         def sync_gemini_call():
             response = model.generate_content(prompt)
             return response.text
-            
         gemini_response_text = await asyncio.to_thread(sync_gemini_call)
-        
         if not gemini_response_text.strip():
             gemini_response_text = "Я пока не знаю, что ответить... 😅"
-            
-        # Обновляем историю сообщением от бота, используя его текущую роль как имя
         update_conversation_history(chat_id, bot_name, gemini_response_text, role="assistant")
         return gemini_response_text[:4000]
-        
     except Exception as e:
         logging.error(f"Gemini API Error: {e}")
         error_message = "Ошибка блят"
-        # Обновляем историю сообщением об ошибке
         update_conversation_history(chat_id, bot_name, error_message, role="assistant")
         return error_message
-
 
 async def handle_bot_conversation(message: types.Message, user_first_name: str) -> str:
     """
     Обрабатывает входящее сообщение в рамках общего диалога чата.
     """
     chat_id = str(message.chat.id)
+    
+    # <<< НАЧАЛО ИЗМЕНЕНИЙ >>>
     user_input = message.text
     
-    # Обновляем общую историю сообщением от текущего пользователя
+    # Очищаем сообщение от триггерных слов, чтобы модель реагировала на суть
+    temp_input_lower = user_input.lower()
+    for keyword in DIALOG_TRIGGER_KEYWORDS:
+        if temp_input_lower.startswith(keyword):
+            # Удаляем ключевое слово и возможные пробелы/запятые после него
+            user_input = user_input[len(keyword):].lstrip(' ,')
+            break # Прерываем цикл, т.к. ключевое слово может быть только одно в начале
+    
+    # Если после очистки ничего не осталось, просим уточнить
+    if not user_input.strip():
+        return "Да, я вас слушаю. Что вы хотели спросить?"
+    # <<< КОНЕЦ ИЗМЕНЕНИЙ >>>
+
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
     
-    # Получаем текущий промпт и имя роли бота для этого чата
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
-    
-    # Получаем отформатированную общую историю диалога
     chat_history_formatted = format_chat_history(chat_id)
     
-    # Формируем полный промпт для модели. Теперь модель видит, кто что сказал.
     full_prompt = (
         f"{selected_prompt}\n\n"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
-        f"{prompt_name}:" # Указываем, что следующий ответ должен быть от имени роли бота
+        f"{prompt_name}:"
     )
     
-    # Генерируем ответ, передавая chat_id и имя роли бота для обновления истории
     response_text = await generate_response(full_prompt, chat_id, prompt_name)
     return response_text
 
-
 async def process_general_message(message: types.Message):
-    """
-    Главная функция, обрабатывающая все сообщения. Логика вызова диалога не изменилась.
-    """
     chat_id = str(message.chat.id)
     update_chat_settings(chat_id)
     current_settings = chat_settings.get(chat_id, {})
@@ -321,7 +303,6 @@ async def process_general_message(message: types.Message):
     if (is_private_chat or is_reply_to_bot or is_direct_appeal) and current_settings.get("dialog_enabled", True):
         user_first_name = message.from_user.first_name or "Пользователь"
         await bot.send_chat_action(chat_id=chat_id, action="typing")
-        # Вызываем обновленный обработчик диалога
         response = await handle_bot_conversation(message, user_first_name)
         await message.reply(response)
         return
