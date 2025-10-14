@@ -255,8 +255,8 @@ I'll answer as a world-famous <role> PhD <detailed topic> with <most prestigious
 
 
 # Apply the custom prompt template to all prompts in PROMPTS_DICT
-for name, personality in PROMPTS_DICT.items():
-    PROMPTS_DICT[name] = CUSTOM_PROMPT_TEMPLATE.format(personality=personality)
+# for name, personality in PROMPTS_DICT.items():
+#    PROMPTS_DICT[name] = CUSTOM_PROMPT_TEMPLATE.format(personality=personality)
 
 
 # Список промптов для случайного выбора (для обратной совместимости)
