@@ -261,7 +261,7 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     
     # Если после очистки ничего не осталось, просим уточнить
     if not user_input.strip():
-        return "Да, я вас слушаю. Что вы хотели спросить?"
+        return "Хули?"
     # <<< КОНЕЦ ИЗМЕНЕНИЙ >>>
 
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
