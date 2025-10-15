@@ -2,21 +2,27 @@ import os
 import json
 import logging
 from aiogram import Bot, types
-from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID
+from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, sms_disabled_chats
 
 # ✅ Функция загрузки списка чатов с отключёнными смс
 def load_sms_disabled_chats():
+    """
+    Загружает чаты с отключенными СМС из файла.
+    Модифицирует глобальное множество `sms_disabled_chats` на месте.
+    """
     global sms_disabled_chats
     if os.path.exists(SMS_DISABLED_CHATS_FILE):
         try:
             with open(SMS_DISABLED_CHATS_FILE, "r", encoding="utf-8") as file:
-                sms_disabled_chats = set(json.load(file))
+                # ИСПРАВЛЕНИЕ: Очищаем и обновляем множество, а не переназначаем.
+                sms_disabled_chats.clear()
+                sms_disabled_chats.update(json.load(file))
                 logging.info(f"Загружено {len(sms_disabled_chats)} чатов с отключёнными смс.")
         except Exception as e:
             logging.error(f"Ошибка при загрузке списка отключённых смс: {e}")
-            sms_disabled_chats = set()
+            sms_disabled_chats.clear()
     else:
-        sms_disabled_chats = set()
+        sms_disabled_chats.clear()
 
 # ✅ Функция сохранения списка чатов с отключёнными смс
 def save_sms_disabled_chats():
@@ -35,15 +41,17 @@ async def process_disable_sms(chat_id, user_id, bot):
     # Проверяем, является ли пользователь админом или суперюзером
     chat_member = await bot.get_chat_member(chat_id, user_id)
     is_admin = chat_member.status in ["administrator", "creator"]
-    is_superuser = user_id == 126386976  # 👑 Наш суперюзер
+    is_superuser = user_id == 126386976 # 👑 Наш суперюзер
     
     if not (is_admin or is_superuser):
         return "Ты не админ и не бог, иди нахуй."
     
-    if chat_id in sms_disabled_chats:
+    # Конвертируем chat_id в строку для консистентности, так как в `interactive_settings` он строка
+    chat_id_str = str(chat_id)
+    if chat_id_str in sms_disabled_chats:
         return "СМС и ММС уже отключены в этом чате."
     else:
-        sms_disabled_chats.add(chat_id)
+        sms_disabled_chats.add(chat_id_str)
         save_sms_disabled_chats()
         return "Теперь я не принимаю и не отправляю смс и ммс в этом чате."
 
@@ -54,18 +62,19 @@ async def process_enable_sms(chat_id, user_id, bot):
     if chat_member.status not in ["administrator", "creator"]:
         return "Ты не админ, иди нахуй."
     
-    if chat_id in sms_disabled_chats:
-        sms_disabled_chats.remove(chat_id)
+    chat_id_str = str(chat_id)
+    if chat_id_str in sms_disabled_chats:
+        sms_disabled_chats.remove(chat_id_str)
         save_sms_disabled_chats()
         return "Теперь я снова принимаю и отправляю смс и ммс в этом чате."
     else:
         return "СМС и ММС уже разрешены в этом чате."
 
 # Вынесенная логика отправки СМС
-async def process_send_sms(message, chat_list, bot, sms_disabled_chats):
+async def process_send_sms(message, chat_list, bot, sms_disabled_chats_param):
     chat_id = str(message.chat.id)
-    is_reply = message.reply_to_message is not None  # Проверяем, это реплай или нет
-    parts = message.text.split(maxsplit=2)  # Разделяем команду
+    is_reply = message.reply_to_message is not None # Проверяем, это реплай или нет
+    parts = message.text.split(maxsplit=2) # Разделяем команду
     
     if len(parts) < 2 and not is_reply:
         await message.reply("эээ далбаеб: смс <номер чата> <текст>")
@@ -85,7 +94,7 @@ async def process_send_sms(message, chat_list, bot, sms_disabled_chats):
             
         target_chat_id = str(filtered_chats[chat_index]["id"])
         # Проверяем, отключены ли СМС в целевом чате
-        if target_chat_id in sms_disabled_chats:
+        if target_chat_id in sms_disabled_chats_param:
             await message.reply("Этот чат не принимает СМС.")
             return
             
@@ -112,8 +121,8 @@ async def process_send_sms(message, chat_list, bot, sms_disabled_chats):
         await message.reply("Не удалось отправить сообщение. Возможно, я хуисос")
 
 # Вынесенная логика отправки ММС
-async def process_send_mms(message, chat_list_param, bot, sms_disabled_chats):
-    chat_list = chat_list_param  # Используем локальную переменную вместо global
+async def process_send_mms(message, chat_list_param, bot, sms_disabled_chats_param):
+    chat_list = chat_list_param # Используем локальную переменную вместо global
     chat_id = str(message.chat.id)
 
     is_reply = message.reply_to_message is not None
@@ -140,7 +149,7 @@ async def process_send_mms(message, chat_list_param, bot, sms_disabled_chats):
         target_chat_id = str(filtered_chats[chat_index]["id"])
 
         # Проверяем, отключены ли ММС в целевом чате
-        if target_chat_id in sms_disabled_chats:
+        if target_chat_id in sms_disabled_chats_param:
             await message.reply("Этот чат не принимает ММС.")
             return
 
@@ -191,7 +200,7 @@ async def process_send_mms(message, chat_list_param, bot, sms_disabled_chats):
                     type='quiz' if poll.type == 'quiz' else 'regular',
                     correct_option_id=poll.correct_option_id if poll.type == 'quiz' else None,
                     explanation=poll.explanation,
-                    is_anonymous=False  # Добавляем этот параметр
+                    is_anonymous=False # Добавляем этот параметр
                 )
 
             await message.reply(f"Аткрытка отправлена в чат {chat_list[chat_index]['title']}!")
