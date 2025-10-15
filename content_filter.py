@@ -9,7 +9,7 @@ from datetime import timedelta
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, ChatPermissions
 
-from config import ADMIN_ID
+from config import ADMIN_ID, ANTISPAM_ENABLED_CHATS
 
 # --- НАСТРОЙКИ ФИЛЬТРА ---
 MUTE_DURATION_SECONDS = 60
@@ -25,8 +25,8 @@ ALLOWED_BOTS = ["@expertyebaniebot"]
 
 # Регулярные выражения для продвинутой проверки
 SPAM_PATTERNS = [
-    re.compile(r"@Amofitlifebot", re.IGNORECASE),  # конкретное упоминание бота
-    re.compile(r"@\w+bot\b", re.IGNORECASE),  # любое упоминание бота (@...bot)
+    re.compile(r"@Amofitlifebot", re.IGNORECASE), # конкретное упоминание бота
+    re.compile(r"@\w+bot\b", re.IGNORECASE), # любое упоминание бота (@...bot)
     re.compile(r"(заработок|доход|подработ\w+).{0,20}(\d+\$|\d+\s*доллар|\d+\s*\$)", re.IGNORECASE),
     re.compile(r"(обучени[ея].{0,20}0\s*до\s*результата)", re.IGNORECASE),
     re.compile(r"(в\s*лс|в\s*личн(ые|ку|ые\s*сообщения))", re.IGNORECASE)
@@ -34,9 +34,12 @@ SPAM_PATTERNS = [
 
 # --- УПРАВЛЕНИЕ СОСТОЯНИЕМ ФИЛЬТРА ---
 ANTISPAM_SETTINGS_FILE = "antispam_enabled.json"
-ANTISPAM_ENABLED_CHATS = set()
 
 def load_antispam_settings():
+    """
+    Загружает чаты с включенным антиспамом.
+    Этот код уже был написан корректно, используя .update()
+    """
     if os.path.exists(ANTISPAM_SETTINGS_FILE):
         try:
             with open(ANTISPAM_SETTINGS_FILE, "r") as f:
@@ -50,6 +53,9 @@ def load_antispam_settings():
 def save_antispam_settings():
     with open(ANTISPAM_SETTINGS_FILE, "w") as f:
         json.dump(list(ANTISPAM_ENABLED_CHATS), f)
+
+# Загружаем настройки при старте
+load_antispam_settings()
 
 NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
 
@@ -67,7 +73,8 @@ class ContentFilterMiddleware(BaseMiddleware):
         event: Message,
         data: Dict[str, Any]
     ) -> Any:
-        if event.chat.id not in ANTISPAM_ENABLED_CHATS:
+        # Проверяем, включен ли антиспам для чата (ID могут быть и строками в JSON)
+        if event.chat.id not in ANTISPAM_ENABLED_CHATS and str(event.chat.id) not in ANTISPAM_ENABLED_CHATS:
             return await handler(event, data)
 
         if not (event.text or event.caption):
@@ -90,11 +97,11 @@ class ContentFilterMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # 2. Блокируем сообщения с английскими словами и ссылкой (кроме телеграма)
-        if re.search(r"https?://\\S+|www\\.\\S+", text, re.IGNORECASE):
+        if re.search(r"https?://\S+|www\.\S+", text, re.IGNORECASE):
             # если это ссылка НЕ на телеграм
-            if not re.search(r"(t\\.me|telegram\\.me)/", text, re.IGNORECASE):
+            if not re.search(r"(t\.me|telegram\.me)/", text, re.IGNORECASE):
                 english_words = re.findall(r"[a-zA-Z]{3,}", text)
-                if len(english_words) >= 3:  # три и более английских слов
+                if len(english_words) >= 3: # три и более английских слов
                     try:
                         await bot.delete_message(chat_id=chat_id, message_id=event.message_id)
                         mute_duration = timedelta(seconds=MUTE_DURATION_SECONDS)
