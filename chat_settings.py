@@ -6,22 +6,34 @@ from config import CHAT_SETTINGS_FILE, CHAT_LIST_FILE, SPECIAL_CHAT_ID, chat_set
 
 # Функция загрузки настроек чатов при старте
 def load_chat_settings():
+    """
+    Загружает настройки чатов из файла JSON.
+    Важно: Модифицирует глобальный словарь `chat_settings` на месте,
+    чтобы все модули, импортирующие его, видели изменения.
+    """
     global chat_settings
     if os.path.exists(CHAT_SETTINGS_FILE):
         try:
             with open(CHAT_SETTINGS_FILE, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                if isinstance(data, dict):  # Проверяем, что файл содержит словарь
-                    chat_settings = data
+                if isinstance(data, dict):
+                    # ИСПРАВЛЕНИЕ: Очищаем текущий словарь и обновляем его данными из файла.
+                    # Это гарантирует, что все ссылки на `chat_settings` в других модулях
+                    # остаются действительными и видят загруженные данные.
+                    chat_settings.clear()
+                    chat_settings.update(data)
                     logging.info(f"Загружены настройки для {len(chat_settings)} чатов.")
                 else:
-                    chat_settings = {}
-                    logging.warning("Файл chat_settings.json повреждён, создан новый.")
+                    # Если файл поврежден, очищаем словарь
+                    chat_settings.clear()
+                    logging.warning("Файл chat_settings.json повреждён, используется пустой словарь настроек.")
         except Exception as e:
             logging.error(f"Ошибка при загрузке настроек чатов: {e}")
-            chat_settings = {}
+            chat_settings.clear() # Очищаем в случае любой ошибки чтения
     else:
-        chat_settings = {}
+        # Если файл не существует, убедимся, что словарь пуст
+        chat_settings.clear()
+        logging.info("Файл chat_settings.json не найден, используется пустой словарь настроек.")
 
 # Функция сохранения настроек чатов в файл
 def save_chat_settings():
@@ -42,7 +54,7 @@ def load_chats():
         try:
             with open(CHAT_LIST_FILE, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                if isinstance(data, list):  # Проверяем, что файл содержит список
+                if isinstance(data, list): # Проверяем, что файл содержит список
                     # ИЗМЕНЕНО: Модифицируем список на месте, а не переназначаем
                     chat_list.clear()
                     chat_list.extend(data)
@@ -77,7 +89,7 @@ def add_chat(chat_id, chat_title, chat_username=None):
             "username": chat_username if chat_username else None
         }
         chat_list.append(chat_info)
-        save_chats()  # Сохраняем изменения
+        save_chats() # Сохраняем изменения
         logging.info(f"Добавлен новый чат: {chat_title} ({chat_id})")
 
     # Перемещаем "особый" чат наверх
@@ -114,7 +126,7 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
     """Попытка обновить информацию о всех чатах через API бота и удаление недоступных чатов"""
     global chat_list
     
-    if message.from_user.id != ADMIN_ID:  # Проверка на админа
+    if message.from_user.id != ADMIN_ID: # Проверка на админа
         await message.reply("Иди нахуй, у тебя нет прав на это.")
         return
         
@@ -179,7 +191,7 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
         for i, chat in enumerate(chat_list):
             chat["index"] = i + 1
         
-        save_chats()  # Сохраняем обновленный список
+        save_chats() # Сохраняем обновленный список
         
         # Формируем отчет об удаленных чатах
         removed_info = ""
