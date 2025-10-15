@@ -19,13 +19,15 @@ def load_rank_notifications_settings():
         try:
             with open(RANK_NOTIFICATIONS_FILE, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                rank_notifications_disabled_chats = set(data.get("disabled_chats", []))
+                # ИСПРАВЛЕНИЕ: Очищаем и обновляем множество, а не переназначаем.
+                rank_notifications_disabled_chats.clear()
+                rank_notifications_disabled_chats.update(data.get("disabled_chats", []))
                 logging.info(f"🔕 Загружены настройки уведомлений о рангах для {len(rank_notifications_disabled_chats)} чатов.")
         except Exception as e:
             logging.error(f"Ошибка при загрузке настроек уведомлений о рангах: {e}")
-            rank_notifications_disabled_chats = set()
+            rank_notifications_disabled_chats.clear()
     else:
-        rank_notifications_disabled_chats = set()
+        rank_notifications_disabled_chats.clear()
 
 def save_rank_notifications_settings():
     """Сохранение настроек уведомлений о рангах"""
@@ -47,13 +49,15 @@ def load_stats():
     if os.path.exists(STATS_FILE):
         try:
             with open(STATS_FILE, "r", encoding="utf-8") as file:
-                message_stats = json.load(file)
+                # ИСПРАВЛЕНИЕ: Очищаем и обновляем словарь, а не переназначаем.
+                message_stats.clear()
+                message_stats.update(json.load(file))
                 logging.info(f"📊 Загружено {len(message_stats)} чатов в статистику.")
         except Exception as e:
             logging.error(f"Ошибка при загрузке статистики: {e}")
-            message_stats = {}
+            message_stats.clear()
     else:
-        message_stats = {}
+        message_stats.clear()
 
 # Функция сохранения статистики
 def save_stats():
@@ -85,7 +89,7 @@ async def track_message_statistics(message: types.Message):
         message_stats[chat_id] = {}
     if user_id not in message_stats[chat_id]:
         message_stats[chat_id][user_id] = {
-            "total": previous_total,  # Используем предыдущее значение
+            "total": previous_total, # Используем предыдущее значение
             "daily": 0, 
             "weekly": 0,
             "last_daily_reset": current_date_str,
@@ -95,7 +99,7 @@ async def track_message_statistics(message: types.Message):
     user_stats = message_stats[chat_id][user_id]
     
     # Проверяем, что total не меньше предыдущего значения
-    if user_stats["total"] < previous_total:
+    if user_stats.get("total", 0) < previous_total:
         user_stats["total"] = previous_total
     
     # Handle date conversion safely
@@ -123,9 +127,9 @@ async def track_message_statistics(message: types.Message):
         user_stats["last_weekly_reset"] = current_date_str
     
     # Increment counters
-    user_stats["total"] += 1
-    user_stats["daily"] += 1
-    user_stats["weekly"] += 1
+    user_stats["total"] = user_stats.get("total", 0) + 1
+    user_stats["daily"] = user_stats.get("daily", 0) + 1
+    user_stats["weekly"] = user_stats.get("weekly", 0) + 1
     
     # Check for rank promotion
     new_rank = None
@@ -153,7 +157,7 @@ async def get_user_statistics(chat_id: str, user_id: str) -> tuple[str, bool]:
 
     user_rank = "без ранга"
     for count, rank in sorted(RANKS.items(), reverse=True):
-        if user_stats["total"] >= count:
+        if user_stats.get("total", 0) >= count:
             user_rank = rank
             break
 
