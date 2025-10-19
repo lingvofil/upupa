@@ -91,30 +91,9 @@ class ContentFilterMiddleware(BaseMiddleware):
         text = event.text or event.caption
         normalized_text = normalize_text(text)
 
-        # --- НОВЫЕ УСЛОВИЯ ---
-
-        # 1. Пропускаем команды, начинающиеся с "/"
+        # Пропускаем команды, начинающиеся с "/"
         if text.strip().startswith("/"):
             return await handler(event, data)
-
-        # 2. Блокируем сообщения с английскими словами и ссылкой (кроме телеграма)
-        if re.search(r"https?://\S+|www\.\S+", text, re.IGNORECASE):
-            # если это ссылка НЕ на телеграм
-            if not re.search(r"(t\.me|telegram\.me)/", text, re.IGNORECASE):
-                english_words = re.findall(r"[a-zA-Z]{3,}", text)
-                if len(english_words) >= 3: # три и более английских слов
-                    try:
-                        await bot.delete_message(chat_id=chat_id, message_id=event.message_id)
-                        mute_duration = timedelta(seconds=MUTE_DURATION_SECONDS)
-                        await bot.restrict_chat_member(
-                            chat_id=chat_id,
-                            user_id=user_id,
-                            permissions=ChatPermissions(can_send_messages=False),
-                            until_date=now + mute_duration
-                        )
-                    except Exception as e:
-                        print(f"Не удалось обработать спам (ссылка+EN) от {user_id} в чате {chat_id}: {e}")
-                    return
 
         reason = ""
 
