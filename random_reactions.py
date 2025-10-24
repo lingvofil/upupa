@@ -356,11 +356,41 @@ async def generate_insult_for_lis(message, model_instance):
         return True
     return False
 
+# <<<--- НАЧАЛО НОВОГО БЛОКА ---<<<
+
+# Список фраз для пользователя 126386976
+PHRASES_FOR_126386976 = [
+    "Твой, сука, юношеский максимализм плюс гормональная нестабильность заставляют тебя думать, что если ты будешь приходить и говном всех поливать, то тебе полегчает\nА если тебе не отвечать, так ты ещё больше говном плюёшься\nТак пиздуй-ка ты проспись лучше",
+    "что",
+    "хуёв сто",
+    "спи иди нахуй",
+    "Слыш ты, гари, блядь\nНе доводи до предела, Залиночка\nНе стоит оно того",
+    "Ты тупая там штоле совсем? Иди-ка перечитай свои охуительные сообщения\nТебя никто, убогую, не трогает\nА ты сходу тут говна полный рот наберёшь и плюёшься\nНи здрасте, ни пошли нахуй\nКакого хуя тебя так разрывает-то",
+    "С хуёнией, Женя\nШтоб первый день её знать, так ладно бы\nА то, блядь, каждый раз с говном в ладошках",
+    "Всё, сука, растёт, меняется\nА эта как была с мозгами из пипетки, так, блядь, и осталась",
+    "Тупая, в первую очередь",
+    "ИДИ БЛЯДЬ НА УЛИЦЕ ПОГУЛЯЙ НАХУЙ",
+    "А поплачешь, так меньше ссать будешь"
+]
+
+async def generate_reaction_for_126386976(message: Message):
+    """Отправляет случайную фразу из списка пользователю 126386976."""
+    try:
+        selected_phrase = random.choice(PHRASES_FOR_126386976)
+        await message.reply(selected_phrase)
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка при отправке реакции для 126386976: {e}")
+        return False
+
+# <<<--- КОНЕЦ НОВОГО БЛОКА ---<<<
+
+
 async def generate_regular_reaction(message):
     try:
         if not message.text: return None
         words = message.text.split()
-        valid_words = [word for word in words if len(word) > 2]        
+        valid_words = [word for word in words if len(word) > 2]      
         if not valid_words: return None
         random_word = random.choice(valid_words)            
         if len(valid_words) > 1 and random.random() < 0.008:
@@ -407,6 +437,13 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         success = await generate_insult_for_lis(message, model)
         if success:
             return True
+
+    # <<<--- НАЧАЛО НОВОГО БЛОКА ---<<<
+    if message.from_user.id == 126386976 and random.random() < 0.05:
+        success = await generate_reaction_for_126386976(message)
+        if success:
+            return True
+    # <<<--- КОНЕЦ НОВОГО БЛОКА ---<<<
 
     if random.random() < 0.0001:
         success = await send_random_common_voice_reaction(message)
