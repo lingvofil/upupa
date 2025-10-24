@@ -356,10 +356,10 @@ async def generate_insult_for_lis(message, model_instance):
         return True
     return False
 
-# <<<--- НАЧАЛО НОВОГО БЛОКА ---<<<
+# <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---<<<
 
-# Список фраз для пользователя 126386976
-PHRASES_FOR_126386976 = [
+# Обновленный список фраз для пользователя 113086922
+PHRASES_FOR_113086922 = [
     "Твой, сука, юношеский максимализм плюс гормональная нестабильность заставляют тебя думать, что если ты будешь приходить и говном всех поливать, то тебе полегчает\nА если тебе не отвечать, так ты ещё больше говном плюёшься\nТак пиздуй-ка ты проспись лучше",
     "хуёв сто",
     "спи иди нахуй",
@@ -368,22 +368,64 @@ PHRASES_FOR_126386976 = [
     "С хуёнией, Женя\nШтоб первый день её знать, так ладно бы\nА то, блядь, каждый раз с говном в ладошках",
     "Всё, сука, растёт, меняется\nА эта как была с мозгами из пипетки, так, блядь, и осталась",
     "Тупая, в первую очередь",
-    "По пизде мешалкой себе постучи, ишь",
+    "По пизде мешалкой себе постучи, ишь", # Добавлено
     "ИДИ БЛЯДЬ НА УЛИЦЕ ПОГУЛЯЙ НАХУЙ",
     "А поплачешь, так меньше ссать будешь"
 ]
 
-async def generate_reaction_for_126386976(message: Message):
-    """Отправляет случайную фразу из списка пользователю 126386976."""
+async def generate_reaction_for_113086922(message: Message, model_instance):
+    """
+    Генерирует реакцию для пользователя 113086922.
+    С вероятностью 50% генерирует новую фразу через LLM,
+    с вероятностью 50% выбирает случайную фразу из списка.
+    """
     try:
-        selected_phrase = random.choice(PHRASES_FOR_126386976)
-        await message.reply(selected_phrase)
-        return True
+        if random.random() < 0.5: # 50% шанс сгенерировать новую фразу
+            logging.info("Генерация новой фразы для 113086922...")
+            # Составляем промпт для генерации
+            prompt = (
+                "Сгенерируй одну новую, короткую, язвительную фразу в ответ. "
+                "Используй стиль, лексику и тон следующих примеров. Можно смешивать идеи из разных примеров, но не копируй их целиком. "
+                "Ответ должен быть ОДНОЙ фразой (5-15 слов), без пояснений.\n\n"
+                "Примеры для стиля:\n" + "\n".join(PHRASES_FOR_113086922) +
+                "\n\nТвоя новая фраза (коротко и в том же духе):"
+            )
+
+            def call_llm():
+                try:
+                    response = model_instance.generate_content(
+                        prompt,
+                        # Высокая температура для креативности
+                        generation_config={'temperature': 1.0, 'max_output_tokens': 60, 'top_p': 1.0}
+                    )
+                    return getattr(response, 'text', '').strip()
+                except Exception as e:
+                    logging.error(f"Ошибка генерации реакции для 113086922 (LLM call): {e}")
+                    return None
+            
+            new_phrase = await asyncio.to_thread(call_llm)
+            
+            if new_phrase:
+                await message.reply(new_phrase)
+                return True
+            else:
+                # Фолбэк: если генерация не удалась, отправить случайную из списка
+                logging.warning("Не удалось сгенерировать новую фразу для 113086922, используется случайная из списка (фолбэк).")
+                selected_phrase = random.choice(PHRASES_FOR_113086922)
+                await message.reply(selected_phrase)
+                return True
+        
+        else: # 50% шанс использовать старую фразу
+            logging.info("Использование случайной фразы из списка для 113086922...")
+            selected_phrase = random.choice(PHRASES_FOR_113086922)
+            await message.reply(selected_phrase)
+            return True
+
     except Exception as e:
-        logging.error(f"Ошибка при отправке реакции для 126386976: {e}")
+        logging.error(f"Критическая ошибка при отправке реакции для 113086922: {e}")
         return False
 
-# <<<--- КОНЕЦ НОВОГО БЛОКА ---<<<
+# <<<--- КОНЕЦ ИЗМЕНЕНИЙ ---<<<
 
 
 async def generate_regular_reaction(message):
@@ -438,12 +480,13 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         if success:
             return True
 
-    # <<<--- НАЧАЛО НОВОГО БЛОКА ---<<<
-    if message.from_user.id == 113086922 and random.random() < 0.5:
-        success = await generate_reaction_for_126386976(message)
+    # <<<--- НАЧАЛО ИЗМЕНЕНИЙ (ВЫЗОВ ФУНКЦИИ) ---<<<
+    if message.from_user.id == 113086922 and random.random() < 0.05:
+        # Теперь передаем 'model' в функцию
+        success = await generate_reaction_for_113086922(message, model)
         if success:
             return True
-    # <<<--- КОНЕЦ НОВОГО БЛОКА ---<<<
+    # <<<--- КОНЕЦ ИЗМЕНЕНИЙ (ВЫЗОВ ФУНКЦИИ) ---<<<
 
     if random.random() < 0.0001:
         success = await send_random_common_voice_reaction(message)
@@ -477,3 +520,5 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         return False
         
     return False
+
+
