@@ -439,7 +439,7 @@ async def process_random_reactions(message: Message, model, save_user_message, t
             return True
 
     # <<<--- НАЧАЛО НОВОГО БЛОКА ---<<<
-    if message.from_user.id == 126386976 and random.random() < 0.05:
+    if message.from_user.id == 126386976 and random.random() < 0.5:
         success = await generate_reaction_for_126386976(message)
         if success:
             return True
