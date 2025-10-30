@@ -252,15 +252,17 @@ async def handle_send_sms(message: types.Message):
     if chat_id in sms_disabled_chats:
         await message.reply("СМС и ММС отключены в этом чате.")
         return
-    await process_send_sms(message, chat_list, bot, sms_disabled_chats)
+    # 🔴 ИСПРАВЛЕНИЕ: Убираем 4-й аргумент
+    await process_send_sms(message, chat_list, bot)
 
 @router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
-                                (message.caption and message.caption.lower().startswith("ммс ")))
+                                 (message.caption and message.caption.lower().startswith("ммс ")))
 async def handle_send_mms(message: types.Message):
     chat_id = str(message.chat.id)
     if chat_id in sms_disabled_chats:
         await message.reply("СМС и ММС отключены в этом чате.")
         return
+    # ✅ Этот вызов у вас уже был правильный (3 аргумента)
     await process_send_mms(message, chat_list, bot)
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
@@ -535,9 +537,9 @@ async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
     
 @router.message(lambda message: message.text and 
-                (message.text.lower().startswith("упупа запомни: мой др") or 
-                 message.text.lower().startswith("упупа запомни мой др")) and 
-                message.from_user.id not in BLOCKED_USERS)
+                 (message.text.lower().startswith("упупа запомни: мой др") or 
+                  message.text.lower().startswith("упупа запомни мой др")) and 
+                 message.from_user.id not in BLOCKED_USERS)
 async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
 
