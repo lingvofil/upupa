@@ -261,7 +261,7 @@ async def handle_send_mms(message: types.Message):
     if chat_id in sms_disabled_chats:
         await message.reply("СМС и ММС отключены в этом чате.")
         return
-    await process_send_mms(message, chat_list, bot, sms_disabled_chats)
+    await process_send_mms(message, chat_list, bot)
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
 async def handle_my_lexicon(message: types.Message):
