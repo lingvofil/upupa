@@ -484,6 +484,9 @@ async def edit_image(message: types.Message):
     )
 )
 async def generate_image(message: types.Message):
+    """
+    Вызывает handle_image_generation_command (Kandinsky)
+    """
     await handle_image_generation_command(message)
     
 @router.message(
@@ -496,6 +499,9 @@ async def generate_image(message: types.Message):
     )
 )
 async def generate_image_kandinsky(message: types.Message):
+    """
+    Вызывает handle_kandinsky_generation_command (Kandinsky)
+    """
     await handle_kandinsky_generation_command(message)
 
 @router.message(
@@ -509,6 +515,9 @@ async def generate_image_kandinsky(message: types.Message):
     )
 )
 async def redraw_image(message: types.Message):
+    """
+    Вызывает handle_redraw_command (Kandinsky + Gemini Vision)
+    """
     await handle_redraw_command(message)
 
 @router.message(
@@ -517,6 +526,9 @@ async def redraw_image(message: types.Message):
     message.from_user.id not in BLOCKED_USERS
 )
 async def generate_pun_with_image(message: types.Message):
+    """
+    Вызывает handle_pun_image_command (Kandinsky + Gemini Text)
+    """
     await handle_pun_image_command(message)
     
 @router.message(
