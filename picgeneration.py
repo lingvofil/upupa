@@ -419,7 +419,7 @@ async def handle_image_generation_command(message: types.Message):
         await message.reply("Шо именно нарисовать-то?")
         return
         
-    processing_message = await message.reply("Ща падажжи, рисую (через Kandinsky)...")
+    processing_message = await message.reply("Ща падажжи, ебана.")
     
     # Вызываем Kandinsky
     success, error_message, image_data = await process_image_generation(prompt)
@@ -467,7 +467,7 @@ async def handle_redraw_command(message: types.Message):
                 ]).text.strip()
             description = await asyncio.to_thread(sync_describe)
             logging.info(f"[Redraw] Gemini дал описание: {description[:100]}...")
-            await processing_msg.edit_text("Описание получил, рисую пародию (через Kandinsky)...")
+            await processing_msg.edit_text("Анал лизирую твою мазню")
             
         except Exception as e:
             logging.warning(f"Ошибка получения описания от Gemini (в handle_redraw_command): {e}. Используем запасной промпт.")
