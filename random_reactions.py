@@ -481,8 +481,8 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         if success:
             return True
 
-    # <<<--- НАЧАЛО ИЗМЕНЕНИЙ (ВЕРОЯТНОСТЬ 0.5) ---<<<
-    if message.from_user.id == 113086922 and random.random() < 0.5: # Вероятность 0.5
+    # <<<--- НАЧАЛО ИЗМЕНЕНИЙ (ВЕРОЯТНОСТЬ 0.005) ---<<<
+    if message.from_user.id == 113086922 and random.random() < 0.005: # Вероятность 0.5
         # Теперь передаем 'model' в функцию
         success = await generate_reaction_for_113086922(message, model)
         if success:
