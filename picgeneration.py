@@ -95,6 +95,7 @@ class FusionBrainAPI:
                     logging.error(f"Генерация {request_id} провалена: {error_desc}")
                     return None, error_desc
                 attempts -= 1
+                logging.debug(f"Kandinsky status: {data.get('status')}. Попыток осталось: {attempts}")
                 time.sleep(delay)
             except requests.RequestException as e:
                 logging.error(f"HTTP ошибка при проверке статуса: {e}")
@@ -107,6 +108,8 @@ class FusionBrainAPI:
 
 api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
 pipeline_id = api.get_pipeline()
+if not pipeline_id:
+    logging.warning("Не удалось получить pipeline_id для Kandinsky при запуске.")
 
 async def process_image_generation(prompt):
     """
@@ -114,15 +117,16 @@ async def process_image_generation(prompt):
     Возвращает (success, error_message, image_data)
     """
     if not pipeline_id:
-        return False, "Не удалось получить ID модели от API.", None
+        return False, "Не удалось получить ID модели от API (Kandinsky).", None
     try:
         loop = asyncio.get_event_loop()
         uuid, error = await loop.run_in_executor(None, api.generate, prompt, pipeline_id)
         if error:
             return False, f"Не удалось запустить генерацию: {error}", None
         
-        # Увеличиваем время ожидания для Kandinsky
-        files, check_error = await loop.run_in_executor(None, api.check_generation, uuid, attempts=20, delay=15)
+        # Увеличиваем время ожидания для Kandinsky (20 попыток по 15 секунд)
+        # ИСПРАВЛЕНИЕ: Аргументы (20, 15) передаются позиционно в api.check_generation (attempts, delay)
+        files, check_error = await loop.run_in_executor(None, api.check_generation, uuid, 20, 15)
         
         if check_error:
             return False, f"Ошибка при генерации: {check_error}", None
@@ -284,7 +288,7 @@ async def process_image_generation(prompt):
 #             prompt = message.caption.lower().replace("отредактируй", "", 1).strip()
 #         elif message.text:
 #             prompt = message.text.lower().replace("отредактируй", "", 1).strip()
-#         
+#     _     
 #         if not prompt:
 #             await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
 #             return
@@ -390,7 +394,8 @@ async def handle_pun_image_command(message: types.Message):
             # 3. Накладываем текст на готовое изображение
             modified_path = _overlay_text_on_image(image_data, final_word)
             await message.reply_photo(FSInputFile(modified_path))
-            os.remove(modified_path)
+            if os.path.exists(modified_path):
+                os.remove(modified_path)
             await processing_msg.delete()
         else:
             await processing_msg.edit_text(f"Ошибка генерации изображения (Kandinsky): {error_message}")
@@ -453,6 +458,9 @@ async def handle_redraw_command(message: types.Message):
 Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
             
             def sync_describe():
+                # Убедимся, что model (gemini) определена
+                if not model:
+                    raise Exception("Модель Gemini (model) не сконфигурирована.")
                 return model.generate_content([
                     detailed_prompt,
                     {"mime_type": "image/jpeg", "data": image_bytes}
@@ -529,6 +537,8 @@ async def handle_edit_command(message: types.Message):
         try:
             await processing_msg.edit_text("Описываю оригинал (через Gemini)...")
             def sync_describe_original():
+                if not model:
+                     raise Exception("Модель Gemini (model) не сконфигурирована.")
                 return model.generate_content([
                     "Опиши это изображение детально для его воссоздания: объекты, фон, стиль.",
                     {"mime_type": "image/jpeg", "data": image_bytes}
@@ -604,6 +614,7 @@ def _get_text_size(font, text):
         return font.getsize(text)
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
+    output_path = os.path.join(tempfile.gettempdir(), f"modified_pun_{random.randint(1000, 9999)}.jpg")
     try:
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
     except Exception as e:
@@ -616,35 +627,33 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     
     # Поиск шрифта
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    if not os.path.exists(font_path):
+    font = None
+    font_size = 48
+    
+    if os.path.exists(font_path):
+        font = ImageFont.truetype(font_path, font_size)
+    else:
         # Альтернативный путь (может отличаться в вашей системе)
         font_path = "/usr/share/fonts/TTF/DejaVuSans.ttf"
-        if not os.path.exists(font_path):
+        if os.path.exists(font_path):
+            font = ImageFont.truetype(font_path, font_size)
+        else:
              # Запасной вариант для Windows (если вдруг)
             font_path = "arial.ttf"
-            if not os.path.exists(font_path):
-                logging.warning("Шрифты не найдены. Используется стандартный шрифт PIL.")
+            if os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, font_size)
+            else:
+                logging.warning("Шрифты (DejaVuSans, arial) не найдены. Используется стандартный шрифт PIL.")
                 try:
                     font = ImageFont.load_default()
-                    font_size = 20 # Стандартный шрифт маленький
                 except IOError:
                     logging.error("Не удалось загрузить даже стандартный шрифт.")
-                    font = None # Обработаем ниже
-            else:
-                font_size = 48
-                font = ImageFont.truetype(font_path, font_size)
-        else:
-            font_size = 48
-            font = ImageFont.truetype(font_path, font_size)
-    else:
-        font_size = 48
-        font = ImageFont.truetype(font_path, font_size)
+                    # В этом случае font останется None
 
     if font is None:
-         # Если шрифт так и не загружен, просто сохраняем
-        output_path = "modified_pun_image.jpg"
-        image.save(output_path)
-        return output_path
+         logging.error("Шрифт не загружен. Наложение текста невозможно. Изображение будет сохранено как есть.")
+         image.save(output_path, quality=90)
+         return output_path
 
     max_width = image.width - 40
     
@@ -657,11 +666,19 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         
     max_chars_per_line = int(max_width // avg_char_width) if avg_char_width > 0 else 20
     
-    lines = textwrap.wrap(text, width=max_chars_per_line)
+    lines = textwrap.wrap(text, width=max_chars_per_line, drop_whitespace=False, replace_whitespace=False)
     
-    _, line_height = _get_text_size(font, "A")
+    if not lines:
+        logging.warning("Textwrap не вернул строк, возможно, текст пустой.")
+        lines = [""] # Гарантируем хотя бы одну пустую строку для рендера фона
+
+    try:
+        _, line_height = _get_text_size(font, "A")
+    except Exception as e:
+        logging.warning(f"Не удалось получить высоту строки: {e}, используем fallback {font_size}")
+        line_height = font_size
+
     text_block_height = (line_height + 5) * len(lines)
-    
     margin_bottom = 60
     
     # Рисуем полупрозрачный фон для текста
@@ -679,7 +696,11 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     
     # Рисуем текст
     for line in lines:
-        text_width, _ = _get_text_size(font, line)
+        try:
+            text_width, _ = _get_text_size(font, line)
+        except Exception:
+            text_width = len(line) * avg_char_width # Fallback
+            
         x = (image.width - text_width) / 2
         # Обводка для читаемости
         draw.text((x-1, current_y-1), line, font=font, fill="black")
@@ -690,6 +711,5 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         draw.text((x, current_y), line, font=font, fill="white")
         current_y += line_height + 5
         
-    output_path = "modified_pun_image.jpg"
     image.save(output_path, quality=90)
     return output_path
