@@ -7,6 +7,8 @@ from aiogram import types
 from config import bot, API_TOKEN, model
 # Импортируем новый единый список промптов
 from prompts import PROMPTS_MEDIA
+# НОВОЕ: Снова импортируем BeautifulSoup
+from bs4 import BeautifulSoup
 
 def get_custom_prompt(message: types.Message) -> str | None:
     """
@@ -247,7 +249,7 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
 
-# ================== ИСПРАВЛЕНО: URL ==================
+# ================== ИСПРАВЛЕНО: URL (Возврат к BS4) ==================
 def extract_url_from_message(message: types.Message) -> str | None:
     """Ищет URL в тексте сообщения или в его entities."""
     text = message.text or message.caption or ""
@@ -258,13 +260,13 @@ def extract_url_from_message(message: types.Message) -> str | None:
     if message.entities:
         for entity in message.entities:
             if entity.type == 'url':
-                # ИСПРАВЛЕНО: 'MessageEntity' не имеет 'get_text', используем 'offset' и 'length'
+                # Исправление 'AttributeError'
                 return text[entity.offset : entity.offset + entity.length]
                 
     if message.caption_entities:
          for entity in message.caption_entities:
             if entity.type == 'url':
-                # ИСПРАВЛЕНО: То же самое для caption_entities
+                # Исправление 'AttributeError'
                 return text[entity.offset : entity.offset + entity.length]
                 
     # Если entities нет, ищем простым regex
@@ -274,54 +276,50 @@ def extract_url_from_message(message: types.Message) -> str | None:
     return None
 
 async def process_url_whatisthere(message: types.Message, url: str) -> tuple[bool, str]:
-    """Обрабатывает контент по URL, используя гибридный подход."""
+    """Обрабатывает контент по URL (ручной метод, т.к. url_context недоступен)"""
     try:
-        # Сначала делаем HEAD запрос, чтобы узнать тип контента, не скачивая его
-        headers = {'User-Agent': 'Mozilla/5.0'} # Некоторые сайты не любят ботов
-        head_response = requests.head(url, timeout=10, allow_redirects=True, headers=headers)
-        head_response.raise_for_status()
+        headers = {'User-Agent': 'Mozilla/5.0'} 
+        response = requests.get(url, timeout=10, allow_redirects=True, headers=headers)
+        response.raise_for_status()
         
-        content_type = head_response.headers.get('Content-Type', '').split(';')[0].strip()
+        content_type = response.headers.get('Content-Type', '').split(';')[0].strip()
         custom_prompt = get_custom_prompt(message)
 
         logging.info(f"URL: {url}, Content-Type: {content_type}")
 
-        # Вариант 1: Неподдерживаемые типы (Аудио/Видео)
-        # Мы обрабатываем их вручную через requests.get + analyze_media_bytes
-        if content_type.startswith(('audio/', 'video/')):
-            logging.info("Тип: Аудио/Видео. Загружаю байты...")
-            get_response = requests.get(url, timeout=20, headers=headers)
-            get_response.raise_for_status()
-            media_data = get_response.content
+        # Вариант 1: Медиа (Аудио, Видео, Изображение)
+        if content_type.startswith(('audio/', 'video/', 'image/')):
+            logging.info("Тип: Аудио/Видео/Изображение. Загружаю байты...")
+            media_data = response.content
             description = await analyze_media_bytes(media_data, content_type, custom_prompt)
             return True, description
             
-        # Вариант 2: Поддерживаемые типы (Текст/Картинки/PDF)
-        # Используем встроенный инструмент Gemini 'url_context'
-        elif content_type.startswith(('text/', 'image/', 'application/pdf', 'application/json')):
-            logging.info("Тип: Текст/Изображение/PDF. Использую url_context...")
+        # Вариант 2: HTML или обычный текст
+        elif content_type.startswith(('text/html', 'text/plain')):
+            logging.info("Тип: HTML/Текст. Парсинг BeautifulSoup...")
+            # Используем .content вместо .text для правильной обработки кодировки
+            soup = BeautifulSoup(response.content, 'html.parser')
+            text_to_analyze = soup.get_text(separator=' ', strip=True)
+
+            if len(text_to_analyze) > 4000:
+                text_to_analyze = text_to_analyze[:4000] + "..."
             
-            # Определяем промпт
+            if not text_to_analyze.strip():
+                 return False, "Не смог извлечь текст с этой страницы (возможно, это JavaScript-сайт)."
+
+            # Логика анализа текста (как в process_text_whatisthere)
             if custom_prompt:
                 content_prompt = f"{custom_prompt}, не более 80 слов"
             else:
                 base_prompt = random.choice(PROMPTS_MEDIA)
                 content_prompt = f"{base_prompt}, не более 80 слов"
+                
+            prompt = f"{content_prompt}\n\nТекст для анализа (взято с сайта {url}): {text_to_analyze}"
             
-            # Формируем запрос с URL
-            prompt_with_url = f"{content_prompt}\n\nПроанализируй контент по этой ссылке: {url}"
-            
-            # Определяем инструмент
-            tools = [{"url_context": {}}]
-            
-            # Вызываем модель с инструментами
-            response = model.generate_content(
-                prompt_with_url,
-                tools=tools,
-            )
-            return True, response.text
+            gen_response = model.generate_content(prompt)
+            return True, gen_response.text
 
-        # Вариант 3: Непонятный или пустой тип
+        # Вариант 3: Непонятный тип
         else:
             logging.warning(f"Неподдерживаемый/неопределенный тип контента по URL: {content_type}")
             return False, f"Не могу разобрать этот тип контента: {content_type} (URL: {url})"
@@ -330,7 +328,8 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
         logging.error(f"Ошибка при загрузке URL {url}: {e}")
         return False, "Не удалось загрузить контент по ссылке."
     except Exception as e:
-        logging.error(f"Ошибка при обработке URL 'чотам': {e}")
+        # Добавляем exc_info=True для полного трейсбека в логах
+        logging.error(f"Ошибка при обработке URL 'чотам': {e}", exc_info=True)
         return False, "Ошибка при анализе ссылки."
 
 # ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
