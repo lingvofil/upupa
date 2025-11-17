@@ -7,6 +7,9 @@ from aiogram import types
 from config import bot, API_TOKEN, model
 # Импортируем новый единый список промптов
 from prompts import PROMPTS_MEDIA
+# НОВОЕ: Нам не нужен BeautifulSoup, но нам нужно передавать
+# конфигурацию инструментов в модель
+# (Хотя, кажется, библиотека позволяет передать простой dict)
 
 def get_custom_prompt(message: types.Message) -> str | None:
     """
@@ -42,12 +45,21 @@ async def download_file(file_id: str, file_name: str) -> bool:
         logging.error(f"Ошибка при загрузке файла {file_id}: {e}")
         return False
 
-# Общая функция анализа для всех медиа
-async def analyze_media(file_path: str, mime_type: str, custom_prompt: str | None = None) -> str:
-    """Анализирует медиафайл и возвращает текстовое описание."""
+# ИЗМЕНЕНО: Общая функция анализа для медиа (принимает путь ИЛИ байты)
+# Эта функция остается для ЛОКАЛЬНЫХ файлов (из Telegram) и для АУДИО/ВИДЕО по ссылкам
+async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None) -> str:
+    """
+    Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание.
+    """
     try:
-        with open(file_path, "rb") as media_file:
-            media_data = media_file.read()
+        media_data = None
+        if isinstance(media_source, str): # Если это путь к файлу
+            with open(media_source, "rb") as media_file:
+                media_data = media_file.read()
+        elif isinstance(media_source, bytes): # Если это уже байты
+            media_data = media_source
+        else:
+            raise ValueError("Неверный тип media_source: нужен str (путь) или bytes")
 
         # Используем кастомный промпт если он есть, иначе случайный
         if custom_prompt:
@@ -63,7 +75,7 @@ async def analyze_media(file_path: str, mime_type: str, custom_prompt: str | Non
         response = model.generate_content(contents)
         return response.text
     except Exception as e:
-        logging.error(f"Ошибка при анализе медиа ({mime_type}): {e}")
+        logging.error(f"Ошибка при анализе медиа байтов ({mime_type}): {e}")
         return "Нихуя не понял, давай еще раз."
 
 # ================== AUDIO ==================
@@ -84,7 +96,7 @@ async def process_audio_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить аудио."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media(file_name, mime_type, custom_prompt)
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -112,7 +124,7 @@ async def process_video_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить видео."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media(file_name, mime_type, custom_prompt)
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -141,7 +153,7 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить картинку."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media(file_name, mime_type, custom_prompt)
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -150,7 +162,7 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке изображения 'чотам': {e}")
         return False, "Ошибка при анализе картинки."
 
-# ================== GIF ==================
+# =S================= GIF ==================
 def extract_gif_info(message: types.Message) -> tuple[str | None, str, str | None]:
     target_message = message.reply_to_message if message.reply_to_message else message
     if target_message.animation:
@@ -170,7 +182,7 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить гифку."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media(file_name, mime_type, custom_prompt)
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -185,7 +197,6 @@ def extract_sticker_info(message: types.Message) -> tuple[str | None, str, str |
     if target_message.sticker:
         sticker = target_message.sticker
         file_id = sticker.file_id
-        # Стикеры могут быть в формате webp или tgs (анимированные)
         if sticker.is_animated:
             file_name = f"sticker_{file_id}.tgs"
             mime_type = "application/x-tgsticker"
@@ -204,7 +215,7 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
             return False, "Не удалось загрузить стикер."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media(file_name, mime_type, custom_prompt)
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -219,21 +230,18 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
     Обработка текста по команде 'чотам'
     """
     try:
-        # Текст для анализа должен быть в отвеченном сообщении
         if not (message.reply_to_message and message.reply_to_message.text):
             return False, "Для анализа текста ответьте на сообщение командой 'чотам'."
         
         text_to_analyze = message.reply_to_message.text
         custom_prompt = get_custom_prompt(message)
         
-        # Выбираем промпт
         if custom_prompt:
             content_prompt = f"{custom_prompt}, не более 80 слов"
         else:
             base_prompt = random.choice(PROMPTS_MEDIA)
             content_prompt = f"{base_prompt}, не более 80 слов"
         
-        # Формируем запрос для анализа текста
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
         
         response = model.generate_content(prompt)
@@ -243,13 +251,108 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
 
-# ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
+# ================== ИЗМЕНЕНО: URL (Гибридный подход) ==================
+def extract_url_from_message(message: types.Message) -> str | None:
+    """Ищет URL в тексте сообщения или в его entities."""
+    text = message.text or message.caption or ""
+    if not text:
+        return None
+    
+    # Сначала проверяем entities (более надежно)
+    if message.entities:
+        for entity in message.entities:
+            if entity.type == 'url':
+                return entity.get_text(text)
+    if message.caption_entities:
+         for entity in message.caption_entities:
+            if entity.type == 'url':
+                return entity.get_text(text)
+                
+    # Если entities нет, ищем простым regex
+    match = re.search(r'https?://[^\s]+', text)
+    if match:
+        return match.group(0)
+    return None
+
+async def process_url_whatisthere(message: types.Message, url: str) -> tuple[bool, str]:
+    """Обрабатывает контент по URL, используя гибридный подход."""
+    try:
+        # Сначала делаем HEAD запрос, чтобы узнать тип контента, не скачивая его
+        headers = {'User-Agent': 'Mozilla/5.0'} # Некоторые сайты не любят ботов
+        head_response = requests.head(url, timeout=10, allow_redirects=True, headers=headers)
+        head_response.raise_for_status()
+        
+        content_type = head_response.headers.get('Content-Type', '').split(';')[0].strip()
+        custom_prompt = get_custom_prompt(message)
+
+        logging.info(f"URL: {url}, Content-Type: {content_type}")
+
+        # Вариант 1: Неподдерживаемые типы (Аудио/Видео)
+        # Мы обрабатываем их вручную через requests.get + analyze_media_bytes
+        if content_type.startswith(('audio/', 'video/')):
+            logging.info("Тип: Аудио/Видео. Загружаю байты...")
+            get_response = requests.get(url, timeout=20, headers=headers)
+            get_response.raise_for_status()
+            media_data = get_response.content
+            description = await analyze_media_bytes(media_data, content_type, custom_prompt)
+            return True, description
+            
+        # Вариант 2: Поддерживаемые типы (Текст/Картинки/PDF)
+        # Используем встроенный инструмент Gemini 'url_context'
+        elif content_type.startswith(('text/', 'image/', 'application/pdf', 'application/json')):
+            logging.info("Тип: Текст/Изображение/PDF. Использую url_context...")
+            
+            # Определяем промпт
+            if custom_prompt:
+                content_prompt = f"{custom_prompt}, не более 80 слов"
+            else:
+                base_prompt = random.choice(PROMPTS_MEDIA)
+                content_prompt = f"{base_prompt}, не более 80 слов"
+            
+            # Формируем запрос с URL
+            prompt_with_url = f"{content_prompt}\n\nПроанализируй контент по этой ссылке: {url}"
+            
+            # Определяем инструмент
+            tools = [{"url_context": {}}]
+            
+            # Вызываем модель с инструментами
+            response = model.generate_content(
+                prompt_with_url,
+                tools=tools,
+            )
+            # (Опционально) Можно добавить проверку response.candidates[0].url_context_metadata
+            return True, response.text
+
+        # Вариант 3: Непонятный или пустой тип
+        else:
+            logging.warning(f"Неподдерживаемый/неопределенный тип контента по URL: {content_type}")
+            return False, f"Не могу разобрать этот тип контента: {content_type} (URL: {url})"
+            
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Ошибка при загрузке URL {url}: {e}")
+        return False, "Не удалось загрузить контент по ссылке."
+    except Exception as e:
+        logging.error(f"Ошибка при обработке URL 'чотам': {e}")
+        return False, "Ошибка при анализе ссылки."
+
+# ================== ИЗМЕНЕНО: УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
     """
-    Универсальная функция для обработки всех типов медиа и текста по команде 'чотам'
+    Универсальная функция для обработки всех типов медиа, текста и URL по команде 'чотам'
     """
     target_message = message.reply_to_message if message.reply_to_message else message
     
+    # НОВОЕ: В первую очередь ищем URL
+    # Проверяем и в реплае и в самом сообщении
+    url = extract_url_from_message(target_message)
+    if not url:
+         # Если в реплае нет, ищем в самом триггер-сообщении
+         if not message.reply_to_message:
+            url = extract_url_from_message(message)
+
+    if url:
+        return await process_url_whatisthere(message, url)
+        
     # Определяем тип медиа и вызываем соответствующую функцию
     if target_message.audio or target_message.voice:
         return await process_audio_description(message)
@@ -261,18 +364,30 @@ async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str
         return await process_gif_whatisthere(message)
     elif target_message.sticker:
         return await process_sticker_whatisthere(message)
-    # Проверяем, есть ли текст для анализа (в реплае или в самом сообщении, если нет реплая)
-    elif target_message.text or (message.text and "чотам" in message.text.lower()):
-        return await process_text_whatisthere(message)
+    elif target_message.text:
+        if message.reply_to_message:
+             return await process_text_whatisthere(message)
+        else:
+             return False, "Для анализа текста ответьте на сообщение."
     else:
         return False, "Не найдено контента для анализа."
 
+# ИЗМЕНЕНО:
 def get_processing_message(message: types.Message) -> str:
     """
     Возвращает подходящее сообщение о процессе в зависимости от типа медиа
     """
     target_message = message.reply_to_message if message.reply_to_message else message
     
+    # НОВОЕ: Проверка на URL
+    url = extract_url_from_message(target_message)
+    if not url:
+        if not message.reply_to_message:
+            url = extract_url_from_message(message)
+
+    if url:
+        return "Лезю по ссылке..."
+        
     if target_message.audio or target_message.voice:
         return "Слушою..."
     elif target_message.video:
@@ -283,7 +398,7 @@ def get_processing_message(message: types.Message) -> str:
         return "Да не дергайся ты..."
     elif target_message.sticker:
         return "Стикер-шмикер..."
-    elif target_message.text or (message.text and "чотам" in message.text.lower()):
+    elif target_message.text:
         return "Понаписали ебанарот..."
     else:
         return "Анализирую..."
