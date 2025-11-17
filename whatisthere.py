@@ -7,9 +7,6 @@ from aiogram import types
 from config import bot, API_TOKEN, model
 # Импортируем новый единый список промптов
 from prompts import PROMPTS_MEDIA
-# НОВОЕ: Нам не нужен BeautifulSoup, но нам нужно передавать
-# конфигурацию инструментов в модель
-# (Хотя, кажется, библиотека позволяет передать простой dict)
 
 def get_custom_prompt(message: types.Message) -> str | None:
     """
@@ -45,8 +42,7 @@ async def download_file(file_id: str, file_name: str) -> bool:
         logging.error(f"Ошибка при загрузке файла {file_id}: {e}")
         return False
 
-# ИЗМЕНЕНО: Общая функция анализа для медиа (принимает путь ИЛИ байты)
-# Эта функция остается для ЛОКАЛЬНЫХ файлов (из Telegram) и для АУДИО/ВИДЕО по ссылкам
+# Общая функция анализа для медиа (принимает путь ИЛИ байты)
 async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None) -> str:
     """
     Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание.
@@ -162,7 +158,7 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке изображения 'чотам': {e}")
         return False, "Ошибка при анализе картинки."
 
-# =S================= GIF ==================
+# ================== GIF ==================
 def extract_gif_info(message: types.Message) -> tuple[str | None, str, str | None]:
     target_message = message.reply_to_message if message.reply_to_message else message
     if target_message.animation:
@@ -251,7 +247,7 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
 
-# ================== ИЗМЕНЕНО: URL (Гибридный подход) ==================
+# ================== ИСПРАВЛЕНО: URL ==================
 def extract_url_from_message(message: types.Message) -> str | None:
     """Ищет URL в тексте сообщения или в его entities."""
     text = message.text or message.caption or ""
@@ -262,11 +258,14 @@ def extract_url_from_message(message: types.Message) -> str | None:
     if message.entities:
         for entity in message.entities:
             if entity.type == 'url':
-                return entity.get_text(text)
+                # ИСПРАВЛЕНО: 'MessageEntity' не имеет 'get_text', используем 'offset' и 'length'
+                return text[entity.offset : entity.offset + entity.length]
+                
     if message.caption_entities:
          for entity in message.caption_entities:
             if entity.type == 'url':
-                return entity.get_text(text)
+                # ИСПРАВЛЕНО: То же самое для caption_entities
+                return text[entity.offset : entity.offset + entity.length]
                 
     # Если entities нет, ищем простым regex
     match = re.search(r'https?://[^\s]+', text)
@@ -320,7 +319,6 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
                 prompt_with_url,
                 tools=tools,
             )
-            # (Опционально) Можно добавить проверку response.candidates[0].url_context_metadata
             return True, response.text
 
         # Вариант 3: Непонятный или пустой тип
@@ -335,14 +333,14 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
         logging.error(f"Ошибка при обработке URL 'чотам': {e}")
         return False, "Ошибка при анализе ссылки."
 
-# ================== ИЗМЕНЕНО: УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
+# ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
     """
     Универсальная функция для обработки всех типов медиа, текста и URL по команде 'чотам'
     """
     target_message = message.reply_to_message if message.reply_to_message else message
     
-    # НОВОЕ: В первую очередь ищем URL
+    # В первую очередь ищем URL
     # Проверяем и в реплае и в самом сообщении
     url = extract_url_from_message(target_message)
     if not url:
@@ -372,14 +370,13 @@ async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str
     else:
         return False, "Не найдено контента для анализа."
 
-# ИЗМЕНЕНО:
 def get_processing_message(message: types.Message) -> str:
     """
     Возвращает подходящее сообщение о процессе в зависимости от типа медиа
     """
     target_message = message.reply_to_message if message.reply_to_message else message
     
-    # НОВОЕ: Проверка на URL
+    # Проверка на URL
     url = extract_url_from_message(target_message)
     if not url:
         if not message.reply_to_message:
