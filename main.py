@@ -24,7 +24,7 @@ from config import (
 from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
-from common_settings import process_leave_chat
+from common_settings import process_leave_chat, process_leave_empty_chats
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
 from chat_settings import (
