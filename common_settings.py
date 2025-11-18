@@ -47,6 +47,8 @@ async def process_leave_chat(message: types.Message, chat_identifier: str):
 async def process_leave_empty_chats(message: types.Message):
     """Выходит из всех групповых чатов, где только бот и один пользователь"""
     
+    logging.info(f"Начинаю проверку чатов на одиночество. Всего чатов: {len(chat_list)}")
+    
     left_chats = []
     failed_chats = []
     
