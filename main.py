@@ -217,6 +217,7 @@ async def leave_empty_chats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("Еще чо сделать?")
         return
+    await process_leave_empty_chats(message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
 async def leave_chat(message: types.Message):
@@ -227,8 +228,7 @@ async def leave_chat(message: types.Message):
     await process_leave_chat(message, chat_identifier)
 
 
-    
-    await process_leave_empty_chats(message)
+   
 
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
 async def update_all_chats(message: types.Message):
