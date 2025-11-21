@@ -344,6 +344,7 @@ async def generate_insult_for_lis(message, model_instance):
         "Твой ответ — только результат микса (5-10 слов), без пояснений.\n\n"
         "Примеры для микширования:\n" + "\n".join(insult_words) +
         "\n\nОтветь только текстом без пояснений."
+        )
     
     def call_llm():
         try:
