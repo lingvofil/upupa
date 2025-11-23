@@ -14,10 +14,11 @@ from google.api_core import exceptions as google_exceptions
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, BufferedInputFile
 
 # Убедитесь, что все зависимости импортированы
 # (предполагается, что gemini_generation больше не нужен, но оставлен для бэкапа)
+# Добавил BufferedInputFile, который использовался в закомментированных функциях
 from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
@@ -25,6 +26,7 @@ from gemini_generation import process_gemini_generation, save_and_send_generated
 
 # =============================================================================
 # Класс и функции для работы с API Kandinsky (FusionBrain)
+# ОСТАВЛЕНО ДЛЯ РАБОТЫ handle_kandinsky_generation_command и для бэкапа.
 # =============================================================================
 
 class FusionBrainAPI:
@@ -152,217 +154,11 @@ async def process_image_generation(prompt):
         return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 # =============================================================================
-# БЭКАП ФУНКЦИЙ GEMINI (ЗАКОММЕНТИРОВАНЫ)
-# =============================================================================
-
-# async def _handle_pun_image_command_gemini(message: types.Message):
-#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-#     processing_msg = await message.reply("Генерирую хуйню...")
-#     pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
-#     Совпадать должны как минимум две буквы. 
-#     Не комментируй генерацию.
-#     Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
-#     Например: "манго+голубь = манголубь" """
-#     try:
-#         def sync_call():
-#             return model.generate_content(pun_prompt).text.strip()
-#         pun_word = await asyncio.to_thread(sync_call)
-#         
-#         parts = pun_word.split('=')
-#         
-#         if len(parts) != 2:
-#             await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
-#             return
-# 
-#         source_words = parts[0].strip()
-#         final_word = parts[1].strip()
-# 
-#         # ИЗМЕНЕНИЕ: Промпт сделан более прямым и "машинным", чтобы модель гарантированно генерировала изображение, а не текст.
-#         image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль."
-#         
-#         status, data = await process_gemini_generation(image_gen_prompt)
-# 
-#         if status == 'SUCCESS':
-#             image_data = data['image_data']
-#             # Накладываем на чистое изображение только итоговое слово
-#             modified_path = _overlay_text_on_image(image_data, final_word)
-#             await message.reply_photo(FSInputFile(modified_path))
-#             os.remove(modified_path)
-#             await processing_msg.delete()
-#         else:
-#             # Если data содержит текст ответа, покажем его пользователю
-#             error_text = data.get('error')
-#             if "Gemini не вернул изображение, но вернул текст" in error_text:
-#                 text_response = error_text.split(":", 1)[1].strip()
-#                 await processing_msg.edit_text(f"Модель не смогла сгенерировать картинку, но вот что она ответила:\n\n_{text_response}_", parse_mode="Markdown")
-#             else:
-#                 await processing_msg.edit_text(f"Ошибка генерации: {error_text}")
-# 
-#     except Exception as e:
-#         logging.error(f"Ошибка в _handle_pun_image_command_gemini: {e}", exc_info=True)
-#         await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
-
-# async def _handle_image_generation_command_gemini(message: types.Message):
-#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-#     prompt = None
-#     if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
-#         prompt = message.reply_to_message.text or message.reply_to_message.caption
-#     elif message.text.lower().startswith("нарисуй "):
-#         prompt = message.text[len("нарисуй "):].strip()
-#     if not prompt:
-#         await message.reply("Шо именно нарисовать-то?")
-#         return
-#     processing_message = await message.reply("Ща падажжи, рисую...")
-#     status, data = await process_gemini_generation(prompt)
-#     if status == 'SUCCESS':
-#         await processing_message.delete()
-#         await save_and_send_gemini(message, data['image_data'])
-#     else:
-#         await processing_message.edit_text(f"Ошибка: {data.get('error')}")
-
-# async def _handle_redraw_command_gemini(message: types.Message):
-#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-#     processing_msg = await message.reply("Анализирую тваю мазню...")
-#     try:
-#         photo = None
-#         if message.photo:
-#             photo = message.photo[-1]
-#         elif message.document:
-#             photo = message.document
-#         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-#             photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-#         if not photo:
-#             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
-#             return
-#         image_bytes = await download_telegram_image(bot, photo)
-#         detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
-# Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
-#         def sync_describe():
-#             return model.generate_content([
-#                 detailed_prompt,
-#                 {"mime_type": "image/jpeg", "data": image_bytes}
-#             ]).text.strip()
-#         description = await asyncio.to_thread(sync_describe)
-#         status, data = await process_gemini_generation(description)
-#         if status == 'SUCCESS':
-#             await processing_msg.delete()
-#             await save_and_send_gemini(message, data['image_data'])
-#         else:
-#             await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
-#     except Exception as e:
-#         logging.error(f"Ошибка в _handle_redraw_command_gemini: {e}", exc_info=True)
-#         await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
-# # ✨ Редактирование изображения через Gemini
-# async def _handle_edit_command_gemini(message: types.Message):
-#     processing_msg = None
-#     try:
-#         logging.info("[EDIT] Получен запрос на редактирование изображения")
-#         bot_instance = message.bot # Используем bot из message
-#         processing_msg = await message.reply("Применяю магию...")
-# 
-#         # 1. Получаем фото
-#         image_obj = None
-#         if message.photo:
-#             image_obj = message.photo[-1]
-#         elif message.document:
-#             image_obj = message.document
-#         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-#             image_obj = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-#         
-#         if not image_obj:
-#             await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
-#             return
-# 
-#         # 2. Скачиваем изображение в байты
-#         image_bytes = await download_telegram_image(bot_instance, image_obj)
-#         if not image_bytes:
-#              await processing_msg.edit_text("Не удалось загрузить изображение.")
-#              return
-#         logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
-# 
-#         # 3. Получаем текстовый промпт
-#         prompt = ""
-#         if message.caption:
-#             prompt = message.caption.lower().replace("отредактируй", "", 1).strip()
-#         elif message.text:
-#             prompt = message.text.lower().replace("отредактируй", "", 1).strip()
-#     _     
-#         if not prompt:
-#             await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
-#             return
-# 
-#         # 4. Отправляем запрос в Gemini
-#         def sync_edit_call():
-#             # Готовим данные для модели: текст и PIL изображение
-#             img = Image.open(BytesIO(image_bytes))
-#             # ИЗМЕНЕНИЕ: Используем специальную модель для редактирования
-#             return edit_model.generate_content([prompt, img])
-# 
-#         response = await asyncio.to_thread(sync_edit_call)
-#         
-#         # 5. Обрабатываем ответ
-#         edited_image_found = False
-#         # Ответ от API состоит из "частей". Ищем часть с изображением.
-#         for part in response.parts:
-#             # Самый надежный способ - проверить MIME-тип
-#             if part.mime_type and part.mime_type.startswith("image/"):
-#                 # Извлекаем байты изображения
-#                 image_data = part.inline_data.data
-#                 output_file = types.BufferedInputFile(image_data, filename="edited.png")
-#                 
-#                 await processing_msg.delete() # Удаляем сообщение "Применяю магию..."
-#                 await message.reply_photo(photo=output_file)
-#                 
-#                 edited_image_found = True
-#                 break # Выходим из цикла, так как нашли картинку
-# 
-#         if not edited_image_found:
-#             # Если изображений в ответе нет, возможно, модель вернула текст (например, с ошибкой или отказом)
-#             text_feedback = "Модель не вернула изображение."
-#             try:
-#                 # Попытаемся извлечь текстовый ответ для отладки
-#                 text_feedback = response.text
-#                 logging.warning(f"[EDIT] Gemini не вернул изображение. Ответ: {text_feedback}")
-#             except Exception as e:
-#                 logging.error(f"[EDIT] Не удалось извлечь текст из ответа Gemini: {e}. Полный ответ: {response}")
-# 
-#             await processing_msg.edit_text(
-#                 f"Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.\n\n"
-#                 f"Ответ модели: _{text_feedback}_",
-#                 parse_mode="Markdown"
-#             )
-#     # ИЗМЕНЕНИЕ: Отлавливаем ошибку 'Not Found' и даем пользователю четкую инструкцию
-#     except google_exceptions.NotFound as e:
-#         logging.error(f"[EDIT] Ошибка 'Модель не найдена': {e}", exc_info=True)
-#         error_message = (
-#             "**Ошибка: Модель для редактирования не найдена!**\n\n"
-#             "Похоже, что в `config.py` указано неверное имя модели.\n"
-#             "Пожалуйста, замените строку в `config.py` на:\n"
-#             "`edit_model = genai.GenerativeModel(\"models/gemini-pro-vision\")`\n\n"
-#             "Это специальная модель для работы с изображениями."
-#         )
-#         if processing_msg:
-#             await processing_msg.edit_text(error_message, parse_mode="Markdown")
-#         else:
-#             await message.reply(error_message, parse_mode="Markdown")
-#     except Exception as e:
-#         logging.error(f"[EDIT] Критическая ошибка в _handle_edit_command_gemini: {e}", exc_info=True)
-#         if processing_msg:
-#             await processing_msg.edit_text("Произошла критическая ошибка при редактировании изображения.")
-#         else:
-#             await message.reply("Произошла критическая ошибка при редактировании изображения.")
-
-
-# =============================================================================
-# Каламбур, Нарисуй, Перерисуй, Отредактируй -> KANDINSKY
+# ФУНКЦИИ GEMINI (ВОССТАНОВЛЕНЫ И СТАНОВЯТСЯ ОСНОВНЫМИ)
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
-    """
-    Генерирует каламбур (текст через Gemini) и картинку (через Kandinsky).
-    """
+    """Генерирует каламбур (текст) и изображение (через Gemini)."""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Генерирую хуйню...")
     pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
@@ -371,7 +167,6 @@ async def handle_pun_image_command(message: types.Message):
     Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
     Например: "манго+голубь = манголубь" """
     try:
-        # 1. Генерируем текст каламбура (все еще через Gemini)
         def sync_call():
             return model.generate_content(pun_prompt).text.strip()
         pun_word = await asyncio.to_thread(sync_call)
@@ -379,36 +174,40 @@ async def handle_pun_image_command(message: types.Message):
         parts = pun_word.split('=')
         
         if len(parts) != 2:
-            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети (Gemini) не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
             return
-
+    
         source_words = parts[0].strip()
         final_word = parts[1].strip()
 
-        # 2. Генерируем изображение (уже через Kandinsky)
-        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль, высокое качество."
+        # ИЗМЕНЕНИЕ: Промпт сделан более прямым и "машинным", чтобы модель гарантированно генерировала изображение, а не текст.
+        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль."
         
-        success, error_message, image_data = await process_image_generation(image_gen_prompt)
+        status, data = await process_gemini_generation(image_gen_prompt)
 
-        if success and image_data:
-            # 3. Накладываем текст на готовое изображение
+        if status == 'SUCCESS':
+            image_data = data['image_data']
+            # Накладываем на чистое изображение только итоговое слово
             modified_path = _overlay_text_on_image(image_data, final_word)
             await message.reply_photo(FSInputFile(modified_path))
-            if os.path.exists(modified_path):
-                os.remove(modified_path)
+            os.remove(modified_path)
             await processing_msg.delete()
         else:
-            await processing_msg.edit_text(f"Ошибка генерации изображения (Kandinsky): {error_message}")
-
+            # Если data содержит текст ответа, покажем его пользователю
+            error_text = data.get('error')
+            if "Gemini не вернул изображение, но вернул текст" in error_text:
+                text_response = error_text.split(":", 1)[1].strip()
+                await processing_msg.edit_text(f"Модель не смогла сгенерировать картинку, но вот что она ответила:\n\n_{text_response}_", parse_mode="Markdown")
+            else:
+                await processing_msg.edit_text(f"Ошибка генерации: {error_text}")
+    
     except Exception as e:
-        logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
+        logging.error(f"Ошибка в handle_pun_image_command (Gemini): {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 
 async def handle_image_generation_command(message: types.Message):
-    """
-    Команда "Нарисуй" -> Kandinsky
-    """
+    """Команда "Нарисуй" -> Gemini."""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = None
     if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
@@ -418,24 +217,16 @@ async def handle_image_generation_command(message: types.Message):
     if not prompt:
         await message.reply("Шо именно нарисовать-то?")
         return
-        
-    processing_message = await message.reply("Ща падажжи, ебана.")
-    
-    # Вызываем Kandinsky
-    success, error_message, image_data = await process_image_generation(prompt)
-    
-    if success and image_data:
+    processing_message = await message.reply("Ща падажжи, рисую (через Gemini)...")
+    status, data = await process_gemini_generation(prompt)
+    if status == 'SUCCESS':
         await processing_message.delete()
-        buffered_image = types.BufferedInputFile(image_data, filename="kandinsky.png")
-        await message.reply_photo(buffered_image)
+        await save_and_send_gemini(message, data['image_data'])
     else:
-        await processing_message.edit_text(f"Ошибка (Kandinsky): {error_message}")
-
+        await processing_message.edit_text(f"Ошибка: {data.get('error')}")
 
 async def handle_redraw_command(message: types.Message):
-    """
-    Команда "Перерисуй" -> Kandinsky (с описанием от Gemini)
-    """
+    """Команда "Перерисуй" -> Gemini (Описание + Генерация)."""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Анализирую тваю мазню...")
     try:
@@ -449,57 +240,33 @@ async def handle_redraw_command(message: types.Message):
         if not photo:
             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
             return
-
-        # 1. Получаем описание изображения (все еще через Gemini, т.к. Kandinsky не видит)
         image_bytes = await download_telegram_image(bot, photo)
-        description = ""
-        try:
-            detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
+        detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
 Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
-            
-            def sync_describe():
-                # Убедимся, что model (gemini) определена
-                if not model:
-                    raise Exception("Модель Gemini (model) не сконфигурирована.")
-                return model.generate_content([
-                    detailed_prompt,
-                    {"mime_type": "image/jpeg", "data": image_bytes}
-                ]).text.strip()
-            description = await asyncio.to_thread(sync_describe)
-            logging.info(f"[Redraw] Gemini дал описание: {description[:100]}...")
-            await processing_msg.edit_text("Анал лизирую твою мазню")
-            
-        except Exception as e:
-            logging.warning(f"Ошибка получения описания от Gemini (в handle_redraw_command): {e}. Используем запасной промпт.")
-            description = "очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок"
-            await processing_msg.edit_text("Не смог получить описание от Gemini, рисую пародию по общему промпту (через Kandinsky)...")
-
-        # 2. Генерируем изображение по описанию (через Kandinsky)
-        success, error_message, image_data = await process_image_generation(description)
-        
-        if success and image_data:
+        def sync_describe():
+            return model.generate_content([
+                detailed_prompt,
+                {"mime_type": "image/jpeg", "data": image_bytes}
+            ]).text.strip()
+        description = await asyncio.to_thread(sync_describe)
+        status, data = await process_gemini_generation(description)
+        if status == 'SUCCESS':
             await processing_msg.delete()
-            buffered_image = types.BufferedInputFile(image_data, filename="kandinsky_redraw.png")
-            await message.reply_photo(buffered_image)
+            await save_and_send_gemini(message, data['image_data'])
         else:
-            await processing_msg.edit_text(f"Ошибка (Kandinsky): {error_message}")
-            
+            await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
     except Exception as e:
-        logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
+        logging.error(f"Ошибка в handle_redraw_command (Gemini): {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
-
+# ✨ Редактирование изображения через Gemini
 async def handle_edit_command(message: types.Message):
-    """
-    Команда "Отредактируй" -> Kandinsky (с описанием от Gemini)
-    Kandinsky не умеет редактировать, поэтому мы описываем
-    оригинал и добавляем промпт, генерируя новое изображение.
-    """
+    """Команда "Отредактируй" -> Gemini (Image-to-Image Editing)."""
     processing_msg = None
     try:
-        logging.info("[EDIT-KANDINSKY] Получен запрос на редактирование")
+        logging.info("[EDIT-GEMINI] Получен запрос на редактирование изображения")
         bot_instance = message.bot 
-        processing_msg = await message.reply("Применяю магию (через Kandinsky)...")
+        processing_msg = await message.reply("Применяю магию (через Gemini)...")
 
         # 1. Получаем фото
         image_obj = None
@@ -509,71 +276,309 @@ async def handle_edit_command(message: types.Message):
             image_obj = message.document
         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
             image_obj = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-            
+        
         if not image_obj:
             await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
             return
 
-        # 2. Скачиваем изображение
+        # 2. Скачиваем изображение в байты
         image_bytes = await download_telegram_image(bot_instance, image_obj)
         if not image_bytes:
              await processing_msg.edit_text("Не удалось загрузить изображение.")
              return
-        logging.info(f"[EDIT-KANDINSKY] Изображение загружено, размер {len(image_bytes)} байт")
+        logging.info(f"[EDIT-GEMINI] Изображение загружено, размер {len(image_bytes)} байт")
 
         # 3. Получаем текстовый промпт
-        prompt_text = ""
-        if message.caption:
-            prompt_text = message.caption.lower().replace("отредактируй", "", 1).strip()
-        elif message.text:
-            prompt_text = message.text.lower().replace("отредактируй", "", 1).strip()
+        prompt = ""
+        # Проверяем caption/text и удаляем команду
+        if message.caption and message.caption.lower().startswith("отредактируй"):
+            prompt = message.caption.lower().replace("отредактируй", "", 1).strip()
+        elif message.text and message.text.lower().startswith("отредактируй"):
+            prompt = message.text.lower().replace("отредактируй", "", 1).strip()
             
-        if not prompt_text:
+        if not prompt:
             await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
             return
+
+        # 4. Отправляем запрос в Gemini
+        def sync_edit_call():
+            # Готовим данные для модели: текст и PIL изображение
+            img = Image.open(BytesIO(image_bytes))
+            # ИЗМЕНЕНИЕ: Используем специальную модель для редактирования, предполагая, что edit_model настроена на gemini-2.5-flash-image-preview или аналогичную
+            return edit_model.generate_content([prompt, img])
+
+        response = await asyncio.to_thread(sync_edit_call)
         
-        # 4. Получаем описание оригинала (через Gemini)
-        original_description = ""
-        try:
-            await processing_msg.edit_text("Описываю оригинал (через Gemini)...")
-            def sync_describe_original():
-                if not model:
-                     raise Exception("Модель Gemini (model) не сконфигурирована.")
-                return model.generate_content([
-                    "Опиши это изображение детально для его воссоздания: объекты, фон, стиль.",
-                    {"mime_type": "image/jpeg", "data": image_bytes}
-                ]).text.strip()
-            original_description = await asyncio.to_thread(sync_describe_original)
-            logging.info(f"[EDIT-KANDINSKY] Gemini дал описание: {original_description[:100]}...")
-            
-        except Exception as e:
-            logging.warning(f"Ошибка получения описания от Gemini (в handle_edit_command): {e}. Используем только промпт пользователя.")
-            original_description = "" # Оставляем пустым, если Gemini не ответил
+        # 5. Обрабатываем ответ
+        edited_image_found = False
+        # Ответ от API состоит из "частей". Ищем часть с изображением.
+        for part in response.parts:
+            # Самый надежный способ - проверить MIME-тип
+            if part.mime_type and part.mime_type.startswith("image/"):
+                # Извлекаем байты изображения
+                image_data = part.inline_data.data
+                output_file = BufferedInputFile(image_data, filename="edited.png")
+                
+                await processing_msg.delete() # Удаляем сообщение "Применяю магию..."
+                await message.reply_photo(photo=output_file)
+                
+                edited_image_found = True
+                break # Выходим из цикла, так как нашли картинку
 
-        # 5. Собираем финальный промпт для Kandinsky
-        if original_description:
-            final_kandinsky_prompt = f"{original_description}. {prompt_text}"
-        else:
-            final_kandinsky_prompt = prompt_text # Если Gemini не смог описать, используем только запрос
-            
-        await processing_msg.edit_text(f"Генерирую новое изображение по промпту: '{final_kandinsky_prompt[:150]}...' (через Kandinsky)")
+        if not edited_image_found:
+            # Если изображений в ответе нет, возможно, модель вернула текст (например, с ошибкой или отказом)
+            text_feedback = "Модель не вернула изображение."
+            try:
+                # Попытаемся извлечь текстовый ответ для отладки
+                text_feedback = response.text
+                logging.warning(f"[EDIT-GEMINI] Gemini не вернул изображение. Ответ: {text_feedback}")
+            except Exception as e:
+                logging.error(f"[EDIT-GEMINI] Не удалось извлечь текст из ответа Gemini: {e}. Полный ответ: {response}")
 
-        # 6. Генерируем новое изображение (через Kandinsky)
-        success, error_message, image_data = await process_image_generation(final_kandinsky_prompt)
-
-        if success and image_data:
-            await processing_msg.delete()
-            buffered_image = types.BufferedInputFile(image_data, filename="kandinsky_edited.png")
-            await message.reply_photo(buffered_image)
-        else:
-            await processing_msg.edit_text(f"Ошибка генерации (Kandinsky): {error_message}")
-
-    except Exception as e:
-        logging.error(f"[EDIT-KANDINSKY] Критическая ошибка: {e}", exc_info=True)
+            await processing_msg.edit_text(
+                f"Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.\n\n"
+                f"Ответ модели: _{text_feedback}_",
+                parse_mode="Markdown"
+            )
+    # ИЗМЕНЕНИЕ: Отлавливаем ошибку 'Not Found' и даем пользователю четкую инструкцию
+    except google_exceptions.NotFound as e:
+        logging.error(f"[EDIT-GEMINI] Ошибка 'Модель не найдена': {e}", exc_info=True)
+        error_message = (
+            "**Ошибка: Модель для редактирования не найдена!**\n\n"
+            "Похоже, что в `config.py` указано неверное имя модели или модель недоступна.\n"
+            "Проверьте, что `edit_model` настроен на модель с поддержкой Image-to-Image (например, `gemini-2.5-flash-image-preview` или `gemini-pro-vision`)."
+        )
         if processing_msg:
-            await processing_msg.edit_text("Произошла критическая ошибка при редактировании изображения.")
+            await processing_msg.edit_text(error_message, parse_mode="Markdown")
+        else:
+            await message.reply(error_message, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"[EDIT-GEMINI] Критическая ошибка в handle_edit_command: {e}", exc_info=True)
+        if processing_msg:
+            await processing_msg.edit_text(f"Произошла критическая ошибка при редактировании изображения (Gemini): {str(e)[:150]}")
         else:
             await message.reply("Произошла критическая ошибка при редактировании изображения.")
+
+
+# =============================================================================
+# БЭКАП ФУНКЦИЙ KANDINSKY (ЗАКОММЕНТИРОВАНЫ)
+# =============================================================================
+
+# async def handle_pun_image_command_kandinsky(message: types.Message):
+#     """
+#     БЭКАП: Генерирует каламбур (текст через Gemini) и картинку (через Kandinsky).
+#     """
+#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+#     processing_msg = await message.reply("Генерирую хуйню...")
+#     pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
+#     Совпадать должны как минимум две буквы. 
+#     Не комментируй генерацию.
+#     Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
+#     Например: "манго+голубь = манголубь" """
+#     try:
+#         # 1. Генерируем текст каламбура (все еще через Gemini)
+#         def sync_call():
+#             return model.generate_content(pun_prompt).text.strip()
+#         pun_word = await asyncio.to_thread(sync_call)
+        
+#         parts = pun_word.split('=')
+        
+#         if len(parts) != 2:
+#             await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети (Gemini) не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+#             return
+
+#         source_words = parts[0].strip()
+#         final_word = parts[1].strip()
+
+#         # 2. Генерируем изображение (уже через Kandinsky)
+#         image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль, высокое качество."
+        
+#         success, error_message, image_data = await process_image_generation(image_gen_prompt)
+
+#         if success and image_data:
+#             # 3. Накладываем текст на готовое изображение
+#             modified_path = _overlay_text_on_image(image_data, final_word)
+#             await message.reply_photo(FSInputFile(modified_path))
+#             if os.path.exists(modified_path):
+#                 os.remove(modified_path)
+#             await processing_msg.delete()
+#         else:
+#             await processing_msg.edit_text(f"Ошибка генерации изображения (Kandinsky): {error_message}")
+
+#     except Exception as e:
+#         logging.error(f"Ошибка в handle_pun_image_command_kandinsky: {e}", exc_info=True)
+#         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
+
+# async def handle_image_generation_command_kandinsky(message: types.Message):
+#     """
+#     БЭКАП: Команда "Нарисуй" -> Kandinsky
+#     """
+#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+#     prompt = None
+#     if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
+#         prompt = message.reply_to_message.text or message.reply_to_message.caption
+#     elif message.text.lower().startswith("нарисуй "):
+#         prompt = message.text[len("нарисуй "):].strip()
+#     if not prompt:
+#         await message.reply("Шо именно нарисовать-то?")
+#         return
+        
+#     processing_message = await message.reply("Ща падажжи, ебана.")
+    
+#     # Вызываем Kandinsky
+#     success, error_message, image_data = await process_image_generation(prompt)
+    
+#     if success and image_data:
+#         await processing_message.delete()
+#         buffered_image = types.BufferedInputFile(image_data, filename="kandinsky.png")
+#         await message.reply_photo(buffered_image)
+#     else:
+#         await processing_message.edit_text(f"Ошибка (Kandinsky): {error_message}")
+
+
+# async def handle_redraw_command_kandinsky(message: types.Message):
+#     """
+#     БЭКАП: Команда "Перерисуй" -> Kandinsky (с описанием от Gemini)
+#     """
+#     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+#     processing_msg = await message.reply("Анализирую тваю мазню...")
+#     try:
+#         photo = None
+#         if message.photo:
+#             photo = message.photo[-1]
+#         elif message.document:
+#             photo = message.document
+#         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+#             photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+#         if not photo:
+#             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
+#             return
+
+#         # 1. Получаем описание изображения (все еще через Gemini, т.к. Kandinsky не видит)
+#         image_bytes = await download_telegram_image(bot, photo)
+#         description = ""
+#         try:
+#             detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
+# Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
+            
+#             def sync_describe():
+#                 # Убедимся, что model (gemini) определена
+#                 if not model:
+#                     raise Exception("Модель Gemini (model) не сконфигурирована.")
+#                 return model.generate_content([
+#                     detailed_prompt,
+#                     {"mime_type": "image/jpeg", "data": image_bytes}
+#                 ]).text.strip()
+#             description = await asyncio.to_thread(sync_describe)
+#             logging.info(f"[Redraw] Gemini дал описание: {description[:100]}...")
+#             await processing_msg.edit_text("Анал лизирую твою мазню")
+            
+#         except Exception as e:
+#             logging.warning(f"Ошибка получения описания от Gemini (в handle_redraw_command_kandinsky): {e}. Используем запасной промпт.")
+#             description = "очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок"
+#             await processing_msg.edit_text("Не смог получить описание от Gemini, рисую пародию по общему промпту (через Kandinsky)...")
+
+#         # 2. Генерируем изображение по описанию (через Kandinsky)
+#         success, error_message, image_data = await process_image_generation(description)
+        
+#         if success and image_data:
+#             await processing_msg.delete()
+#             buffered_image = types.BufferedInputFile(image_data, filename="kandinsky_redraw.png")
+#             await message.reply_photo(buffered_image)
+#         else:
+#             await processing_msg.edit_text(f"Ошибка (Kandinsky): {error_message}")
+            
+#     except Exception as e:
+#         logging.error(f"Ошибка в handle_redraw_command_kandinsky: {e}", exc_info=True)
+#         await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
+
+# async def handle_edit_command_kandinsky(message: types.Message):
+#     """
+#     БЭКАП: Команда "Отредактируй" -> Kandinsky (с описанием от Gemini)
+#     Kandinsky не умеет редактировать, поэтому мы описываем
+#     оригинал и добавляем промпт, генерируя новое изображение.
+#     """
+#     processing_msg = None
+#     try:
+#         logging.info("[EDIT-KANDINSKY] Получен запрос на редактирование")
+#         bot_instance = message.bot 
+#         processing_msg = await message.reply("Применяю магию (через Kandinsky)...")
+
+#         # 1. Получаем фото
+#         image_obj = None
+#         if message.photo:
+#             image_obj = message.photo[-1]
+#         elif message.document:
+#             image_obj = message.document
+#         elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+#             image_obj = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+            
+#         if not image_obj:
+#             await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
+#             return
+
+#         # 2. Скачиваем изображение
+#         image_bytes = await download_telegram_image(bot_instance, image_obj)
+#         if not image_bytes:
+#              await processing_msg.edit_text("Не удалось загрузить изображение.")
+#              return
+#         logging.info(f"[EDIT-KANDINSKY] Изображение загружено, размер {len(image_bytes)} байт")
+
+#         # 3. Получаем текстовый промпт
+#         prompt_text = ""
+#         if message.caption:
+#             prompt_text = message.caption.lower().replace("отредактируй", "", 1).strip()
+#         elif message.text:
+#             prompt_text = message.text.lower().replace("отредактируй", "", 1).strip()
+            
+#         if not prompt_text:
+#             await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
+#             return
+        
+#         # 4. Получаем описание оригинала (через Gemini)
+#         original_description = ""
+#         try:
+#             await processing_msg.edit_text("Описываю оригинал (через Gemini)...")
+#             def sync_describe_original():
+#                 if not model:
+#                     raise Exception("Модель Gemini (model) не сконфигурирована.")
+#                 return model.generate_content([
+#                     "Опиши это изображение детально для его воссоздания: объекты, фон, стиль.",
+#                     {"mime_type": "image/jpeg", "data": image_bytes}
+#                 ]).text.strip()
+#             original_description = await asyncio.to_thread(sync_describe_original)
+#             logging.info(f"[EDIT-KANDINSKY] Gemini дал описание: {original_description[:100]}...")
+            
+#         except Exception as e:
+#             logging.warning(f"Ошибка получения описания от Gemini (в handle_edit_command_kandinsky): {e}. Используем только промпт пользователя.")
+#             original_description = "" # Оставляем пустым, если Gemini не ответил
+
+#         # 5. Собираем финальный промпт для Kandinsky
+#         if original_description:
+#             final_kandinsky_prompt = f"{original_description}. {prompt_text}"
+#         else:
+#             final_kandinsky_prompt = prompt_text # Если Gemini не смог описать, используем только запрос
+            
+#         await processing_msg.edit_text(f"Генерирую новое изображение по промпту: '{final_kandinsky_prompt[:150]}...' (через Kandinsky)")
+
+#         # 6. Генерируем новое изображение (через Kandinsky)
+#         success, error_message, image_data = await process_image_generation(final_kandinsky_prompt)
+
+#         if success and image_data:
+#             await processing_msg.delete()
+#             buffered_image = types.BufferedInputFile(image_data, filename="kandinsky_edited.png")
+#             await message.reply_photo(buffered_image)
+#         else:
+#             await processing_msg.edit_text(f"Ошибка генерации (Kandinsky): {error_message}")
+
+#     except Exception as e:
+#         logging.error(f"[EDIT-KANDINSKY] Критическая ошибка: {e}", exc_info=True)
+#         if processing_msg:
+#             await processing_msg.edit_text("Произошла критическая ошибка при редактировании изображения.")
+#         else:
+#             await message.reply("Произошла критическая ошибка при редактировании изображения.")
 
 
 # =============================================================================
@@ -581,6 +586,7 @@ async def handle_edit_command(message: types.Message):
 # =============================================================================
 
 async def handle_kandinsky_generation_command(message: types.Message):
+    """Команда "Сгенерируй" -> Kandinsky (остается активной)."""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = None
     if message.text.lower().startswith("сгенерируй "):
@@ -638,7 +644,7 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         if os.path.exists(font_path):
             font = ImageFont.truetype(font_path, font_size)
         else:
-             # Запасной вариант для Windows (если вдруг)
+            # Запасной вариант для Windows (если вдруг)
             font_path = "arial.ttf"
             if os.path.exists(font_path):
                 font = ImageFont.truetype(font_path, font_size)
@@ -650,66 +656,31 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
                     logging.error("Не удалось загрузить даже стандартный шрифт.")
                     # В этом случае font останется None
 
-    if font is None:
-         logging.error("Шрифт не загружен. Наложение текста невозможно. Изображение будет сохранено как есть.")
-         image.save(output_path, quality=90)
-         return output_path
+    if font:
+        width, height = image.size
+        lines = textwrap.wrap(text, width=20) # Ограничиваем ширину текста
+        y_text = height - 50 - len(lines) * font_size # Начинаем снизу
 
-    max_width = image.width - 40
-    
-    # Улучшенный расчет средней ширины символа
-    sample_chars = "абвгдежзийклмнопрстуфхцчшщъыьэюяАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
-    try:
-        avg_char_width = sum(_get_text_size(font, char)[0] for char in sample_chars) / len(sample_chars)
-    except Exception:
-        avg_char_width = font_size / 2 # Приблизительный fallback
+        # Вычисляем максимальную ширину текста для центрирования
+        max_text_width = max([_get_text_size(font, line)[0] for line in lines])
         
-    max_chars_per_line = int(max_width // avg_char_width) if avg_char_width > 0 else 20
-    
-    lines = textwrap.wrap(text, width=max_chars_per_line, drop_whitespace=False, replace_whitespace=False)
-    
-    if not lines:
-        logging.warning("Textwrap не вернул строк, возможно, текст пустой.")
-        lines = [""] # Гарантируем хотя бы одну пустую строку для рендера фона
-
-    try:
-        _, line_height = _get_text_size(font, "A")
-    except Exception as e:
-        logging.warning(f"Не удалось получить высоту строки: {e}, используем fallback {font_size}")
-        line_height = font_size
-
-    text_block_height = (line_height + 5) * len(lines)
-    margin_bottom = 60
-    
-    # Рисуем полупрозрачный фон для текста
-    y = image.height - text_block_height - margin_bottom
-    try:
-        rectangle = Image.new('RGBA', (image.width, text_block_height + 40), (0, 0, 0, 128))
-        image.paste(rectangle, (0, y - 20), rectangle)
-    except Exception as e:
-        logging.warning(f"Не удалось наложить полупрозрачный фон: {e}")
-        # Рисуем сплошной фон, если RGBA не удалось
-        draw.rectangle([0, y - 20, image.width, y + text_block_height + 20], fill=(0, 0, 0))
-
-    
-    current_y = y - 10
-    
-    # Рисуем текст
-    for line in lines:
-        try:
-            text_width, _ = _get_text_size(font, line)
-        except Exception:
-            text_width = len(line) * avg_char_width # Fallback
+        for line in reversed(lines):
+            line_width, line_height = _get_text_size(font, line)
+            x = (width - line_width) / 2 # Центрируем
             
-        x = (image.width - text_width) / 2
-        # Обводка для читаемости
-        draw.text((x-1, current_y-1), line, font=font, fill="black")
-        draw.text((x+1, current_y-1), line, font=font, fill="black")
-        draw.text((x-1, current_y+1), line, font=font, fill="black")
-        draw.text((x+1, current_y+1), line, font=font, fill="black")
-        # Сам текст
-        draw.text((x, current_y), line, font=font, fill="white")
-        current_y += line_height + 5
-        
-    image.save(output_path, quality=90)
+            # Обводка текста (outline)
+            outline_color = (0, 0, 0)
+            fill_color = (255, 255, 255)
+            
+            draw.text((x-1, y_text), line, font=font, fill=outline_color)
+            draw.text((x+1, y_text), line, font=font, fill=outline_color)
+            draw.text((x, y_text-1), line, font=font, fill=outline_color)
+            draw.text((x, y_text+1), line, font=font, fill=outline_color)
+            
+            # Основной текст
+            draw.text((x, y_text), line, font=font, fill=fill_color)
+            
+            y_text -= (line_height + 5) # Сдвигаем вверх для следующей строки
+
+    image.save(output_path, 'JPEG')
     return output_path
