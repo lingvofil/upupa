@@ -145,6 +145,10 @@ from content_filter import ContentFilterMiddleware
 from dnd import dnd_router 
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
+@router.message(F.text.lower() == "упупа какая модель")
+async def check_current_model(message: types.Message):
+    await message.reply(model.last_used_model_name)
+
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
