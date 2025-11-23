@@ -54,31 +54,25 @@ class FallbackChatSession:
     """
     def __init__(self, wrapper, initial_history=None):
         self.wrapper = wrapper
-        # Нам нужно инициализировать "настоящую" историю в формате Google.
-        # Для этого мы создаем временную сессию с первой рабочей моделью.
         self._history = []
         self._init_real_history(initial_history)
 
     def _init_real_history(self, initial_history):
-        """Создает реальный объект истории Google, чтобы dnd.py мог его редактировать."""
         for model_name in self.wrapper.model_names:
             try:
                 model = genai.GenerativeModel(model_name)
-                # Запускаем чат, чтобы получить объект истории правильного типа
                 chat = model.start_chat(history=initial_history)
                 self._history = chat.history
-                logging.info(f"✅ Чат инициализирован через {model_name}")
+                # Если инициализация прошла успешно, запоминаем модель
+                self.wrapper.last_used_model_name = model_name 
                 return
-            except Exception as e:
-                logging.warning(f"⚠️ Не удалось инициализировать чат через {model_name}: {e}")
+            except Exception:
                 continue
-        # Если ни одна модель не смогла создать историю (вряд ли), создаем пустой список
         if self._history is None:
             self._history = []
 
     @property
     def history(self):
-        """Возвращает историю. dnd.py использует это свойство."""
         return self._history
 
     @history.setter
@@ -86,33 +80,22 @@ class FallbackChatSession:
         self._history = value
 
     def send_message(self, content):
-        """
-        Отправляет сообщение, перебирая модели при ошибках.
-        """
         last_error = None
-        
         for model_name in self.wrapper.model_names:
             try:
-                # 1. Создаем свежую модель
                 current_model = genai.GenerativeModel(model_name)
-                
-                # 2. Загружаем в неё ТЕКУЩУЮ историю
-                # (Важно: передаем self._history, который мог быть изменен в dnd.py)
                 chat = current_model.start_chat(history=self._history)
                 
-                # 3. Пытаемся отправить сообщение
                 response = chat.send_message(content)
                 
-                # 4. Если успех - обновляем нашу сохраненную историю
+                # УСПЕХ: Обновляем историю и запоминаем текущую рабочую модель
                 self._history = chat.history
+                self.wrapper.last_used_model_name = model_name 
                 return response
 
             except exceptions.ResourceExhausted:
-                logging.warning(f"⚠️ Лимит исчерпан для {model_name} в чате. Пробую следующую...")
                 continue
             except Exception as e:
-                # Ловим 404 (модель не найдена) и другие ошибки
-                logging.error(f"❌ Ошибка в чате с моделью {model_name}: {e}")
                 last_error = e
                 continue
         
@@ -122,24 +105,27 @@ class FallbackChatSession:
 class ModelFallbackWrapper:
     def __init__(self, model_names):
         self.model_names = model_names
+        # Переменная для хранения последней успешной модели
+        self.last_used_model_name = "Еще не использовалась"
 
     def generate_content(self, *args, **kwargs):
-        """Обычная генерация (для команд типа 'пирожок' и т.д.)"""
         last_error = None
         for model_name in self.model_names:
             try:
                 current_model = genai.GenerativeModel(model_name)
-                return current_model.generate_content(*args, **kwargs)
+                result = current_model.generate_content(*args, **kwargs)
+                
+                # УСПЕХ: Запоминаем модель
+                self.last_used_model_name = model_name
+                return result
+                
             except (exceptions.ResourceExhausted, Exception) as e:
-                logging.warning(f"⚠️ Ошибка генерации на {model_name}: {e}. Пробую следующую...")
+                logging.warning(f"⚠️ Ошибка на {model_name}: {e}")
                 last_error = e
                 continue
         raise last_error if last_error else Exception("Все модели исчерпаны.")
 
     def start_chat(self, history=None):
-        """
-        Возвращает нашу 'Умную сессию', которая умеет менять модели.
-        """
         return FallbackChatSession(self, initial_history=history)
 
 # Создаем "умную" модель
