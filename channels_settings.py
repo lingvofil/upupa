@@ -91,8 +91,18 @@ async def _download_random_media(url):
             )
             page = await context.new_page()
             try:
-                await page.goto(url)
-                await page.wait_for_load_state('networkidle')
+                # ИЗМЕНЕНИЕ 1: Увеличен таймаут до 60 сек и изменено условие ожидания на domcontentloaded
+                # Это позволяет не ждать загрузки всей рекламы и счетчиков
+                await page.goto(url, timeout=60000, wait_until='domcontentloaded')
+                
+                # ИЗМЕНЕНИЕ 2: Ожидание networkidle обернуто в try/except
+                # Tgstat может постоянно подгружать данные, из-за чего networkidle никогда не наступит
+                try:
+                    await page.wait_for_load_state('networkidle', timeout=5000)
+                except Exception:
+                    pass # Игнорируем, если сеть не успокоилась, у нас есть явный wait ниже
+
+                # Оставляем явное ожидание для подгрузки картинок (infinite scroll / lazy load)
                 await page.wait_for_timeout(10000)
                 
                 media_urls = await page.evaluate("""
@@ -149,4 +159,3 @@ async def _send_media_file(message, media_url, media_type):
     except Exception as e:
         logging.error(f"Ошибка при отправке медиафайла: {str(e)}")
         raise
-
