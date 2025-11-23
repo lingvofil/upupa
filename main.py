@@ -85,8 +85,7 @@ from picgeneration import (
     handle_pun_image_command, 
     handle_redraw_command, 
     handle_kandinsky_generation_command, 
-    handle_edit_command,
-    handle_add_text_command # Добавлен импорт для хэндлера "добавь"
+    handle_edit_command
 )
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
