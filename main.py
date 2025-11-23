@@ -138,9 +138,12 @@ from broadcast import handle_broadcast_command, is_broadcast_command
 # ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
 from interactive_settings import send_settings_menu, handle_settings_callback
 
-# ================== БЛОК КОНТЕНТ-ФИЛЬТРА (НОВОЕ) ==================
+# ================== БЛОК 3.22 КОНТЕНТ-ФИЛЬТРА ==================
 from content_filter import ContentFilterMiddleware
-        
+
+# ================== БЛОК 3.23 ДНД ==================
+from dnd import dnd_router 
+
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
@@ -655,6 +658,7 @@ async def main():
     
     asyncio.create_task(birthday_scheduler(bot))
     
+    dp.include_router(dnd_router)
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, skip_updates=True)
