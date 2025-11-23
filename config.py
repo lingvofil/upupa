@@ -37,8 +37,8 @@ genai.configure(api_key=GENERIC_API_KEY)
 
 # Список моделей. Бот будет пробовать их по очереди.
 MODEL_QUEUE = [
+    'gemini-2.5-pro',                        # 2 RPM (в минуту) / 50 RPD (в день)    
     'gemini-2.5-flash-preview-09-2025',     # 10 RPM (в минуту) / 250 RPD (в день)
-    'gemini-2.5-pro',                        # 2 RPM (в минуту) / 50 RPD (в день)
     'gemini-2.5-flash',                      # 10 RPM (в минуту) / 250 RPD (в день)
     'gemini-2.0-flash',                      # 15 RPM (в минуту) / 200 RPD (в день)
     'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM (в минуту) / 1000 RPD (в день)
