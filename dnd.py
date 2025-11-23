@@ -189,7 +189,7 @@ async def wait_for_poll_timeout(bot: Bot, chat_id: int, poll_chat_id: int, messa
 
 # ================== ХЭНДЛЕРЫ ==================
 
-@dnd_router.poll_answer()
+@dnd_router.poll_answer(lambda event: event.poll_id in poll_map)
 async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
     poll_id = poll_answer.poll_id
     chat_id = poll_map.get(poll_id)
@@ -215,7 +215,7 @@ async def cmd_start_dnd(message: Message):
     dnd_sessions[message.chat.id] = GameSession(message.chat.id, user_name)
     await message.answer(f"Лады, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
 
-@dnd_router.message(F.text.lower().startswith("упупа заверши историю"))
+@dnd_router.message(F.text.lower().startswith(("упупа заверши историю", "упупа закончи историю")))
 async def cmd_stop_dnd(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session:
