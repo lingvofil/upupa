@@ -5,38 +5,36 @@ import re
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message, PollAnswer
-from config import model  # Импортируем настроенную модель из твоего конфига
+from config import model  # Импорт модели из твоего конфига
 
 dnd_router = Router()
 
 # Хранилище активных сессий: chat_id -> GameSession
 dnd_sessions = {}
 
-# Системный промпт для Gemini, задающий характер мастера
 DND_SYSTEM_PROMPT = """
 Ты — Мастер Подземелий (Dungeon Master) в текстовой RPG.
-Твой характер: Ироничный, дерзкий, саркастичный, немного грубый. Ты используешь сленг и можешь позволить себе крепкое словцо (нецензурную лексику в меру).
+Твой характер: Ироничный, дерзкий, саркастичный, немного грубый. Ты используешь сленг и можешь позволить себе крепкое словцо.
 Ты ведешь игру для участников чата. Интегрируй их имена в историю.
 
 Твоя задача:
 1. Генерировать короткие, но емкие куски сюжета (2-3 абзаца).
-2. В конце каждого своего сообщения ты ОБЯЗАН указать технический тег действия, чтобы программа поняла, что делать дальше.
+2. В конце сообщения ОБЯЗАТЕЛЬНО укажи один из технических тегов действий.
 
-ФОРМАТ ТЕХНИЧЕСКИХ ТЕГОВ (Пиши их в самом конце сообщения):
+ФОРМАТ ТЕХНИЧЕСКИХ ТЕГОВ (В конце сообщения):
 
-Если нужна развилка сюжета:
+Если нужна развилка сюжета (Опрос):
 [ACTION:POLL;OPTIONS:Вариант 1;Вариант 2;Вариант 3]
-(Максимум 4 варианта. Используй этот вариант часто для движухи).
+(Максимум 4 варианта. Используй часто).
 
-Если нужна проверка навыка (игрок должен кинуть кубик):
+Если нужна проверка навыка (Бросок кубика):
 [ACTION:ROLL;STAT:Название характеристики (например, Ловкость)]
 
-Если нужен просто ответ игрока (диалог или свободное действие):
+Если нужен ответ игрока текстом:
 [ACTION:INPUT]
 
-Пример ответа:
-"Ну вы и, бл*ть, попали. Перед вами стоит огромный орк и ковыряет в зубах чьей-то берцовой костью. Он рыгает, и запах долетает до ваших носов.
-[ACTION:POLL;OPTIONS:Атаковать в лоб;Попытаться украсть кость;Убежать с позором]"
+Если игрок попросил завершить игру ("упупа заверши историю"), опиши их нелепую или эпичную гибель и закончи текст тегом:
+[ACTION:END]
 """
 
 class GameSession:
@@ -44,13 +42,13 @@ class GameSession:
         self.chat_id = chat_id
         self.history = []
         self.chat_session = model.start_chat(history=[
-            {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Следуй инструкциям по характеру и форматированию."]},
-            {"role": "model", "parts": ["Окей, я готов унижать и властвовать. Жду вводную."]}
+            {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Следуй инструкциям по характеру и тегам."]},
+            {"role": "model", "parts": ["Погнали, щенки. Сейчас устрою вам веселую жизнь."]}
         ])
-        # Добавляем системный промпт в контекст через первое сообщение или инструкцию (Gemini поддерживает system instruction при создании, но здесь делаем через chat для сохранения контекста)
-        self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n" + self.chat_session.history[0].parts[0].text
+        # Инъекция системного промпта в начало памяти (хак для сохранения персоналии)
+        self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n\n" + self.chat_session.history[0].parts[0].text
         
-        self.state = "WAITING_BACKSTORY" # WAITING_BACKSTORY, WAITING_POLL, WAITING_ROLL, WAITING_ACTION
+        self.state = "WAITING_BACKSTORY" 
         self.last_roll_stat = None
 
 async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
@@ -58,62 +56,79 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     if not session:
         return
 
-    # 1. Ищем тег действия
+    # Ищем тег действия
     action_match = re.search(r'\[ACTION:(.*?)\]', text_response)
-    
     clean_text = re.sub(r'\[ACTION:.*?\]', '', text_response).strip()
     
-    # Отправляем текст истории
+    # Отправляем сюжетный текст
     if clean_text:
         await bot.send_message(chat_id, clean_text)
 
     if not action_match:
-        # Если Gemini забыл тег, по дефолту ждем ввод
+        # Если модель забыла тег, по дефолту ждем ввод
         session.state = "WAITING_ACTION"
-        await bot.send_message(chat_id, "Ну, и че встали? (Что делаете?)")
+        await bot.send_message(chat_id, "Ну, и че встали? (Жду действий...)")
         return
 
     command_str = action_match.group(1)
     
-    # === ЛОГИКА ГОЛОСОВАНИЯ ===
+    # === ОБРАБОТКА ДЕЙСТВИЙ ===
+    
     if command_str.startswith("POLL"):
-        options_str = command_str.split("OPTIONS:")[1]
-        options = [opt.strip() for opt in options_str.split(";")]
-        
-        session.state = "WAITING_POLL"
-        
-        # Отправляем опрос
-        poll_msg = await bot.send_poll(
-            chat_id=chat_id,
-            question="Чё делать будем?",
-            options=options,
-            is_anonymous=False,
-            open_period=600 # 10 минут = 600 секунд
-        )
-        
-        # Запускаем таймер ожидания конца опроса
-        asyncio.create_task(wait_for_poll_end(bot, chat_id, poll_msg.chat.id, poll_msg.message_id, options))
+        try:
+            options_part = command_str.split("OPTIONS:")[1]
+            options = [opt.strip() for opt in options_part.split(";")]
+            # Обрезаем лишние варианты если их > 10 (ограничение ТГ) или пустые
+            options = [o for o in options if o][:4] 
+            
+            session.state = "WAITING_POLL"
+            
+            # ВАЖНО: Убрали open_period, чтобы бот сам закрыл опрос через stop_poll
+            poll_msg = await bot.send_poll(
+                chat_id=chat_id,
+                question="Чё делать будем?",
+                options=options,
+                is_anonymous=False
+            )
+            
+            # Запускаем фоновую задачу ожидания
+            asyncio.create_task(wait_for_poll_end(bot, chat_id, poll_msg.chat.id, poll_msg.message_id, options))
+            
+        except Exception as e:
+            await bot.send_message(chat_id, f"(Мастер подавился кубиком: ошибка опроса. Просто напишите, что делаете).")
+            session.state = "WAITING_ACTION"
 
-    # === ЛОГИКА КУБИКА ===
     elif command_str.startswith("ROLL"):
         stat = command_str.split("STAT:")[1].strip()
         session.last_roll_stat = stat
         session.state = "WAITING_ROLL"
-        await bot.send_message(chat_id, f"🎲 Проверка: *{stat}*. Пиши *кидаю*, чтобы испытать удачу.", parse_mode="Markdown")
+        await bot.send_message(chat_id, f"🎲 Проверка: *{stat}*. Пиши *кидаю*, чтобы не сдохнуть.", parse_mode="Markdown")
 
-    # === ЛОГИКА ВВОДА ===
     elif command_str.startswith("INPUT"):
         session.state = "WAITING_ACTION"
         await bot.send_message(chat_id, "Ваши действия?")
+        
+    elif command_str.startswith("END"):
+        del dnd_sessions[chat_id]
+        await bot.send_message(chat_id, "☠️ Игра окончена. R.I.P.")
 
 async def wait_for_poll_end(bot: Bot, chat_id: int, poll_chat_id: int, message_id: int, options: list):
-    """Ждет 10 минут, закрывает опрос и продолжает историю"""
-    await asyncio.sleep(600) # Ждем 10 минут
+    """Ждет 10 минут, стопает опрос, считает голоса и пинает модель"""
+    await asyncio.sleep(600) # 600 секунд = 10 минут
     
+    # Проверяем, жива ли сессия (могли отменить игру за это время)
+    if chat_id not in dnd_sessions:
+        try:
+            await bot.stop_poll(chat_id=poll_chat_id, message_id=message_id)
+        except:
+            pass
+        return
+
+    outcome = "Никто не решился выбрать."
     try:
+        # Останавливаем опрос и получаем результаты
         poll_res = await bot.stop_poll(chat_id=poll_chat_id, message_id=message_id)
         
-        # Считаем победителя
         max_votes = 0
         winners = []
         
@@ -125,22 +140,26 @@ async def wait_for_poll_end(bot: Bot, chat_id: int, poll_chat_id: int, message_i
                 winners.append(option.text)
         
         if not winners:
-            result_text = random.choice(options)
-            outcome = f"Никто не проголосовал. Случайный выбор судьбы: {result_text}"
+            random_choice = random.choice(options)
+            outcome = f"Игроки промолчали. Случайность выбрала: {random_choice}"
         else:
-            result_text = random.choice(winners) # Если ничья, рандом среди победителей
-            outcome = f"Народ решил: {result_text}"
+            chosen = random.choice(winners)
+            outcome = f"Большинство (или рандом при ничьей) выбрало: {chosen}"
 
-        await bot.send_message(chat_id, f"⏳ Голосование окончено. {outcome}")
+        await bot.send_message(chat_id, f"⏳ Время вышло. {outcome}")
         
-        # Продолжаем историю
-        session = dnd_sessions.get(chat_id)
-        if session:
-            response = session.chat_session.send_message(f"Игроки выбрали: {outcome}. Продолжай историю.")
-            await parse_and_execute_turn(bot, chat_id, response.text)
+        # Отправляем выбор в модель
+        session = dnd_sessions[chat_id]
+        response = session.chat_session.send_message(f"Результат голосования: {outcome}. Продолжай историю.")
+        await parse_and_execute_turn(bot, chat_id, response.text)
             
     except Exception as e:
-        print(f"Error in poll wait: {e}")
+        print(f"DnD Poll Error: {e}")
+        # Если опрос сломался, просто пинаем модель, чтоб не висело
+        session = dnd_sessions.get(chat_id)
+        if session:
+            response = session.chat_session.send_message("Опрос сломался, выбери любой вариант сам и продолжай.")
+            await parse_and_execute_turn(bot, chat_id, response.text)
 
 # ================== ХЭНДЛЕРЫ ==================
 
@@ -148,56 +167,65 @@ async def wait_for_poll_end(bot: Bot, chat_id: int, poll_chat_id: int, message_i
 async def cmd_start_dnd(message: Message):
     user_name = message.from_user.first_name
     dnd_sessions[message.chat.id] = GameSession(message.chat.id, user_name)
+    await message.answer(f"Так, {user_name}, решил поиграть с судьбой?\nЯ активирую режим Мастера.\n\nКакую предысторию хочешь, смертный? (Ответь реплаем на это сообщение)")
+
+@dnd_router.message(F.text.lower().startswith("упупа заверши историю"))
+async def cmd_stop_dnd(message: Message):
+    session = dnd_sessions.get(message.chat.id)
+    if not session:
+        await message.answer("Да мы вроде и не играем, шизоид.")
+        return
     
-    await message.answer(f"Опа, {user_name}, приключений захотелось? Я активирую режим Бога.\nКакую историю бы ты хотел, буцефал? (Ответь реплаем на это сообщение)")
+    await message.answer("Ой, всё? Надоело? Ладно, сейчас оформим красивый уход...")
+    try:
+        # Просим модель убить всех
+        response = session.chat_session.send_message("Игроки просят завершить игру. Опиши короткий, саркастичный и летальный финал для всей группы. Используй тег [ACTION:END]")
+        await parse_and_execute_turn(message.bot, message.chat.id, response.text)
+    except Exception as e:
+        await message.answer("Просто все умерли. Конец.")
+        del dnd_sessions[message.chat.id]
 
 @dnd_router.message(lambda m: m.reply_to_message and dnd_sessions.get(m.chat.id) and dnd_sessions[m.chat.id].state == "WAITING_BACKSTORY")
 async def handle_backstory(message: Message):
     session = dnd_sessions[message.chat.id]
     backstory = message.text
-    
-    wait_msg = await message.answer("Так-так, записываю... Генерирую мир дерьма и палок...")
+    msg = await message.answer("Загружаю этот бред в матрицу...")
     
     try:
-        response = session.chat_session.send_message(f"Предыстория от игрока: {backstory}. Начинай сюжет.")
-        await bot_delete_message(message.chat.id, wait_msg.message_id, message.bot) # Удаляем сообщение "генерирую"
+        response = session.chat_session.send_message(f"Предыстория: {backstory}. Начинай.")
+        try: await message.bot.delete_message(message.chat.id, msg.message_id)
+        except: pass
         await parse_and_execute_turn(message.bot, message.chat.id, response.text)
     except Exception as e:
-        await message.answer(f"Мой кремниевый мозг сбоит: {e}")
+        await message.answer(f"Ошибка нейронки: {e}")
 
-@dnd_router.message(F.text.lower() == "кидаю")
+@dnd_router.message(F.text.lower().contains("кидаю"))
 async def handle_roll(message: Message):
     session = dnd_sessions.get(message.chat.id)
+    # Реагируем только если ждем бросок
     if not session or session.state != "WAITING_ROLL":
-        return # Игнорим, если сейчас не время кидать
+        return 
 
     roll_result = random.randint(1, 20)
     stat = session.last_roll_stat
     
     comment = ""
-    if roll_result == 1: comment = "(Критический провал, лох!)"
-    elif roll_result == 20: comment = "(Критический успех, красава!)"
+    if roll_result == 1: comment = "(Критический провал! Земля тебе пухом)"
+    elif roll_result == 20: comment = "(Критический успех! Читер?)"
+    elif roll_result < 10: comment = "(Ну такое...)"
     
-    await message.answer(f"🎲 {message.from_user.first_name} кидает на {stat}...\nВыпало: **{roll_result}** {comment}", parse_mode="Markdown")
+    await message.answer(f"🎲 {message.from_user.first_name} проверяет {stat}...\nВыпало: **{roll_result}** {comment}", parse_mode="Markdown")
     
-    # Отправляем результат мастеру
-    response = session.chat_session.send_message(f"Игрок {message.from_user.first_name} кинул кубик на {stat}. Результат: {roll_result}. Опиши последствия.")
+    response = session.chat_session.send_message(f"Игрок {message.from_user.first_name} кинул на {stat}: результат {roll_result}. Описывай последствия.")
     await parse_and_execute_turn(message.bot, message.chat.id, response.text)
 
 @dnd_router.message(lambda m: dnd_sessions.get(m.chat.id) and dnd_sessions[m.chat.id].state == "WAITING_ACTION")
 async def handle_free_action(message: Message):
-    # Обработка свободного ответа игрока, если это не команда старта
     if message.text.lower().startswith("упупа"): return
     
     session = dnd_sessions[message.chat.id]
     user_action = message.text
     user_name = message.from_user.first_name
     
-    response = session.chat_session.send_message(f"Игрок {user_name} делает: {user_action}. Реагируй и двигай сюжет.")
+    response = session.chat_session.send_message(f"Игрок {user_name} делает: {user_action}. Продолжай.")
     await parse_and_execute_turn(message.bot, message.chat.id, response.text)
-
-async def bot_delete_message(chat_id, message_id, bot):
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except:
-        pass
