@@ -46,7 +46,7 @@ GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # Настройка клиента Gemini (Google Generative AI)
 genai.configure(api_key=GENERIC_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
 image_model = genai.GenerativeModel("models/gemini-2.5-flash-image-preview")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
