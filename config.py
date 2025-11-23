@@ -48,7 +48,7 @@ GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 genai.configure(api_key=GENERIC_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
-image_model = genai.GenerativeModel("models/gemini-2.5-flash-image-preview")
+image_model = genai.GenerativeModel("models/gemini-2.0-flash")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
 # Класс для работы с OpenRouter, имитирующий интерфейс genai.GenerativeModel
