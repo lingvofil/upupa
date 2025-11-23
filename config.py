@@ -1,4 +1,5 @@
 import google.generativeai as genai
+from google.api_core import exceptions
 import logging
 from aiogram import Bot, Dispatcher, Router
 import requests
@@ -46,7 +47,52 @@ GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # Настройка клиента Gemini (Google Generative AI)
 genai.configure(api_key=GENERIC_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+
+# Список моделей в порядке приоритета
+MODEL_QUEUE = [
+    'gemini-2.5-pro',                        # 2 RPM (в минуту) / 50 RPD (в день)
+    'gemini-2.5-flash-preview-09-2025',     # 10 RPM (в минуту) / 250 RPD (в день)
+    'gemini-2.5-flash',                      # 10 RPM (в минуту) / 250 RPD (в день)
+    'gemini-2.0-flash',                      # 15 RPM (в минуту) / 200 RPD (в день)
+    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM (в минуту) / 1000 RPD (в день)
+    'gemini-2.5-flash-lite',                 # 15 RPM (в минуту) / 1000 RPD (в день)
+    'gemini-2.0-flash-lite',                 # 30 RPM (в минуту) / 200 RPD (в день)
+    'gemini-1.5-flash'                       # 15 RPM (в минуту) / 50 RPD (в день)
+]
+
+class ModelFallbackWrapper:
+    def __init__(self, model_names):
+        self.model_names = model_names
+
+    def generate_content(self, *args, **kwargs):
+        """
+        Пытается сгенерировать ответ, перебирая модели из списка.
+        """
+        last_error = None
+        
+        for model_name in self.model_names:
+            try:
+                # Инициализируем конкретную модель
+                current_model = genai.GenerativeModel(model_name)
+                
+                # Пытаемся получить ответ
+                return current_model.generate_content(*args, **kwargs)
+            
+            except exceptions.ResourceExhausted:
+                logging.warning(f"⚠️ Лимит токенов исчерпан для {model_name}. Переключаюсь на следующую...")
+                continue # Идем к следующей модели в списке
+            
+            except Exception as e:
+                # Ловим другие ошибки (например, если gemini-2.5 еще не существует или 503 Service Unavailable)
+                logging.error(f"❌ Ошибка модели {model_name}: {e}")
+                last_error = e
+                continue # Идем к следующей модели
+        
+        # Если цикл закончился, а ответа нет
+        logging.error("🔥 Все модели недоступны!")
+        raise last_error if last_error else Exception("Все модели исчерпаны.")
+
+model = ModelFallbackWrapper(MODEL_QUEUE)
 advanced_model = genai.GenerativeModel('gemini-2.0-flash') #gemini-2.5-pro-exp-03-25
 image_model = genai.GenerativeModel("models/gemini-2.0-flash")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
