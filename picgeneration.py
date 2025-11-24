@@ -15,12 +15,11 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 
-# Убедитесь, что все зависимости импортированы
 from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
-from gemini_generation import process_gemini_generation, save_and_send_generated_image as save_and_send_gemini
 
 # =============================================================================
 # Класс и функции для работы с API Kandinsky (FusionBrain)
@@ -107,7 +106,8 @@ class FusionBrainAPI:
 api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
 pipeline_id = api.get_pipeline()
 
-async def process_image_generation(prompt):
+async def process_kandinsky_generation(prompt):
+    """Генерация через Kandinsky API"""
     if not pipeline_id:
         return False, "Не удалось получить ID модели от API.", None
     try:
@@ -133,38 +133,80 @@ async def process_image_generation(prompt):
             return False, f"Ошибка декодирования: {str(e)}", None
     except Exception as e:
         import traceback
-        logging.error(f"Критическая ошибка в process_image_generation: {traceback.format_exc()}")
+        logging.error(f"Критическая ошибка в process_kandinsky_generation: {traceback.format_exc()}")
         return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 # =============================================================================
-# Специальная функция для Imagen 3 (Google)
+# Функции для работы с Gemini/Imagen
 # =============================================================================
+
+def is_valid_image_data(data: bytes) -> bool:
+    """Проверяет сигнатуры известных форматов изображений."""
+    if data.startswith(b'\x89PNG') or data.startswith(b'\xff\xd8') or data.startswith(b'RIFF'):
+        return True
+    return False
+
+async def save_and_send_generated_image(message: types.Message, image_data: bytes):
+    """Пытается отправить изображение, при ошибке использует Pillow для конвертации."""
+    try:
+        logging.info("Попытка №1: отправка необработанных данных изображения...")
+        raw_buffered_image = types.BufferedInputFile(image_data, filename="gemini_image_raw.png")
+        await message.reply_photo(raw_buffered_image)
+        logging.info("Необработанные данные успешно отправлены.")
+    except TelegramBadRequest:
+        logging.warning("Попытка №1 не удалась. Запускаю Pillow.")
+        try:
+            image = Image.open(BytesIO(image_data))
+            output_buffer = BytesIO()
+            image.save(output_buffer, 'PNG')
+            output_buffer.seek(0)
+            processed_buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image_processed.png")
+            await message.reply_photo(processed_buffered_image)
+            logging.info("Обработанное через Pillow изображение успешно отправлено.")
+        except Exception as pil_error:
+            logging.error(f"Pillow не смог обработать: {pil_error}")
+            await message.reply("API вернуло данные, которые не являются изображением.")
 
 async def generate_image_with_imagen(prompt: str):
     """
-    Прямой вызов модели imagen-3.0-generate-001, минуя старый wrapper,
-    так как формат ответа отличается (нет text, только inline_data).
+    Генерация изображения через Imagen 3 (imagen-3.0-generate-001)
+    Возвращает ('SUCCESS', {'image_data': bytes}) или ('ERROR', {'error': str})
     """
     try:
         def sync_call():
-            # Запрос к Imagen 3
-            # Внимание: для imagen используется обычный generate_content, но ответ приходит в parts
-            return image_model.generate_content(prompt)
+            return image_model.generate_content(
+                contents=prompt,
+                generation_config={'response_modalities': ['IMAGE']}
+            )
 
         response = await asyncio.to_thread(sync_call)
 
-        # Проверка на отказ (например, safety settings)
         if not response.parts:
-             return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
+            return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
 
-        # Извлечение данных
         for part in response.parts:
-            if part.inline_data:
-                return 'SUCCESS', {'image_data': part.inline_data.data}
+            if hasattr(part, "inline_data") and part.inline_data:
+                mime_type = getattr(part.inline_data, "mime_type", "unknown")
+                logging.info(f"Imagen вернул MIME-тип: {mime_type}")
+                raw_data = part.inline_data.data
+                
+                if isinstance(raw_data, str):
+                    try:
+                        image_data = base64.b64decode(raw_data)
+                    except Exception:
+                        image_data = raw_data.encode("latin1", errors="ignore")
+                elif isinstance(raw_data, bytes):
+                    image_data = raw_data
+                
+                if not is_valid_image_data(image_data):
+                    logging.error(f"API вернуло невалидные данные изображения.")
+                    return 'ERROR', {'error': "API сгенерировало данные без стандартных сигнатур PNG/JPEG/WebP."}
+                
+                return 'SUCCESS', {'image_data': image_data}
         
-        # Если нет inline_data, но есть текст (например "Я не могу это нарисовать")
+        # Если нет inline_data, проверяем текст
         if response.text:
-             return 'ERROR', {'error': f"Модель отказалась рисовать: {response.text}"}
+            return 'ERROR', {'error': f"Модель отказалась рисовать: {response.text}"}
              
         return 'ERROR', {'error': "Неизвестный формат ответа от Imagen."}
 
@@ -173,240 +215,7 @@ async def generate_image_with_imagen(prompt: str):
         return 'ERROR', {'error': str(e)}
 
 # =============================================================================
-# Каламбур, Нарисуй, Перерисуй, Отредактируй -> Gemini / Imagen
-# =============================================================================
-
-async def handle_pun_image_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    processing_msg = await message.reply("Генерирую хуйню...")
-    pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
-    Совпадать должны как минимум две буквы. 
-    Не комментируй генерацию.
-    Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
-    Например: "манго+голубь = манголубь" """
-    try:
-        def sync_call():
-            return model.generate_content(pun_prompt).text.strip()
-        pun_word = await asyncio.to_thread(sync_call)
-        
-        parts = pun_word.split('=')
-        
-        if len(parts) != 2:
-            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
-            return
-
-        source_words = parts[0].strip()
-        final_word = parts[1].strip()
-
-        # Промпт для imagen
-        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. High quality, detailed."
-        
-        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
-        status, data = await generate_image_with_imagen(image_gen_prompt)
-
-        if status == 'SUCCESS':
-            image_data = data['image_data']
-            # Накладываем на чистое изображение только итоговое слово
-            try:
-                modified_path = await asyncio.to_thread(_overlay_text_on_image, image_data, final_word)
-                await message.reply_photo(FSInputFile(modified_path))
-                os.remove(modified_path)
-                await processing_msg.delete()
-            except Exception as e:
-                await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
-                # Отправляем чистое, если оверлей упал
-                await save_and_send_gemini(message, image_data)
-        else:
-            await processing_msg.edit_text(f"Ошибка генерации картинки: {data.get('error')}")
-
-    except Exception as e:
-        logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
-        await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
-
-async def handle_image_generation_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    prompt = None
-    if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
-        prompt = message.reply_to_message.text or message.reply_to_message.caption
-    elif message.text.lower().startswith("нарисуй "):
-        prompt = message.text[len("нарисуй "):].strip()
-    if not prompt:
-        await message.reply("Шо именно нарисовать-то?")
-        return
-    processing_message = await message.reply("Ща падажжи, рисую...")
-    
-    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ вместо process_gemini_generation
-    status, data = await generate_image_with_imagen(prompt)
-    
-    if status == 'SUCCESS':
-        await processing_message.delete()
-        await save_and_send_gemini(message, data['image_data'])
-    else:
-        await processing_message.edit_text(f"Ошибка: {data.get('error')}")
-
-async def handle_redraw_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    processing_msg = await message.reply("Анализирую тваю мазню...")
-    try:
-        photo = None
-        if message.photo:
-            photo = message.photo[-1]
-        elif message.document:
-            photo = message.document
-        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-        if not photo:
-            await processing_msg.edit_text("Изображение для перерисовки не найдено.")
-            return
-        image_bytes = await download_telegram_image(bot, photo)
-        detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
-Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
-        
-        # Шаг 1: Получаем описание через текстовую модель
-        def sync_describe():
-            return model.generate_content([
-                detailed_prompt,
-                {"mime_type": "image/jpeg", "data": image_bytes}
-            ]).text.strip()
-        description = await asyncio.to_thread(sync_describe)
-        
-        # Шаг 2: Генерируем картинку по описанию через Imagen
-        status, data = await generate_image_with_imagen(description)
-        
-        if status == 'SUCCESS':
-            await processing_msg.delete()
-            await save_and_send_gemini(message, data['image_data'])
-        else:
-            await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
-    except Exception as e:
-        logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
-        await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
-# ✨ Редактирование изображения через Gemini
-async def handle_edit_command(message: types.Message):
-    processing_msg = None
-    try:
-        logging.info("[EDIT] Получен запрос на редактирование изображения")
-        bot_instance = message.bot # Используем bot из message
-        processing_msg = await message.reply("Применяю магию...")
-
-        # 1. Получаем фото
-        image_obj = None
-        if message.photo:
-            image_obj = message.photo[-1]
-        elif message.document:
-            image_obj = message.document
-        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
-            image_obj = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-        
-        if not image_obj:
-            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
-            return
-
-        # 2. Скачиваем изображение в байты
-        image_bytes = await download_telegram_image(bot_instance, image_obj)
-        if not image_bytes:
-             await processing_msg.edit_text("Не удалось загрузить изображение.")
-             return
-        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
-
-        # 3. Получаем текстовый промпт
-        prompt = ""
-        if message.caption:
-            prompt = message.caption.lower().replace("отредактируй", "", 1).strip()
-        elif message.text:
-            prompt = message.text.lower().replace("отредактируй", "", 1).strip()
-        
-        if not prompt:
-            await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
-            return
-
-        # 4. Отправляем запрос в Gemini
-        def sync_edit_call():
-            # Готовим данные для модели: текст и PIL изображение
-            img = Image.open(BytesIO(image_bytes))
-            # ИЗМЕНЕНИЕ: Используем специальную модель для редактирования
-            return edit_model.generate_content([prompt, img])
-
-        response = await asyncio.to_thread(sync_edit_call)
-        
-        # 5. Обрабатываем ответ
-        edited_image_found = False
-        # Ответ от API состоит из "частей". Ищем часть с изображением.
-        for part in response.parts:
-            # Самый надежный способ - проверить MIME-тип
-            if part.mime_type and part.mime_type.startswith("image/"):
-                # Извлекаем байты изображения
-                image_data = part.inline_data.data
-                output_file = types.BufferedInputFile(image_data, filename="edited.png")
-                
-                await processing_msg.delete() # Удаляем сообщение "Применяю магию..."
-                await message.reply_photo(photo=output_file)
-                
-                edited_image_found = True
-                break # Выходим из цикла, так как нашли картинку
-
-        if not edited_image_found:
-            # Если изображений в ответе нет, возможно, модель вернула текст (например, с ошибкой или отказом)
-            text_feedback = "Модель не вернула изображение."
-            try:
-                # Попытаемся извлечь текстовый ответ для отладки
-                text_feedback = response.text
-                logging.warning(f"[EDIT] Gemini не вернул изображение. Ответ: {text_feedback}")
-            except Exception as e:
-                logging.error(f"[EDIT] Не удалось извлечь текст из ответа Gemini: {e}. Полный ответ: {response}")
-
-            await processing_msg.edit_text(
-                f"Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.\n\n"
-                f"Ответ модели: _{text_feedback}_",
-                parse_mode="Markdown"
-            )
-    # ИЗМЕНЕНИЕ: Отлавливаем ошибку 'Not Found' и даем пользователю четкую инструкцию
-    except google_exceptions.NotFound as e:
-        logging.error(f"[EDIT] Ошибка 'Модель не найдена': {e}", exc_info=True)
-        error_message = (
-            "**Ошибка: Модель для редактирования не найдена!**\n\n"
-            "Похоже, что в `config.py` указано неверное имя модели.\n"
-            "Пожалуйста, замените строку в `config.py` на:\n"
-            "`edit_model = genai.GenerativeModel(\"models/gemini-pro-vision\")`\n\n"
-            "Это специальная модель для работы с изображениями."
-        )
-        if processing_msg:
-            await processing_msg.edit_text(error_message, parse_mode="Markdown")
-        else:
-            await message.reply(error_message, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"[EDIT] Критическая ошибка в handle_edit_command: {e}", exc_info=True)
-        if processing_msg:
-            await processing_msg.edit_text("Произошла критическая ошибка при редактировании изображения.")
-        else:
-            await message.reply("Произошла критическая ошибка при редактировании изображения.")
-# =============================================================================
-# Сгенерируй -> Kandinsky
-# =============================================================================
-
-async def handle_kandinsky_generation_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    prompt = None
-    if message.text.lower().startswith("сгенерируй "):
-        prompt = message.text[len("сгенерируй "):].strip()
-    elif message.text.lower().strip() == "сгенерируй" and message.reply_to_message:
-        prompt = message.reply_to_message.text or message.reply_to_message.caption
-    if not prompt:
-        await message.reply("Что именно сгенерировать?")
-        return
-    processing_message = await message.reply("Думаю над вашим запросом... 🤖")
-    success, error_message, image_data = await process_image_generation(prompt)
-    if success and image_data:
-        await processing_message.delete()
-        buffered_image = types.BufferedInputFile(image_data, filename="kandinsky.png")
-        await message.reply_photo(buffered_image)
-    else:
-        await processing_message.edit_text(f"Ошибка: {error_message}")
-
-# =============================================================================
-# Вспомогательные функции
+# Вспомогательные функции для текста на изображении
 # =============================================================================
 
 def _get_text_size(font, text):
@@ -419,6 +228,7 @@ def _get_text_size(font, text):
         return font.getsize(text)
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
+    """Накладывает текст на изображение и возвращает путь к файлу"""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -428,7 +238,7 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     try:
         font = ImageFont.truetype(font_path, font_size)
     except IOError:
-        font = ImageFont.load_default() # Fallback если нет шрифта
+        font = ImageFont.load_default()
 
     max_width = image.width - 40
     sample_chars = "абвгдежзийклмнопрстуфхцчшщъыьэюя"
@@ -456,7 +266,223 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         draw.text((x, current_y), line, font=font, fill="white", stroke_width=1, stroke_fill="black")
         current_y += line_height + 5
     
-    # Создаем уникальное имя для файла во избежание коллизий
     output_path = f"modified_pun_image_{random.randint(1000,9999)}.jpg"
     image.save(output_path)
     return output_path
+
+# =============================================================================
+# ХЭНДЛЕРЫ КОМАНД
+# =============================================================================
+
+async def handle_pun_image_command(message: types.Message):
+    """Каламбур - генерирует каламбурное слово и рисует его через Imagen"""
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    processing_msg = await message.reply("Генерирую хуйню...")
+    pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
+    Совпадать должны как минимум две буквы. 
+    Не комментируй генерацию.
+    Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
+    Например: "манго+голубь = манголубь" """
+    try:
+        def sync_call():
+            return model.generate_content(pun_prompt).text.strip()
+        pun_word = await asyncio.to_thread(sync_call)
+        
+        parts = pun_word.split('=')
+        
+        if len(parts) != 2:
+            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+            return
+
+        source_words = parts[0].strip()
+        final_word = parts[1].strip()
+
+        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. High quality, detailed."
+        
+        status, data = await generate_image_with_imagen(image_gen_prompt)
+
+        if status == 'SUCCESS':
+            image_data = data['image_data']
+            try:
+                modified_path = await asyncio.to_thread(_overlay_text_on_image, image_data, final_word)
+                await message.reply_photo(FSInputFile(modified_path))
+                os.remove(modified_path)
+                await processing_msg.delete()
+            except Exception as e:
+                await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
+                await save_and_send_generated_image(message, image_data)
+        else:
+            await processing_msg.edit_text(f"Ошибка генерации картинки: {data.get('error')}")
+
+    except Exception as e:
+        logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
+        await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
+
+async def handle_image_generation_command(message: types.Message):
+    """Нарисуй - генерация через Imagen"""
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    prompt = None
+    if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
+        prompt = message.reply_to_message.text or message.reply_to_message.caption
+    elif message.text.lower().startswith("нарисуй "):
+        prompt = message.text[len("нарисуй "):].strip()
+    if not prompt:
+        await message.reply("Шо именно нарисовать-то?")
+        return
+    processing_message = await message.reply("Ща падажжи, рисую...")
+    
+    status, data = await generate_image_with_imagen(prompt)
+    
+    if status == 'SUCCESS':
+        await processing_message.delete()
+        await save_and_send_generated_image(message, data['image_data'])
+    else:
+        await processing_message.edit_text(f"Ошибка: {data.get('error')}")
+
+
+async def handle_redraw_command(message: types.Message):
+    """Перерисуй - анализирует изображение и перерисовывает его как детский рисунок"""
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    processing_msg = await message.reply("Анализирую тваю мазню...")
+    try:
+        photo = None
+        if message.photo:
+            photo = message.photo[-1]
+        elif message.document:
+            photo = message.document
+        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+        if not photo:
+            await processing_msg.edit_text("Изображение для перерисовки не найдено.")
+            return
+        image_bytes = await download_telegram_image(bot, photo)
+        detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
+Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
+        
+        def sync_describe():
+            return model.generate_content([
+                detailed_prompt,
+                {"mime_type": "image/jpeg", "data": image_bytes}
+            ]).text.strip()
+        description = await asyncio.to_thread(sync_describe)
+        
+        status, data = await generate_image_with_imagen(description)
+        
+        if status == 'SUCCESS':
+            await processing_msg.delete()
+            await save_and_send_generated_image(message, data['image_data'])
+        else:
+            await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
+    except Exception as e:
+        logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
+        await processing_msg.edit_text(f"Ошибка: {str(e)}")
+
+
+async def handle_edit_command(message: types.Message):
+    """Отредактируй - редактирование изображения через Gemini"""
+    processing_msg = None
+    try:
+        logging.info("[EDIT] Получен запрос на редактирование изображения")
+        bot_instance = message.bot
+        processing_msg = await message.reply("Применяю магию...")
+
+        image_obj = None
+        if message.photo:
+            image_obj = message.photo[-1]
+        elif message.document:
+            image_obj = message.document
+        elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+            image_obj = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
+        
+        if not image_obj:
+            await processing_msg.edit_text("Не удалось найти изображение для редактирования.")
+            return
+
+        image_bytes = await download_telegram_image(bot_instance, image_obj)
+        if not image_bytes:
+            await processing_msg.edit_text("Не удалось загрузить изображение.")
+            return
+        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
+
+        prompt = ""
+        if message.caption:
+            prompt = message.caption.lower().replace("отредактируй", "", 1).strip()
+        elif message.text:
+            prompt = message.text.lower().replace("отредактируй", "", 1).strip()
+        
+        if not prompt:
+            await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
+            return
+
+        def sync_edit_call():
+            img = Image.open(BytesIO(image_bytes))
+            return edit_model.generate_content([prompt, img])
+
+        response = await asyncio.to_thread(sync_edit_call)
+        
+        edited_image_found = False
+        for part in response.parts:
+            if part.mime_type and part.mime_type.startswith("image/"):
+                image_data = part.inline_data.data
+                output_file = types.BufferedInputFile(image_data, filename="edited.png")
+                
+                await processing_msg.delete()
+                await message.reply_photo(photo=output_file)
+                
+                edited_image_found = True
+                break
+
+        if not edited_image_found:
+            text_feedback = "Модель не вернула изображение."
+            try:
+                text_feedback = response.text
+                logging.warning(f"[EDIT] Gemini не вернул изображение. Ответ: {text_feedback}")
+            except Exception as e:
+                logging.error(f"[EDIT] Не удалось извлечь текст из ответа Gemini: {e}. Полный ответ: {response}")
+
+            await processing_msg.edit_text(
+                f"Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.\n\n"
+                f"Ответ модели: _{text_feedback}_",
+                parse_mode="Markdown"
+            )
+    except google_exceptions.NotFound as e:
+        logging.error(f"[EDIT] Ошибка 'Модель не найдена': {e}", exc_info=True)
+        error_message = (
+            "**Ошибка: Модель для редактирования не найдена!**\n\n"
+            "Похоже, что в `config.py` указано неверное имя модели.\n"
+            "Пожалуйста, замените строку в `config.py` на:\n"
+            "`edit_model = genai.GenerativeModel(\"models/gemini-pro-vision\")`\n\n"
+            "Это специальная модель для работы с изображениями."
+        )
+        if processing_msg:
+            await processing_msg.edit_text(error_message, parse_mode="Markdown")
+        else:
+            await message.reply(error_message, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"[EDIT] Критическая ошибка в handle_edit_command: {e}", exc_info=True)
+        if processing_msg:
+            await processing_msg.edit_text("Произошла критическая ошибка при редактировании изображения.")
+        else:
+            await message.reply("Произошла критическая ошибка при редактировании изображения.")
+
+
+async def handle_kandinsky_generation_command(message: types.Message):
+    """Сгенерируй - генерация через Kandinsky"""
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    prompt = None
+    if message.text.lower().startswith("сгенерируй "):
+        prompt = message.text[len("сгенерируй "):].strip()
+    elif message.text.lower().strip() == "сгенерируй" and message.reply_to_message:
+        prompt = message.reply_to_message.text or message.reply_to_message.caption
+    if not prompt:
+        await message.reply("Что именно сгенерировать?")
+        return
+    processing_message = await message.reply("Думаю над вашим запросом... 🤖")
+    success, error_message, image_data = await process_kandinsky_generation(prompt)
+    if success and image_data:
+        await processing_message.delete()
+        buffered_image = types.BufferedInputFile(image_data, filename="kandinsky.png")
+        await message.reply_photo(buffered_image)
+    else:
+        await processing_message.edit_text(f"Ошибка: {error_message}")
