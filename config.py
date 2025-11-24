@@ -21,11 +21,25 @@ try:
         GIGACHAT_API_KEY, GIGACHAT_CLIENT_ID
     )
 except ImportError:
-    print("Warning: config_private.py not found. Attempting to load from environment variables.")
-    API_TOKEN = os.getenv('API_TOKEN', '')
-    GENERIC_API_KEY = os.getenv('GENERIC_API_KEY', '')
-    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
-    # ... остальные заглушки ...
+    print("Warning: config_private.py not found. Attempting to load from environment variables or using placeholders.")
+    # Если config_private.py не найден, читаем из переменных окружения.
+    # Если переменная окружения не установлена, используем заполнитель,
+    # чтобы избежать ошибок при локальной разработке без этих ключей.
+    API_TOKEN = os.getenv('API_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
+    GENERIC_API_KEY3 = os.getenv('GENERIC_API_KEY3', 'YOUR_GEMINI_KEY3_HERE')
+    GENERIC_API_KEY2 = os.getenv('GENERIC_API_KEY2', 'YOUR_GEMINI_KEY2_HERE')
+    GENERIC_API_KEY4 = os.getenv('GENERIC_API_KEY4', 'YOUR_GEMINI_KEY4_HERE')
+    GENERIC_API_KEY5 = os.getenv('GENERIC_API_KEY5', 'YOUR_GEMINI_KEY5_HERE')
+    GENERIC_API_KEY6 = os.getenv('GENERIC_API_KEY6', 'YOUR_GEMINI_KEY6_HERE')
+    GENERIC_API_KEY = os.getenv('GENERIC_API_KEY', 'YOUR_GEMINI_KEY_RUSIC_HERE')
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', 'YOUR_OPENROUTER_KEY_HERE')
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', 'YOUR_Google Search_KEY_HERE')
+    GOOGLE_API_KEY2 = os.getenv('GOOGLE_API_KEY2', 'YOUR_Google Search_KEY2_HERE')
+    giphy_api_key = os.getenv('GIPHY_API_KEY', 'YOUR_GIPHY_KEY_HERE')
+    KANDINSKY_API_KEY = os.getenv('KANDINSKY_API_KEY', 'YOUR_KANDINSKY_KEY_HERE')
+    KANDINSKY_SECRET_KEY = os.getenv('KANDINSKY_SECRET_KEY', 'YOUR_KANDINSKY_SECRET_HERE')
+    GIGACHAT_API_KEY = os.getenv('GIGACHAT_API_KEY', 'YOUR_GIGACHAT_KEY_HERE')
+    GIGACHAT_CLIENT_ID = os.getenv('GIGACHAT_CLIENT_ID', 'YOUR_GIGACHAT_CLIENT_ID_HERE')
 
 SEARCH_ENGINE_ID = "33026288e406447ea"
 GIGACHAT_MODEL = 'GigaChat-2'
