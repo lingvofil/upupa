@@ -137,7 +137,43 @@ async def process_image_generation(prompt):
         return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 # =============================================================================
-# Каламбур, Нарисуй, Перерисуй, Отредактируй -> Gemini
+# Специальная функция для Imagen 3 (Google)
+# =============================================================================
+
+async def generate_image_with_imagen(prompt: str):
+    """
+    Прямой вызов модели imagen-3.0-generate-001, минуя старый wrapper,
+    так как формат ответа отличается (нет text, только inline_data).
+    """
+    try:
+        def sync_call():
+            # Запрос к Imagen 3
+            # Внимание: для imagen используется обычный generate_content, но ответ приходит в parts
+            return image_model.generate_content(prompt)
+
+        response = await asyncio.to_thread(sync_call)
+
+        # Проверка на отказ (например, safety settings)
+        if not response.parts:
+             return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
+
+        # Извлечение данных
+        for part in response.parts:
+            if part.inline_data:
+                return 'SUCCESS', {'image_data': part.inline_data.data}
+        
+        # Если нет inline_data, но есть текст (например "Я не могу это нарисовать")
+        if response.text:
+             return 'ERROR', {'error': f"Модель отказалась рисовать: {response.text}"}
+             
+        return 'ERROR', {'error': "Неизвестный формат ответа от Imagen."}
+
+    except Exception as e:
+        logging.error(f"Ошибка в generate_image_with_imagen: {e}", exc_info=True)
+        return 'ERROR', {'error': str(e)}
+
+# =============================================================================
+# Каламбур, Нарисуй, Перерисуй, Отредактируй -> Gemini / Imagen
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
@@ -162,26 +198,26 @@ async def handle_pun_image_command(message: types.Message):
         source_words = parts[0].strip()
         final_word = parts[1].strip()
 
-        # ИЗМЕНЕНИЕ: Промпт сделан более прямым и "машинным", чтобы модель гарантированно генерировала изображение, а не текст.
-        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль."
+        # Промпт для imagen
+        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. High quality, detailed."
         
-        status, data = await process_gemini_generation(image_gen_prompt)
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+        status, data = await generate_image_with_imagen(image_gen_prompt)
 
         if status == 'SUCCESS':
             image_data = data['image_data']
             # Накладываем на чистое изображение только итоговое слово
-            modified_path = _overlay_text_on_image(image_data, final_word)
-            await message.reply_photo(FSInputFile(modified_path))
-            os.remove(modified_path)
-            await processing_msg.delete()
+            try:
+                modified_path = await asyncio.to_thread(_overlay_text_on_image, image_data, final_word)
+                await message.reply_photo(FSInputFile(modified_path))
+                os.remove(modified_path)
+                await processing_msg.delete()
+            except Exception as e:
+                await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
+                # Отправляем чистое, если оверлей упал
+                await save_and_send_gemini(message, image_data)
         else:
-            # Если data содержит текст ответа, покажем его пользователю
-            error_text = data.get('error')
-            if "Gemini не вернул изображение, но вернул текст" in error_text:
-                text_response = error_text.split(":", 1)[1].strip()
-                await processing_msg.edit_text(f"Модель не смогла сгенерировать картинку, но вот что она ответила:\n\n_{text_response}_", parse_mode="Markdown")
-            else:
-                await processing_msg.edit_text(f"Ошибка генерации: {error_text}")
+            await processing_msg.edit_text(f"Ошибка генерации картинки: {data.get('error')}")
 
     except Exception as e:
         logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
@@ -199,7 +235,10 @@ async def handle_image_generation_command(message: types.Message):
         await message.reply("Шо именно нарисовать-то?")
         return
     processing_message = await message.reply("Ща падажжи, рисую...")
-    status, data = await process_gemini_generation(prompt)
+    
+    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ вместо process_gemini_generation
+    status, data = await generate_image_with_imagen(prompt)
+    
     if status == 'SUCCESS':
         await processing_message.delete()
         await save_and_send_gemini(message, data['image_data'])
@@ -223,13 +262,18 @@ async def handle_redraw_command(message: types.Message):
         image_bytes = await download_telegram_image(bot, photo)
         detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
 Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
+        
+        # Шаг 1: Получаем описание через текстовую модель
         def sync_describe():
             return model.generate_content([
                 detailed_prompt,
                 {"mime_type": "image/jpeg", "data": image_bytes}
             ]).text.strip()
         description = await asyncio.to_thread(sync_describe)
-        status, data = await process_gemini_generation(description)
+        
+        # Шаг 2: Генерируем картинку по описанию через Imagen
+        status, data = await generate_image_with_imagen(description)
+        
         if status == 'SUCCESS':
             await processing_msg.delete()
             await save_and_send_gemini(message, data['image_data'])
@@ -381,13 +425,25 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     if not os.path.exists(font_path):
         font_path = "arial.ttf"
     font_size = 48
-    font = ImageFont.truetype(font_path, font_size)
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except IOError:
+        font = ImageFont.load_default() # Fallback если нет шрифта
+
     max_width = image.width - 40
     sample_chars = "абвгдежзийклмнопрстуфхцчшщъыьэюя"
-    avg_char_width = sum(_get_text_size(font, char)[0] for char in sample_chars) / len(sample_chars)
-    max_chars_per_line = int(max_width // avg_char_width) if avg_char_width > 0 else 20
+    try:
+        avg_char_width = sum(_get_text_size(font, char)[0] for char in sample_chars) / len(sample_chars)
+        max_chars_per_line = int(max_width // avg_char_width) if avg_char_width > 0 else 20
+    except:
+        max_chars_per_line = 20
+
     lines = textwrap.wrap(text, width=max_chars_per_line)
-    _, line_height = _get_text_size(font, "A")
+    try:
+        _, line_height = _get_text_size(font, "A")
+    except:
+        line_height = 50
+
     text_block_height = (line_height + 5) * len(lines)
     margin_bottom = 60
     y = image.height - text_block_height - margin_bottom
@@ -399,6 +455,8 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         x = (image.width - text_width) / 2
         draw.text((x, current_y), line, font=font, fill="white", stroke_width=1, stroke_fill="black")
         current_y += line_height + 5
-    output_path = "modified_pun_image.jpg"
+    
+    # Создаем уникальное имя для файла во избежание коллизий
+    output_path = f"modified_pun_image_{random.randint(1000,9999)}.jpg"
     image.save(output_path)
     return output_path
