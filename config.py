@@ -147,7 +147,7 @@ model = ModelFallbackWrapper(MODEL_QUEUE)
 
 # Остальные модели
 advanced_model = genai.GenerativeModel('gemini-2.0-flash') 
-image_model = genai.GenerativeModel("models/gemini-2.0-flash")
+image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
