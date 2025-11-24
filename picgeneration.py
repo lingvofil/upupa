@@ -169,14 +169,17 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
 
 async def generate_image_with_imagen(prompt: str):
     """
-    Генерация изображения через Imagen 3 (imagen-3.0-generate-001)
+    Генерация изображения через Gemini 2.0 Flash (с поддержкой генерации изображений)
     Возвращает ('SUCCESS', {'image_data': bytes}) или ('ERROR', {'error': str})
     """
     try:
         def sync_call():
+            # Для Gemini 2.0 Flash используем response_modalities
             return image_model.generate_content(
-                contents=prompt,
-                generation_config={'response_modalities': ['IMAGE']}
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    response_modalities=["image"]
+                )
             )
 
         response = await asyncio.to_thread(sync_call)
@@ -185,6 +188,7 @@ async def generate_image_with_imagen(prompt: str):
             return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
 
         for part in response.parts:
+            # Проверяем наличие inline_data (изображение)
             if hasattr(part, "inline_data") and part.inline_data:
                 mime_type = getattr(part.inline_data, "mime_type", "unknown")
                 logging.info(f"Imagen вернул MIME-тип: {mime_type}")
