@@ -81,11 +81,11 @@ from search import (
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
 from picgeneration import (
-    handle_image_generation_command, 
-    handle_pun_image_command, 
-    handle_redraw_command, 
-    handle_kandinsky_generation_command, 
-    handle_edit_command
+    handle_pun_image_command,
+    handle_image_generation_command,
+    handle_redraw_command,
+    handle_edit_command,
+    handle_kandinsky_generation_command
 )
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
