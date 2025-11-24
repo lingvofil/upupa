@@ -174,12 +174,10 @@ async def generate_image_with_imagen(prompt: str):
     """
     try:
         def sync_call():
-            # Для Gemini 2.0 Flash используем response_modalities
+            # Для Gemini 2.0 Flash передаем response_modalities напрямую
             return image_model.generate_content(
                 prompt,
-                generation_config=genai.GenerationConfig(
-                    response_modalities=["image"]
-                )
+                generation_config={'response_modalities': ['image']}
             )
 
         response = await asyncio.to_thread(sync_call)
