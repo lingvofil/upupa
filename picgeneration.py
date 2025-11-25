@@ -17,6 +17,7 @@ from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 
+# Импортируем настройки. Если image_model не сработает, попробуем фоллбэк внутри функции
 from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
@@ -169,18 +170,30 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
 
 async def generate_image_with_imagen(prompt: str):
     """
-    Генерация изображения через Gemini 2.0 Flash (с поддержкой генерации изображений)
+    Генерация изображения через Gemini.
+    Пытается использовать image_model из config.
+    При ошибке 'Model does not support...' пробует fallback на 'imagen-3.0-generate-001'.
     Возвращает ('SUCCESS', {'image_data': bytes}) или ('ERROR', {'error': str})
     """
-    try:
-        def sync_call():
-            # Для Gemini 2.0 Flash передаем response_modalities напрямую (в верхнем регистре!)
-            return image_model.generate_content(
-                prompt,
-                generation_config={'response_modalities': ['IMAGE']}
-            )
+    # Внутренняя функция для вызова API
+    def _call_api(model_instance):
+        return model_instance.generate_content(
+            prompt,
+            generation_config={'response_modalities': ['IMAGE']}
+        )
 
-        response = await asyncio.to_thread(sync_call)
+    try:
+        try:
+            # Попытка 1: используем модель из конфига (gemini-2.0-flash)
+            response = await asyncio.to_thread(_call_api, image_model)
+        except google_exceptions.InvalidArgument as e:
+            # Если модель не поддерживает картинки (400), пробуем Imagen 3 явно
+            if "Model does not support the requested response modalities" in str(e):
+                logging.warning(f"Модель из конфига не поддерживает IMAGE. Пробую imagen-3.0-generate-001. Ошибка: {e}")
+                fallback_model = genai.GenerativeModel("imagen-3.0-generate-001")
+                response = await asyncio.to_thread(_call_api, fallback_model)
+            else:
+                raise e # Пробрасываем ошибку, если она другая
 
         if not response.parts:
             return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
@@ -209,12 +222,12 @@ async def generate_image_with_imagen(prompt: str):
         # Если нет inline_data, проверяем текст
         if response.text:
             return 'ERROR', {'error': f"Модель отказалась рисовать: {response.text}"}
-             
+              
         return 'ERROR', {'error': "Неизвестный формат ответа от Imagen."}
 
     except Exception as e:
         logging.error(f"Ошибка в generate_image_with_imagen: {e}", exc_info=True)
-        return 'ERROR', {'error': str(e)}
+        return 'ERROR', {'error': f"Ошибка генерации: {str(e)}"}
 
 # =============================================================================
 # Вспомогательные функции для текста на изображении
