@@ -10,8 +10,7 @@ from aiogram import types
 from aiogram.types import FSInputFile, Message
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# Импортируем все необходимые ключи и объекты из config
-# Убедитесь, что в config.py есть GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
+# Импортируем ключи и объекты из config
 from config import (
     API_TOKEN, 
     model, 
@@ -24,15 +23,15 @@ from config import (
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 # =============================================================================
-# LEGACY: ФУНКЦИИ ПОИСКА (GOOGLE CUSTOM SEARCH & GIPHY)
+# LEGACY: ПОИСК КАРТИНОК (GOOGLE CUSTOM SEARCH)
 # =============================================================================
 
 def get_google_service():
     return build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
 
 def search_images(query: str):
-    service = get_google_service()
     try:
+        service = get_google_service()
         result = service.cse().list(q=query, cx=SEARCH_ENGINE_ID, searchType='image').execute()
         items = result.get("items", [])
         return [item["link"] for item in items]
@@ -41,7 +40,7 @@ def search_images(query: str):
         return []
 
 async def handle_message(message: types.Message, query, temp_img_path, error_msg):
-    """Старая функция-хэндлер для скачивания картинки по запросу"""
+    """Старый хэндлер для прямой обработки (если используется где-то еще)"""
     try:
         image_urls = search_images(query)
         if image_urls:
@@ -54,15 +53,15 @@ async def handle_message(message: types.Message, query, temp_img_path, error_msg
                 await message.reply_photo(photo=photo)
                 os.remove(temp_img_path)
             else:
-                await message.reply(f"Не удалось скачать изображение: {random_image_url}")
+                await message.reply(f"Не удалось скачать: {random_image_url}")
         else:
             await message.reply(error_msg)
     except Exception as e:
-        logging.error(f"Ошибка при поиске изображений: {e}")
-        await message.reply("Произошла ошибка при поиске изображений.")
+        logging.error(f"Ошибка handle_message: {e}")
+        await message.reply("Ошибка при поиске.")
 
 async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
-    """Обрабатывает поиск изображения по запросу для команды 'найди'."""
+    """Логика поиска картинки для команды 'найди'"""
     if not query:
         return False, "Шо тебе найти блядь", None
     try:
@@ -76,13 +75,13 @@ async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
         if img_response.status_code == 200:
             return True, "", img_response.content
         else:
-            return False, f"Вот тебе сцылко: {random_image_url}", None
+            return False, f"Ссылка битая: {random_image_url}", None
     except Exception as e:
-        logging.error(f"Ошибка при поиске изображений через Google: {e}")
-        return False, f"Да иди ты нахуй: {e}", None
+        logging.error(f"Ошибка process_image_search: {e}")
+        return False, f"Ошибка: {e}", None
 
 async def save_and_send_searched_image(message: Message, image_data: bytes):
-    """Сохраняет и отправляет найденное изображение."""
+    """Сохраняет и отправляет картинку"""
     temp_img_path = "searched_image.jpg"
     try:
         with open(temp_img_path, "wb") as f:
@@ -159,9 +158,11 @@ async def process_grounding_search(query: str) -> str:
         return "Ты забыл написать, что искать, гений."
     try:
         prompt = f"Найди актуальную информацию по запросу: {query}. Ответь развернуто и по делу."
+        
+        # ИСПРАВЛЕНИЕ: tools='google_search' вместо 'google_search_retrieval'
         response = await search_model.generate_content_async(
             prompt,
-            tools='google_search_retrieval',
+            tools='google_search', 
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -169,7 +170,14 @@ async def process_grounding_search(query: str) -> str:
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             }
         )
-        return response.text if response.text else "Гугл молчит, как партизан. Ничего не нашел."
+        # Иногда Gemini возвращает ответ в частях или структура меняется
+        if response.text:
+            return response.text
+        # Fallback на случай, если структура ответа другая
+        elif response.parts:
+            return "".join([part.text for part in response.parts])
+        else:
+            return "Гугл молчит, как партизан. Ничего не нашел."
     except Exception as e:
         logging.error(f"Ошибка Grounding search: {e}")
         return f"Что-то пошло не так при поиске. Ошибка: {e}"
@@ -184,9 +192,11 @@ async def process_location_search(address: str, user_request: str) -> str:
             f"Ответь пользователю в ироничном стиле, с сарказмом и немного используй нецензурную лексику (мат). "
             f"Не будь душным, будь дерзким, но дай полезную информацию (названия, рейтинг, открыто ли)."
         )
+        
+        # ИСПРАВЛЕНИЕ: tools='google_search' вместо 'google_search_retrieval'
         response = await search_model.generate_content_async(
             prompt,
-            tools='google_search_retrieval',
+            tools='google_search',
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -194,7 +204,13 @@ async def process_location_search(address: str, user_request: str) -> str:
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             }
         )
-        return response.text if response.text else "Бля, ничего не нашел в этой дыре."
+        
+        if response.text:
+            return response.text
+        elif response.parts:
+            return "".join([part.text for part in response.parts])
+        else:
+            return "Бля, ничего не нашел в этой дыре."
     except Exception as e:
         logging.error(f"Ошибка Location search: {e}")
         return "Я сломался, пока искал эту херню."
@@ -321,29 +337,24 @@ def overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     draw = ImageDraw.Draw(image)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     
-    # Пытаемся загрузить шрифт, если нет - дефолтный (но с дефолтным размер не поменяешь)
     try:
         font = ImageFont.truetype(font_path, 48)
     except IOError:
         font = ImageFont.load_default()
 
     max_width = image.width - 20
-    # Грубая оценка ширины символа для переноса строк
     avg_char_width = 25 
     max_chars_per_line = max(1, int(max_width // avg_char_width))
     lines = textwrap.wrap(text, width=max_chars_per_line)
     
-    # Расчет высоты блока
     line_height = 50
     text_block_height = line_height * len(lines)
     margin_bottom = 60
     y = image.height - text_block_height - margin_bottom
     
-    # Рисуем подложку
     rectangle = Image.new('RGBA', (image.width, text_block_height + 40), (0, 0, 0, 128))
     image.paste(rectangle, (0, y - 5), rectangle)
     
-    # Рисуем текст
     for line in lines:
         text_width, _ = get_text_size(font, line)
         x = (image.width - text_width) / 2
