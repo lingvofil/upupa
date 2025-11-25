@@ -450,41 +450,111 @@ async def handle_redraw_command(message: types.Message):
         logging.error(f"Redraw error: {e}")
         await msg.edit_text("Ошибка перерисовки.")
 
-async def handle_edit_command(message: types.Message):
-    """Отредактируй (Img2Img) - только Cloudflare поддерживает img2img"""
-    msg = await message.reply("Редактирую (CF)...")
+async def generate_inpainting_cloudflare(prompt: str, source_image_bytes: bytes):
+    """
+    Генерация через Cloudflare Stable Diffusion Inpainting v1.5.
+    Принимает байты изображения, ресайзит до 512x512, создает полную маску и отправляет запрос.
+    """
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        return 'ERROR', "Cloudflare Credentials not found."
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/runwayml/stable-diffusion-v1-5-inpainting"
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}"
+    }
+
     try:
+        # Обработка изображения через PIL
+        # SD v1.5 Inpainting оптимизирован под 512x512.
+        # Передача больших изображений массивом чисел (как требует API) может вызвать ошибку размера payload.
+        img = Image.open(BytesIO(source_image_bytes)).convert("RGB")
+        img = img.resize((512, 512))
+        
+        # Сохраняем уменьшенное изображение в байты
+        img_buf = BytesIO()
+        img.save(img_buf, format="PNG")
+        img_bytes_final = img_buf.getvalue()
+
+        # Создаем маску (Белая = редактировать всё). 
+        # Если нужна частичная замена, нужна сложная логика сегментации, 
+        # но для команды "отредактируй" обычно меняют суть картинки.
+        mask = Image.new("L", (512, 512), 255) 
+        mask_buf = BytesIO()
+        mask.save(mask_buf, format="PNG")
+        mask_bytes_final = mask_buf.getvalue()
+
+        # API Cloudflare для этой модели просит массив целых чисел (байтов файла), а не base64
+        # Согласно инструкции: mask: [...new Uint8Array(await exampleMask.arrayBuffer())]
+        payload = {
+            "prompt": prompt,
+            "image": list(img_bytes_final), # Превращаем байты PNG файла в список чисел [137, 80, 78, ...]
+            "mask": list(mask_bytes_final), # Аналогично для маски
+            "num_steps": 20,
+            "guidance": 7.5,
+            # strength можно добавить, если результат слишком сильно отличается от оригинала (0.5 - 0.8)
+            # но для inpainting обычно используется дефолт.
+        }
+
+        logging.info(f"Запрос Inpainting к Cloudflare: {prompt}...")
+
+        def _sync_request():
+            # Используем json=payload, requests сам сериализует списки
+            return requests.post(url, headers=headers, json=payload)
+
+        response = await asyncio.to_thread(_sync_request)
+        
+        if response.status_code == 200:
+            # API возвращает бинарные данные картинки напрямую
+            return 'SUCCESS', response.content
+        else:
+            logging.error(f"CF Inpainting Error {response.status_code}: {response.text}")
+            return 'ERROR', f"Cloudflare API Error: {response.status_code} - {response.text[:200]}"
+
+    except Exception as e:
+        logging.error(f"Ошибка в generate_inpainting_cloudflare: {e}", exc_info=True)
+        return 'ERROR', str(e)
+
+async def handle_edit_command(message: types.Message):
+    """Отредактируй (Inpainting v1.5)"""
+    msg = await message.reply("Обрабатываю (Inpainting)...")
+    try:
+        # 1. Получаем фото
         photo = message.photo[-1] if message.photo else None 
-        if message.reply_to_message and message.reply_to_message.photo:
+        if not photo and message.reply_to_message and message.reply_to_message.photo:
             photo = message.reply_to_message.photo[-1]
             
         if not photo:
-            await msg.edit_text("Нужно фото.")
+            await msg.edit_text("Пришлите фото или ответьте на него командой.")
             return
             
-        prompt = message.caption or message.text
-        prompt = prompt.lower().replace("отредактируй", "").strip()
+        # 2. Получаем промпт
+        prompt_text = message.caption or message.text
+        # Убираем саму команду из текста
+        prompt_text = prompt_text.lower().replace("/отредактируй", "").replace("отредактируй", "").strip()
         
-        if not prompt:
-            await msg.edit_text("Напишите, что сделать (например: 'добавь шляпу').")
+        if not prompt_text:
+            await msg.edit_text("Напишите, что именно изменить (например: 'отредактируй добавь очки').")
             return
 
+        # 3. Скачиваем фото
         img_bytes = await download_telegram_image(bot, photo)
         
-        # Переводим инструкцию по редактированию для Cloudflare
-        english_prompt = await translate_to_english(prompt)
+        # 4. Переводим промпт на английский (модель понимает только EN)
+        english_prompt = await translate_to_english(prompt_text)
         
-        # Пробуем CF Img2Img
-        status, data = await generate_image_with_cloudflare(english_prompt, img_bytes)
+        # 5. Запускаем генерацию через новую функцию
+        status, result = await generate_inpainting_cloudflare(english_prompt, img_bytes)
+        
         if status == 'SUCCESS':
             await msg.delete()
-            await save_and_send_generated_image(message, data['image_data'])
+            # result здесь - это уже байты картинки (PNG)
+            await save_and_send_generated_image(message, result, filename="edited_inpainting.png")
         else:
-            await msg.edit_text(f"Cloudflare Img2Img Error: {data.get('error')}")
+            await msg.edit_text(f"Ошибка редактирования:\n{result}")
             
     except Exception as e:
-        logging.error(f"Edit error: {e}")
-        await msg.edit_text("Ошибка редактирования.")
+        logging.error(f"Edit error: {e}", exc_info=True)
+        await msg.edit_text("Произошла ошибка при обработке.")
 
 async def handle_kandinsky_generation_command(message: types.Message):
     """Сгенерируй (Принудительно Кандинский)"""
