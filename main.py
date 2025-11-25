@@ -5,7 +5,7 @@ import logging
 import asyncio
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Filter
 from aiogram.filters.command import Command
 import json
 import nest_asyncio
@@ -77,15 +77,8 @@ from search import (
     save_and_send_searched_image,
     process_gif_search,
     save_and_send_gif,
-    # Новые импорты для Grounding
-    handle_grounding_search,
-    start_location_request,
-    handle_location_input,
-    handle_location_query,
-    is_waiting_for_location,
-    is_waiting_for_query,
-    cancel_location_request,
-    get_location_state
+    process_grounding_search, # <--- Новый
+    process_location_search   # <--- Новый
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -418,62 +411,58 @@ async def handle_image_search(message: Message):
         await message.reply(response_message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
-async def handle_grounding_search_command(message: Message):
-    """Обработка команды 'упупа скажи' для поиска с Grounding"""
+async def handle_grounding_search(message: Message):
+    # Отрезаем команду "упупа скажи" (11 символов + пробелы)
     query = message.text[len("упупа скажи"):].strip()
-    if not query:
-        await message.reply("Чё сказать-то, еблан?")
+    
+    # Отправляем действие "печатает", так как поиск может занять пару секунд
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    response_text = await process_grounding_search(query)
+    
+    # Gemini возвращает Markdown, поэтому используем parse_mode="Markdown" или None, 
+    # но безопаснее всего позволить aiogram самому разобраться или использовать MarkdownV2 аккуратно.
+    # Обычно обычный текст Gemini хорошо читается без специфичного парсинга, либо с Markdown.
+    await message.reply(response_text)
+
+
+# --- ХЭНДЛЕР 2: Инициализация локации ("упупа локация") ---
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа локация") and message.from_user.id not in BLOCKED_USERS)
+async def handle_location_start(message: Message):
+    address = message.text[len("упупа локация"):].strip()
+    
+    if not address:
+        await message.reply("Ты адрес забыл написать, чучело.")
         return
-    # Отправляем индикатор "печатает..."
-    await message.bot.send_chat_action(message.chat.id, "typing")
-    # Получаем ответ с использованием Google Search Grounding
-    response = await handle_grounding_search(query)
-    await message.reply(response)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа локация" and message.from_user.id not in BLOCKED_USERS)
-async def handle_location_command(message: Message):
-    """Начало запроса локации"""
-    await start_location_request(message, message.from_user.id)
+    # Отвечаем фразой, которую потом будем ловить в реплае
+    # Важно: текст должен точно совпадать с тем, что мы проверяем в следующем хэндлере
+    await message.reply(f"ну и хули ты хочешь по адресу {address}")
 
 
-@router.message(lambda message: message.text and is_waiting_for_location(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
-async def handle_location_address_text(message: Message):
-    """Обработка текстового адреса от пользователя"""
-    await handle_location_input(message, message.from_user.id, message.text)
+# --- ХЭНДЛЕР 3: Обработка уточнения по локации (Reply) ---
+# Фильтр проверяет, что это реплай И текст оригинального сообщения начинается с кодовой фразы
+@router.message(F.reply_to_message & F.reply_to_message.text.startswith("ну и хули ты хочешь по адресу"))
+async def handle_location_followup(message: Message):
+    if message.from_user.id in BLOCKED_USERS:
+        return
 
-
-@router.message(lambda message: message.location and is_waiting_for_location(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
-async def handle_location_address_geo(message: Message):
-    """Обработка геолокации от пользователя"""
-    location_text = f"координаты: {message.location.latitude}, {message.location.longitude}"
-    await handle_location_input(message, message.from_user.id, location_text)
-
-
-@router.message(lambda message: message.text and is_waiting_for_query(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
-async def handle_location_query_command(message: Message):
-    """Обработка запроса о локации (может быть реплаем или просто текстом)"""
+    # Достаем адрес из сообщения бота (оригинального)
+    bot_text = message.reply_to_message.text
+    prefix = "ну и хули ты хочешь по адресу "
     
-    # Отправляем индикатор "печатает..."
-    await message.bot.send_chat_action(message.chat.id, "typing")
+    # Извлекаем адрес (все, что идет после префикса)
+    address = bot_text[len(prefix):]
     
-    # Получаем ответ с использованием Google Maps Grounding
-    response = await handle_location_query(message, message.from_user.id, message.text)
+    # Запрос пользователя (то, что он написал сейчас: "бары", "аптеки" и т.д.)
+    user_query = message.text
     
-    # Проверяем что это был запрос локации (не None)
-    if response is not None:
-        await message.reply(response)
-    # Если None - значит это не запрос локации, и сообщение уйдет дальше в обычную говорилку
-
-
-# ================== ОТМЕНА ЗАПРОСА ЛОКАЦИИ ==================
-
-@router.message(lambda message: message.text and message.text.lower() in ["отмена", "упупа отмена"] and 
-                get_location_state(message.from_user.id) is not None and 
-                message.from_user.id not in BLOCKED_USERS)
-async def handle_cancel_location(message: Message):
-    """Отмена запроса локации"""
-    cancel_location_request(message.from_user.id)
-    await message.reply("Ладно, забыли про локацию.")
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    # Запускаем поиск через Gemini
+    result = await process_location_search(address, user_query)
+    
+    await message.reply(result)
 
 @router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
 async def universal_handler(message: types.Message):
