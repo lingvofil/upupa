@@ -320,7 +320,7 @@ async def handle_image_generation_command(message: types.Message):
     if not prompt:
         await message.reply("Шо именно нарисовать-то?")
         return
-    processing_message = await message.reply("Ща падажжи, рисую через молнию (CF)...")
+    processing_message = await message.reply("Ща падажжи, ебана")
     
     # ИСПОЛЬЗУЕМ CLOUDFLARE
     # Можно добавить "cinematic, high quality" к промпту для улучшения качества
