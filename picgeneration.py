@@ -53,32 +53,50 @@ class FusionBrainAPI:
             return None
 
     def generate(self, prompt, pipeline, images=1, width=1024, height=1024):
+        # Ограничиваем длину промпта (макс ~900 символов для надежности)
+        if len(prompt) > 900:
+            prompt = prompt[:900]
+            logging.warning(f"Промпт обрезан до 900 символов")
+        
         params = {
             "type": "GENERATE",
             "numImages": images,
             "width": width,
             "height": height,
             "generateParams": {
-                "query": f'{prompt}'
+                "query": prompt
             }
         }
+        
         data = {
             'pipeline_id': (None, pipeline),
             'params': (None, json.dumps(params), 'application/json')
         }
+        
         try:
+            logging.info(f"Kandinsky request params: {json.dumps(params, ensure_ascii=False)[:200]}")
             response = requests.post(self.URL + 'key/api/v1/pipeline/run', headers=self.AUTH_HEADERS, files=data)
+            
+            # Логируем полный ответ для отладки
+            if response.status_code != 200:
+                logging.error(f"Kandinsky API error {response.status_code}: {response.text}")
+            
             response.raise_for_status()
             data = response.json()
+            
             if 'uuid' in data:
                 return data['uuid'], None
+            
             error_message = data.get('errorDescription') or data.get('message') or data.get('pipeline_status') or json.dumps(data)
             logging.error(f"Kandinsky API не вернул UUID. Ответ: {error_message}")
             return None, error_message
+            
         except requests.RequestException as e:
             logging.error(f"HTTP ошибка при запуске генерации: {e}")
+            if hasattr(e.response, 'text'):
+                logging.error(f"Response body: {e.response.text}")
             return None, str(e)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             logging.error(f"Ошибка декодирования JSON ответа: {response.text}")
             return None, "API вернул некорректный JSON."
 
@@ -300,75 +318,91 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
-    """Каламбур"""
+    """Каламбур - генерирует каламбурное слово и рисует его"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    processing_msg = await message.reply("Генерирую каламбур...")
+    processing_msg = await message.reply("Генерирую хуйню...")
     
-    pun_prompt = "составь каламбурное сочетание слов в одном слове (формат: слово1+слово2 = итог)."
+    pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
+    Совпадать должны как минимум две буквы. 
+    Не комментируй генерацию.
+    Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
+    Например: "манго+голубь = манголубь" """
+    
     try:
         def sync_call():
             return model.generate_content(pun_prompt).text.strip()
-        pun_text = await asyncio.to_thread(sync_call)
+        pun_word = await asyncio.to_thread(sync_call)
         
-        if "=" in pun_text:
-            parts = pun_text.split('=')
-            source = parts[0].strip()
-            final = parts[1].strip()
-        else:
-            source = pun_text
-            final = pun_text
-
-        # Формируем описание на русском для Кандинского
-        description_ru = f"Сюрреалистичный арт, визуализация буквального каламбура: {source}. Фотореализм, 8k."
+        parts = pun_word.split('=')
+        
+        if len(parts) != 2:
+            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+            return
+        
+        source_words = parts[0].strip()
+        final_word = parts[1].strip()
+        
+        # Формируем описание для Кандинского (русский)
+        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. Высокое качество, детализация."
         
         # Пробуем Kandinsky (русский промпт)
-        success, err, k_data = await process_kandinsky_generation(description_ru)
+        success, err, k_data = await process_kandinsky_generation(image_gen_prompt)
         
         if success:
             try:
-                path = await asyncio.to_thread(_overlay_text_on_image, k_data, final)
-                await message.reply_photo(FSInputFile(path))
-                os.remove(path)
+                modified_path = await asyncio.to_thread(_overlay_text_on_image, k_data, final_word)
+                await message.reply_photo(FSInputFile(modified_path))
+                os.remove(modified_path)
                 await processing_msg.delete()
-            except:
+            except Exception as e:
+                logging.error(f"Ошибка наложения текста: {e}")
+                await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
                 await save_and_send_generated_image(message, k_data)
         else:
             # Фоллбэк на Cloudflare - генерируем АНГЛИЙСКИЙ каламбур
             await processing_msg.edit_text("Кандинский не ответил, пробую Cloudflare с английским каламбуром...")
             
             # Генерируем новый каламбур на английском для Cloudflare
-            english_pun_prompt = "Create a pun by combining two words into one (format: word1+word2 = result)."
+            english_pun_prompt = """Create a pun by combining two words into one. There should be an overlap between the end of the first word and the beginning of the second.
+At least two letters should match.
+Do not comment on the generation.
+Answer strictly in the format: "word1+word2 = finalword"
+For example: "butter+butterfly = butterflutter" """
+            
             def sync_call_en():
                 return model.generate_content(english_pun_prompt).text.strip()
-            pun_text_en = await asyncio.to_thread(sync_call_en)
+            pun_word_en = await asyncio.to_thread(sync_call_en)
             
-            if "=" in pun_text_en:
-                parts_en = pun_text_en.split('=')
-                source_en = parts_en[0].strip()
-                final_en = parts_en[1].strip()
-            else:
-                source_en = pun_text_en
-                final_en = pun_text_en
+            parts_en = pun_word_en.split('=')
             
-            # Промпт уже на английском
-            description_en = f"Surrealistic art, visualization of literal pun: {source_en}. Photorealistic, 8k."
+            if len(parts_en) != 2:
+                await processing_msg.edit_text(f"Cloudflare fallback failed: invalid pun format. Response: {pun_word_en}")
+                return
             
-            status, data = await generate_image_with_cloudflare(description_en)
+            source_words_en = parts_en[0].strip()
+            final_word_en = parts_en[1].strip()
+            
+            # Промпт на английском для Cloudflare
+            image_gen_prompt_en = f"Visualization of pun '{final_word_en}'. Surrealistic painting combining concepts '{source_words_en}'. No letters or text on the image. Photorealistic style. High quality, detailed."
+            
+            status, data = await generate_image_with_cloudflare(image_gen_prompt_en)
             
             if status == 'SUCCESS':
                 try:
-                    path = await asyncio.to_thread(_overlay_text_on_image, data['image_data'], final_en)
-                    await message.reply_photo(FSInputFile(path))
-                    os.remove(path)
+                    modified_path = await asyncio.to_thread(_overlay_text_on_image, data['image_data'], final_word_en)
+                    await message.reply_photo(FSInputFile(modified_path))
+                    os.remove(modified_path)
                     await processing_msg.delete()
-                except:
+                except Exception as e:
+                    logging.error(f"Ошибка наложения текста (CF): {e}")
+                    await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
                     await save_and_send_generated_image(message, data['image_data'])
             else:
-                await processing_msg.edit_text("Не вышло нарисовать каламбур.")
+                await processing_msg.edit_text(f"Ошибка генерации картинки: {data.get('error')}")
 
     except Exception as e:
-        logging.error(f"Err pun: {e}")
-        await processing_msg.edit_text("Ошибка логики каламбура.")
+        logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
+        await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 async def handle_image_generation_command(message: types.Message):
     """Нарисуй"""
