@@ -198,7 +198,7 @@ async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes 
     if not CF_ACCOUNT_ID or not CF_API_TOKEN or CF_ACCOUNT_ID == "NO_CF_ID":
         return 'ERROR', {'error': "Cloudflare Credentials not found or invalid in Config."}
 
-    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/bytedance/stable-diffusion-xl-lightning"
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/bytedance/stable-diffusion-xl-base-1.0"
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}"
     }
