@@ -1,29 +1,30 @@
 import requests
 import json
 import time
-import aiohttp
 import asyncio
-import tempfile
 import os
 import logging
 import random
 import textwrap
 import base64
-import google.generativeai as genai
-from google.api_core import exceptions as google_exceptions
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 
-# Импортируем настройки.
-from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
+# Импортируем ключи CLOUDFLARE. Убедитесь, что добавили их в config.py
+from config import (
+    KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, 
+    CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN,
+    bot, model, edit_model, API_TOKEN
+)
 from prompts import actions
 from adddescribe import download_telegram_image
 
 # =============================================================================
 # Класс и функции для работы с API Kandinsky (FusionBrain)
+# (БЕЗ ИЗМЕНЕНИЙ)
 # =============================================================================
 
 class FusionBrainAPI:
@@ -138,110 +139,67 @@ async def process_kandinsky_generation(prompt):
         return False, f"Критическая ошибка: {repr(e)[:300]}", None
 
 # =============================================================================
-# Функции для работы с Gemini/Imagen
+# Функции для работы с Cloudflare Workers AI (SDXL Lightning)
 # =============================================================================
 
-def is_valid_image_data(data: bytes) -> bool:
-    """Проверяет сигнатуры известных форматов изображений."""
-    if data.startswith(b'\x89PNG') or data.startswith(b'\xff\xd8') or data.startswith(b'RIFF'):
-        return True
-    return False
-
-async def save_and_send_generated_image(message: types.Message, image_data: bytes):
-    """Пытается отправить изображение, при ошибке использует Pillow для конвертации."""
+async def save_and_send_generated_image(message: types.Message, image_data: bytes, filename="image.png"):
+    """Отправляет изображение в чат"""
     try:
-        logging.info("Попытка №1: отправка необработанных данных изображения...")
-        raw_buffered_image = types.BufferedInputFile(image_data, filename="gemini_image_raw.png")
-        await message.reply_photo(raw_buffered_image)
-        logging.info("Необработанные данные успешно отправлены.")
-    except TelegramBadRequest:
-        logging.warning("Попытка №1 не удалась. Запускаю Pillow.")
-        try:
-            image = Image.open(BytesIO(image_data))
-            output_buffer = BytesIO()
-            image.save(output_buffer, 'PNG')
-            output_buffer.seek(0)
-            processed_buffered_image = types.BufferedInputFile(output_buffer.read(), filename="gemini_image_processed.png")
-            await message.reply_photo(processed_buffered_image)
-            logging.info("Обработанное через Pillow изображение успешно отправлено.")
-        except Exception as pil_error:
-            logging.error(f"Pillow не смог обработать: {pil_error}")
-            await message.reply("API вернуло данные, которые не являются изображением.")
+        input_file = types.BufferedInputFile(image_data, filename=filename)
+        await message.reply_photo(input_file)
+    except Exception as e:
+        logging.error(f"Ошибка отправки изображения: {e}")
+        await message.reply("Не удалось отправить сгенерированное изображение.")
 
-async def generate_image_with_imagen(prompt: str):
+async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes = None):
     """
-    Генерация изображения через Gemini.
-    Сначала пробует image_model из config.
-    Если не поддерживает (400/404), перебирает список 'рисующих' моделей.
+    Генерация изображения через Cloudflare SDXL Lightning.
+    Если передан source_image_bytes, работает в режиме Img2Img.
     """
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/bytedance/stable-diffusion-xl-lightning"
+    headers = {
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"
+    }
     
-    # Список моделей для перебора в случае неудачи (от самых вероятных к новым)
-    # gemini-2.0-flash-exp - обычно включены все экспериментальные фичи (рисование)
-    # gemini-3-pro-image-preview - нативная рисовалка из PDF
-    # gemini-2.5-flash-image - нативная рисовалка из PDF
-    FALLBACK_MODELS = [
-        "gemini-2.0-flash-exp",
-        "gemini-3-pro-image-preview",
-        "gemini-2.5-flash-image"
-    ]
+    # SDXL Lightning хорошо работает на малом кол-ве шагов (4-8)
+    payload = {
+        "prompt": prompt,
+        "num_steps": 8, 
+        "guidance": 7.5,
+        "width": 1024,
+        "height": 1024
+    }
 
-    def _call_api(model_instance, prompt_text):
-        return model_instance.generate_content(
-            prompt_text,
-            generation_config={'response_modalities': ['IMAGE']}
-        )
-
-    # Шаг 1: Пробуем модель из конфига
-    current_models_to_try = [(image_model, "Config Model")]
-    # Добавляем запасные варианты (создаем объекты GenerativeModel на лету)
-    for m_name in FALLBACK_MODELS:
-        current_models_to_try.append((genai.GenerativeModel(m_name), m_name))
-
-    last_error = None
-
-    for model_obj, model_name in current_models_to_try:
+    # Если есть исходное изображение (для перерисовки/редактирования)
+    if source_image_bytes:
         try:
-            logging.info(f"Попытка генерации изображения через модель: {model_name}")
-            response = await asyncio.to_thread(_call_api, model_obj, prompt)
-
-            if not response.parts:
-                logging.warning(f"Модель {model_name} вернула пустой ответ (Safety Filter?).")
-                last_error = "Safety Filter (пустой ответ)"
-                continue
-
-            for part in response.parts:
-                if hasattr(part, "inline_data") and part.inline_data:
-                    mime_type = getattr(part.inline_data, "mime_type", "unknown")
-                    logging.info(f"Успех! Модель {model_name} вернула MIME-тип: {mime_type}")
-                    raw_data = part.inline_data.data
-                    
-                    if isinstance(raw_data, str):
-                        try:
-                            image_data = base64.b64decode(raw_data)
-                        except Exception:
-                            image_data = raw_data.encode("latin1", errors="ignore")
-                    elif isinstance(raw_data, bytes):
-                        image_data = raw_data
-                    
-                    if is_valid_image_data(image_data):
-                        return 'SUCCESS', {'image_data': image_data}
-            
-            # Если дошли сюда, значит картинки в ответе не было (модель ответила текстом)
-            if response.text:
-                logging.warning(f"Модель {model_name} ответила текстом вместо картинки: {response.text[:50]}...")
-                last_error = f"Модель отказалась рисовать: {response.text}"
-        
+            # Конвертируем байты в base64 строку
+            image_b64 = base64.b64encode(source_image_bytes).decode('utf-8')
+            payload["image_b64"] = image_b64
+            # Для Img2Img strength влияет на то, как сильно меняется картинка (0.3 - мало, 0.7 - сильно)
+            payload["strength"] = 0.6 
         except Exception as e:
-            error_str = str(e)
-            # Игнорируем ошибки "не поддерживается", идем к следующей модели
-            if "400" in error_str or "404" in error_str or "not support" in error_str:
-                logging.warning(f"Модель {model_name} не подошла: {error_str}")
-                last_error = f"Модель недоступна или не рисует ({error_str})"
-            else:
-                logging.error(f"Ошибка в generate_image_with_imagen ({model_name}): {e}", exc_info=True)
-                last_error = str(e)
-    
-    return 'ERROR', {'error': f"Все модели провалились. Последняя ошибка: {last_error}"}
+            logging.error(f"Ошибка кодирования source_image для CF: {e}")
+            return 'ERROR', {'error': "Ошибка обработки исходного изображения"}
+
+    def _sync_request():
+        response = requests.post(url, headers=headers, json=payload)
+        return response
+
+    try:
+        logging.info(f"Запрос к Cloudflare AI: {prompt[:50]}...")
+        response = await asyncio.to_thread(_sync_request)
+        
+        if response.status_code == 200:
+            # Cloudflare возвращает бинарные данные (image/png) напрямую
+            return 'SUCCESS', {'image_data': response.content}
+        else:
+            logging.error(f"Cloudflare Error {response.status_code}: {response.text}")
+            return 'ERROR', {'error': f"Cloudflare API Error: {response.status_code} - {response.text[:100]}"}
+            
+    except Exception as e:
+        logging.error(f"Ошибка в generate_image_with_cloudflare: {e}", exc_info=True)
+        return 'ERROR', {'error': str(e)}
 
 # =============================================================================
 # Вспомогательные функции для текста на изображении
@@ -304,7 +262,7 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
 # =============================================================================
 
 async def handle_pun_image_command(message: types.Message):
-    """Каламбур - генерирует каламбурное слово и рисует его через Imagen"""
+    """Каламбур - генерирует каламбурное слово (Gemini) и рисует его (Cloudflare)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Генерирую хуйню...")
     pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
@@ -320,15 +278,18 @@ async def handle_pun_image_command(message: types.Message):
         parts = pun_word.split('=')
         
         if len(parts) != 2:
-            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ нейросети не соответствует формату 'слово1+слово2 = итоговоеслово'. Ответ: {pun_word}")
+            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ: {pun_word}")
             return
 
         source_words = parts[0].strip()
         final_word = parts[1].strip()
 
-        image_gen_prompt = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. High quality, detailed."
+        # Промпт для SDXL лучше делать на английском, но CF понимает и русский
+        # Для надежности можно попросить Gemini перевести промпт, но пока попробуем так
+        image_gen_prompt = f"Surreal painting, visualization of a pun '{final_word}', combining concepts of '{source_words}'. No text, no letters. Photorealistic style, 8k, high detailed."
         
-        status, data = await generate_image_with_imagen(image_gen_prompt)
+        # ИСПОЛЬЗУЕМ CLOUDFLARE
+        status, data = await generate_image_with_cloudflare(image_gen_prompt)
 
         if status == 'SUCCESS':
             image_data = data['image_data']
@@ -339,9 +300,9 @@ async def handle_pun_image_command(message: types.Message):
                 await processing_msg.delete()
             except Exception as e:
                 await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
-                await save_and_send_generated_image(message, image_data)
+                await save_and_send_generated_image(message, image_data, filename="pun.png")
         else:
-            await processing_msg.edit_text(f"Ошибка генерации картинки: {data.get('error')}")
+            await processing_msg.edit_text(f"Ошибка генерации картинки через CF: {data.get('error')}")
 
     except Exception as e:
         logging.error(f"Ошибка в handle_pun_image_command: {e}", exc_info=True)
@@ -349,7 +310,7 @@ async def handle_pun_image_command(message: types.Message):
 
 
 async def handle_image_generation_command(message: types.Message):
-    """Нарисуй - генерация через Imagen"""
+    """Нарисуй - генерация через Cloudflare SDXL"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = None
     if message.text.lower().strip() == "нарисуй" and message.reply_to_message:
@@ -359,19 +320,23 @@ async def handle_image_generation_command(message: types.Message):
     if not prompt:
         await message.reply("Шо именно нарисовать-то?")
         return
-    processing_message = await message.reply("Ща падажжи, рисую...")
+    processing_message = await message.reply("Ща падажжи, рисую через молнию (CF)...")
     
-    status, data = await generate_image_with_imagen(prompt)
+    # ИСПОЛЬЗУЕМ CLOUDFLARE
+    # Можно добавить "cinematic, high quality" к промпту для улучшения качества
+    full_prompt = f"{prompt}, high quality, masterpiece, 8k"
+    
+    status, data = await generate_image_with_cloudflare(full_prompt)
     
     if status == 'SUCCESS':
         await processing_message.delete()
-        await save_and_send_generated_image(message, data['image_data'])
+        await save_and_send_generated_image(message, data['image_data'], filename="sdxl_lightning.png")
     else:
         await processing_message.edit_text(f"Ошибка: {data.get('error')}")
 
 
 async def handle_redraw_command(message: types.Message):
-    """Перерисуй - анализирует изображение и перерисовывает его как детский рисунок"""
+    """Перерисуй - анализирует изображение (Gemini) и перерисовывает (Cloudflare)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Анализирую тваю мазню...")
     try:
@@ -386,35 +351,44 @@ async def handle_redraw_command(message: types.Message):
             await processing_msg.edit_text("Изображение для перерисовки не найдено.")
             return
         image_bytes = await download_telegram_image(bot, photo)
+        
+        # 1. Описываем картинку через Gemini (Input Images работает хорошо)
         detailed_prompt = """Опиши детально все, что видишь на этом изображении. 
-Укажи: основные объекты, цвета, стиль, фон, детали. Опиши максимально подробно для воссоздания изображения, должен получиться очень плохо и криво нарисованный рисунок карандашом, как будто рисовал трехлетний ребенок. Весь текст должен вмещаться в один абзац, не более 100 слов"""
+Укажи: основные объекты, цвета, стиль, фон, детали. Опиши так, чтобы по этому описанию можно было нарисовать "очень плохой и кривой детский рисунок карандашом"."""
         
         def sync_describe():
             return model.generate_content([
                 detailed_prompt,
                 {"mime_type": "image/jpeg", "data": image_bytes}
             ]).text.strip()
-        description = await asyncio.to_thread(sync_describe)
         
-        status, data = await generate_image_with_imagen(description)
+        # Gemini описывает картинку
+        description = await asyncio.to_thread(sync_describe)
+        logging.info(f"Описание от Gemini: {description}")
+        
+        # 2. Рисуем через Cloudflare по описанию
+        # Добавляем стиль в промпт
+        style_prompt = f"Children's drawing style, crayon drawing, bad drawing, scribbles. {description}"
+        
+        status, data = await generate_image_with_cloudflare(style_prompt)
         
         if status == 'SUCCESS':
             await processing_msg.delete()
-            await save_and_send_generated_image(message, data['image_data'])
+            await save_and_send_generated_image(message, data['image_data'], filename="redraw_child.png")
         else:
-            await processing_msg.edit_text(f"Ошибка: {data.get('error')}")
+            await processing_msg.edit_text(f"Ошибка генерации: {data.get('error')}")
     except Exception as e:
         logging.error(f"Ошибка в handle_redraw_command: {e}", exc_info=True)
         await processing_msg.edit_text(f"Ошибка: {str(e)}")
 
 
 async def handle_edit_command(message: types.Message):
-    """Отредактируй - редактирование изображения через Gemini"""
+    """Отредактируй - использует Img2Img Cloudflare"""
     processing_msg = None
     try:
         logging.info("[EDIT] Получен запрос на редактирование изображения")
         bot_instance = message.bot
-        processing_msg = await message.reply("Применяю магию...")
+        processing_msg = await message.reply("Применяю магию (Img2Img)...")
 
         image_obj = None
         if message.photo:
@@ -432,7 +406,6 @@ async def handle_edit_command(message: types.Message):
         if not image_bytes:
             await processing_msg.edit_text("Не удалось загрузить изображение.")
             return
-        logging.info(f"[EDIT] Изображение загружено, размер {len(image_bytes)} байт")
 
         prompt = ""
         if message.caption:
@@ -441,53 +414,19 @@ async def handle_edit_command(message: types.Message):
             prompt = message.text.lower().replace("отредактируй", "", 1).strip()
         
         if not prompt:
-            await processing_msg.edit_text("Пожалуйста, укажите, как нужно отредактировать изображение. Например: 'отредактируй добавь шляпу'")
+            await processing_msg.edit_text("Напишите, во что превратить картинку. Например: 'отредактируй в стиле киберпанк'")
             return
 
-        def sync_edit_call():
-            img = Image.open(BytesIO(image_bytes))
-            return edit_model.generate_content([prompt, img])
+        # ИСПОЛЬЗУЕМ CLOUDFLARE IMG2IMG
+        # Передаем prompt и исходные байты
+        status, data = await generate_image_with_cloudflare(prompt, source_image_bytes=image_bytes)
 
-        response = await asyncio.to_thread(sync_edit_call)
-        
-        edited_image_found = False
-        for part in response.parts:
-            if part.mime_type and part.mime_type.startswith("image/"):
-                image_data = part.inline_data.data
-                output_file = types.BufferedInputFile(image_data, filename="edited.png")
-                
-                await processing_msg.delete()
-                await message.reply_photo(photo=output_file)
-                
-                edited_image_found = True
-                break
-
-        if not edited_image_found:
-            text_feedback = "Модель не вернула изображение."
-            try:
-                text_feedback = response.text
-                logging.warning(f"[EDIT] Gemini не вернул изображение. Ответ: {text_feedback}")
-            except Exception as e:
-                logging.error(f"[EDIT] Не удалось извлечь текст из ответа Gemini: {e}. Полный ответ: {response}")
-
-            await processing_msg.edit_text(
-                f"Не удалось получить изменённое изображение. Попробуйте переформулировать запрос.\n\n"
-                f"Ответ модели: _{text_feedback}_",
-                parse_mode="Markdown"
-            )
-    except google_exceptions.NotFound as e:
-        logging.error(f"[EDIT] Ошибка 'Модель не найдена': {e}", exc_info=True)
-        error_message = (
-            "**Ошибка: Модель для редактирования не найдена!**\n\n"
-            "Похоже, что в `config.py` указано неверное имя модели.\n"
-            "Пожалуйста, замените строку в `config.py` на:\n"
-            "`edit_model = genai.GenerativeModel(\"models/gemini-pro-vision\")`\n\n"
-            "Это специальная модель для работы с изображениями."
-        )
-        if processing_msg:
-            await processing_msg.edit_text(error_message, parse_mode="Markdown")
+        if status == 'SUCCESS':
+            await processing_msg.delete()
+            await save_and_send_generated_image(message, data['image_data'], filename="edited_cf.png")
         else:
-            await message.reply(error_message, parse_mode="Markdown")
+            await processing_msg.edit_text(f"Ошибка редактирования: {data.get('error')}")
+
     except Exception as e:
         logging.error(f"[EDIT] Критическая ошибка в handle_edit_command: {e}", exc_info=True)
         if processing_msg:
@@ -497,7 +436,7 @@ async def handle_edit_command(message: types.Message):
 
 
 async def handle_kandinsky_generation_command(message: types.Message):
-    """Сгенерируй - генерация через Kandinsky"""
+    """Сгенерируй - генерация через Kandinsky (БЕЗ ИЗМЕНЕНИЙ)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = None
     if message.text.lower().startswith("сгенерируй "):
