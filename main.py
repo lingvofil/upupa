@@ -76,7 +76,14 @@ from search import (
     process_image_search,
     save_and_send_searched_image,
     process_gif_search,
-    save_and_send_gif
+    save_and_send_gif,
+    handle_grounding_search,
+    start_location_request,
+    handle_location_input,
+    handle_location_query,
+    is_waiting_for_location,
+    is_waiting_for_query,
+    cancel_location_request
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -407,6 +414,43 @@ async def handle_image_search(message: Message):
         await save_and_send_searched_image(message, image_data)
     elif response_message:
         await message.reply(response_message)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
+async def handle_grounding_search_command(message: Message):
+    """Обработка команды 'упупа скажи' для поиска с Grounding"""
+    query = message.text[len("упупа скажи"):].strip()
+    if not query:
+        await message.reply("Чё сказать-то, еблан?")
+        return
+    # Отправляем индикатор "печатает..."
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    # Получаем ответ с использованием Google Search Grounding
+    response = await handle_grounding_search(query)
+    await message.reply(response)
+
+@router.message(lambda message: message.text and message.text.lower() == "упупа локация" and message.from_user.id not in BLOCKED_USERS)
+async def handle_location_command(message: Message):
+    await start_location_request(message, message.from_user.id)
+
+@router.message(lambda message: message.text and is_waiting_for_location(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
+async def handle_location_address(message: Message):
+    await handle_location_input(message, message.from_user.id, message.text)
+
+@router.message(lambda message: message.text and message.reply_to_message and 
+                is_waiting_for_query(message.from_user.id, message.reply_to_message.message_id) and 
+                message.from_user.id not in BLOCKED_USERS)
+async def handle_location_query_command(message: Message):
+    """Обработка запроса о локации (должен быть реплаем)"""
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    response = await handle_location_query(message, message.from_user.id, message.text)
+    await message.reply(response)
+
+@router.message(lambda message: message.text and message.text.lower() in ["отмена", "упупа отмена"] and 
+                message.from_user.id in location_awaiting and 
+                message.from_user.id not in BLOCKED_USERS)
+async def handle_cancel_location(message: Message):
+    cancel_location_request(message.from_user.id)
+    await message.reply("Ладно, забыли про локацию.")
 
 @router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
 async def universal_handler(message: types.Message):
