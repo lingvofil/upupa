@@ -40,7 +40,6 @@ def search_images(query: str):
         return []
 
 async def handle_message(message: types.Message, query, temp_img_path, error_msg):
-    """Старый хэндлер для прямой обработки (если используется где-то еще)"""
     try:
         image_urls = search_images(query)
         if image_urls:
@@ -61,7 +60,6 @@ async def handle_message(message: types.Message, query, temp_img_path, error_msg
         await message.reply("Ошибка при поиске.")
 
 async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
-    """Логика поиска картинки для команды 'найди'"""
     if not query:
         return False, "Шо тебе найти блядь", None
     try:
@@ -81,7 +79,6 @@ async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
         return False, f"Ошибка: {e}", None
 
 async def save_and_send_searched_image(message: Message, image_data: bytes):
-    """Сохраняет и отправляет картинку"""
     temp_img_path = "searched_image.jpg"
     try:
         with open(temp_img_path, "wb") as f:
@@ -159,10 +156,10 @@ async def process_grounding_search(query: str) -> str:
     try:
         prompt = f"Найди актуальную информацию по запросу: {query}. Ответь развернуто и по делу."
         
-        # ИСПРАВЛЕНИЕ: tools='google_search' вместо 'google_search_retrieval'
+        # ИСПРАВЛЕНИЕ: передаем список словарей, а не строку
         response = await search_model.generate_content_async(
             prompt,
-            tools='google_search', 
+            tools=[{'google_search': {}}], 
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -170,10 +167,8 @@ async def process_grounding_search(query: str) -> str:
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             }
         )
-        # Иногда Gemini возвращает ответ в частях или структура меняется
         if response.text:
             return response.text
-        # Fallback на случай, если структура ответа другая
         elif response.parts:
             return "".join([part.text for part in response.parts])
         else:
@@ -193,10 +188,10 @@ async def process_location_search(address: str, user_request: str) -> str:
             f"Не будь душным, будь дерзким, но дай полезную информацию (названия, рейтинг, открыто ли)."
         )
         
-        # ИСПРАВЛЕНИЕ: tools='google_search' вместо 'google_search_retrieval'
+        # ИСПРАВЛЕНИЕ: передаем список словарей, а не строку
         response = await search_model.generate_content_async(
             prompt,
-            tools='google_search',
+            tools=[{'google_search': {}}],
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
