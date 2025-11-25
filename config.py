@@ -18,7 +18,8 @@ try:
         GOOGLE_API_KEY, GOOGLE_API_KEY2,
         giphy_api_key,
         KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY,
-        GIGACHAT_API_KEY, GIGACHAT_CLIENT_ID
+        GIGACHAT_API_KEY, GIGACHAT_CLIENT_ID,
+        CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
     )
 except ImportError:
     print("Warning: config_private.py not found. Attempting to load from environment variables or using placeholders.")
@@ -40,6 +41,8 @@ except ImportError:
     KANDINSKY_SECRET_KEY = os.getenv('KANDINSKY_SECRET_KEY', 'YOUR_KANDINSKY_SECRET_HERE')
     GIGACHAT_API_KEY = os.getenv('GIGACHAT_API_KEY', 'YOUR_GIGACHAT_KEY_HERE')
     GIGACHAT_CLIENT_ID = os.getenv('GIGACHAT_CLIENT_ID', 'YOUR_GIGACHAT_CLIENT_ID_HERE')
+    CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "NO_CF_ID")
+    CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "NO_CF_TOKEN")
 
 SEARCH_ENGINE_ID = "33026288e406447ea"
 GIGACHAT_MODEL = 'GigaChat-2'
