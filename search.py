@@ -126,7 +126,7 @@ async def handle_grounding_search(query: str) -> str:
         logging.info(f"Grounding Search запрос: {query}")
         response = search_model.generate_content(
             query,
-            tools=[genai.Tool(google_search=genai.GoogleSearch())]
+            tools="google_search"
         )
         if response and response.text:
             logging.info(f"Grounding Search успешно выполнен")
@@ -167,7 +167,7 @@ async def handle_location_query(message: types.Message, user_id: int, query: str
         full_query = f"{query} рядом с {location}"
         response = search_model.generate_content(
             full_query,
-            tools=[genai.Tool(google_search=genai.GoogleSearch())]
+            tools="google_search"
         )
         del location_awaiting[user_id]
         if response and response.text:
