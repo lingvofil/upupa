@@ -149,8 +149,6 @@ async def translate_to_english(text):
     """Переводит текст на английский, используя основную LLM модель"""
     if not text: 
         return ""
-    # Если текст уже на английском (простая эвристика), можно не переводить, 
-    # но для надежности прогоняем всё, кроме очень коротких ASCII строк.
     try:
         translation_prompt = f"Translate the following text to English for an image generation prompt. Output only the translation, no explanations: {text}"
         response = await asyncio.to_thread(lambda: model.generate_content(translation_prompt).text)
@@ -159,7 +157,7 @@ async def translate_to_english(text):
         return translated
     except Exception as e:
         logging.error(f"Ошибка перевода: {e}")
-        return text # Возвращаем оригинал в случае ошибки
+        return text
 
 # =============================================================================
 # Функции для работы с Cloudflare Workers AI (SDXL Lightning)
@@ -260,37 +258,42 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     return output_path
 
 # =============================================================================
-# ОБЩАЯ ЛОГИКА ГЕНЕРАЦИИ (С ФОЛЛБЭКОМ)
+# ОБЩАЯ ЛОГИКА ГЕНЕРАЦИИ (KANDINSKY PRIMARY, CF FALLBACK)
 # =============================================================================
 
-async def robust_image_generation(message: types.Message, prompt: str, processing_msg: types.Message, mode="text2img", source_bytes=None):
+async def robust_image_generation(message: types.Message, prompt: str, processing_msg: types.Message, mode="text2img", source_bytes=None, is_pun=False):
     """
-    Пытается сгенерировать через Cloudflare.
-    При неудаче автоматически переключается на Kandinsky.
-    """
-    # 1. Попытка Cloudflare
-    status, data = await generate_image_with_cloudflare(prompt, source_bytes)
+    Пытается сгенерировать через Kandinsky (основной, использует русский).
+    При неудаче автоматически переключается на Cloudflare (резервный, требует английский).
     
-    if status == 'SUCCESS':
+    is_pun - флаг для команды "скаламбурь", чтобы при фоллбэке на CF генерировать каламбур на английском
+    """
+    # 1. Попытка Kandinsky (русский промпт)
+    success, error, k_data = await process_kandinsky_generation(prompt)
+    
+    if success:
         await processing_msg.delete()
-        await save_and_send_generated_image(message, data['image_data'], filename="sdxl.png")
+        await save_and_send_generated_image(message, k_data, filename="kandinsky.png")
         return
 
-    # 2. Фоллбэк на Kandinsky
-    logging.warning(f"Cloudflare failed: {data.get('error')}. Switching to Kandinsky.")
+    # 2. Фоллбэк на Cloudflare
+    logging.warning(f"Kandinsky failed: {error}. Switching to Cloudflare.")
     
     if mode == "text2img":
-        await processing_msg.edit_text("⚡️ Молния не сверкнула, запускаю Кандинского... 🎨")
-        # Кандинский хорошо понимает и английский и русский, отправляем тот промпт, что есть (английский)
-        success, error, k_data = await process_kandinsky_generation(prompt)
-        if success:
+        await processing_msg.edit_text("🎨 Кандинский приболел, вызываю молнию... ⚡️")
+        
+        # Для Cloudflare переводим промпт на английский
+        english_prompt = await translate_to_english(prompt)
+        
+        status, data = await generate_image_with_cloudflare(english_prompt)
+        if status == 'SUCCESS':
             await processing_msg.delete()
-            await save_and_send_generated_image(message, k_data, filename="kandinsky_backup.png")
+            await save_and_send_generated_image(message, data['image_data'], filename="cloudflare_backup.png")
         else:
-            await processing_msg.edit_text(f"Оба художника пьяны.\nCF Error: {data.get('error')}\nKandinsky Error: {error}")
+            await processing_msg.edit_text(f"Оба художника пьяны.\nKandinsky Error: {error}\nCF Error: {data.get('error')}")
     else:
         # Для Img2Img (редактирование)
-        await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {data.get('error')}")
+        await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {error}")
 
 # =============================================================================
 # ХЭНДЛЕРЫ
@@ -315,35 +318,51 @@ async def handle_pun_image_command(message: types.Message):
             source = pun_text
             final = pun_text
 
-        # Формируем описание на русском для перевода
+        # Формируем описание на русском для Кандинского
         description_ru = f"Сюрреалистичный арт, визуализация буквального каламбура: {source}. Фотореализм, 8k."
         
-        # Переводим промпт для Cloudflare
-        english_prompt = await translate_to_english(description_ru)
+        # Пробуем Kandinsky (русский промпт)
+        success, err, k_data = await process_kandinsky_generation(description_ru)
         
-        # Пробуем CF
-        status, data = await generate_image_with_cloudflare(english_prompt)
-        
-        if status == 'SUCCESS':
+        if success:
             try:
-                path = await asyncio.to_thread(_overlay_text_on_image, data['image_data'], final)
+                path = await asyncio.to_thread(_overlay_text_on_image, k_data, final)
                 await message.reply_photo(FSInputFile(path))
                 os.remove(path)
                 await processing_msg.delete()
             except:
-                await save_and_send_generated_image(message, data['image_data'])
+                await save_and_send_generated_image(message, k_data)
         else:
-            # Фоллбэк
-            await processing_msg.edit_text("CF не ответил, пробую Кандинского...")
-            success, err, k_data = await process_kandinsky_generation(english_prompt)
-            if success:
+            # Фоллбэк на Cloudflare - генерируем АНГЛИЙСКИЙ каламбур
+            await processing_msg.edit_text("Кандинский не ответил, пробую Cloudflare с английским каламбуром...")
+            
+            # Генерируем новый каламбур на английском для Cloudflare
+            english_pun_prompt = "Create a pun by combining two words into one (format: word1+word2 = result)."
+            def sync_call_en():
+                return model.generate_content(english_pun_prompt).text.strip()
+            pun_text_en = await asyncio.to_thread(sync_call_en)
+            
+            if "=" in pun_text_en:
+                parts_en = pun_text_en.split('=')
+                source_en = parts_en[0].strip()
+                final_en = parts_en[1].strip()
+            else:
+                source_en = pun_text_en
+                final_en = pun_text_en
+            
+            # Промпт уже на английском
+            description_en = f"Surrealistic art, visualization of literal pun: {source_en}. Photorealistic, 8k."
+            
+            status, data = await generate_image_with_cloudflare(description_en)
+            
+            if status == 'SUCCESS':
                 try:
-                    path = await asyncio.to_thread(_overlay_text_on_image, k_data, final)
+                    path = await asyncio.to_thread(_overlay_text_on_image, data['image_data'], final_en)
                     await message.reply_photo(FSInputFile(path))
                     os.remove(path)
                     await processing_msg.delete()
                 except:
-                    await save_and_send_generated_image(message, k_data)
+                    await save_and_send_generated_image(message, data['image_data'])
             else:
                 await processing_msg.edit_text("Не вышло нарисовать каламбур.")
 
@@ -364,9 +383,8 @@ async def handle_image_generation_command(message: types.Message):
 
     msg = await message.reply("Рисую...")
     
-    # Переводим входящий промпт
-    english_prompt = await translate_to_english(prompt)
-    full_prompt = f"{english_prompt}, high quality, masterpiece, 8k"
+    # Кандинский понимает русский, но для улучшения качества можно добавить детали
+    full_prompt = f"{prompt}, высокое качество, шедевр, 8k"
     
     await robust_image_generation(message, full_prompt, msg, mode="text2img")
 
@@ -384,13 +402,13 @@ async def handle_redraw_command(message: types.Message):
 
         img_bytes = await download_telegram_image(bot, photo)
         
-        # Просим Gemini описать картинку сразу на АНГЛИЙСКОМ
-        prompt_desc = "Describe this image in detail in English. Focus on visual elements, objects, colors. The description will be used to recreate this image as a 'bad children's crayon drawing'."
+        # Просим Gemini описать картинку на русском для Кандинского
+        prompt_desc = "Опиши эту картинку детально на русском языке. Сосредоточься на визуальных элементах, объектах, цветах. Описание будет использовано для воссоздания изображения в стиле 'плохой детский рисунок карандашами'."
         
         resp = await asyncio.to_thread(lambda: model.generate_content([prompt_desc, {"mime_type": "image/jpeg", "data": img_bytes}]))
-        english_desc = resp.text.strip()
+        russian_desc = resp.text.strip()
         
-        full_prompt = f"Children's crayon drawing, bad style, scribbles. {english_desc}"
+        full_prompt = f"Детский рисунок карандашами, плохой стиль, каракули. {russian_desc}"
         
         await robust_image_generation(message, full_prompt, msg, mode="text2img")
         
@@ -399,7 +417,7 @@ async def handle_redraw_command(message: types.Message):
         await msg.edit_text("Ошибка перерисовки.")
 
 async def handle_edit_command(message: types.Message):
-    """Отредактируй (Img2Img)"""
+    """Отредактируй (Img2Img) - только Cloudflare поддерживает img2img"""
     msg = await message.reply("Редактирую (CF)...")
     try:
         photo = message.photo[-1] if message.photo else None 
@@ -419,7 +437,7 @@ async def handle_edit_command(message: types.Message):
 
         img_bytes = await download_telegram_image(bot, photo)
         
-        # Переводим инструкцию по редактированию
+        # Переводим инструкцию по редактированию для Cloudflare
         english_prompt = await translate_to_english(prompt)
         
         # Пробуем CF Img2Img
@@ -435,7 +453,7 @@ async def handle_edit_command(message: types.Message):
         await msg.edit_text("Ошибка редактирования.")
 
 async def handle_kandinsky_generation_command(message: types.Message):
-    """Сгенерируй (Принудительно Кандинский) - БЕЗ ИЗМЕНЕНИЙ"""
+    """Сгенерируй (Принудительно Кандинский)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = message.text.replace("сгенерируй", "").strip()
     msg = await message.reply("Кандинский работает...")
