@@ -442,17 +442,22 @@ async def handle_location_start(message: Message):
 
 # --- ХЭНДЛЕР 3: Обработка уточнения по локации (Reply) ---
 # Фильтр проверяет, что это реплай И текст оригинального сообщения начинается с кодовой фразы
-@router.message(F.reply_to_message & F.reply_to_message.text.startswith("ну и хули ты хочешь по адресу"))
+@router.message(
+    F.reply_to_message & 
+    F.reply_to_message.text & # Убедимся, что там есть текст
+    F.reply_to_message.text.lower().startswith("ну и хули ты хочешь по адресу")
+)
 async def handle_location_followup(message: Message):
     if message.from_user.id in BLOCKED_USERS:
         return
 
     # Достаем адрес из сообщения бота (оригинального)
     bot_text = message.reply_to_message.text
-    prefix = "ну и хули ты хочешь по адресу "
+    # Используем ту же фразу, что в начале, но не забываем про длину
+    prefix_check = "ну и хули ты хочешь по адресу "
     
-    # Извлекаем адрес (все, что идет после префикса)
-    address = bot_text[len(prefix):]
+    # Чтобы корректно отрезать, находим индекс начала адреса (длина префикса)
+    address = bot_text[len(prefix_check):]
     
     # Запрос пользователя (то, что он написал сейчас: "бары", "аптеки" и т.д.)
     user_query = message.text
