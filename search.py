@@ -1,224 +1,284 @@
-import os
-import random
+import base64
 import logging
+import os
+import textwrap
 import requests
-from googleapiclient.discovery import build
+import random 
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
-from aiogram.types import FSInputFile, Message
-from config import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key, GENERIC_API_KEY
-import google.generativeai as genai
-# ============== СУЩЕСТВУЮЩИЙ КОД (Google Image Search, Giphy) ==============
-def get_google_service():
-    service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
-    return service
-def search_images(query: str):
-    service = get_google_service()
-    result = service.cse().list(q=query, cx=SEARCH_ENGINE_ID, searchType='image').execute()
-    items = result.get("items", [])
-    image_urls = [item["link"] for item in items]
-    return image_urls
-async def handle_message(message: types.Message, query, temp_img_path, error_msg):
+from aiogram.types import FSInputFile
+from config import API_TOKEN, model, bot, search_model
+from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+# =============================================================================
+# НОВАЯ ФУНКЦИЯ-ОБРАБОТЧИК
+# =============================================================================
+async def handle_add_text_command(message: types.Message):
+    """
+    Полностью обрабатывает команду "добавь": находит фото, генерирует текст,
+    накладывает его на изображение, отправляет результат и обрабатывает ошибки.
+    """
     try:
-        image_urls = search_images(query)
-        if image_urls:
-            random_image_url = random.choice(image_urls)
-            img_response = requests.get(random_image_url)
-            if img_response.status_code == 200:
-                with open(temp_img_path, "wb") as f:
-                    f.write(img_response.content)
-                photo = FSInputFile(temp_img_path)
-                await message.reply_photo(photo=photo)
-                os.remove(temp_img_path)
-            else:
-                await message.reply(f"Не удалось скачать изображение: {random_image_url}")
-        else:
-            await message.reply(error_msg)
+        # Отправка действия в чат теперь здесь
+        await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+
+        photo = await get_photo_from_message(message)
+        if not photo:
+            await message.reply("Изображение для обработки не найдено.")
+            return
+
+        # Основная логика в блоке try/except/finally
+        image_bytes = await download_telegram_image(bot, photo)
+        generated_text = await process_image(image_bytes)
+        
+        modified_image_path = overlay_text_on_image(image_bytes, generated_text)
+        
+        photo_file = FSInputFile(modified_image_path)
+        await message.reply_photo(photo_file)
+
     except Exception as e:
-        logging.error(f"Ошибка при поиске изображений: {e}")
-        await message.reply("Произошла ошибка при поиске изображений.")
-async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
-    if not query:
-        return False, "Шо тебе найти блядь", None
-    try:
-        image_urls = search_images(query)
-        if not image_urls:
-            return False, "Хуй", None
-        random_image_url = random.choice(image_urls)
-        img_response = requests.get(random_image_url)
-        if img_response.status_code == 200:
-            return True, "", img_response.content
-        else:
-            return False, f"Вот тебе сцылко: {random_image_url}", None
-    except Exception as e:
-        logging.error(f"Ошибка при поиске изображений через Google: {e}")
-        return False, f"Да иди ты нахуй: {e}", None
-async def save_and_send_searched_image(message: Message, image_data: bytes):
-    temp_img_path = "searched_image.jpg"
-    try:
-        with open(temp_img_path, "wb") as f:
-            f.write(image_data)
-        photo = FSInputFile(temp_img_path)
-        await message.reply_photo(photo=photo)
+        logging.error(f"Ошибка в handle_add_text_command: {e}", exc_info=True)
+        await message.reply(f"Произошла непредвиденная ошибка при обработке изображения.")
     finally:
-        if os.path.exists(temp_img_path):
-            os.remove(temp_img_path)
-def search_gifs(query: str = "cat"):
-    url = 'https://api.giphy.com/v1/gifs/search'
-    params = {
-        'api_key': giphy_api_key,
-        'q': query,
-        'limit': 10,
-        'offset': 0,
-        'rating': 'g',
-        'lang': 'en'
-    }
+        # Очистка временного файла
+        if os.path.exists("modified_image.jpg"):
+            try:
+                os.remove("modified_image.jpg")
+            except OSError as e:
+                logging.error(f"Не удалось удалить временный файл modified_image.jpg: {e}")
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ КОМАНДЫ "ОПИШИ"
+# =============================================================================
+async def process_image_description(bot, message: types.Message) -> tuple[bool, str]:
+    """
+    Основная функция для обработки команды "опиши"
+    """
     try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        gifs = data.get('data', [])
-        gif_urls = [gif['images']['original']['url'] for gif in gifs]
-        return gif_urls
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Ошибка при обращении к Giphy API: {e}")
-        return []
-async def process_gif_search(search_query: str) -> tuple[bool, str, bytes | None]:
-    logging.info(f"Начало поиска гифки по запросу: '{search_query}'")
+        # Отправляем действие в чат
+        await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+        
+        # Получаем изображение из сообщения
+        photo = await get_photo_from_message(message)
+        if not photo:
+            return False, "Изображение для описания не найдено."
+        
+        # Загружаем изображение
+        image_data = await download_image(bot, photo.file_id)
+        if not image_data:
+            return False, "Не удалось загрузить изображение."
+        
+        # Генерируем описание
+        success, description = await generate_image_description(image_data)
+        
+        if success:
+            return True, description
+        else:
+            return False, description
+            
+    except Exception as e:
+        logging.error(f"Ошибка в process_image_description: {e}", exc_info=True)
+        return False, "Произошла ошибка при обработке изображения."
+
+async def download_image(bot, file_id: str) -> bytes | None:
+    """
+    Загружает изображение по file_id
+    """
     try:
-        gif_urls = search_gifs(search_query)
-        if not gif_urls:
-            logging.warning("Не найдено подходящих гифок")
-            return False, "Не удалось найти гифку 😿", None
-        random_gif_url = random.choice(gif_urls)
-        logging.info(f"Выбран случайный URL: {random_gif_url}")
-        response = requests.get(random_gif_url)
+        file = await bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
+        logging.info(f"Загружаем изображение с URL: {file_url}")
+        
+        response = requests.get(file_url)
         if response.status_code == 200:
-            logging.info("Гифка успешно загружена")
-            return True, "", response.content
+            return response.content
         else:
-            error_msg = f"Не удалось скачать гифку: {random_gif_url}"
-            logging.warning(error_msg)
-            return False, error_msg, None
+            logging.error(f"Ошибка загрузки изображения: статус {response.status_code}")
+            return None
+            
     except Exception as e:
-        error_msg = f"Ошибка при загрузке гифки: {e}"
-        logging.error(error_msg)
-        return False, "Произошла ошибка при отправке гифки 😿", None
-async def save_and_send_gif(message: types.Message, gif_data: bytes) -> None:
-    temp_gif_path = "temp_cat.gif"
+        logging.error(f"Ошибка в download_image: {e}", exc_info=True)
+        return None
+
+async def generate_image_description(image_data: bytes) -> tuple[bool, str]:
+    """
+    Генерирует описание изображения с помощью AI модели
+    """
     try:
-        logging.info("Начало сохранения гифки")
-        with open(temp_gif_path, "wb") as f:
-            f.write(gif_data)
-        gif = FSInputFile(temp_gif_path)
-        await message.reply_document(gif)
-        logging.info("Гифка успешно отправлена")
+        response = model.generate_content([
+            PROMPT_DESCRIBE,
+            {"mime_type": "image/jpeg", "data": image_data}
+        ])
+        
+        description = response.text
+        logging.info(f"Сгенерированное описание: {description}")
+        return True, description
+        
     except Exception as e:
-        logging.error(f"Ошибка при сохранении/отправке гифки: {e}")
-        await message.reply("Произошла ошибка при отправке гифки 😿")
-    finally:
-        if os.path.exists(temp_gif_path):
-            os.remove(temp_gif_path)
-            logging.info("Временный файл удален")
-# ============== НОВЫЙ КОД: GROUNDING WITH GOOGLE SEARCH ==============
-location_awaiting = {}
-genai.configure(api_key=GENERIC_API_KEY)
-search_model = genai.GenerativeModel(
-    'gemini-2.0-flash-exp',
-    tools='google_search_retrieval'
-)
-async def handle_grounding_search(query: str) -> str:
+        logging.error(f"Ошибка генерации описания: {e}", exc_info=True)
+        return False, f"Ошибка генерации описания: {str(e)}"
+
+async def extract_image_info(message: types.Message) -> str | None:
+    """
+    Извлекает информацию об изображении из сообщения
+    """
     try:
-        logging.info(f"Grounding Search запрос: {query}")
-        response = search_model.generate_content(query)
-        if response and response.text:
-            logging.info(f"Grounding Search успешно выполнен")
+        if message.photo:
+            photo = message.photo[-1]  # Берем самое большое разрешение
+            return photo.file_id
+        elif message.reply_to_message:
+            if message.reply_to_message.photo:
+                photo = message.reply_to_message.photo[-1]
+                return photo.file_id
+            elif message.reply_to_message.document:
+                doc = message.reply_to_message.document
+                if doc.mime_type and doc.mime_type.startswith('image/'):
+                    return doc.file_id
+        return None
+        
+    except Exception as e:
+        logging.error(f"Ошибка в extract_image_info: {e}", exc_info=True)
+        return None
+
+# =============================================================================
+# ОБЩИЕ ФУНКЦИИ (используются и для "добавь" и для "опиши")
+# =============================================================================
+async def get_photo_from_message(message: types.Message):
+    if message.photo:
+        return message.photo[-1]
+    elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document):
+        if message.reply_to_message.photo:
+            return message.reply_to_message.photo[-1]
+        return message.reply_to_message.document
+    return None
+
+async def download_telegram_image(bot, photo):
+    file = await bot.get_file(photo.file_id)
+    file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
+    logging.info(f"Загружаем изображение с URL: {file_url}")
+    response = requests.get(file_url)
+    if response.status_code != 200:
+        raise Exception("Не удалось загрузить изображение.")
+    return response.content
+
+async def process_image(image_bytes: bytes) -> str:
+    """
+    Обрабатывает изображение и генерирует текст для команды "добавь".
+    """
+    try:
+        response = model.generate_content([
+            SPECIAL_PROMPT,
+            {"mime_type": "image/jpeg", "data": image_bytes}
+        ])
+        generated_text = response.text
+        logging.info(f"Сгенерированный текст: {generated_text}")
+        return generated_text
+    except Exception as e:
+        logging.error(f"Ошибка обработки изображения: {str(e)}", exc_info=True)
+        raise RuntimeError(f"Ошибка генерации текста: {str(e)}") from e
+
+def get_text_size(font, text):
+    bbox = font.getbbox(text)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width, height
+
+def overlay_text_on_image(image_bytes: bytes, text: str) -> str:
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    font_size = 48
+    font = ImageFont.truetype(font_path, font_size)
+    max_width = image.width - 20
+    sample_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя"
+    total_width = sum(get_text_size(font, char)[0] for char in sample_chars)
+    avg_char_width = total_width / len(sample_chars)
+    max_chars_per_line = int(max_width // avg_char_width)
+    lines = textwrap.wrap(text, width=max_chars_per_line)
+    _, line_height = get_text_size(font, "A")
+    text_block_height = line_height * len(lines)
+    margin_bottom = 60
+    y = image.height - text_block_height - margin_bottom
+    rectangle = Image.new('RGBA', (image.width, text_block_height + 40), (0, 0, 0, 128))
+    image.paste(rectangle, (0, y - 5), rectangle)
+    for line in lines:
+        text_width, _ = get_text_size(font, line)
+        x = (image.width - text_width) / 2
+        draw.text((x, y), line, font=font, fill="white")
+        y += line_height + 10
+    output_path = "modified_image.jpg"
+    image.save(output_path)
+    return output_path
+
+async def process_grounding_search(query: str) -> str:
+    """
+    Выполняет поиск информации через Gemini с использованием Grounding with Google Search.
+    """
+    if not query:
+        return "Ты забыл написать, что искать, гений."
+
+    try:
+        # Промпт для модели
+        prompt = f"Найди актуальную информацию по запросу: {query}. Ответь развернуто и по делу."
+
+        # Вызов модели с инструментом google_search_retrieval
+        # Настройки безопасности ослаблены, чтобы бот не боялся "острых" тем, если они попадутся в поиске
+        response = await search_model.generate_content_async(
+            prompt,
+            tools='google_search_retrieval',
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+        )
+        
+        # Если модель нашла информацию и сгенерировала текст
+        if response.text:
             return response.text
         else:
-            return "Не удалось получить информацию, попробуй переформулировать запрос."
+            return "Гугл молчит, как партизан. Ничего не нашел."
+
     except Exception as e:
-        logging.error(f"Ошибка при Grounding Search: {e}")
-        return f"Произошла ошибка при поиске: {str(e)}"
-async def handle_grounding_search_command(message: Message):
-    query = message.text[len("упупа скажи"):].strip()
-    if not query:
-        await message.reply("Чё сказать-то, еблан?")
-        return
-    await message.bot.send_chat_action(message.chat.id, "typing")
-    response = await handle_grounding_search(query)
-    await message.reply(response)
-# ============== НОВЫЙ КОД: GROUNDING WITH GOOGLE MAPS ==============
-async def start_location_request(message: types.Message, user_id: int):
-    location_awaiting[user_id] = {"stage": "waiting_location"}
-    await message.reply("Ну давай, кидай свой адрес, посмотрим что там у тебя.")
-async def handle_location_input(message: types.Message, user_id: int, location_text: str):
-    if user_id in location_awaiting and location_awaiting[user_id]["stage"] == "waiting_location":
-        location_awaiting[user_id] = {
-            "stage": "waiting_query",
-            "location": location_text,
-            "message_id": message.message_id
-        }
-        await message.reply(f"Ну и хули ты хочешь по адресу {location_text}")
-        return True
-    return False
-async def handle_location_query(message: types.Message, user_id: int, query: str) -> str:
-    if user_id not in location_awaiting or location_awaiting[user_id]["stage"] != "waiting_query":
-        return None
-    location = location_awaiting[user_id]["location"]
+        logging.error(f"Ошибка Grounding search: {e}")
+        return f"Что-то пошло не так при поиске. Ошибка: {e}"
+
+
+# === НОВЫЙ ФУНКЦИОНАЛ: ЛОКАЦИЯ (GROUNDING MAPS/SEARCH) ===
+
+async def process_location_search(address: str, user_request: str) -> str:
+    """
+    Ищет места рядом с адресом и отвечает в иронично-грубом стиле.
+    """
     try:
-        logging.info(f"Google Maps Grounding запрос: {query} для локации {location}")
-        full_query = f"{query} рядом с {location}"
-        response = search_model.generate_content(full_query)
-        del location_awaiting[user_id]
-        if response and response.text:
-            logging.info(f"Google Maps Grounding успешно выполнен")
-            sarcastic_prefix = random.choice([
-                "Ну охуеть теперь, держи свои варианты:\n\n",
-                "Слушай, я тут для тебя постарался:\n\n",
-                "Вот что нашлось, хотя хуй знает, зачем тебе это:\n\n",
-                "Ладно, смотри что я накопал:\n\n",
-                "Держи, только не говори потом что я тебе хуйню посоветовал:\n\n"
-            ])
-            sarcastic_suffix = random.choice([
-                "\n\nНу вот, доволен теперь?",
-                "\n\nЧё, поможет?",
-                "\n\nТеперь свали отсюда 😏",
-                "\n\nЕщё что-нибудь захочешь - сам ищи.",
-                "\n\nВот такие дела, бро."
-            ])
-            return sarcastic_prefix + response.text + sarcastic_suffix
+        # Формируем промпт с личностью бота
+        prompt = (
+            f"Пользователь находится по адресу: {address}. "
+            f"Его запрос: {user_request}. "
+            f"Найди информацию об этом через Google Search (используй карты/места). "
+            f"Ответь пользователю в ироничном стиле, с сарказмом и немного используй нецензурную лексику (мат). "
+            f"Не будь душным, будь дерзким, но дай полезную информацию (названия, рейтинг, открыто ли)."
+        )
+
+        response = await search_model.generate_content_async(
+            prompt,
+            tools='google_search_retrieval', # Используем тот же поиск, он отлично находит места
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE, # Важно для мата
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+        )
+
+        if response.text:
+            return response.text
         else:
-            return "Хуй там что-то нашлось по твоему адресу. Может, ты в жопе мира живешь?"
+            return "Бля, ничего не нашел в этой дыре."
+
     except Exception as e:
-        logging.error(f"Ошибка при Google Maps Grounding: {e}")
-        if user_id in location_awaiting:
-            del location_awaiting[user_id]
-        return f"Чёт накосячило при поиске: {str(e)}"
-async def handle_location_address(message: Message, user_id: int):
-    if message.location:
-        location_text = f"координаты: {message.location.latitude}, {message.location.longitude}"
-        await handle_location_input(message, user_id, location_text)
-    elif message.text:
-        await handle_location_input(message, user_id, message.text)
-async def handle_location_query_command(message: Message, user_id: int):
-    await message.bot.send_chat_action(message.chat.id, "typing")
-    response = await handle_location_query(message, user_id, message.text)
-    if response is not None:
-        await message.reply(response)
-        return True
-    return False
-def is_waiting_for_location(user_id: int) -> bool:
-    return user_id in location_awaiting and location_awaiting[user_id]["stage"] == "waiting_location"
-def is_waiting_for_query(user_id: int, message_id: int = None) -> bool:
-    if user_id not in location_awaiting or location_awaiting[user_id]["stage"] != "waiting_query":
-        return False
-    if message_id is not None:
-        return location_awaiting[user_id].get("message_id") == message_id
-    return True
-def cancel_location_request(user_id: int):
-    if user_id in location_awaiting:
-        del location_awaiting[user_id]
-def get_location_state(user_id: int) -> dict | None:
-    return location_awaiting.get(user_id)
-async def handle_cancel_location(message: Message, user_id: int):
-    cancel_location_request(user_id)
-    await message.reply("Ладно, забыли про локацию.")
+        logging.error(f"Ошибка Location search: {e}")
+        return "Я сломался, пока искал эту херню."
