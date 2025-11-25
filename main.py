@@ -77,13 +77,15 @@ from search import (
     save_and_send_searched_image,
     process_gif_search,
     save_and_send_gif,
+    # Новые импорты для Grounding
     handle_grounding_search,
     start_location_request,
     handle_location_input,
     handle_location_query,
     is_waiting_for_location,
     is_waiting_for_query,
-    cancel_location_request
+    cancel_location_request,
+    get_location_state
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -430,25 +432,46 @@ async def handle_grounding_search_command(message: Message):
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа локация" and message.from_user.id not in BLOCKED_USERS)
 async def handle_location_command(message: Message):
+    """Начало запроса локации"""
     await start_location_request(message, message.from_user.id)
 
+
 @router.message(lambda message: message.text and is_waiting_for_location(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
-async def handle_location_address(message: Message):
+async def handle_location_address_text(message: Message):
+    """Обработка текстового адреса от пользователя"""
     await handle_location_input(message, message.from_user.id, message.text)
 
-@router.message(lambda message: message.text and message.reply_to_message and 
-                is_waiting_for_query(message.from_user.id, message.reply_to_message.message_id) and 
-                message.from_user.id not in BLOCKED_USERS)
+
+@router.message(lambda message: message.location and is_waiting_for_location(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
+async def handle_location_address_geo(message: Message):
+    """Обработка геолокации от пользователя"""
+    location_text = f"координаты: {message.location.latitude}, {message.location.longitude}"
+    await handle_location_input(message, message.from_user.id, location_text)
+
+
+@router.message(lambda message: message.text and is_waiting_for_query(message.from_user.id) and message.from_user.id not in BLOCKED_USERS)
 async def handle_location_query_command(message: Message):
-    """Обработка запроса о локации (должен быть реплаем)"""
+    """Обработка запроса о локации (может быть реплаем или просто текстом)"""
+    
+    # Отправляем индикатор "печатает..."
     await message.bot.send_chat_action(message.chat.id, "typing")
+    
+    # Получаем ответ с использованием Google Maps Grounding
     response = await handle_location_query(message, message.from_user.id, message.text)
-    await message.reply(response)
+    
+    # Проверяем что это был запрос локации (не None)
+    if response is not None:
+        await message.reply(response)
+    # Если None - значит это не запрос локации, и сообщение уйдет дальше в обычную говорилку
+
+
+# ================== ОТМЕНА ЗАПРОСА ЛОКАЦИИ ==================
 
 @router.message(lambda message: message.text and message.text.lower() in ["отмена", "упупа отмена"] and 
-                message.from_user.id in location_awaiting and 
+                get_location_state(message.from_user.id) is not None and 
                 message.from_user.id not in BLOCKED_USERS)
 async def handle_cancel_location(message: Message):
+    """Отмена запроса локации"""
     cancel_location_request(message.from_user.id)
     await message.reply("Ладно, забыли про локацию.")
 
