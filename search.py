@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 from aiogram import types
 from aiogram.types import FSInputFile, Message
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google.generativeai import protos # <--- ВАЖНЫЙ ИМПОРТ
 
 # Импортируем ключи и объекты из config
 from config import (
@@ -156,10 +157,12 @@ async def process_grounding_search(query: str) -> str:
     try:
         prompt = f"Найди актуальную информацию по запросу: {query}. Ответь развернуто и по делу."
         
-        # ИСПРАВЛЕНИЕ: передаем список словарей, а не строку
+        # ИСПОЛЬЗУЕМ PROTOS ДЛЯ ТОЧНОГО ОПРЕДЕЛЕНИЯ ИНСТРУМЕНТА
+        tool_config = [protos.Tool(google_search=protos.GoogleSearch())]
+        
         response = await search_model.generate_content_async(
             prompt,
-            tools=[{'google_search': {}}], 
+            tools=tool_config, 
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -170,6 +173,7 @@ async def process_grounding_search(query: str) -> str:
         if response.text:
             return response.text
         elif response.parts:
+            # Собираем текст из частей, если ответ разбит
             return "".join([part.text for part in response.parts])
         else:
             return "Гугл молчит, как партизан. Ничего не нашел."
@@ -188,10 +192,12 @@ async def process_location_search(address: str, user_request: str) -> str:
             f"Не будь душным, будь дерзким, но дай полезную информацию (названия, рейтинг, открыто ли)."
         )
         
-        # ИСПРАВЛЕНИЕ: передаем список словарей, а не строку
+        # ИСПОЛЬЗУЕМ PROTOS ДЛЯ ТОЧНОГО ОПРЕДЕЛЕНИЯ ИНСТРУМЕНТА
+        tool_config = [protos.Tool(google_search=protos.GoogleSearch())]
+        
         response = await search_model.generate_content_async(
             prompt,
-            tools=[{'google_search': {}}],
+            tools=tool_config,
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
