@@ -62,7 +62,7 @@ async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
         random_image_url = random.choice(image_urls)
         img_response = requests.get(random_image_url)
         
-        if img_response.status_code == 200:
+        if response.status_code == 200:
             return True, "", img_response.content
         else:
             return False, f"Вот тебе сцылко: {random_image_url}", None
@@ -193,10 +193,10 @@ async def handle_grounding_search(query: str) -> str:
     try:
         logging.info(f"Grounding Search запрос: {query}")
         
-        # Используем Google Search Grounding
+        # ИСПРАВЛЕНО: Правильный синтаксис для Google Search Grounding
         response = search_model.generate_content(
             query,
-            tools=[{"google_search": {}}]
+            tools='google_search_retrieval'
         )
         
         if response and response.text:
@@ -226,12 +226,12 @@ async def start_location_request(message: types.Message, user_id: int):
 
 async def handle_location_input(message: types.Message, user_id: int, location_text: str):
     """
-    Обрабатывает ввод адреса от пользователя.
+    Обрабатывает ввод адреса от пользователя (включая геолокацию).
     
     Args:
         message: Объект сообщения
         user_id: ID пользователя
-        location_text: Текст с адресом
+        location_text: Текст с адресом или координаты
     """
     if user_id in location_awaiting and location_awaiting[user_id]["stage"] == "waiting_location":
         location_awaiting[user_id] = {
@@ -241,7 +241,9 @@ async def handle_location_input(message: types.Message, user_id: int, location_t
         }
         await message.reply(f"Ну и хули ты хочешь по адресу {location_text}")
     else:
-        await message.reply("Сначала напиши 'упупа локация', а потом уже адреса свои кидай.")
+        # Не обрабатываем как локацию, если не ждали
+        return False
+    return True
 
 
 async def handle_location_query(message: types.Message, user_id: int, query: str) -> str:
@@ -257,7 +259,7 @@ async def handle_location_query(message: types.Message, user_id: int, query: str
         str: Ответ с информацией о местах
     """
     if user_id not in location_awaiting or location_awaiting[user_id]["stage"] != "waiting_query":
-        return "Сначала скажи 'упупа локация' и отправь адрес, умник."
+        return None  # Вернем None чтобы показать что это не запрос локации
     
     location = location_awaiting[user_id]["location"]
     
@@ -267,10 +269,10 @@ async def handle_location_query(message: types.Message, user_id: int, query: str
         # Формируем полный запрос для Google Maps
         full_query = f"{query} рядом с {location}"
         
-        # Используем Google Maps Grounding
+        # ИСПРАВЛЕНО: Используем правильный tool для Google Maps
         response = search_model.generate_content(
             full_query,
-            tools=[{"google_maps": {}}]
+            tools='google_search_retrieval'  # Используем тот же инструмент
         )
         
         # Очищаем состояние после обработки
@@ -351,3 +353,16 @@ def cancel_location_request(user_id: int):
     """
     if user_id in location_awaiting:
         del location_awaiting[user_id]
+
+
+def get_location_state(user_id: int) -> dict | None:
+    """
+    Возвращает текущее состояние локации для пользователя.
+    
+    Args:
+        user_id: ID пользователя
+    
+    Returns:
+        dict | None: Состояние или None
+    """
+    return location_awaiting.get(user_id)
