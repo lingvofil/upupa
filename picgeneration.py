@@ -188,7 +188,7 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
         await message.reply_photo(input_file)
     except Exception as e:
         logging.error(f"Ошибка отправки изображения: {e}")
-        await message.reply("Не удалось отправить сгенерированное изображение.")
+        await message.reply("Да пошел ты нахуй")
 
 async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes = None):
     """
@@ -415,7 +415,7 @@ async def handle_image_generation_command(message: types.Message):
         await message.reply("Что рисовать?")
         return
 
-    msg = await message.reply("Рисую...")
+    msg = await message.reply("Ща падажжи ебана")
     
     # Кандинский понимает русский, но для улучшения качества можно добавить детали
     full_prompt = f"{prompt}, высокое качество, шедевр, 8k"
@@ -424,7 +424,7 @@ async def handle_image_generation_command(message: types.Message):
 
 async def handle_redraw_command(message: types.Message):
     """Перерисуй"""
-    msg = await message.reply("Смотрю картинку...")
+    msg = await message.reply("Анал лизирую твою мазню")
     try:
         photo = message.photo[-1] if message.photo else (message.document if message.document else None)
         if not photo and message.reply_to_message:
@@ -507,7 +507,7 @@ async def generate_img2img_cloudflare(prompt: str, source_image_bytes: bytes):
 
 async def handle_edit_command(message: types.Message):
     """Отредактируй (Img2Img v1.5)"""
-    msg = await message.reply("Перерисовываю...")
+    msg = await message.reply("Ща блядь отредактирую")
     try:
         # 1. Получаем фото
         photo = message.photo[-1] if message.photo else None 
@@ -550,7 +550,7 @@ async def handle_kandinsky_generation_command(message: types.Message):
     """Сгенерируй (Принудительно Кандинский)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     prompt = message.text.replace("сгенерируй", "").strip()
-    msg = await message.reply("Кандинский работает...")
+    msg = await message.reply("Гондинский работает...")
     success, err, data = await process_kandinsky_generation(prompt)
     if success:
         await msg.delete()
