@@ -5,8 +5,9 @@ import requests
 from googleapiclient.discovery import build
 from aiogram import types
 from aiogram.types import FSInputFile, Message
-from config import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key, search_model
-import google.generativeai as genai
+from config import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
+from google import genai
+from google.genai.types import Tool, GoogleSearch, GenerateContentConfig
 # ============== СУЩЕСТВУЮЩИЙ КОД (Google Image Search, Giphy) ==============
 def get_google_service():
     service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
@@ -121,12 +122,16 @@ async def save_and_send_gif(message: types.Message, gif_data: bytes) -> None:
             logging.info("Временный файл удален")
 # ============== НОВЫЙ КОД: GROUNDING WITH GOOGLE SEARCH ==============
 location_awaiting = {}
+grounding_client = genai.Client()
 async def handle_grounding_search(query: str) -> str:
     try:
         logging.info(f"Grounding Search запрос: {query}")
-        response = search_model.generate_content(
-            query,
-            tools="google_search"
+        response = grounding_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=query,
+            config=GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())]
+            )
         )
         if response and response.text:
             logging.info(f"Grounding Search успешно выполнен")
@@ -165,9 +170,12 @@ async def handle_location_query(message: types.Message, user_id: int, query: str
     try:
         logging.info(f"Google Maps Grounding запрос: {query} для локации {location}")
         full_query = f"{query} рядом с {location}"
-        response = search_model.generate_content(
-            full_query,
-            tools="google_search"
+        response = grounding_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=full_query,
+            config=GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())]
+            )
         )
         del location_awaiting[user_id]
         if response and response.text:
