@@ -17,7 +17,7 @@ from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 
-# Импортируем настройки. Если image_model не сработает, попробуем фоллбэк внутри функции
+# Импортируем настройки.
 from config import KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, bot, model, image_model, edit_model, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
@@ -171,63 +171,77 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
 async def generate_image_with_imagen(prompt: str):
     """
     Генерация изображения через Gemini.
-    Пытается использовать image_model из config.
-    При ошибке 'Model does not support...' пробует fallback на 'imagen-3.0-generate-001'.
-    Возвращает ('SUCCESS', {'image_data': bytes}) или ('ERROR', {'error': str})
+    Сначала пробует image_model из config.
+    Если не поддерживает (400/404), перебирает список 'рисующих' моделей.
     """
-    # Внутренняя функция для вызова API
-    def _call_api(model_instance):
+    
+    # Список моделей для перебора в случае неудачи (от самых вероятных к новым)
+    # gemini-2.0-flash-exp - обычно включены все экспериментальные фичи (рисование)
+    # gemini-3-pro-image-preview - нативная рисовалка из PDF
+    # gemini-2.5-flash-image - нативная рисовалка из PDF
+    FALLBACK_MODELS = [
+        "gemini-2.0-flash-exp",
+        "gemini-3-pro-image-preview",
+        "gemini-2.5-flash-image"
+    ]
+
+    def _call_api(model_instance, prompt_text):
         return model_instance.generate_content(
-            prompt,
+            prompt_text,
             generation_config={'response_modalities': ['IMAGE']}
         )
 
-    try:
+    # Шаг 1: Пробуем модель из конфига
+    current_models_to_try = [(image_model, "Config Model")]
+    # Добавляем запасные варианты (создаем объекты GenerativeModel на лету)
+    for m_name in FALLBACK_MODELS:
+        current_models_to_try.append((genai.GenerativeModel(m_name), m_name))
+
+    last_error = None
+
+    for model_obj, model_name in current_models_to_try:
         try:
-            # Попытка 1: используем модель из конфига (gemini-2.0-flash)
-            response = await asyncio.to_thread(_call_api, image_model)
-        except google_exceptions.InvalidArgument as e:
-            # Если модель не поддерживает картинки (400), пробуем Imagen 3 явно
-            if "Model does not support the requested response modalities" in str(e):
-                logging.warning(f"Модель из конфига не поддерживает IMAGE. Пробую imagen-3.0-generate-001. Ошибка: {e}")
-                fallback_model = genai.GenerativeModel("imagen-3.0-generate-001")
-                response = await asyncio.to_thread(_call_api, fallback_model)
-            else:
-                raise e # Пробрасываем ошибку, если она другая
+            logging.info(f"Попытка генерации изображения через модель: {model_name}")
+            response = await asyncio.to_thread(_call_api, model_obj, prompt)
 
-        if not response.parts:
-            return 'ERROR', {'error': "Модель вернула пустой ответ (возможно, сработал Safety Filter)."}
+            if not response.parts:
+                logging.warning(f"Модель {model_name} вернула пустой ответ (Safety Filter?).")
+                last_error = "Safety Filter (пустой ответ)"
+                continue
 
-        for part in response.parts:
-            # Проверяем наличие inline_data (изображение)
-            if hasattr(part, "inline_data") and part.inline_data:
-                mime_type = getattr(part.inline_data, "mime_type", "unknown")
-                logging.info(f"Imagen вернул MIME-тип: {mime_type}")
-                raw_data = part.inline_data.data
-                
-                if isinstance(raw_data, str):
-                    try:
-                        image_data = base64.b64decode(raw_data)
-                    except Exception:
-                        image_data = raw_data.encode("latin1", errors="ignore")
-                elif isinstance(raw_data, bytes):
-                    image_data = raw_data
-                
-                if not is_valid_image_data(image_data):
-                    logging.error(f"API вернуло невалидные данные изображения.")
-                    return 'ERROR', {'error': "API сгенерировало данные без стандартных сигнатур PNG/JPEG/WebP."}
-                
-                return 'SUCCESS', {'image_data': image_data}
+            for part in response.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    mime_type = getattr(part.inline_data, "mime_type", "unknown")
+                    logging.info(f"Успех! Модель {model_name} вернула MIME-тип: {mime_type}")
+                    raw_data = part.inline_data.data
+                    
+                    if isinstance(raw_data, str):
+                        try:
+                            image_data = base64.b64decode(raw_data)
+                        except Exception:
+                            image_data = raw_data.encode("latin1", errors="ignore")
+                    elif isinstance(raw_data, bytes):
+                        image_data = raw_data
+                    
+                    if is_valid_image_data(image_data):
+                        return 'SUCCESS', {'image_data': image_data}
+            
+            # Если дошли сюда, значит картинки в ответе не было (модель ответила текстом)
+            if response.text:
+                logging.warning(f"Модель {model_name} ответила текстом вместо картинки: {response.text[:50]}...")
+                last_error = f"Модель отказалась рисовать: {response.text}"
         
-        # Если нет inline_data, проверяем текст
-        if response.text:
-            return 'ERROR', {'error': f"Модель отказалась рисовать: {response.text}"}
-              
-        return 'ERROR', {'error': "Неизвестный формат ответа от Imagen."}
-
-    except Exception as e:
-        logging.error(f"Ошибка в generate_image_with_imagen: {e}", exc_info=True)
-        return 'ERROR', {'error': f"Ошибка генерации: {str(e)}"}
+        except Exception as e:
+            error_str = str(e)
+            # Игнорируем ошибки "не поддерживается", идем к следующей модели
+            if "400" in error_str or "404" in error_str or "not support" in error_str:
+                logging.warning(f"Модель {model_name} не подошла: {error_str}")
+                last_error = f"Модель недоступна или не рисует ({error_str})"
+            else:
+                logging.error(f"Ошибка в generate_image_with_imagen ({model_name}): {e}", exc_info=True)
+                last_error = str(e)
+    
+    return 'ERROR', {'error': f"Все модели провалились. Последняя ошибка: {last_error}"}
 
 # =============================================================================
 # Вспомогательные функции для текста на изображении
