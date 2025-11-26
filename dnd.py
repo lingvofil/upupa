@@ -40,11 +40,14 @@ class GameSession:
     def __init__(self, chat_id, starter_name):
         self.chat_id = chat_id
         self.history = []
-        # Инициализация чата с моделью
-        self.chat_session = model.start_chat(history=[
-            {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."]},
-            {"role": "model", "parts": ["Погнали."]}
-        ])
+        # Инициализация чата с моделью, передаем chat_id для балансировки нагрузки
+        self.chat_session = model.start_chat(
+            chat_id=chat_id, # <<< ИЗМЕНЕНИЕ 1/6
+            history=[
+                {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."]},
+                {"role": "model", "parts": ["Погнали."]}
+            ]
+        )
         # Инъекция системного промпта
         self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n\n" + self.chat_session.history[0].parts[0].text
         
@@ -159,13 +162,20 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
             del poll_map[session.current_poll_id]
         session.current_poll_id = None
 
-        response = session.chat_session.send_message(f"Результат: {outcome}. Продолжай (до 100 слов).")
+        # Отправляем результат в модель, передаем chat_id
+        response = session.chat_session.send_message(
+            f"Результат: {outcome}. Продолжай (до 100 слов).",
+            chat_id=chat_id # <<< ИЗМЕНЕНИЕ 2/6
+        )
         await parse_and_execute_turn(bot, chat_id, response.text)
             
     except Exception as e:
         print(f"Poll Error: {e}")
         # Если не смогли стопнуть, просто пинаем модель
-        response = session.chat_session.send_message("Опрос завершен. Продолжай.")
+        response = session.chat_session.send_message(
+            "Опрос завершен. Продолжай.",
+            chat_id=chat_id # <<< ИЗМЕНЕНИЕ 3/6 (на случай ошибки)
+        )
         await parse_and_execute_turn(bot, chat_id, response.text)
 
 async def wait_for_poll_timeout(bot: Bot, chat_id: int, poll_chat_id: int, message_id: int, options: list, poll_id: str):
@@ -212,6 +222,7 @@ async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
 async def cmd_start_dnd(message: Message):
     user_name = message.from_user.first_name
     cleanup_session(message.chat.id) # Чистим старую если была
+    # chat_id передается в конструктор GameSession
     dnd_sessions[message.chat.id] = GameSession(message.chat.id, user_name)
     await message.answer(f"Лады, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
 
@@ -223,7 +234,11 @@ async def cmd_stop_dnd(message: Message):
         return
     
     try:
-        response = session.chat_session.send_message("Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]")
+        # Передаем chat_id при запросе на завершение
+        response = session.chat_session.send_message(
+            "Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]",
+            chat_id=message.chat.id # <<< ИЗМЕНЕНИЕ 4/6
+        )
         await parse_and_execute_turn(message.bot, message.chat.id, response.text)
     except:
         cleanup_session(message.chat.id)
@@ -236,7 +251,11 @@ async def handle_backstory(message: Message):
     msg = await message.answer("Генерирую...")
     
     try:
-        response = session.chat_session.send_message(f"Предыстория: {backstory}. Начинай.")
+        # Передаем chat_id при отправке предыстории
+        response = session.chat_session.send_message(
+            f"Предыстория: {backstory}. Начинай.",
+            chat_id=message.chat.id # <<< ИЗМЕНЕНИЕ 5/6
+        )
         try: await message.bot.delete_message(message.chat.id, msg.message_id)
         except: pass
         await parse_and_execute_turn(message.bot, message.chat.id, response.text)
@@ -254,7 +273,11 @@ async def handle_roll(message: Message):
     
     await message.answer(f"🎲 {message.from_user.first_name}: {stat} -> **{roll_result}**", parse_mode="Markdown")
     
-    response = session.chat_session.send_message(f"Игрок кинул на {stat}: {roll_result}. Продолжай.")
+    # Передаем chat_id при отправке результата броска
+    response = session.chat_session.send_message(
+        f"Игрок кинул на {stat}: {roll_result}. Продолжай.",
+        chat_id=message.chat.id # <<< ИЗМЕНЕНИЕ 6/6
+    )
     await parse_and_execute_turn(message.bot, message.chat.id, response.text)
 
 @dnd_router.message(lambda m: dnd_sessions.get(m.chat.id) and dnd_sessions[m.chat.id].state == "WAITING_ACTION")
@@ -265,5 +288,9 @@ async def handle_free_action(message: Message):
     user_action = message.text
     user_name = message.from_user.first_name
     
-    response = session.chat_session.send_message(f"{user_name}: {user_action}. Продолжай.")
+    # Передаем chat_id при отправке свободного действия
+    response = session.chat_session.send_message(
+        f"{user_name}: {user_action}. Продолжай.",
+        chat_id=message.chat.id # <<< ИЗМЕНЕНИЕ 7/7
+    )
     await parse_and_execute_turn(message.bot, message.chat.id, response.text)
