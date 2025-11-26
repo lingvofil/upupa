@@ -77,8 +77,8 @@ from search import (
     save_and_send_searched_image,
     process_gif_search,
     save_and_send_gif,
-    process_grounding_search, # <--- Новый
-    process_location_search   # <--- Новый
+    process_grounding_search, 
+    process_location_search    
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -211,7 +211,7 @@ async def handle_chooumeesh(message: types.Message):
 async def handle_broadcast(message: types.Message):
     await handle_broadcast_command(message)
 
-# ================== НАЧАЛО БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК (НОВОЕ) ==================
+# ================== НАЧАЛО БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК ==================
 @router.message(F.text.lower() == "упупа настройки")
 async def settings_command_handler(message: types.Message):
     await send_settings_menu(message)
@@ -237,7 +237,7 @@ async def leave_chat(message: types.Message):
     
     chat_identifier = message.text[14:].strip()
     await process_leave_chat(message, chat_identifier)
-   
+    
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
 async def update_all_chats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -270,7 +270,6 @@ async def handle_send_sms(message: types.Message):
     if chat_id in sms_disabled_chats:
         await message.reply("СМС и ММС отключены в этом чате.")
         return
-    # 🔴 ИСПРАВЛЕНИЕ: Убираем 4-й аргумент
     await process_send_sms(message, chat_list, bot)
 
 @router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
@@ -280,7 +279,6 @@ async def handle_send_mms(message: types.Message):
     if chat_id in sms_disabled_chats:
         await message.reply("СМС и ММС отключены в этом чате.")
         return
-    # ✅ Этот вызов у вас уже был правильный (3 аргумента)
     await process_send_mms(message, chat_list, bot)
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
@@ -304,7 +302,7 @@ async def handle_user_lexicon(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     username_or_name = message.text[len("лексикон "):].strip()
     if username_or_name.startswith('@'):
-        username_or_name = username_or_name[1:]   
+        username_or_name = username_or_name[1:]    
     chat_id = message.chat.id
     await process_user_lexicon(username_or_name, chat_id, message)
 
@@ -339,10 +337,10 @@ async def handle_user_profile(message: types.Message):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("пародия"))
 async def handle_parody(message: types.Message):
-   random_action = random.choice(actions)
-   await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-   chat_id = message.chat.id
-   await process_parody(message, chat_id)
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    chat_id = message.chat.id
+    await process_parody(message, chat_id)
 
 @router.message(F.text.lower() == "викторина участники")
 async def start_participant_quiz(message: Message, bot: Bot):
@@ -412,7 +410,7 @@ async def handle_image_search(message: Message):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
 async def handle_grounding_search(message: Message):
-    # Отрезаем команду "упупа скажи" (11 символов + пробелы)
+    # Отрезаем команду "упупа скажи" 
     query = message.text[len("упупа скажи"):].strip()
     
     # Отправляем действие "печатает", так как поиск может занять пару секунд
@@ -420,9 +418,6 @@ async def handle_grounding_search(message: Message):
     
     response_text = await process_grounding_search(query)
     
-    # Gemini возвращает Markdown, поэтому используем parse_mode="Markdown" или None, 
-    # но безопаснее всего позволить aiogram самому разобраться или использовать MarkdownV2 аккуратно.
-    # Обычно обычный текст Gemini хорошо читается без специфичного парсинга, либо с Markdown.
     await message.reply(response_text)
 
 
@@ -436,15 +431,13 @@ async def handle_location_start(message: Message):
         return
 
     # Отвечаем фразой, которую потом будем ловить в реплае
-    # Важно: текст должен точно совпадать с тем, что мы проверяем в следующем хэндлере
     await message.reply(f"ну и хули ты хочешь по адресу {address}")
 
 
 # --- ХЭНДЛЕР 3: Обработка уточнения по локации (Reply) ---
-# Фильтр проверяет, что это реплай И текст оригинального сообщения начинается с кодовой фразы
 @router.message(
     F.reply_to_message & 
-    F.reply_to_message.text & # Убедимся, что там есть текст
+    F.reply_to_message.text & 
     F.reply_to_message.text.lower().startswith("ну и хули ты хочешь по адресу")
 )
 async def handle_location_followup(message: Message):
@@ -542,7 +535,7 @@ async def describe_image(message: types.Message):
             (message.photo and message.caption and "отредактируй" in message.caption.lower()) or
             (message.document and message.caption and "отредактируй" in message.caption.lower()) or
             (message.text and "отредактируй" in message.text.lower() and message.reply_to_message and 
-             (message.reply_to_message.photo or message.reply_to_message.document))
+            (message.reply_to_message.photo or message.reply_to_message.document))
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
@@ -581,7 +574,7 @@ async def generate_image_kandinsky(message: types.Message):
             (message.photo and message.caption and "перерисуй" in message.caption.lower()) or
             (message.document and message.caption and "перерисуй" in message.caption.lower()) or
             (message.text and "перерисуй" in message.text.lower() and message.reply_to_message and 
-             (message.reply_to_message.photo or message.reply_to_message.document))
+            (message.reply_to_message.photo or message.reply_to_message.document))
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
@@ -614,8 +607,8 @@ async def handle_weekly_forecast(message: types.Message):
     await handle_weekly_forecast_command(message)
     
 @router.message(lambda message: message.text and 
-                 (message.text.lower().startswith("упупа запомни: мой др") or 
-                  message.text.lower().startswith("упупа запомни мой др")) and 
+                (message.text.lower().startswith("упупа запомни: мой др") or 
+                 message.text.lower().startswith("упупа запомни мой др")) and 
                  message.from_user.id not in BLOCKED_USERS)
 async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
@@ -702,7 +695,7 @@ async def process_message(message: types.Message):
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
     from content_filter import load_antispam_settings
-    load_antispam_settings() # <--- Вот она
+    load_antispam_settings() 
     bot_statistics.init_db()
     chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
