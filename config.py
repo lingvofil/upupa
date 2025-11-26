@@ -50,26 +50,19 @@ GIGACHAT_MODEL_PRO = 'GigaChat-2-Pro'
 GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # === НАСТРОЙКА GEMINI ===
-SPECIAL_CHAT_ID = -1001707530786
 genai.configure(api_key=GENERIC_API_KEY)
 
-# 1. Очередь для ВСЕХ ЧАТОВ (без gemini-2.5-pro)
-DEFAULT_MODEL_QUEUE = [
-    'gemini-2.5-flash-preview-09-2025',  # 10 RPM (в минуту) / 250 RPD (в день)
-    'gemini-2.5-flash',                 # 10 RPM (в минуту) / 250 RPD (в день)
-    'gemini-2.0-flash',                 # 15 RPM (в минуту) / 200 RPD (в день)
-    'gemini-2.5-flash-lite-preview-09-2025', # 15 RPM (в минуту) / 1000 RPD (в день)
-    'gemini-2.5-flash-lite',            # 15 RPM (в минуту) / 1000 RPD (в день)
-    'gemini-2.0-flash-lite',            # 30 RPM (в минуту) / 200 RPD (в день)
-    'gemini-1.5-flash'                  # 15 RPM (в минуту) / 50 RPD (в день)
+# Список моделей. Бот будет пробовать их по очереди.
+MODEL_QUEUE = [
+    'gemini-2.5-pro',                        # 2 RPM (в минуту) / 50 RPD (в день)    
+    'gemini-2.5-flash-preview-09-2025',     # 10 RPM (в минуту) / 250 RPD (в день)
+    'gemini-2.5-flash',                      # 10 RPM (в минуту) / 250 RPD (в день)
+    'gemini-2.0-flash',                      # 15 RPM (в минуту) / 200 RPD (в день)
+    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM (в минуту) / 1000 RPD (в день)
+    'gemini-2.5-flash-lite',                 # 15 RPM (в минуту) / 1000 RPD (в день)
+    'gemini-2.0-flash-lite',                 # 30 RPM (в минуту) / 200 RPD (в день)
+    'gemini-1.5-flash'                       # 15 RPM (в минуту) / 50 RPD (в день)
 ]
-
-# 2. Очередь для СПЕЦИАЛЬНОГО ЧАТА (с gemini-2.5-pro)
-SPECIAL_CHAT_MODEL_QUEUE = [
-    'gemini-2.5-pro',                   # 2 RPM (в минуту) / 50 RPD (в день)
-    *DEFAULT_MODEL_QUEUE                # Все остальные модели в качестве запасного варианта
-]
-
 
 class FallbackChatSession:
     """
@@ -82,23 +75,18 @@ class FallbackChatSession:
         self._init_real_history(initial_history)
 
     def _init_real_history(self, initial_history):
-        self._history = []
         for model_name in self.wrapper.model_names:
             try:
                 model = genai.GenerativeModel(model_name)
-                # Если initial_history не None, передаем его
-                chat = model.start_chat(history=initial_history or [])
+                chat = model.start_chat(history=initial_history)
                 self._history = chat.history
                 # Если инициализация прошла успешно, запоминаем модель
                 self.wrapper.last_used_model_name = model_name 
-                logging.debug(f"Чат-сессия успешно инициализирована с моделью: {model_name}")
                 return
-            except Exception as e:
-                logging.warning(f"⚠️ Ошибка инициализации чата с {model_name}: {e}")
+            except Exception:
                 continue
-        logging.error("Не удалось инициализировать чат-сессию ни с одной моделью.")
-        if initial_history is not None:
-             self._history = initial_history
+        if self._history is None:
+            self._history = []
 
     @property
     def history(self):
@@ -120,26 +108,18 @@ class FallbackChatSession:
                 # УСПЕХ: Обновляем историю и запоминаем текущую рабочую модель
                 self._history = chat.history
                 self.wrapper.last_used_model_name = model_name 
-                logging.info(f"Сообщение успешно обработано моделью: {model_name}")
                 return response
 
             except exceptions.ResourceExhausted:
-                logging.warning(f"⚠️ Лимит исчерпан для {model_name}. Переход к следующей модели.")
                 continue
             except Exception as e:
-                logging.warning(f"⚠️ Ошибка на {model_name}: {e}. Переход к следующей модели.")
                 last_error = e
                 continue
         
-        error_message = "Все модели в очереди недоступны."
-        logging.error(error_message)
-        raise last_error if last_error else Exception(error_message)
+        raise last_error if last_error else Exception("Все модели в чате недоступны.")
 
 
 class ModelFallbackWrapper:
-    """
-    Класс-обертка для генерации контента и чат-сессий с балансировкой моделей.
-    """
     def __init__(self, model_names):
         self.model_names = model_names
         # Переменная для хранения последней успешной модели
@@ -154,39 +134,19 @@ class ModelFallbackWrapper:
                 
                 # УСПЕХ: Запоминаем модель
                 self.last_used_model_name = model_name
-                logging.info(f"Контент успешно сгенерирован моделью: {model_name}")
                 return result
                 
-            except exceptions.ResourceExhausted as e:
-                logging.warning(f"⚠️ Лимит исчерпан для {model_name}. Переход к следующей модели.")
+            except (exceptions.ResourceExhausted, Exception) as e:
+                logging.warning(f"⚠️ Ошибка на {model_name}: {e}")
                 last_error = e
                 continue
-            except Exception as e:
-                logging.warning(f"⚠️ Ошибка на {model_name}: {e}. Переход к следующей модели.")
-                last_error = e
-                continue
-        
-        error_message = "Все модели исчерпаны/недоступны для generate_content."
-        logging.error(error_message)
-        raise last_error if last_error else Exception(error_message)
+        raise last_error if last_error else Exception("Все модели исчерпаны.")
 
     def start_chat(self, history=None):
         return FallbackChatSession(self, initial_history=history)
 
-# Создаем две инстанцированные "умные" модели
-default_model_wrapper = ModelFallbackWrapper(DEFAULT_MODEL_QUEUE)
-special_chat_model_wrapper = ModelFallbackWrapper(SPECIAL_CHAT_MODEL_QUEUE)
-
-def get_model_wrapper(chat_id):
-    """
-    Функция для получения соответствующего ModelFallbackWrapper на основе ID чата.
-    Используйте ее в хэндлерах вместо прямого обращения к переменной 'model'.
-    """
-    if chat_id == SPECIAL_CHAT_ID:
-        logging.debug("Выбран wrapper для специального чата (с gemini-2.5-pro).")
-        return special_chat_model_wrapper
-    logging.debug("Выбран wrapper по умолчанию.")
-    return default_model_wrapper
+# Создаем "умную" модель
+model = ModelFallbackWrapper(MODEL_QUEUE)
 
 # Остальные модели
 search_model = genai.GenerativeModel('gemini-2.5-flash') 
@@ -196,6 +156,7 @@ edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-genera
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
+SPECIAL_CHAT_ID = -1001707530786
 
 CHAT_SETTINGS_FILE = "chat_settings.json"
 LOG_FILE = "user_messages.log"
