@@ -65,6 +65,7 @@ async def generate_situational_reaction(chat_id: int, model_instance):
         def sync_llm_call():
             response = model_instance.generate_content(
                 prompt,
+                chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
                 generation_config={
                     'temperature': 1.0,
                     'max_output_tokens': 60,
@@ -96,6 +97,7 @@ async def generate_rhyme_reaction(message, model_instance):
     """Генерирует рифмованную реакцию на последнее слово сообщения"""
     tries = 0
     max_tries = 3
+    chat_id = message.chat.id # Получаем chat_id
     
     while tries < max_tries:
         try:
@@ -118,6 +120,7 @@ async def generate_rhyme_reaction(message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         rhyme_prompt,
+                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
                         generation_config={
                             'temperature': 0.7,
                             'max_output_tokens': 10,
@@ -219,7 +222,7 @@ async def send_yaytsa_voice_reaction(message):
     except Exception as e:
         logging.error(f"Ошибка при отправке голосового сообщения: {e}")
         return False
-    
+        
 async def send_para_voice_reaction(message):
     try:
         voice_path = "/root/upupa/voice/muzhik_molodetc.ogg"
@@ -299,8 +302,9 @@ async def generate_insult_for_lis(message, model_instance):
     С вероятностью 90% генерирует новую фразу (микс) через LLM,
     с вероятностью 10% выбирает случайную фразу из списка.
     """
+    chat_id = message.chat.id # Получаем chat_id
     try:
-        if random.random() < 0.9:  # 90% шанс сгенерировать новую фразу (микс)
+        if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
             logging.info("Генерация МИКСА фразы для 1399269377...")
             
             # Промпт для микширования
@@ -316,6 +320,7 @@ async def generate_insult_for_lis(message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         prompt,
+                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
                         generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
                     )
                     return getattr(response, 'text', '').strip()
@@ -335,7 +340,7 @@ async def generate_insult_for_lis(message, model_instance):
                 await message.reply(selected_phrase)
                 return True
         
-        else:  # 10% шанс использовать фразу из списка
+        else: # 10% шанс использовать фразу из списка
             logging.info("Использование случайной фразы из списка для 1399269377...")
             selected_phrase = random.choice(INSULT_WORDS_FOR_1399269377)
             await message.reply(selected_phrase)
@@ -372,8 +377,9 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
     С вероятностью 90% генерирует новую фразу (микс) через LLM,
     с вероятностью 10% выбирает случайную фразу из списка.
     """
+    chat_id = message.chat.id # Получаем chat_id
     try:
-        if random.random() < 0.9:  # 90% шанс сгенерировать новую фразу (микс)
+        if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
             logging.info("Генерация МИКСА фразы для 113086922...")
             
             # Новый, строгий промпт для микширования
@@ -389,6 +395,7 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         prompt,
+                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
                         generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
                     )
                     return getattr(response, 'text', '').strip()
@@ -408,7 +415,7 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 await message.reply(selected_phrase)
                 return True
         
-        else:  # 10% шанс использовать старую фразу
+        else: # 10% шанс использовать старую фразу
             logging.info("Использование случайной фразы из списка для 113086922...")
             selected_phrase = random.choice(PHRASES_FOR_113086922)
             await message.reply(selected_phrase)
@@ -424,7 +431,7 @@ async def generate_regular_reaction(message):
         words = message.text.split()
         valid_words = [word for word in words if len(word) > 2]      
         if not valid_words: return None
-        random_word = random.choice(valid_words)            
+        random_word = random.choice(valid_words)              
         if len(valid_words) > 1 and random.random() < 0.008:
             word_index = words.index(random_word)
             if word_index < len(words) - 1 and len(words[word_index + 1]) > 2:
@@ -457,17 +464,20 @@ async def process_random_reactions(message: Message, model, save_user_message, t
         return False
 
     if random.random() < 0.01: 
+        # Передача message.chat.id для генерации ситуативной реакции
         situational_reaction = await generate_situational_reaction(message.chat.id, model)
         if situational_reaction:
             await message.bot.send_message(message.chat.id, situational_reaction, parse_mode="Markdown")
             return True
 
     if message.from_user.id == 1399269377 and random.random() < 0.3 and message.text:
+        # Передача message для генерации оскорбления
         success = await generate_insult_for_lis(message, model)
         if success:
             return True
 
     if message.from_user.id == 113086922 and random.random() < 0.005:
+        # Передача message для генерации реакции
         success = await generate_reaction_for_113086922(message, model)
         if success:
             return True
@@ -488,6 +498,7 @@ async def process_random_reactions(message: Message, model, save_user_message, t
             return True
 
     if random.random() < 0.008 and message.text:
+        # Передача message для генерации рифмы
         rhyme_reaction = await generate_rhyme_reaction(message, model)
         if rhyme_reaction:
             await message.reply(rhyme_reaction)
