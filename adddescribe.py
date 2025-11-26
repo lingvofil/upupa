@@ -4,6 +4,7 @@ import os
 import textwrap
 import requests
 import random
+import asyncio
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
@@ -40,7 +41,8 @@ async def handle_add_text_command(message: types.Message):
             generated_text = user_text
         else:
             logging.info("Генерируем текст через AI")
-            generated_text = await process_image(image_bytes)
+            # Передаем chat_id
+            generated_text = await process_image(image_bytes, message.chat.id)
         
         modified_image_path = overlay_text_on_image(image_bytes, generated_text)
         
@@ -104,7 +106,8 @@ async def process_image_description(bot, message: types.Message) -> tuple[bool, 
         if not image_data:
             return False, "Не удалось загрузить изображение."
         
-        success, description = await generate_image_description(image_data)
+        # Передаем chat_id
+        success, description = await generate_image_description(image_data, message.chat.id)
         
         if success:
             return True, description
@@ -135,15 +138,15 @@ async def download_image(bot, file_id: str) -> bytes | None:
         logging.error(f"Ошибка в download_image: {e}", exc_info=True)
         return None
 
-async def generate_image_description(image_data: bytes) -> tuple[bool, str]:
+async def generate_image_description(image_data: bytes, chat_id: int) -> tuple[bool, str]:
     """
-    Генерирует описание изображения с помощью AI модели
+    Генерирует описание изображения с помощью AI модели. Теперь принимает chat_id.
     """
     try:
         response = model.generate_content([
             PROMPT_DESCRIBE,
             {"mime_type": "image/jpeg", "data": image_data}
-        ])
+        ], chat_id=chat_id) # Передача chat_id
         
         description = response.text
         logging.info(f"Сгенерированное описание: {description}")
@@ -196,15 +199,16 @@ async def download_telegram_image(bot, photo):
         raise Exception("Не удалось загрузить изображение.")
     return response.content
 
-async def process_image(image_bytes: bytes) -> str:
+async def process_image(image_bytes: bytes, chat_id: int) -> str:
     """
     Обрабатывает изображение и генерирует текст для команды "добавь".
+    Теперь принимает chat_id.
     """
     try:
         response = model.generate_content([
             SPECIAL_PROMPT,
             {"mime_type": "image/jpeg", "data": image_bytes}
-        ])
+        ], chat_id=chat_id) # Передача chat_id
         generated_text = response.text
         logging.info(f"Сгенерированный текст: {generated_text}")
         return generated_text
