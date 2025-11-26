@@ -11,7 +11,8 @@ from prompts import actions # Make sure actions list is available
 async def summarize_chat_history(message: types.Message, chat_model, log_file_path: str, action_list: list):
     chat_id = str(message.chat.id)
     now = datetime.now()
-    twenty_four_hours_ago = now - timedelta(hours=12)
+    # Сводка за последние 12 часов, но переменная называется twenty_four_hours_ago - оставляем как есть.
+    twenty_four_hours_ago = now - timedelta(hours:12)
     messages_to_summarize = []
     users_in_period = {}  # To store user_id: name and username mapping for mentions
     chat_name = None  # Добавляем переменную для хранения имени чата
@@ -105,7 +106,8 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         # Use the provided chat_model (gemini-2.0-flash)
         def sync_gemini_summarize_call():
             try:
-                response = chat_model.generate_content(summary_prompt)
+                # === ИЗМЕНЕНИЕ: Передаем chat_id для балансировки нагрузки ===
+                response = chat_model.generate_content(summary_prompt, chat_id=message.chat.id)
                 return response.text  # Access the generated text
             except Exception as e:
                 logging.error(f"Error generating content with model: {e}")
