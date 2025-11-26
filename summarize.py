@@ -12,7 +12,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
     chat_id = str(message.chat.id)
     now = datetime.now()
     # Сводка за последние 12 часов, но переменная называется twenty_four_hours_ago - оставляем как есть.
-    twenty_four_hours_ago = now - timedelta(hours:12)
+    twenty_four_hours_ago = now - timedelta(hours=12)
     messages_to_summarize = []
     users_in_period = {}  # To store user_id: name and username mapping for mentions
     chat_name = None  # Добавляем переменную для хранения имени чата
