@@ -45,7 +45,8 @@ async def download_file(file_id: str, file_name: str) -> bool:
         return False
 
 # Общая функция анализа для медиа (принимает путь ИЛИ байты)
-async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None) -> str:
+# === ИЗМЕНЕНИЕ 1: Добавили аргумент chat_id ===
+async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None, chat_id: int | str | None = None) -> str:
     """
     Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание.
     """
@@ -70,7 +71,8 @@ async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_
             {"mime_type": mime_type, "data": media_data},
             content_prompt
         ]
-        response = model.generate_content(contents)
+        # === ИЗМЕНЕНИЕ 2: Передаем chat_id в модель ===
+        response = model.generate_content(contents, chat_id=chat_id)
         return response.text
     except Exception as e:
         logging.error(f"Ошибка при анализе медиа байтов ({mime_type}): {e}")
@@ -94,7 +96,8 @@ async def process_audio_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить аудио."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -122,7 +125,8 @@ async def process_video_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить видео."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -151,7 +155,8 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить картинку."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -180,7 +185,8 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить гифку."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -213,7 +219,8 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
             return False, "Не удалось загрузить стикер."
         try:
             custom_prompt = get_custom_prompt(message)
-            description = await analyze_media_bytes(file_name, mime_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
             if os.path.exists(file_name):
@@ -242,7 +249,8 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
         
-        response = model.generate_content(prompt)
+        # === ИЗМЕНЕНИЕ 3: Передаем chat_id ===
+        response = model.generate_content(prompt, chat_id=message.chat.id)
         return True, response.text
         
     except Exception as e:
@@ -291,7 +299,8 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
         if content_type.startswith(('audio/', 'video/', 'image/')):
             logging.info("Тип: Аудио/Видео/Изображение. Загружаю байты...")
             media_data = response.content
-            description = await analyze_media_bytes(media_data, content_type, custom_prompt)
+            # Передаем chat_id
+            description = await analyze_media_bytes(media_data, content_type, custom_prompt, chat_id=message.chat.id)
             return True, description
             
         # Вариант 2: HTML или обычный текст
@@ -316,7 +325,8 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
                 
             prompt = f"{content_prompt}\n\nТекст для анализа (взято с сайта {url}): {text_to_analyze}"
             
-            gen_response = model.generate_content(prompt)
+            # === ИЗМЕНЕНИЕ 4: Передаем chat_id ===
+            gen_response = model.generate_content(prompt, chat_id=message.chat.id)
             return True, gen_response.text
 
         # Вариант 3: Непонятный тип
