@@ -55,7 +55,8 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     try:
         def sync_call():
-            return model.generate_content(full_prompt).text
+            # === ИЗМЕНЕНИЕ 1: Передаем chat_id, чтобы config выбрал правильную очередь моделей ===
+            return model.generate_content(full_prompt, chat_id=message.chat.id).text
         response_text = await asyncio.to_thread(sync_call)
     except Exception as e:
         logging.error(f"Gemini API Error for {poem_type}: {e}")
@@ -229,7 +230,8 @@ def format_chat_history(chat_id: str) -> str:
 async def generate_response(prompt: str, chat_id: str, bot_name: str) -> str:
     try:
         def sync_gemini_call():
-            response = model.generate_content(prompt)
+            # === ИЗМЕНЕНИЕ 2: Передаем chat_id, чтобы включить логику балансировки для этого чата ===
+            response = model.generate_content(prompt, chat_id=chat_id)
             return response.text
         gemini_response_text = await asyncio.to_thread(sync_gemini_call)
         if not gemini_response_text.strip():
@@ -306,6 +308,8 @@ async def process_general_message(message: types.Message):
         await message.reply(response)
         return
 
+    # Здесь мы передаем model как объект. Внутри random_reactions.py будет вызван generate_content БЕЗ chat_id,
+    # поэтому для реакций будет использоваться стандартная очередь (без Pro модели), что нам и нужно.
     reaction_sent = await process_random_reactions(
         message, model, save_user_message, track_message_statistics,
         add_chat, chat_settings, save_chat_settings
