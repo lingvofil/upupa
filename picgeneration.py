@@ -77,8 +77,8 @@ class FusionBrainAPI:
             logging.info(f"Kandinsky request params: {json.dumps(params, ensure_ascii=False)[:200]}")
             response = requests.post(self.URL + 'key/api/v1/pipeline/run', headers=self.AUTH_HEADERS, files=data)
             
-            # Логируем полный ответ для отладки
-            if response.status_code != 200:
+            # ИСПРАВЛЕНИЕ 1: Разрешаем 201 (Created) как успешный статус
+            if response.status_code not in [200, 201]:
                 logging.error(f"Kandinsky API error {response.status_code}: {response.text}")
             
             response.raise_for_status()
@@ -222,14 +222,17 @@ async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes 
     if not CF_ACCOUNT_ID or not CF_API_TOKEN or CF_ACCOUNT_ID == "NO_CF_ID":
         return 'ERROR', {'error': "Cloudflare Credentials not found or invalid in Config."}
 
-    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/bytedance/stable-diffusion-xl-base-1.0"
+    # ИСПРАВЛЕНИЕ 2: Правильный адрес модели Stability AI SDXL Base
+    # Ранее был несуществующий @cf/bytedance/stable-diffusion-xl-base-1.0
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/stabilityai/stable-diffusion-xl-base-1.0"
+    
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}"
     }
     
     payload = {
         "prompt": prompt,
-        "num_steps": 8, 
+        "num_steps": 20, # Для Base лучше побольше шагов, чем для Lightning
         "guidance": 7.5,
         "width": 1024,
         "height": 1024
