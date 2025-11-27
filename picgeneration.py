@@ -8,7 +8,7 @@ import random
 import textwrap
 import base64
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
@@ -182,13 +182,37 @@ async def translate_to_english(text):
 # =============================================================================
 
 async def save_and_send_generated_image(message: types.Message, image_data: bytes, filename="image.png"):
-    """Отправляет изображение в чат"""
+    """Отправляет изображение в чат с предварительной проверкой"""
     try:
+        if not image_data:
+            raise ValueError("Пустые данные изображения")
+
+        # Проверяем, является ли это валидным изображением
+        try:
+            with Image.open(BytesIO(image_data)) as img:
+                img.verify()
+        except Exception as e:
+            # Если это текст (например ошибка сервера), логируем его
+            if len(image_data) < 500:
+                try:
+                    text_content = image_data.decode('utf-8', errors='ignore')
+                    logging.error(f"Пришли невалидные данные (текст): {text_content}")
+                except:
+                    pass
+            logging.error(f"FATAL: Полученные данные не являются изображением: {e}")
+            await message.reply("Сервер генерации вернул мусор вместо картинки. Попробуй позже.")
+            return
+
+        # Если всё ок, отправляем
         input_file = types.BufferedInputFile(image_data, filename=filename)
         await message.reply_photo(input_file)
+
+    except TelegramBadRequest as e:
+        logging.error(f"TelegramBadRequest (IMAGE_PROCESS_FAILED): {e}")
+        await message.reply("Telegram отказался принимать этот файл (IMAGE_PROCESS_FAILED).")
     except Exception as e:
         logging.error(f"Ошибка отправки изображения: {e}")
-        await message.reply("Да пошел ты нахуй")
+        await message.reply("Да пошел ты нахуй (ошибка отправки)")
 
 async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes = None):
     """
