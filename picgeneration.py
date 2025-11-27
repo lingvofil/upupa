@@ -347,7 +347,7 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
     logging.warning(f"Kandinsky failed: {error}. Switching to Cloudflare.")
     
     if mode == "text2img":
-        await processing_msg.edit_text("🎨 Кандинский приболел, вызываю молнию... ⚡️")
+        await processing_msg.edit_text("🎨 пися хуй")
         english_prompt = await translate_to_english(prompt)
         
         status, data = await generate_image_with_cloudflare(english_prompt)
