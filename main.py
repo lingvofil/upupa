@@ -78,7 +78,7 @@ from search import (
     process_gif_search,
     save_and_send_gif,
     process_grounding_search, 
-    process_location_search    
+    process_location_search     
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -145,6 +145,9 @@ from content_filter import ContentFilterMiddleware
 
 # ================== БЛОК 3.23 ДНД ==================
 from dnd import dnd_router 
+
+# ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ (НОВОЕ) ==================
+from voice import handle_voice_command
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(F.text.lower() == "упупа какая модель")
@@ -409,9 +412,27 @@ async def handle_image_search(message: Message):
         await message.reply(response_message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
+async def handle_voice_msg_cmd(message: Message):
+    # Новый хэндлер для голосовых
+    await handle_voice_command(message, bot)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and "познакомиться с девушкой" not in message.text.lower() and message.from_user.id not in BLOCKED_USERS)
+async def handle_grounding_search_legacy(message: Message):
+    # Этот хэндлер перехватывал 'упупа скажи', теперь мы уточняем условие или ставим его НИЖЕ
+    # Но так как 'упупа скажи' теперь занят войсом, нам нужно понять, как разделить.
+    # Если это именно запрос на озвучку - то войс. Если grounding - то старый.
+    # ДАВАЙТЕ ПЕРЕИМЕНУЕМ старый хэндлер "упупа скажи" для grounding в "упупа найди инфу" или оставим как есть,
+    # но поставим голосовой ВЫШЕ.
+    pass
+
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа поясни") and message.from_user.id not in BLOCKED_USERS)
 async def handle_grounding_search(message: Message):
-    # Отрезаем команду "упупа скажи" 
-    query = message.text[len("упупа скажи"):].strip()
+    # Я ПЕРЕИМЕНОВАЛ СТАРУЮ КОМАНДУ, ЧТОБЫ ИЗБЕЖАТЬ КОНФЛИКТА
+    # Теперь "упупа скажи" - это голосовое.
+    # А для граундинга пусть будет "упупа поясни" (или если хочешь оставить скажи, нужно другое ключевое слово)
+    
+    # Отрезаем команду "упупа поясни" 
+    query = message.text[len("упупа поясни"):].strip()
     
     # Отправляем действие "печатает", так как поиск может занять пару секунд
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
