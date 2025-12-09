@@ -56,6 +56,7 @@ SPECIAL_CHAT_ID = -1001707530786
 genai.configure(api_key=GENERIC_API_KEY)
 
 # 1. Очередь для ВСЕХ чатов (БЕЗ 2.5 Pro)
+# Убрали 1.5-flash, так как она вызывает 404
 MODEL_QUEUE_DEFAULT = [
     'gemini-2.5-flash-preview-09-2025',      # 10 RPM
     'gemini-2.5-flash',                      # 10 RPM
@@ -63,7 +64,6 @@ MODEL_QUEUE_DEFAULT = [
     'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM
     'gemini-2.5-flash-lite',                 # 15 RPM
     'gemini-2.0-flash-lite',                 # 30 RPM
-    'gemini-1.5-flash'                       # 15 RPM
 ]
 
 # 2. Очередь ТОЛЬКО для специального чата (С 2.5 Pro)
@@ -184,9 +184,9 @@ image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
 # === Очередь моделей для TTS (Аудио) ===
+# Убрали вторую модель, так как она дает 404. Будем долбить первую через Retry.
 TTS_MODELS_QUEUE = [
-    "gemini-2.5-flash-preview-tts",              # Специализированная TTS
-    "gemini-2.5-flash-native-audio-preview-09-2025" # Native Audio / Live API
+    "gemini-2.5-flash-preview-tts"
 ]
 
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
