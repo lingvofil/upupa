@@ -4,12 +4,14 @@ import asyncio
 import logging
 import base64
 import wave
+import time
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 from config import model, chat_settings, conversation_history, MAX_HISTORY_LENGTH, TTS_MODEL_NAME
 from talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
 from distortion import apply_ffmpeg_audio_distortion
 import google.generativeai as genai
+from google.api_core import exceptions
 
 # Пытаемся импортировать настройки
 try:
@@ -61,14 +63,10 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
 async def generate_audio_from_text(text: str, output_path: str) -> bool:
     """
-    Использует Gemini TTS для генерации аудио.
+    Использует Gemini TTS для генерации аудио с механизмом повторных попыток (Retry).
     """
     try:
-        # Прямой вызов Gemini API для TTS
-        # ВАЖНО: Используем специальный конфиг для аудио
-        
         # Выбираем случайный голос из доступных для разнообразия
-        # (На данный момент Gemini поддерживает несколько голосов, возьмем 'Kore' или 'Charon' как дефолт)
         voice_name = random.choice(["Kore", "Fenrir", "Puck", "Charon"])
         
         generation_config = {
@@ -82,21 +80,43 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
             }
         }
 
-        # Вызываем модель напрямую через genai, так как TTS специфичен
         tts_model = genai.GenerativeModel(TTS_MODEL_NAME)
         
-        def sync_tts_call():
-            response = tts_model.generate_content(
-                text,
-                generation_config=generation_config
-            )
-            return response
+        # Функция для синхронного вызова с повторными попытками
+        def sync_tts_call_with_retry():
+            max_retries = 3
+            base_delay = 10  # Начальная задержка в секундах
+            
+            for attempt in range(max_retries):
+                try:
+                    # Пробуем генерировать
+                    response = tts_model.generate_content(
+                        text,
+                        generation_config=generation_config
+                    )
+                    return response
+                except exceptions.ResourceExhausted as e:
+                    # Если превышен лимит
+                    if attempt < max_retries - 1:
+                        # Если это не последняя попытка, ждем
+                        delay = base_delay * (attempt + 1) + random.uniform(0, 2)
+                        logging.warning(f"⚠️ Quota exceeded for TTS ({e}). Retrying in {delay:.1f}s...")
+                        time.sleep(delay)
+                    else:
+                        # Если попытки кончились, пробрасываем ошибку дальше
+                        logging.error("❌ Max retries reached for TTS.")
+                        raise e
+                except Exception as e:
+                    # Другие ошибки (не 429) ломают сразу или можно тоже ретраить, но осторожно
+                    logging.error(f"TTS API Error: {e}")
+                    raise e
+            return None
 
-        response = await asyncio.to_thread(sync_tts_call)
+        # Запускаем в отдельном потоке, чтобы sleep не блокировал бота
+        response = await asyncio.to_thread(sync_tts_call_with_retry)
         
-        # Обработка ответа (Gemini возвращает PCM audio)
-        # Нам нужно достать аудио данные
-        if not response.candidates:
+        # Обработка ответа
+        if not response or not response.candidates:
             logging.error("Gemini TTS returned no candidates")
             return False
             
@@ -105,15 +125,9 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
             logging.error("Gemini TTS returned no inline_data")
             return False
 
-        # Данные приходят в base64 (обычно) или байтах внутри объекта
-        # В Python SDK это обычно .data (bytes)
         audio_data = part.inline_data.data
         
-        # Gemini возвращает Raw PCM (обычно 24kHz, mono, s16le)
-        # Нам нужно завернуть это в WAV, чтобы ffmpeg понял
-        
-        # Параметры PCM от Gemini (стандартные для текущей preview)
-        # Частота может меняться, но обычно 24000
+        # Параметры PCM от Gemini
         sample_rate = 24000 
         
         with wave.open(output_path, "wb") as wav_file:
@@ -125,7 +139,8 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
         return True
 
     except Exception as e:
-        logging.error(f"Gemini TTS Error: {e}", exc_info=True)
+        # Ловим ошибку глобально, чтобы вернуть False и сообщить пользователю
+        logging.error(f"Gemini TTS Final Error: {e}")
         return False
 
 async def handle_voice_command(message: types.Message, bot: Bot):
@@ -150,29 +165,26 @@ async def handle_voice_command(message: types.Message, bot: Bot):
     # Временные файлы
     rand_id = random.randint(10000, 99999)
     temp_wav = f"temp_voice_{rand_id}.wav"
-    temp_mp3 = f"voice_out_{rand_id}.mp3" # Финальный файл после дисторшна
+    temp_mp3 = f"voice_out_{rand_id}.mp3" 
 
     try:
-        # 2. Генерируем текст ответа (в стиле персонажа)
+        # 2. Генерируем текст ответа
         text_response = await generate_text_response_for_voice(chat_id, user_query)
         
-        # Если ответ слишком длинный, обрезаем, иначе TTS может отвалиться или быть дорогим
         if len(text_response) > 500:
             text_response = text_response[:500] + "..."
 
-        # 3. Генерируем аудио (WAV)
+        # 3. Генерируем аудио (WAV) с ретраями
         tts_success = await generate_audio_from_text(text_response, temp_wav)
         
         if not tts_success:
-            await processing_msg.edit_text("🤐 Голос пропал (ошибка генерации).")
+            await processing_msg.edit_text("🤐 Голос сорвал (превышен лимит API, попробуй позже).")
             return
 
         # 4. Применяем дисторшн (WAV -> MP3)
-        # Используем intensity 60 (средне-сильное искажение)
         distort_success = await apply_ffmpeg_audio_distortion(temp_wav, temp_mp3, DEFAULT_DISTORTION_INTENSITY)
         
         if not distort_success:
-            # Если дисторшн не сработал, попробуем отправить оригинал (конвертировав, если нужно, но пока просто ошибку)
             await processing_msg.edit_text("🤐 Микрофон зафонил (ошибка обработки).")
             return
 
