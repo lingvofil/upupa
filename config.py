@@ -181,7 +181,7 @@ model = ModelFallbackWrapper(MODEL_QUEUE_DEFAULT, MODEL_QUEUE_SPECIAL)
 search_model = genai.GenerativeModel('gemini-2.5-flash') 
 image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-TTS_MODEL_NAME = "gemini-2.0-flash-lite-preview-02-05" # Используем актуальную модель с поддержкой аудио
+TTS_MODEL_NAME = "gemini-2.5-flash-preview-tts" # Используем актуальную модель с поддержкой аудио
 
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
 
