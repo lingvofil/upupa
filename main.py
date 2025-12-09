@@ -146,7 +146,7 @@ from content_filter import ContentFilterMiddleware
 # ================== БЛОК 3.23 ДНД ==================
 from dnd import dnd_router 
 
-# ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ (НОВОЕ) ==================
+# ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
 from voice import handle_voice_command
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
@@ -413,33 +413,8 @@ async def handle_image_search(message: Message):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
 async def handle_voice_msg_cmd(message: Message):
-    # Новый хэндлер для голосовых
+    # Новый хэндлер для голосовых. Теперь он единственный на эту команду.
     await handle_voice_command(message, bot)
-
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and "познакомиться с девушкой" not in message.text.lower() and message.from_user.id not in BLOCKED_USERS)
-async def handle_grounding_search_legacy(message: Message):
-    # Этот хэндлер перехватывал 'упупа скажи', теперь мы уточняем условие или ставим его НИЖЕ
-    # Но так как 'упупа скажи' теперь занят войсом, нам нужно понять, как разделить.
-    # Если это именно запрос на озвучку - то войс. Если grounding - то старый.
-    # ДАВАЙТЕ ПЕРЕИМЕНУЕМ старый хэндлер "упупа скажи" для grounding в "упупа найди инфу" или оставим как есть,
-    # но поставим голосовой ВЫШЕ.
-    pass
-
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа поясни") and message.from_user.id not in BLOCKED_USERS)
-async def handle_grounding_search(message: Message):
-    # Я ПЕРЕИМЕНОВАЛ СТАРУЮ КОМАНДУ, ЧТОБЫ ИЗБЕЖАТЬ КОНФЛИКТА
-    # Теперь "упупа скажи" - это голосовое.
-    # А для граундинга пусть будет "упупа поясни" (или если хочешь оставить скажи, нужно другое ключевое слово)
-    
-    # Отрезаем команду "упупа поясни" 
-    query = message.text[len("упупа поясни"):].strip()
-    
-    # Отправляем действие "печатает", так как поиск может занять пару секунд
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
-    response_text = await process_grounding_search(query)
-    
-    await message.reply(response_text)
 
 
 # --- ХЭНДЛЕР 2: Инициализация локации ("упупа локация") ---
