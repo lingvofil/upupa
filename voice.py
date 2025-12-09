@@ -65,10 +65,10 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
 async def generate_audio_from_text(text: str, output_path: str) -> bool:
     """
-    Использует Gemini TTS (с ротацией моделей) для генерации аудио.
+    Использует Gemini TTS для генерации аудио.
+    Если модель перегружена (429), ждет и пробует снова (Retry).
     """
     try:
-        # Выбираем случайный голос из полного списка
         voice_name = random.choice(AVAILABLE_VOICES)
         
         generation_config = {
@@ -82,42 +82,58 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
             }
         }
 
-        # Функция для попытки генерации через разные модели
-        def sync_tts_call_with_fallback():
-            last_error = None
+        # Функция для попытки генерации с ожиданием
+        def sync_tts_call_with_retry():
+            max_retries = 3
+            # Начальная задержка больше, так как Google просит ~27 сек
+            base_delay = 15 
             
-            # Пробегаем по всем доступным моделям TTS
+            # Пробегаем по моделям в очереди (в нашем случае там одна)
             for model_name in TTS_MODELS_QUEUE:
-                try:
-                    logging.info(f"🎤 Trying TTS model: {model_name} with voice {voice_name}")
-                    tts_model = genai.GenerativeModel(model_name)
-                    
-                    response = tts_model.generate_content(
-                        text,
-                        generation_config=generation_config
-                    )
-                    return response
-                    
-                except exceptions.ResourceExhausted:
-                    logging.warning(f"⚠️ Quota exceeded for {model_name}. Switching to next model...")
-                    continue # Пробуем следующую модель в списке
-                    
-                except Exception as e:
-                    logging.error(f"Error with model {model_name}: {e}")
-                    last_error = e
-                    continue # Пробуем следующую модель даже при других ошибках
+                tts_model = genai.GenerativeModel(model_name)
+                
+                # Внутренний цикл повторов для одной модели
+                for attempt in range(max_retries):
+                    try:
+                        logging.info(f"🎤 Trying TTS model: {model_name} with voice {voice_name} (Attempt {attempt+1})")
+                        response = tts_model.generate_content(
+                            text,
+                            generation_config=generation_config
+                        )
+                        return response
+                        
+                    except exceptions.ResourceExhausted as e:
+                        if attempt < max_retries - 1:
+                            # Увеличиваем задержку экспоненциально + рандом
+                            delay = base_delay * (attempt + 1) + random.uniform(1, 5)
+                            logging.warning(f"⚠️ Quota exceeded for {model_name}. Sleeping for {delay:.1f}s...")
+                            time.sleep(delay)
+                        else:
+                            logging.error(f"❌ Max retries reached for {model_name}.")
+                            # Если есть другие модели в очереди - попробуем их
+                            break 
+                            
+                    except Exception as e:
+                        # Если 404 (Not Found), сразу переходим к следующей модели (break inner loop)
+                        if "404" in str(e):
+                             logging.error(f"❌ Model {model_name} not found (404). Skipping.")
+                             break
+                        
+                        logging.error(f"Error with model {model_name}: {e}")
+                        # Для других ошибок можно попробовать еще раз или выйти
+                        if attempt < max_retries - 1:
+                            time.sleep(5)
+                        else:
+                            break
             
-            # Если вышли из цикла и ничего не вернули
-            if last_error:
-                raise last_error
             return None
 
         # Запускаем в отдельном потоке
-        response = await asyncio.to_thread(sync_tts_call_with_fallback)
+        response = await asyncio.to_thread(sync_tts_call_with_retry)
         
         # Обработка ответа
         if not response or not response.candidates:
-            logging.error("Gemini TTS returned no candidates (all models failed or empty response)")
+            logging.error("Gemini TTS returned no candidates")
             return False
             
         part = response.candidates[0].content.parts[0]
@@ -169,7 +185,7 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         tts_success = await generate_audio_from_text(text_response, temp_wav)
         
         if not tts_success:
-            await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены).")
+            await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены, я подождал, но не вышло).")
             return
 
         distort_success = await apply_ffmpeg_audio_distortion(temp_wav, temp_mp3, DEFAULT_DISTORTION_INTENSITY)
