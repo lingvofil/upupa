@@ -7,18 +7,24 @@ import wave
 import time
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
-from config import model, chat_settings, conversation_history, MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE
+from config import model, chat_settings, conversation_history, MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
 from talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
 from distortion import apply_ffmpeg_audio_distortion
 import google.generativeai as genai
 from google.api_core import exceptions
 
-# Если в конфиге вдруг нет очереди, делаем fallback
+# Fallbacks
 if not 'TTS_MODELS_QUEUE' in locals() and not 'TTS_MODELS_QUEUE' in globals():
     try:
         from config import TTS_MODELS_QUEUE
     except ImportError:
         TTS_MODELS_QUEUE = ["gemini-2.5-flash-preview-tts"]
+
+if not 'TEXT_GENERATION_MODEL_LIGHT' in locals() and not 'TEXT_GENERATION_MODEL_LIGHT' in globals():
+    try:
+        from config import TEXT_GENERATION_MODEL_LIGHT
+    except ImportError:
+        TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
 
 # Полный список доступных голосов
 AVAILABLE_VOICES = [
@@ -29,12 +35,12 @@ AVAILABLE_VOICES = [
     "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
 ]
 
-# Параметры для дисторшна по умолчанию
 DEFAULT_DISTORTION_INTENSITY = 60 
 
 async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str:
     """
     Генерирует текстовый ответ от имени персонажа.
+    ИСПОЛЬЗУЕТ ЛЕГКУЮ МОДЕЛЬ, чтобы не тратить лимиты основной очереди.
     """
     update_chat_settings(chat_id)
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
@@ -50,23 +56,34 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
     try:
         def sync_gemini_call():
-            response = model.generate_content(full_prompt, chat_id=chat_id)
+            # ВМЕСТО model.generate_content (который берет тяжелую модель)
+            # Мы используем легкую модель специально для этого таска
+            light_model = genai.GenerativeModel(TEXT_GENERATION_MODEL_LIGHT)
+            response = light_model.generate_content(full_prompt)
             return response.text
             
         text_response = await asyncio.to_thread(sync_gemini_call)
         
+        # Историю сохраняем как обычно
         update_conversation_history(chat_id, "User (Voice)", user_query, role="user")
         update_conversation_history(chat_id, prompt_name, text_response, role="assistant")
         
         return text_response
     except Exception as e:
-        logging.error(f"Voice Text Gen Error: {e}")
-        return "Кхе-кхе... Что-то горло першит, не могу говорить."
+        logging.error(f"Voice Text Gen Error ({TEXT_GENERATION_MODEL_LIGHT}): {e}")
+        # Если легкая упала, можно попробовать через основную очередь как fallback
+        try:
+             logging.info("Fallback to main model queue for voice text...")
+             def sync_fallback_call():
+                 return model.generate_content(full_prompt, chat_id=chat_id).text
+             return await asyncio.to_thread(sync_fallback_call)
+        except Exception as e2:
+             logging.error(f"Fallback Voice Text Gen Error: {e2}")
+             return "Кхе-кхе... Что-то горло першит, не могу говорить."
 
 async def generate_audio_from_text(text: str, output_path: str) -> bool:
     """
-    Использует Gemini TTS для генерации аудио.
-    Если модель перегружена (429), ждет и пробует снова (Retry).
+    Использует Gemini TTS для генерации аудио с Retry.
     """
     try:
         voice_name = random.choice(AVAILABLE_VOICES)
@@ -82,17 +99,13 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
             }
         }
 
-        # Функция для попытки генерации с ожиданием
         def sync_tts_call_with_retry():
             max_retries = 3
-            # Начальная задержка больше, так как Google просит ~27 сек
             base_delay = 15 
             
-            # Пробегаем по моделям в очереди (в нашем случае там одна)
             for model_name in TTS_MODELS_QUEUE:
                 tts_model = genai.GenerativeModel(model_name)
                 
-                # Внутренний цикл повторов для одной модели
                 for attempt in range(max_retries):
                     try:
                         logging.info(f"🎤 Trying TTS model: {model_name} with voice {voice_name} (Attempt {attempt+1})")
@@ -104,34 +117,26 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
                         
                     except exceptions.ResourceExhausted as e:
                         if attempt < max_retries - 1:
-                            # Увеличиваем задержку экспоненциально + рандом
                             delay = base_delay * (attempt + 1) + random.uniform(1, 5)
                             logging.warning(f"⚠️ Quota exceeded for {model_name}. Sleeping for {delay:.1f}s...")
                             time.sleep(delay)
                         else:
                             logging.error(f"❌ Max retries reached for {model_name}.")
-                            # Если есть другие модели в очереди - попробуем их
                             break 
                             
                     except Exception as e:
-                        # Если 404 (Not Found), сразу переходим к следующей модели (break inner loop)
                         if "404" in str(e):
                              logging.error(f"❌ Model {model_name} not found (404). Skipping.")
                              break
-                        
                         logging.error(f"Error with model {model_name}: {e}")
-                        # Для других ошибок можно попробовать еще раз или выйти
                         if attempt < max_retries - 1:
                             time.sleep(5)
                         else:
                             break
-            
             return None
 
-        # Запускаем в отдельном потоке
         response = await asyncio.to_thread(sync_tts_call_with_retry)
         
-        # Обработка ответа
         if not response or not response.candidates:
             logging.error("Gemini TTS returned no candidates")
             return False
@@ -142,13 +147,11 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
             return False
 
         audio_data = part.inline_data.data
-        
-        # Параметры PCM от Gemini
         sample_rate = 24000 
         
         with wave.open(output_path, "wb") as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setnchannels(1) 
+            wav_file.setsampwidth(2) 
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(audio_data)
             
@@ -159,9 +162,6 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
         return False
 
 async def handle_voice_command(message: types.Message, bot: Bot):
-    """
-    Обработчик команды 'упупа скажи ...'
-    """
     chat_id = str(message.chat.id)
     command_prefix = "упупа скажи"
     user_query = message.text[len(command_prefix):].strip()
