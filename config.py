@@ -47,7 +47,6 @@ GIGACHAT_MODEL_PRO = 'GigaChat-2-Pro'
 GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # === ГЛОБАЛЬНЫЕ НАСТРОЙКИ ЧАТОВ ===
-# (Перенесли выше, чтобы использовать в классе)
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
@@ -56,19 +55,18 @@ SPECIAL_CHAT_ID = -1001707530786
 genai.configure(api_key=GENERIC_API_KEY)
 
 # 1. Очередь для ВСЕХ чатов (БЕЗ 2.5 Pro)
-# Убрали 1.5-flash, так как она вызывает 404
+# ОПТИМИЗАЦИЯ: Сначала легкие и стабильные модели (Lite), потом обычные, в конце превью.
 MODEL_QUEUE_DEFAULT = [
-    'gemini-2.5-flash-preview-09-2025',      # 10 RPM
-    'gemini-2.5-flash',                      # 10 RPM
-    'gemini-2.0-flash',                      # 15 RPM
-    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM
-    'gemini-2.5-flash-lite',                 # 15 RPM
-    'gemini-2.0-flash-lite',                 # 30 RPM
+    'gemini-2.0-flash-lite-preview-02-05',  # Самая легкая и быстрая (обычно высокие лимиты)
+    'gemini-2.0-flash',                      # Стандартная стабильная (15 RPM)
+    'gemini-2.5-flash-lite-preview-09-2025',
+    'gemini-2.5-flash',                      # Preview (часто перегружена)
+    'gemini-2.5-flash-preview-09-2025'
 ]
 
 # 2. Очередь ТОЛЬКО для специального чата (С 2.5 Pro)
 MODEL_QUEUE_SPECIAL = [
-    'gemini-2.5-pro',                        # 2 RPM - ставим первой
+    'gemini-2.5-pro',                        # 2 RPM - ставим первой для "элиты"
 ] + MODEL_QUEUE_DEFAULT
 
 class FallbackChatSession:
@@ -78,13 +76,11 @@ class FallbackChatSession:
     """
     def __init__(self, wrapper, initial_history=None, model_queue=None):
         self.wrapper = wrapper
-        # Используем переданную очередь или дефолтную из обертки
         self.model_queue = model_queue if model_queue else wrapper.default_queue
         self._history = []
         self._init_real_history(initial_history)
 
     def _init_real_history(self, initial_history):
-        # Пробегаем именно по очереди этого чата
         for model_name in self.model_queue:
             try:
                 model = genai.GenerativeModel(model_name)
@@ -107,7 +103,6 @@ class FallbackChatSession:
 
     def send_message(self, content):
         last_error = None
-        # Итерируемся по очереди моделей, закрепленной за этой сессией
         for model_name in self.model_queue:
             try:
                 current_model = genai.GenerativeModel(model_name)
@@ -115,7 +110,6 @@ class FallbackChatSession:
                 
                 response = chat.send_message(content)
                 
-                # УСПЕХ: Обновляем историю и запоминаем текущую рабочую модель
                 self._history = chat.history
                 self.wrapper.last_used_model_name = model_name 
                 return response
@@ -139,15 +133,12 @@ class ModelFallbackWrapper:
         self.last_used_model_name = "Еще не использовалась"
 
     def _get_queue(self, chat_id=None):
-        """Выбирает нужную очередь на основе ID чата."""
         if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
 
     def generate_content(self, *args, **kwargs):
-        # Извлекаем chat_id из аргументов, если он есть, чтобы не передавать его в Gemini
         chat_id = kwargs.pop('chat_id', None)
-        
         current_queue = self._get_queue(chat_id)
         last_error = None
 
@@ -160,17 +151,17 @@ class ModelFallbackWrapper:
                 return result
                 
             except (exceptions.ResourceExhausted, Exception) as e:
+                # 404 означает, что модели нет - логируем и идем дальше
+                # 429 означает лимиты - тоже идем дальше
                 logging.warning(f"⚠️ Ошибка на {model_name} (ChatID: {chat_id}): {e}")
                 last_error = e
                 continue
         raise last_error if last_error else Exception("Все модели исчерпаны.")
 
     def start_chat(self, history=None, chat_id=None):
-        # Определяем очередь моделей для этой конкретной сессии
         queue = self._get_queue(chat_id)
         return FallbackChatSession(self, initial_history=history, model_queue=queue)
 
-    # Для совместимости, если где-то обращаются к model_names напрямую (берем дефолт)
     @property
     def model_names(self):
         return self.default_queue
@@ -184,13 +175,11 @@ image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
 # === Очередь моделей для TTS (Аудио) ===
-# Убрали вторую модель, так как она дает 404. Будем долбить первую через Retry.
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
 
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
-
 CHAT_SETTINGS_FILE = "chat_settings.json"
 LOG_FILE = "user_messages.log"
 STATS_FILE = "message_stats.json"
@@ -202,15 +191,11 @@ DB_FILE = "statistics.db"
 chat_settings = {}
 conversation_history = {}
 message_stats = {}
-
-# Словари для викторин
 quiz_questions = {} 
 quiz_states = {} 
-
 chat_list = []
 sms_disabled_chats = set()
 ANTISPAM_ENABLED_CHATS = set()
-
 DAILY_PROMPT = None
 LAST_PROMPT_UPDATE = None
 DIALOG_ENABLED = True
