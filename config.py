@@ -47,7 +47,6 @@ GIGACHAT_MODEL_PRO = 'GigaChat-2-Pro'
 GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
 
 # === ГЛОБАЛЬНЫЕ НАСТРОЙКИ ЧАТОВ ===
-# (Перенесли выше, чтобы использовать в классе)
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
@@ -182,6 +181,7 @@ model = ModelFallbackWrapper(MODEL_QUEUE_DEFAULT, MODEL_QUEUE_SPECIAL)
 search_model = genai.GenerativeModel('gemini-2.5-flash') 
 image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
+TTS_MODEL_NAME = "gemini-2.0-flash-lite-preview-02-05" # Используем актуальную модель с поддержкой аудио
 
 # === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
 
