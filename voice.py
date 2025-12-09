@@ -145,7 +145,7 @@ async def handle_voice_command(message: types.Message, bot: Bot):
     # Отправляем экшен "запись голосового"
     await bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
     
-    processing_msg = await message.reply("🎤 Грею связки...")
+    processing_msg = await message.reply("🎤 Записываю голосовое...")
 
     # Временные файлы
     rand_id = random.randint(10000, 99999)
