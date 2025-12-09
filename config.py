@@ -55,24 +55,25 @@ SPECIAL_CHAT_ID = -1001707530786
 genai.configure(api_key=GENERIC_API_KEY)
 
 # 1. Очередь для ВСЕХ чатов (БЕЗ 2.5 Pro)
-# ОПТИМИЗАЦИЯ: Сначала легкие и стабильные модели (Lite), потом обычные, в конце превью.
+# Вернули как было (приоритет качества/новизны)
 MODEL_QUEUE_DEFAULT = [
-    'gemini-2.0-flash-lite-preview-02-05',  # Самая легкая и быстрая (обычно высокие лимиты)
-    'gemini-2.0-flash',                      # Стандартная стабильная (15 RPM)
-    'gemini-2.5-flash-lite-preview-09-2025',
-    'gemini-2.5-flash',                      # Preview (часто перегружена)
-    'gemini-2.5-flash-preview-09-2025'
+    'gemini-2.5-flash-preview-09-2025',      # 10 RPM
+    'gemini-2.5-flash',                      # 10 RPM
+    'gemini-2.0-flash',                      # 15 RPM
+    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM
+    'gemini-2.5-flash-lite',                 # 15 RPM
+    'gemini-2.0-flash-lite',                 # 30 RPM
+    'gemini-1.5-flash'                       # 15 RPM
 ]
 
 # 2. Очередь ТОЛЬКО для специального чата (С 2.5 Pro)
 MODEL_QUEUE_SPECIAL = [
-    'gemini-2.5-pro',                        # 2 RPM - ставим первой для "элиты"
+    'gemini-2.5-pro',                        # 2 RPM - ставим первой
 ] + MODEL_QUEUE_DEFAULT
 
 class FallbackChatSession:
     """
     Класс-обертка для чат-сессии.
-    Привязывается к конкретному списку моделей при создании.
     """
     def __init__(self, wrapper, initial_history=None, model_queue=None):
         self.wrapper = wrapper
@@ -151,8 +152,6 @@ class ModelFallbackWrapper:
                 return result
                 
             except (exceptions.ResourceExhausted, Exception) as e:
-                # 404 означает, что модели нет - логируем и идем дальше
-                # 429 означает лимиты - тоже идем дальше
                 logging.warning(f"⚠️ Ошибка на {model_name} (ChatID: {chat_id}): {e}")
                 last_error = e
                 continue
@@ -174,7 +173,10 @@ search_model = genai.GenerativeModel('gemini-2.5-flash')
 image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
-# === Очередь моделей для TTS (Аудио) ===
+# Спец. модель для генерации ТЕКСТА озвучки (чтобы не тратить квоту основной модели)
+TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
+
+# Очередь для TTS (Аудио)
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
