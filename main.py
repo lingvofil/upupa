@@ -411,10 +411,10 @@ async def handle_image_search(message: Message):
     elif response_message:
         await message.reply(response_message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
-async def handle_voice_msg_cmd(message: Message):
+#@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
+#async def handle_voice_msg_cmd(message: Message):
     # Новый хэндлер для голосовых. Теперь он единственный на эту команду.
-    await handle_voice_command(message, bot)
+    #await handle_voice_command(message, bot)
 
 
 # --- ХЭНДЛЕР 2: Инициализация локации ("упупа локация") ---
