@@ -22,24 +22,10 @@ try:
         CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
     )
 except ImportError:
-    print("Warning: config_private.py not found. Attempting to load from environment variables or using placeholders.")
+    print("Warning: config_private.py not found. Attempting to load from environment variables.")
     API_TOKEN = os.getenv('API_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
-    GENERIC_API_KEY3 = os.getenv('GENERIC_API_KEY3', 'YOUR_GEMINI_KEY3_HERE')
-    GENERIC_API_KEY2 = os.getenv('GENERIC_API_KEY2', 'YOUR_GEMINI_KEY2_HERE')
-    GENERIC_API_KEY4 = os.getenv('GENERIC_API_KEY4', 'YOUR_GEMINI_KEY4_HERE')
-    GENERIC_API_KEY5 = os.getenv('GENERIC_API_KEY5', 'YOUR_GEMINI_KEY5_HERE')
-    GENERIC_API_KEY6 = os.getenv('GENERIC_API_KEY6', 'YOUR_GEMINI_KEY6_HERE')
     GENERIC_API_KEY = os.getenv('GENERIC_API_KEY', 'YOUR_GEMINI_KEY_RUSIC_HERE')
-    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', 'YOUR_OPENROUTER_KEY_HERE')
-    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', 'YOUR_Google Search_KEY_HERE')
-    GOOGLE_API_KEY2 = os.getenv('GOOGLE_API_KEY2', 'YOUR_Google Search_KEY2_HERE')
-    giphy_api_key = os.getenv('GIPHY_API_KEY', 'YOUR_GIPHY_KEY_HERE')
-    KANDINSKY_API_KEY = os.getenv('KANDINSKY_API_KEY', 'YOUR_KANDINSKY_KEY_HERE')
-    KANDINSKY_SECRET_KEY = os.getenv('KANDINSKY_SECRET_KEY', 'YOUR_KANDINSKY_SECRET_HERE')
-    GIGACHAT_API_KEY = os.getenv('GIGACHAT_API_KEY', 'YOUR_GIGACHAT_KEY_HERE')
-    GIGACHAT_CLIENT_ID = os.getenv('GIGACHAT_CLIENT_ID', 'YOUR_GIGACHAT_CLIENT_ID_HERE')
-    CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "NO_CF_ID")
-    CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "NO_CF_TOKEN")
+    # ... (остальные ключи, если нужны, можно оставить как есть или заглушки)
 
 SEARCH_ENGINE_ID = "33026288e406447ea"
 GIGACHAT_MODEL = 'GigaChat-2'
@@ -55,7 +41,6 @@ SPECIAL_CHAT_ID = -1001707530786
 genai.configure(api_key=GENERIC_API_KEY)
 
 # 1. Очередь для ВСЕХ чатов (БЕЗ 2.5 Pro)
-# Вернули как было (приоритет качества/новизны)
 MODEL_QUEUE_DEFAULT = [
     'gemini-2.5-flash-preview-09-2025',      # 10 RPM
     'gemini-2.5-flash',                      # 10 RPM
@@ -75,9 +60,11 @@ class FallbackChatSession:
     """
     Класс-обертка для чат-сессии.
     """
-    def __init__(self, wrapper, initial_history=None, model_queue=None):
+    def __init__(self, wrapper, initial_history=None, model_queue=None, chat_id=None, user_id=None):
         self.wrapper = wrapper
         self.model_queue = model_queue if model_queue else wrapper.default_queue
+        self.chat_id = chat_id
+        self.user_id = user_id
         self._history = []
         self._init_real_history(initial_history)
 
@@ -103,6 +90,9 @@ class FallbackChatSession:
         self._history = value
 
     def send_message(self, content):
+        # Импортируем внутри метода, чтобы избежать циклического импорта
+        from statistics import log_model_request
+        
         last_error = None
         for model_name in self.model_queue:
             try:
@@ -112,7 +102,11 @@ class FallbackChatSession:
                 response = chat.send_message(content)
                 
                 self._history = chat.history
-                self.wrapper.last_used_model_name = model_name 
+                self.wrapper.last_used_model_name = model_name
+                
+                # ЛОГИРУЕМ УСПЕШНЫЙ ЗАПРОС
+                log_model_request(self.chat_id, self.user_id, model_name, request_type="chat_message")
+                
                 return response
 
             except exceptions.ResourceExhausted:
@@ -139,7 +133,17 @@ class ModelFallbackWrapper:
         return self.default_queue
 
     def generate_content(self, *args, **kwargs):
+        # Извлекаем параметры для логирования, не удаляя их, если они не мешают Gemini, 
+        # или удаляем (pop), если Gemini ругается на лишние аргументы.
+        # Обычно Gemini принимает только text/contents, generation_config и т.д.
+        # Поэтому chat_id и user_id надо извлечь и УДАЛИТЬ из kwargs перед передачей в genai
+        
         chat_id = kwargs.pop('chat_id', None)
+        user_id = kwargs.pop('user_id', None)
+        
+        # Импорт здесь для избежания цикла
+        from statistics import log_model_request
+
         current_queue = self._get_queue(chat_id)
         last_error = None
 
@@ -149,6 +153,10 @@ class ModelFallbackWrapper:
                 result = current_model.generate_content(*args, **kwargs)
                 
                 self.last_used_model_name = model_name
+                
+                # ЛОГИРУЕМ УСПЕШНЫЙ ЗАПРОС
+                log_model_request(chat_id, user_id, model_name, request_type="generate_content")
+                
                 return result
                 
             except (exceptions.ResourceExhausted, Exception) as e:
@@ -157,9 +165,12 @@ class ModelFallbackWrapper:
                 continue
         raise last_error if last_error else Exception("Все модели исчерпаны.")
 
-    def start_chat(self, history=None, chat_id=None):
+    def start_chat(self, history=None, chat_id=None, user_id=None):
+        """
+        Теперь принимает chat_id и user_id для статистики.
+        """
         queue = self._get_queue(chat_id)
-        return FallbackChatSession(self, initial_history=history, model_queue=queue)
+        return FallbackChatSession(self, initial_history=history, model_queue=queue, chat_id=chat_id, user_id=user_id)
 
     @property
     def model_names(self):
@@ -173,10 +184,8 @@ search_model = genai.GenerativeModel('gemini-2.5-flash')
 image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 
-# Спец. модель для генерации ТЕКСТА озвучки (чтобы не тратить квоту основной модели)
 TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
 
-# Очередь для TTS (Аудио)
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
