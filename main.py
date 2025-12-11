@@ -78,7 +78,7 @@ from search import (
     process_gif_search,
     save_and_send_gif,
     process_grounding_search, 
-    process_location_search     
+    process_location_search      
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
@@ -156,12 +156,21 @@ async def check_current_model(message: types.Message):
 
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
+
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     """Вспомогательная функция для красивого форматирования статистики."""
     parts = [f"📊 *{title}*"]
 
+    if stats.get("model_usage"):
+        parts.append("\n🤖 *НАГРУЗКА НА GEMINI (Запросы):*")
+        sorted_usage = sorted(stats["model_usage"].items(), key=lambda item: item[1], reverse=True)
+        for chat_name, count in sorted_usage:
+            parts.append(f"  🔥 `{chat_name}`: {count} запросов")
+    else:
+        parts.append("\n_Запросов к Gemini не зафиксировано._")
+
     if stats.get("groups"):
-        parts.append("\n*Чаты:*")
+        parts.append("\n*Активность (Сообщения в чатах):*")
         sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
         for chat_title, count in sorted_groups:
             parts.append(f"  • `{chat_title}`: {count} сообщ.")
@@ -410,12 +419,6 @@ async def handle_image_search(message: Message):
         await save_and_send_searched_image(message, image_data)
     elif response_message:
         await message.reply(response_message)
-
-#@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
-#async def handle_voice_msg_cmd(message: Message):
-    # Новый хэндлер для голосовых. Теперь он единственный на эту команду.
-    #await handle_voice_command(message, bot)
-
 
 # --- ХЭНДЛЕР 2: Инициализация локации ("упупа локация") ---
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа локация") and message.from_user.id not in BLOCKED_USERS)
