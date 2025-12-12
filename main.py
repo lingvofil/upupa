@@ -420,7 +420,10 @@ async def handle_image_search(message: Message):
     elif response_message:
         await message.reply(response_message)
 
-# --- ХЭНДЛЕР 2: Инициализация локации ("упупа локация") ---
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
+async def handle_voice_msg_cmd(message: Message):
+    await handle_voice_command(message, bot)
+
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа локация") and message.from_user.id not in BLOCKED_USERS)
 async def handle_location_start(message: Message):
     address = message.text[len("упупа локация"):].strip()
