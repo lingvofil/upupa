@@ -198,7 +198,7 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         await bot.send_voice(
             chat_id=message.chat.id,
             voice=audio_file,
-            caption=f"🗣 Ответ на: {user_query[:20]}...",
+            #caption=f"🗣 Ответ на: {user_query[:20]}...",
             reply_to_message_id=message.message_id
         )
         
