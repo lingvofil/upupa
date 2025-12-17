@@ -47,7 +47,6 @@ class FusionBrainAPI:
             response.raise_for_status()
             data = response.json()
             if data:
-                # logging.info(f"Kandinsky Pipelines found: {len(data)}. Using: {data[0].get('name')}")
                 if 'id' in data[0]:
                     return data[0]['id']
             logging.error("API не вернул ожидаемую структуру для pipeline.")
@@ -192,7 +191,7 @@ async def save_and_send_generated_image(message: types.Message, image_data: byte
         await message.reply("Ошибка при отправке файла.")
 
 # =============================================================================
-# HUGGING FACE INFERENCE API (PRIORITY 1)
+# HUGGING FACE INFERENCE API (PRIORITY 2)
 # =============================================================================
 
 async def generate_image_huggingface(prompt: str):
@@ -297,28 +296,13 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
     """
     Основная функция-оркестратор генерации.
     Приоритет:
-    1. Hugging Face (SDXL/Flux) - требует перевода на английский.
-    2. Kandinsky - работает с русским.
-    3. Cloudflare - требует перевода на английский.
+    1. Kandinsky (FusionBrain) - работает с русским.
+    2. Hugging Face (SDXL/Flux) - требует перевода.
+    3. Cloudflare - требует перевода.
     """
     
-    # 1. Попытка Hugging Face (Priority 1)
-    try:
-        english_prompt = await translate_to_english(prompt)
-        success_hf, error_hf, hf_data = await generate_image_huggingface(english_prompt)
-        
-        if success_hf:
-            await processing_msg.delete()
-            await save_and_send_generated_image(message, hf_data, filename="sdxl_hf.png")
-            return
-        else:
-            logging.warning(f"HF Generation failed: {error_hf}. Switching to Kandinsky.")
-            # Если не вышло, не удаляем сообщение, продолжаем.
-    except Exception as e:
-        logging.error(f"HF Critical Error: {e}")
-
-    # 2. Попытка Kandinsky (Priority 2)
-    await processing_msg.edit_text("Художник курит, зову Кандинского...")
+    # 1. Попытка Kandinsky (Priority 1)
+    # await processing_msg.edit_text("Художник курит, зову Кандинского...") - уже должно быть отправлено сообщение "Ща падажжи" или "Гондинский работает"
     success_k, error_k, k_data = await process_kandinsky_generation(prompt)
     
     if success_k:
@@ -326,18 +310,35 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
         await save_and_send_generated_image(message, k_data, filename="kandinsky.png")
         return
 
-    logging.warning(f"Kandinsky failed: {error_k}. Switching to Cloudflare.")
+    logging.warning(f"Kandinsky failed: {error_k}. Switching to HuggingFace.")
+    
+    # Переводим промпт один раз для последующих моделей
+    await processing_msg.edit_text("Кандинский не смог, зову новую модель...")
+    english_prompt = await translate_to_english(prompt)
+
+    # 2. Попытка Hugging Face (Priority 2)
+    try:
+        success_hf, error_hf, hf_data = await generate_image_huggingface(english_prompt)
+        
+        if success_hf:
+            await processing_msg.delete()
+            await save_and_send_generated_image(message, hf_data, filename="sdxl_hf.png")
+            return
+        else:
+            logging.warning(f"HF Generation failed: {error_hf}. Switching to Cloudflare.")
+    except Exception as e:
+        error_hf = str(e)
+        logging.error(f"HF Critical Error: {e}")
 
     # 3. Попытка Cloudflare (Priority 3)
     if mode == "text2img":
-        await processing_msg.edit_text("Кандинский запил, бужу Клаудфлеер...")
-        # Промпт уже переведен для HF, используем его
+        await processing_msg.edit_text("Все модные нейронки сломались, бужу Клаудфлеер...")
         status, data = await generate_image_with_cloudflare(english_prompt)
         if status == 'SUCCESS':
             await processing_msg.delete()
             await save_and_send_generated_image(message, data['image_data'], filename="cloudflare_backup.png")
         else:
-            await processing_msg.edit_text(f"Все художники в запое.\nHF Error: {error_hf}\nKandinsky Error: {error_k}\nCF Error: {data.get('error')}")
+            await processing_msg.edit_text(f"Все художники в запое.\nKandinsky: {error_k}\nHF: {error_hf}\nCF: {data.get('error')}")
     else:
         await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {error_k}")
 
@@ -368,19 +369,25 @@ async def handle_pun_image_command(message: types.Message):
         source_words = parts[0].strip()
         final_word = parts[1].strip()
         
-        # Промпт для генерации
+        # Промпт для генерации (Русский)
         image_gen_prompt_ru = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. Высокое качество, детализация."
         
-        # 1. Пробуем HF (нужен перевод)
-        english_desc = await translate_to_english(f"Surrealistic painting combining concepts {source_words}. No text.")
-        success, err, img_data = await generate_image_huggingface(english_desc)
+        # 1. Пробуем Kandinsky (Priority 1)
+        success, err, img_data = await process_kandinsky_generation(image_gen_prompt_ru)
         
+        # Переменные для перевода, если понадобится
+        english_desc = None
+
         if not success:
-            # 2. Пробуем Kandinsky (русский)
-            success, err, img_data = await process_kandinsky_generation(image_gen_prompt_ru)
+             # 2. Пробуем HF (нужен перевод)
+            english_desc = await translate_to_english(f"Surrealistic painting combining concepts {source_words}. No text.")
+            success, err, img_data = await generate_image_huggingface(english_desc)
             
         if not success:
-             # 3. Пробуем CF (английский)
+             # 3. Пробуем CF (Priority 3)
+            if not english_desc:
+                 english_desc = await translate_to_english(f"Surrealistic painting combining concepts {source_words}. No text.")
+            
             status, data = await generate_image_with_cloudflare(english_desc)
             if status == 'SUCCESS':
                 success = True
@@ -431,8 +438,6 @@ async def handle_redraw_command(message: types.Message):
         full_prompt = f"Детский рисунок карандашами, плохой стиль, каракули. {resp.text.strip()}"
         
         # Перерисовка через robust использует Text2Img с описанием.
-        # Если нужен именно Img2Img, то HF (бесплатный API) обычно поддерживает только Text2Img. 
-        # Поэтому логика robust_image_generation подходит (генерирует новую по описанию старой).
         await robust_image_generation(message, full_prompt, msg, mode="text2img")
     except Exception as e:
         await msg.edit_text("Ошибка перерисовки.")
@@ -469,7 +474,7 @@ async def handle_edit_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
         english_prompt = await translate_to_english(prompt_text)
         
-        # Для редактирования (Img2Img) пока оставляем Cloudflare, т.к. бесплатный HF Inference часто только Text2Img
+        # Для редактирования (Img2Img) пока оставляем Cloudflare
         status, result = await generate_img2img_cloudflare(english_prompt, img_bytes)
         
         if status == 'SUCCESS':
