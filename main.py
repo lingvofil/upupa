@@ -88,7 +88,7 @@ from picgeneration import (
     handle_redraw_command,
     handle_edit_command,
     handle_kandinsky_generation_command,
-    handle_gemini_flash_command
+    handle_huggingface_command  # ИМПОРТИРУЕМ НОВЫЙ ХЭНДЛЕР
 )
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
@@ -322,7 +322,7 @@ async def handle_user_lexicon(message: types.Message):
 @router.message(F.text.lower() == "моя статистика")
 async def show_personal_stats(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     logging.info(f"Команда 'моя статистика' вызвана пользователем {message.from_user.id} в чате {message.chat.id}")
     chat_id = str(message.chat.id)
     user_id = str(message.from_user.id)
@@ -343,7 +343,7 @@ async def handle_chat_profile(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower() == "кто я")
 async def handle_user_profile(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     user_id = message.from_user.id
     chat_id = message.chat.id
     await process_user_profile(user_id, chat_id, message)
@@ -351,14 +351,14 @@ async def handle_user_profile(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith("пародия"))
 async def handle_parody(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     chat_id = message.chat.id
     await process_parody(message, chat_id)
 
 @router.message(F.text.lower() == "викторина участники")
 async def start_participant_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("ищем цитаты великих людей...")
     
     success, error_message = await process_participant_quiz_start(message, bot)
@@ -370,7 +370,7 @@ async def start_participant_quiz(message: Message, bot: Bot):
 @router.message(F.text.lower().contains("викторина"))
 async def start_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("Генерирую вапросики...")
     success, error_message = await process_quiz_start(message, bot)
     await processing_msg.delete()
@@ -571,7 +571,7 @@ async def generate_image(message: types.Message):
 async def generate_image_kandinsky(message: types.Message):
     await handle_kandinsky_generation_command(message)
 
-# ================== НОВЫЙ ХЭНДЛЕР: GEMINI 2.0 FLASH ==================
+# ================== НОВЫЙ ХЭНДЛЕР: HUGGING FACE (FLUX.1) ==================
 @router.message(
     lambda message: (
         message.from_user.id not in BLOCKED_USERS and
@@ -581,8 +581,8 @@ async def generate_image_kandinsky(message: types.Message):
         )
     )
 )
-async def generate_image_gemini(message: types.Message):
-    await handle_gemini_flash_command(message)
+async def generate_image_hf(message: types.Message):
+    await handle_huggingface_command(message)
 
 @router.message(
     lambda message: (
