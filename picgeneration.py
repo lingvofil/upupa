@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
+import google.generativeai as genai # Добавили импорт библиотеки Google
 
 # Импортируем настройки. 
 import config
@@ -360,6 +361,54 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
         await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {error}")
 
 # =============================================================================
+# НОВАЯ ФУНКЦИЯ ДЛЯ GEMINI 2.0 FLASH (Native Image Gen)
+# =============================================================================
+
+async def process_gemini_generation(prompt: str):
+    """
+    Генерация через Gemini 2.0 Flash (Native Image Generation).
+    Мы обращаемся к модели gemini-2.0-flash как к генеративной, 
+    и ищем в ответе inline_data (картинку), а не текст.
+    """
+    try:
+        logging.info(f"Запрос к Gemini 2.0 Flash (Image Gen): {prompt}")
+        
+        # Используем GenerativeModel с именем gemini-2.0-flash
+        # Важно: это мультимодальная модель, она может вернуть и текст, и картинку.
+        model_flash = genai.GenerativeModel("gemini-2.0-flash")
+        
+        # Просим модель сгенерировать изображение
+        # Для 2.0 Flash иногда нужно явно сказать "Generate an image"
+        full_prompt = f"Generate an image: {prompt}"
+        
+        # Выполняем генерацию
+        result = await asyncio.to_thread(
+            model_flash.generate_content,
+            full_prompt
+        )
+        
+        # Ищем картинку в частях ответа (parts -> inline_data)
+        if result and result.parts:
+            for part in result.parts:
+                # Проверяем наличие графических данных (inline_data)
+                if hasattr(part, 'inline_data') and part.inline_data and part.inline_data.data:
+                    logging.info("Gemini 2.0 Flash успешно вернул изображение.")
+                    return True, None, part.inline_data.data # Это bytes
+        
+        # Если картинки нет, проверяем текст (возможно, модель отказалась или feature disabled)
+        try:
+            text_response = result.text if result and hasattr(result, 'text') else "No content"
+        except Exception:
+            text_response = "Unable to extract text"
+            
+        logging.warning(f"Gemini 2.0 Flash вернул только текст/пустоту: {text_response}")
+        return False, f"Модель не сгенерировала картинку (возможно, функция отключена). Ответ: {text_response[:100]}", None
+            
+    except Exception as e:
+        logging.error(f"Ошибка Gemini 2.0 Flash Gen: {e}")
+        return False, str(e), None
+
+# =============================================================================
 # ХЭНДЛЕРЫ
 # =============================================================================
 
@@ -571,3 +620,34 @@ async def handle_kandinsky_generation_command(message: types.Message):
         await save_and_send_generated_image(message, data, "kandinsky.png")
     else:
         await msg.edit_text(f"Ошибка: {err}")
+
+async def handle_gemini_flash_command(message: types.Message):
+    """
+    НОВЫЙ ХЭНДЛЕР: упупа накидай
+    Тестируем Gemini 2.0 Flash / Imagen 3
+    """
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    
+    # Убираем триггерную фразу
+    prompt = message.text.lower().replace("упупа накидай", "").strip()
+    
+    if not prompt and message.reply_to_message:
+        prompt = message.reply_to_message.text or message.reply_to_message.caption
+    
+    if not prompt:
+        await message.reply("Что накидать то? Напиши после команды.")
+        return
+
+    msg = await message.reply("Gemini Flash (Imagen 3) думает...")
+    
+    # Imagen лучше понимает английский, хотя и русский ест. 
+    # Для теста можно перевести, можно нет. Попробуем с переводом для надежности.
+    english_prompt = await translate_to_english(prompt)
+    
+    success, error, data = await process_gemini_generation(english_prompt)
+    
+    if success:
+        await msg.delete()
+        await save_and_send_generated_image(message, data, filename="gemini_flash.png")
+    else:
+        await msg.edit_text(f"Gemini обосрался: {error}")
