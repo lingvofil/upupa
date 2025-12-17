@@ -247,47 +247,44 @@ async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes 
 # =============================================================================
 
 async def generate_image_huggingface(prompt: str):
-    """
-    Генерация через Hugging Face API.
-    Используем модель: stabilityai/stable-diffusion-xl-base-1.0
-    (FLUX.1-dev недоступен на free tier)
-    """
     if not HF_TOKEN:
-        return False, "Не задан HUGGINGFACE_TOKEN в настройках.", None
+        return False, "HUGGINGFACE_TOKEN не задан", None
 
-    # Переключились на SDXL, так как он доступен на бесплатном уровне
-    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
-    # payload для API (SDXL)
+    API_URL = (
+        "https://router.huggingface.co/hf-inference/models/"
+        "stabilityai/stable-diffusion-xl-base-1.0"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "image/png"
+    }
+
     payload = {
         "inputs": prompt,
-        # Для SDXL параметры чуть другие, чем для Flux, но основные совпадают
-        "parameters": {
-             # Можно добавить negative_prompt и т.д., если нужно
+        "options": {
+            "wait_for_model": True
         }
     }
 
-    def _sync_request():
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=90)
-        return response
+    def _sync():
+        return requests.post(API_URL, headers=headers, json=payload, timeout=120)
 
     try:
-        logging.info(f"Запрос к HuggingFace (SDXL): {prompt}")
-        response = await asyncio.to_thread(_sync_request)
-        
+        response = await asyncio.to_thread(_sync)
+
         if response.status_code == 200:
             return True, None, response.content
-        elif response.status_code == 503:
-             return False, "Модель SDXL 'греется' (503). Попробуйте через 30-60 сек.", None
-        else:
-            err_msg = f"HF Error {response.status_code}: {response.text[:200]}"
-            logging.error(err_msg)
-            return False, err_msg, None
-            
+
+        if response.status_code == 503:
+            return False, "Модель прогревается (503). Повтори через минуту.", None
+
+        return False, f"HF Error {response.status_code}: {response.text[:300]}", None
+
     except Exception as e:
-        logging.error(f"Ошибка HuggingFace Gen: {e}")
-        return False, str(e), None
+        return False, f"HF Exception: {e}", None
+
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
