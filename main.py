@@ -87,8 +87,8 @@ from picgeneration import (
     handle_image_generation_command,
     handle_redraw_command,
     handle_edit_command,
-    handle_kandinsky_generation_command,
-    handle_huggingface_command  # ИМПОРТИРУЕМ НОВЫЙ ХЭНДЛЕР
+    handle_kandinsky_generation_command
+    # УБРАЛ ИМПОРТ handle_huggingface_command
 )
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
@@ -511,7 +511,7 @@ async def handle_distortion_command(message: types.Message):
 )
 async def handle_whatisthere_unified(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     
     processing_text = get_processing_message(message)
     processing_msg = await message.reply(processing_text)
@@ -571,18 +571,7 @@ async def generate_image(message: types.Message):
 async def generate_image_kandinsky(message: types.Message):
     await handle_kandinsky_generation_command(message)
 
-# ================== НОВЫЙ ХЭНДЛЕР: HUGGING FACE (FLUX.1) ==================
-@router.message(
-    lambda message: (
-        message.from_user.id not in BLOCKED_USERS and
-        message.text and (
-            message.text.lower().startswith("упупа накидай") or
-            (message.text.lower().strip() == "упупа накидай" and message.reply_to_message)
-        )
-    )
-)
-async def generate_image_hf(message: types.Message):
-    await handle_huggingface_command(message)
+# ХЭНДЛЕР "упупа накидай" УДАЛЕН. Логика перенесена в generate_image
 
 @router.message(
     lambda message: (
