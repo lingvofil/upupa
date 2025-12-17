@@ -256,7 +256,7 @@ async def generate_image_huggingface(prompt: str):
 
     # URL модели. FLUX.1-dev - топ сейчас. 
     # Если будет ошибка доступа (нужно принять условия на сайте HF), можно сменить на stabilityai/stable-diffusion-xl-base-1.0
-    API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev"
+    API_URL = "https://router.huggingface.co/models/black-forest-labs/FLUX.1-dev"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
     # payload для API
