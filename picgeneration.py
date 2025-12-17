@@ -256,7 +256,7 @@ async def generate_image_huggingface(prompt: str):
         return False, "Не задан HUGGINGFACE_TOKEN в настройках.", None
 
     # Переключились на SDXL, так как он доступен на бесплатном уровне
-    API_URL = "https://router.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
     # payload для API (SDXL)
