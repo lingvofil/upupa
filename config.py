@@ -19,12 +19,14 @@ try:
         giphy_api_key,
         KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY,
         GIGACHAT_API_KEY, GIGACHAT_CLIENT_ID,
-        CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+        CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN,
+        HUGGINGFACE_TOKEN # Добавили токен HF
     )
 except ImportError:
     print("Warning: config_private.py not found. Attempting to load from environment variables.")
     API_TOKEN = os.getenv('API_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
     GENERIC_API_KEY = os.getenv('GENERIC_API_KEY', 'YOUR_GEMINI_KEY_RUSIC_HERE')
+    HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN', None) # Fallback
     # ... (остальные ключи, если нужны, можно оставить как есть или заглушки)
 
 SEARCH_ENGINE_ID = "33026288e406447ea"
