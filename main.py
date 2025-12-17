@@ -87,7 +87,8 @@ from picgeneration import (
     handle_image_generation_command,
     handle_redraw_command,
     handle_edit_command,
-    handle_kandinsky_generation_command
+    handle_kandinsky_generation_command,
+    handle_gemini_flash_command
 )
 # ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
@@ -314,7 +315,7 @@ async def handle_user_lexicon(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     username_or_name = message.text[len("лексикон "):].strip()
     if username_or_name.startswith('@'):
-        username_or_name = username_or_name[1:]    
+        username_or_name = username_or_name[1:]     
     chat_id = message.chat.id
     await process_user_lexicon(username_or_name, chat_id, message)
 
@@ -569,6 +570,19 @@ async def generate_image(message: types.Message):
 )
 async def generate_image_kandinsky(message: types.Message):
     await handle_kandinsky_generation_command(message)
+
+# ================== НОВЫЙ ХЭНДЛЕР: GEMINI 2.0 FLASH ==================
+@router.message(
+    lambda message: (
+        message.from_user.id not in BLOCKED_USERS and
+        message.text and (
+            message.text.lower().startswith("упупа накидай") or
+            (message.text.lower().strip() == "упупа накидай" and message.reply_to_message)
+        )
+    )
+)
+async def generate_image_gemini(message: types.Message):
+    await handle_gemini_flash_command(message)
 
 @router.message(
     lambda message: (
