@@ -49,12 +49,12 @@ MODEL_QUEUE_DEFAULT = [
     'gemini-2.0-flash',                      # 15 RPM
     'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM
     'gemini-2.5-flash-lite',                 # 15 RPM
-    'gemini-2.0-flash-lite',                 # 30 RPM
-    'gemini-1.5-flash'                       # 15 RPM
+    'gemini-2.0-flash-lite'                 # 30 RPM
 ]
 
 # 2. Очередь ТОЛЬКО для специального чата (С 2.5 Pro)
 MODEL_QUEUE_SPECIAL = [
+    'gemini-3-flash-preview',
     'gemini-2.5-pro',                        # 2 RPM - ставим первой
 ] + MODEL_QUEUE_DEFAULT
 
