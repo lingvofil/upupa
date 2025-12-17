@@ -17,18 +17,21 @@ from prompts import (
     get_prompts_list_text, actions, get_prompt_by_name,
     PROMPT_PIROZHOK, PROMPT_PIROZHOK1, PROMPT_POROSHOK, PROMPT_POROSHOK1,
     KEYWORDS, CUSTOM_PROMPT_TEMPLATE,
-    DIALOG_TRIGGER_KEYWORDS  # <<< ДОБАВЛЕН ИМПОРТ
+    DIALOG_TRIGGER_KEYWORDS
 )
 # Функции для извлечения сообщений
 from lexicon_settings import (save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
+    extract_user_messages, # Добавили, может пригодиться
     get_frequent_phrases_from_text
 )
 # Импорт для реакций и статистики
 from random_reactions import process_random_reactions
 from stat_rank_settings import track_message_statistics
 
+# === НОВЫЙ ИМПОРТ ===
+from smart_search import find_relevant_context
 
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД (Без изменений)
@@ -104,7 +107,6 @@ async def handle_current_prompt_command(message: types.Message):
 async def handle_set_prompt_command(message: types.Message):
     """
     Обрабатывает установку нового промпта (готового или кастомного).
-    Эта функция быстрая, так как не ищет пользователей в истории.
     """
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
@@ -141,7 +143,6 @@ async def handle_set_prompt_command(message: types.Message):
 async def handle_set_participant_prompt_command(message: types.Message):
     """
     Обрабатывает установку промпта для имитации участника чата.
-    Эта функция может быть медленной из-за поиска по истории сообщений.
     """
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
@@ -153,28 +154,35 @@ async def handle_set_participant_prompt_command(message: types.Message):
 
     display_name = command_part.lstrip('@')
 
+    # Ищем сообщения (сначала по юзернейму, потом по имени)
     messages = await extract_messages_by_username(display_name, chat_id)
+    found_by = "username"
     if not messages:
         messages = await extract_messages_by_full_name(display_name, chat_id)
+        found_by = "full_name"
 
     if not messages:
         await message.reply(f"Не могу найти сообщения от пользователя '{display_name}', чтобы ему подражать.")
         return
 
+    # Создаем базовый промпт стиля (на основе частотных фраз)
     user_prompt = await _create_user_style_prompt(messages, display_name)
+    
     update_chat_settings(chat_id)
     current_settings = chat_settings[chat_id]
     current_settings["prompt"] = user_prompt
     current_settings["prompt_name"] = display_name
     current_settings["prompt_source"] = "user_imitation"
     current_settings["prompt_type"] = "user_style"
+    
+    # Сохраняем метаданные пользователя, чтобы потом искать контекст
     current_settings["imitated_user"] = {
-        "username": display_name if '@' in command_part else None,
-        "full_name": display_name if '@' not in command_part else None,
+        "username": display_name if found_by == "username" else None,
+        "full_name": display_name if found_by == "full_name" else None,
         "display_name": display_name
     }
     save_chat_settings()
-    await message.reply(f"Теперь я буду разговаривать как {display_name}!")
+    await message.reply(f"Теперь я буду разговаривать как {display_name}! Буду подстраиваться под контекст.")
 
 
 async def handle_change_prompt_randomly_command(message: types.Message):
@@ -212,7 +220,7 @@ async def handle_change_prompt_randomly_command(message: types.Message):
 
 
 # =============================================================================
-# ОСНОВНАЯ ЛОГИКА ДИАЛОГА (ИЗМЕНЕНО)
+# ОСНОВНАЯ ЛОГИКА ДИАЛОГА (ИЗМЕНЕНО ДЛЯ SMART SEARCH)
 # =============================================================================
 
 def update_conversation_history(chat_id: str, name: str, message_text: str, role: str):
@@ -250,29 +258,63 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     """
     chat_id = str(message.chat.id)
     
-    # <<< НАЧАЛО ИЗМЕНЕНИЙ >>>
+    # Подготовка ввода пользователя
     user_input = message.text
-    
-    # Очищаем сообщение от триггерных слов, чтобы модель реагировала на суть
     temp_input_lower = user_input.lower()
     for keyword in DIALOG_TRIGGER_KEYWORDS:
         if temp_input_lower.startswith(keyword):
-            # Удаляем ключевое слово и возможные пробелы/запятые после него
             user_input = user_input[len(keyword):].lstrip(' ,')
-            break # Прерываем цикл, т.к. ключевое слово может быть только одно в начале
+            break
     
-    # Если после очистки ничего не осталось, просим уточнить
     if not user_input.strip():
         return "Хули?"
-    # <<< КОНЕЦ ИЗМЕНЕНИЙ >>>
 
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
     
+    # Получаем базовый промпт
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
+    
+    # ===============================================================
+    # SMART SEARCH: Если включена имитация, ищем релевантный контекст
+    # ===============================================================
+    current_settings = chat_settings.get(chat_id, {})
+    additional_context = ""
+    
+    if current_settings.get("prompt_type") == "user_style":
+        imitated_user_data = current_settings.get("imitated_user", {})
+        
+        # Определяем, кого мы имитируем, чтобы найти его логи
+        target_name = imitated_user_data.get("username") or imitated_user_data.get("full_name")
+        
+        if target_name:
+            # Извлекаем сообщения (кэширование бы не помешало, но пока так)
+            # ВАЖНО: Мы не знаем точно, username это или full_name, пробуем методы
+            # Это может быть медленно, но дает точность
+            if imitated_user_data.get("username"):
+                messages = await extract_messages_by_username(imitated_user_data["username"], chat_id)
+            else:
+                messages = await extract_messages_by_full_name(imitated_user_data["full_name"], chat_id)
+            
+            if messages:
+                # Ищем похожие ответы на текущий ввод пользователя
+                # "Как этот пользователь реагировал на похожее дерьмо?"
+                relevant_msgs = await find_relevant_context(user_input, messages, top_k=3)
+                
+                if relevant_msgs:
+                    additional_context = (
+                        f"\n\nВАЖНО! Вот что {prompt_name} говорил(а) на похожие темы или в похожем контексте ранее:\n"
+                        f"{' | '.join(relevant_msgs)}\n"
+                        f"Используй эти фразы или мысли, чтобы ответ был максимально похож на него/неё."
+                    )
+                    logging.info(f"Smart Search added context for {prompt_name}: {relevant_msgs}")
+
+    # ===============================================================
+
     chat_history_formatted = format_chat_history(chat_id)
     
     full_prompt = (
-        f"{selected_prompt}\n\n"
+        f"{selected_prompt}\n"
+        f"{additional_context}\n" # Вставляем найденный контекст
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
         f"{prompt_name}:"
@@ -341,8 +383,9 @@ async def _create_user_style_prompt(messages: list, display_name: str) -> str:
         "- Манеру речи и словарный запас",
         "- Характерные выражения и обороты",
         "- Стиль юмора и тон общения",
-        "\nПримеры сообщений:",
+        "\nПримеры сообщений (общий стиль):",
     ]
+    # Оставляем немного примеров в базовом промпте для общего тона
     for i, msg in enumerate(sample_messages[:15], 1):
         prompt_parts.append(f"{i}. {msg}")
     if frequent_words:
