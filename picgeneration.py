@@ -249,40 +249,37 @@ async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes 
 async def generate_image_huggingface(prompt: str):
     """
     Генерация через Hugging Face API.
-    Модель: FLUX.1-dev (SOTA) или Stable Diffusion 3.5
+    Используем модель: stabilityai/stable-diffusion-xl-base-1.0
+    (FLUX.1-dev недоступен на free tier)
     """
     if not HF_TOKEN:
         return False, "Не задан HUGGINGFACE_TOKEN в настройках.", None
 
-    # URL модели. FLUX.1-dev - топ сейчас. 
-    # Если будет ошибка доступа (нужно принять условия на сайте HF), можно сменить на stabilityai/stable-diffusion-xl-base-1.0
-    API_URL = "https://router.huggingface.co/models/black-forest-labs/FLUX.1-dev"
+    # Переключились на SDXL, так как он доступен на бесплатном уровне
+    API_URL = "https://router.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
-    # payload для API
+    # payload для API (SDXL)
     payload = {
         "inputs": prompt,
+        # Для SDXL параметры чуть другие, чем для Flux, но основные совпадают
         "parameters": {
-             "width": 1024,
-             "height": 1024,
-             "num_inference_steps": 25 # Для FLUX это хороший дефолт
+             # Можно добавить negative_prompt и т.д., если нужно
         }
     }
 
     def _sync_request():
-        # Иногда HF тупит и модель "загружается" (503 error), можно добавить ретрай, но пока просто запрос
         response = requests.post(API_URL, headers=headers, json=payload, timeout=90)
         return response
 
     try:
-        logging.info(f"Запрос к HuggingFace (FLUX.1): {prompt}")
+        logging.info(f"Запрос к HuggingFace (SDXL): {prompt}")
         response = await asyncio.to_thread(_sync_request)
         
         if response.status_code == 200:
             return True, None, response.content
         elif response.status_code == 503:
-             # Модель загружается, HF пишет estimated_time
-             return False, "Модель на сервере HuggingFace 'холодная' и загружается. Попробуйте через минуту.", None
+             return False, "Модель SDXL 'греется' (503). Попробуйте через 30-60 сек.", None
         else:
             err_msg = f"HF Error {response.status_code}: {response.text[:200]}"
             logging.error(err_msg)
@@ -485,7 +482,7 @@ async def handle_kandinsky_generation_command(message: types.Message):
 
 async def handle_huggingface_command(message: types.Message):
     """
-    Хэндлер для Hugging Face (FLUX.1)
+    Хэндлер для Hugging Face (SDXL)
     Команда: упупа накидай
     """
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
@@ -498,7 +495,7 @@ async def handle_huggingface_command(message: types.Message):
         await message.reply("Что накидать то? Напиши после команды.")
         return
 
-    msg = await message.reply("HuggingFace (FLUX.1-dev) рисует... (это может занять время)")
+    msg = await message.reply("HuggingFace (SDXL) рисует... (это может занять время)")
     
     # HF модели лучше понимают английский
     english_prompt = await translate_to_english(prompt)
@@ -507,11 +504,10 @@ async def handle_huggingface_command(message: types.Message):
     
     if success:
         await msg.delete()
-        await save_and_send_generated_image(message, data, filename="flux_hf.png")
+        await save_and_send_generated_image(message, data, filename="sdxl_hf.png")
     else:
         await msg.edit_text(f"Не вышло: {error}\nПроверь HUGGINGFACE_TOKEN в конфиге.")
 
-# Оставляем пустую функцию Gemini для совместимости, если она где-то импортируется, 
-# но в main.py мы заменим импорт на handle_huggingface_command
+# Оставляем пустую функцию Gemini для совместимости
 async def handle_gemini_flash_command(message: types.Message):
     pass
