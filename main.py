@@ -426,16 +426,20 @@ async def handle_image_search(message: Message):
 async def handle_voice_msg_cmd(message: Message):
     await handle_voice_command(message, bot)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа локация") and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda m: m.text and m.text.lower().startswith("упупа локация") and m.from_user.id not in BLOCKED_USERS)
 async def handle_location_start(message: Message):
-    address = message.text[len("упупа локация"):].strip()
-    
-    if not address:
-        await message.reply("Ты адрес забыл написать, чучело.")
+    try:
+        raw = message.text[len("упупа локация"):].strip()
+        if "|" not in raw:
+        await message.reply("Формат, долбоёб:\nупупа локация <адрес> | <что искать>")
         return
-
-    # Отвечаем фразой, которую потом будем ловить в реплае
-    await message.reply(f"ну и хули ты хочешь по адресу {address}")
+        address, user_request = map(str.strip, raw.split("|", 1))
+        await message.reply("Ща посмотрю, не ссы…")
+        result = await process_location_search(address, user_request)
+        await message.reply(result)
+    except Exception as e:
+        logging.error(f"Location handler error: {e}", exc_info=True)
+        await message.reply("Я обосрался где-то по дороге.")
 
 
 # --- ХЭНДЛЕР 3: Обработка уточнения по локации (Reply) ---
