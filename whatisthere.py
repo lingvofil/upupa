@@ -4,11 +4,10 @@ import logging
 import requests
 import re
 from aiogram import types
-from config import bot, API_TOKEN, model
-# Импортируем новый единый список промптов
+from config import bot, API_TOKEN, model, ROBOTICS_MODEL
 from prompts import PROMPTS_MEDIA
-# НОВОЕ: Снова импортируем BeautifulSoup
 from bs4 import BeautifulSoup
+import google.generativeai as genai
 
 def get_custom_prompt(message: types.Message) -> str | None:
     """
@@ -342,6 +341,64 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
         logging.error(f"Ошибка при обработке URL 'чотам': {e}", exc_info=True)
         return False, "Ошибка при анализе ссылки."
 
+# ================== ROBOTICS / ОПИШИ СИЛЬНО ==================
+async def process_robotics_description(message: types.Message) -> tuple[bool, str]:
+    """
+    Анализ фото с использованием Gemini Robotics (Embodied Reasoning).
+    Идеально для оценки геометрии, проходимости и физических свойств объектов.
+    """
+    file_path = None
+    try:
+        # 1. Извлекаем фото (из самого сообщения или реплая)
+        target_message = message.reply_to_message if message.reply_to_message else message
+        if not target_message.photo:
+            return False, "Для мощного анализа мне нужна фотография."
+            
+        photo = target_message.photo[-1]
+        file_id = photo.file_id
+        file_name = f"robotics_{file_id}.jpg"
+        
+        # 2. Скачиваем файл
+        if not await download_file(file_id, file_name):
+            return False, "Не удалось скачать фото для анализа."
+        file_path = file_name
+
+        # 3. Инициализируем Robotics модель
+        # Мы делаем это здесь, а не глобально, чтобы не держать лишние коннекты, если функция используется редко
+        robotics_model = genai.GenerativeModel(ROBOTICS_MODEL)
+        
+        # 4. Читаем байты
+        with open(file_name, "rb") as f:
+            image_data = f.read()
+
+        # 5. Формируем промпт "Сталкер / Инженер"
+        # Robotics модель хорошо понимает физику, поэтому просим её смотреть на мир через эту призму.
+        user_add_prompt = get_custom_prompt(message)
+        
+        system_prompt = (
+            "Ты — эксперт по физическому взаимодействию и анализу пространства (Embodied AI). "
+            "Проанализируй изображение с точки зрения физики, геометрии и безопасности.\n"
+            "Если это локация: оцени проходимость, устойчивость конструкций, возможные пути и риски.\n"
+            "Если это предмет: опиши его материал, примерный вес, как его можно использовать или взять в руки.\n"
+            "Отвечай коротко и по делу, как опытный исследователь."
+        )
+        
+        full_prompt = f"{system_prompt}\n\nЗадача от пользователя: {user_add_prompt}" if user_add_prompt else system_prompt
+
+        # 6. Генерируем ответ
+        # Передаем картинку как mime_type data
+        response = robotics_model.generate_content([full_prompt, {"mime_type": "image/jpeg", "data": image_data}])
+        
+        return True, response.text
+
+    except Exception as e:
+        logging.error(f"Ошибка в process_robotics_description: {e}")
+        return False, f"Модуль Robotics выдал ошибку: {e}"
+    finally:
+        # Удаляем файл
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            
 # ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
     """
