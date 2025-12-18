@@ -152,7 +152,7 @@ from dnd import dnd_router
 from voice import handle_voice_command
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-@router.message(F.text.lower() == "упупа какая модель")
+@router.message(F.text.lower() == "какая модель")
 async def check_current_model(message: types.Message):
     await message.reply(model.last_used_model_name)
 
