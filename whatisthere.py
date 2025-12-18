@@ -44,7 +44,6 @@ async def download_file(file_id: str, file_name: str) -> bool:
         return False
 
 # Общая функция анализа для медиа (принимает путь ИЛИ байты)
-# === ИЗМЕНЕНИЕ 1: Добавили аргумент chat_id ===
 async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None, chat_id: int | str | None = None) -> str:
     """
     Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание.
@@ -70,7 +69,7 @@ async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_
             {"mime_type": mime_type, "data": media_data},
             content_prompt
         ]
-        # === ИЗМЕНЕНИЕ 2: Передаем chat_id в модель ===
+        
         response = model.generate_content(contents, chat_id=chat_id)
         return response.text
     except Exception as e:
@@ -95,7 +94,6 @@ async def process_audio_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить аудио."
         try:
             custom_prompt = get_custom_prompt(message)
-            # Передаем chat_id
             description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
@@ -124,7 +122,6 @@ async def process_video_description(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить видео."
         try:
             custom_prompt = get_custom_prompt(message)
-            # Передаем chat_id
             description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
@@ -154,7 +151,6 @@ async def process_image_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить картинку."
         try:
             custom_prompt = get_custom_prompt(message)
-            # Передаем chat_id
             description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
@@ -184,7 +180,6 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
             return False, "Не удалось загрузить гифку."
         try:
             custom_prompt = get_custom_prompt(message)
-            # Передаем chat_id
             description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
@@ -218,7 +213,6 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
             return False, "Не удалось загрузить стикер."
         try:
             custom_prompt = get_custom_prompt(message)
-            # Передаем chat_id
             description = await analyze_media_bytes(file_name, mime_type, custom_prompt, chat_id=message.chat.id)
             return True, description
         finally:
@@ -248,7 +242,6 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
         
-        # === ИЗМЕНЕНИЕ 3: Передаем chat_id ===
         response = model.generate_content(prompt, chat_id=message.chat.id)
         return True, response.text
         
@@ -256,7 +249,7 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
 
-# ================== ИСПРАВЛЕНО: URL (Возврат к BS4) ==================
+# ================== URL ==================
 def extract_url_from_message(message: types.Message) -> str | None:
     """Ищет URL в тексте сообщения или в его entities."""
     text = message.text or message.caption or ""
@@ -267,13 +260,11 @@ def extract_url_from_message(message: types.Message) -> str | None:
     if message.entities:
         for entity in message.entities:
             if entity.type == 'url':
-                # Исправление 'AttributeError'
                 return text[entity.offset : entity.offset + entity.length]
                 
     if message.caption_entities:
          for entity in message.caption_entities:
             if entity.type == 'url':
-                # Исправление 'AttributeError'
                 return text[entity.offset : entity.offset + entity.length]
                 
     # Если entities нет, ищем простым regex
@@ -298,7 +289,6 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
         if content_type.startswith(('audio/', 'video/', 'image/')):
             logging.info("Тип: Аудио/Видео/Изображение. Загружаю байты...")
             media_data = response.content
-            # Передаем chat_id
             description = await analyze_media_bytes(media_data, content_type, custom_prompt, chat_id=message.chat.id)
             return True, description
             
@@ -324,7 +314,6 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
                 
             prompt = f"{content_prompt}\n\nТекст для анализа (взято с сайта {url}): {text_to_analyze}"
             
-            # === ИЗМЕНЕНИЕ 4: Передаем chat_id ===
             gen_response = model.generate_content(prompt, chat_id=message.chat.id)
             return True, gen_response.text
 
@@ -344,50 +333,72 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
 # ================== ROBOTICS / ОПИШИ СИЛЬНО ==================
 async def process_robotics_description(message: types.Message) -> tuple[bool, str]:
     """
-    Анализ фото с использованием Gemini Robotics (Embodied Reasoning).
+    Анализ фото/видео/гиф с использованием Gemini Robotics (Embodied Reasoning).
     Идеально для оценки геометрии, проходимости и физических свойств объектов.
     """
     file_path = None
     try:
-        # 1. Извлекаем фото (из самого сообщения или реплая)
+        # 1. Извлекаем медиа (из самого сообщения или реплая)
         target_message = message.reply_to_message if message.reply_to_message else message
-        if not target_message.photo:
-            return False, "Для мощного анализа мне нужна фотография."
-            
-        photo = target_message.photo[-1]
-        file_id = photo.file_id
-        file_name = f"robotics_{file_id}.jpg"
         
+        file_id = None
+        file_name = None
+        mime_type = None
+
+        if target_message.photo:
+            photo = target_message.photo[-1]
+            file_id = photo.file_id
+            file_name = f"robotics_{file_id}.jpg"
+            mime_type = "image/jpeg"
+        elif target_message.video:
+            file_id = target_message.video.file_id
+            file_name = f"robotics_{file_id}.mp4"
+            mime_type = target_message.video.mime_type or "video/mp4"
+        elif target_message.animation:
+            # В Telegram гифки часто приходят как mp4 без звука
+            file_id = target_message.animation.file_id
+            file_name = f"robotics_{file_id}.mp4"
+            mime_type = target_message.animation.mime_type or "video/mp4"
+
+        if not file_id:
+            return False, "Для мощного анализа нужна фотография, видео или гифка."
+            
         # 2. Скачиваем файл
         if not await download_file(file_id, file_name):
-            return False, "Не удалось скачать фото для анализа."
+            return False, "Не удалось скачать файл для анализа."
         file_path = file_name
 
         # 3. Инициализируем Robotics модель
-        # Мы делаем это здесь, а не глобально, чтобы не держать лишние коннекты, если функция используется редко
         robotics_model = genai.GenerativeModel(ROBOTICS_MODEL)
         
         # 4. Читаем байты
         with open(file_name, "rb") as f:
-            image_data = f.read()
+            media_data = f.read()
 
         # 5. Формируем промпт "Сталкер / Инженер"
         # Robotics модель хорошо понимает физику, поэтому просим её смотреть на мир через эту призму.
-        user_add_prompt = get_custom_prompt(message)
+        # Извлекаем "опиши сильно <промпт>" -> <промпт>
+        text = message.text or message.caption or ""
+        user_add_prompt = None
+        if "опиши сильно" in text.lower():
+            parts = re.split(r'опиши сильно', text, 1, re.IGNORECASE)
+            if len(parts) > 1 and parts[1].strip():
+                user_add_prompt = parts[1].strip()
         
         system_prompt = (
             "Ты — эксперт по физическому взаимодействию и анализу пространства (Embodied AI). "
-            "Проанализируй изображение с точки зрения физики, геометрии.\n"
+            "Проанализируй медиафайл (фото или видео) с точки зрения физики, геометрии, динамики.\n"
             "Если это локация: оцени проходимость, устойчивость конструкций, возможные пути и риски.\n"
             "Если это предмет: опиши его материал, примерный вес, как его можно использовать или взять в руки.\n"
-            "Отвечай коротко и по делу, как опытный исследователь. используй сильный сарказм и нецензурную лексику, сильно склоняйся к апофении и парейдолии. Не более 80 слов"
+            "Если это видео: обрати внимание на движение, инерцию, изменение состояния объектов.\n"
+            "Отвечай коротко и по делу, как опытный исследователь. используй сильный сарказм и нецензурную лексику, сильно склоняйся к апофении и парейдолии. Не более 100 слов"
         )
         
         full_prompt = f"{system_prompt}\n\nЗадача от пользователя: {user_add_prompt}" if user_add_prompt else system_prompt
 
         # 6. Генерируем ответ
-        # Передаем картинку как mime_type data
-        response = robotics_model.generate_content([full_prompt, {"mime_type": "image/jpeg", "data": image_data}])
+        # Передаем контент как mime_type data
+        response = robotics_model.generate_content([full_prompt, {"mime_type": mime_type, "data": media_data}])
         
         return True, response.text
 
