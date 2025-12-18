@@ -523,9 +523,16 @@ async def handle_whatisthere_unified(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.photo and message.caption and "опиши сильно" in message.caption.lower())
+        (
+            (message.photo or message.video or message.animation) and 
+            message.caption and "опиши сильно" in message.caption.lower()
+        )
         or 
-        (message.text and "опиши сильно" in message.text.lower() and message.reply_to_message and message.reply_to_message.photo)
+        (
+            message.text and "опиши сильно" in message.text.lower() and 
+            message.reply_to_message and 
+            (message.reply_to_message.photo or message.reply_to_message.video or message.reply_to_message.animation)
+        )
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_robotics_description(message: types.Message):
@@ -533,7 +540,7 @@ async def handle_robotics_description(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     
     # Отправляем сообщение о начале "тяжелого" анализа
-    processing = await message.reply("Включаю модули пространственного анализа... (Robotics 1.5)")
+    processing = await message.reply("Включаю модули педерастического анализа... (Robotics 1.5)")
     
     success, response = await process_robotics_description(message)
     
