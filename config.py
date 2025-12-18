@@ -185,8 +185,8 @@ model = ModelFallbackWrapper(MODEL_QUEUE_DEFAULT, MODEL_QUEUE_SPECIAL)
 search_model = genai.GenerativeModel('gemini-2.5-flash') 
 image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-
 TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
+ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
 
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
