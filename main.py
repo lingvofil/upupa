@@ -431,8 +431,8 @@ async def handle_location_start(message: Message):
     try:
         raw = message.text[len("упупа локация"):].strip()
         if "|" not in raw:
-        await message.reply("Формат, долбоёб:\nупупа локация <адрес> | <что искать>")
-        return
+            await message.reply("Формат, долбоёб:\nупупа локация <адрес> | <что искать>")
+            return
         address, user_request = map(str.strip, raw.split("|", 1))
         await message.reply("Ща посмотрю, не ссы…")
         result = await process_location_search(address, user_request)
