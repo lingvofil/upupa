@@ -523,18 +523,6 @@ async def handle_whatisthere_unified(message: types.Message):
 
 @router.message(lambda message: 
     (
-        (message.photo and message.caption and "опиши" in message.caption.lower())
-        or 
-        (message.text and "опиши" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
-    ) and message.from_user.id not in BLOCKED_USERS
-)
-async def describe_image(message: types.Message):
-    random_action = random.choice(actions)
-    success, response = await process_image_description(bot, message)
-    await message.reply(response)
-
-@router.message(lambda message: 
-    (
         (message.photo and message.caption and "опиши сильно" in message.caption.lower())
         or 
         (message.text and "опиши сильно" in message.text.lower() and message.reply_to_message and message.reply_to_message.photo)
@@ -550,6 +538,18 @@ async def handle_robotics_description(message: types.Message):
     success, response = await process_robotics_description(message)
     
     await processing.delete()
+    await message.reply(response)
+
+@router.message(lambda message: 
+    (
+        (message.photo and message.caption and "опиши" in message.caption.lower())
+        or 
+        (message.text and "опиши" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def describe_image(message: types.Message):
+    random_action = random.choice(actions)
+    success, response = await process_image_description(bot, message)
     await message.reply(response)
 
 @router.message(
