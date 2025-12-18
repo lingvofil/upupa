@@ -64,7 +64,8 @@ from adddescribe import (
 # ================== БЛОК 3.9: НАСТРОЙКА ЧОТАМ ==================
 from whatisthere import (
     process_whatisthere_unified,
-    get_processing_message
+    get_processing_message,
+    process_robotics_description
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
@@ -530,6 +531,25 @@ async def handle_whatisthere_unified(message: types.Message):
 async def describe_image(message: types.Message):
     random_action = random.choice(actions)
     success, response = await process_image_description(bot, message)
+    await message.reply(response)
+
+@router.message(lambda message: 
+    (
+        (message.photo and message.caption and "опиши сильно" in message.caption.lower())
+        or 
+        (message.text and "опиши сильно" in message.text.lower() and message.reply_to_message and message.reply_to_message.photo)
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_robotics_description(message: types.Message):
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    
+    # Отправляем сообщение о начале "тяжелого" анализа
+    processing = await message.reply("Включаю модули пространственного анализа... (Robotics 1.5)")
+    
+    success, response = await process_robotics_description(message)
+    
+    await processing.delete()
     await message.reply(response)
 
 @router.message(
