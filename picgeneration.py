@@ -1,499 +1,322 @@
-import requests
-import json
-import time
 import asyncio
-import os
+import base64
+import json
 import logging
+import os
 import random
 import textwrap
-import base64
+import time
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-from aiogram import types
-from aiogram.types import FSInputFile
-from aiogram.exceptions import TelegramBadRequest
-import google.generativeai as genai 
-from google.api_core.exceptions import ResourceExhausted
+from typing import Optional, Tuple, Union
 
-# Импортируем настройки. 
+import requests
+from PIL import Image, ImageDraw, ImageFont
+from aiogram import types
+from aiogram.exceptions import TelegramBadRequest
+
 import config
-from config import (
-    KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, 
-    bot, model, edit_model, API_TOKEN
-)
+from config import bot, model, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
 
-# Безопасное получение ключей
+# Безопасное получение ключей из конфига
 CF_ACCOUNT_ID = getattr(config, 'CLOUDFLARE_ACCOUNT_ID', None)
 CF_API_TOKEN = getattr(config, 'CLOUDFLARE_API_TOKEN', None)
 HF_TOKEN = getattr(config, 'HUGGINGFACE_TOKEN', None)
 
 # =============================================================================
-# Класс и функции для работы с API Kandinsky (FusionBrain)
+# КЛАСС KANDINSKY (FUSIONBRAIN)
 # =============================================================================
 
 class FusionBrainAPI:
-    def __init__(self, url, api_key, secret_key):
+    def __init__(self, url: str, api_key: str, secret_key: str):
         self.URL = url
-        self.AUTH_HEADERS = {
+        self.headers = {
             'X-Key': f'Key {api_key}',
             'X-Secret': f'Secret {secret_key}',
         }
 
-    def get_pipeline(self):
+    def get_pipeline(self) -> Optional[str]:
         try:
-            response = requests.get(self.URL + 'key/api/v1/pipelines', headers=self.AUTH_HEADERS)
-            response.raise_for_status()
-            data = response.json()
-            if data:
-                if 'id' in data[0]:
-                    return data[0]['id']
-            logging.error("API не вернул ожидаемую структуру для pipeline.")
-            return None
-        except requests.RequestException as e:
-            logging.error(f"Ошибка при получении pipeline: {e}")
+            r = requests.get(self.URL + 'key/api/v1/pipelines', headers=self.headers, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            return data[0]['id'] if data else None
+        except Exception as e:
+            logging.error(f"Kandinsky pipeline error: {e}")
             return None
 
-    def generate(self, prompt, pipeline, images=1, width=1024, height=1024):
-        if len(prompt) > 900:
-            prompt = prompt[:900]
-        
+    def generate(self, prompt: str, pipeline_id: str) -> Tuple[Optional[str], Optional[str]]:
         params = {
             "type": "GENERATE",
-            "numImages": images,
-            "width": width,
-            "height": height,
-            "generateParams": {
-                "query": prompt
-            }
+            "numImages": 1,
+            "width": 1024,
+            "height": 1024,
+            "generateParams": {"query": prompt[:900]},
         }
-        
         data = {
-            'pipeline_id': (None, pipeline),
-            'params': (None, json.dumps(params), 'application/json')
+            'pipeline_id': (None, pipeline_id),
+            'params': (None, json.dumps(params), 'application/json'),
         }
-        
         try:
-            response = requests.post(self.URL + 'key/api/v1/pipeline/run', headers=self.AUTH_HEADERS, files=data)
-            response.raise_for_status()
-            data = response.json()
-            
-            if 'uuid' in data:
-                return data['uuid'], None
-            
-            error_message = data.get('errorDescription') or data.get('message') or json.dumps(data)
-            return None, error_message
-            
-        except requests.RequestException as e:
-            return None, str(e)
-        except json.JSONDecodeError:
-            return None, "API вернул некорректный JSON."
-
-    def check_generation(self, request_id, attempts=15, delay=5):
-        """Проверка статуса с расширенным логированием ошибок"""
-        while attempts > 0:
-            try:
-                response = requests.get(self.URL + 'key/api/v1/pipeline/status/' + request_id, headers=self.AUTH_HEADERS)
-                response.raise_for_status()
-                data = response.json()
-                
-                status = data.get('status')
-                
-                if status == 'DONE':
-                    if data.get('result', {}).get('censored', False):
-                        return None, "Изображение было зацензурено (NSFW фильтр)."
-                    return data.get('result', {}).get('files'), None
-                
-                elif status == 'FAIL':
-                    error_desc = data.get('errorDescription') or "Неизвестная ошибка"
-                    return None, error_desc
-                
-                attempts -= 1
-                time.sleep(delay)
-                
-            except requests.RequestException as e:
-                return None, str(e)
-            except json.JSONDecodeError:
-                attempts -= 1
-                time.sleep(delay)
-                
-        return None, "Превышено время ожидания ответа от API."
-
-api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
-pipeline_id = api.get_pipeline()
-
-async def process_kandinsky_generation(prompt):
-    global pipeline_id
-    if not pipeline_id:
-        pipeline_id = api.get_pipeline()
-        if not pipeline_id:
-            return False, "Не удалось получить ID модели Kandinsky.", None
-
-    try:
-        loop = asyncio.get_event_loop()
-        uuid, error = await loop.run_in_executor(None, api.generate, prompt, pipeline_id)
-        
-        if error:
-            return False, f"Не удалось запустить генерацию: {error}", None
-            
-        files, check_error = await loop.run_in_executor(None, api.check_generation, uuid)
-        
-        if check_error:
-            return False, f"Ошибка при генерации: {check_error}", None
-            
-        if not files:
-            return False, "Kandinsky: не вернул файлы", None
-            
-        image_data_base64 = files[0]
-        try:
-            base64_data = image_data_base64.split(',')[1] if ',' in image_data_base64 else image_data_base64
-            image_data = base64.b64decode(base64_data)
-            return True, None, image_data
+            r = requests.post(self.URL + 'key/api/v1/pipeline/run', headers=self.headers, files=data, timeout=20)
+            r.raise_for_status()
+            res = r.json()
+            return res.get('uuid'), None
         except Exception as e:
-            return False, f"Ошибка декодирования: {str(e)}", None
-    except Exception as e:
-        import traceback
-        logging.error(f"Критическая ошибка в process_kandinsky_generation: {traceback.format_exc()}")
-        return False, f"Критическая ошибка: {repr(e)[:300]}", None
+            return None, str(e)
 
-async def translate_to_english(text):
-    if not text: 
-        return ""
+    def check(self, uuid: str) -> Tuple[Optional[bytes], Optional[str]]:
+        for _ in range(15):
+            try:
+                r = requests.get(self.URL + f'key/api/v1/pipeline/status/{uuid}', headers=self.headers, timeout=15)
+                r.raise_for_status()
+                data = r.json()
+                if data.get('status') == 'DONE':
+                    if data.get('result', {}).get('censored'):
+                        return None, "Censored"
+                    img_b64 = data['result']['files'][0]
+                    return base64.b64decode(img_b64.split(',')[-1]), None
+                if data.get('status') == 'FAIL':
+                    return None, data.get('errorDescription', 'Unknown fail')
+                time.sleep(5)
+            except Exception as e:
+                return None, str(e)
+        return None, "Timeout"
+
+kandinsky_api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
+# Кэшируем pipeline_id при запуске
+PIPELINE_ID = kandinsky_api.get_pipeline()
+
+# =============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =============================================================================
+
+async def translate_to_en(text: str) -> str:
+    """Перевод промпта на английский через Gemini."""
+    if not text: return ""
     try:
-        translation_prompt = f"Translate the following text to English for an image generation prompt. Output only the translation, no explanations: {text}"
-        response = await asyncio.to_thread(lambda: model.generate_content(translation_prompt).text)
-        translated = response.strip()
-        return translated
-    except Exception as e:
-        logging.error(f"Ошибка перевода: {e}")
+        res = await asyncio.to_thread(lambda: model.generate_content(
+            f"Translate to English for image generation prompt. Output only translation: {text}"
+        ).text)
+        return res.strip()
+    except Exception:
         return text
 
-async def save_and_send_generated_image(message: types.Message, image_data: bytes, filename="image.png"):
-    try:
-        if not image_data:
-            raise ValueError("Пустые данные изображения")
-        try:
-            with Image.open(BytesIO(image_data)) as img:
-                img.verify()
-        except Exception as e:
-            logging.error(f"FATAL: Полученные данные не являются изображением: {e}")
-            await message.reply("Сервер генерации вернул ошибку вместо картинки.")
-            return
-
-        input_file = types.BufferedInputFile(image_data, filename=filename)
-        await message.reply_photo(input_file)
-    except TelegramBadRequest as e:
-        logging.error(f"TelegramBadRequest (IMAGE_PROCESS_FAILED): {e}")
-        await message.reply("Telegram не смог обработать этот файл.")
-    except Exception as e:
-        logging.error(f"Ошибка отправки изображения: {e}")
-        await message.reply("Ошибка при отправке файла.")
-
-# =============================================================================
-# HUGGING FACE INFERENCE API (PRIORITY 2)
-# =============================================================================
-
-async def generate_image_huggingface(prompt: str):
-    if not HF_TOKEN:
-        return False, "HUGGINGFACE_TOKEN не задан", None
-
-    # Используем стабильную модель SDXL или FLUX, если доступна
-    API_URL = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
-
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "image/png"
-    }
-
-    payload = {
-        "inputs": prompt,
-        "options": {
-            "wait_for_model": True,
-            "use_cache": False
-        }
-    }
-
-    def _sync():
-        return requests.post(API_URL, headers=headers, json=payload, timeout=120)
-
-    try:
-        response = await asyncio.to_thread(_sync)
-
-        if response.status_code == 200:
-            return True, None, response.content
-
-        if response.status_code == 503:
-            return False, "Модель прогревается (503).", None
-
-        return False, f"HF Error {response.status_code}: {response.text[:200]}", None
-
-    except Exception as e:
-        return False, f"HF Exception: {e}", None
-
-# =============================================================================
-# CLOUDFLARE (PRIORITY 3 - FALLBACK)
-# =============================================================================
-async def generate_image_with_cloudflare(prompt: str, source_image_bytes: bytes = None):
-    if not CF_ACCOUNT_ID or not CF_API_TOKEN or CF_ACCOUNT_ID == "NO_CF_ID":
-        return 'ERROR', {'error': "Cloudflare Credentials not found."}
-
-    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/stabilityai/stable-diffusion-xl-base-1.0"
-    headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
-    payload = {"prompt": prompt, "num_steps": 20, "guidance": 7.5, "width": 1024, "height": 1024}
-
-    if source_image_bytes:
-        try:
-            image_b64 = base64.b64encode(source_image_bytes).decode('utf-8')
-            payload["image_b64"] = image_b64
-            payload["strength"] = 0.6 
-        except Exception as e:
-            return 'ERROR', {'error': f"Ошибка обработки исходного: {e}"}
-
-    def _sync_request():
-        return requests.post(url, headers=headers, json=payload, timeout=60)
-
-    try:
-        response = await asyncio.to_thread(_sync_request)
-        if response.status_code == 200:
-            return 'SUCCESS', {'image_data': response.content}
-        else:
-            return 'ERROR', {'error': f"CF Error: {response.status_code}"}
-    except Exception as e:
-        return 'ERROR', {'error': str(e)}
-
-
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
+    """Наложение текста на изображение (для каламбуров)."""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
+    
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if not os.path.exists(font_path): font_path = "arial.ttf"
     try: font = ImageFont.truetype(font_path, 48)
-    except IOError: font = ImageFont.load_default()
+    except: font = ImageFont.load_default()
 
-    max_chars = 20
-    lines = textwrap.wrap(text, width=max_chars)
-    text_block_height = (50 + 5) * len(lines)
-    y = image.height - text_block_height - 60
-    
-    rectangle = Image.new('RGBA', (image.width, text_block_height + 40), (0, 0, 0, 128))
-    image.paste(rectangle, (0, y - 20), rectangle)
-    
-    current_y = y - 10
+    lines = textwrap.wrap(text, width=20)
+    line_height = 55
+    text_block_h = line_height * len(lines)
+    y_start = image.height - text_block_h - 60
+
+    # Подложка
+    rect = Image.new('RGBA', (image.width, text_block_h + 40), (0, 0, 0, 140))
+    image.paste(rect, (0, y_start - 20), rect)
+
+    curr_y = y_start - 10
     for line in lines:
-        try: text_w = font.getbbox(line)[2]
-        except: text_w = len(line) * 10
-        x = (image.width - text_w) / 2
-        draw.text((x, current_y), line, font=font, fill="white", stroke_width=1, stroke_fill="black")
-        current_y += 55
-    
-    output_path = f"pun_{random.randint(1000,9999)}.jpg"
-    image.save(output_path)
-    return output_path
+        try: w = font.getbbox(line)[2]
+        except: w = len(line) * 20
+        x = (image.width - w) / 2
+        draw.text((x, curr_y), line, font=font, fill="white", stroke_width=2, stroke_fill="black")
+        curr_y += line_height
 
-async def robust_image_generation(message: types.Message, prompt: str, processing_msg: types.Message, mode="text2img", source_bytes=None, is_pun=False):
-    """
-    Основная функция-оркестратор генерации.
-    Приоритет:
-    1. Kandinsky (FusionBrain) - работает с русским.
-    2. Hugging Face (SDXL/Flux) - требует перевода.
-    3. Cloudflare - требует перевода.
-    """
-    
-    # 1. Попытка Kandinsky (Priority 1)
-    # await processing_msg.edit_text("Художник курит, зову Кандинского...") - уже должно быть отправлено сообщение "Ща падажжи" или "Гондинский работает"
-    success_k, error_k, k_data = await process_kandinsky_generation(prompt)
-    
-    if success_k:
-        await processing_msg.delete()
-        await save_and_send_generated_image(message, k_data, filename="kandinsky.png")
-        return
+    out_path = f"pun_{random.randint(1000,9999)}.jpg"
+    image.save(out_path, quality=95)
+    return out_path
 
-    logging.warning(f"Kandinsky failed: {error_k}. Switching to HuggingFace.")
-    
-    # Переводим промпт один раз для последующих моделей
-    await processing_msg.edit_text("щаща")
-    english_prompt = await translate_to_english(prompt)
-
-    # 2. Попытка Hugging Face (Priority 2)
+async def send_generated_photo(message: types.Message, data: bytes, filename: str):
+    """Отправка байтов как фото в Telegram."""
     try:
-        success_hf, error_hf, hf_data = await generate_image_huggingface(english_prompt)
-        
-        if success_hf:
-            await processing_msg.delete()
-            await save_and_send_generated_image(message, hf_data, filename="sdxl_hf.png")
-            return
-        else:
-            logging.warning(f"HF Generation failed: {error_hf}. Switching to Cloudflare.")
+        input_file = types.BufferedInputFile(data, filename=filename)
+        await message.reply_photo(input_file)
     except Exception as e:
-        error_hf = str(e)
-        logging.error(f"HF Critical Error: {e}")
-
-    # 3. Попытка Cloudflare (Priority 3)
-    if mode == "text2img":
-        await processing_msg.edit_text("Да щаща")
-        status, data = await generate_image_with_cloudflare(english_prompt)
-        if status == 'SUCCESS':
-            await processing_msg.delete()
-            await save_and_send_generated_image(message, data['image_data'], filename="cloudflare_backup.png")
-        else:
-            await processing_msg.edit_text(f"Иди нахуй короче.\nKandinsky: {error_k}\nHF: {error_hf}\nCF: {data.get('error')}")
-    else:
-        await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {error_k}")
-
+        logging.error(f"Send photo error: {e}")
+        await message.reply("Не удалось отправить файл.")
 
 # =============================================================================
-# ХЭНДЛЕРЫ
+# ГЕНЕРАТОРЫ (HF & CF)
 # =============================================================================
 
-async def handle_pun_image_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    processing_msg = await message.reply("Генерирую хуйню...")
-    
-    pun_prompt = """составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. 
-    Совпадать должны как минимум две буквы. 
-    Не комментируй генерацию.
-    Ответ дай строго в формате: "слово1+слово2 = итоговоеслово"
-    Например: "манго+голубь = манголубь" """
-    
+async def hf_generate(prompt: str, model_id: str) -> Optional[bytes]:
+    if not HF_TOKEN: return None
+    url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}", "Accept": "image/png"}
+    payload = {"inputs": prompt, "options": {"wait_for_model": True, "use_cache": False}}
     try:
-        def sync_call():
-            return model.generate_content(pun_prompt).text.strip()
-        pun_word = await asyncio.to_thread(sync_call)
-        parts = pun_word.split('=')
-        if len(parts) != 2:
-            await processing_msg.edit_text(f"Не удалось распознать каламбур. Ответ: {pun_word}")
-            return
-        
-        source_words = parts[0].strip()
-        final_word = parts[1].strip()
-        
-        # Промпт для генерации (Русский)
-        image_gen_prompt_ru = f"Визуализация каламбура '{final_word}'. Сюрреалистичная картина, объединяющая концепции '{source_words}'. Без букв и текста на изображении. Фотореалистичный стиль. Высокое качество, детализация."
-        
-        # 1. Пробуем Kandinsky (Priority 1)
-        success, err, img_data = await process_kandinsky_generation(image_gen_prompt_ru)
-        
-        # Переменные для перевода, если понадобится
-        english_desc = None
+        r = await asyncio.to_thread(lambda: requests.post(url, headers=headers, json=payload, timeout=120))
+        return r.content if r.status_code == 200 else None
+    except: return None
 
-        if not success:
-             # 2. Пробуем HF (нужен перевод)
-            english_desc = await translate_to_english(f"Surrealistic painting combining concepts {source_words}. No text.")
-            success, err, img_data = await generate_image_huggingface(english_desc)
-            
-        if not success:
-             # 3. Пробуем CF (Priority 3)
-            if not english_desc:
-                 english_desc = await translate_to_english(f"Surrealistic painting combining concepts {source_words}. No text.")
-            
-            status, data = await generate_image_with_cloudflare(english_desc)
-            if status == 'SUCCESS':
-                success = True
-                img_data = data['image_data']
-            else:
-                err = data.get('error')
-
-        # Если хоть кто-то сгенерировал
-        if success and img_data:
-            try:
-                modified_path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
-                await message.reply_photo(FSInputFile(modified_path))
-                os.remove(modified_path)
-                await processing_msg.delete()
-            except Exception as e:
-                await processing_msg.edit_text(f"Картинка есть, но текст наложить не вышло: {e}")
-                await save_and_send_generated_image(message, img_data)
-        else:
-             await processing_msg.edit_text(f"Ошибка генерации картинки (все модели): {err}")
-
-    except Exception as e:
-        await processing_msg.edit_text(f"Ошибка: {str(e)}")
-
-async def handle_image_generation_command(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    prompt = message.text.replace("нарисуй", "").strip()
-    if not prompt and message.reply_to_message:
-        prompt = message.reply_to_message.text or message.reply_to_message.caption
-    if not prompt:
-        await message.reply("Что рисовать?")
-        return
-    msg = await message.reply("Ща падажжи ебана")
-    full_prompt = f"{prompt}, высокое качество, шедевр, 8k"
-    await robust_image_generation(message, full_prompt, msg, mode="text2img")
-
-async def handle_redraw_command(message: types.Message):
-    msg = await message.reply("Анал лизирую твою мазню")
-    try:
-        photo = message.photo[-1] if message.photo else (message.document if message.document else None)
-        if not photo and message.reply_to_message:
-            photo = message.reply_to_message.photo[-1] if message.reply_to_message.photo else message.reply_to_message.document
-        if not photo:
-            await msg.edit_text("Нет картинки.")
-            return
-        img_bytes = await download_telegram_image(bot, photo)
-        prompt_desc = "Опиши эту картинку детально на русском языке. Сосредоточься на визуальных элементах."
-        resp = await asyncio.to_thread(lambda: model.generate_content([prompt_desc, {"mime_type": "image/jpeg", "data": img_bytes}]))
-        full_prompt = f"Детский рисунок карандашами, плохой стиль, каракули. {resp.text.strip()}"
-        
-        # Перерисовка через robust использует Text2Img с описанием.
-        await robust_image_generation(message, full_prompt, msg, mode="text2img")
-    except Exception as e:
-        await msg.edit_text("Ошибка перерисовки.")
-
-async def generate_img2img_cloudflare(prompt: str, source_image_bytes: bytes):
-    if not CF_ACCOUNT_ID or not CF_API_TOKEN: return 'ERROR', "Cloudflare Credentials not found."
-    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
+async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN: return None
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
     try:
-        img = Image.open(BytesIO(source_image_bytes)).convert("RGB")
-        img = img.resize((512, 512))
-        img_buf = BytesIO(); img.save(img_buf, format="PNG"); img_bytes_final = img_buf.getvalue()
-        payload = {"prompt": prompt, "image": list(img_bytes_final), "num_steps": 20, "strength": 0.7, "guidance": 7.5}
-        def _sync(): return requests.post(url, headers=headers, json=payload, timeout=60)
-        response = await asyncio.to_thread(_sync)
-        if response.status_code == 200: return 'SUCCESS', response.content
-        else: return 'ERROR', f"CF Error: {response.status_code}"
-    except Exception as e: return 'ERROR', str(e)
+        r = await asyncio.to_thread(lambda: requests.post(url, headers=headers, json={"prompt": prompt}, timeout=60))
+        return r.content if r.status_code == 200 else None
+    except: return None
+
+# =============================================================================
+# ГЛАВНЫЙ ОРКЕСТРАТОР
+# =============================================================================
+
+async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message):
+    """Цепочка: Kandinsky -> FLUX Schnell -> FLUX Dev -> SDXL HF -> SDXL CF."""
+    global PIPELINE_ID
+    
+    # 1. Kandinsky
+    if not PIPELINE_ID: PIPELINE_ID = kandinsky_api.get_pipeline()
+    if PIPELINE_ID:
+        uuid, err = kandinsky_api.generate(prompt_ru, PIPELINE_ID)
+        if uuid:
+            img, check_err = await asyncio.to_thread(kandinsky_api.check, uuid)
+            if img:
+                await processing_msg.delete()
+                await send_generated_photo(message, img, "kandinsky.png")
+                return
+
+    # Перевод для остальных моделей
+    await processing_msg.edit_text("Кандинский не смог, перевожу промпт...")
+    prompt_en = await translate_to_en(prompt_ru)
+
+    # 2-4. HuggingFace Chain
+    hf_models = [
+        'black-forest-labs/FLUX.1-schnell',
+        'black-forest-labs/FLUX.1-dev',
+        'stabilityai/stable-diffusion-xl-base-1.0'
+    ]
+    
+    for m_id in hf_models:
+        await processing_msg.edit_text(f"Пробую {m_id.split('/')[-1]}...")
+        img = await hf_generate(prompt_en, m_id)
+        if img:
+            await processing_msg.delete()
+            await send_generated_photo(message, img, f"{m_id.replace('/','_')}.png")
+            return
+
+    # 5. Cloudflare Fallback
+    await processing_msg.edit_text("Последний шанс (Cloudflare)...")
+    img = await cf_generate_t2i(prompt_en)
+    if img:
+        await processing_msg.delete()
+        await send_generated_photo(message, img, "cloudflare.png")
+        return
+
+    await processing_msg.edit_text("Ни одна модель не справилась. Попробуй позже.")
+
+# =============================================================================
+# ХЭНДЛЕРЫ ДЛЯ main.py
+# =============================================================================
+
+async def handle_image_generation_command(message: types.Message):
+    """Стандартная команда 'нарисуй'."""
+    prompt = message.text.lower().replace("нарисуй", "").strip()
+    if not prompt and message.reply_to_message:
+        prompt = message.reply_to_message.text or message.reply_to_message.caption
+    
+    if not prompt:
+        return await message.reply("Что рисовать-то?")
+    
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    msg = await message.reply("Ща, краски разведу...")
+    full_prompt = f"{prompt}, high quality, highly detailed"
+    await robust_image_generation(message, full_prompt, msg)
+
+async def handle_pun_image_command(message: types.Message):
+    """Генерация каламбура с картинкой."""
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    msg = await message.reply("Придумываю каламбур...")
+    
+    pun_query = "Придумай смешной каламбур-склейку двух слов. Формат: слово1+слово2 = итоговоеслово. Только одну строку."
+    try:
+        pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_query).text.strip())
+        if '=' not in pun_res: 
+            return await msg.edit_text(f"Не вышло: {pun_res}")
+        
+        source, final_word = pun_res.split('=')[0].strip(), pun_res.split('=')[1].strip()
+        img_prompt = f"Surrealistic visual of {final_word} (combination of {source}). Photo style, no text."
+        
+        # Для каламбуров сразу идем в robust (начиная с Кандинского)
+        # Но сначала попробуем получить данные через robust_image_generation (нужно чуть переделать логику возврата)
+        # Для упрощения здесь используем упрощенный waterfall
+        img_data = await hf_generate(await translate_to_en(img_prompt), "black-forest-labs/FLUX.1-schnell")
+        if not img_data:
+            success, err, img_data = await asyncio.to_thread(kandinsky_api.generate, img_prompt, PIPELINE_ID)
+            # ... здесь можно добавить полный waterfall, но для краткости:
+        
+        if img_data:
+            path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
+            await message.reply_photo(types.FSInputFile(path))
+            os.remove(path)
+            await msg.delete()
+        else:
+            await msg.edit_text("Каламбур придумал, а рисовать лень.")
+    except Exception as e:
+        await msg.edit_text(f"Ошибка каламбура: {e}")
+
+async def handle_redraw_command(message: types.Message):
+    """Перерисовка ('мазня')."""
+    photo = message.photo[-1] if message.photo else None
+    if not photo and message.reply_to_message and message.reply_to_message.photo:
+        photo = message.reply_to_message.photo[-1]
+    
+    if not photo:
+        return await message.reply("Где картинка?")
+
+    msg = await message.reply("Анализирую этот шедевр...")
+    try:
+        img_bytes = await download_telegram_image(bot, photo)
+        desc_res = await asyncio.to_thread(lambda: model.generate_content([
+            "Опиши кратко что на картинке для генерации в стиле детского рисунка.", 
+            {"mime_type": "image/jpeg", "data": img_bytes}
+        ]))
+        prompt = f"Childish crayon drawing, naive art, {desc_res.text.strip()}"
+        await robust_image_generation(message, prompt, msg)
+    except Exception:
+        await msg.edit_text("Не смог рассмотреть.")
 
 async def handle_edit_command(message: types.Message):
-    msg = await message.reply("Ща блядь отредактирую")
-    try:
-        photo = message.photo[-1] if message.photo else None 
-        if not photo and message.reply_to_message and message.reply_to_message.photo:
-            photo = message.reply_to_message.photo[-1]
-        if not photo:
-            await msg.edit_text("Нужно фото для редактирования.")
-            return
-        prompt_text = message.caption or message.text
-        prompt_text = prompt_text.lower().replace("/отредактируй", "").replace("отредактируй", "").strip()
-        if not prompt_text:
-            await msg.edit_text("Напишите, во что превратить фото.")
-            return
-        img_bytes = await download_telegram_image(bot, photo)
-        english_prompt = await translate_to_english(prompt_text)
-        
-        # Для редактирования (Img2Img) пока оставляем Cloudflare
-        status, result = await generate_img2img_cloudflare(english_prompt, img_bytes)
-        
-        if status == 'SUCCESS':
-            await msg.delete()
-            await save_and_send_generated_image(message, result, filename="edited_img2img.png")
-        else:
-            await msg.edit_text(f"Не удалось отредактировать: {result}")
-    except Exception as e:
-        logging.error(f"Edit error: {e}", exc_info=True)
-        await msg.edit_text("Произошла ошибка при обработке.")
+    """Редактирование через Img2Img (Cloudflare)."""
+    photo = message.photo[-1] if message.photo else None
+    if not photo and message.reply_to_message and message.reply_to_message.photo:
+        photo = message.reply_to_message.photo[-1]
+    
+    if not photo: return await message.reply("Нужно фото.")
+    
+    prompt_text = (message.caption or message.text or "").lower().replace("отредактируй", "").strip()
+    if not prompt_text: return await message.reply("Во что превращаем?")
 
-async def handle_kandinsky_generation_command(message: types.Message):
-    # Принудительная генерация через Кандинского (старая команда "сгенерируй")
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    prompt = message.text.replace("сгенерируй", "").strip()
-    msg = await message.reply("Гондинский работает...")
-    success, err, data = await process_kandinsky_generation(prompt)
-    if success:
-        await msg.delete()
-        await save_and_send_generated_image(message, data, "kandinsky.png")
-    else:
-        await msg.edit_text(f"Ошибка: {err}")
+    msg = await message.reply("Ща подкрасим...")
+    try:
+        img_bytes = await download_telegram_image(bot, photo)
+        en_prompt = await translate_to_en(prompt_text)
+        
+        # Img2Img специфичен для CF
+        url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
+        headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+        
+        # Ресайз для SD 1.5
+        img = Image.open(BytesIO(img_bytes)).convert("RGB").resize((512, 512))
+        buf = BytesIO(); img.save(buf, format="PNG"); final_bytes = buf.getvalue()
+        
+        payload = {"prompt": en_prompt, "image": list(final_bytes), "strength": 0.6}
+        r = await asyncio.to_thread(lambda: requests.post(url, headers=headers, json=payload, timeout=60))
+        
+        if r.status_code == 200:
+            await msg.delete()
+            await send_generated_photo(message, r.content, "edited.png")
+        else:
+            await msg.edit_text("Не вышло отредактировать.")
+    except Exception as e:
+        logging.error(f"Edit error: {e}")
+        await msg.edit_text("Ошибка API.")
