@@ -241,25 +241,53 @@ async def handle_kandinsky_generation_command(message: types.Message):
     await msg.edit_text(f"Кандинский не смог: {err or 'неизвестная ошибка'}")
 
 async def handle_pun_image_command(message: types.Message):
+    """Команда для генерации каламбура с картинкой"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    msg = await message.reply("Придумываю каламбур...")
+    msg = await message.reply("Ща обожди")
     try:
-        pun_res = await asyncio.to_thread(lambda: model.generate_content("Придумай каламбур-склейку. Формат: слово1+слово2 = итоговоеслово.").text.strip())
-        if '=' not in pun_res: return await msg.edit_text(f"Не вышло: {pun_res}")
+        # Новый системный промпт
+        pun_prompt = (
+            "составь каламбурное сочетание слов в одном слове. должно быть пересечение конца первого слова с началом второго. "
+            "Совпадать должны как минимум две буквы. "
+            "Не комментируй генерацию. "
+            "Ответ дай строго в формате: \"слово1+слово2 = итоговоеслово\" "
+            "Например: \"манго+голубь = манголубь\""
+        )
+        
+        pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt).text.strip())
+        
+        # Очистка от возможных лишних символов (кавычки и т.д.)
+        pun_res = pun_res.replace('"', '').replace("'", "").strip()
+        
+        if '=' not in pun_res: 
+            return await msg.edit_text(f"Не вышло составить каламбур: {pun_res}")
+            
         parts = pun_res.split('=')
         source, final_word = parts[0].strip(), parts[1].strip()
-        prompt_en = await translate_to_en(f"Visual of {final_word} ({source}). Surreal art, no text.")
+        
+        # Генерируем описание для промпта
+        prompt_en = await translate_to_en(f"A creative surreal visual of {final_word} which is a mix of {source}. High quality art, no text on image.")
+        
         img_data = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
+        
         if not img_data:
+            global PIPELINE_ID
+            if not PIPELINE_ID: PIPELINE_ID = kandinsky_api.get_pipeline()
             uuid, _ = kandinsky_api.generate(f"Каламбур {final_word}, {source}", PIPELINE_ID)
             if uuid: img_data, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
+            
         if img_data:
+            # Накладываем текст каламбура на картинку
             path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
             await message.reply_photo(types.FSInputFile(path))
             os.remove(path)
             await msg.delete()
-        else: await msg.edit_text("Рисовать лень.")
-    except Exception as e: await msg.edit_text(f"Ошибка: {e}")
+        else: 
+            await msg.edit_text(f"Каламбур: {pun_res}\nНо нарисовать не получилось.")
+            
+    except Exception as e: 
+        logging.error(f"Error in handle_pun_image_command: {e}")
+        await msg.edit_text(f"Ошибка: {e}")
 
 async def handle_redraw_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
