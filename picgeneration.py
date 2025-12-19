@@ -313,7 +313,7 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
     logging.warning(f"Kandinsky failed: {error_k}. Switching to HuggingFace.")
     
     # Переводим промпт один раз для последующих моделей
-    await processing_msg.edit_text("Кандинский не смог, зову новую модель...")
+    await processing_msg.edit_text("щаща")
     english_prompt = await translate_to_english(prompt)
 
     # 2. Попытка Hugging Face (Priority 2)
@@ -332,13 +332,13 @@ async def robust_image_generation(message: types.Message, prompt: str, processin
 
     # 3. Попытка Cloudflare (Priority 3)
     if mode == "text2img":
-        await processing_msg.edit_text("Все модные нейронки сломались, бужу Клаудфлеер...")
+        await processing_msg.edit_text("Да щаща")
         status, data = await generate_image_with_cloudflare(english_prompt)
         if status == 'SUCCESS':
             await processing_msg.delete()
             await save_and_send_generated_image(message, data['image_data'], filename="cloudflare_backup.png")
         else:
-            await processing_msg.edit_text(f"Все художники в запое.\nKandinsky: {error_k}\nHF: {error_hf}\nCF: {data.get('error')}")
+            await processing_msg.edit_text(f"Иди нахуй короче.\nKandinsky: {error_k}\nHF: {error_hf}\nCF: {data.get('error')}")
     else:
         await processing_msg.edit_text(f"Не удалось обработать изображение.\nОшибка: {error_k}")
 
