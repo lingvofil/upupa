@@ -19,7 +19,7 @@ from config import bot, model, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKE
 from prompts import actions
 from adddescribe import download_telegram_image
 
-# Настройка логирования (если не настроено в main.py)
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Безопасное получение ключей из конфига
@@ -95,7 +95,6 @@ PIPELINE_ID = kandinsky_api.get_pipeline()
 # =============================================================================
 
 async def translate_to_en(text: str) -> str:
-    """Перевод промпта через Gemini."""
     if not text: return ""
     try:
         res = await asyncio.to_thread(lambda: model.generate_content(
@@ -106,22 +105,17 @@ async def translate_to_en(text: str) -> str:
         return text
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
-    """Наложение текста для каламбуров."""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
-    
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if not os.path.exists(font_path): font_path = "arial.ttf"
     try: font = ImageFont.truetype(font_path, 48)
     except: font = ImageFont.load_default()
-
     lines = textwrap.wrap(text, width=20)
     line_h = 55
     y_start = image.height - (line_h * len(lines)) - 60
-
     rect = Image.new('RGBA', (image.width, (line_h * len(lines)) + 40), (0, 0, 0, 140))
     image.paste(rect, (0, y_start - 20), rect)
-
     curr_y = y_start - 10
     for line in lines:
         try: w = font.getbbox(line)[2]
@@ -129,7 +123,6 @@ def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         x = (image.width - w) / 2
         draw.text((x, curr_y), line, font=font, fill="white", stroke_width=2, stroke_fill="black")
         curr_y += line_h
-
     out_path = f"pun_{random.randint(1000,9999)}.jpg"
     image.save(out_path, quality=95)
     return out_path
@@ -143,7 +136,7 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
         await message.reply("Не удалось отправить картинку.")
 
 # =============================================================================
-# ГЕНЕРАТОРЫ
+# ГЕНЕРАТОРЫ (HF & CF)
 # =============================================================================
 
 async def hf_generate(prompt: str, model_id: str) -> Optional[bytes]:
@@ -166,18 +159,10 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
     except: return None
 
 # =============================================================================
-# ГЛАВНЫЙ ОРКЕСТРАТОР С ЛОГИРОВАНИЕМ
+# ГЛАВНЫЙ ОРКЕСТРАТОР (WATERFALL)
 # =============================================================================
 
 async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message):
-    """
-    Приоритеты:
-    1. Kandinsky (FusionBrain)
-    2. FLUX.1-schnell (HF)
-    3. FLUX.1-dev (HF)
-    4. SDXL (HF)
-    5. SDXL (CF)
-    """
     global PIPELINE_ID
     
     # 1. Kandinsky
@@ -192,11 +177,9 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
                 await send_generated_photo(message, img, "kandinsky.png")
                 return
 
-    # Перевод
-    await processing_msg.edit_text("Кандинский занят, перевожу промпт...")
+    await processing_msg.edit_text("Кандинский не справился, перевожу промпт...")
     prompt_en = await translate_to_en(prompt_ru)
 
-    # 2-4. HuggingFace Chain
     hf_chain = [
         ('black-forest-labs/FLUX.1-schnell', 2),
         ('black-forest-labs/FLUX.1-dev', 3),
@@ -213,7 +196,6 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
             await send_generated_photo(message, img, f"{model_name}.png")
             return
 
-    # 5. Cloudflare Fallback
     await processing_msg.edit_text("Финальная попытка (Cloudflare)...")
     img = await cf_generate_t2i(prompt_en)
     if img:
@@ -223,99 +205,87 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
         return
 
     logging.error(f"[FAIL] Все модели отказали. Промпт: {prompt_ru}")
-    await processing_msg.edit_text("Не удалось сгенерировать изображение. Все художники в запое.")
+    await processing_msg.edit_text("Не удалось сгенерировать. Все художники заняты.")
 
 # =============================================================================
-# ХЭНДЛЕРЫ
+# ПУБЛИЧНЫЕ ХЭНДЛЕРЫ ДЛЯ main.py
 # =============================================================================
 
 async def handle_image_generation_command(message: types.Message):
+    """Команда 'нарисуй' (через Waterfall)"""
     prompt = message.text.lower().replace("нарисуй", "").strip()
     if not prompt and message.reply_to_message:
         prompt = message.reply_to_message.text or message.reply_to_message.caption
-    
-    if not prompt:
-        return await message.reply("Рисовать пустоту? Опиши словами.")
-    
+    if not prompt: return await message.reply("Что рисовать?")
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    msg = await message.reply("Сдуваю пыль с мольберта...")
+    msg = await message.reply("Готовлю холст...")
     await robust_image_generation(message, prompt, msg)
+
+async def handle_kandinsky_generation_command(message: types.Message):
+    """Команда 'сгенерируй' (только Кандинский)"""
+    prompt = message.text.lower().replace("сгенерируй", "").strip()
+    if not prompt: return await message.reply("Что сгенерировать?")
+    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    msg = await message.reply("Гондинский заводит трактор...")
+    
+    global PIPELINE_ID
+    if not PIPELINE_ID: PIPELINE_ID = kandinsky_api.get_pipeline()
+    uuid, err = kandinsky_api.generate(prompt, PIPELINE_ID)
+    if uuid:
+        img, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
+        if img:
+            logging.info(f"[SUCCESS] Модель: Kandinsky (Direct) | User: {message.from_user.id}")
+            await msg.delete()
+            return await send_generated_photo(message, img, "kandinsky.png")
+    
+    await msg.edit_text(f"Кандинский не смог: {err or 'неизвестная ошибка'}")
 
 async def handle_pun_image_command(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     msg = await message.reply("Придумываю каламбур...")
-    
     try:
-        pun_q = "Придумай каламбур-склейку. Формат: слово1+слово2 = итоговоеслово. Только одна строка."
-        pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_q).text.strip())
+        pun_res = await asyncio.to_thread(lambda: model.generate_content("Придумай каламбур-склейку. Формат: слово1+слово2 = итоговоеслово.").text.strip())
         if '=' not in pun_res: return await msg.edit_text(f"Не вышло: {pun_res}")
-        
         parts = pun_res.split('=')
         source, final_word = parts[0].strip(), parts[1].strip()
-        
-        # Для каламбура используем быструю модель FLUX напрямую или Кандинского
         prompt_en = await translate_to_en(f"Visual of {final_word} ({source}). Surreal art, no text.")
         img_data = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
-        
-        if not img_data: # Fallback на Кандинского
+        if not img_data:
             uuid, _ = kandinsky_api.generate(f"Каламбур {final_word}, {source}", PIPELINE_ID)
             if uuid: img_data, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
-
         if img_data:
             path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
             await message.reply_photo(types.FSInputFile(path))
             os.remove(path)
             await msg.delete()
-        else:
-            await msg.edit_text("Каламбур есть, а красок не хватило.")
-    except Exception as e:
-        await msg.edit_text(f"Ошибка: {e}")
+        else: await msg.edit_text("Рисовать лень.")
+    except Exception as e: await msg.edit_text(f"Ошибка: {e}")
 
 async def handle_redraw_command(message: types.Message):
-    photo = message.photo[-1] if message.photo else None
-    if not photo and message.reply_to_message and message.reply_to_message.photo:
-        photo = message.reply_to_message.photo[-1]
-    
+    photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
     if not photo: return await message.reply("Дай картинку.")
-    msg = await message.reply("Смотрю на твое творчество...")
-    
+    msg = await message.reply("Изучаю мазню...")
     try:
         img_bytes = await download_telegram_image(bot, photo)
-        desc = await asyncio.to_thread(lambda: model.generate_content([
-            "Опиши визуально для промпта (детский рисунок карандашом).", 
-            {"mime_type": "image/jpeg", "data": img_bytes}
-        ]))
+        desc = await asyncio.to_thread(lambda: model.generate_content(["Опиши для промпта (детский рисунок карандашом).", {"mime_type": "image/jpeg", "data": img_bytes}]))
         await robust_image_generation(message, f"Childish drawing, crayons, {desc.text.strip()}", msg)
-    except Exception:
-        await msg.edit_text("Не разглядел.")
+    except Exception: await msg.edit_text("Не разглядел.")
 
 async def handle_edit_command(message: types.Message):
-    photo = message.photo[-1] if message.photo else None
-    if not photo and message.reply_to_message and message.reply_to_message.photo:
-        photo = message.reply_to_message.photo[-1]
-    
+    photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
     if not photo: return await message.reply("Нужно фото.")
     prompt = (message.caption or message.text or "").lower().replace("отредактируй", "").strip()
-    if not prompt: return await message.reply("Напиши, что изменить.")
-
-    msg = await message.reply("Маляр уже бежит...")
+    if not prompt: return await message.reply("Что менять?")
+    msg = await message.reply("Крашу забор...")
     try:
         img_bytes = await download_telegram_image(bot, photo)
         en_prompt = await translate_to_en(prompt)
-        
-        # Img2Img через Cloudflare
         url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
-        headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
-        
         img = Image.open(BytesIO(img_bytes)).convert("RGB").resize((512, 512))
         buf = BytesIO(); img.save(buf, format="PNG"); final_bytes = buf.getvalue()
-        
-        r = await asyncio.to_thread(lambda: requests.post(url, headers=headers, json={"prompt": en_prompt, "image": list(final_bytes), "strength": 0.6}, timeout=60))
+        r = await asyncio.to_thread(lambda: requests.post(url, headers={"Authorization": f"Bearer {CF_API_TOKEN}"}, json={"prompt": en_prompt, "image": list(final_bytes), "strength": 0.6}, timeout=60))
         if r.status_code == 200:
             await msg.delete()
             await send_generated_photo(message, r.content, "edited.png")
-            logging.info(f"[SUCCESS] Img2Img Edit | User: {message.from_user.id}")
-        else:
-            await msg.edit_text("Не получилось отредактировать.")
-    except Exception as e:
-        await msg.edit_text("Ошибка сервиса.")
+        else: await msg.edit_text("Не получилось.")
+    except Exception: await msg.edit_text("Ошибка сервиса.")
