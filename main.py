@@ -637,7 +637,7 @@ async def generate_pun_with_image(message: types.Message):
 async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
 
-router.message((F.text.lower() == "мем") | (F.text.lower() == "meme"))
+@router.message((F.text.lower() == "мем") | (F.text.lower() == "meme"))
 async def meme_handler(message: Message):
     try:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
