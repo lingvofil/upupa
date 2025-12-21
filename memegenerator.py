@@ -14,54 +14,71 @@ import config
 _templates_cache = []
 _template_details = {}
 
-# Шрифты (добавьте свой путь, еслиImpact.ttf лежит в папке бота)
+# Список путей к шрифтам для Linux (основные сервера)
 FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "Impact.ttf", # Если положите файл шрифта в корень
-    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
 ]
 
 def get_font(size):
+    """Возвращает жирный шрифт указанного размера"""
     for path in FONT_PATHS:
         if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+            try:
+                return ImageFont.truetype(path, size)
+            except:
+                continue
     return ImageFont.load_default()
 
-def draw_text_in_box(draw, text, box, font_base_size):
-    """Рисует текст внутри заданного прямоугольника (box)"""
-    x, y, w, h = box['x'], box['y'], box['width'], box['height']
+def draw_text_in_box(draw, text, box, img_scale):
+    """Рисует текст, вписанный в координаты бокса с учетом масштаба"""
+    # Масштабируем координаты бокса под реальный размер картинки
+    x = box['x'] * img_scale
+    y = box['y'] * img_scale
+    w = box['width'] * img_scale
+    h = box['height'] * img_scale
     
-    # Центр бокса
     center_x = x + w / 2
     center_y = y + h / 2
     
-    # Автоподбор размера шрифта под бокс
-    current_size = font_base_size
-    font = get_font(current_size)
+    # 1. Подбираем размер шрифта под высоту и ширину бокса
+    # Начинаем с 10% от высоты картинки и уменьшаем, пока не влезет
+    font_size = int(h * 0.8) # Текст не должен занимать 100% высоты
+    font = get_font(font_size)
     
-    # Разбиваем на строки
-    # Примерная ширина символа ~0.6 от размера шрифта
-    char_width = current_size * 0.5
-    chars_per_line = max(1, int(w / char_width))
-    lines = textwrap.wrap(text, width=chars_per_line)
+    # 2. Перенос строк
+    # Примерная ширина символа ~0.5 от кегля
+    avg_char_width = font_size * 0.5
+    max_chars = max(1, int(w / avg_char_width))
+    lines = textwrap.wrap(text.upper(), width=max_chars)
     
-    # Рисуем строки
-    full_text = "\n".join(lines).upper()
+    # Если строк слишком много, уменьшаем шрифт
+    while len(lines) * font_size > h * 1.1 and font_size > 10:
+        font_size -= 2
+        font = get_font(font_size)
+        avg_char_width = font_size * 0.5
+        max_chars = max(1, int(w / avg_char_width))
+        lines = textwrap.wrap(text.upper(), width=max_chars)
+
+    full_text = "\n".join(lines)
     
-    # Рисуем обводку
-    stroke = 2
-    for ox in range(-stroke, stroke + 1):
-        for oy in range(-stroke, stroke + 1):
-            draw.text((center_x + ox, center_y + oy), full_text, font=font, 
-                      fill="black", align="center", anchor="mm")
-    
-    # Основной текст
-    draw.text((center_x, center_y), full_text, font=font, 
-              fill="white", align="center", anchor="mm")
+    # 3. Рисуем классическую мемную обводку
+    stroke = max(1, int(font_size * 0.05))
+    draw.multiline_text(
+        (center_x, center_y), 
+        full_text, 
+        font=font, 
+        fill="white", 
+        stroke_width=stroke, 
+        stroke_fill="black", 
+        align="center", 
+        anchor="mm"
+    )
 
 async def get_template_info(tid: str):
-    """Получает детальную информацию о зонах текста для шаблона"""
+    """Получает данные о зонах текста для шаблона"""
     if tid in _template_details:
         return _template_details[tid]
     
@@ -73,7 +90,7 @@ async def get_template_info(tid: str):
                 _template_details[tid] = data
                 return data
     except Exception as e:
-        logging.error(f"Error fetching template details for {tid}: {e}")
+        logging.error(f"Template info error ({tid}): {e}")
     return None
 
 async def get_all_templates():
@@ -89,17 +106,16 @@ async def get_all_templates():
     return [{"id": "drake"}]
 
 def get_context_text(chat_id: int, reply_text: str = None) -> list[str]:
-    """Возвращает список фраз для заполнения боксов мема"""
-    source_text = ""
-    if reply_text:
-        source_text = reply_text
-    else:
+    """Собирает до 100 фраз и возвращает список для заполнения мема"""
+    source_text = reply_text
+    
+    if not source_text:
         log_path = config.LOG_FILE
         if os.path.exists(log_path):
             try:
                 messages = []
                 with open(log_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()[-500:]
+                    lines = f.readlines()[-500:] # Читаем последние 500 строк
                     for line in reversed(lines):
                         match = re.search(r"Chat (\-?\d+).*?\]: (.*?)$", line)
                         if match and match.group(1) == str(chat_id):
@@ -113,11 +129,11 @@ def get_context_text(chat_id: int, reply_text: str = None) -> list[str]:
             except: pass
 
     if not source_text:
-        source_text = "Когда нет слов | одни эмоции"
+        source_text = "Я | ТВОЙ БОТ"
 
-    # Если в шаблоне несколько зон, попробуем разделить текст по разделителю или пополам
+    # Разделяем текст для разных зон мема
     if "|" in source_text:
-        return [part.strip() for part in source_text.split("|", 3)]
+        return [part.strip() for part in source_text.split("|")]
     
     words = source_text.split()
     if len(words) > 3:
@@ -126,20 +142,14 @@ def get_context_text(chat_id: int, reply_text: str = None) -> list[str]:
     return [source_text]
 
 async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInputFile | None:
-    # 1. Выбираем шаблон
     all_templates = await get_all_templates()
     template_base = random.choice(all_templates)
     tid = template_base['id']
     
-    # 2. Получаем зоны (boxes) для этого шаблона
     info = await get_template_info(tid)
     if not info: return None
-    boxes = info.get('boxes', [])
     
-    # 3. Получаем тексты
-    text_parts = get_context_text(chat_id, reply_text)
-    
-    # 4. Скачиваем чистый фон
+    # 1. Скачиваем чистый фон
     bg_url = f"https://api.memegen.link/images/{tid}.png"
     
     try:
@@ -147,27 +157,30 @@ async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInp
             resp = await client.get(bg_url, timeout=15)
             if resp.status_code != 200: return None
             
-            img = Image.open(io.BytesIO(resp.content))
+            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
             draw = ImageDraw.Draw(img)
             
-            # Базовый размер шрифта зависит от высоты картинки
-            base_size = int(img.size[1] * 0.07)
+            # 2. Считаем масштаб (реальная ширина / ширина в метаданных)
+            meta_width = info.get('width', img.size[0])
+            img_scale = img.size[0] / meta_width
             
-            # Рисуем текст в каждый доступный бокс
+            # 3. Подготавливаем тексты
+            text_parts = get_context_text(chat_id, reply_text)
+            boxes = info.get('boxes', [])
+            
+            # 4. Рисуем текст в каждый бокс
             for i, box in enumerate(boxes):
-                if i < len(text_parts):
-                    txt = text_parts[i]
-                else:
-                    txt = text_parts[-1] if text_parts else "???"
-                
-                draw_text_in_box(draw, txt, box, base_size)
+                # Берем соответствующую часть текста или последнюю доступную
+                txt = text_parts[i] if i < len(text_parts) else text_parts[-1]
+                draw_text_in_box(draw, txt, box, img_scale)
 
+            # 5. Сохраняем
             output = io.BytesIO()
             img.save(output, format="JPEG", quality=95)
             return BufferedInputFile(output.getvalue(), filename=f"meme_{tid}.jpg")
             
     except Exception as e:
-        logging.error(f"Meme generation failed: {e}")
+        logging.error(f"Pillow drawing error: {e}")
     return None
 
 async def check_and_send_random_meme(message: Message):
@@ -179,4 +192,4 @@ async def check_and_send_random_meme(message: Message):
             if photo:
                 await message.answer_photo(photo)
         except Exception as e:
-            logging.error(f"Random meme error: {e}")
+            logging.error(f"Auto-meme error: {e}")
