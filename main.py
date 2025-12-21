@@ -640,7 +640,10 @@ async def add_text_to_image(message: types.Message):
 @router.message((F.text.lower() == "мем") | (F.text.lower() == "meme"))
 async def meme_handler(message: Message):
     try:
-        await message.bot.send_chat_action(message.chat.id, "upload_photo")
+        await message.bot.send_chat_action(
+            chat_id=message.chat.id,
+            action="upload_photo"
+        )
         reply_text = None
         if message.reply_to_message and message.reply_to_message.text:
             reply_text = message.reply_to_message.text
@@ -653,12 +656,18 @@ async def meme_handler(message: Message):
             reply_text=reply_text,
             history_msgs=history_msgs
         )
-        if meme_url:
-            await message.answer_photo(meme_url)
-        else:
+        if not meme_url:
             await message.answer("Мем не получился. Юмор ушёл в отпуск.")
+            return
+        resp = requests.get(meme_url, timeout=15)
+        resp.raise_for_status()
+        photo = BufferedInputFile(
+            file=resp.content,
+            filename="meme.jpg"
+        )
+        await message.answer_photo(photo)
     except Exception as e:
-        logging.error(f"Meme handler error: {e}")
+        logging.error(f"Meme handler error: {e}", exc_info=True)
         await message.answer("Ошибка при генерации мема.")
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
