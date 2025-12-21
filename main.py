@@ -639,17 +639,15 @@ async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
 
 @router.message(F.text.lower().in_(["мем", "meme"]))
-async def meme_handler(message: Message):
+async def meme_command_handler(message: Message):
+    """Принудительная генерация мема по команде"""
     await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
-    
-    # Вся логика теперь в одной функции create_meme_image
     reply_text = message.reply_to_message.text if message.reply_to_message else None
     photo = await memegenerator.create_meme_image(message.chat.id, reply_text)
-    
     if photo:
         await message.answer_photo(photo)
     else:
-        await message.answer("Мем сломался, но мы работаем над этим.")
+        await message.answer("Иди нахуй")
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
@@ -728,8 +726,8 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
+    await memegenerator.check_and_send_random_meme(message)
     await process_general_message(message)
-    
     try:
         if message.from_user:
             is_private = message.chat.type == 'private'
@@ -743,7 +741,6 @@ async def process_message(message: types.Message):
                 user_username=message.from_user.username
             )
     except Exception as e:
-        logging.error(f"Failed to log message stats: {e}")
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
