@@ -1,5 +1,5 @@
 import logging
-from aiogram import types, Bot
+from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import chat_settings, sms_disabled_chats, bot, ADMIN_ID
@@ -10,20 +10,23 @@ from content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
 from stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
 
 async def has_settings_permission(chat_id: int, user_id: int) -> bool:
+    """Проверка прав: только админы или создатель могут менять настройки."""
     if user_id == ADMIN_ID:
         return True
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         return member.status in ["administrator", "creator"]
     except Exception as e:
-        logging.error(f"Не удалось проверить статус администратора: {e}")
+        logging.error(f"Permission check error: {e}")
         return False
 
 async def get_main_settings_markup(chat_id: str):
+    """Генерация текста и кнопок главного меню настроек."""
     settings = chat_settings.get(chat_id, {})
     dialog_enabled = settings.get("dialog_enabled", True)
     reactions_enabled = settings.get("reactions_enabled", True)
-    random_memes_enabled = settings.get("random_memes_enabled", False) # По умолчанию выключено
+    random_memes_enabled = settings.get("random_memes_enabled", False)
+    
     sms_enabled = chat_id not in sms_disabled_chats
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
     rank_notifications_enabled = chat_id not in rank_notifications_disabled_chats
@@ -41,16 +44,37 @@ async def get_main_settings_markup(chat_id: str):
     builder = InlineKeyboardBuilder()
     builder.button(text=f"{'Выкл.' if dialog_enabled else 'Вкл.'} болталку", callback_data="settings:toggle:dialog")
     builder.button(text=f"{'Выкл.' if reactions_enabled else 'Вкл.'} реакции", callback_data="settings:toggle:reactions")
-    builder.button(text=f"{'Выкл.' if random_memes_enabled else 'Вкл.'} случайные мемы", callback_data="settings:toggle:random_memes")
+    builder.button(text=f"{'Выкл.' if random_memes_enabled else 'Вкл.'} мемы (1%)", callback_data="settings:toggle:random_memes")
     builder.button(text=f"{'Выкл.' if sms_enabled else 'Вкл.'} СМС/ММС", callback_data="settings:toggle:sms")
     builder.button(text=f"{'Выкл.' if antispam_enabled else 'Вкл.'} антиспам", callback_data="settings:toggle:antispam")
-    builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} уведомления о рангах", callback_data="settings:toggle:rank_notifications")
+    builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
     
-    builder.adjust(1)
+    builder.adjust(2) # Кнопки в два ряда для компактности
     return text, builder.as_markup()
 
+async def get_prompts_markup():
+    """Меню выбора промптов."""
+    text = "🎭 *Выберите персонажа для бота*"
+    builder = InlineKeyboardBuilder()
+    for prompt_name in PROMPTS_DICT.keys():
+        builder.button(text=prompt_name.capitalize(), callback_data=f"settings:set_prompt:{prompt_name}")
+    builder.button(text="⬅️ Назад", callback_data="settings:view:main")
+    builder.adjust(2)
+    return text, builder.as_markup()
+
+async def send_settings_menu(message: types.Message):
+    """Точка входа: отправляет меню настроек."""
+    if not await has_settings_permission(message.chat.id, message.from_user.id):
+        await message.reply("Настройки могут менять только админы, иди нахуй.")
+        return
+    
+    chat_id = str(message.chat.id)
+    text, markup = await get_main_settings_markup(chat_id)
+    await message.answer(text, reply_markup=markup, parse_mode="Markdown")
+
 async def handle_settings_callback(query: types.CallbackQuery):
+    """Обработчик нажатий на кнопки в меню настроек."""
     if not await has_settings_permission(query.message.chat.id, query.from_user.id):
         await query.answer("Только админы могут менять настройки!", show_alert=True)
         return
@@ -64,15 +88,27 @@ async def handle_settings_callback(query: types.CallbackQuery):
     if action == "view":
         if value == "prompts":
             text, markup = await get_prompts_markup()
-        elif value == "main":
-            text, markup = await get_main_settings_markup(chat_id)
         else:
-            return
+            text, markup = await get_main_settings_markup(chat_id)
         await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         await query.answer()
-        return
 
-    if action == "toggle":
+    elif action == "set_prompt":
+        prompt_name = value
+        prompt_text = PROMPTS_DICT.get(prompt_name)
+        if prompt_text:
+            chat_settings.setdefault(chat_id, {})
+            settings = chat_settings[chat_id]
+            settings["prompt"] = prompt_text
+            settings["prompt_name"] = prompt_name
+            save_chat_settings()
+            await query.answer(f"Промпт изменен на: {prompt_name.capitalize()}")
+            text, markup = await get_main_settings_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            await query.answer("Ошибка: промпт не найден.")
+
+    elif action == "toggle":
         chat_settings.setdefault(chat_id, {})
         
         if value == "dialog":
@@ -100,5 +136,5 @@ async def handle_settings_callback(query: types.CallbackQuery):
         try:
             await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         except:
-            pass
-        await query.answer("Настройки обновлены")
+            pass # Если текст не изменился
+        await query.answer("Настройка сохранена")
