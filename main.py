@@ -638,38 +638,23 @@ async def generate_pun_with_image(message: types.Message):
 async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
 
-@router.message((F.text.lower() == "мем") | (F.text.lower() == "meme"))
+@router.message(F.text.lower().in_(["мем", "meme", "сделай мем"]))
 async def meme_handler(message: Message):
-    try:
-        await message.bot.send_chat_action(
-            chat_id=message.chat.id,
-            action="upload_photo"
-        )
-        reply_text = None
-        if message.reply_to_message and message.reply_to_message.text:
-            reply_text = message.reply_to_message.text
-        history_msgs = memegenerator.get_last_chat_messages(
-            str(message.chat.id),
-            limit=10
-        )
-        meme_url = await memegenerator.process_meme_command(
-            chat_id=message.chat.id,
-            reply_text=reply_text,
-            history_msgs=history_msgs
-        )
-        if not meme_url:
-            await message.answer("Мем не получился. Юмор ушёл в отпуск.")
-            return
-        resp = requests.get(meme_url, timeout=15)
-        resp.raise_for_status()
-        photo = BufferedInputFile(
-            file=resp.content,
-            filename="meme.jpg"
-        )
-        await message.answer_photo(photo)
-    except Exception as e:
-        logging.error(f"Meme handler error: {e}", exc_info=True)
-        await message.answer("Ошибка при генерации мема.")
+    # Показываем статус "отправка фото"
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+    
+    reply_text = message.reply_to_message.text if message.reply_to_message and message.reply_to_message.text else None
+    
+    # Вызываем тяжелую логику из модуля
+    photo_file = await memegenerator.create_meme_image(
+        chat_id=message.chat.id, 
+        reply_text=reply_text
+    )
+    
+    if photo_file:
+        await message.answer_photo(photo=photo_file)
+    else:
+        await message.answer("Не удалось собрать подходящий мем. Попробуй позже!")
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
