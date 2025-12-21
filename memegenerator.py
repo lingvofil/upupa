@@ -55,7 +55,7 @@ def get_last_chat_messages(chat_id_str, limit=10):
     """
     Парсит лог-файл (Config.LOG_FILE) и возвращает последние N сообщений.
     """
-    log_path = Config.LOG_FILE
+    log_path = config.LOG_FILE
     messages = []
     
     if not os.path.exists(log_path):
