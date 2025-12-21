@@ -2,31 +2,31 @@ import random
 import logging
 import os
 import re
-import httpx  # Используем httpx для асинхронности
+import httpx
 from aiogram.types import BufferedInputFile
 import config
 
-# Настройки кэширования шаблонов
+# Кэш шаблонов
 _templates_cache = []
 
-def _escape_memegen_text(text: str) -> str:
+def _prep_text(text: str) -> str:
     """
-    Экранирование текста по правилам memegen.link
+    Подготовка текста для memegen.link.
+    Заменяет спецсимволы по правилам API и делает URL-safe кодирование.
     """
     if not text:
         return "_"
     
-    # Очистка
     text = text.strip()
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    text = text[:100] # Ограничение длины
+    # Очистка от лишних пробелов и переносов
+    text = re.sub(r"\s+", " ", text)
+    text = text[:100]
 
-    # Специфические замены Memegen
+    # Правила замены memegen.link
     replacements = [
-        ("-", "--"),   # дефис -> двойной дефис
-        ("_", "__"),   # подчеркивание -> двойное подчеркивание
-        (" ", "_"),    # пробел -> подчеркивание
+        ("-", "--"),
+        ("_", "__"),
+        (" ", "_"),
         ("?", "~q"),
         ("&", "~a"),
         ("%", "~p"),
@@ -37,106 +37,88 @@ def _escape_memegen_text(text: str) -> str:
         (">", "~g"),
         ('"', "''"),
     ]
-    
     for old, new in replacements:
         text = text.replace(old, new)
-        
+    
+    # Важно: memegen ожидает именно такие символы в пути, 
+    # дополнительное url-кодирование всей строки может сломать рендер кириллицы.
     return text
 
 async def get_all_templates():
-    """Загружает актуальный список шаблонов с API"""
+    """Загружает список шаблонов"""
     global _templates_cache
     if _templates_cache:
         return _templates_cache
     
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get("https://api.memegen.link/templates", timeout=5)
+            resp = await client.get("https://api.memegen.link/templates", timeout=10)
             if resp.status_code == 200:
                 _templates_cache = resp.json()
                 return _templates_cache
     except Exception as e:
-        logging.error(f"Error fetching meme templates: {e}")
+        logging.error(f"Meme templates fetch error: {e}")
     
-    # Резервный список, если API лежит
     return [{"id": "drake", "lines": 2}, {"id": "two-buttons", "lines": 2}]
 
-def get_last_chat_messages(chat_id_str: str, limit: int = 15) -> list[str]:
-    """Извлечение сообщений из лога для контекста"""
-    log_path = config.LOG_FILE
-    messages: list[str] = []
+def get_context_text(chat_id: int, reply_text: str = None) -> str:
+    """Выбирает текст из истории или реплая"""
+    if reply_text:
+        return reply_text
 
+    log_path = config.LOG_FILE
     if not os.path.exists(log_path):
-        return []
+        return "Когда не нашел сообщений в логе"
 
     try:
+        messages = []
         with open(log_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        for line in reversed(lines):
-            # Регулярка под ваш формат лога
-            match = re.search(r"Chat (\-?\d+).*?\]: (.*?)$", line)
-            if not match: continue
-
-            log_chat_id, text = match.groups()
-            if str(log_chat_id) != str(chat_id_str): continue
-
-            text = text.strip()
-            # Игнорируем команды и пустые строки
-            if not text or text.startswith("/") or len(text) < 2: continue
-            if any(cmd in text.lower() for cmd in ["мем", "meme"]): continue
-
-            messages.append(text)
-            if len(messages) >= limit: break
-
-        return messages
-    except Exception as e:
-        logging.error(f"Log parse error: {e}")
-        return []
+            lines = f.readlines()[-100:] # Читаем последние 100 строк
+            for line in reversed(lines):
+                match = re.search(r"Chat (\-?\d+).*?\]: (.*?)$", line)
+                if match:
+                    cid, txt = match.groups()
+                    if cid == str(chat_id):
+                        txt = txt.strip()
+                        if txt and not txt.startswith("/") and len(txt) > 3:
+                            if "мем" not in txt.lower():
+                                messages.append(txt)
+                if len(messages) > 15: break
+        
+        return random.choice(messages) if messages else "Пустота в чате..."
+    except:
+        return "Что-то пошло не так"
 
 async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInputFile | None:
-    """
-    Основная функция: выбирает текст, шаблон и скачивает готовую картинку.
-    Возвращает BufferedInputFile для отправки через Telegram.
-    """
-    # 1. Сбор текстов
-    history = get_last_chat_messages(str(chat_id))
-    
-    if reply_text:
-        # Если есть реплай, используем его как основу
-        text_source = reply_text
-    elif history:
-        text_source = random.choice(history)
-    else:
-        return None
-
-    # 2. Выбор шаблона
+    """Генерирует мем и возвращает файл для Telegram"""
+    source_text = get_context_text(chat_id, reply_text)
     templates = await get_all_templates()
     template = random.choice(templates)
-    template_id = template.get("id", "drake")
-    lines_count = template.get("lines", 2)
-
-    # 3. Подготовка строк для мема
-    words = text_source.split()
-    if lines_count >= 2 and len(words) > 1:
+    
+    tid = template.get("id", "drake")
+    
+    # Разбивка текста
+    words = source_text.split()
+    if len(words) > 2:
         mid = len(words) // 2
-        t0 = _escape_memegen_text(" ".join(words[:mid]))
-        t1 = _escape_memegen_text(" ".join(words[mid:]))
-        url = f"https://api.memegen.link/images/{template_id}/{t0}/{t1}.jpg"
+        top = _prep_text(" ".join(words[:mid]))
+        bottom = _prep_text(" ".join(words[mid:]))
     else:
-        t0 = _escape_memegen_text(text_source)
-        url = f"https://api.memegen.link/images/{template_id}/{t0}.jpg"
+        top = "_"
+        bottom = _prep_text(source_text)
 
-    # 4. Скачивание
+    # Собираем URL. Параметр ?font=notosans критичен для кириллицы!
+    # Также используем .png для лучшего качества текста.
+    url = f"https://api.memegen.link/images/{tid}/{top}/{bottom}.png?font=notosans"
+
     try:
         async with httpx.AsyncClient() as client:
-            # Добавляем параметры, чтобы картинка была качественнее или с фолбеком
-            resp = await client.get(url, timeout=10)
-            if resp.status_code != 200:
-                logging.error(f"Memegen API returned {resp.status_code} for URL: {url}")
-                return None
-            
-            return BufferedInputFile(resp.content, filename=f"meme_{template_id}.jpg")
+            resp = await client.get(url, timeout=15)
+            if resp.status_code == 200:
+                return BufferedInputFile(resp.content, filename=f"meme_{tid}.png")
+            else:
+                logging.error(f"Memegen API error {resp.status_code} for {url}")
     except Exception as e:
-        logging.error(f"Failed to download meme: {e}")
-        return None
+        logging.error(f"Meme download error: {e}")
+    
+    return None
