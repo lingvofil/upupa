@@ -154,7 +154,7 @@ def fit_text_to_box(draw, text, box, font_path, max_font_size=60, min_font_size=
 async def generate_meme_content(chat_history_text: str) -> dict:
     """Генерирует JSON с текстом мема через Gemini (используя Config.API_KEY)."""
     # Используем промпт из Prompts.py
-    prompt = f"{Prompts.MEME_SYSTEM_PROMPT}\n\nВот последние сообщения чата:\n{chat_history_text}"
+    prompt = f"{prompts.MEME_SYSTEM_PROMPT}\n\nВот последние сообщения чата:\n{chat_history_text}"
     
     try:
         response = await model.generate_content_async(prompt)
