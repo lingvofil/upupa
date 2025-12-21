@@ -103,12 +103,8 @@ async def process_meme_command(
     reply_text: str | None = None,
     history_msgs: list[str] | None = None,
 ) -> str | None:
-    """
-    Generate meme via memegen.link.
-    Returns image URL or None.
-    """
 
-    # 1. Determine base text
+    # 1. Базовый текст
     if reply_text:
         base_text = reply_text.strip()
     else:
@@ -121,24 +117,22 @@ async def process_meme_command(
     if not base_text:
         return None
 
-    # 2. Choose template
+    # 2. Выбор шаблона
     template = random.choice(MEMEGEN_TEMPLATES)
 
-    # 3. Split text if needed
+    # 3. Генерация URL
     if template["type"] == "2":
         words = base_text.split()
         if len(words) < 2:
             text0 = base_text
-            text1 = "…"
+            text1 = "_"
         else:
             mid = len(words) // 2
             text0 = " ".join(words[:mid])
-            text1 = " ".join(words[mid:])
-        if not text0.strip():
-            text0 = "…"
-        if not text1.strip():
-            text1 = "…"
+            text1 = " ".join(words[mid:]) or "_"
+
         return generate_memegen(template["id"], text0, text1)
 
-    # 1-line meme
-    return generate_memegen(template["id"], base_text)
+    # 1-line шаблон
+    return generate_memegen(template["id"], base_text, "_")
+
