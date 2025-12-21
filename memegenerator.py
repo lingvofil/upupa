@@ -34,10 +34,13 @@ def _escape(text: str) -> str:
 # ================================
 
 def generate_memegen(template_id: str, text0: str, text1: str | None = None) -> str:
-    """Return memegen.link image URL."""
-    if text1:
-        return f"https://api.memegen.link/images/{template_id}/{_escape(text0)}/{_escape(text1)}.jpg"
-    return f"https://api.memegen.link/images/{template_id}/{_escape(text0)}.jpg"
+    if not text1:
+        text1 = "_"
+
+    return (
+        f"https://api.memegen.link/images/"
+        f"{template_id}/{_escape(text0)}/{_escape(text1)}.jpg"
+    )
 
 
 # ================================
