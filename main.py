@@ -741,6 +741,7 @@ async def process_message(message: types.Message):
                 user_username=message.from_user.username
             )
     except Exception as e:
+        logging.error(f"Failed to log message stats: {e}")
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
