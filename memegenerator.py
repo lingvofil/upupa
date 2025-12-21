@@ -54,7 +54,7 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
     try:
         messages = []
         with open(log_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-100:] # Читаем хвост файла
+            lines = f.readlines()[-500:] # Читаем хвост файла
             for line in reversed(lines):
                 match = re.search(r"Chat (\-?\d+).*?\]: (.*?)$", line)
                 if match:
@@ -65,7 +65,7 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
                         if txt and not txt.startswith("/") and len(txt) > 3:
                             if not any(x in txt.lower() for x in ["мем", "meme"]):
                                 messages.append(txt)
-                if len(messages) > 15: break
+                if len(messages) > 100: break
         return random.choice(messages) if messages else "Где все?"
     except Exception as e:
         logging.error(f"Meme context error: {e}")
