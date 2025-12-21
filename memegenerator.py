@@ -68,3 +68,38 @@ async def process_meme_command(chat_id, reply_text: str | None = None, history_m
 
     # 4. Генерация
     return generate_imgflip(template["id"], text0, text1)
+
+def get_last_chat_messages(chat_id_str, limit=10):
+    import os
+    import re
+    import logging
+    import config
+
+    log_path = config.LOG_FILE
+    messages = []
+
+    if not os.path.exists(log_path):
+        return []
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        for line in reversed(lines):
+            match = re.search(
+                r"Chat (\-?\d+).*?\[(.*?)\]: (.*?)$",
+                line
+            )
+            if match:
+                log_chat_id, _, text = match.groups()
+                if str(log_chat_id) == str(chat_id_str):
+                    text = text.strip()
+                    if text and "мем" not in text.lower():
+                        messages.append(text)
+                if len(messages) >= limit:
+                    break
+
+        return list(reversed(messages))
+    except Exception as e:
+        logging.error(f"Log parse error: {e}")
+        return []
