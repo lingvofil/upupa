@@ -1,82 +1,54 @@
 import random
-import requests
+import urllib.parse
 import logging
+import os
+import re
+import config
 
-IMGFLIP_USER = "imgflip_hubot"
-IMGFLIP_PASS = "imgflip_hubot"
-
-# Базовый набор популярных шаблонов
-IMGFLIP_TEMPLATES = [
-    {"id": "181913649", "type": "2"},  # Drake
-    {"id": "87743020", "type": "2"},   # Two Buttons
-    {"id": "129242436", "type": "1"},  # Change My Mind
-    {"id": "61579", "type": "2"},      # One Does Not Simply
+# ================================
+# Memegen.link templates
+# ================================
+MEMEGEN_TEMPLATES = [
+    {"id": "drake", "type": "2"},
+    {"id": "two-buttons", "type": "2"},
+    {"id": "change-my-mind", "type": "1"},
+    {"id": "one-does-not-simply", "type": "2"},
+    {"id": "waiting-skeleton", "type": "1"},
 ]
 
-def generate_imgflip(template_id: str, text0: str = "", text1: str = "") -> str | None:
-    url = "https://api.imgflip.com/caption_image"
-    payload = {
-        "template_id": template_id,
-        "username": IMGFLIP_USER,
-        "password": IMGFLIP_PASS,
-        "text0": text0[:300],
-        "text1": text1[:300],
-    }
 
-    try:
-        r = requests.post(url, data=payload, timeout=10)
-        data = r.json()
-        if not data.get("success"):
-            logging.error(f"Imgflip error: {data}")
-            return None
-        return data["data"]["url"]
-    except Exception as e:
-        logging.error(f"Imgflip request failed: {e}")
-        return None
+# ================================
+# Utils
+# ================================
+
+def _escape(text: str) -> str:
+    """Prepare text for memegen.link URL."""
+    if not text:
+        return "_"
+    text = text.strip().replace(" ", "_")
+    return urllib.parse.quote(text, safe="")
 
 
-async def process_meme_command(chat_id, reply_text: str | None = None, history_msgs: list[str] | None = None):
-    """
-    Генерирует мем через Imgflip.
-    Возвращает URL картинки или None.
-    """
+# ================================
+# Memegen core
+# ================================
 
-    # 1. Источник текста
-    if reply_text:
-        base_text = reply_text.strip()
-    else:
-        if not history_msgs:
-            return None
-        base_text = random.choice(history_msgs).strip()
+def generate_memegen(template_id: str, text0: str, text1: str | None = None) -> str:
+    """Return memegen.link image URL."""
+    if text1:
+        return f"https://api.memegen.link/images/{template_id}/{_escape(text0)}/{_escape(text1)}.jpg"
+    return f"https://api.memegen.link/images/{template_id}/{_escape(text0)}.jpg"
 
-    if not base_text:
-        return None
 
-    # 2. Выбор шаблона
-    template = random.choice(IMGFLIP_TEMPLATES)
+# ================================
+# Chat history
+# ================================
 
-    # 3. Подготовка текста
-    if template["type"] == "2":
-        # аккуратно делим фразу на 2 части
-        words = base_text.split()
-        mid = max(1, len(words) // 2)
-        text0 = " ".join(words[:mid])
-        text1 = " ".join(words[mid:])
-    else:
-        text0 = base_text
-        text1 = ""
-
-    # 4. Генерация
-    return generate_imgflip(template["id"], text0, text1)
-
-def get_last_chat_messages(chat_id_str, limit=10):
-    import os
-    import re
-    import logging
-    import config
+def get_last_chat_messages(chat_id_str: str, limit: int = 10) -> list[str]:
+    """Extract last messages from log file for meme context."""
 
     log_path = config.LOG_FILE
-    messages = []
+    messages: list[str] = []
 
     if not os.path.exists(log_path):
         return []
@@ -86,20 +58,68 @@ def get_last_chat_messages(chat_id_str, limit=10):
             lines = f.readlines()
 
         for line in reversed(lines):
-            match = re.search(
-                r"Chat (\-?\d+).*?\[(.*?)\]: (.*?)$",
-                line
-            )
-            if match:
-                log_chat_id, _, text = match.groups()
-                if str(log_chat_id) == str(chat_id_str):
-                    text = text.strip()
-                    if text and "мем" not in text.lower():
-                        messages.append(text)
-                if len(messages) >= limit:
-                    break
+            match = re.search(r"Chat (\-?\d+).*?\[(.*?)\]: (.*?)$", line)
+            if not match:
+                continue
+
+            log_chat_id, _, text = match.groups()
+            if str(log_chat_id) != str(chat_id_str):
+                continue
+
+            text = text.strip()
+            if not text:
+                continue
+            if "мем" in text.lower():
+                continue
+
+            messages.append(text)
+            if len(messages) >= limit:
+                break
 
         return list(reversed(messages))
+
     except Exception as e:
         logging.error(f"Log parse error: {e}")
         return []
+
+
+# ================================
+# Public API
+# ================================
+
+async def process_meme_command(
+    chat_id,
+    reply_text: str | None = None,
+    history_msgs: list[str] | None = None,
+) -> str | None:
+    """
+    Generate meme via memegen.link.
+    Returns image URL or None.
+    """
+
+    # 1. Determine base text
+    if reply_text:
+        base_text = reply_text.strip()
+    else:
+        if not history_msgs:
+            history_msgs = get_last_chat_messages(str(chat_id), limit=10)
+        if not history_msgs:
+            return None
+        base_text = random.choice(history_msgs).strip()
+
+    if not base_text:
+        return None
+
+    # 2. Choose template
+    template = random.choice(MEMEGEN_TEMPLATES)
+
+    # 3. Split text if needed
+    if template["type"] == "2":
+        words = base_text.split()
+        mid = max(1, len(words) // 2)
+        text0 = " ".join(words[:mid])
+        text1 = " ".join(words[mid:]) or "…"
+        return generate_memegen(template["id"], text0, text1)
+
+    # 1-line meme
+    return generate_memegen(template["id"], base_text)
