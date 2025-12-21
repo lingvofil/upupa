@@ -12,6 +12,7 @@ import nest_asyncio
 from datetime import datetime, timedelta
 import re
 from typing import Dict
+import requests
 
 nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
