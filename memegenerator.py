@@ -13,7 +13,7 @@ import prompts
 
 # Настраиваем Gemini, используя ключ из твоего Config.py
 # В твоем конфиге ключ называется GENERIC_API_KEY
-genai.configure(api_key=Config.GENERIC_API_KEY)
+genai.configure(api_key=config.GENERIC_API_KEY)
 
 # Инициализируем модель специально для мемов.
 # Используем 'gemini-2.0-flash' как самую быструю и стабильную для JSON задач.
