@@ -22,11 +22,18 @@ MEMEGEN_TEMPLATES = [
 # ================================
 
 def _escape(text: str) -> str:
-    """Prepare text for memegen.link URL."""
     if not text:
-        return "_"
-    text = text.strip().replace(" ", "_")
+        return "..."
+    text = text.strip()
+    # убираем мусор
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    # memegen плохо переживает длинный unicode
+    text = text[:80]
+    # пробелы → _
+    text = text.replace(" ", "_")
     return urllib.parse.quote(text, safe="")
+
 
 
 # ================================
@@ -35,12 +42,13 @@ def _escape(text: str) -> str:
 
 def generate_memegen(template_id: str, text0: str, text1: str | None = None) -> str:
     if not text1:
-        text1 = "_"
+        text1 = "…"
 
     return (
         f"https://api.memegen.link/images/"
         f"{template_id}/{_escape(text0)}/{_escape(text1)}.jpg"
     )
+
 
 
 # ================================
@@ -119,9 +127,17 @@ async def process_meme_command(
     # 3. Split text if needed
     if template["type"] == "2":
         words = base_text.split()
-        mid = max(1, len(words) // 2)
-        text0 = " ".join(words[:mid])
-        text1 = " ".join(words[mid:]) or "…"
+        if len(words) < 2:
+            text0 = base_text
+            text1 = "…"
+        else:
+            mid = len(words) // 2
+            text0 = " ".join(words[:mid])
+            text1 = " ".join(words[mid:])
+        if not text0.strip():
+            text0 = "…"
+        if not text1.strip():
+            text1 = "…"
         return generate_memegen(template["id"], text0, text1)
 
     # 1-line meme
