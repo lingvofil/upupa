@@ -68,10 +68,10 @@ from whatisthere import (
     process_robotics_description
 )
 
-# ================== БЛОК 3.7: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
+# ================== БЛОК 3.10: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
 from channels_settings import process_channel_command
 
-# ================== БЛОК 3.8: НАСТРОЙКА ПОИСКА ==================
+# ================== БЛОК 3.11: НАСТРОЙКА ПОИСКА ==================
 from search import (
     handle_message,
     process_image_search,
@@ -82,7 +82,7 @@ from search import (
     process_location_search      
 )
 
-# ================== БЛОК 3.9: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
+# ================== БЛОК 3.12: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
 from picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
@@ -91,12 +91,12 @@ from picgeneration import (
     handle_kandinsky_generation_command
     # УБРАЛ ИМПОРТ handle_huggingface_command
 )
-# ================== БЛОК 3.10: НАСТРОЙКА ПОГОДЫ ==================
+# ================== БЛОК 3.13: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
     handle_current_weather_command, 
     handle_weekly_forecast_command
 )
-# ================== БЛОК 3.11: НАСТРОЙКА ГОВОРИЛКИ ==================
+# ================== БЛОК 3.14: НАСТРОЙКА ГОВОРИЛКИ ==================
 from talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
@@ -150,6 +150,9 @@ from dnd import dnd_router
 
 # ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
 from voice import handle_voice_command
+
+# ================== БЛОК 3.25 МЕМЫ ==================
+import memegenerator
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(F.text.lower() == "какая модель")
@@ -633,6 +636,30 @@ async def generate_pun_with_image(message: types.Message):
 )
 async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
+
+router.message((F.text.lower() == "мем") | (F.text.lower() == "meme"))
+async def meme_handler(message: Message):
+    try:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+        reply_text = None
+        if message.reply_to_message and message.reply_to_message.text:
+            reply_text = message.reply_to_message.text
+        photo_path = await memegenerator.process_meme_command(
+            chat_id=message.chat.id, 
+            reply_text=reply_text
+        )
+        if photo_path:
+            photo = FSInputFile(photo_path)
+            await message.answer_photo(photo)
+            try:
+                os.remove(photo_path)
+            except OSError:
+                pass
+        else:
+            await message.answer("Не удалось сварить мем. Возможно, лог пуст или муза покинула бота.")
+    except Exception as e:
+        logging.error(f"Handler error: {e}")
+        await message.answer("Произошла ошибка при создании мема.")
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
