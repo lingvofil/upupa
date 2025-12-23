@@ -1,3 +1,4 @@
+#config.py
 import google.generativeai as genai
 from google.api_core import exceptions
 import logging
