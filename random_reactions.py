@@ -517,90 +517,116 @@ async def generate_regular_reaction(message):
         logging.error(f"Ошибка при генерации обычной реакции: {e}")
         return None
 
-async def process_random_reactions(message: Message, model, save_user_message, track_message_statistics, add_chat, chat_settings, save_chat_settings):
-    """Основная функция обработки случайных реакций"""
+async def process_random_reactions(
+    message: Message,
+    model,
+    save_user_message,
+    track_message_statistics,
+    add_chat,
+    chat_settings,
+    save_chat_settings,
+):
+
+    # --- 0. Защита от реакции на сообщения бота ---
+    if not message.from_user or message.from_user.is_bot:
+        return False
+
+    # --- 1. Базовые операции учета ---
     await save_user_message(message)
     await track_message_statistics(message)
-    add_chat(message.chat.id, message.chat.title, message.chat.username)    
-    
+    add_chat(message.chat.id, message.chat.title, message.chat.username)
+
     chat_id = str(message.chat.id)
-    # Инициализируем настройки, если их нет, с новым параметром
+
+    # --- 2. Инициализация настроек чата ---
     if chat_id not in chat_settings:
         chat_settings[chat_id] = {
-            "dialog_enabled": True, 
-            "prompt": None,
-            "reactions_enabled": True
+            "dialog_enabled": True,
+            "reactions_enabled": True,
+            "emoji_enabled": True,
         }
         save_chat_settings()
 
-    # Проверяем, включены ли реакции в этом чате
-    if not chat_settings.get(chat_id, {}).get("reactions_enabled", True):
-        # Если выключены "общие" реакции, проверим, не разрешены ли хотя бы эмодзи отдельно?
-        # Но по старой логике это "Master Switch".
-        # ДАВАЙТЕ РАЗДЕЛИМ:
-        # Уберем "return False" здесь, и будем проверять флаги внутри блоков.
-        pass 
+    chat_cfg = chat_settings.get(chat_id, {})
 
-    # --- НОВЫЙ ФУНКЦИОНАЛ: ЭМОДЗИ РЕАКЦИИ ---
-    # Проверяем отдельный флаг emoji_enabled (по умолчанию True)
-    if chat_settings.get(chat_id, {}).get("emoji_enabled", True):
-        # Шанс 5% что бот поставит реакцию.
+    # ------------------------------------------------------------------
+    # 3. EMOJI-РЕАКЦИИ (ставятся только на входящие сообщения пользователя)
+    # ------------------------------------------------------------------
+    if chat_cfg.get("emoji_enabled", True):
+        # Реальный шанс 5%
         if random.random() < 0.95:
-            await set_contextual_emoji_reaction(message, model)
+            try:
+                await set_contextual_emoji_reaction(message, model)
+            except Exception as e:
+                logging.error(f"Emoji reaction failed: {e}", exc_info=True)
 
-    # Для остальных реакций проверяем reactions_enabled
-    if not chat_settings.get(chat_id, {}).get("reactions_enabled", True):
+    # ------------------------------------------------------------------
+    # 4. Если реакции полностью отключены — выходим
+    # ------------------------------------------------------------------
+    if not chat_cfg.get("reactions_enabled", True):
         return False
 
-    if random.random() < 0.01: 
-        # Передача message.chat.id для генерации ситуативной реакции
-        situational_reaction = await generate_situational_reaction(message.chat.id, model)
-        if situational_reaction:
-            await message.bot.send_message(message.chat.id, situational_reaction, parse_mode="Markdown")
+    # ------------------------------------------------------------------
+    # 5. Ситуативная текстовая реакция (в чат, не reply)
+    # ------------------------------------------------------------------
+    if random.random() < 0.01:
+        situational = await generate_situational_reaction(message.chat.id, model)
+        if situational:
+            await message.bot.send_message(
+                message.chat.id,
+                situational,
+                parse_mode="Markdown",
+            )
             return True
 
-    if message.from_user.id == 1399269377 and random.random() < 0.3 and message.text:
-        # Передача message для генерации оскорбления
-        success = await generate_insult_for_lis(message, model)
-        if success:
+    # ------------------------------------------------------------------
+    # 6. Персональные реакции
+    # ------------------------------------------------------------------
+    if message.from_user.id == 1399269377 and message.text and random.random() < 0.3:
+        if await generate_insult_for_lis(message, model):
             return True
 
     if message.from_user.id == 113086922 and random.random() < 0.005:
-        # Передача message для генерации реакции
-        success = await generate_reaction_for_113086922(message, model)
-        if success:
+        if await generate_reaction_for_113086922(message, model):
+            return True
+
+    # ------------------------------------------------------------------
+    # 7. Голосовые реакции
+    # ------------------------------------------------------------------
+    if message.voice and random.random() < 0.001:
+        if await send_random_voice_reaction(message):
             return True
 
     if random.random() < 0.0001:
-        success = await send_random_common_voice_reaction(message)
-        if success:
+        if await send_random_common_voice_reaction(message):
             return True
-            
+
     if message.text and "пара дня" in message.text.lower() and random.random() < 0.05:
-        success = await send_para_voice_reaction(message)
-        if success:
+        if await send_para_voice_reaction(message):
             return True
 
-    if message.voice and random.random() < 0.001:
-        success = await send_random_voice_reaction(message)
-        if success:
+    # ------------------------------------------------------------------
+    # 8. Рифма
+    # ------------------------------------------------------------------
+    if message.text and random.random() < 0.008:
+        rhyme = await generate_rhyme_reaction(message, model)
+        if rhyme:
+            await message.reply(rhyme)
             return True
 
-    if random.random() < 0.008 and message.text:
-        # Передача message для генерации рифмы
-        rhyme_reaction = await generate_rhyme_reaction(message, model)
-        if rhyme_reaction:
-            await message.reply(rhyme_reaction)
+    # ------------------------------------------------------------------
+    # 9. Обычная текстовая реакция
+    # ------------------------------------------------------------------
+    if message.text and random.random() < 0.008:
+        regular = await generate_regular_reaction(message)
+        if regular:
+            await message.reply(regular)
             return True
 
-    if random.random() < 0.008 and message.text:
-        regular_reaction = await generate_regular_reaction(message)
-        if regular_reaction:
-            await message.reply(regular_reaction)
-            return True
-
-    # Проверяем включен ли диалог
-    if not chat_settings[chat_id]["dialog_enabled"]:
+    # ------------------------------------------------------------------
+    # 10. Диалог выключен
+    # ------------------------------------------------------------------
+    if not chat_cfg.get("dialog_enabled", True):
         return False
-        
+
     return False
