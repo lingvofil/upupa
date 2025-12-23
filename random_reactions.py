@@ -9,110 +9,54 @@ from aiogram import Bot
 
 # Используем тот же экстрактор сообщений, что и в других модулях
 from lexicon_settings import extract_chat_messages
-from config import model # Модель передается как аргумент, но импорт может быть полезен для типизации
+from config import model # Модель передается как аргумент
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
     "❤️", "🥰", "😁", "❤️‍🔥", "💔", "🤨", "👀", "🫡"
 ]
 
-# --- НОВАЯ ФУНКЦИЯ: Контекстные эмодзи-реакции ---
-async def set_contextual_emoji_reaction(message: Message, model_instance):
+# --- ИЗМЕНЕНО: Случайные эмодзи-реакции (БЕЗ AI) ---
+async def set_random_emoji_reaction(message: Message):
     """
-    Анализирует контекст диалога и ставит подходящий эмодзи в качестве реакции.
+    Ставит случайный эмодзи из списка без анализа контекста.
+    Быстро, бесплатно, не грузит API.
     """
-    chat_id = message.chat.id
-    logging.info(f"Запуск подбора эмодзи для реакции в чате {chat_id}.")
-    
-    # Получаем историю сообщений
-    all_messages = await extract_chat_messages(chat_id)
-    if not all_messages:
-        return False
-
-    # Берем последние 10 сообщений для контекста
-    last_messages = all_messages[-10:]
-    chat_history = "\n".join(last_messages)
-
-    prompt = f"""
-    Проанализируй диалог в чате и выбери ОДИН наиболее подходящий эмодзи-реакцию из предложенного списка.
-    Твой ответ должен содержать ТОЛЬКО ОДИН этот эмодзи и ничего больше
-
-    Список доступных реакций:
-    {', '.join(TELEGRAM_REACTIONS)}
-
-    История чата:
-    ---
-    {chat_history}
-    ---
-
-    Твой выбор (только смайл):
-    """
-
     try:
-        def sync_llm_call():
-            response = model_instance.generate_content(
-                prompt,
-                chat_id=chat_id,
-                generation_config={
-                    'temperature': 0.8,
-                    'max_output_tokens': 5,
-                    'top_p': 0.9,
-                }
-            )
-            return getattr(response, 'text', '').strip()
-
-        chosen_emoji = await asyncio.to_thread(sync_llm_call)
+        # Выбираем случайный эмодзи
+        chosen_emoji = random.choice(TELEGRAM_REACTIONS)
         
-        # Очистка от лишних символов (пробелы, переносы строк)
-        chosen_emoji = chosen_emoji.replace(" ", "").replace("\n", "")
-        
-        # Проверяем, есть ли этот эмодзи в нашем списке (или содержится ли он в ответе)
-        found_emoji = None
-        for emoji in TELEGRAM_REACTIONS:
-            if emoji == chosen_emoji:
-                found_emoji = emoji
-                break
-        
-        if found_emoji:
-            # Ставим реакцию
-            await message.react(reactions=[ReactionTypeEmoji(emoji=found_emoji)])
-            logging.info(f"Бот поставил реакцию: {found_emoji}")
-            return True
-        else:
-            logging.warning(f"Модель вернула некорректный эмодзи для реакции: {chosen_emoji}")
-            return False
+        # Ставим реакцию
+        await message.react(reactions=[ReactionTypeEmoji(emoji=chosen_emoji)])
+        logging.info(f"Бот поставил случайную реакцию: {chosen_emoji}")
+        return True
 
     except Exception as e:
-        logging.error(f"Ошибка при проставлении эмодзи-реакции: {e}")
+        logging.error(f"Ошибка при проставлении случайной эмодзи-реакции: {e}")
         return False
 
-# --- СТАРЫЙ ФУНКЦИОНАЛ ---
+# --- СТАРЫЙ ФУНКЦИОНАЛ (Остался с AI, так как вызывается редко) ---
 
 async def generate_situational_reaction(chat_id: int, model_instance):
     """
     Генерирует ироничную кинематографичную ремарку на основе истории чата.
-    Использует `extract_chat_messages` для надежности.
     """
     logging.info(f"Запуск генерации ситуативной реакции для чата {chat_id}.")
     
-    # 1. Получаем все сообщения из лога для данного чата
     all_messages = await extract_chat_messages(chat_id)
     
     if not all_messages:
         logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
         return None
 
-    # 2. Берем последние 15 сообщений для анализа
     last_messages = all_messages[-15:]
     chat_history = "\n".join(last_messages)
     
     if not chat_history.strip():
-        logging.warning("История чата пуста после обработки. Реакция отменена.")
         return None
         
     logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции.")
 
-    # 3. Формируем промпт (с добавлением обсценной лексики)
     prompt = f"""
     Проанализируй диалог из чата. Придумай короткую, кинематографичную ремарку или звуковой эффект, который бы дополнил этот эффект. 
     Ремарка должна быть креативной, возможно даже грубоватой, но четко подходить под ситуацию.
@@ -134,35 +78,35 @@ async def generate_situational_reaction(chat_id: int, model_instance):
     Твоя ремарка (короткая, атмосферная, курсивом):
     """
     
-    logging.info(f"Промпт для ситуативной реакции готов. Длина: {len(prompt)}")
-
-    # 4. Отправляем запрос к модели
     try:
         def sync_llm_call():
-            response = model_instance.generate_content(
-                prompt,
-                chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
-                generation_config={
-                    'temperature': 1.0,
-                    'max_output_tokens': 60,
-                    'top_p': 1.0,
-                }
-            )
-            return getattr(response, 'text', '').strip()
+            try:
+                response = model_instance.generate_content(
+                    prompt,
+                    chat_id=chat_id,
+                    generation_config={
+                        'temperature': 1.0,
+                        'max_output_tokens': 60,
+                        'top_p': 1.0,
+                    }
+                )
+                if response and response.candidates and response.candidates[0].content.parts:
+                    return response.text.strip()
+                return ""
+            except Exception as e:
+                 logging.warning(f"Ошибка внутри sync_llm_call (situational): {e}")
+                 return ""
 
         reaction_text = await asyncio.to_thread(sync_llm_call)
         
         logging.info(f"Ответ от Gemini для ситуативной реакции: '{reaction_text}'")
 
-        # 5. Проверяем и возвращаем результат
         if reaction_text and reaction_text.startswith('*') and reaction_text.endswith('*'):
             return reaction_text
         else:
-            logging.warning(f"Ситуативная реакция от модели не соответствует формату: {reaction_text}")
             return None
 
     except Exception as e:
-        # Логируем ошибку с полной трассировкой
         logging.error(f"Ошибка при генерации ситуативной реакции: {e}", exc_info=True)
         return None
 
@@ -171,7 +115,7 @@ async def generate_rhyme_reaction(message, model_instance):
     """Генерирует рифмованную реакцию на последнее слово сообщения"""
     tries = 0
     max_tries = 3
-    chat_id = message.chat.id # Получаем chat_id
+    chat_id = message.chat.id
     
     while tries < max_tries:
         try:
@@ -194,7 +138,7 @@ async def generate_rhyme_reaction(message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         rhyme_prompt,
-                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
+                        chat_id=chat_id,
                         generation_config={
                             'temperature': 0.7,
                             'max_output_tokens': 10,
@@ -207,7 +151,6 @@ async def generate_rhyme_reaction(message, model_instance):
                         candidate = response.candidates[0]
                         if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
                             return candidate.content.parts[0].text.strip()
-                    logging.warning(f"Gemini API returned empty response for rhyme generation")
                     return None
                         
                 except Exception as e:
@@ -326,7 +269,7 @@ async def send_random_voice_reaction(message: Message):
         logging.error(f"Ошибка при отправке голосового сообщения: {e}")
         return False
 
-# <<<--- НАЧАЛО ИЗМЕНЕНИЙ: СПИСОК ФРАЗ ДЛЯ 1399269377 --->>>
+# <<<--- СПИСОК ФРАЗ ДЛЯ 1399269377 --->>>
 INSULT_WORDS_FOR_1399269377 = [
     "норм", "найс", "горит", "тряска", "матрас", "подматрасный", "ебать", "фултайм", "юрист", "порвало",
     "петух", "карлан", "кривозубый", "гном", "куколд", "сталкер", "лысик", "лисичка", "порвало пердак", 
@@ -373,15 +316,12 @@ INSULT_WORDS_FOR_1399269377 = [
 async def generate_insult_for_lis(message, model_instance):
     """
     Генерирует реакцию для пользователя 1399269377.
-    С вероятностью 90% генерирует новую фразу (микс) через LLM,
-    с вероятностью 10% выбирает случайную фразу из списка.
     """
-    chat_id = message.chat.id # Получаем chat_id
+    chat_id = message.chat.id
     try:
         if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
             logging.info("Генерация МИКСА фразы для 1399269377...")
             
-            # Промпт для микширования
             prompt = (
                 "Ты — микшер фраз. Твоя задача — взять 2-3 фразы из списка ниже и смешать их, чтобы получилась новая, но в том же стиле. "
                 "ВАЖНО: Используй ТОЛЬКО слова и короткие обороты из предложенных примеров. Не добавляй НИЧЕГО от себя. "
@@ -394,10 +334,12 @@ async def generate_insult_for_lis(message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         prompt,
-                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
+                        chat_id=chat_id,
                         generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
                     )
-                    return getattr(response, 'text', '').strip()
+                    if response and response.candidates and response.candidates[0].content.parts:
+                        return response.text.strip()
+                    return ""
                 except Exception as e:
                     logging.error(f"Ошибка генерации реакции для 1399269377 (LLM call): {e}")
                     return None
@@ -408,7 +350,6 @@ async def generate_insult_for_lis(message, model_instance):
                 await message.reply(new_phrase)
                 return True
             else:
-                # Фолбэк: если генерация не удалась, отправить случайную из списка
                 logging.warning("Не удалось сгенерировать МИКС для 1399269377, используется случайная из списка (фолбэк).")
                 selected_phrase = random.choice(INSULT_WORDS_FOR_1399269377)
                 await message.reply(selected_phrase)
@@ -423,7 +364,6 @@ async def generate_insult_for_lis(message, model_instance):
     except Exception as e:
         logging.error(f"Критическая ошибка при отправке реакции для 1399269377: {e}")
         return False
-# <<<--- КОНЕЦ ИЗМЕНЕНИЙ: СПИСОК ФРАЗ ДЛЯ 1399269377 --->>>
 
 # Список фраз для пользователя 113086922
 PHRASES_FOR_113086922 = [
@@ -448,15 +388,12 @@ PHRASES_FOR_113086922 = [
 async def generate_reaction_for_113086922(message: Message, model_instance):
     """
     Генерирует реакцию для пользователя 113086922.
-    С вероятностью 90% генерирует новую фразу (микс) через LLM,
-    с вероятностью 10% выбирает случайную фразу из списка.
     """
-    chat_id = message.chat.id # Получаем chat_id
+    chat_id = message.chat.id
     try:
         if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
             logging.info("Генерация МИКСА фразы для 113086922...")
             
-            # Новый, строгий промпт для микширования
             prompt = (
                 "Ты — микшер фраз. Твоя задача — взять 2-3 фразы из списка ниже и смешать их, чтобы получилась новая, но в том же стиле. "
                 "ВАЖНО: Используй ТОЛЬКО слова и короткие обороты из предложенных примеров. Не добавляй НИЧЕГО от себя. "
@@ -469,10 +406,12 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 try:
                     response = model_instance.generate_content(
                         prompt,
-                        chat_id=chat_id, # <<<--- ДОБАВЛЕНО: передача chat_id для выбора модели
+                        chat_id=chat_id,
                         generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
                     )
-                    return getattr(response, 'text', '').strip()
+                    if response and response.candidates and response.candidates[0].content.parts:
+                        return response.text.strip()
+                    return ""
                 except Exception as e:
                     logging.error(f"Ошибка генерации реакции для 113086922 (LLM call): {e}")
                     return None
@@ -483,7 +422,6 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 await message.reply(new_phrase)
                 return True
             else:
-                # Фолбэк: если генерация не удалась, отправить случайную из списка
                 logging.warning("Не удалось сгенерировать МИКС для 113086922, используется случайная из списка (фолбэк).")
                 selected_phrase = random.choice(PHRASES_FOR_113086922)
                 await message.reply(selected_phrase)
@@ -503,9 +441,9 @@ async def generate_regular_reaction(message):
     try:
         if not message.text: return None
         words = message.text.split()
-        valid_words = [word for word in words if len(word) > 2]       
+        valid_words = [word for word in words if len(word) > 2]        
         if not valid_words: return None
-        random_word = random.choice(valid_words)               
+        random_word = random.choice(valid_words)                
         if len(valid_words) > 1 and random.random() < 0.008:
             word_index = words.index(random_word)
             if word_index < len(words) - 1 and len(words[word_index + 1]) > 2:
@@ -550,13 +488,14 @@ async def process_random_reactions(
     chat_cfg = chat_settings.get(chat_id, {})
 
     # ------------------------------------------------------------------
-    # 3. EMOJI-РЕАКЦИИ (ставятся только на входящие сообщения пользователя)
+    # 3. EMOJI-РЕАКЦИИ (Random, без AI)
     # ------------------------------------------------------------------
     if chat_cfg.get("emoji_enabled", True):
-        # Реальный шанс 5%
-        if random.random() < 0.95:
+        # Шанс можно немного поднять, раз это бесплатно (например, 7-10%)
+        # Оставил 5% как было
+        if random.random() < 0.05:
             try:
-                await set_contextual_emoji_reaction(message, model)
+                await set_random_emoji_reaction(message)
             except Exception as e:
                 logging.error(f"Emoji reaction failed: {e}", exc_info=True)
 
