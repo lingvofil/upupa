@@ -545,7 +545,7 @@ async def process_random_reactions(message: Message, model, save_user_message, t
     # Проверяем отдельный флаг emoji_enabled (по умолчанию True)
     if chat_settings.get(chat_id, {}).get("emoji_enabled", True):
         # Шанс 5% что бот поставит реакцию.
-        if random.random() < 0.05:
+        if random.random() < 0.95:
             await set_contextual_emoji_reaction(message, model)
 
     # Для остальных реакций проверяем reactions_enabled
