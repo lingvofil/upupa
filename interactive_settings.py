@@ -237,21 +237,21 @@ def get_help_keyboard(current_section="main"):
     # Кнопки разделов
     builder.row(
         types.InlineKeyboardButton(text="🗣 Говорилка", callback_data="help:talking"),
-        types.InlineKeyboardButton(text="📊 Стата", callback_data="help:stats")
+        types.InlineKeyboardButton(text="📊 Стотистика и оналез", callback_data="help:stats")
     )
     builder.row(
-        types.InlineKeyboardButton(text="🎨 Творчество", callback_data="help:creative"),
-        types.InlineKeyboardButton(text="🖼 Медиа", callback_data="help:media")
+        types.InlineKeyboardButton(text=" Векторины и игры", callback_data="help:creative"),
+        types.InlineKeyboardButton(text="🎨 Медиа", callback_data="help:media")
     )
     builder.row(
-        types.InlineKeyboardButton(text="📺 Каналы", callback_data="help:content"),
-        types.InlineKeyboardButton(text="🛠 Утилиты", callback_data="help:utils")
+        types.InlineKeyboardButton(text="📺 Коналы", callback_data="help:content"),
+        types.InlineKeyboardButton(text="🖼 Всякая хуйня", callback_data="help:utils")
     )
     
-    # Кнопка "В начало", если мы не в главном меню
+    # Кнопка "В ночало", если мы не в главном меню
     if current_section != "main":
         builder.row(
-            types.InlineKeyboardButton(text="🔙 В начало", callback_data="help:main")
+            types.InlineKeyboardButton(text="🔙 В ночало", callback_data="help:main")
         )
         
     return builder.as_markup()
