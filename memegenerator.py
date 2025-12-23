@@ -102,7 +102,7 @@ async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInp
     return None
 
 async def check_and_send_random_meme(message: Message):
-    """Проверка условий (настройки + 1% шанс) и отправка мема"""
+    """Проверка условий (настройки + настраиваемый шанс) и отправка мема"""
     if not message.text or message.text.startswith("/"):
         return
 
@@ -113,13 +113,15 @@ async def check_and_send_random_meme(message: Message):
     if not settings.get("random_memes_enabled", False):
         return
 
-    # Шанс 1%
-    if random.random() < 0.01:
+    # Получаем шанс из настроек или дефолт 1%
+    meme_prob = settings.get("meme_prob", 0.01)
+
+    if random.random() < meme_prob:
         try:
             await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
             photo = await create_meme_image(message.chat.id)
             if photo:
                 await message.answer_photo(photo)
-                logging.info(f"Random meme triggered in chat {message.chat.id}")
+                logging.info(f"Random meme triggered in chat {message.chat.id} with prob {meme_prob}")
         except Exception as e:
             logging.error(f"Random meme trigger error: {e}")
