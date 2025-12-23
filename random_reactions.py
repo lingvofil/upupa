@@ -27,7 +27,8 @@ async def set_random_emoji_reaction(message: Message):
         chosen_emoji = random.choice(TELEGRAM_REACTIONS)
         
         # Ставим реакцию
-        await message.react(reactions=[ReactionTypeEmoji(emoji=chosen_emoji)])
+        # ВАЖНО: аргумент называется 'reaction', а не 'reactions'
+        await message.react(reaction=[ReactionTypeEmoji(emoji=chosen_emoji)])
         logging.info(f"Бот поставил случайную реакцию: {chosen_emoji}")
         return True
 
@@ -491,8 +492,7 @@ async def process_random_reactions(
     # 3. EMOJI-РЕАКЦИИ (Random, без AI)
     # ------------------------------------------------------------------
     if chat_cfg.get("emoji_enabled", True):
-        # Шанс можно немного поднять, раз это бесплатно (например, 7-10%)
-        # Оставил 5% как было
+        # Шанс 5%
         if random.random() < 0.5:
             try:
                 await set_random_emoji_reaction(message)
