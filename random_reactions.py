@@ -493,7 +493,7 @@ async def process_random_reactions(
     if chat_cfg.get("emoji_enabled", True):
         # Шанс можно немного поднять, раз это бесплатно (например, 7-10%)
         # Оставил 5% как было
-        if random.random() < 0.05:
+        if random.random() < 0.5:
             try:
                 await set_random_emoji_reaction(message)
             except Exception as e:
