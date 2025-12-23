@@ -24,7 +24,8 @@ async def get_main_settings_markup(chat_id: str):
     """Генерация текста и кнопок главного меню настроек."""
     settings = chat_settings.get(chat_id, {})
     dialog_enabled = settings.get("dialog_enabled", True)
-    reactions_enabled = settings.get("reactions_enabled", True)
+    reactions_enabled = settings.get("reactions_enabled", True) # Это текстовые/голосовые
+    emoji_enabled = settings.get("emoji_enabled", True) # Это эмодзи
     random_memes_enabled = settings.get("random_memes_enabled", False)
     
     sms_enabled = chat_id not in sms_disabled_chats
@@ -34,7 +35,8 @@ async def get_main_settings_markup(chat_id: str):
 
     text = "⚙️ *Настройки чата*\n\n"
     text += f"🗣️ *Болталка:* {'Вкл. ✅' if dialog_enabled else 'Выкл. ❌'}\n"
-    text += f"🎉 *Случайные реакции:* {'Вкл. ✅' if reactions_enabled else 'Выкл. ❌'}\n"
+    text += f"🎉 *Случайные ответы:* {'Вкл. ✅' if reactions_enabled else 'Выкл. ❌'}\n"
+    text += f"🤡 *Эмодзи-реакции:* {'Вкл. ✅' if emoji_enabled else 'Выкл. ❌'}\n"
     text += f"🖼️ *Случайные мемы (1%):* {'Вкл. ✅' if random_memes_enabled else 'Выкл. ❌'}\n"
     text += f"💬 *СМС/ММС:* {'Вкл. ✅' if sms_enabled else 'Выкл. ❌'}\n"
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
@@ -43,8 +45,9 @@ async def get_main_settings_markup(chat_id: str):
 
     builder = InlineKeyboardBuilder()
     builder.button(text=f"{'Выкл.' if dialog_enabled else 'Вкл.'} болталку", callback_data="settings:toggle:dialog")
-    builder.button(text=f"{'Выкл.' if reactions_enabled else 'Вкл.'} реакции", callback_data="settings:toggle:reactions")
-    builder.button(text=f"{'Выкл.' if random_memes_enabled else 'Вкл.'} мемы (1%)", callback_data="settings:toggle:random_memes")
+    builder.button(text=f"{'Выкл.' if reactions_enabled else 'Вкл.'} ответы", callback_data="settings:toggle:reactions")
+    builder.button(text=f"{'Выкл.' if emoji_enabled else 'Вкл.'} эмодзи", callback_data="settings:toggle:emojis")
+    builder.button(text=f"{'Выкл.' if random_memes_enabled else 'Вкл.'} мемы", callback_data="settings:toggle:random_memes")
     builder.button(text=f"{'Выкл.' if sms_enabled else 'Вкл.'} СМС/ММС", callback_data="settings:toggle:sms")
     builder.button(text=f"{'Выкл.' if antispam_enabled else 'Вкл.'} антиспам", callback_data="settings:toggle:antispam")
     builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
@@ -115,6 +118,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             chat_settings[chat_id]["dialog_enabled"] = not chat_settings[chat_id].get("dialog_enabled", True)
         elif value == "reactions":
             chat_settings[chat_id]["reactions_enabled"] = not chat_settings[chat_id].get("reactions_enabled", True)
+        elif value == "emojis":
+            chat_settings[chat_id]["emoji_enabled"] = not chat_settings[chat_id].get("emoji_enabled", True)
         elif value == "random_memes":
             chat_settings[chat_id]["random_memes_enabled"] = not chat_settings[chat_id].get("random_memes_enabled", False)
         elif value == "sms":
