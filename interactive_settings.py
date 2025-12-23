@@ -1,4 +1,4 @@
-interactive_settings.py
+#interactive_settings.py
 
 import logging
 from aiogram import types
