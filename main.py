@@ -1,3 +1,5 @@
+#main.py
+
 # ================== БЛОК 0: Библиотеки ==================
 import os
 import random
@@ -143,7 +145,7 @@ from distortion import is_distortion_command, handle_distortion_request
 from broadcast import handle_broadcast_command, is_broadcast_command
 
 # ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
-from interactive_settings import send_settings_menu, handle_settings_callback
+from interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
 
 # ================== БЛОК 3.22 КОНТЕНТ-ФИЛЬТРА ==================
 from content_filter import ContentFilterMiddleware
@@ -223,9 +225,13 @@ async def process_clear_command(message: types.Message):
     conversation_history[user_id] = []
     await message.reply("Смыто всё говно")
 
-@router.message(lambda message: message.text and message.text.lower() == "чоумееш" and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and message.text.lower() in ["чоумееш", "справка", "help", "помощь"] and message.from_user.id not in BLOCKED_USERS)
 async def handle_chooumeesh(message: types.Message):
-    await message.reply(HELP_TEXT)
+    await send_help_menu(message)
+    
+@router.callback_query(F.data.startswith("help:"))
+async def help_callback_handler(query: types.CallbackQuery):
+    await handle_help_callback(query)
     
 @router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)
 async def handle_broadcast(message: types.Message):
