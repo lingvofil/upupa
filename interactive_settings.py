@@ -36,7 +36,7 @@ async def get_main_settings_markup(chat_id: str):
     text = "⚙️ *Настройки чата*\n\n"
     text += f"🗣️ *Болталка:* {'Вкл. ✅' if dialog_enabled else 'Выкл. ❌'}\n"
     text += f"🎉 *Случайные ответы:* {'Вкл. ✅' if reactions_enabled else 'Выкл. ❌'}\n"
-    text += f"🤡 *Эмодзи-реакции:* {'Вкл. ✅' if emoji_enabled else 'Выкл. ❌'}\n"
+    text += f"👀 *Эмодзи-реакции:* {'Вкл. ✅' if emoji_enabled else 'Выкл. ❌'}\n"
     text += f"🖼️ *Случайные мемы (1%):* {'Вкл. ✅' if random_memes_enabled else 'Выкл. ❌'}\n"
     text += f"💬 *СМС/ММС:* {'Вкл. ✅' if sms_enabled else 'Выкл. ❌'}\n"
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
