@@ -4,14 +4,90 @@ import random
 import logging
 import asyncio
 import json
-from aiogram.types import FSInputFile, Message
+from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
 from aiogram import Bot
 
 # Используем тот же экстрактор сообщений, что и в других модулях
 from lexicon_settings import extract_chat_messages
-from config import model # Модель передается как аргумент, импорт не нужен
+from config import model # Модель передается как аргумент, но импорт может быть полезен для типизации
 
-# Новая, исправленная функция для генерации ситуативных реакций
+# Полный список доступных реакций Telegram
+TELEGRAM_REACTIONS = [
+    "❤️", "🥰", "😁", "❤️‍🔥", "💔", "🤨", "👀"
+]
+
+# --- НОВАЯ ФУНКЦИЯ: Контекстные эмодзи-реакции ---
+async def set_contextual_emoji_reaction(message: Message, model_instance):
+    """
+    Анализирует контекст диалога и ставит подходящий эмодзи в качестве реакции.
+    """
+    chat_id = message.chat.id
+    logging.info(f"Запуск подбора эмодзи для реакции в чате {chat_id}.")
+    
+    # Получаем историю сообщений
+    all_messages = await extract_chat_messages(chat_id)
+    if not all_messages:
+        return False
+
+    # Берем последние 10 сообщений для контекста
+    last_messages = all_messages[-10:]
+    chat_history = "\n".join(last_messages)
+
+    prompt = f"""
+    Проанализируй диалог в чате и выбери ОДИН наиболее подходящий эмодзи-реакцию из предложенного списка.
+    Твой ответ должен содержать ТОЛЬКО ОДИН этот эмодзи и ничего больше
+
+    Список доступных реакций:
+    {', '.join(TELEGRAM_REACTIONS)}
+
+    История чата:
+    ---
+    {chat_history}
+    ---
+
+    Твой выбор (только смайл):
+    """
+
+    try:
+        def sync_llm_call():
+            response = model_instance.generate_content(
+                prompt,
+                chat_id=chat_id,
+                generation_config={
+                    'temperature': 0.8,
+                    'max_output_tokens': 5,
+                    'top_p': 0.9,
+                }
+            )
+            return getattr(response, 'text', '').strip()
+
+        chosen_emoji = await asyncio.to_thread(sync_llm_call)
+        
+        # Очистка от лишних символов (пробелы, переносы строк)
+        chosen_emoji = chosen_emoji.replace(" ", "").replace("\n", "")
+        
+        # Проверяем, есть ли этот эмодзи в нашем списке (или содержится ли он в ответе)
+        found_emoji = None
+        for emoji in TELEGRAM_REACTIONS:
+            if emoji == chosen_emoji:
+                found_emoji = emoji
+                break
+        
+        if found_emoji:
+            # Ставим реакцию
+            await message.react(reactions=[ReactionTypeEmoji(emoji=found_emoji)])
+            logging.info(f"Бот поставил реакцию: {found_emoji}")
+            return True
+        else:
+            logging.warning(f"Модель вернула некорректный эмодзи для реакции: {chosen_emoji}")
+            return False
+
+    except Exception as e:
+        logging.error(f"Ошибка при проставлении эмодзи-реакции: {e}")
+        return False
+
+# --- СТАРЫЙ ФУНКЦИОНАЛ ---
+
 async def generate_situational_reaction(chat_id: int, model_instance):
     """
     Генерирует ироничную кинематографичную ремарку на основе истории чата.
@@ -89,8 +165,6 @@ async def generate_situational_reaction(chat_id: int, model_instance):
         # Логируем ошибку с полной трассировкой
         logging.error(f"Ошибка при генерации ситуативной реакции: {e}", exc_info=True)
         return None
-
-# --- Остальные функции остаются без изменений ---
 
 # Рифма
 async def generate_rhyme_reaction(message, model_instance):
@@ -429,9 +503,9 @@ async def generate_regular_reaction(message):
     try:
         if not message.text: return None
         words = message.text.split()
-        valid_words = [word for word in words if len(word) > 2]      
+        valid_words = [word for word in words if len(word) > 2]       
         if not valid_words: return None
-        random_word = random.choice(valid_words)              
+        random_word = random.choice(valid_words)               
         if len(valid_words) > 1 and random.random() < 0.008:
             word_index = words.index(random_word)
             if word_index < len(words) - 1 and len(words[word_index + 1]) > 2:
@@ -462,6 +536,12 @@ async def process_random_reactions(message: Message, model, save_user_message, t
     # Проверяем, включены ли реакции в этом чате
     if not chat_settings.get(chat_id, {}).get("reactions_enabled", True):
         return False
+
+    # --- НОВЫЙ ФУНКЦИОНАЛ: ЭМОДЗИ РЕАКЦИИ ---
+    # Шанс 5% что бот поставит реакцию.
+    # Мы НЕ возвращаем True, чтобы бот мог дополнительно отправить текстовое сообщение
+    if random.random() < 0.05:
+        await set_contextual_emoji_reaction(message, model)
 
     if random.random() < 0.01: 
         # Передача message.chat.id для генерации ситуативной реакции
