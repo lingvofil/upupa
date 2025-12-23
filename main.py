@@ -33,11 +33,13 @@ from chat_settings import (
 )
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
-from stat_rank_settings import get_user_statistics, generate_chat_stats_report
+# ДОБАВЛЕНО: track_message_statistics для модуля реакций
+from stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
 
 # ================== БЛОК 3.4: НАСТРОЙКА ЛЕКСИКОНА ==================
+# ДОБАВЛЕНО: save_user_message для модуля реакций
 from lexicon_settings import (
-    process_my_lexicon, process_chat_lexicon, process_user_lexicon
+    process_my_lexicon, process_chat_lexicon, process_user_lexicon, save_user_message
 )
 
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
@@ -90,8 +92,8 @@ from picgeneration import (
     handle_redraw_command,
     handle_edit_command,
     handle_kandinsky_generation_command
-    # УБРАЛ ИМПОРТ handle_huggingface_command
 )
+
 # ================== БЛОК 3.13: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
     handle_current_weather_command, 
@@ -727,7 +729,21 @@ async def handle_poem(message: types.Message):
 @router.message()
 async def process_message(message: types.Message):
     await memegenerator.check_and_send_random_meme(message)
+    
+    # --- НОВАЯ ВСТАВКА: Обработка реакций и эмодзи ---
+    # Если бот решил "подколоть" или ответить рифмой (вернул True), 
+    # то основную генерацию (LLM) пропускаем.
+    # Если бот просто поставил эмодзи (вернул False), идем дальше.
+    should_stop = await process_random_reactions(
+        message, model, save_user_message, track_message_statistics,
+        add_chat, chat_settings, save_chat_settings
+    )
+    if should_stop:
+        return
+    # --------------------------------------------------
+
     await process_general_message(message)
+    
     try:
         if message.from_user:
             is_private = message.chat.type == 'private'
