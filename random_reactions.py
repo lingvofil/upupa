@@ -27,7 +27,6 @@ async def set_random_emoji_reaction(message: Message):
         chosen_emoji = random.choice(TELEGRAM_REACTIONS)
         
         # Ставим реакцию
-        # ВАЖНО: аргумент называется 'reaction', а не 'reactions'
         await message.react(reaction=[ReactionTypeEmoji(emoji=chosen_emoji)])
         logging.info(f"Бот поставил случайную реакцию: {chosen_emoji}")
         return True
@@ -442,9 +441,9 @@ async def generate_regular_reaction(message):
     try:
         if not message.text: return None
         words = message.text.split()
-        valid_words = [word for word in words if len(word) > 2]        
+        valid_words = [word for word in words if len(word) > 2]         
         if not valid_words: return None
-        random_word = random.choice(valid_words)                
+        random_word = random.choice(valid_words)                 
         if len(valid_words) > 1 and random.random() < 0.008:
             word_index = words.index(random_word)
             if word_index < len(words) - 1 and len(words[word_index + 1]) > 2:
@@ -489,11 +488,11 @@ async def process_random_reactions(
     chat_cfg = chat_settings.get(chat_id, {})
 
     # ------------------------------------------------------------------
-    # 3. EMOJI-РЕАКЦИИ (Random, без AI)
+    # 3. EMOJI-РЕАКЦИИ (Random, без AI) - key: emoji_prob
     # ------------------------------------------------------------------
     if chat_cfg.get("emoji_enabled", True):
-        # Шанс 5%
-        if random.random() < 0.01:
+        emoji_prob = chat_cfg.get("emoji_prob", 0.01) # Default 1%
+        if random.random() < emoji_prob:
             try:
                 await set_random_emoji_reaction(message)
             except Exception as e:
@@ -506,9 +505,10 @@ async def process_random_reactions(
         return False
 
     # ------------------------------------------------------------------
-    # 5. Ситуативная текстовая реакция (в чат, не reply)
+    # 5. Ситуативная текстовая реакция (AI/Remarks) - key: ai_prob
     # ------------------------------------------------------------------
-    if random.random() < 0.01:
+    ai_prob = chat_cfg.get("ai_prob", 0.01) # Default 1%
+    if random.random() < ai_prob:
         situational = await generate_situational_reaction(message.chat.id, model)
         if situational:
             await message.bot.send_message(
@@ -519,7 +519,7 @@ async def process_random_reactions(
             return True
 
     # ------------------------------------------------------------------
-    # 6. Персональные реакции
+    # 6. Персональные реакции (Easter Eggs) - Хардкод, так как персонально
     # ------------------------------------------------------------------
     if message.from_user.id == 1399269377 and message.text and random.random() < 0.3:
         if await generate_insult_for_lis(message, model):
@@ -530,33 +530,40 @@ async def process_random_reactions(
             return True
 
     # ------------------------------------------------------------------
-    # 7. Голосовые реакции
+    # 7. Голосовые реакции - key: voice_prob
     # ------------------------------------------------------------------
-    if message.voice and random.random() < 0.001:
+    voice_prob = chat_cfg.get("voice_prob", 0.0001) # Default 0.01%
+    
+    # 7.1 Реакция на войсы (чуть выше шанс, хардкод 0.1% или зависимый)
+    if message.voice and random.random() < 0.001: 
         if await send_random_voice_reaction(message):
             return True
 
-    if random.random() < 0.0001:
+    # 7.2 Случайный вброс войса в текст
+    if random.random() < voice_prob:
         if await send_random_common_voice_reaction(message):
             return True
 
+    # 7.3 Специфические триггеры (оставляем фиксированный шанс, это пасхалки)
     if message.text and "пара дня" in message.text.lower() and random.random() < 0.05:
         if await send_para_voice_reaction(message):
             return True
 
     # ------------------------------------------------------------------
-    # 8. Рифма
+    # 8. Рифма - key: rhyme_prob
     # ------------------------------------------------------------------
-    if message.text and random.random() < 0.008:
+    rhyme_prob = chat_cfg.get("rhyme_prob", 0.008) # Default 0.8%
+    if message.text and random.random() < rhyme_prob:
         rhyme = await generate_rhyme_reaction(message, model)
         if rhyme:
             await message.reply(rhyme)
             return True
 
     # ------------------------------------------------------------------
-    # 9. Обычная текстовая реакция
+    # 9. Обычная текстовая реакция (Штаны) - key: regular_prob
     # ------------------------------------------------------------------
-    if message.text and random.random() < 0.008:
+    regular_prob = chat_cfg.get("regular_prob", 0.008) # Default 0.8%
+    if message.text and random.random() < regular_prob:
         regular = await generate_regular_reaction(message)
         if regular:
             await message.reply(regular)
