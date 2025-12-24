@@ -1,4 +1,3 @@
-# statistics.py
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable, Awaitable
@@ -59,6 +58,26 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+# --- Логирование использования нейросетей (Gemini) ---
+
+def log_model_request(chat_id: Optional[int], user_id: Optional[int], model_name: str, request_type: str):
+    """
+    Функция для записи статистики использования моделей нейросетей.
+    Вызывается из config.py.
+    """
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO model_stats (chat_id, user_id, model_name, request_type) 
+               VALUES (?, ?, ?, ?)""",
+            (chat_id, user_id, model_name, request_type)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Error logging model request: {e}")
 
 # --- Логирование сообщений ---
 
@@ -127,7 +146,7 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
 
     group_stats = {str(row[0]): row[1] for row in cursor.fetchall()}
 
-    # --- ЛС (используем последний сохранённый ник) ---
+    # --- ЛС ---
     cursor.execute(f"""
         SELECT user_id, COUNT(*)
         FROM message_stats
@@ -142,18 +161,24 @@ def get_stats(period_hours: Optional[int] = None) -> Dict[str, Dict]:
         private_stats[display] = count
 
     # --- Статистика модели ---
+    model_time_filter = ""
+    model_params = []
+    if period_hours:
+        model_time_filter = "WHERE timestamp >= ?"
+        model_params.append(datetime.now() - timedelta(hours=period_hours))
+
     cursor.execute(f"""
         SELECT chat_id, COUNT(*)
         FROM model_stats
-        {"WHERE timestamp >= ?" if period_hours else ""}
+        {model_time_filter}
         GROUP BY chat_id
         ORDER BY COUNT(*) DESC
-    """, params if period_hours else [])
+    """, model_params)
 
     model_usage = {}
     for chat_id, count in cursor.fetchall():
         if not chat_id:
-            key = "Неизвестный чат"
+            key = "Неизвестный чат / API"
         else:
             cursor.execute(
                 "SELECT chat_title FROM message_stats WHERE chat_id = ? LIMIT 1",
