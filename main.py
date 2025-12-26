@@ -6,7 +6,7 @@ import random
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.client.session.aiohttp import AiohttpSession # <--- ДОБАВЛЕН ИМПОРТ
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart, Filter
 from aiogram.filters.command import Command
@@ -36,11 +36,9 @@ from chat_settings import (
 )
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
-# ДОБАВЛЕНО: track_message_statistics для модуля реакций
 from stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
 
 # ================== БЛОК 3.4: НАСТРОЙКА ЛЕКСИКОНА ==================
-# ДОБАВЛЕНО: save_user_message для модуля реакций
 from lexicon_settings import (
     process_my_lexicon, process_chat_lexicon, process_user_lexicon, save_user_message
 )
@@ -117,8 +115,9 @@ from random_reactions import process_random_reactions
 # ================== БЛОК 3.15: НАСТРОЙКА ИМЕНИ ==================
 from nameinfo import process_name_info
 
-# ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО ==================
-from summarize import summarize_chat_history
+# ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО И ИТОГИ ГОДА ==================
+# === ИЗМЕНЕНИЕ: Добавлен импорт summarize_year ===
+from summarize import summarize_chat_history, summarize_year
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
 from egra import start_egra, handle_egra_answer, handle_final_button_press
@@ -169,7 +168,6 @@ router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
 
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
-    """Вспомогательная функция для красивого форматирования статистики."""
     parts = [f"📊 *{title}*"]
 
     if stats.get("model_usage"):
@@ -329,7 +327,7 @@ async def handle_user_lexicon(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     username_or_name = message.text[len("лексикон "):].strip()
     if username_or_name.startswith('@'):
-        username_or_name = username_or_name[1:]      
+        username_or_name = username_or_name[1:]       
     chat_id = message.chat.id
     await process_user_lexicon(username_or_name, chat_id, message)
 
@@ -454,8 +452,6 @@ async def handle_location_start(message: Message):
         logging.error(f"Location handler error: {e}", exc_info=True)
         await message.reply("Я обосрался где-то по дороге.")
 
-
-# --- ХЭНДЛЕР 3: Обработка уточнения по локации (Reply) ---
 @router.message(
     F.reply_to_message & 
     F.reply_to_message.text & 
@@ -464,23 +460,12 @@ async def handle_location_start(message: Message):
 async def handle_location_followup(message: Message):
     if message.from_user.id in BLOCKED_USERS:
         return
-
-    # Достаем адрес из сообщения бота (оригинального)
     bot_text = message.reply_to_message.text
-    # Используем ту же фразу, что в начале, но не забываем про длину
     prefix_check = "ну и хули ты хочешь по адресу "
-    
-    # Чтобы корректно отрезать, находим индекс начала адреса (длина префикса)
     address = bot_text[len(prefix_check):]
-    
-    # Запрос пользователя (то, что он написал сейчас: "бары", "аптеки" и т.д.)
     user_query = message.text
-    
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
-    # Запускаем поиск через Gemini
     result = await process_location_search(address, user_query)
-    
     await message.reply(result)
 
 @router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
@@ -556,7 +541,6 @@ async def handle_robotics_description(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     
-    # Отправляем сообщение о начале "тяжелого" анализа
     processing = await message.reply("Включаю модули педерастического анализа... (Robotics 1.5)")
     
     success, response = await process_robotics_description(message)
@@ -587,7 +571,6 @@ async def describe_image(message: types.Message):
     )
 )
 async def edit_image(message: types.Message):
-    # теперь handle_edit_command сам берёт bot из message
     await handle_edit_command(message)
 
 
@@ -614,8 +597,6 @@ async def generate_image(message: types.Message):
 )
 async def generate_image_kandinsky(message: types.Message):
     await handle_kandinsky_generation_command(message)
-
-# ХЭНДЛЕР "упупа накидай" УДАЛЕН. Логика перенесена в generate_image
 
 @router.message(
     lambda message: (
@@ -649,7 +630,6 @@ async def add_text_to_image(message: types.Message):
 
 @router.message(F.text.lower().in_(["мем", "meme"]))
 async def meme_command_handler(message: Message):
-    """Принудительная генерация мема по команде"""
     await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
     reply_text = message.reply_to_message.text if message.reply_to_message else None
     photo = await memegenerator.create_meme_image(message.chat.id, reply_text)
@@ -689,6 +669,12 @@ async def admin_birthday_list_command(message: types.Message):
 async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
+
+# === ИЗМЕНЕНИЕ: Добавлен хэндлер для Итогов Года ===
+@router.message(F.text.lower() == "итоги года")
+async def handle_year_results(message: types.Message):
+    random_action = random.choice(actions)
+    await summarize_year(message, model, LOG_FILE, actions)
 
 @router.message(F.text.lower() == "упупа не болтай")
 async def disable_dialog(message: types.Message):
@@ -737,17 +723,13 @@ async def handle_poem(message: types.Message):
 async def process_message(message: types.Message):
     await memegenerator.check_and_send_random_meme(message)
     
-    # --- НОВАЯ ВСТАВКА: Обработка реакций и эмодзи ---
-    # Если бот решил "подколоть" или ответить рифмой (вернул True), 
-    # то основную генерацию (LLM) пропускаем.
-    # Если бот просто поставил эмодзи (вернул False), идем дальше.
+    # --- Обработка реакций и эмодзи ---
     should_stop = await process_random_reactions(
         message, model, save_user_message, track_message_statistics,
         add_chat, chat_settings, save_chat_settings
     )
     if should_stop:
         return
-    # --------------------------------------------------
 
     await process_general_message(message)
     
@@ -781,10 +763,7 @@ async def main():
     dp.include_router(dnd_router)
     dp.include_router(router)
     
-    # --- FIX: Установка длинного таймаута для сессии бота ---
-    # Мы делаем это здесь, так как bot импортирован из конфига
     bot.session = AiohttpSession(timeout=60)
-    # --------------------------------------------------------
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, skip_updates=True)
