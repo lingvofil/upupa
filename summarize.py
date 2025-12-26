@@ -3,6 +3,7 @@
 import logging
 import asyncio
 import re
+import time
 from datetime import datetime, timedelta
 from aiogram import types
 import random
@@ -107,12 +108,13 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 async def summarize_year(message: types.Message, chat_model, log_file_path: str, action_list: list):
     """
     Итоги года (команда 'итоги года').
+    С защитой от переполнения контекста (Limit 429).
     """
     chat_id = str(message.chat.id)
     now = datetime.now()
     time_threshold = now - timedelta(days=365) 
 
-    status_msg = await message.reply("Ого, итоги года? Ща, подниму архивы, это займет время...")
+    status_msg = await message.reply("Ого, итоги года? Поднимаю архивы, это займет время...")
 
     messages_to_summarize, users_in_period, chat_name = await asyncio.to_thread(
         _get_chat_messages, log_file_path, chat_id, time_threshold
@@ -122,7 +124,22 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
         await status_msg.edit_text("За последний год логов не найдено. Видимо, я спал.")
         return
 
-    summary_input_text = f"Хронология сообщений чата {chat_name} за ГОД (всего {len(messages_to_summarize)} сообщений):\n\n"
+    # === ЛОГИКА СЖАТИЯ ДЛЯ ИЗБЕЖАНИЯ ОШИБКИ 429 ===
+    # Оцениваем объем текста. Грубо: 1 токен ~ 4 символа.
+    # Лимит Free Tier для Flash часто около 1 млн токенов/минуту, но Flash-Lite или загрузка сети могут быть меньше.
+    # Безопасный порог для одного запроса "без нервов" ~ 60 000 - 80 000 символов.
+    
+    total_chars_approx = sum(len(m['text']) for m in messages_to_summarize)
+    MAX_SAFE_CHARS = 80000 
+
+    if total_chars_approx > MAX_SAFE_CHARS:
+        # Вычисляем шаг, чтобы проредить сообщения равномерно
+        step = (total_chars_approx // MAX_SAFE_CHARS) + 1
+        messages_to_summarize = messages_to_summarize[::step]
+        logging.info(f"Log too large ({total_chars_approx} chars). Downsampling with step {step}. New count: {len(messages_to_summarize)}")
+        await status_msg.edit_text(f"Логов слишком дохуя ({total_chars_approx} симв.), читаю по диагонали (каждое {step}-е сообщение)...")
+    
+    summary_input_text = f"Хронология сообщений чата {chat_name} за ГОД (выборка, всего {len(messages_to_summarize)} сообщений):\n\n"
     for msg in messages_to_summarize:
         summary_input_text += f"[{msg['date']}] {msg['display_name']}: {msg['text']}\n"
 
@@ -142,7 +159,6 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     
     Стиль: Сарказм, обсценная лексика (мат умеренно, но метко), панибратство.
     Объем: Будь подробен, но не лей воду.
-    Используй Markdown для выделения жирным (*текст*).
     
     Лог чата:
     {summary_input_text}
@@ -150,41 +166,63 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     Твой отчет:
     """
 
-    await status_msg.delete()
-    await _generate_and_send_summary(message, chat_model, summary_prompt, action_list, "Пишу мемуары, ждите...")
+    # Не удаляем status_msg сразу, удалим внутри генерации или после
+    await _generate_and_send_summary(message, chat_model, summary_prompt, action_list, "Анализирую этот пиздец...", status_msg)
 
-async def _generate_and_send_summary(message: types.Message, chat_model, prompt: str, action_list: list, wait_text: str):
+async def _generate_and_send_summary(message: types.Message, chat_model, prompt: str, action_list: list, wait_text: str, prev_msg: types.Message = None):
     """
-    Внутренняя функция для отправки запроса в LLM и ответа пользователю.
-    С защитой от ошибок парсинга Markdown.
+    Внутренняя функция для отправки запроса в LLM с ретраями при 429.
     """
     try:
         random_action = random.choice(action_list)
         await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
         
-        processing_msg = await message.reply(wait_text)
-
-        def sync_gemini_call():
+        if prev_msg:
             try:
-                response = chat_model.generate_content(prompt, chat_id=message.chat.id)
-                return response.text
-            except Exception as e:
-                logging.error(f"Error generating content: {e}")
-                return f"Ошибка при генерации: {str(e)}"
+                await prev_msg.edit_text(wait_text)
+                processing_msg = prev_msg
+            except:
+                processing_msg = await message.reply(wait_text)
+        else:
+            processing_msg = await message.reply(wait_text)
 
-        summary_response = await asyncio.to_thread(sync_gemini_call)
+        def sync_gemini_call_with_retry():
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    # Передаем chat_id, если обертка это поддерживает
+                    response = chat_model.generate_content(prompt, chat_id=message.chat.id)
+                    return response.text
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str:
+                        if attempt < max_retries:
+                            # Пытаемся выпарсить время ожидания, если его нет - ждем минуту
+                            wait_time = 60
+                            logging.warning(f"Quota exceeded (429). Waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+                            time.sleep(wait_time) 
+                            continue
+                        else:
+                            raise e # Ретраи кончились
+                    else:
+                        raise e
+
+        # Запускаем в треде, чтобы time.sleep не вешал бота
+        summary_response = await asyncio.to_thread(sync_gemini_call_with_retry)
         
         await processing_msg.delete()
 
         # === FIX: Защита от ошибок Markdown ===
         try:
-            # Сначала пробуем отправить красиво с Markdown
             await message.reply(summary_response, parse_mode="Markdown")
         except Exception as e:
             logging.warning(f"Markdown parsing failed ({e}), sending plain text fallback.")
-            # Если Telegram ругается на незакрытые теги, отправляем как есть (без parse_mode)
             await message.reply(summary_response)
 
     except Exception as e:
         logging.error(f"API Error during summarization: {e}")
-        await message.reply("🤖 Не удалось сформировать отчет из-за ошибки API.")
+        error_text = str(e)
+        if "429" in error_text:
+            await message.reply("🤖 Google жалуется на лимиты (429). Слишком много текста. Попробуй позже или скажи админу уменьшить выборку.")
+        else:
+            await message.reply(f"🤖 Не удалось сформировать отчет. Ошибка: {error_text[:100]}...")
