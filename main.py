@@ -6,6 +6,7 @@ import random
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.client.session.aiohttp import AiohttpSession # <--- ДОБАВЛЕН ИМПОРТ
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart, Filter
 from aiogram.filters.command import Command
@@ -328,7 +329,7 @@ async def handle_user_lexicon(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     username_or_name = message.text[len("лексикон "):].strip()
     if username_or_name.startswith('@'):
-        username_or_name = username_or_name[1:]     
+        username_or_name = username_or_name[1:]      
     chat_id = message.chat.id
     await process_user_lexicon(username_or_name, chat_id, message)
 
@@ -779,6 +780,12 @@ async def main():
     
     dp.include_router(dnd_router)
     dp.include_router(router)
+    
+    # --- FIX: Установка длинного таймаута для сессии бота ---
+    # Мы делаем это здесь, так как bot импортирован из конфига
+    bot.session = AiohttpSession(timeout=60)
+    # --------------------------------------------------------
+
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, skip_updates=True)
 
