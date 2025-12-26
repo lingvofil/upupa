@@ -112,7 +112,7 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     now = datetime.now()
     time_threshold = now - timedelta(days=365) 
 
-    status_msg = await message.reply("Ого, итоги года? Поднимаю архивы (может занять минуту)...")
+    status_msg = await message.reply("Я долго терпел вас, уебков")
 
     messages_to_summarize, users_in_period, chat_name = await asyncio.to_thread(
         _get_chat_messages, log_file_path, chat_id, time_threshold
