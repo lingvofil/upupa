@@ -106,7 +106,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 
 async def summarize_year(message: types.Message, chat_model, log_file_path: str, action_list: list):
     """
-    Итоги года с жестким сжатием и отключением цензуры.
+    Итоги года.
     """
     chat_id = str(message.chat.id)
     now = datetime.now()
@@ -122,8 +122,7 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
         await status_msg.edit_text("За последний год логов не найдено. Видимо, я спал.")
         return
 
-    # === АГРЕССИВНОЕ СЖАТИЕ ===
-    # Снижаем лимит до 30к символов, чтобы пролезть в квоты и не ждать минуту
+    # Сжатие для избежания лимитов API
     total_chars_approx = sum(len(m['text']) for m in messages_to_summarize)
     MAX_SAFE_CHARS = 30000 
 
@@ -162,7 +161,7 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
 
 async def _generate_and_send_summary(message: types.Message, chat_model, prompt: str, action_list: list, wait_text: str, prev_msg: types.Message = None):
     """
-    Отправка в LLM с отключением фильтров безопасности и ретраями.
+    Отправка в LLM с ретраями и разбивкой длинных сообщений.
     """
     try:
         random_action = random.choice(action_list)
@@ -177,8 +176,7 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
         else:
             processing_msg = await message.reply(wait_text)
 
-        # === НАСТРОЙКИ БЕЗОПАСНОСТИ (BLOCK_NONE) ===
-        # Это решает ошибку PROHIBITED_CONTENT
+        # Отключение фильтров безопасности
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -190,26 +188,24 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
             max_retries = 2
             for attempt in range(max_retries + 1):
                 try:
-                    # Передаем safety_settings
                     response = chat_model.generate_content(
                         prompt, 
                         safety_settings=safety_settings,
-                        chat_id=message.chat.id # Если твоя обертка поддерживает chat_id
+                        chat_id=message.chat.id
                     )
                     return response.text
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str:
                         if attempt < max_retries:
-                            wait_time = 30 # Ждем 30 сек
+                            wait_time = 30
                             logging.warning(f"Quota 429. Waiting {wait_time}s...")
                             time.sleep(wait_time) 
                             continue
                         else:
                             raise e
                     elif "PROHIBITED" in error_str or "block_reason" in error_str:
-                        # Если даже с настройками заблокировали
-                        return "Google зассал и заблокировал ответ из-за 'недопустимого контента'. Слишком грязно ругаетесь, господа."
+                        return "Google зассал и заблокировал ответ из-за 'недопустимого контента'. Слишком грязно ругаетесь."
                     else:
                         raise e
 
@@ -217,11 +213,47 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
         
         await processing_msg.delete()
 
-        try:
-            await message.reply(summary_response, parse_mode="Markdown")
-        except Exception as e:
-            logging.warning(f"Markdown failed, sending text: {e}")
-            await message.reply(summary_response)
+        # === ЛОГИКА РАЗБИВКИ НА ЧАСТИ (MAX 4096) ===
+        if len(summary_response) <= 4096:
+            try:
+                await message.reply(summary_response, parse_mode="Markdown")
+            except Exception:
+                await message.reply(summary_response)
+        else:
+            # Разбиваем текст на куски
+            parts = []
+            while summary_response:
+                if len(summary_response) <= 4096:
+                    parts.append(summary_response)
+                    break
+                
+                # Ищем перенос строки ближе к концу лимита
+                split_index = summary_response.rfind('\n', 0, 4096)
+                if split_index == -1:
+                    # Если нет переноса, ищем пробел
+                    split_index = summary_response.rfind(' ', 0, 4096)
+                
+                if split_index == -1:
+                    # Если вообще ничего нет, режем жестко
+                    split_index = 4096
+                
+                parts.append(summary_response[:split_index])
+                summary_response = summary_response[split_index:].lstrip() # Убираем пробелы в начале след. куска
+
+            # Отправляем куски
+            for i, part in enumerate(parts):
+                try:
+                    # Первое сообщение - reply, остальные просто в чат
+                    if i == 0:
+                        await message.reply(part, parse_mode="Markdown")
+                    else:
+                        await message.answer(part, parse_mode="Markdown")
+                except Exception as e:
+                    logging.warning(f"Markdown failed for part {i}, sending plain text.")
+                    if i == 0:
+                        await message.reply(part)
+                    else:
+                        await message.answer(part)
 
     except Exception as e:
         logging.error(f"Summarization Error: {e}")
