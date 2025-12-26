@@ -190,6 +190,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
     
     # 1. Flux (Pollinations)
     await processing_msg.edit_text("Использую ебучий Flux...")
+    # Если в промпте уже есть английские "badly drawn", translate_to_en не должен это испортить
     prompt_en = await translate_to_en(prompt_ru)
     img = await pollinations_generate(prompt_en)
     if img:
@@ -234,7 +235,7 @@ async def handle_kandinsky_generation_command(message: types.Message):
     await handle_image_generation_command(message)
 
 async def handle_pun_image_command(message: types.Message):
-    """Каламбур с картинкой (Исправлено)"""
+    """Каламбур с картинкой"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     msg = await message.reply("🤔 Придумываю калом бур...")
     
@@ -248,7 +249,6 @@ async def handle_pun_image_command(message: types.Message):
         )
         
         pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt).text.strip())
-        # Чистим от Markdown и мусора
         pun_res = pun_res.replace('*', '').replace('"', '').replace("'", "").strip()
         
         if '=' not in pun_res:
@@ -260,13 +260,11 @@ async def handle_pun_image_command(message: types.Message):
         
         await msg.edit_text("Ща скаламбурю нахуй")
         
-        # Для каламбура промпт должен быть описательным
         prompt_en = await translate_to_en(f"A creative surreal hybrid of {source_raw}, visual pun, digital art, high resolution")
         
-        # Генерируем (Flux лучше всего для этого)
+        # Генерируем
         img_data = await pollinations_generate(prompt_en)
         if not img_data:
-            # Фолбек на Kandinsky если Flux лежит
             global PIPELINE_ID
             if not PIPELINE_ID: PIPELINE_ID = await asyncio.to_thread(kandinsky_api.get_pipeline)
             if PIPELINE_ID:
@@ -274,7 +272,6 @@ async def handle_pun_image_command(message: types.Message):
                 if uuid: img_data, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
         
         if img_data:
-            # Наложение текста и отправка
             path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
             await message.reply_photo(types.FSInputFile(path))
             os.remove(path)
@@ -287,14 +284,27 @@ async def handle_pun_image_command(message: types.Message):
         await msg.edit_text("Ашипка блядь")
 
 async def handle_redraw_command(message: types.Message):
+    """Перерисовка в стиле всратого детского рисунка"""
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
     if not photo: return await message.reply("Нужно фото.")
-    msg = await message.reply("🔍 Анализирую...")
+    msg = await message.reply("Анализирую тваю мазню...")
     try:
         img_bytes = await download_telegram_image(bot, photo)
-        desc = await asyncio.to_thread(lambda: model.generate_content(["Describe this for a prompt.", {"mime_type": "image/jpeg", "data": img_bytes}]))
-        await robust_image_generation(message, desc.text.strip(), msg)
-    except: await msg.edit_text("Ошибка анализа.")
+        # Просим Gemini описать только суть объектов, чтобы не было конфликта стилей
+        desc = await asyncio.to_thread(lambda: model.generate_content(
+            ["Briefly describe the main objects and actions in this image.", {"mime_type": "image/jpeg", "data": img_bytes}]
+        ))
+        
+        # Формируем всратый промпт
+        shitty_prompt = (
+            f"A very bad children's drawing, ugly doodle, mess, crayon style, "
+            f"scribble, naive art, stick figures, white background, masterpiece by 4 year old child of: {desc.text.strip()}"
+        )
+        
+        await robust_image_generation(message, shitty_prompt, msg)
+    except Exception as e:
+        logging.error(f"Redraw error: {e}")
+        await msg.edit_text("Ошибка анализа.")
 
 async def handle_edit_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
