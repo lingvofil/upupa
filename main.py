@@ -116,7 +116,6 @@ from random_reactions import process_random_reactions
 from nameinfo import process_name_info
 
 # ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО И ИТОГИ ГОДА ==================
-# === ИЗМЕНЕНИЕ: Добавлен импорт summarize_year ===
 from summarize import summarize_chat_history, summarize_year
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
@@ -670,7 +669,6 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
-# === ИЗМЕНЕНИЕ: Добавлен хэндлер для Итогов Года ===
 @router.message(F.text.lower() == "итоги года")
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
