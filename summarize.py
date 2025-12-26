@@ -21,8 +21,6 @@ def _get_chat_messages(log_file_path: str, chat_id: str, start_time: datetime):
     
     try:
         with open(log_file_path, "r", encoding="utf-8") as f:
-            # Читаем файл. Если файл огромный, в будущем стоит читать с конца, 
-            # но пока оставляем полную вычитку для надежности поиска.
             lines = f.readlines()
             
             for line in lines:
@@ -79,7 +77,6 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 
     await message.reply("Щас всех вас сдам...")
 
-    # Запускаем чтение файла в отдельном потоке, чтобы не блокировать бота
     messages_to_summarize, users_in_period, chat_name = await asyncio.to_thread(
         _get_chat_messages, log_file_path, chat_id, time_threshold
     )
@@ -88,7 +85,6 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         await message.reply(f"За последние 12 часов в чате {chat_name or chat_id} нихуя не было.")
         return
 
-    # Формируем текст для модели
     summary_input_text = f"Сообщения из чата {chat_name} за последние 12 часов (всего {len(messages_to_summarize)} сообщений):\n\n"
     for msg in messages_to_summarize:
         summary_input_text += f"{msg['display_name']}: {msg['text']}\n"
@@ -114,11 +110,10 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     """
     chat_id = str(message.chat.id)
     now = datetime.now()
-    time_threshold = now - timedelta(days=365) # Берем год
+    time_threshold = now - timedelta(days=365) 
 
     status_msg = await message.reply("Ого, итоги года? Ща, подниму архивы, это займет время...")
 
-    # Читаем логи (это может занять время)
     messages_to_summarize, users_in_period, chat_name = await asyncio.to_thread(
         _get_chat_messages, log_file_path, chat_id, time_threshold
     )
@@ -127,32 +122,27 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
         await status_msg.edit_text("За последний год логов не найдено. Видимо, я спал.")
         return
 
-    # Если сообщений ОЧЕНЬ много, Gemini 2.0 Flash справится (окно 1М токенов), 
-    # но на всякий случай можно обрезать совсем старое или лимитировать, 
-    # но пока попробуем скормить всё.
-    
     summary_input_text = f"Хронология сообщений чата {chat_name} за ГОД (всего {len(messages_to_summarize)} сообщений):\n\n"
     for msg in messages_to_summarize:
-        # Добавляем дату, чтобы бот понимал, когда было событие
         summary_input_text += f"[{msg['date']}] {msg['display_name']}: {msg['text']}\n"
 
     user_mentions_list = [u["display_name"] for u in users_in_period.values() if u["display_name"]]
     user_mentions_str = ", ".join(user_mentions_list) if user_mentions_list else "всех бродяг"
 
-    # Промпт специально под итоги года
     summary_prompt = f"""Ты подводишь ИТОГИ ГОДА для чата {chat_name}.
     Входящие данные — это лог переписки за 12 месяцев.
     
     Твоя задача написать эпичный, смешной и немного оскорбительный отчет.
     
     Структура отчета:
-    1. 🏆 **Главные события года**: Выдели 3-5 основных сюжетных арок или срачей, которые происходили. Указывай примерные месяцы (ты видишь даты).
-    2. 🤡 **Номинации года**: Придумай смешные номинации на основе поведения (например: "Душнила года", "Генератор кринжа", "Пропажа года", "Главный спамер"). Раздай их участникам: {user_mentions_str}.
+    1. 🏆 **Главные события года**: Выдели 3-5 основных сюжетных арок или срачей.
+    2. 🤡 **Номинации года**: Придумай смешные номинации (например: "Душнила года", "Генератор кринжа", "Пропажа года"). Раздай их участникам: {user_mentions_str}.
     3. 💬 **Золотой фонд цитат**: Выбери 3 самые странные или смешные цитаты из лога.
     4. 📉 **Общая атмосфера**: Как прошел год? Деградировали или эволюционировали?
     
-    Стиль: Сарказм, обсценная лексика (мат умеренно, но метко), панибратство. Ты — циничный наблюдатель.
+    Стиль: Сарказм, обсценная лексика (мат умеренно, но метко), панибратство.
     Объем: Будь подробен, но не лей воду.
+    Используй Markdown для выделения жирным (*текст*).
     
     Лог чата:
     {summary_input_text}
@@ -166,6 +156,7 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
 async def _generate_and_send_summary(message: types.Message, chat_model, prompt: str, action_list: list, wait_text: str):
     """
     Внутренняя функция для отправки запроса в LLM и ответа пользователю.
+    С защитой от ошибок парсинга Markdown.
     """
     try:
         random_action = random.choice(action_list)
@@ -175,7 +166,6 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
 
         def sync_gemini_call():
             try:
-                # Передаем chat_id для балансировки/ключей, если это реализовано в обертке модели
                 response = chat_model.generate_content(prompt, chat_id=message.chat.id)
                 return response.text
             except Exception as e:
@@ -185,7 +175,15 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
         summary_response = await asyncio.to_thread(sync_gemini_call)
         
         await processing_msg.delete()
-        await message.reply(summary_response, parse_mode="Markdown") # Markdown для красоты итогов
+
+        # === FIX: Защита от ошибок Markdown ===
+        try:
+            # Сначала пробуем отправить красиво с Markdown
+            await message.reply(summary_response, parse_mode="Markdown")
+        except Exception as e:
+            logging.warning(f"Markdown parsing failed ({e}), sending plain text fallback.")
+            # Если Telegram ругается на незакрытые теги, отправляем как есть (без parse_mode)
+            await message.reply(summary_response)
 
     except Exception as e:
         logging.error(f"API Error during summarization: {e}")
