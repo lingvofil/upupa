@@ -669,7 +669,7 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
-@router.message(F.text.lower() == "итоги года")
+@router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
     await summarize_year(message, model, LOG_FILE, actions)
