@@ -189,7 +189,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
     global PIPELINE_ID
     
     # 1. Flux (Pollinations)
-    await processing_msg.edit_text("🎨 Рисую через Flux...")
+    await processing_msg.edit_text("Использую ебучий Flux...")
     prompt_en = await translate_to_en(prompt_ru)
     img = await pollinations_generate(prompt_en)
     if img:
@@ -197,7 +197,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
         return await send_generated_photo(message, img, "flux.png")
 
     # 2. Kandinsky
-    await processing_msg.edit_text("🔄 Пробую Kandinsky...")
+    await processing_msg.edit_text("Использую ебучий Kandinsky...")
     if not PIPELINE_ID: PIPELINE_ID = await asyncio.to_thread(kandinsky_api.get_pipeline)
     if PIPELINE_ID:
         uuid, _ = await asyncio.to_thread(kandinsky_api.generate, prompt_ru, PIPELINE_ID)
@@ -208,7 +208,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
                 return await send_generated_photo(message, img, "kandinsky.png")
 
     # 3. Резервы
-    await processing_msg.edit_text("🔌 Использую резервный канал...")
+    await processing_msg.edit_text("Использую резервный анал...")
     img = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
     if not img: img = await cf_generate_t2i(prompt_en)
     
@@ -216,7 +216,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
         await processing_msg.delete()
         await send_generated_photo(message, img, "ai_image.png")
     else:
-        await processing_msg.edit_text("Все нейросети перегружены. Попробуй позже.")
+        await processing_msg.edit_text("Иди нахуй, я спать")
 
 # =============================================================================
 # ПУБЛИЧНЫЕ ХЭНДЛЕРЫ
@@ -227,7 +227,7 @@ async def handle_image_generation_command(message: types.Message):
     if not prompt and message.reply_to_message:
         prompt = message.reply_to_message.text or message.reply_to_message.caption
     if not prompt: return await message.reply("Что нарисовать?")
-    msg = await message.reply("🎨 Готовлю холст...")
+    msg = await message.reply("Ща падажжи ебана.")
     await robust_image_generation(message, prompt, msg)
 
 async def handle_kandinsky_generation_command(message: types.Message):
@@ -236,7 +236,7 @@ async def handle_kandinsky_generation_command(message: types.Message):
 async def handle_pun_image_command(message: types.Message):
     """Каламбур с картинкой (Исправлено)"""
     await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    msg = await message.reply("🤔 Придумываю каламбур...")
+    msg = await message.reply("🤔 Придумываю калом бур...")
     
     try:
         # Максимально строгий промпт для Gemini
@@ -252,13 +252,13 @@ async def handle_pun_image_command(message: types.Message):
         pun_res = pun_res.replace('*', '').replace('"', '').replace("'", "").strip()
         
         if '=' not in pun_res:
-            return await msg.edit_text("Не удалось составить каламбур. Модель капризничает.")
+            return await msg.edit_text("Я пидорас")
             
         parts = pun_res.split('=')
         source_raw = parts[0].strip()
         final_word = parts[1].strip()
         
-        await msg.edit_text(f"✨ Каламбур: {final_word}\n🎨 Рисую...")
+        await msg.edit_text("Ща скаламбурю нахуй")
         
         # Для каламбура промпт должен быть описательным
         prompt_en = await translate_to_en(f"A creative surreal hybrid of {source_raw}, visual pun, digital art, high resolution")
@@ -280,11 +280,11 @@ async def handle_pun_image_command(message: types.Message):
             os.remove(path)
             await msg.delete()
         else:
-            await msg.edit_text(f"Каламбур придумал: {pun_res}\nНо все художники сейчас заняты.")
+            await msg.edit_text(f"Вот тебе калом бур: {pun_res}\nРисуй сам, раз такой умный.")
             
     except Exception as e:
         logging.error(f"Pun error: {e}")
-        await msg.edit_text("Произошла ошибка при создании каламбура.")
+        await msg.edit_text("Ашипка блядь")
 
 async def handle_redraw_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
