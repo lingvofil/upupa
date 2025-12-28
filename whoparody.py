@@ -1,11 +1,14 @@
+#whoparody.py
+
 import random
 import logging
+import asyncio
 from aiogram import types
 from lexicon_settings import (
     extract_user_messages,
     extract_messages_by_username,
     extract_messages_by_full_name,
-    extract_chat_messages  # Используем существующую функцию
+    extract_chat_messages
 )
 from config import model, LOG_FILE
 from prompts import actions, PARODY_PROMPT
@@ -17,6 +20,7 @@ WHO_AM_I_PROMPT = """
 Будь максимально саркастичным, язвительным и не стесняйся в выражениях. Используй ненормативную лексику. 
 Опиши его манеру общения, возможные увлечения и характер, приводи примеры его сообщений. 
 Не пиши вступлений типа "на основе сообщений", просто выдавай готовую характеристику.
+ВАЖНО: Постарайся уложиться в 3000 символов.
 
 Вот сообщения для анализа:
 {messages}
@@ -28,31 +32,46 @@ CHAT_PROFILE_PROMPT = """
 Опиши атмосферу, манеру общения участников и возможные темы обсуждений, приводи примеры.
 Не пиши вступлений типа "на основе сообщений", просто выдавай готовую характеристику.
 Проведи отдельный краткий анализ по самым активным пользователям.
+ВАЖНО: Постарайся уложиться в 3500 символов.
 
 Вот сообщения для анализа:
 {messages}
 """
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+async def send_long_message(message: types.Message, text: str):
+    """Разбивает текст на части по 4000 символов и отправляет их."""
+    MAX_LENGTH = 4000
+    if len(text) <= MAX_LENGTH:
+        await message.reply(text)
+    else:
+        # Разбиваем текст на куски
+        chunks = [text[i:i + MAX_LENGTH] for i in range(0, len(text), MAX_LENGTH)]
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                await message.reply(chunk)
+            else:
+                # Последующие части отправляем обычным сообщением, чтобы не спамить реплаями
+                await message.answer(chunk)
+            # Небольшая пауза, чтобы не поймать Flood Limit от Telegram
+            await asyncio.sleep(0.5)
+
 # --- ОСНОВНАЯ ЛОГИКА ---
 
-# Обновленная логика обработки "кто я"
 async def process_user_profile(user_id, chat_id, message: types.Message):
     """Генерирует саркастичную характеристику пользователя на основе его сообщений."""
-    # ДОБАВЛЕНО: Промежуточное сообщение
     processing_msg = await message.reply("щас посмотрим, что ты за фрукт")
     
-    # Собираем сообщения пользователя только в этом чате
     messages = await extract_user_messages(user_id, chat_id)
     if not messages:
         await processing_msg.delete()
         await message.reply("Я тебя не знаю, иди нахуй.")
         return
         
-    # Выбираем 400 случайных сообщений или все, если их меньше
     sample_size = min(400, len(messages))
     message_sample = random.sample(messages, sample_size)
     
-    # Формируем текст для промпта
     messages_text = "\n".join(message_sample)
     prompt = WHO_AM_I_PROMPT.format(messages=messages_text)
     
@@ -67,16 +86,13 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
         description = f"Не могу составить твой портрет, ты слишком сложная и непонятная хуйня. Ошибка: {e}"
     
     await processing_msg.delete()
-    await message.reply(description)
+    await send_long_message(message, description)
 
-# ИСПРАВЛЕННАЯ логика обработки "что за чат"
 async def process_chat_profile(message: types.Message):
     """Генерирует саркастичную характеристику чата на основе сообщений в нем."""
     chat_id = message.chat.id
-    # ДОБАВЛЕНО: Промежуточное сообщение
     processing_msg = await message.reply("Анализирую этот гадюшник...")
 
-    # Используем правильную функцию из Lexicon_settings.py
     messages = await extract_chat_messages(chat_id)
     logging.info(f"Извлечено {len(messages)} сообщений для чата: {chat_id}")
     
@@ -85,7 +101,6 @@ async def process_chat_profile(message: types.Message):
         await message.reply("В этом чате такая тишина, что даже мухи дохнут со скуки. Нечего анализировать.")
         return
 
-    # Выбираем 400 случайных сообщений или все, если их меньше
     sample_size = min(400, len(messages))
     message_sample = random.sample(messages, sample_size)
     messages_text = "\n".join(message_sample)
@@ -102,10 +117,9 @@ async def process_chat_profile(message: types.Message):
         description = "Не могу понять, что это за притон. Слишком много кринжа."
         
     await processing_msg.delete()
-    await message.reply(description)
+    await send_long_message(message, description)
 
-# Логика обработки "пародия" (без изменений)
-async def process_parody(message, chat_id):
+async def process_parody(message: types.Message, chat_id: int):
    random_action = random.choice(actions)
    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
    parts = message.text.split(maxsplit=1)
@@ -139,4 +153,4 @@ async def process_parody(message, chat_id):
        
    response_text = f"{'@' + username if username else full_name}:\n\n{parody_text}"
    
-   await message.reply(response_text)
+   await send_long_message(message, response_text)
