@@ -675,42 +675,23 @@ async def handle_chobylo(message: types.Message):
 
 # ================== ХЭНДЛЕР ИГРЫ КРОКОДИЛ ==================
 @router.message(F.text.lower() == "крокодил")
-async def cmd_crocodile(message: Message):
-    if message.chat.type == 'private':
-        return await message.reply("В это нужно играть в группе, а не в одиночку!")
-    
-    chat_id = str(message.chat.id)
-    word = await crocodile.generate_game_word()
-    
-    # Сохраняем состояние игры
-    crocodile.game_sessions[chat_id] = {
-        "word": word,
-        "drawer_id": message.from_user.id
-    }
-    
-    kb = crocodile.get_game_keyboard(chat_id)
-    
-    if kb is None:
-        return await message.answer("⚠️ Ошибка конфигурации Mini App. Проверьте логи сервера.")
+async def start_croc(message: types.Message):
+    await crocodile.handle_start_game(message)
 
-    try:
-        await message.answer(
-            f"🎮 **ИГРА КРОКОДИЛ НАЧАТА!**\n\n"
-            f"Ведущий: {message.from_user.full_name}\n"
-            f"Остальные — угадывайте слово в чате! Ведущий, открывай холст и приступай.",
-            reply_markup=kb,
-            parse_mode="Markdown"
-        )
-        
-        # Секретное слово ведущему в ЛС
-        try:
-            await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**\nНикому не говори!")
-        except Exception:
-            await message.answer("Ведущий, напиши мне в личку, чтобы я мог прислать тебе слово!")
-            
-    except Exception as e:
-        logging.error(f"Error sending crocodile keyboard: {e}")
-        await message.answer(f"❌ Ошибка Telegram: {e}. Скорее всего, домен туннеля не совпадает с настройками в BotFather.")
+@router.callback_query(F.data.startswith("cr_"))
+async def croc_callback(callback: types.CallbackQuery):
+    if callback.data == "cr_restart":
+        await crocodile.handle_start_game(callback.message)
+        await callback.answer()
+    else:
+        await crocodile.handle_callback(callback)
+
+# В общем хендлере сообщений
+@router.message()
+async def process_all(message: types.Message):
+    # Пытаемся проверить, не ответ ли это в Крокодиле
+    if await crocodile.check_answer(message):
+        return
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
