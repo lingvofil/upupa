@@ -12,35 +12,21 @@
             font-family: -apple-system, system-ui, sans-serif; 
             overflow: hidden; height: 100vh; display: flex; flex-direction: column; 
         }
-        #canvas { 
-            display: block; background: #ffffff; touch-action: none; 
-            width: 100%; flex-grow: 1; cursor: crosshair;
-        }
+        #canvas { display: block; background: #fff; touch-action: none; width: 100%; flex-grow: 1; }
         .toolbar { 
             height: 80px; background: #2c2c2e; display: flex; 
             align-items: center; justify-content: space-around; 
             padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid #3a3a3c;
         }
-        .color-picker-wrapper {
-            width: 44px; height: 44px; border: 2px solid #fff; border-radius: 50%;
-            overflow: hidden; position: relative;
-        }
-        input[type="color"] {
-            position: absolute; top: -5px; left: -5px; width: 60px; height: 60px;
-            border: none; background: none; cursor: pointer;
-        }
-        .btn { 
-            background: #ff3b30; color: white; border: none; padding: 12px 20px; 
-            border-radius: 12px; font-weight: bold; 
-        }
+        .color-picker { width: 44px; height: 44px; border: 2px solid #fff; border-radius: 50%; overflow: hidden; position: relative; }
+        input[type="color"] { position: absolute; top: -5px; left: -5px; width: 60px; height: 60px; border: none; background: none; cursor: pointer; }
+        .btn { background: #ff3b30; color: white; border: none; padding: 12px 20px; border-radius: 12px; font-weight: bold; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <div class="toolbar">
-        <div class="color-picker-wrapper">
-            <input type="color" id="brushColor" value="#000000">
-        </div>
+        <div class="color-picker"><input type="color" id="brushColor" value="#000000"></div>
         <button class="btn" id="clearBtn">ОЧИСТИТЬ</button>
     </div>
 
@@ -54,11 +40,20 @@
         const brushColor = document.getElementById('brushColor');
         const clearBtn = document.getElementById('clearBtn');
 
-        // Подключаемся к сокету
         const socket = io();
 
+        // ЛОГИКА ОПРЕДЕЛЕНИЯ КОМНАТЫ (cid или start_param)
         const urlParams = new URLSearchParams(window.location.search);
-        const roomId = urlParams.get('cid') || 'global';
+        let roomId = urlParams.get('cid');
+
+        // Если cid нет в URL, пробуем достать его из start_param (для t.me ссылок)
+        if (!roomId && tg.initDataUnsafe && tg.initDataUnsafe.start_param) {
+            roomId = tg.initDataUnsafe.start_param;
+        }
+        
+        if (!roomId) roomId = 'global';
+
+        console.log("Room ID initialized:", roomId);
 
         function resize() {
             const ratio = window.devicePixelRatio || 1;
@@ -68,7 +63,6 @@
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.lineWidth = 5;
-            // Фон холста
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
@@ -88,30 +82,6 @@
             return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
-        function startDraw(e) {
-            drawing = true;
-            lastPos = getPos(e);
-            ctx.beginPath();
-            ctx.moveTo(lastPos.x, lastPos.y);
-        }
-
-        function draw(e) {
-            if (!drawing) return;
-            if (e.cancelable) e.preventDefault();
-            const pos = getPos(e);
-            
-            const data = {
-                x: pos.x, y: pos.y,
-                px: lastPos.x, py: lastPos.y,
-                color: brushColor.value,
-                room: roomId
-            };
-
-            renderLine(data);
-            socket.emit('draw_step', data);
-            lastPos = pos;
-        }
-
         function renderLine(data) {
             ctx.strokeStyle = data.color;
             ctx.beginPath();
@@ -120,15 +90,30 @@
             ctx.stroke();
         }
 
-        canvas.addEventListener('mousedown', startDraw);
-        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mousedown', (e) => { drawing = true; lastPos = getPos(e); ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); });
+        canvas.addEventListener('mousemove', (e) => {
+            if (!drawing) return;
+            const pos = getPos(e);
+            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: brushColor.value, room: roomId };
+            renderLine(data);
+            socket.emit('draw_step', data);
+            lastPos = pos;
+        });
         window.addEventListener('mouseup', () => drawing = false);
 
-        canvas.addEventListener('touchstart', (e) => {
-            startDraw(e);
-            if (e.cancelable) e.preventDefault();
+        canvas.addEventListener('touchstart', (e) => { 
+            drawing = true; lastPos = getPos(e); 
+            if (e.cancelable) e.preventDefault(); 
         }, {passive: false});
-        canvas.addEventListener('touchmove', draw, {passive: false});
+        canvas.addEventListener('touchmove', (e) => {
+            if (!drawing) return;
+            if (e.cancelable) e.preventDefault();
+            const pos = getPos(e);
+            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: brushColor.value, room: roomId };
+            renderLine(data);
+            socket.emit('draw_step', data);
+            lastPos = pos;
+        }, {passive: false});
         window.addEventListener('touchend', () => drawing = false);
 
         clearBtn.onclick = () => {
@@ -137,11 +122,8 @@
             socket.emit('clear_canvas', { room: roomId });
         };
 
-        socket.on('draw_data', (data) => renderLine(data));
-        socket.on('clear', () => {
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        });
+        socket.on('draw_data', renderLine);
+        socket.on('clear', () => { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); });
     </script>
 </body>
 </html>
