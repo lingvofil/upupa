@@ -10,7 +10,9 @@ from config import model  # Твоя модель
 # ================== НАСТРОЙКИ ==================
 # Прописываем URL максимально жестко, чтобы исключить ошибки Telegram
 WEB_APP_DOMAIN = "upupaepops.duckdns.org"
-WEBAPP_URL = f"https://{WEB_APP_DOMAIN}/game"
+WEB_APP_PATH = "/game"
+# Собираем базовый URL без параметров
+WEBAPP_BASE_URL = f"https://{WEB_APP_DOMAIN}{WEB_APP_PATH}"
 
 SOCKET_SERVER_PORT = 8080
 game_sessions = {}
@@ -39,7 +41,7 @@ async def serve_index(request):
     except Exception:
         return web.Response(text="index.html not found", status=404)
 
-app_game.router.add_get("/game", serve_index)
+app_game.router.add_get(WEB_APP_PATH, serve_index)
 
 async def start_socket_server():
     runner = web.AppRunner(app_game)
@@ -51,17 +53,15 @@ async def start_socket_server():
 # ================== ЧАСТЬ 2: Логика игры ==================
 
 async def generate_game_word():
-    """Генерация слова (совместимая с твоим ModelFallbackWrapper)"""
+    """Генерация слова через Gemini (совместимо с ModelFallbackWrapper)"""
     prompt = "Придумай одно существительное на русском языке для игры Крокодил. Только одно слово без знаков препинания."
     try:
-        # Так как твоя обертка не поддерживает async, используем thread для запуска синхронного метода
-        # Это не даст боту зависнуть во время генерации
-        def call_gemini():
+        # Используем thread для синхронного вызова, так как обертка не поддерживает async
+        def call_model():
             return model.generate_content(prompt)
             
-        response = await asyncio.to_thread(call_gemini)
+        response = await asyncio.to_thread(call_model)
         
-        # Безопасно достаем текст
         if hasattr(response, 'text') and response.text:
             word = response.text.strip().lower().split()[0]
             return word
@@ -71,19 +71,22 @@ async def generate_game_word():
         return random.choice(["бегемот", "телевизор", "колбаса"])
 
 def get_game_keyboard(chat_id):
-    """Создает клавиатуру с очисткой URL"""
-    # Telegram очень чувствителен к формату. Очищаем всё лишнее.
-    clean_url = f"{WEBAPP_URL}?chat_id={chat_id}".strip().replace(" ", "")
+    """Создает клавиатуру с ультра-чистым URL"""
+    # Превращаем ID чата в строку и убираем лишнее
+    str_chat_id = str(chat_id).strip()
+    # Формируем URL и чистим его от любых пробелов или переносов
+    clean_url = f"{WEBAPP_BASE_URL}?chat_id={str_chat_id}".replace(" ", "").strip()
     
-    # Логируем URL для отладки, если кнопка снова упадет
-    logging.info(f"Generated WebApp URL: {clean_url}")
+    # Лог для проверки в консоли сервера
+    logging.info(f"DEBUG: Отправка WebApp URL: '{clean_url}'")
     
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🎨 Открыть холст", 
-            web_app=WebAppInfo(url=clean_url)
-        )]
-    ])
+    # Создаем кнопку. Важно: только text и web_app
+    button = InlineKeyboardButton(
+        text="🎨 Открыть холст", 
+        web_app=WebAppInfo(url=clean_url)
+    )
+    
+    return InlineKeyboardMarkup(inline_keyboard=[[button]])
 
 async def is_correct_answer(chat_id, text):
     chat_id_str = str(chat_id)
