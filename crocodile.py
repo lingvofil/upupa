@@ -89,7 +89,7 @@ def get_game_keyboard(chat_id):
     
     # Формируем URL максимально чисто
     query = urllib.parse.urlencode({'cid': safe_cid})
-    full_url = f"{WEB_APP_URL_BASE}?{query}".strip()
+    full_url = WEB_APP_URL_BASE
     
     # Отладка в логи (посмотрите их после команды)
     logging.info(f"Final MiniApp URL: {full_url}")
