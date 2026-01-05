@@ -2,15 +2,28 @@
 import random
 import logging
 import socketio
+import asyncio
 from aiohttp import web
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import WEBAPP_URL, model
+from config import model  # Используем твою модель из config
 
-# ================== ЧАСТЬ 1: WebSocket и Сервер ==================
+# ================== НАСТРОЙКИ (ВНУТРИ МОДУЛЯ) ==================
+# Твой домен DuckDNS (обязательно HTTPS для Telegram)
+WEB_APP_BASE_URL = "https://upupaepops.duckdns.org" 
+WEB_APP_PATH = "/game"
+WEBAPP_URL = f"{WEB_APP_BASE_URL}{WEB_APP_PATH}"
+
+# Порт, на котором слушает сокет-сервер внутри сервера
+SOCKET_SERVER_PORT = 8080
+
+# Состояние игры: {chat_id: {"word": "слово", "drawer_id": 123}}
+game_sessions = {}
+
+# ================== ЧАСТЬ 1: WebSocket и HTTP Сервер ==================
 
 sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
-app_socket = web.Application()
-sio.attach(app_socket)
+app_game = web.Application()
+sio.attach(app_game)
 
 @sio.event
 async def join_room(sid, data):
@@ -20,54 +33,63 @@ async def join_room(sid, data):
 
 @sio.event
 async def draw_step(sid, data):
-    # Трансляция координат рисования всем в комнате (чате)
+    # Трансляция координат всем участникам в комнате чата
     await sio.emit('draw_data', data, room=str(data.get('room')), skip_sid=sid)
 
 @sio.event
 async def clear_canvas(sid, data):
-    # Очистка холста у всех участников
     await sio.emit('clear', {}, room=str(data.get('room')), skip_sid=sid)
 
 async def serve_index(request):
-    """Раздача HTML-файла игры"""
+    """Отдает HTML-файл фронтенда"""
     try:
         return web.FileResponse('index.html')
     except Exception as e:
         logging.error(f"Error serving index.html: {e}")
-        return web.Response(text="Файл игры не найден", status=404)
+        return web.Response(text="Файл index.html не найден в корне бота", status=404)
 
-# Маршрут для загрузки интерфейса игры
-app_socket.router.add_get('/game', serve_index)
+# Настройка маршрута для Mini App
+app_game.router.add_get(WEB_APP_PATH, serve_index)
 
 async def start_socket_server():
-    """Запуск сервера на отдельном порту (8080)"""
-    runner = web.AppRunner(app_socket)
+    """Запуск сервера на указанном порту"""
+    runner = web.AppRunner(app_game)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    site = web.TCPSite(runner, '0.0.0.0', SOCKET_SERVER_PORT)
     await site.start()
-    logging.info("Crocodile Game Server started on port 8080")
+    logging.info(f"=== Crocodile Game Server started on port {SOCKET_SERVER_PORT} ===")
 
 
-# ================== ЧАСТЬ 2: Бизнес-логика ==================
+# ================== ЧАСТЬ 2: Логика игры ==================
 
 async def generate_game_word():
-    """Генерирует слово для игры через Gemini 2.0 Flash"""
+    """Генерация слова через Gemini 2.0"""
     prompt = (
-        "Ты — ведущий игры 'Крокодил'. Придумай ОДНО забавное или необычное существительное, "
-        "которое можно нарисовать. Ответь только этим словом, без лишних знаков."
+        "Ты ведущий игры Крокодил. Придумай ОДНО существительное на русском языке, "
+        "которое интересно рисовать. Ответь только этим словом, без знаков препинания."
     )
     try:
         response = await model.generate_content(prompt)
-        word = response.text.strip().split()[0]
+        word = response.text.strip().lower().replace(".", "").split()[0]
         return word
     except Exception as e:
-        logging.error(f"Word generation error: {e}")
-        return random.choice(["Синхрофазотрон", "Оливье", "Чебурашка", "Гравитация"])
+        logging.error(f"Gemini error: {e}")
+        # Запасной список на случай ошибки API
+        return random.choice(["космонавт", "шаурма", "синхрофазотрон", "кактус", "программист"])
 
 def get_game_keyboard(chat_id):
-    """Создает кнопку открытия Mini App"""
-    # WEBAPP_URL берется из Config.py (например, https://твой-домен.com/game)
+    """Создает клавиатуру с кнопкой запуска Mini App"""
+    # Добавляем chat_id в параметры, чтобы фронтенд знал комнату
     url = f"{WEBAPP_URL}?chat_id={chat_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎨 Рисовать на холсте", web_app=WebAppInfo(url=url))]
+        [InlineKeyboardButton(text="🎨 Открыть холст", web_app=WebAppInfo(url=url))]
     ])
+
+async def is_correct_answer(chat_id, text):
+    """Проверка правильности ответа"""
+    chat_id_str = str(chat_id)
+    if chat_id_str in game_sessions:
+        target_word = game_sessions[chat_id_str]['word']
+        if text.strip().lower() == target_word:
+            return True
+    return False
