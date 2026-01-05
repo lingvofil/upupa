@@ -34,11 +34,12 @@
         const brushColor = document.getElementById('brushColor');
         const clearBtn = document.getElementById('clearBtn');
 
-        // Инициализация сокетов (автоматически подключается к тому же хосту)
+        // Инициализация сокетов
         const socket = io();
 
         const urlParams = new URLSearchParams(window.location.search);
-        const roomId = urlParams.get('chat_id') || 'global';
+        // ВАЖНО: Изменили chat_id на cid, чтобы соответствовать ссылке из crocodile.py
+        const roomId = urlParams.get('cid') || 'global';
 
         // Настройка размеров холста
         function resize() {
