@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import model  # Твоя модель
 
 # ================== НАСТРОЙКИ (ВНУТРИ МОДУЛЯ) ==================
-# Жестко прописываем домен
+# Жестко прописываем домен без переменных
 WEB_APP_DOMAIN = "upupaepops.duckdns.org"
 WEB_APP_URL_BASE = f"https://{WEB_APP_DOMAIN}/game"
 
@@ -47,7 +47,7 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Crocodile Server started on {SOCKET_SERVER_PORT}")
+    logging.info(f"Crocodile Server started on port {SOCKET_SERVER_PORT}")
 
 # ================== ЧАСТЬ 2: Логика игры ==================
 
@@ -55,14 +55,14 @@ async def generate_game_word():
     """Генерация слова (совместимо с твоим ModelFallbackWrapper)"""
     prompt = "Придумай одно существительное на русском языке для игры Крокодил. Только одно слово без знаков препинания."
     try:
-        # Используем thread, так как обертка поддерживает только синхронный generate_content
+        # Используем thread для синхронного вызова обертки
         def sync_call():
             return model.generate_content(prompt)
             
         response = await asyncio.to_thread(sync_call)
         
-        # Безопасное извлечение текста
         if response and hasattr(response, 'text'):
+            # Берем только первое слово, приводим к нижнему регистру
             word = response.text.strip().lower().split()[0]
             return word
         return random.choice(["трактор", "кактус", "пельмень"])
@@ -71,19 +71,19 @@ async def generate_game_word():
         return random.choice(["бегемот", "телевизор", "колбаса"])
 
 def get_game_keyboard(chat_id):
-    """Создает клавиатуру с гарантированно чистым URL"""
-    # Превращаем ID чата в строку и убираем минус, если он мешает валидации Telegram
-    # (Некоторые версии API капризничают на спецсимволы в query-параметрах Mini Apps)
+    """Создает клавиатуру с гарантированно чистым URL для Telegram"""
+    # Превращаем ID чата в строку и делаем его "безопасным" для URL параметров
+    # Убираем минус, заменяя на 'm', так как некоторые парсеры Telegram его не любят в Mini Apps
     safe_chat_id = str(chat_id).replace("-", "m") 
     
-    # Формируем URL
-    clean_url = f"{WEB_APP_URL_BASE}?cid={safe_chat_id}"
+    # Формируем URL без единого лишнего символа или пробела
+    clean_url = f"{WEB_APP_URL_BASE}?cid={safe_chat_id}".strip()
     
     logging.info(f"DEBUG: Создание кнопки с URL: '{clean_url}'")
     
     try:
-        # Прямое создание клавиатуры через список списков
-        return InlineKeyboardMarkup(
+        # Прямая сборка клавиатуры
+        keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
@@ -93,11 +93,13 @@ def get_game_keyboard(chat_id):
                 ]
             ]
         )
+        return keyboard
     except Exception as e:
         logging.error(f"Error creating InlineKeyboardMarkup: {e}")
         return None
 
 async def is_correct_answer(chat_id, text):
+    """Сверка ответа игрока с загаданным словом"""
     chat_id_str = str(chat_id)
     if chat_id_str in game_sessions and text:
         target_word = game_sessions[chat_id_str]['word']
