@@ -5,7 +5,7 @@ import os
 import random
 import logging
 import asyncio
-from aiogram import Bot, Dispatcher, F, types, web
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart, Filter
@@ -177,7 +177,7 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
         parts.append("\n🤖 *НАГРУЗКА НА GEMINI (Запросы):*")
         sorted_usage = sorted(stats["model_usage"].items(), key=lambda item: item[1], reverse=True)
         for chat_name, count in sorted_usage:
-            parts.append(f"  🔥 `{chat_name}`: {count} запросов")
+            parts.append(f"   🔥 `{chat_name}`: {count} запросов")
     else:
         parts.append("\n_Запросов к Gemini не зафиксировано._")
 
@@ -185,7 +185,7 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
         parts.append("\n*Активность (Сообщения в чатах):*")
         sorted_groups = sorted(stats["groups"].items(), key=lambda item: item[1], reverse=True)
         for chat_title, count in sorted_groups:
-            parts.append(f"  • `{chat_title}`: {count} сообщ.")
+            parts.append(f"   • `{chat_title}`: {count} сообщ.")
     else:
         parts.append("\n_Нет активности в групповых чатах._")
 
@@ -193,7 +193,7 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
         parts.append("\n*Личные сообщения:*")
         sorted_private = sorted(stats["private"].items(), key=lambda item: item[1], reverse=True)
         for user_display, count in sorted_private:
-            parts.append(f"  • `{user_display}`: {count} сообщ.")
+            parts.append(f"   • `{user_display}`: {count} сообщ.")
     else:
         parts.append("\n_Нет активности в личных сообщениях._")
 
@@ -544,7 +544,7 @@ async def handle_robotics_description(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     
-    processing = await message.reply("Включаю модули педерастического анализа... (Robotics 1.5)")
+    processing = await message.reply("Включаю модули анализа... (Robotics 1.5)")
     
     success, response = await process_robotics_description(message)
     
@@ -639,7 +639,7 @@ async def meme_command_handler(message: Message):
     if photo:
         await message.answer_photo(photo)
     else:
-        await message.answer("Иди нахуй")
+        await message.answer("Ошибка при создании мема.")
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
@@ -673,13 +673,23 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
+# ================== ХЭНДЛЕР ИГРЫ КРОКОДИЛ ==================
 @router.message(F.text.lower() == "крокодил")
 async def cmd_crocodile(message: Message):
     if message.chat.type == 'private':
-        await message.reply("В это нужно играть в группе, а не в одиночку!")
-        return
+        return await message.reply("В это нужно играть в группе, а не в одиночку!")
+    
+    chat_id = str(message.chat.id)
     word = await crocodile.generate_game_word()
-    kb = crocodile.get_game_keyboard(message.chat.id)
+    
+    # Сохраняем состояние игры
+    crocodile.game_sessions[chat_id] = {
+        "word": word,
+        "drawer_id": message.from_user.id
+    }
+    
+    kb = crocodile.get_game_keyboard(chat_id)
+    
     await message.answer(
         f"🎮 **ИГРА КРОКОДИЛ НАЧАТА!**\n\n"
         f"Ведущий: {message.from_user.full_name}\n"
@@ -688,8 +698,9 @@ async def cmd_crocodile(message: Message):
         parse_mode="Markdown"
     )
     
+    # Секретное слово ведущему в ЛС
     try:
-        await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**")
+        await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**\nНикому не говори!")
     except Exception:
         await message.answer("Ведущий, напиши мне в личку, чтобы я мог прислать тебе слово!")
 
@@ -743,6 +754,18 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
+    # 1. Проверка на победу в Крокодиле (ПРЕОРИТЕТНАЯ)
+    if message.text:
+        chat_id = str(message.chat.id)
+        if await crocodile.is_correct_answer(chat_id, message.text):
+            word = crocodile.game_sessions[chat_id]['word']
+            del crocodile.game_sessions[chat_id] # Завершаем игровую сессию
+            return await message.answer(
+                f"🎉 **ПОБЕДА!**\n\n{message.from_user.full_name} угадал слово: **{word}**!",
+                parse_mode="Markdown"
+            )
+
+    # 2. Обычная обработка сообщений
     await memegenerator.check_and_send_random_meme(message)
     
     # --- Обработка реакций и эмодзи ---
@@ -775,13 +798,17 @@ async def main():
     from content_filter import load_antispam_settings
     load_antispam_settings() 
     bot_statistics.init_db()
+    
     chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
         chat_id_int = int(chat_id)
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
     
     asyncio.create_task(birthday_scheduler(bot))
-    asyncio.create_task(crocodile.start_socket_server())    
+    
+    # ЗАПУСК СОКЕТ-СЕРВЕРА ДЛЯ КРОКОДИЛА
+    asyncio.create_task(crocodile.start_socket_server())
+    
     dp.include_router(dnd_router)
     dp.include_router(router)
     
