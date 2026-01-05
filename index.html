@@ -30,6 +30,7 @@
         const socket = io();
 
         const roomId = tg.initDataUnsafe.start_param || 'global';
+        let hasChanges = false;
 
         function resize() {
             const ratio = window.devicePixelRatio || 1;
@@ -45,7 +46,6 @@
 
         let drawing = false;
         let lastPos = { x: 0, y: 0 };
-        let hasChanges = false;
 
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
@@ -54,23 +54,30 @@
             return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
-        canvas.addEventListener('mousedown', (e) => { drawing = true; lastPos = getPos(e); });
-        canvas.addEventListener('mousemove', (e) => {
+        const start = (e) => { drawing = true; lastPos = getPos(e); };
+        const move = (e) => {
             if (!drawing) return;
             const pos = getPos(e);
-            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: document.getElementById('brushColor').value, room: roomId };
-            ctx.strokeStyle = data.color; ctx.beginPath(); ctx.moveTo(data.px, data.py); ctx.lineTo(data.x, data.y); ctx.stroke();
-            socket.emit('draw_step', data);
+            ctx.strokeStyle = document.getElementById('brushColor').value;
+            ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(pos.x, pos.y); ctx.stroke();
+            socket.emit('draw_step', { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: ctx.strokeStyle, room: roomId });
             lastPos = pos;
-            hasChanges = true;
-        });
-        window.addEventListener('mouseup', () => drawing = false);
+            hasChanges = true; // Важно!
+        };
 
-        // Таймер скриншотов (каждые 10 секунд)
+        canvas.addEventListener('mousedown', start);
+        canvas.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', () => drawing = false);
+        canvas.addEventListener('touchstart', (e) => { start(e); if(e.cancelable) e.preventDefault(); }, {passive: false});
+        canvas.addEventListener('touchmove', move, {passive: false});
+        window.addEventListener('touchend', () => drawing = false);
+
+        // Таймер: каждые 10 сек шлем скриншот, если были изменения
         setInterval(() => {
             if (hasChanges) {
-                const dataURL = canvas.toDataURL('image/jpeg', 0.6); // Качество 0.6 для скорости
-                socket.emit('send_frame', { room: roomId, image: dataURL });
+                console.log("Sending frame...");
+                const img = canvas.toDataURL('image/jpeg', 0.5); // JPEG легче
+                socket.emit('send_frame', { room: roomId, image: img });
                 hasChanges = false;
             }
         }, 10000);
@@ -80,7 +87,6 @@
             socket.emit('clear_canvas', { room: roomId });
             hasChanges = true;
         };
-        
         socket.on('clear', () => { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); });
     </script>
 </body>
