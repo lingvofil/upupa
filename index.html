@@ -27,18 +27,23 @@
 
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d', { alpha: false });
-        const socket = io();
+        
+        // Добавляем transports для стабильности через туннели
+        const socket = io({
+            transports: ['websocket', 'polling']
+        });
 
         const roomId = tg.initDataUnsafe.start_param || 'global';
         let hasChanges = false;
 
         function resize() {
-            const ratio = 1; // Уменьшаем разрешение для скорости
-            canvas.width = canvas.clientWidth * ratio;
-            canvas.height = canvas.clientHeight * ratio;
-            ctx.scale(ratio, ratio);
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
-            ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Уменьшаем внутреннее разрешение в 2 раза для легкости скриншотов
+            const scale = 0.5;
+            canvas.width = canvas.clientWidth * scale;
+            canvas.height = canvas.clientHeight * scale;
+            ctx.scale(scale, scale);
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 10; // Толще линия для низкого разрешения
+            ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width / scale, canvas.height / scale);
         }
         window.addEventListener('resize', resize); resize();
 
@@ -51,20 +56,22 @@
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            return { x: clientX - rect.left, y: clientY - rect.top };
-        };
-
-        const drawLine = (p1, p2, color) => {
-            ctx.strokeStyle = color;
-            ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+            // Учитываем масштаб
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
         };
 
         const start = (e) => { drawing = true; lastPos = getPos(e); };
         const move = (e) => {
             if (!drawing) return;
+            if (e.cancelable) e.preventDefault();
             const pos = getPos(e);
             const color = document.getElementById('brushColor').value;
-            drawLine(lastPos, pos, color);
+            
+            ctx.strokeStyle = color;
+            ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(pos.x, pos.y); ctx.stroke();
+            
             socket.emit('draw_step', { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: color, room: roomId });
             lastPos = pos;
             hasChanges = true;
@@ -77,22 +84,36 @@
         canvas.addEventListener('touchmove', move, {passive: false});
         window.addEventListener('touchend', () => drawing = false);
 
-        // ТАЙМЕР: Каждые 5 секунд
+        // ТАЙМЕР СКРИНШОТОВ (каждые 5 секунд)
         setInterval(() => {
-            if (hasChanges) {
-                // Качество 0.3 для минимального размера данных
-                const img = canvas.toDataURL('image/jpeg', 0.3);
-                socket.emit('send_frame', { room: roomId, image: img });
-                hasChanges = false;
+            if (hasChanges && socket.connected) {
+                console.log("Generating frame...");
+                try {
+                    // Используем JPEG с низким качеством
+                    const img = canvas.toDataURL('image/jpeg', 0.2);
+                    console.log("Sending frame size:", img.length);
+                    socket.emit('send_frame', { room: roomId, image: img });
+                    hasChanges = false;
+                } catch (err) {
+                    console.error("Frame error:", err);
+                }
             }
         }, 5000);
 
         document.getElementById('clearBtn').onclick = () => {
-            ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width * 2, canvas.height * 2);
             socket.emit('clear_canvas', { room: roomId });
             hasChanges = true;
         };
-        socket.on('clear', () => { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); });
+        
+        socket.on('clear', () => { 
+            ctx.fillStyle = "#ffffff"; 
+            ctx.fillRect(0, 0, canvas.width * 2, canvas.height * 2); 
+        });
+
+        socket.on('connect', () => console.log("Socket connected!"));
+        socket.on('connect_error', (err) => console.error("Socket error:", err));
     </script>
 </body>
 </html>
