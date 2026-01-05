@@ -5,7 +5,7 @@ import os
 import random
 import logging
 import asyncio
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, F, types, web
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart, Filter
@@ -157,6 +157,10 @@ from voice import handle_voice_command
 
 # ================== БЛОК 3.25 МЕМЫ ==================
 import memegenerator
+
+# ================== БЛОК 3.26 КРОКОДИЛ ==================
+import crocodile
+
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
 @router.message(F.text.lower() == "какая модель")
@@ -669,6 +673,26 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
+@router.message(F.text.lower() == "крокодил")
+async def cmd_crocodile(message: Message):
+    if message.chat.type == 'private':
+        await message.reply("В это нужно играть в группе, а не в одиночку!")
+        return
+    word = await crocodile.generate_game_word()
+    kb = crocodile.get_game_keyboard(message.chat.id)
+    await message.answer(
+        f"🎮 **ИГРА КРОКОДИЛ НАЧАТА!**\n\n"
+        f"Ведущий: {message.from_user.full_name}\n"
+        f"Остальные — угадывайте слово в чате! Ведущий, открывай холст и приступай.",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    
+    try:
+        await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**")
+    except Exception:
+        await message.answer("Ведущий, напиши мне в личку, чтобы я мог прислать тебе слово!")
+
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
@@ -757,7 +781,7 @@ async def main():
         asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
     
     asyncio.create_task(birthday_scheduler(bot))
-    
+    asyncio.create_task(crocodile.start_socket_server())    
     dp.include_router(dnd_router)
     dp.include_router(router)
     
