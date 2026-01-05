@@ -690,19 +690,27 @@ async def cmd_crocodile(message: Message):
     
     kb = crocodile.get_game_keyboard(chat_id)
     
-    await message.answer(
-        f"🎮 **ИГРА КРОКОДИЛ НАЧАТА!**\n\n"
-        f"Ведущий: {message.from_user.full_name}\n"
-        f"Остальные — угадывайте слово в чате! Ведущий, открывай холст и приступай.",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-    
-    # Секретное слово ведущему в ЛС
+    if kb is None:
+        return await message.answer("⚠️ Ошибка конфигурации Mini App. Проверьте логи сервера.")
+
     try:
-        await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**\nНикому не говори!")
-    except Exception:
-        await message.answer("Ведущий, напиши мне в личку, чтобы я мог прислать тебе слово!")
+        await message.answer(
+            f"🎮 **ИГРА КРОКОДИЛ НАЧАТА!**\n\n"
+            f"Ведущий: {message.from_user.full_name}\n"
+            f"Остальные — угадывайте слово в чате! Ведущий, открывай холст и приступай.",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        
+        # Секретное слово ведущему в ЛС
+        try:
+            await bot.send_message(message.from_user.id, f"Твое слово для рисования: **{word}**\nНикому не говори!")
+        except Exception:
+            await message.answer("Ведущий, напиши мне в личку, чтобы я мог прислать тебе слово!")
+            
+    except Exception as e:
+        logging.error(f"Error sending crocodile keyboard: {e}")
+        await message.answer(f"❌ Ошибка Telegram: {e}. Скорее всего, домен туннеля не совпадает с настройками в BotFather.")
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
@@ -754,12 +762,12 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
-    # 1. Проверка на победу в Крокодиле (ПРЕОРИТЕТНАЯ)
+    # 1. Проверка на победу в Крокодиле (ПРИОРИТЕТНАЯ)
     if message.text:
         chat_id = str(message.chat.id)
         if await crocodile.is_correct_answer(chat_id, message.text):
             word = crocodile.game_sessions[chat_id]['word']
-            del crocodile.game_sessions[chat_id] # Завершаем игровую сессию
+            del crocodile.game_sessions[chat_id] 
             return await message.answer(
                 f"🎉 **ПОБЕДА!**\n\n{message.from_user.full_name} угадал слово: **{word}**!",
                 parse_mode="Markdown"
