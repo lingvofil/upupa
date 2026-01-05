@@ -1,3 +1,5 @@
+#crocodile.py
+
 import random
 import logging
 import socketio
@@ -7,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import model  # Твоя модель
 
 # ================== НАСТРОЙКИ (ВНУТРИ МОДУЛЯ) ==================
-# Жестко прописываем домен без переменных, чтобы избежать ошибок конкатенации
+# Жестко прописываем домен
 WEB_APP_DOMAIN = "upupaepops.duckdns.org"
 WEB_APP_URL_BASE = f"https://{WEB_APP_DOMAIN}/game"
 
@@ -59,6 +61,7 @@ async def generate_game_word():
             
         response = await asyncio.to_thread(sync_call)
         
+        # Безопасное извлечение текста
         if response and hasattr(response, 'text'):
             word = response.text.strip().lower().split()[0]
             return word
@@ -69,25 +72,27 @@ async def generate_game_word():
 
 def get_game_keyboard(chat_id):
     """Создает клавиатуру с гарантированно чистым URL"""
-    # Превращаем ID чата в строку и чистим URL
-    str_chat_id = str(chat_id).strip()
-    # Собираем URL без лишних пробелов и символов
-    clean_url = f"{WEB_APP_URL_BASE}?chat_id={str_chat_id}".replace(" ", "").strip()
+    # Превращаем ID чата в строку и убираем минус, если он мешает валидации Telegram
+    # (Некоторые версии API капризничают на спецсимволы в query-параметрах Mini Apps)
+    safe_chat_id = str(chat_id).replace("-", "m") 
     
-    # Лог для проверки (посмотри в консоль сервера при вызове команды)
+    # Формируем URL
+    clean_url = f"{WEB_APP_URL_BASE}?cid={safe_chat_id}"
+    
     logging.info(f"DEBUG: Создание кнопки с URL: '{clean_url}'")
     
-    # Создаем объект кнопки через WebAppInfo
     try:
-        web_app_btn = InlineKeyboardButton(
-            text="🎨 Открыть холст", 
-            web_app=WebAppInfo(url=clean_url)
+        # Прямое создание клавиатуры через список списков
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🎨 Открыть холст", 
+                        web_app=WebAppInfo(url=clean_url)
+                    )
+                ]
+            ]
         )
-        
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[web_app_btn]]
-        )
-        return keyboard
     except Exception as e:
         logging.error(f"Error creating InlineKeyboardMarkup: {e}")
         return None
