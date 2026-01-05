@@ -7,26 +7,16 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { 
-            margin: 0; padding: 0; background: #1c1c1d; color: #fff; 
-            font-family: -apple-system, system-ui, sans-serif; 
-            overflow: hidden; height: 100vh; display: flex; flex-direction: column; 
-        }
+        body { margin: 0; padding: 0; background: #1c1c1d; overflow: hidden; height: 100vh; display: flex; flex-direction: column; font-family: sans-serif; }
         #canvas { display: block; background: #fff; touch-action: none; width: 100%; flex-grow: 1; }
-        .toolbar { 
-            height: 80px; background: #2c2c2e; display: flex; 
-            align-items: center; justify-content: space-around; 
-            padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid #3a3a3c;
-        }
-        .color-picker { width: 44px; height: 44px; border: 2px solid #fff; border-radius: 50%; overflow: hidden; position: relative; }
-        input[type="color"] { position: absolute; top: -5px; left: -5px; width: 60px; height: 60px; border: none; background: none; cursor: pointer; }
+        .toolbar { height: 80px; background: #2c2c2e; display: flex; align-items: center; justify-content: space-around; border-top: 1px solid #3a3a3c; }
         .btn { background: #ff3b30; color: white; border: none; padding: 12px 20px; border-radius: 12px; font-weight: bold; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <div class="toolbar">
-        <div class="color-picker"><input type="color" id="brushColor" value="#000000"></div>
+        <input type="color" id="brushColor" value="#000000" style="width:44px; height:44px; border:2px solid #fff; border-radius:50%;">
         <button class="btn" id="clearBtn">ОЧИСТИТЬ</button>
     </div>
 
@@ -37,43 +27,25 @@
 
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d', { alpha: false });
-        const brushColor = document.getElementById('brushColor');
-        const clearBtn = document.getElementById('clearBtn');
-
         const socket = io();
 
-        // ЛОГИКА ОПРЕДЕЛЕНИЯ КОМНАТЫ (cid или start_param)
-        const urlParams = new URLSearchParams(window.location.search);
-        let roomId = urlParams.get('cid');
-
-        // Если cid нет в URL, пробуем достать его из start_param (для t.me ссылок)
-        if (!roomId && tg.initDataUnsafe && tg.initDataUnsafe.start_param) {
-            roomId = tg.initDataUnsafe.start_param;
-        }
-        
-        if (!roomId) roomId = 'global';
-
-        console.log("Room ID initialized:", roomId);
+        const roomId = tg.initDataUnsafe.start_param || 'global';
 
         function resize() {
             const ratio = window.devicePixelRatio || 1;
             canvas.width = canvas.clientWidth * ratio;
             canvas.height = canvas.clientHeight * ratio;
             ctx.scale(ratio, ratio);
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.lineWidth = 5;
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
+            ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-
-        window.addEventListener('resize', resize);
-        resize();
+        window.addEventListener('resize', resize); resize();
 
         socket.emit('join_room', { room: roomId });
 
         let drawing = false;
         let lastPos = { x: 0, y: 0 };
+        let hasChanges = false;
 
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
@@ -82,47 +54,33 @@
             return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
-        function renderLine(data) {
-            ctx.strokeStyle = data.color;
-            ctx.beginPath();
-            ctx.moveTo(data.px || data.x, data.py || data.y);
-            ctx.lineTo(data.x, data.y);
-            ctx.stroke();
-        }
-
-        canvas.addEventListener('mousedown', (e) => { drawing = true; lastPos = getPos(e); ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); });
+        canvas.addEventListener('mousedown', (e) => { drawing = true; lastPos = getPos(e); });
         canvas.addEventListener('mousemove', (e) => {
             if (!drawing) return;
             const pos = getPos(e);
-            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: brushColor.value, room: roomId };
-            renderLine(data);
+            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: document.getElementById('brushColor').value, room: roomId };
+            ctx.strokeStyle = data.color; ctx.beginPath(); ctx.moveTo(data.px, data.py); ctx.lineTo(data.x, data.y); ctx.stroke();
             socket.emit('draw_step', data);
             lastPos = pos;
+            hasChanges = true;
         });
         window.addEventListener('mouseup', () => drawing = false);
 
-        canvas.addEventListener('touchstart', (e) => { 
-            drawing = true; lastPos = getPos(e); 
-            if (e.cancelable) e.preventDefault(); 
-        }, {passive: false});
-        canvas.addEventListener('touchmove', (e) => {
-            if (!drawing) return;
-            if (e.cancelable) e.preventDefault();
-            const pos = getPos(e);
-            const data = { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: brushColor.value, room: roomId };
-            renderLine(data);
-            socket.emit('draw_step', data);
-            lastPos = pos;
-        }, {passive: false});
-        window.addEventListener('touchend', () => drawing = false);
+        // Таймер скриншотов (каждые 10 секунд)
+        setInterval(() => {
+            if (hasChanges) {
+                const dataURL = canvas.toDataURL('image/jpeg', 0.6); // Качество 0.6 для скорости
+                socket.emit('send_frame', { room: roomId, image: dataURL });
+                hasChanges = false;
+            }
+        }, 10000);
 
-        clearBtn.onclick = () => {
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        document.getElementById('clearBtn').onclick = () => {
+            ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
             socket.emit('clear_canvas', { room: roomId });
+            hasChanges = true;
         };
-
-        socket.on('draw_data', renderLine);
+        
         socket.on('clear', () => { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); });
     </script>
 </body>
