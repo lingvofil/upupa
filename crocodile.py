@@ -21,7 +21,12 @@ game_sessions = {}
 scores = {}        
 
 # ================== ЧАСТЬ 1: WebSocket Сервер ==================
-sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
+# Увеличиваем лимит данных до 10МБ (10 * 1024 * 1024)
+sio = socketio.AsyncServer(
+    async_mode='aiohttp', 
+    cors_allowed_origins='*',
+    max_http_buffer_size=10485760 
+)
 app_game = web.Application()
 sio.attach(app_game)
 
@@ -48,25 +53,25 @@ async def send_frame(sid, data):
     if not room_id or not image_data:
         return
 
-    # Логируем получение кадра для отладки
-    print(f"📸 Получен скриншот для комнаты {room_id} (длина: {len(image_data)})")
+    # ЛОГ В КОНСОЛЬ: Если вы это видите, значит данные ДОШЛИ до сервера
+    print(f"📸 СИГНАЛ: Получен кадр {len(image_data)} байт для {room_id}")
 
     try:
         # Превращаем m123 обратно в -123
-        chat_id = room_id.replace("m", "-") if room_id.startswith("m") else room_id
-        session = game_sessions.get(str(chat_id))
+        chat_id = str(room_id.replace("m", "-") if room_id.startswith("m") else room_id)
+        session = game_sessions.get(chat_id)
         
         if session:
             header, encoded = image_data.split(",", 1)
             data_bytes = base64.b64decode(encoded)
             
-            photo = BufferedInputFile(data_bytes, filename="draw.jpg")
+            photo = BufferedInputFile(data_bytes, filename="drawing.jpg")
             
             # Отправляем новый скриншот
             new_msg = await bot.send_photo(
                 chat_id=chat_id,
                 photo=photo,
-                caption=f"🖌 **{session.get('drawer_name')}** рисует...\nУгадывайте слово в чате!",
+                caption=f"🖌 **{session.get('drawer_name')}** рисует...\nУгадывайте слово!",
                 disable_notification=True
             )
             
@@ -77,7 +82,7 @@ async def send_frame(sid, data):
             
             session['last_photo_id'] = new_msg.message_id
         else:
-            print(f"⚠️ Сессия для чата {chat_id} не найдена в game_sessions")
+            print(f"⚠️ ОШИБКА: Сессия {chat_id} не найдена (возможно бот перезагрузился)")
     except Exception as e:
         logging.error(f"Error in send_frame: {e}")
 
@@ -92,19 +97,18 @@ async def start_socket_server():
     runner = web.AppRunner(app_game)
     await runner.setup()
     await web.TCPSite(runner, '127.0.0.1', SOCKET_SERVER_PORT).start()
-    logging.info(f"=== Crocodile Socket Server started on 8080 ===")
+    logging.info(f"=== Crocodile Server started on 8080 ===")
 
 # ================== ЧАСТЬ 2: Логика Игры ==================
 
 async def generate_game_word():
-    prompt = "Придумай одно существительное на русском языке для игры Крокодил. Одно слово."
     try:
-        def sync_call(): return model.generate_content(prompt)
+        def sync_call(): return model.generate_content("Придумай существительное для игры Крокодил")
         response = await asyncio.to_thread(sync_call)
         word = response.text.strip().lower().split()[0]
         return "".join(filter(str.isalpha, word))
     except:
-        return random.choice(["трактор", "кактус", "пельмень", "бегемот", "телевизор"])
+        return random.choice(["трактор", "кактус", "пельмень", "бегемот"])
 
 def get_game_keyboard(chat_id):
     safe_cid = str(chat_id).replace("-", "m")
@@ -127,7 +131,7 @@ async def handle_start_game(message: types.Message):
         "last_photo_id": None
     }
     await message.answer(
-        f"🎮 **КРОКОДИЛ НАЧАТ!**\n\nВедущий: {message.from_user.full_name}\nУгадывайте слово!",
+        f"🎮 **КРОКОДИЛ НАЧАТ!**\nВедущий: {message.from_user.full_name}",
         reply_markup=get_game_keyboard(chat_id)
     )
 
@@ -136,8 +140,7 @@ async def handle_callback(callback: types.CallbackQuery):
     session = game_sessions.get(chat_id)
     if not session: return await callback.answer("Игра окончена.")
     if callback.data.startswith("cr_w_"):
-        if callback.from_user.id != session['drawer_id']:
-            return await callback.answer("Это не твое слово!", show_alert=True)
+        if callback.from_user.id != session['drawer_id']: return await callback.answer("Не твое слово!")
         await callback.answer(f"СЛОВО: {session['word'].upper()}", show_alert=True)
     elif callback.data.startswith("cr_n_"):
         if callback.from_user.id != session['drawer_id']: return await callback.answer("Только ведущий!")
@@ -150,15 +153,12 @@ async def check_answer(message: types.Message):
     if not session or not message.text: return False
     if message.text.strip().lower() == session['word']:
         if message.from_user.id == session['drawer_id']: return True
-        
         user_id, user_name, word = message.from_user.id, message.from_user.full_name, session['word']
         if user_id not in scores: scores[user_id] = {"name": user_name, "points": 0}
         scores[user_id]["points"] += 1
-        
         del game_sessions[chat_id]
         top = sorted(scores.items(), key=lambda x: x[1]['points'], reverse=True)[:5]
         leaderboard = "\n".join([f"{i+1}. {v['name']}: {v['points']}" for i, (k,v) in enumerate(top)])
-        
         await message.answer(f"🎉 **ПОБЕДА!**\n{user_name} угадал: **{word}**\n\n🏆 **ТОП:**\n{leaderboard}",
                            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Еще!", callback_data="cr_restart")]]))
         return True
