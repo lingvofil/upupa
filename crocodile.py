@@ -76,22 +76,33 @@ async def generate_game_word():
         return random.choice(["бегемот", "телевизор", "колбаса"])
 
 def get_game_keyboard(chat_id):
-    safe_chat_id = str(chat_id).replace("-", "m") 
-    clean_url = f"{WEB_APP_URL_BASE}?cid={safe_chat_id}".strip()
+    """Создает клавиатуру и выводит URL в консоль для проверки"""
+    # 1. Убеждаемся, что ID чата чистый
+    safe_chat_id = str(chat_id).replace("-", "m").strip()
     
+    # 2. Формируем URL, принудительно убирая любые пробелы
+    base_url = WEB_APP_URL_BASE.strip()
+    clean_url = f"{base_url}?cid={safe_chat_id}".replace(" ", "")
+    
+    # 3. ВАЖНО: Выводим в консоль для проверки (посмотрите это при запуске!)
+    print(f"--- DEBUG ---")
+    print(f"Final URL: '{clean_url}'")
+    print(f"-------------")
+
     try:
+        # Явно указываем параметры, чтобы исключить ошибки позиционных аргументов
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🎨 Открыть холст", 
+                        text="🎨 Открыть холст",
                         web_app=WebAppInfo(url=clean_url)
                     )
                 ]
             ]
         )
     except Exception as e:
-        logging.error(f"Error creating keyboard: {e}")
+        logging.error(f"CRITICAL ERROR in keyboard creation: {e}")
         return None
 
 async def is_correct_answer(chat_id, text):
