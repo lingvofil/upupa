@@ -1,4 +1,3 @@
-# crocodile.py
 import random
 import logging
 import socketio
@@ -7,12 +6,10 @@ from aiohttp import web
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import model  # Твоя модель
 
-# ================== НАСТРОЙКИ ==================
-# Прописываем URL максимально жестко, чтобы исключить ошибки Telegram
+# ================== НАСТРОЙКИ (ВНУТРИ МОДУЛЯ) ==================
+# Жестко прописываем домен без переменных, чтобы избежать ошибок конкатенации
 WEB_APP_DOMAIN = "upupaepops.duckdns.org"
-WEB_APP_PATH = "/game"
-# Собираем базовый URL без параметров
-WEBAPP_BASE_URL = f"https://{WEB_APP_DOMAIN}{WEB_APP_PATH}"
+WEB_APP_URL_BASE = f"https://{WEB_APP_DOMAIN}/game"
 
 SOCKET_SERVER_PORT = 8080
 game_sessions = {}
@@ -41,7 +38,7 @@ async def serve_index(request):
     except Exception:
         return web.Response(text="index.html not found", status=404)
 
-app_game.router.add_get(WEB_APP_PATH, serve_index)
+app_game.router.add_get("/game", serve_index)
 
 async def start_socket_server():
     runner = web.AppRunner(app_game)
@@ -53,16 +50,16 @@ async def start_socket_server():
 # ================== ЧАСТЬ 2: Логика игры ==================
 
 async def generate_game_word():
-    """Генерация слова через Gemini (совместимо с ModelFallbackWrapper)"""
+    """Генерация слова (совместимо с твоим ModelFallbackWrapper)"""
     prompt = "Придумай одно существительное на русском языке для игры Крокодил. Только одно слово без знаков препинания."
     try:
-        # Используем thread для синхронного вызова, так как обертка не поддерживает async
-        def call_model():
+        # Используем thread, так как обертка поддерживает только синхронный generate_content
+        def sync_call():
             return model.generate_content(prompt)
             
-        response = await asyncio.to_thread(call_model)
+        response = await asyncio.to_thread(sync_call)
         
-        if hasattr(response, 'text') and response.text:
+        if response and hasattr(response, 'text'):
             word = response.text.strip().lower().split()[0]
             return word
         return random.choice(["трактор", "кактус", "пельмень"])
@@ -71,22 +68,29 @@ async def generate_game_word():
         return random.choice(["бегемот", "телевизор", "колбаса"])
 
 def get_game_keyboard(chat_id):
-    """Создает клавиатуру с ультра-чистым URL"""
-    # Превращаем ID чата в строку и убираем лишнее
+    """Создает клавиатуру с гарантированно чистым URL"""
+    # Превращаем ID чата в строку и чистим URL
     str_chat_id = str(chat_id).strip()
-    # Формируем URL и чистим его от любых пробелов или переносов
-    clean_url = f"{WEBAPP_BASE_URL}?chat_id={str_chat_id}".replace(" ", "").strip()
+    # Собираем URL без лишних пробелов и символов
+    clean_url = f"{WEB_APP_URL_BASE}?chat_id={str_chat_id}".replace(" ", "").strip()
     
-    # Лог для проверки в консоли сервера
-    logging.info(f"DEBUG: Отправка WebApp URL: '{clean_url}'")
+    # Лог для проверки (посмотри в консоль сервера при вызове команды)
+    logging.info(f"DEBUG: Создание кнопки с URL: '{clean_url}'")
     
-    # Создаем кнопку. Важно: только text и web_app
-    button = InlineKeyboardButton(
-        text="🎨 Открыть холст", 
-        web_app=WebAppInfo(url=clean_url)
-    )
-    
-    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+    # Создаем объект кнопки через WebAppInfo
+    try:
+        web_app_btn = InlineKeyboardButton(
+            text="🎨 Открыть холст", 
+            web_app=WebAppInfo(url=clean_url)
+        )
+        
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[web_app_btn]]
+        )
+        return keyboard
+    except Exception as e:
+        logging.error(f"Error creating InlineKeyboardMarkup: {e}")
+        return None
 
 async def is_correct_answer(chat_id, text):
     chat_id_str = str(chat_id)
