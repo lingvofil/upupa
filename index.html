@@ -1,80 +1,131 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crocodile</title>
+    <title>Upupa Crocodile</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background: #1a1a1a; color: white; touch-action: none; font-family: sans-serif; }
-        canvas { display: block; background: #ffffff; width: 100vw; height: 80vh; }
-        .tools { height: 20vh; display: flex; align-items: center; justify-content: space-around; background: #222; }
-        button { padding: 15px; border-radius: 10px; border: none; background: #444; color: white; }
+        body { margin: 0; padding: 0; background: #1c1c1d; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        #canvas { display: block; background: #ffffff; touch-action: none; width: 100%; flex-grow: 1; }
+        .toolbar { height: 80px; background: #2c2c2e; display: flex; align-items: center; justify-content: space-around; padding: 0 15px; border-top: 1px solid #3a3a3c; }
+        input[type="color"] { -webkit-appearance: none; border: none; width: 44px; height: 44px; border-radius: 22px; background: none; cursor: pointer; }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: 2px solid #fff; border-radius: 22px; }
+        .btn { background: #ff3b30; color: white; border: none; padding: 12px 20px; border-radius: 12px; font-weight: 600; font-size: 14px; }
+        .btn:active { opacity: 0.8; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <div class="tools">
-        <input type="color" id="color" value="#000000">
-        <button id="clear">Очистить</button>
+    <div class="toolbar">
+        <input type="color" id="brushColor" value="#000000">
+        <button class="btn" id="clearBtn">ОЧИСТИТЬ</button>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
-        
+        tg.ready();
+
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const socket = io(); // Подключаемся к тому же домену
+        const brushColor = document.getElementById('brushColor');
+        const clearBtn = document.getElementById('clearBtn');
+
+        // Инициализация сокетов (автоматически подключается к тому же хосту)
+        const socket = io();
 
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('chat_id') || 'global';
 
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight * 0.8;
+        // Настройка размеров холста
+        function resize() {
+            const ratio = window.devicePixelRatio || 1;
+            canvas.width = canvas.clientWidth * ratio;
+            canvas.height = canvas.clientHeight * ratio;
+            ctx.scale(ratio, ratio);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 4;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
 
         socket.emit('join_room', { room: roomId });
 
         let drawing = false;
 
-        function getPos(e) {
-            const t = e.touches ? e.touches[0] : e;
-            return { x: t.clientX, y: t.clientY };
+        function getCoord(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        function startDrawing(e) {
+            drawing = true;
+            const pos = getCoord(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+        }
+
+        function stopDrawing() {
+            drawing = false;
+            ctx.beginPath();
         }
 
         function draw(e) {
             if (!drawing) return;
-            const pos = getPos(e);
-            const data = { ...pos, color: document.getElementById('color').value, room: roomId };
-            render(data);
-            socket.emit('draw_step', data);
+            if (e.cancelable) e.preventDefault();
+
+            const pos = getCoord(e);
+            const drawData = {
+                x: pos.x,
+                y: pos.y,
+                color: brushColor.value,
+                room: roomId
+            };
+
+            renderLine(drawData);
+            socket.emit('draw_step', drawData);
         }
 
-        function render(data) {
+        function renderLine(data) {
             ctx.strokeStyle = data.color;
-            ctx.lineWidth = 5;
-            ctx.lineCap = 'round';
             ctx.lineTo(data.x, data.y);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(data.x, data.y);
         }
 
-        canvas.addEventListener('mousedown', () => drawing = true);
-        canvas.addEventListener('touchstart', () => drawing = true);
-        window.addEventListener('mouseup', () => { drawing = false; ctx.beginPath(); });
-        window.addEventListener('touchend', () => { drawing = false; ctx.beginPath(); });
+        // События мыши
+        canvas.addEventListener('mousedown', startDrawing);
         canvas.addEventListener('mousemove', draw);
-        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); draw(e); }, {passive: false});
+        window.addEventListener('mouseup', stopDrawing);
 
-        document.getElementById('clear').onclick = () => {
-            ctx.clearRect(0,0, canvas.width, canvas.height);
+        // События касания
+        canvas.addEventListener('touchstart', (e) => {
+            startDrawing(e);
+            if (e.cancelable) e.preventDefault();
+        }, {passive: false});
+        canvas.addEventListener('touchmove', draw, {passive: false});
+        window.addEventListener('touchend', stopDrawing);
+
+        clearBtn.onclick = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             socket.emit('clear_canvas', { room: roomId });
         };
 
-        socket.on('draw_data', render);
-        socket.on('clear', () => ctx.clearRect(0,0, canvas.width, canvas.height));
+        // Слушаем сокеты
+        socket.on('draw_data', (data) => renderLine(data));
+        socket.on('clear', () => ctx.clearRect(0, 0, canvas.width, canvas.height));
+
     </script>
 </body>
 </html>
