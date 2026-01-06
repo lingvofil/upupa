@@ -536,6 +536,24 @@ async def handle_start_game(message: types.Message):
     if BUMP_INTERVAL and BUMP_INTERVAL > 0:
         game_sessions[cid]["bump_task"] = asyncio.create_task(_bump_loop(cid))
 
+async def handle_text_stop(message: types.Message):
+    """
+    Остановка игры текстовой командой: "кракадил стоп"
+    """
+    cid = str(message.chat.id)
+
+    if cid not in game_sessions:
+        await message.reply("Игра не запущена.")
+        return
+
+    await _stop_session(cid, reason="text stop")
+
+    await message.reply("🛑 Игра остановлена.")
+    await message.answer(
+        format_leaderboard(cid, "🏆 Рейтинг (текущий)"),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 async def handle_callback(cb: types.CallbackQuery):
     data = cb.data
@@ -544,17 +562,24 @@ async def handle_callback(cb: types.CallbackQuery):
     if not session:
         return await cb.answer("Игра не найдена")
 
+    is_drawer = bool(cb.from_user and cb.from_user.id == session.get("drawer_id"))
+
     if data.startswith("cr_w_"):
-        await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
+        if not is_drawer:
+            return await cb.answer("Это может смотреть только загадывающий 👀", show_alert=True)
+        return await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
 
     elif data.startswith("cr_n_"):
+        if not is_drawer:
+            return await cb.answer("Менять слово может только загадывающий 🔒", show_alert=True)
+
         new_w = _pick_word()
         session["word"] = new_w
 
         room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
         await sio.emit("new_word_data", {"word": new_w}, room=room)
 
-        await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
+        return await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
 
     elif data.startswith("cr_stop_"):
         await _stop_session(chat_id, reason="manual stop")
@@ -564,7 +589,7 @@ async def handle_callback(cb: types.CallbackQuery):
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-        await cb.answer("Остановлено")
+        return await cb.answer("Остановлено")
 
 
 async def check_answer(msg: types.Message) -> bool:
