@@ -15,8 +15,8 @@ WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-# Интервал обновления превью в секундах (чтобы не словить FloodWait от Telegram)
-PREVIEW_UPDATE_INTERVAL = 4.0 
+# Интервал обновления превью в секундах
+PREVIEW_UPDATE_INTERVAL = 3.0 
 
 # ================== ХРАНИЛИЩЕ СОСТОЯНИЯ ==================
 # game_sessions[chat_id] = { 
@@ -44,8 +44,9 @@ async def join_room(sid, data):
 
 @sio.event
 async def draw_step(sid, data):
-    """Ретрансляция штриха другим игрокам (если они тоже открыли Mini App)"""
+    """Ретрансляция штриха другим игрокам"""
     room = str(data.get("room"))
+    # skip_sid=sid чтобы не отправлять обратно рисующему
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 @sio.event
@@ -55,17 +56,20 @@ async def preview_snapshot(sid, data):
     """
     room = str(data.get("room"))
     
-    # Определяем chat_id
+    # Определяем chat_id (m123 -> -123)
     if room.startswith("m"):
         chat_id = int(room.replace("m", "-"))
     else:
         chat_id = int(room)
-
-    session = game_sessions.get(str(chat_id))
+    
+    str_chat_id = str(chat_id)
+    session = game_sessions.get(str_chat_id)
+    
     if not session:
+        # logging.warning(f"Session not found for {str_chat_id}")
         return
 
-    # Проверка на троттлинг (не чаще чем раз в N секунд)
+    # Проверка на троттлинг
     now = time.time()
     last_update = session.get("last_preview_time", 0)
     if now - last_update < PREVIEW_UPDATE_INTERVAL:
@@ -76,12 +80,11 @@ async def preview_snapshot(sid, data):
         return
 
     try:
-        # Декодируем картинку
+        # print(f"Processing snapshot for {chat_id}...") # Debug
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
         
-        # Обновляем сообщение в чате
-        # Используем edit_message_media для обновления картинки без удаления
+        # Обновляем сообщение. Важно: используем InputMediaPhoto
         media = InputMediaPhoto(
             media=BufferedInputFile(image_bytes, filename="preview.jpg"),
             caption=f"🎨 **LIVE:** {session['drawer_name']} рисует..."
@@ -93,20 +96,22 @@ async def preview_snapshot(sid, data):
             message_id=msg_id
         )
         
-        # Обновляем время последнего апдейта
         session["last_preview_time"] = now
 
     except Exception as e:
-        # Часто бывает, что картинка не изменилась (Telegram не дает редактировать на то же самое)
-        # или сеть лагает. Игнорируем мелкие ошибки.
-        logging.warning(f"[socket] preview update failed: {e}")
+        error_str = str(e)
+        # Игнорируем ошибку, если картинка не изменилась
+        if "message is not modified" not in error_str.lower():
+            logging.warning(f"[socket] preview update failed: {e}")
 
 @sio.event
 async def skip_turn(sid, data):
-    """
-    Запрос на смену слова от ведущего
-    """
-    room = str(data.get("room"))
+    """Запрос на смену слова из Web App"""
+    # Этот хендлер можно оставить для WebApp кнопки, если она есть,
+    # или переиспользовать логику в handle_callback для Telegram-кнопки
+    await handle_skip_logic(data.get("room"), sid)
+
+async def handle_skip_logic(room: str, sid=None):
     if room.startswith("m"):
         chat_id = int(room.replace("m", "-"))
     else:
@@ -116,15 +121,12 @@ async def skip_turn(sid, data):
     if not session:
         return
 
-    # Генерируем новое слово
     new_word = await generate_game_word()
     session["word"] = new_word
     
-    logging.info(f"Word skipped. New word for chat {chat_id}: {new_word}")
-
-    # Отправляем новое слово ТОЛЬКО ведущему (sid)
-    await sio.emit("new_word_data", {"word": new_word}, to=sid)
-
+    # Уведомляем всех в комнате (или только ведущего), что слово изменилось
+    # Лучше всех, чтобы очистился холст у всех наблюдателей тоже
+    await sio.emit("new_word_data", {"word": new_word}, room=room)
 
 @sio.event
 async def final_frame(sid, data):
@@ -143,9 +145,7 @@ async def final_frame(sid, data):
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
         
-        # Если было сообщение с превью, удаляем его, чтобы не захламлять,
-        # или редактируем его в финальное (по желанию). 
-        # Здесь удалим старое превью и отправим новое чистое сообщение.
+        # Удаляем превью сообщение
         if session.get("preview_message_id"):
             try:
                 await bot.delete_message(chat_id, session["preview_message_id"])
@@ -165,6 +165,7 @@ async def final_frame(sid, data):
     finally:
         game_sessions.pop(str(chat_id), None)
 
+
 # ================== WEB SERVER ==================
 
 async def serve_index(request: web.Request):
@@ -179,12 +180,11 @@ async def start_socket_server():
     await site.start()
     logging.info(f"[socket] server started on {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
+
 # ================== GAME LOGIC ==================
 
 async def generate_game_word() -> str:
-    """Генерация слова"""
     try:
-        # Вызов модели (предполагаем, что model настроен в config)
         def sync_call():
             return model.generate_content(
                 "Придумай одно простое существительное для игры Крокодил на русском языке. Только слово."
@@ -193,17 +193,25 @@ async def generate_game_word() -> str:
         word = response.text.strip().lower().split()[0]
         clean_word = "".join(filter(str.isalpha, word))
         return clean_word if clean_word else "яблоко"
-    except Exception as e:
-        logging.error(f"Error generating word: {e}")
+    except Exception:
         return random.choice(["трактор", "кактус", "пельмень", "бегемот", "солнце", "жираф"])
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    """
+    Кнопки в чате:
+    1. Открыть холст (ссылка)
+    2. Показать слово | Следующее слово (callback)
+    """
     safe_chat_id = str(chat_id).replace("-", "m")
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={safe_chat_id}"
+    
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🎨 Рисовать / Смотреть", url=app_link)],
-            [InlineKeyboardButton(text="👁 Напомнить слово", callback_data=f"cr_w_{chat_id}")],
+            [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
+            [
+                InlineKeyboardButton(text="👁 Показать слово", callback_data=f"cr_w_{chat_id}"),
+                InlineKeyboardButton(text="🔄 Следующее слово", callback_data=f"cr_n_{chat_id}")
+            ]
         ]
     )
 
@@ -212,23 +220,21 @@ async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
     word = await generate_game_word()
     
-    # 1. Отправляем стартовое сообщение
     start_msg = await message.answer(
         f"🎮 **КРОКОДИЛ НАЧАТ!**\n"
         f"Ведущий: {message.from_user.full_name}\n"
-        f"Ждем рисунка...",
+        f"Загадывающий, нажми 'Открыть холст'!",
         reply_markup=get_game_keyboard(chat_id),
     )
     
-    # 2. Сразу создаем "Плейсхолдер" для трансляции
-    # Мы отправим заглушку, которую будем редактировать через сокеты
+    # Сообщение-заглушка для трансляции
     preview_msg = await message.answer("⏳ *Ожидание первого штриха...*", parse_mode="Markdown")
 
     game_sessions[str(chat_id)] = {
         "word": word,
         "drawer_id": message.from_user.id,
         "drawer_name": message.from_user.full_name,
-        "preview_message_id": preview_msg.message_id, # ID для лайв-трансляции
+        "preview_message_id": preview_msg.message_id,
         "last_preview_time": 0
     }
 
@@ -240,11 +246,31 @@ async def handle_callback(callback: types.CallbackQuery):
     if not session:
         return await callback.answer("Игра окончена")
 
+    # Проверка, что нажимает ведущий
+    if callback.from_user.id != session["drawer_id"]:
+        return await callback.answer("Только ведущий может управлять!", show_alert=True)
+
+    # Показать слово
     if data.startswith("cr_w_"):
-        if callback.from_user.id == session["drawer_id"]:
-             await callback.answer(f"СЛОВО: {session['word'].upper()}", show_alert=True)
-        else:
-             await callback.answer("Подглядывать нехорошо! 😡", show_alert=True)
+        await callback.answer(f"СЛОВО: {session['word'].upper()}", show_alert=True)
+
+    # Следующее слово
+    elif data.startswith("cr_n_"):
+        # Генерируем новое
+        new_word = await generate_game_word()
+        session["word"] = new_word
+        
+        # Уведомляем ведущего тут
+        await callback.answer(f"Новое слово: {new_word.upper()}", show_alert=True)
+        
+        # Уведомляем WebApp (чтобы очистился холст и показался алерт внутри)
+        # Формируем room_id как m(chat_id) или просто chat_id
+        # В сессии ключ - это str(chat_id) (напр "-100...")
+        # WebApp использует "m100..."
+        safe_room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
+        
+        await sio.emit("new_word_data", {"word": new_word}, room=safe_room)
+
 
 async def check_answer(message: types.Message) -> bool:
     chat_id = str(message.chat.id)
@@ -255,31 +281,19 @@ async def check_answer(message: types.Message) -> bool:
 
     if message.text.strip().lower() == session["word"]:
         if message.from_user.id == session["drawer_id"]:
-            return True # Ведущий пишет слово - игнорим
+            return True 
 
-        # Победитель
         winner_name = message.from_user.full_name
         word = session['word']
         
-        await message.answer(
-            f"🎉 **{winner_name}** угадал слово: **{word.upper()}**!"
-        )
+        await message.answer(f"🎉 **{winner_name}** угадал слово: **{word.upper()}**!")
         
-        # Можно тут же удалить сессию или ждать финала от ведущего.
-        # Обычно лучше ждать, пока ведущий нажмет "Завершить", 
-        # или принудительно завершать тут. 
-        # Для простоты - завершим сессию здесь и сообщим сокетам.
-        
-        # Опционально: отправить сигнал в Mini App, что игра окончена
-        # await sio.emit("game_over", {"winner": winner_name}, room=room_id)
-        
-        # Удаляем превью
         if session.get("preview_message_id"):
             try:
                 await bot.delete_message(message.chat.id, session["preview_message_id"])
             except: 
                 pass
-                
+        
         game_sessions.pop(chat_id, None)
         return True
 
