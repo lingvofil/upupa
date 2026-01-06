@@ -6,6 +6,7 @@ import os
 import random
 import time
 import json
+import html
 from typing import Dict, Optional
 
 from aiohttp import web
@@ -52,8 +53,8 @@ BLANK_PNG_B64 = (
 # chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
 
-# chat_id(str) -> { user_id(str): points(int) }
-_scores: Dict[str, Dict[str, int]] = {}
+# chat_id(str) -> { user_id(str): {"pts": int, "name": str} }
+_scores: Dict[str, Dict[str, dict]] = {}
 
 # =============== socket.io server ===============
 sio = socketio.AsyncServer(
@@ -121,13 +122,38 @@ def _normalize_guess(s: str) -> str:
 
 
 def _scores_load():
+    """
+    Поддержка старого и нового формата.
+    Старый: {chat: {uid: pts_int}}
+    Новый:  {chat: {uid: {"pts": int, "name": str}}}
+    """
     global _scores
     try:
         if os.path.exists(SCORES_FILE):
             with open(SCORES_FILE, "r", encoding="utf-8") as f:
-                _scores = json.load(f)
+                raw = json.load(f)
         else:
-            _scores = {}
+            raw = {}
+
+        normalized: Dict[str, Dict[str, dict]] = {}
+        for cid, table in (raw or {}).items():
+            normalized[str(cid)] = {}
+            if not isinstance(table, dict):
+                continue
+
+            for uid, v in table.items():
+                uid = str(uid)
+                if isinstance(v, int):
+                    normalized[str(cid)][uid] = {"pts": int(v), "name": ""}
+                elif isinstance(v, dict):
+                    pts = int(v.get("pts", 0))
+                    name = str(v.get("name", "") or "")
+                    normalized[str(cid)][uid] = {"pts": pts, "name": name}
+                else:
+                    normalized[str(cid)][uid] = {"pts": 0, "name": ""}
+
+        _scores = normalized
+
     except Exception as e:
         logging.error(f"[scores] load failed: {e}", exc_info=True)
         _scores = {}
@@ -141,29 +167,49 @@ def _scores_save():
         logging.error(f"[scores] save failed: {e}", exc_info=True)
 
 
-def add_point(chat_id: str, user_id: int):
+def add_point(chat_id: str, user_id: int, user_name: str = ""):
     cid = str(chat_id)
     uid = str(user_id)
+
     if cid not in _scores:
         _scores[cid] = {}
-    _scores[cid][uid] = int(_scores[cid].get(uid, 0)) + 1
+
+    if uid not in _scores[cid]:
+        _scores[cid][uid] = {"pts": 0, "name": ""}
+
+    _scores[cid][uid]["pts"] = int(_scores[cid][uid].get("pts", 0)) + 1
+
+    # обновляем имя, если передали (и если оно поменялось)
+    if user_name:
+        _scores[cid][uid]["name"] = str(user_name)
+
     _scores_save()
 
 
-def format_leaderboard(chat_id: str, title: str = "🏆 Список самых умных пидорасов") -> str:
+def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игроков") -> str:
     cid = str(chat_id)
     table = _scores.get(cid, {})
     if not table:
         return f"{title}\n(пока пусто)"
 
     # сортируем по очкам desc
-    items = sorted(table.items(), key=lambda x: x[1], reverse=True)[:LEADERBOARD_TOP]
+    items = sorted(
+        table.items(),
+        key=lambda x: int((x[1] or {}).get("pts", 0)),
+        reverse=True,
+    )[:LEADERBOARD_TOP]
 
     lines = [title]
-    for i, (uid, pts) in enumerate(items, start=1):
-        # имя красиво подтягивать без базы сложно, поэтому делаем ссылку по user_id
+    for i, (uid, data) in enumerate(items, start=1):
+        pts = int((data or {}).get("pts", 0))
+        name = ((data or {}).get("name") or "").strip() or "игрок"
+
+        # HTML-экранирование имени (parse_mode="HTML"!)
+        safe_name = html.escape(name)
+
         # Telegram понимает tg://user?id=
-        lines.append(f"{i}. <a href=\"tg://user?id={uid}\">игрок</a> — <b>{pts}</b>")
+        lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
+
     return "\n".join(lines)
 
 
@@ -404,7 +450,7 @@ async def final_frame(sid, data):
         # после завершения — покажем рейтинг
         await bot.send_message(
             int(chat_id),
-            format_leaderboard(chat_id, "🏆 Рейтинг (после игры)"),
+            format_leaderboard(chat_id, "🏆 Самые умные педорасы"),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -463,7 +509,7 @@ async def handle_start_game(message: types.Message):
     word = _pick_word()
 
     await message.answer(
-        f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
+        f"🎮 **КРАКАДИЛ**\nХуйдожник: {message.from_user.full_name}",
         reply_markup=get_game_keyboard(chat_id),
         parse_mode="Markdown",
     )
@@ -540,9 +586,9 @@ async def check_answer(msg: types.Message) -> bool:
         return True
 
     if guess == word:
-        # начисляем балл
+        # начисляем балл + сохраняем имя для рейтинга
         if msg.from_user:
-            add_point(cid, msg.from_user.id)
+            add_point(cid, msg.from_user.id, msg.from_user.full_name)
 
         # победное сообщение
         await msg.answer(
@@ -556,7 +602,7 @@ async def check_answer(msg: types.Message) -> bool:
         # покажем рейтинг после игры
         await bot.send_message(
             int(cid),
-            format_leaderboard(cid, "🏆 Рейтинг (после игры)"),
+            format_leaderboard(cid, "🏆 Самые умные педорасы"),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
