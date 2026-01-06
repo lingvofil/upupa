@@ -77,24 +77,28 @@
 </div>
 
 <script>
-  const VERSION = "2026-01-06_19-20 SNAP_VIA_SOCKET WS_ONLY";
+  const VERSION = "2026-01-07 FIX_ROOMID + POLLING_WS + MORE_LOGS";
 
   const tg = window.Telegram.WebApp;
-  tg.expand();
-  tg.ready();
+  try { tg.expand(); tg.ready(); } catch (_) {}
 
-  const roomId = tg.initDataUnsafe.start_param;
   const debugEl = document.getElementById('debug');
-
   function log(msg) {
     const prev = debugEl.innerText || "";
     const lines = (prev + "\n" + msg).trim().split("\n");
-    debugEl.innerText = lines.slice(-12).join("\n");
+    debugEl.innerText = lines.slice(-14).join("\n");
   }
 
   log("VERSION: " + VERSION);
   log("HREF: " + location.href);
-  log("ROOM: " + roomId);
+
+  // --- ROOM ID (надёжно) ---
+  const urlRoom = new URLSearchParams(location.search).get("tgWebAppStartParam");
+  const initRoom =
+    (tg.initDataUnsafe && (tg.initDataUnsafe.start_param || tg.initDataUnsafe.startapp)) || "";
+
+  const roomId = initRoom || urlRoom || "";
+  log("ROOM_RESOLVED: " + roomId);
 
   // --- CANVAS ---
   const canvas = document.getElementById('canvas');
@@ -139,19 +143,20 @@
     return pCanvas.toDataURL('image/jpeg', 0.5);
   }
 
-  // --- SOCKET (WS ONLY) ---
+  // --- SOCKET (polling + websocket) ---
   log("Connecting Socket...");
   const socket = io({
-    transports: ['websocket'],
-    upgrade: false
+    path: "/socket.io",
+    transports: ['polling', 'websocket'],
+    upgrade: true
   });
 
   socket.on('connect', () => {
-    log("Socket Online");
+    log("Socket Online: " + socket.id);
     socket.emit('join_room', { room: roomId });
   });
 
-  socket.on('disconnect', () => log("Socket Off"));
+  socket.on('disconnect', (r) => log("Socket Off: " + r));
 
   socket.on('connect_error', (err) => {
     log("Socket ERR: " + (err && err.message ? err.message : String(err)));
@@ -166,18 +171,24 @@
   });
 
   socket.on('new_word_data', (d) => {
-    tg.showPopup({ title: 'Слово', message: d.word.toUpperCase() });
+    try {
+      tg.showPopup({ title: 'Слово', message: String(d.word || "").toUpperCase() });
+    } catch (_) {
+      alert("Слово: " + String(d.word || "").toUpperCase());
+    }
     clearC();
   });
 
   // --- SNAPSHOT VIA SOCKET (ACK) ---
-  function sendSnap() {
-    if (!isDirty) return;
+  function sendSnap(force=false) {
+    if (!force && !isDirty) return;
     if (!socket.connected) { log("SNAP: socket not connected"); return; }
+    if (!roomId) { log("SNAP: no roomId"); return; }
 
     const data = getCompressedData();
     const size = data.length;
 
+    log("SNAP send len=" + size);
     socket.emit('snapshot', { room: roomId, image: data }, (resp) => {
       log(`SNAP ACK: ${resp} (len=${size})`);
     });
@@ -191,16 +202,17 @@
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
-    return {
-      x: (e.pageX || e.clientX) - r.left,
-      y: (e.pageY || e.clientY) - r.top
-    };
+    const x = (e.clientX != null ? e.clientX : e.pageX) - r.left;
+    const y = (e.clientY != null ? e.clientY : e.pageY) - r.top;
+    return { x, y };
   }
 
   canvas.onpointerdown = function (e) {
     drawing = true;
     last = getPos(e);
     canvas.setPointerCapture(e.pointerId);
+    log("DOWN " + Math.round(last.x) + "," + Math.round(last.y));
+    e.preventDefault();
   };
 
   canvas.onpointermove = function (e) {
@@ -221,13 +233,13 @@
     isDirty = true;
     last = p;
 
-    log(`DRAW ${Math.round(p.x)},${Math.round(p.y)}`);
+    log(`MOVE ${Math.round(p.x)},${Math.round(p.y)}`);
   };
 
   canvas.onpointerup = function (e) {
     drawing = false;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-    sendSnap();
+    sendSnap(true); // отправим точно
   };
 
   // --- BUTTONS ---
@@ -235,19 +247,20 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     isDirty = true;
-    sendSnap();
+    sendSnap(true);
   };
 
   window.skip = () => socket.emit('skip_turn', { room: roomId });
 
   window.finish = () => {
+    if (!roomId) { log("FINISH: no roomId"); return; }
     const img = canvas.toDataURL('image/jpeg', 0.8);
     socket.emit('final_frame', { room: roomId, image: img });
-    tg.close();
+    try { tg.close(); } catch (_) {}
   };
 
   // --- AUTO SENDER ---
-  setInterval(sendSnap, 2500);
+  setInterval(() => sendSnap(false), 2500);
 </script>
 
 </body>
