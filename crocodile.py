@@ -16,10 +16,10 @@ from aiogram.types import (
 
 from config import bot
 
+# ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 
-# Если через Cloudflare Tunnel до localhost:8080 — оставляй 127.0.0.1
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
@@ -31,6 +31,7 @@ BLANK_PNG_B64 = (
 
 GAME_WORDS = ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
 
+# chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
 
 sio = socketio.AsyncServer(
@@ -41,11 +42,16 @@ sio = socketio.AsyncServer(
     max_http_buffer_size=10 * 1024 * 1024,
 )
 
+# Лимит 20MB
 app = web.Application(client_max_size=20 * 1024 * 1024)
 sio.attach(app)
 
 
 def get_chat_id_from_room(room: str) -> str:
+    """
+    room = tg start_param
+    пример: m4611982229 -> -4611982229
+    """
     room = str(room or "")
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -53,6 +59,7 @@ def get_chat_id_from_room(room: str) -> str:
 
 
 async def _ensure_session(chat_id: str) -> dict | None:
+    """Если сессии нет — попробуем создать превью-сообщение и восстановить."""
     session = game_sessions.get(chat_id)
     if session:
         return session
@@ -79,6 +86,10 @@ async def _ensure_session(chat_id: str) -> dict | None:
 
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
+    """
+    Универсальная обработка превью.
+    source: 'socket' / 'http' — чисто для логов.
+    """
     if not room or not image_data:
         return "Bad Request"
 
@@ -87,6 +98,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
+    # Throttling
     now = time.time()
     if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
         return "Skipped"
@@ -125,6 +137,8 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "TG error"
 
 
+# ================== SOCKET EVENTS ==================
+
 @sio.event
 async def connect(sid, environ):
     logging.info(f"[socket] CONNECT {sid}")
@@ -151,6 +165,9 @@ async def draw_step(sid, data):
 
 @sio.event
 async def snapshot(sid, data):
+    """
+    Превью через socket.io (ACK возвращает строку результата).
+    """
     room = str((data or {}).get("room") or "")
     image_data = (data or {}).get("image") or ""
     logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
@@ -202,6 +219,8 @@ async def final_frame(sid, data):
         game_sessions.pop(chat_id, None)
 
 
+# ================== HTTP (index only) ==================
+
 async def serve_index(request: web.Request):
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -209,6 +228,8 @@ async def serve_index(request: web.Request):
     resp.headers["Expires"] = "0"
     return resp
 
+
+# ================== ROUTES ==================
 
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
@@ -222,9 +243,11 @@ async def start_socket_server():
     logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
 
 
+# ================== BOT LOGIC ==================
+
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    v = int(time.time())
+    v = int(time.time())  # ломаем кэш на уровне Telegram/Cloudflare
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
 
     return InlineKeyboardMarkup(
@@ -293,6 +316,7 @@ async def check_answer(msg: types.Message) -> bool:
         return False
 
     if msg.text.strip().lower() == str(sess.get("word", "")).strip().lower():
+        # ведущий не должен сам угадывать — и не должен блокировать другие команды
         if msg.from_user and msg.from_user.id == sess.get("drawer_id"):
             return False
 
