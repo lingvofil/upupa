@@ -7,42 +7,40 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background: #222; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+        body { margin: 0; background: #222; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: monospace; }
         canvas { flex: 1; background: #fff; display: block; }
         .toolbar { height: 60px; background: #333; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
         .hidden { display: none !important; }
         .btn { padding: 8px 12px; border-radius: 8px; border: none; font-weight: bold; color: white; cursor: pointer; }
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
-        .btn-gray { background: #555; }
         
-        /* КОНСОЛЬ ОТЛАДКИ */
-        #debugConsole {
-            position: absolute; top: 10px; left: 10px;
-            background: rgba(0,0,0,0.7); color: #0f0;
-            font-family: monospace; font-size: 11px;
-            padding: 5px; border-radius: 4px; pointer-events: none;
-            max-width: 200px;
-            z-index: 999;
+        /* Debug UI */
+        #debug {
+            position: absolute; top: 10px; left: 10px; right: 10px;
+            background: rgba(0,0,0,0.8); color: lime;
+            padding: 5px; font-size: 10px; pointer-events: none;
+            height: 40px; overflow: hidden; white-space: pre-wrap;
         }
+        #testBtn { position: absolute; bottom: 80px; left: 10px; background: blue; color: white; padding: 10px; z-index: 100; }
+        #snapBtn { position: absolute; bottom: 80px; left: 60px; background: green; color: white; padding: 10px; z-index: 100; }
     </style>
 </head>
 <body>
 
-<div id="debugConsole">Initializing...</div>
+<div id="debug">Init...</div>
+<button id="testBtn" onclick="sendTest()">T</button>
+<button id="snapBtn" onclick="forceSnap()">S</button>
+
 <canvas id="canvas"></canvas>
 
-<div id="drawerTools" class="toolbar hidden">
+<div id="toolbar" class="toolbar">
     <div style="display:flex; gap:10px; align-items:center;">
         <input type="color" id="brushColor" value="#000000" style="width:30px;height:30px;border:none;">
-        <button id="clearBtn" class="btn btn-gray">🧹</button>
-        <button id="skipBtn" class="btn btn-blue">🔄</button>
+        <button id="clearBtn" class="btn btn-blue" onclick="clearC()">🧹</button>
+        <button id="skipBtn" class="btn btn-blue" onclick="skip()">🔄</button>
     </div>
-    <button id="finishBtn" class="btn btn-red">🏁</button>
-</div>
-
-<div id="viewerTools" class="toolbar hidden">
-    <div style="color:#aaa; width:100%; text-align:center;">Режим наблюдателя</div>
+    <button id="finishBtn" class="btn btn-red" onclick="finish()">🏁</button>
 </div>
 
 <script>
@@ -51,21 +49,18 @@
     tg.ready();
 
     const roomId = tg.initDataUnsafe.start_param;
-    const debugEl = document.getElementById('debugConsole');
+    const debugEl = document.getElementById('debug');
     
-    function log(txt) {
-        debugEl.innerText = txt;
-        console.log(txt);
+    function log(msg) {
+        debugEl.innerText = msg;
+        console.log(msg);
     }
-    
-    // Показываем инструменты всем для теста
-    document.getElementById('drawerTools').classList.remove('hidden');
 
+    // --- CANVAS SETUP ---
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     let isDirty = false;
 
-    // --- RESIZE ---
     function resize() {
         const h = document.querySelector('.toolbar').offsetHeight;
         const tmp = document.createElement('canvas');
@@ -82,34 +77,14 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // --- COMPRESSOR ---
-    const pCanvas = document.createElement('canvas');
-    const pCtx = pCanvas.getContext('2d');
-    
-    function getSnapshot() {
-        // Жмем до 150px
-        const scale = Math.min(1, 150 / canvas.width);
-        pCanvas.width = canvas.width * scale;
-        pCanvas.height = canvas.height * scale;
-        pCtx.fillStyle='#fff'; pCtx.fillRect(0,0,pCanvas.width,pCanvas.height);
-        pCtx.drawImage(canvas, 0,0,pCanvas.width,pCanvas.height);
-        return pCanvas.toDataURL('image/jpeg', 0.4);
-    }
-
     // --- SOCKET ---
-    log("Connecting...");
-    const socket = io({ 
-        transports: ['polling', 'websocket'], // Разрешаем оба
-        reconnectionDelay: 1000
-    });
+    log("Conn: " + roomId);
+    // Force polling to match logs seen
+    const socket = io({ transports: ['polling', 'websocket'] });
 
-    socket.on('connect', () => {
-        log("Connected: " + socket.id);
-        socket.emit('join_room', { room: roomId });
-    });
-    
-    socket.on('disconnect', () => log("Disconnected"));
-    socket.on('connect_error', (e) => log("Err: " + e.message));
+    socket.on('connect', () => log("CONNECTED " + socket.id));
+    socket.on('disconnect', () => log("DISCONNECTED"));
+    socket.on('connect_error', (e) => log("ERR: " + e.message));
 
     socket.on('draw_data', (d) => {
         ctx.strokeStyle = d.color;
@@ -117,11 +92,33 @@
     });
     
     socket.on('new_word_data', (d) => {
-        tg.showPopup({title:'Слово', message: d.word.toUpperCase()});
-        ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        tg.showPopup({title:'Слово', message:d.word.toUpperCase()});
+        clearC();
     });
 
-    // --- INPUT ---
+    // --- DEBUG ACTIONS ---
+    window.sendTest = () => {
+        log("Sending TEST...");
+        socket.emit('client_test', { room: roomId, time: Date.now() });
+    };
+
+    const pCanvas = document.createElement('canvas');
+    const pCtx = pCanvas.getContext('2d');
+
+    window.forceSnap = () => {
+        // Compress to 150px
+        const scale = Math.min(1, 150 / canvas.width);
+        pCanvas.width = canvas.width * scale;
+        pCanvas.height = canvas.height * scale;
+        pCtx.fillStyle='#fff'; pCtx.fillRect(0,0,pCanvas.width,pCanvas.height);
+        pCtx.drawImage(canvas,0,0,pCanvas.width,pCanvas.height);
+        
+        const data = pCanvas.toDataURL('image/jpeg', 0.3);
+        log("SNAP: " + data.length + " bytes");
+        socket.emit('preview_snapshot', { room: roomId, image: data });
+    };
+
+    // --- DRAWING ---
     let draw = false, last = {x:0, y:0};
     const getPos = (e) => {
         const r = canvas.getBoundingClientRect();
@@ -139,6 +136,7 @@
         ctx.strokeStyle = c;
         ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
         
+        // Emit draw (will not log on server but keeps room alive)
         socket.emit('draw_step', {room:roomId, px:last.x, py:last.y, x:p.x, y:p.y, color:c});
         isDirty = true;
         last = p;
@@ -152,30 +150,18 @@
     canvas.addEventListener('touchmove', move, {passive:false});
     window.addEventListener('touchend', end);
 
-    // --- BUTTONS ---
-    document.getElementById('clearBtn').onclick = () => {
-        ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-        isDirty=true;
-    }
-    document.getElementById('skipBtn').onclick = () => {
-        tg.showConfirm("Другое слово?", (ok) => { if(ok) socket.emit('skip_turn', {room:roomId}); });
-    }
-    document.getElementById('finishBtn').onclick = () => {
-        tg.showConfirm("Отправить?", (ok) => {
-            if(ok) {
-                const img = canvas.toDataURL('image/jpeg', 0.8);
-                socket.emit('final_frame', {room:roomId, image:img});
-                tg.close();
-            }
-        });
+    window.clearC = () => { ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); isDirty=true; }
+    window.skip = () => socket.emit('skip_turn', {room:roomId});
+    window.finish = () => {
+        const img = canvas.toDataURL('image/jpeg', 0.8);
+        socket.emit('final_frame', {room:roomId, image:img});
+        tg.close();
     }
 
-    // --- LOOP ---
+    // Auto loop
     setInterval(() => {
-        if(isDirty) {
-            const shot = getSnapshot();
-            log("Sending... (" + shot.length + ")");
-            socket.emit('preview_snapshot', {room: roomId, image: shot});
+        if(isDirty && socket.connected) {
+            forceSnap();
             isDirty = false;
         }
     }, 4000);
