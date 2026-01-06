@@ -1,10 +1,10 @@
-import asyncio
 import base64
 import logging
 import random
 import time
 from aiohttp import web
 import socketio
+
 from aiogram import types
 from aiogram.types import (
     InlineKeyboardMarkup,
@@ -20,7 +20,8 @@ BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
-PREVIEW_UPDATE_INTERVAL = 2.5  # чаще
+
+PREVIEW_UPDATE_INTERVAL = 2.5  # сек (троттлинг превью)
 
 BLANK_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
@@ -44,7 +45,10 @@ sio.attach(app)
 
 
 def get_chat_id_from_room(room: str) -> str:
-    """room = tg start_param, например m4611982229 -> -4611982229"""
+    """
+    room = tg start_param
+    пример: m4611982229 -> -4611982229
+    """
     room = str(room)
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -52,7 +56,6 @@ def get_chat_id_from_room(room: str) -> str:
 
 
 # ================== SOCKET EVENTS ==================
-
 
 @sio.event
 async def connect(sid, environ):
@@ -98,6 +101,7 @@ async def final_frame(sid, data):
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
+        # удаляем preview, если есть
         if session.get("preview_message_id"):
             try:
                 await bot.delete_message(chat_id, session["preview_message_id"])
@@ -120,10 +124,11 @@ async def final_frame(sid, data):
 
 # ================== HTTP SNAPSHOT ==================
 
-
 async def handle_snapshot_upload(request: web.Request):
-    """Принимает превью-картинку через POST и обновляет preview_message"""
-    # ВАЖНО: логируем самый факт попадания, чтобы понять, доходит ли запрос
+    """
+    Принимает превью-картинку через POST и обновляет preview_message.
+    """
+    # Важно: логируем вход сразу, чтобы увидеть, что запрос ДОШЁЛ
     logging.info(
         f"📥 [HTTP] snapshot hit: {request.method} {request.path} len={request.content_length}"
     )
@@ -139,7 +144,7 @@ async def handle_snapshot_upload(request: web.Request):
         chat_id = get_chat_id_from_room(room)
         session = game_sessions.get(chat_id)
 
-        # --- Auto Recovery ---
+        # --- Auto Recovery (если потеряли сессию, но клиент шлёт превью) ---
         if not session:
             try:
                 blank = base64.b64decode(BLANK_PNG_B64)
@@ -166,11 +171,10 @@ async def handle_snapshot_upload(request: web.Request):
             return web.Response(text="Skipped", status=200)
 
         msg_id = session.get("preview_message_id")
-
         header, encoded = image_data.split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
-        logging.info(f"📸 [HTTP] Preview update for {chat_id} ({len(encoded)} bytes)")
+        logging.info(f"📸 [HTTP] Preview update for {chat_id} ({len(encoded)} b64 chars)")
 
         media = InputMediaPhoto(
             media=BufferedInputFile(image_bytes, filename="preview.jpg"),
@@ -188,7 +192,7 @@ async def handle_snapshot_upload(request: web.Request):
         return web.Response(text="OK", status=200)
 
     except Exception as e:
-        # "message is not modified" бывает при одинаковом контенте
+        # часто бывает при одинаковых данных
         if "message is not modified" not in str(e).lower():
             logging.error(f"[HTTP ERR] {e}")
         return web.Response(text="Error", status=500)
@@ -200,13 +204,13 @@ async def serve_index(request: web.Request):
 
 # ================== ROUTES ==================
 
-# WebApp
+# WebApp (и /game и /game/)
 app.router.add_get("/game", serve_index)
+app.router.add_get("/game/", serve_index)
 
-# Снапшоты: 1) старый путь 2) совместимый путь под /game/*
-app.router.add_post("/snapshot", handle_snapshot_upload)
+# Snapshot endpoints: основной /game/snapshot + запасной /snapshot
 app.router.add_post("/game/snapshot", handle_snapshot_upload)
-
+app.router.add_post("/snapshot", handle_snapshot_upload)
 
 # CORS for snapshot
 async def options_handler(request: web.Request):
@@ -218,9 +222,8 @@ async def options_handler(request: web.Request):
         }
     )
 
-
-app.router.add_options("/snapshot", options_handler)
 app.router.add_options("/game/snapshot", options_handler)
+app.router.add_options("/snapshot", options_handler)
 
 
 async def start_socket_server():
@@ -233,11 +236,9 @@ async def start_socket_server():
 
 # ================== BOT LOGIC ==================
 
-
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
