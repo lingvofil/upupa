@@ -77,6 +77,8 @@
 </div>
 
 <script>
+  const VERSION = "2026-01-06_19-20 SNAP_VIA_SOCKET WS_ONLY";
+
   const tg = window.Telegram.WebApp;
   tg.expand();
   tg.ready();
@@ -87,8 +89,12 @@
   function log(msg) {
     const prev = debugEl.innerText || "";
     const lines = (prev + "\n" + msg).trim().split("\n");
-    debugEl.innerText = lines.slice(-10).join("\n");
+    debugEl.innerText = lines.slice(-12).join("\n");
   }
+
+  log("VERSION: " + VERSION);
+  log("HREF: " + location.href);
+  log("ROOM: " + roomId);
 
   // --- CANVAS ---
   const canvas = document.getElementById('canvas');
@@ -133,9 +139,12 @@
     return pCanvas.toDataURL('image/jpeg', 0.5);
   }
 
-  // --- SOCKET ---
+  // --- SOCKET (WS ONLY) ---
   log("Connecting Socket...");
-  const socket = io({ transports: ['polling'], upgrade: true });
+  const socket = io({
+    transports: ['websocket'],
+    upgrade: false
+  });
 
   socket.on('connect', () => {
     log("Socket Online");
