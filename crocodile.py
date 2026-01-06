@@ -19,6 +19,9 @@ from config import bot
 # ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
+
+# Если ты используешь Cloudflare Tunnel до localhost:8080 — можно оставить 127.0.0.1
+# Если хочешь слушать снаружи напрямую — ставь "0.0.0.0"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
@@ -38,10 +41,9 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     ping_timeout=60,
     ping_interval=25,
-    max_http_buffer_size=10 * 1024 * 1024,  # чтобы base64 jpeg превью пролезал
+    max_http_buffer_size=10 * 1024 * 1024,
 )
 
-# Лимит 20MB
 app = web.Application(client_max_size=20 * 1024 * 1024)
 sio.attach(app)
 
@@ -51,7 +53,7 @@ def get_chat_id_from_room(room: str) -> str:
     room = tg start_param
     пример: m4611982229 -> -4611982229
     """
-    room = str(room)
+    room = str(room or "")
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
     return room
@@ -97,7 +99,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
-    # Throttling
     now = time.time()
     if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
         return "Skipped"
@@ -112,7 +113,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     except Exception:
         return "Bad image"
 
-    logging.info(f"📸 [{source}] Preview update for {chat_id} ({len(encoded)} b64 chars)")
+    logging.info(f"📸 [{source}] Preview update for {chat_id} (b64={len(encoded)} chars)")
 
     media = InputMediaPhoto(
         media=BufferedInputFile(image_bytes, filename="preview.jpg"),
@@ -129,7 +130,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         session["last_preview_time"] = now
         return "OK"
     except Exception as e:
-        # aiogram часто кидает TelegramBadRequest("message is not modified")
         if "message is not modified" in str(e).lower():
             session["last_preview_time"] = now
             return "Not modified"
@@ -145,15 +145,22 @@ async def connect(sid, environ):
 
 
 @sio.event
+async def disconnect(sid):
+    logging.info(f"[socket] DISCONNECT {sid}")
+
+
+@sio.event
 async def join_room(sid, data):
-    room = str(data.get("room"))
+    room = str((data or {}).get("room") or "")
     sio.enter_room(sid, room)
     logging.info(f"[socket] JOIN {room}")
 
 
 @sio.event
 async def draw_step(sid, data):
-    room = str(data.get("room"))
+    room = str((data or {}).get("room") or "")
+    # логируем, чтобы видеть что реально летит рисование
+    logging.info(f"[socket] draw_step room={room}")
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 
@@ -162,15 +169,15 @@ async def snapshot(sid, data):
     """
     Превью через socket.io (ACK возвращает строку результата).
     """
-    room = str(data.get("room") or "")
-    image_data = data.get("image") or ""
+    room = str((data or {}).get("room") or "")
+    image_data = (data or {}).get("image") or ""
     logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
     return await _process_snapshot(room, image_data, source="socket")
 
 
 @sio.event
 async def skip_turn(sid, data):
-    room = str(data.get("room"))
+    room = str((data or {}).get("room") or "")
     chat_id = get_chat_id_from_room(room)
 
     session = game_sessions.get(chat_id)
@@ -183,14 +190,14 @@ async def skip_turn(sid, data):
 
 @sio.event
 async def final_frame(sid, data):
-    room = str(data.get("room"))
+    room = str((data or {}).get("room") or "")
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
     if not session:
         return
 
     try:
-        _header, encoded = data["image"].split(",", 1)
+        _header, encoded = (data or {}).get("image", "").split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
         if session.get("preview_message_id"):
@@ -216,7 +223,6 @@ async def final_frame(sid, data):
 # ================== HTTP (index only) ==================
 
 async def serve_index(request: web.Request):
-    # анти-кэш чтобы Telegram/Cloudflare не держали старую версию
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -242,7 +248,7 @@ async def start_socket_server():
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    v = int(time.time())  # ломаем кэш на уровне Telegram/Cloudflare
+    v = int(time.time())  # ломаем кэш
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
 
     return InlineKeyboardMarkup(
@@ -307,8 +313,7 @@ async def handle_callback(cb: types.CallbackQuery):
 
 async def check_answer(msg: types.Message) -> bool:
     """
-    Возвращает True ТОЛЬКО если это было правильное угадывание
-    и мы обработали победу (т.е. дальнейшая обработка не нужна).
+    True только если было правильное угадывание и мы обработали победу.
     """
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
@@ -317,7 +322,7 @@ async def check_answer(msg: types.Message) -> bool:
         return False
 
     if msg.text.strip().lower() == str(sess.get("word", "")).strip().lower():
-        # ведущий не должен сам угадывать — и НЕ должен блокировать остальные команды
+        # ведущий не должен сам угадывать — и НЕ должен блокировать остальное
         if msg.from_user and msg.from_user.id == sess.get("drawer_id"):
             return False
 
@@ -336,14 +341,3 @@ async def check_answer(msg: types.Message) -> bool:
         return True
 
     return False
-
-
-async def is_correct_answer(chat_id: str, text: str) -> bool:
-    """
-    Совместимость с твоим старым кодом.
-    Просто проверка "текст == слово".
-    """
-    sess = game_sessions.get(str(chat_id))
-    if not sess:
-        return False
-    return str(text).strip().lower() == str(sess.get("word", "")).strip().lower()
