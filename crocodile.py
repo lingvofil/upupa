@@ -16,12 +16,10 @@ from aiogram.types import (
 
 from config import bot
 
-# ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 
-# Если ты используешь Cloudflare Tunnel до localhost:8080 — можно оставить 127.0.0.1
-# Если хочешь слушать снаружи напрямую — ставь "0.0.0.0"
+# Если через Cloudflare Tunnel до localhost:8080 — оставляй 127.0.0.1
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
@@ -33,7 +31,6 @@ BLANK_PNG_B64 = (
 
 GAME_WORDS = ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
 
-# chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
 
 sio = socketio.AsyncServer(
@@ -49,10 +46,6 @@ sio.attach(app)
 
 
 def get_chat_id_from_room(room: str) -> str:
-    """
-    room = tg start_param
-    пример: m4611982229 -> -4611982229
-    """
     room = str(room or "")
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -60,7 +53,6 @@ def get_chat_id_from_room(room: str) -> str:
 
 
 async def _ensure_session(chat_id: str) -> dict | None:
-    """Если сессии нет — попробуем создать превью-сообщение и восстановить."""
     session = game_sessions.get(chat_id)
     if session:
         return session
@@ -87,10 +79,6 @@ async def _ensure_session(chat_id: str) -> dict | None:
 
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
-    """
-    Универсальная обработка превью.
-    source: 'socket' / 'http' — чисто для логов.
-    """
     if not room or not image_data:
         return "Bad Request"
 
@@ -137,8 +125,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "TG error"
 
 
-# ================== SOCKET EVENTS ==================
-
 @sio.event
 async def connect(sid, environ):
     logging.info(f"[socket] CONNECT {sid}")
@@ -159,16 +145,12 @@ async def join_room(sid, data):
 @sio.event
 async def draw_step(sid, data):
     room = str((data or {}).get("room") or "")
-    # логируем, чтобы видеть что реально летит рисование
     logging.info(f"[socket] draw_step room={room}")
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 
 @sio.event
 async def snapshot(sid, data):
-    """
-    Превью через socket.io (ACK возвращает строку результата).
-    """
     room = str((data or {}).get("room") or "")
     image_data = (data or {}).get("image") or ""
     logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
@@ -220,8 +202,6 @@ async def final_frame(sid, data):
         game_sessions.pop(chat_id, None)
 
 
-# ================== HTTP (index only) ==================
-
 async def serve_index(request: web.Request):
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -229,8 +209,6 @@ async def serve_index(request: web.Request):
     resp.headers["Expires"] = "0"
     return resp
 
-
-# ================== ROUTES ==================
 
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
@@ -244,11 +222,9 @@ async def start_socket_server():
     logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
 
 
-# ================== BOT UI ==================
-
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    v = int(time.time())  # ломаем кэш
+    v = int(time.time())
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
 
     return InlineKeyboardMarkup(
@@ -309,12 +285,7 @@ async def handle_callback(cb: types.CallbackQuery):
         await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
 
 
-# ================== ANSWER CHECK ==================
-
 async def check_answer(msg: types.Message) -> bool:
-    """
-    True только если было правильное угадывание и мы обработали победу.
-    """
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
 
@@ -322,7 +293,6 @@ async def check_answer(msg: types.Message) -> bool:
         return False
 
     if msg.text.strip().lower() == str(sess.get("word", "")).strip().lower():
-        # ведущий не должен сам угадывать — и НЕ должен блокировать остальное
         if msg.from_user and msg.from_user.id == sess.get("drawer_id"):
             return False
 
