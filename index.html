@@ -15,14 +15,21 @@
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
         .btn-gray { background: #3a3a3c; }
-        .status { color: #aaa; font-size: 10px; position: absolute; top: 5px; left: 50%; transform: translateX(-50%); pointer-events: none; }
+        
+        /* Debug Console */
+        .debug-panel {
+            position: absolute; bottom: 70px; left: 10px; 
+            color: lime; font-size: 10px; pointer-events: none; 
+            background: rgba(0,0,0,0.5); padding: 5px; border-radius: 4px;
+        }
+        
         input[type="color"] { width: 35px; height: 35px; border-radius: 50%; border: none; padding: 0; background: none; }
     </style>
 </head>
 <body>
 
-<div id="status" class="status">Connecting...</div>
 <canvas id="canvas"></canvas>
+<div id="debug" class="debug-panel">Init...</div>
 
 <div id="drawerTools" class="toolbar hidden">
     <div style="display:flex; gap:10px; align-items:center;">
@@ -43,16 +50,21 @@
     tg.ready();
 
     const roomId = tg.initDataUnsafe.start_param;
-    const statusEl = document.getElementById('status');
+    const debugEl = document.getElementById('debug');
     
-    // Включаем инструменты
+    function log(msg) {
+        debugEl.innerText = msg;
+        console.log(msg);
+    }
+
+    // Показываем инструменты всем (пока нет проверки ID)
     document.getElementById('drawerTools').classList.remove('hidden');
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     let isDirty = false;
 
-    // --- RESIZE LOGIC ---
+    // --- RESIZE ---
     function resize() {
         const h = document.querySelector('.toolbar').offsetHeight;
         const temp = document.createElement('canvas');
@@ -71,39 +83,42 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // --- COMPRESSION LOGIC (CRITICAL FIX) ---
-    // Создаем маленький невидимый канвас для превью
+    // --- COMPRESSION (ULTRA LIGHT) ---
     const previewCanvas = document.createElement('canvas');
     const previewCtx = previewCanvas.getContext('2d');
 
     function getCompressedSnapshot() {
-        // Ограничиваем ширину превью до 300px
-        const MAX_WIDTH = 300;
+        // ОЧЕНЬ МАЛЕНЬКИЙ РАЗМЕР (150px)
+        const MAX_WIDTH = 150;
         const scale = Math.min(1, MAX_WIDTH / canvas.width);
         
         previewCanvas.width = canvas.width * scale;
         previewCanvas.height = canvas.height * scale;
         
-        // Рисуем большой канвас в маленький
+        // Фон
+        previewCtx.fillStyle = '#fff';
+        previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+        
         previewCtx.drawImage(canvas, 0, 0, previewCanvas.width, previewCanvas.height);
         
-        // Получаем легкий JPEG (0.5 качество)
-        return previewCanvas.toDataURL('image/jpeg', 0.5);
+        // Качество 0.3
+        return previewCanvas.toDataURL('image/jpeg', 0.3);
     }
 
     // --- SOCKET ---
+    log("Connecting socket...");
     const socket = io({ 
         transports: ['websocket', 'polling'],
-        reconnectionAttempts: 5
+        upgrade: false // Пытаемся форсировать polling если вебсокет падает
     });
 
     socket.on('connect', () => {
-        statusEl.innerText = 'Online';
+        log('Socket Online ' + socket.id);
         socket.emit('join_room', { room: roomId });
     });
     
-    socket.on('disconnect', () => { statusEl.innerText = 'Disconnected'; });
-    socket.on('connect_error', () => { statusEl.innerText = 'Connection Error'; });
+    socket.on('disconnect', () => { log('Socket Disconnected'); });
+    socket.on('connect_error', (e) => { log('Socket Error: ' + e.message); });
 
     socket.on('draw_data', (d) => {
         ctx.strokeStyle = d.color;
@@ -157,7 +172,6 @@
     document.getElementById('finishBtn').onclick = () => {
         tg.showConfirm("Отправить рисунок?", (ok) => {
             if(ok) {
-                // Финальный кадр тоже жмем, но не так сильно
                 const img = canvas.toDataURL('image/jpeg', 0.8);
                 socket.emit('final_frame', {room: roomId, image: img});
                 tg.close();
@@ -165,20 +179,15 @@
         });
     }
 
-    // --- PREVIEW SENDER ---
+    // --- PREVIEW SENDER LOOP ---
     setInterval(() => {
-        if (isDirty && socket.connected) {
-            statusEl.innerText = 'Sending preview...';
-            
-            // Используем функцию сжатия!
+        // Пытаемся отправить, даже если сокет думает, что он оффлайн (для polling)
+        if (isDirty) {
             const img = getCompressedSnapshot();
+            log("Sending preview (" + img.length + "b)...");
             
             socket.emit('preview_snapshot', { room: roomId, image: img });
             isDirty = false;
-            
-            setTimeout(() => { 
-                if(socket.connected) statusEl.innerText = 'Online'; 
-            }, 1000);
         }
     }, 4000);
 
