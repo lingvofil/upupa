@@ -28,7 +28,7 @@
 <body>
 
 <div id="debug">Init...</div>
-<button id="snapBtn" onclick="sendSnap()">TEST SNAP</button>
+<button id="snapBtn" onclick="sendHttpSnap()">TEST HTTP</button>
 
 <canvas id="canvas"></canvas>
 
@@ -80,7 +80,7 @@
     const pCtx = pCanvas.getContext('2d');
 
     window.getCompressedImage = () => {
-        // Сжимаем до 250px (компромисс между качеством и скоростью)
+        // Сжатие до 250px
         const scale = Math.min(1, 250 / canvas.width);
         pCanvas.width = canvas.width * scale;
         pCanvas.height = canvas.height * scale;
@@ -89,27 +89,35 @@
         return pCanvas.toDataURL('image/jpeg', 0.5);
     }
 
-    // --- SOCKET ---
-    log("Connecting (Polling)...");
-    
-    // Polling Only для стабильности
-    const socket = io({ 
-        transports: ['polling'], 
-        upgrade: false,
-        reconnectionDelay: 1000,
-        timeout: 20000
-    });
+    // --- HTTP SENDER (NEW) ---
+    window.sendHttpSnap = async () => {
+        log("Sending HTTP...");
+        const data = getCompressedImage();
+        
+        try {
+            const res = await fetch('/snapshot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ room: roomId, image: data })
+            });
+            const txt = await res.text();
+            log("HTTP Res: " + txt);
+        } catch (e) {
+            log("HTTP Err: " + e.message);
+        }
+    };
+
+    // --- SOCKET (Still used for drawing strokes) ---
+    log("Connecting Socket...");
+    const socket = io({ transports: ['polling'], upgrade: false });
 
     socket.on('connect', () => {
-        log("ONLINE (" + socket.id.substr(0,4) + ")");
-        socket.emit('join_room', { room: roomId }, (resp) => {
-            log("Joined Room: " + resp);
-        });
+        log("Socket Online");
+        socket.emit('join_room', { room: roomId });
     });
     
-    socket.on('disconnect', () => log("DISCONNECTED"));
-    socket.on('connect_error', (e) => log("ERR: " + e.message));
-
+    socket.on('disconnect', () => log("Socket Off"));
+    
     socket.on('draw_data', (d) => {
         ctx.strokeStyle = d.color;
         ctx.beginPath(); ctx.moveTo(d.px,d.py); ctx.lineTo(d.x,d.y); ctx.stroke();
@@ -120,20 +128,7 @@
         clearC();
     });
 
-    // --- TEST ACTION ---
-    window.sendSnap = () => {
-        if(!socket.connected) { log("Socket Offline!"); return; }
-        
-        const data = getCompressedImage();
-        log("Sending " + data.length + "b...");
-        
-        // Используем Callback для проверки доставки
-        socket.emit('preview_snapshot', { room: roomId, image: data }, (response) => {
-            log("Server ACK: " + response);
-        });
-    };
-
-    // --- DRAW LOGIC ---
+    // --- INPUT ---
     let draw = false, last = {x:0, y:0};
     const getPos = (e) => {
         const r = canvas.getBoundingClientRect();
@@ -160,6 +155,7 @@
     canvas.addEventListener('mousedown', start);
     canvas.addEventListener('mousemove', move);
     window.addEventListener('mouseup', end);
+    // Для Desktop тоже нужны touch обработчики, если эмулятор или гибрид
     canvas.addEventListener('touchstart', start, {passive:false});
     canvas.addEventListener('touchmove', move, {passive:false});
     window.addEventListener('touchend', end);
@@ -172,19 +168,10 @@
         tg.close();
     }
 
-    // --- AUTO SENDER ---
+    // --- AUTO SENDER LOOP ---
     setInterval(() => {
-        if(isDirty && socket.connected) {
-            const data = getCompressedImage();
-            // Шлем без лога в UI чтобы не спамить, но с колбеком в консоль
-            socket.emit('preview_snapshot', { room: roomId, image: data }, (res) => {
-                console.log("Auto Snap: " + res);
-                if (res === 'PROCESSED') {
-                   // Можно мигнуть индикатором
-                   debugEl.style.color = 'white';
-                   setTimeout(() => debugEl.style.color = 'lime', 200);
-                }
-            });
+        if(isDirty) {
+            sendHttpSnap();
             isDirty = false;
         }
     }, 4000);
