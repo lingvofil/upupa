@@ -2,14 +2,14 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Upupa Crocodile Draw</title>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+  <!-- gif.js -->
+  <script src="https://cdn.jsdelivr.net/npm/gif.js.optimized/dist/gif.js"></script>
 
   <style>
     body {
@@ -22,43 +22,64 @@
       font-family: monospace;
       touch-action: none;
     }
-
     canvas {
       flex: 1;
       background: #fff;
       display: block;
       touch-action: none;
     }
-
     .toolbar {
-      height: 60px;
+      height: 74px;
       background: #333;
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 0 10px;
+      gap: 10px;
       flex-shrink: 0;
     }
-
     .btn {
-      padding: 8px 12px;
-      border-radius: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
       border: none;
       font-weight: bold;
       color: white;
       cursor: pointer;
+      white-space: nowrap;
     }
-
     .btn-blue { background: #007aff; }
     .btn-red { background: #ff3b30; }
     .btn-gray { background: #555; }
 
-    /* DEBUG — скрыт по умолчанию */
-    #debug {
-      display: none;
+    /* палитра */
+    .palette {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .swatch {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      border: 2px solid rgba(255,255,255,0.6);
+      box-sizing: border-box;
+    }
+    .swatch.active {
+      border: 2px solid #fff;
+      outline: 2px solid rgba(0,0,0,0.35);
+    }
+    .picker {
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      border: none;
+      padding: 0;
+      background: transparent;
     }
 
-    /* DEBUG включается только при ?debug=1 */
+    /* DEBUG скрыт по умолчанию, включается ?debug=1 */
+    #debug { display: none; }
     #debug.on {
       display: block;
       position: absolute;
@@ -77,25 +98,23 @@
     }
   </style>
 </head>
-
 <body>
 
 <div id="debug"></div>
-
 <canvas id="canvas"></canvas>
 
-<div class="toolbar">
+<div id="toolbar" class="toolbar">
+  <div class="palette" id="palette"></div>
+
   <div style="display:flex; gap:10px; align-items:center;">
-    <input type="color" id="brushColor" value="#000000"
-           style="width:30px;height:30px;border:none;">
     <button class="btn btn-gray" onclick="clearC()">🧹</button>
     <button class="btn btn-blue" onclick="skip()">🔄</button>
+    <button class="btn btn-red" onclick="finish()">🏁</button>
   </div>
-  <button class="btn btn-red" onclick="finish()">🏁</button>
 </div>
 
 <script>
-  const VERSION = "2026-01-07 CLEAN_UI_NO_DEBUG";
+  const VERSION = "2026-01-07 COLORS + GIF_PREVIEW + DEBUG_OFF_DEFAULT";
 
   const tg = window.Telegram.WebApp;
   tg.expand();
@@ -103,13 +122,10 @@
 
   const roomId = tg.initDataUnsafe.start_param;
 
-  /* ===== DEBUG ===== */
-  const debugEl = document.getElementById("debug");
+  // DEBUG
+  const debugEl = document.getElementById('debug');
   const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
-
-  if (DEBUG) {
-    debugEl.classList.add("on");
-  }
+  if (DEBUG) debugEl.classList.add("on");
 
   function log(msg) {
     if (!DEBUG) return;
@@ -121,69 +137,142 @@
   log("VERSION: " + VERSION);
   log("ROOM: " + roomId);
 
-  /* ===== CANVAS ===== */
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
+  // --- COLORS ---
+  const paletteEl = document.getElementById("palette");
+
+  // Нормальная палитра + пипетка
+  const COLORS = [
+    "#000000", "#ffffff",
+    "#ff3b30", "#ff9500", "#ffcc00", "#34c759",
+    "#007aff", "#5856d6", "#af52de",
+    "#00c7be", "#64d2ff",
+    "#8e8e93", "#a2845e", "#ff2d55"
+  ];
+
+  let currentColor = "#000000";
+
+  function setColor(c) {
+    currentColor = c;
+    document.querySelectorAll(".swatch").forEach(el => el.classList.remove("active"));
+    const active = document.querySelector(`.swatch[data-c="${c}"]`);
+    if (active) active.classList.add("active");
+  }
+
+  function buildPalette() {
+    paletteEl.innerHTML = "";
+
+    COLORS.forEach((c, idx) => {
+      const b = document.createElement("button");
+      b.className = "swatch" + (idx === 0 ? " active" : "");
+      b.style.background = c;
+      b.dataset.c = c;
+      b.onclick = () => setColor(c);
+      paletteEl.appendChild(b);
+    });
+
+    // color picker (произвольный цвет)
+    const picker = document.createElement("input");
+    picker.type = "color";
+    picker.className = "picker";
+    picker.value = currentColor;
+    picker.oninput = () => setColor(picker.value);
+    paletteEl.appendChild(picker);
+  }
+
+  buildPalette();
+  setColor("#000000");
+
+  // --- CANVAS ---
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
   let isDirty = false;
 
   function resize() {
-    const toolbarH = document.querySelector(".toolbar").offsetHeight;
-    const tmp = document.createElement("canvas");
+    const toolbarH = document.querySelector('.toolbar').offsetHeight;
+
+    const tmp = document.createElement('canvas');
     tmp.width = canvas.width;
     tmp.height = canvas.height;
-    if (canvas.width > 0) {
-      tmp.getContext("2d").drawImage(canvas, 0, 0);
-    }
+    if (canvas.width > 0) tmp.getContext('2d').drawImage(canvas, 0, 0);
 
     canvas.width = document.body.clientWidth;
-    canvas.height = document.body.clientHeight - toolbarH;
 
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = 5;
-    ctx.fillStyle = "#fff";
+    // вертикальнее — выглядит лучше в Telegram
+    const targetH = Math.floor(canvas.width * 1.25);
+    const maxH = document.body.clientHeight - toolbarH;
+    canvas.height = Math.min(targetH, maxH);
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 6;
+
+    ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (tmp.width > 0) {
-      ctx.drawImage(tmp, 0, 0);
-    }
+    if (tmp.width > 0) ctx.drawImage(tmp, 0, 0);
   }
 
-  window.addEventListener("resize", resize);
-  setTimeout(resize, 100);
+  window.addEventListener('resize', resize);
+  setTimeout(resize, 60);
 
-  /* ===== SNAPSHOT COMPRESSION ===== */
-  const pCanvas = document.createElement("canvas");
-  const pCtx = pCanvas.getContext("2d");
+  // --- PREVIEW FRAME BUFFER ---
+  const pCanvas = document.createElement('canvas');
+  const pCtx = pCanvas.getContext('2d');
 
-  function getCompressedData() {
-    const scale = Math.min(1, 250 / canvas.width);
+  const FRAME_MAX = 10;
+  const FRAME_DELAY = 140;
+  const CAPTURE_EVERY = 180;
+  const PREVIEW_TARGET_W = 320;
+
+  const frames = [];
+  let lastCaptureTs = 0;
+
+  function captureFrame(force = false) {
+    const now = performance.now();
+    if (!force && now - lastCaptureTs < CAPTURE_EVERY) return;
+    lastCaptureTs = now;
+
+    const scale = Math.min(1, PREVIEW_TARGET_W / canvas.width);
+
     pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
     pCanvas.height = Math.max(1, Math.floor(canvas.height * scale));
 
-    pCtx.fillStyle = "#fff";
+    pCtx.fillStyle = '#fff';
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    return pCanvas.toDataURL("image/jpeg", 0.5);
+    const f = document.createElement('canvas');
+    f.width = pCanvas.width;
+    f.height = pCanvas.height;
+    f.getContext('2d').drawImage(pCanvas, 0, 0);
+
+    frames.push(f);
+    while (frames.length > FRAME_MAX) frames.shift();
   }
 
-  /* ===== SOCKET ===== */
-  log("Connecting socket...");
+  // --- SOCKET ---
   const socket = io({
-    transports: ["websocket"],
+    transports: ['websocket'],
     upgrade: false
   });
 
-  socket.on("connect", () => {
-    log("Socket connected");
-    socket.emit("join_room", { room: roomId });
+  socket.on('connect', () => {
+    log("Socket Online");
+    socket.emit('join_room', { room: roomId });
+
+    // быстрый стартовый snap
+    frames.length = 0;
+    captureFrame(true);
+    captureFrame(true);
+    sendGifSnap(true);
   });
 
-  socket.on("disconnect", () => log("Socket disconnected"));
-  socket.on("connect_error", (e) => log("Socket error: " + e));
+  socket.on('disconnect', () => log("Socket Off"));
+  socket.on('connect_error', (err) => {
+    log("Socket ERR: " + (err && err.message ? err.message : String(err)));
+  });
 
-  socket.on("draw_data", (d) => {
+  socket.on('draw_data', (d) => {
     ctx.strokeStyle = d.color;
     ctx.beginPath();
     ctx.moveTo(d.px, d.py);
@@ -191,23 +280,66 @@
     ctx.stroke();
   });
 
-  socket.on("new_word_data", (d) => {
-    tg.showPopup({ title: "Слово", message: d.word.toUpperCase() });
+  socket.on('new_word_data', (d) => {
+    tg.showPopup({ title: 'Слово', message: String(d.word || "").toUpperCase() });
     clearC();
   });
 
-  function sendSnap() {
-    if (!isDirty || !socket.connected) return;
+  // --- GIF SNAPSHOT ---
+  let gifEncoding = false;
 
-    const data = getCompressedData();
-    socket.emit("snapshot", { room: roomId, image: data }, (resp) => {
-      log("SNAP ACK: " + resp);
+  function buildGifDataUrl() {
+    return new Promise((resolve, reject) => {
+      const base = frames[0];
+      const gif = new GIF({
+        workers: 2,
+        quality: 12,
+        width: base.width,
+        height: base.height,
+        workerScript: 'https://cdn.jsdelivr.net/npm/gif.js.optimized/dist/gif.worker.js'
+      });
+
+      for (const f of frames) {
+        gif.addFrame(f, { copy: true, delay: FRAME_DELAY });
+      }
+
+      gif.on('finished', (blob) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob); // data:image/gif;base64,...
+      });
+
+      gif.on('abort', () => reject(new Error("gif abort")));
+
+      gif.render();
     });
-
-    isDirty = false;
   }
 
-  /* ===== DRAW ===== */
+  async function sendGifSnap(force = false) {
+    if (!socket.connected) return;
+    if (gifEncoding) return;
+    if (!force && !isDirty) return;
+    if (frames.length < 2) return;
+
+    gifEncoding = true;
+    try {
+      const dataUrl = await buildGifDataUrl();
+      const size = dataUrl.length;
+
+      socket.emit('snapshot', { room: roomId, image: dataUrl }, (resp) => {
+        log(`SNAP ACK: ${resp} len=${size}`);
+      });
+
+      isDirty = false;
+    } catch (e) {
+      log("GIF ERR: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      gifEncoding = false;
+    }
+  }
+
+  // --- POINTER EVENTS ---
   let drawing = false;
   let last = { x: 0, y: 0 };
 
@@ -219,61 +351,66 @@
     };
   }
 
-  canvas.onpointerdown = (e) => {
+  canvas.onpointerdown = function (e) {
     drawing = true;
     last = getPos(e);
     canvas.setPointerCapture(e.pointerId);
   };
 
-  canvas.onpointermove = (e) => {
+  canvas.onpointermove = function (e) {
     if (!drawing) return;
     e.preventDefault();
 
     const p = getPos(e);
-    const color = document.getElementById("brushColor").value;
 
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = currentColor;
     ctx.beginPath();
     ctx.moveTo(last.x, last.y);
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
 
-    socket.emit("draw_step", {
-      room: roomId,
-      px: last.x,
-      py: last.y,
-      x: p.x,
-      y: p.y,
-      color
-    });
+    socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: currentColor });
 
     isDirty = true;
     last = p;
+
+    captureFrame(false);
   };
 
-  canvas.onpointerup = (e) => {
+  canvas.onpointerup = function (e) {
     drawing = false;
-    try { canvas.releasePointerCapture(e.pointerId); } catch {}
-    sendSnap();
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    captureFrame(true);
+    sendGifSnap(false);
   };
 
-  /* ===== BUTTONS ===== */
+  // --- BUTTONS ---
   window.clearC = () => {
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     isDirty = true;
-    sendSnap();
+
+    frames.length = 0;
+    captureFrame(true);
+    captureFrame(true);
+    sendGifSnap(true);
   };
 
-  window.skip = () => socket.emit("skip_turn", { room: roomId });
+  window.skip = () => socket.emit('skip_turn', { room: roomId });
 
   window.finish = () => {
-    const img = canvas.toDataURL("image/jpeg", 0.8);
-    socket.emit("final_frame", { room: roomId, image: img });
+    const img = canvas.toDataURL('image/jpeg', 0.85);
+    socket.emit('final_frame', { room: roomId, image: img });
     tg.close();
   };
 
-  setInterval(sendSnap, 2500);
+  // авто-отправка раз в 2.5 сек (если были изменения)
+  setInterval(() => {
+    captureFrame(false);
+    sendGifSnap(false);
+  }, 2500);
+
 </script>
 
 </body>
