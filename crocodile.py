@@ -14,11 +14,9 @@ BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
-
-# Интервал обновления (сек)
 PREVIEW_UPDATE_INTERVAL = 3.0 
 
-# 1x1 белый пиксель (PNG) для стартового сообщения
+# Белый квадрат 1x1 для инициализации
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 
 # ================== ХРАНИЛИЩЕ ==================
@@ -30,9 +28,15 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     max_http_buffer_size=10 * 1024 * 1024,
 )
-
 app = web.Application()
 sio.attach(app)
+
+def get_chat_id_from_room(room: str) -> str:
+    """Преобразует roomID (m12345) в chatID (-12345)"""
+    room = str(room)
+    if room.startswith("m"):
+        return str(int(room.replace("m", "-")))
+    return room
 
 @sio.event
 async def join_room(sid, data):
@@ -42,38 +46,36 @@ async def join_room(sid, data):
 
 @sio.event
 async def draw_step(sid, data):
-    """Ретрансляция штриха"""
     room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 @sio.event
 async def preview_snapshot(sid, data):
-    """LIVE-трансляция"""
-    room = str(data.get("room"))
-    if room.startswith("m"):
-        chat_id = int(room.replace("m", "-"))
-    else:
-        chat_id = int(room)
-    
-    session = game_sessions.get(str(chat_id))
-    if not session:
-        return
-
-    # Троттлинг
-    now = time.time()
-    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
-        return
-
-    msg_id = session.get("preview_message_id")
-    if not msg_id:
-        return
-
+    """ОБНОВЛЕНИЕ КАРТИНКИ В ЧАТЕ"""
     try:
-        # print(f"DEBUG: Updating preview for {chat_id}") # Отладка
+        room = str(data.get("room"))
+        chat_id = get_chat_id_from_room(room)
+        session = game_sessions.get(chat_id)
+
+        if not session:
+            logging.warning(f"[DEBUG] SESSION NOT FOUND for chat_id={chat_id}. Room={room}")
+            return
+
+        # Лимит обновлений
+        now = time.time()
+        if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
+            return
+
+        msg_id = session.get("preview_message_id")
+        if not msg_id:
+            logging.warning(f"[DEBUG] No preview_message_id for {chat_id}")
+            return
+
+        # Декодируем и обновляем
+        logging.info(f"[DEBUG] Updating preview for {chat_id}...")
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
         
-        # Обновляем КАРТИНКУ на КАРТИНКУ (это работает)
         media = InputMediaPhoto(
             media=BufferedInputFile(image_bytes, filename="preview.jpg"),
             caption=f"🎨 **LIVE:** {session['drawer_name']} рисует..."
@@ -81,49 +83,35 @@ async def preview_snapshot(sid, data):
         
         await bot.edit_message_media(
             media=media,
-            chat_id=chat_id,
+            chat_id=int(chat_id),
             message_id=msg_id
         )
         session["last_preview_time"] = now
 
     except Exception as e:
-        # Игнорим "message is not modified"
-        if "not modified" not in str(e):
-            logging.error(f"Preview Error: {e}")
+        if "message is not modified" in str(e):
+            pass # Это нормально, если картинка не изменилась
+        else:
+            logging.error(f"[DEBUG] Preview Error: {e}")
 
 @sio.event
 async def skip_turn(sid, data):
-    """Смена слова из WebApp"""
     room = str(data.get("room"))
-    await handle_skip_logic(room)
-
-async def handle_skip_logic(room: str):
-    if room.startswith("m"):
-        chat_id = int(room.replace("m", "-"))
-    else:
-        chat_id = int(room)
-        
-    session = game_sessions.get(str(chat_id))
-    if not session:
-        return
-
-    new_word = await generate_game_word()
-    session["word"] = new_word
+    chat_id = get_chat_id_from_room(room)
+    session = game_sessions.get(chat_id)
     
-    # Сообщаем всем (чтобы обновить UI и стереть холст)
-    await sio.emit("new_word_data", {"word": new_word}, room=room)
-
+    if session:
+        new_word = await generate_game_word()
+        session["word"] = new_word
+        await sio.emit("new_word_data", {"word": new_word}, room=room)
+        logging.info(f"[GAME] Word skipped. New: {new_word}")
 
 @sio.event
 async def final_frame(sid, data):
-    """Финиш"""
     room = str(data.get("room"))
-    if room.startswith("m"):
-        chat_id = int(room.replace("m", "-"))
-    else:
-        chat_id = int(room)
+    chat_id = get_chat_id_from_room(room)
+    session = game_sessions.get(chat_id)
 
-    session = game_sessions.get(str(chat_id))
     if not session:
         return
 
@@ -131,10 +119,8 @@ async def final_frame(sid, data):
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
         
-        # Удаляем превью
         if session.get("preview_message_id"):
-            try:
-                await bot.delete_message(chat_id, session["preview_message_id"])
+            try: await bot.delete_message(chat_id, session["preview_message_id"])
             except: pass
 
         await bot.send_photo(
@@ -145,9 +131,9 @@ async def final_frame(sid, data):
     except Exception as e:
         logging.error(f"Final Frame Error: {e}")
     finally:
-        game_sessions.pop(str(chat_id), None)
+        game_sessions.pop(chat_id, None)
 
-# ================== WEB SERVER ==================
+# ================== WEB & LOGIC ==================
 async def serve_index(request: web.Request):
     return web.FileResponse("index.html")
 
@@ -158,22 +144,22 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Server started: http://{SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
+    logging.info(f"Socket server running at {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
-# ================== GAME LOGIC ==================
 async def generate_game_word() -> str:
     try:
-        # Заглушка, если model не определен. Если определен - раскомментируйте вызов.
-        # return "тест" 
+        # model.generate_content... (раскомментируйте, если есть API)
+        # return "слово"
         def sync_call():
-            return model.generate_content("Придумай одно простое существительное для игры Крокодил.")
+             return model.generate_content("Придумай существительное для игры Крокодил")
         response = await asyncio.to_thread(sync_call)
-        word = response.text.strip().lower().split()[0]
-        return "".join(filter(str.isalpha, word)) or "крокодил"
+        w = response.text.strip().lower().split()[0]
+        return "".join(filter(str.isalpha, w))
     except:
-        return random.choice(["арбуз", "жираф", "пылесос", "замок"])
+        return random.choice(["носорог", "вертолет", "пирамида", "ананас"])
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    # Важно: m-префикс только для групп (отрицательные ID)
     safe_chat_id = str(chat_id).replace("-", "m")
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={safe_chat_id}"
     
@@ -191,18 +177,16 @@ async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
     word = await generate_game_word()
     
-    # 1. Сначала текстовое уведомление
     await message.answer(
         f"🎮 **ИГРА НАЧАЛАСЬ!**\nВедущий: {message.from_user.full_name}",
         reply_markup=get_game_keyboard(chat_id),
     )
     
-    # 2. ВАЖНО: Отправляем КАРТИНКУ (Placeholder), чтобы потом её редактировать
-    # Используем белый пиксель
+    # Отправляем белый квадрат как фото
     blank_bytes = base64.b64decode(BLANK_PNG_B64)
     preview_msg = await message.answer_photo(
         photo=BufferedInputFile(blank_bytes, filename="blank.png"),
-        caption="⏳ *Подготовка холста...*",
+        caption="⏳ *Холст готов...*",
         parse_mode="Markdown"
     )
 
@@ -213,6 +197,7 @@ async def handle_start_game(message: types.Message):
         "preview_message_id": preview_msg.message_id,
         "last_preview_time": 0
     }
+    logging.info(f"New session created for {chat_id}")
 
 async def handle_callback(callback: types.CallbackQuery):
     data = callback.data
@@ -220,22 +205,20 @@ async def handle_callback(callback: types.CallbackQuery):
     session = game_sessions.get(chat_id)
 
     if not session:
-        return await callback.answer("Игра не активна")
+        return await callback.answer("Игра не найдена (перезапустите бота)")
 
-    # Проверяем права (кроме кнопки 'Открыть холст' - она url, её проверяет Mini App)
     if callback.from_user.id != session["drawer_id"]:
-        return await callback.answer("Вы не ведущий! Угадывайте в чате 👇", show_alert=True)
+        return await callback.answer("Только ведущий!", show_alert=True)
 
     if data.startswith("cr_w_"):
         await callback.answer(f"Слово: {session['word'].upper()}", show_alert=True)
-
     elif data.startswith("cr_n_"):
         new_word = await generate_game_word()
         session["word"] = new_word
         await callback.answer(f"Новое слово: {new_word.upper()}", show_alert=True)
-        
-        safe_room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
-        await sio.emit("new_word_data", {"word": new_word}, room=safe_room)
+        # room ID для сокета: mID для групп, ID для лички
+        room_id = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
+        await sio.emit("new_word_data", {"word": new_word}, room=room_id)
 
 async def check_answer(message: types.Message) -> bool:
     chat_id = str(message.chat.id)
@@ -248,10 +231,10 @@ async def check_answer(message: types.Message) -> bool:
 
         await message.answer(f"🎉 **{message.from_user.full_name}** угадал! Это **{session['word'].upper()}**")
         
+        # Удаляем превью и сессию
         if session.get("preview_message_id"):
             try: await bot.delete_message(message.chat.id, session["preview_message_id"])
             except: pass
-            
         game_sessions.pop(chat_id, None)
         return True
     return False
