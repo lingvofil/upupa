@@ -32,7 +32,6 @@
       padding: 0 10px;
       flex-shrink: 0;
     }
-    .hidden { display: none !important; }
     .btn {
       padding: 8px 12px;
       border-radius: 8px;
@@ -50,12 +49,12 @@
       top: 10px;
       left: 10px;
       right: 10px;
-      background: rgba(0,0,0,0.8);
+      background: rgba(0,0,0,0.85);
       color: lime;
-      padding: 5px;
+      padding: 6px;
       font-size: 11px;
       pointer-events: none;
-      border-radius: 4px;
+      border-radius: 6px;
       z-index: 1000;
       user-select: none;
       white-space: pre-line;
@@ -101,7 +100,6 @@
     const tmp = document.createElement('canvas');
     tmp.width = canvas.width;
     tmp.height = canvas.height;
-
     if (canvas.width > 0) tmp.getContext('2d').drawImage(canvas, 0, 0);
 
     canvas.width = document.body.clientWidth;
@@ -135,36 +133,9 @@
     return pCanvas.toDataURL('image/jpeg', 0.5);
   }
 
-  // --- HTTP SENDER (XHR) ---
-  function sendHttpSnap() {
-    if (!isDirty) return;
-
-    const data = getCompressedData();
-    const xhr = new XMLHttpRequest();
-
-    // КЛЮЧЕВОЙ ФИКС:
-    // всегда шлём в /game/snapshot (абсолютный путь), чтобы не зависеть от /game vs /game/
-    xhr.open("POST", "/game/snapshot", true);
-    xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.timeout = 8000;
-
-    xhr.onload = () => {
-      log(`SNAP ${xhr.status}: ${xhr.responseText || ""}`);
-    };
-    xhr.onerror = () => {
-      log("SNAP XHR ERROR (network/proxy)");
-    };
-    xhr.ontimeout = () => {
-      log("SNAP TIMEOUT");
-    };
-
-    xhr.send(JSON.stringify({ room: roomId, image: data }));
-    isDirty = false;
-  }
-
-  // --- SOCKET (Only for drawing sync) ---
+  // --- SOCKET ---
   log("Connecting Socket...");
-  const socket = io({ transports: ['polling'], upgrade: false });
+  const socket = io({ transports: ['polling'], upgrade: true });
 
   socket.on('connect', () => {
     log("Socket Online");
@@ -189,6 +160,21 @@
     tg.showPopup({ title: 'Слово', message: d.word.toUpperCase() });
     clearC();
   });
+
+  // --- SNAPSHOT VIA SOCKET (ACK) ---
+  function sendSnap() {
+    if (!isDirty) return;
+    if (!socket.connected) { log("SNAP: socket not connected"); return; }
+
+    const data = getCompressedData();
+    const size = data.length;
+
+    socket.emit('snapshot', { room: roomId, image: data }, (resp) => {
+      log(`SNAP ACK: ${resp} (len=${size})`);
+    });
+
+    isDirty = false;
+  }
 
   // --- POINTER EVENTS ---
   let drawing = false;
@@ -221,7 +207,7 @@
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
 
-    socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: color });
+    socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color });
 
     isDirty = true;
     last = p;
@@ -232,8 +218,7 @@
   canvas.onpointerup = function (e) {
     drawing = false;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-    // сразу отправляем превью
-    sendHttpSnap();
+    sendSnap();
   };
 
   // --- BUTTONS ---
@@ -241,7 +226,7 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     isDirty = true;
-    sendHttpSnap();
+    sendSnap();
   };
 
   window.skip = () => socket.emit('skip_turn', { room: roomId });
@@ -253,7 +238,7 @@
   };
 
   // --- AUTO SENDER ---
-  setInterval(sendHttpSnap, 3000);
+  setInterval(sendSnap, 2500);
 </script>
 
 </body>
