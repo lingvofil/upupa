@@ -743,16 +743,9 @@ async def handle_poem(message: types.Message):
 
 @router.message()
 async def process_message(message: types.Message):
-    # 1. Проверка на победу в Крокодиле (ПРИОРИТЕТНАЯ)
-    if message.text:
-        chat_id = str(message.chat.id)
-        if await crocodile.is_correct_answer(chat_id, message.text):
-            word = crocodile.game_sessions[chat_id]['word']
-            del crocodile.game_sessions[chat_id] 
-            return await message.answer(
-                f"🎉 **ПОБЕДА!**\n\n{message.from_user.full_name} угадал слово: **{word}**!",
-                parse_mode="Markdown"
-            )
+    # 1) Крокодил: перехватываем только правильное угадывание
+    if await crocodile.check_answer(message):
+        return
 
     # 2. Обычная обработка сообщений
     await memegenerator.check_and_send_random_meme(message)
@@ -784,26 +777,43 @@ async def process_message(message: types.Message):
     
 # ================== БЛОК 5: ЗАПУСК БОТА ==================
 async def main():
+    # --- антиспам ---
     from content_filter import load_antispam_settings
-    load_antispam_settings() 
+    load_antispam_settings()
+
+    # --- статистика ---
     bot_statistics.init_db()
-    
+
+    # --- планировщики викторин ---
     chat_ids = ['-1001707530786', '-1001781970364']
     for chat_id in chat_ids:
-        chat_id_int = int(chat_id)
-        asyncio.create_task(schedule_daily_quiz(bot, chat_id_int))
-    
-    asyncio.create_task(birthday_scheduler(bot))
-    
-    # ЗАПУСК СОКЕТ-СЕРВЕРА ДЛЯ КРОКОДИЛА
-    asyncio.create_task(crocodile.start_socket_server())
-    
+        asyncio.create_task(
+            schedule_daily_quiz(bot, int(chat_id))
+        )
+
+    # --- планировщик дней рождения ---
+    asyncio.create_task(
+        birthday_scheduler(bot)
+    )
+
+    # --- КРОКОДИЛ: socket.io сервер ---
+    # ВАЖНО: только create_task, без await
+    asyncio.create_task(
+        crocodile.start_socket_server()
+    )
+
+    # --- роутеры ---
     dp.include_router(dnd_router)
     dp.include_router(router)
-    
+
+    # --- HTTP-сессия бота ---
     bot.session = AiohttpSession(timeout=60)
 
+    # --- polling ---
+    # webhook гарантированно выключаем
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # стартуем polling (БЛОКИРУЮЩИЙ)
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
