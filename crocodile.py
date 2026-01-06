@@ -1,164 +1,198 @@
-import os
-import random
-import logging
-import socketio
 import asyncio
 import base64
-import urllib.parse
+import logging
+import random
 from aiohttp import web
+import socketio
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
-from config import model, bot 
+from config import bot, model
 
 # ================== НАСТРОЙКИ ==================
-WEB_APP_DOMAIN = "invitations-adjusted-eggs-banana.trycloudflare.com"
-WEB_APP_SHORT_NAME = "upupadile" 
 BOT_USERNAME = "expertyebaniebot"
+WEB_APP_SHORT_NAME = "upupadile"
+SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-game_sessions = {} 
-scores = {}        
+# ================== ХРАНИЛИЩЕ СОСТОЯНИЯ ==================
+# game_sessions[chat_id] = { word, drawer_id }
+game_sessions: dict[str, dict] = {}
 
-# ================== ЧАСТЬ 1: WebSocket Сервер ==================
-# Увеличиваем лимит данных до 10МБ (10 * 1024 * 1024)
+# ================== SOCKET.IO SERVER ==================
 sio = socketio.AsyncServer(
-    async_mode='aiohttp', 
-    cors_allowed_origins='*',
-    max_http_buffer_size=10485760 
+    async_mode="aiohttp",
+    cors_allowed_origins="*",
+    max_http_buffer_size=10 * 1024 * 1024,
 )
-app_game = web.Application()
-sio.attach(app_game)
+
+app = web.Application()
+sio.attach(app)
+
 
 @sio.event
 async def join_room(sid, data):
-    room = str(data.get('room'))
+    """Подключение Mini App к комнате чата"""
+    room = str(data.get("room"))
     sio.enter_room(sid, room)
-    logging.info(f"Socket: User {sid} joined room {room}")
+    logging.info(f"[socket] {sid} joined room {room}")
+
 
 @sio.event
 async def draw_step(sid, data):
-    await sio.emit('draw_data', data, room=str(data.get('room')), skip_sid=sid)
+    """Ретрансляция одного штриха всем участникам комнаты, кроме отправителя"""
+    room = str(data.get("room"))
+    await sio.emit(
+        "draw_data",
+        data,
+        room=room,
+        skip_sid=sid,
+    )
+
 
 @sio.event
-async def clear_canvas(sid, data):
-    await sio.emit('clear', {}, room=str(data.get('room')), skip_sid=sid)
+async def final_frame(sid, data):
+    """
+    Приём финального изображения от ведущего и отправка его в Telegram-чат
+    ОДИН РАЗ в конце раунда
+    """
+    room = str(data.get("room"))
+    if room.startswith("m"):
+        chat_id = int(room.replace("m", "-"))
+    else:
+        chat_id = int(room)
 
-@sio.event
-async def send_frame(sid, data):
-    """Прием скриншота и отправка в чат"""
-    room_id = data.get('room')
-    image_data = data.get('image')
-    
-    if not room_id or not image_data:
+    session = game_sessions.get(str(chat_id))
+    if not session:
+        logging.warning(f"[socket] final_frame: session {chat_id} not found")
         return
 
-    # ЛОГ В КОНСОЛЬ: Если вы это видите, значит данные ДОШЛИ до сервера
-    print(f"📸 СИГНАЛ: Получен кадр {len(image_data)} байт для {room_id}")
-
     try:
-        # Превращаем m123 обратно в -123
-        chat_id = str(room_id.replace("m", "-") if room_id.startswith("m") else room_id)
-        session = game_sessions.get(chat_id)
-        
-        if session:
-            header, encoded = image_data.split(",", 1)
-            data_bytes = base64.b64decode(encoded)
-            
-            photo = BufferedInputFile(data_bytes, filename="drawing.jpg")
-            
-            # Отправляем новый скриншот
-            new_msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=f"🖌 **{session.get('drawer_name')}** рисует...\nУгадывайте слово!",
-                disable_notification=True
-            )
-            
-            # Удаляем старый скриншот
-            if session.get('last_photo_id'):
-                try: await bot.delete_message(chat_id, session['last_photo_id'])
-                except: pass
-            
-            session['last_photo_id'] = new_msg.message_id
-        else:
-            print(f"⚠️ ОШИБКА: Сессия {chat_id} не найдена (возможно бот перезагрузился)")
+        header, encoded = data["image"].split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=BufferedInputFile(image_bytes, filename="crocodile_result.jpg"),
+            caption=(
+                f"🎨 Финальный рисунок\n"
+                f"Слово: **{session['word']}**"
+            ),
+        )
     except Exception as e:
-        logging.error(f"Error in send_frame: {e}")
+        logging.exception(f"[socket] final_frame error: {e}")
+    finally:
+        game_sessions.pop(str(chat_id), None)
 
-async def serve_index(request):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(current_dir, 'index.html')
-    return web.FileResponse(file_path) if os.path.exists(file_path) else web.Response(status=404)
 
-app_game.router.add_get("/game", serve_index)
+# ================== WEB SERVER (MINI APP) ==================
+
+async def serve_index(request: web.Request):
+    """Отдаёт index.html Mini App"""
+    return web.FileResponse("index.html")
+
+
+app.router.add_get("/game", serve_index)
+
 
 async def start_socket_server():
-    runner = web.AppRunner(app_game)
+    """Запуск Socket.IO сервера"""
+    runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, '127.0.0.1', SOCKET_SERVER_PORT).start()
-    logging.info(f"=== Crocodile Server started on 8080 ===")
+    site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
+    await site.start()
+    logging.info(
+        f"[socket] server started on {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}"
+    )
 
-# ================== ЧАСТЬ 2: Логика Игры ==================
 
-async def generate_game_word():
+# ================== GAME LOGIC (BOT) ==================
+
+async def generate_game_word() -> str:
+    """Генерация слова для игры"""
     try:
-        def sync_call(): return model.generate_content("Придумай существительное для игры Крокодил")
+        def sync_call():
+            return model.generate_content(
+                "Придумай одно существительное для игры Крокодил"
+            )
+
         response = await asyncio.to_thread(sync_call)
         word = response.text.strip().lower().split()[0]
         return "".join(filter(str.isalpha, word))
-    except:
+    except Exception:
         return random.choice(["трактор", "кактус", "пельмень", "бегемот"])
 
-def get_game_keyboard(chat_id):
-    safe_cid = str(chat_id).replace("-", "m")
-    app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={safe_cid}"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
-        [
-            InlineKeyboardButton(text="👁 Словцо", callback_data=f"cr_w_{chat_id}"),
-            InlineKeyboardButton(text="🔄 Другое", callback_data=f"cr_n_{chat_id}")
+
+
+def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура запуска Mini App"""
+    safe_chat_id = str(chat_id).replace("-", "m")
+    app_link = (
+        f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}"
+        f"?startapp={safe_chat_id}"
+    )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
+            [InlineKeyboardButton(text="👁 Показать слово", callback_data=f"cr_w_{chat_id}")],
         ]
-    ])
+    )
+
 
 async def handle_start_game(message: types.Message):
-    chat_id = str(message.chat.id)
+    """Старт новой игры"""
+    chat_id = message.chat.id
     word = await generate_game_word()
-    game_sessions[chat_id] = {
+
+    game_sessions[str(chat_id)] = {
         "word": word,
         "drawer_id": message.from_user.id,
         "drawer_name": message.from_user.full_name,
-        "last_photo_id": None
     }
+
     await message.answer(
-        f"🎮 **КРОКОДИЛ НАЧАТ!**\nВедущий: {message.from_user.full_name}",
-        reply_markup=get_game_keyboard(chat_id)
+        f"🎮 **КРОКОДИЛ НАЧАТ!**\n"
+        f"Ведущий: {message.from_user.full_name}",
+        reply_markup=get_game_keyboard(chat_id),
     )
 
-async def handle_callback(callback: types.CallbackQuery):
-    chat_id = callback.data.split("_")[-1]
-    session = game_sessions.get(chat_id)
-    if not session: return await callback.answer("Игра окончена.")
-    if callback.data.startswith("cr_w_"):
-        if callback.from_user.id != session['drawer_id']: return await callback.answer("Не твое слово!")
-        await callback.answer(f"СЛОВО: {session['word'].upper()}", show_alert=True)
-    elif callback.data.startswith("cr_n_"):
-        if callback.from_user.id != session['drawer_id']: return await callback.answer("Только ведущий!")
-        session['word'] = await generate_game_word()
-        await callback.answer("Слово заменено!")
 
-async def check_answer(message: types.Message):
+async def handle_callback(callback: types.CallbackQuery):
+    """Обработка inline-кнопок"""
+    data = callback.data
+    chat_id = data.split("_")[-1]
+    session = game_sessions.get(chat_id)
+
+    if not session:
+        return await callback.answer("Игра окончена")
+
+    if callback.from_user.id != session["drawer_id"]:
+        return await callback.answer("Только ведущий")
+
+    if data.startswith("cr_w_"):
+        await callback.answer(
+            f"СЛОВО: {session['word'].upper()}", show_alert=True
+        )
+
+
+async def check_answer(message: types.Message) -> bool:
+    """Проверка ответа игрока"""
     chat_id = str(message.chat.id)
     session = game_sessions.get(chat_id)
-    if not session or not message.text: return False
-    if message.text.strip().lower() == session['word']:
-        if message.from_user.id == session['drawer_id']: return True
-        user_id, user_name, word = message.from_user.id, message.from_user.full_name, session['word']
-        if user_id not in scores: scores[user_id] = {"name": user_name, "points": 0}
-        scores[user_id]["points"] += 1
-        del game_sessions[chat_id]
-        top = sorted(scores.items(), key=lambda x: x[1]['points'], reverse=True)[:5]
-        leaderboard = "\n".join([f"{i+1}. {v['name']}: {v['points']}" for i, (k,v) in enumerate(top)])
-        await message.answer(f"🎉 **ПОБЕДА!**\n{user_name} угадал: **{word}**\n\n🏆 **ТОП:**\n{leaderboard}",
-                           reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Еще!", callback_data="cr_restart")]]))
+
+    if not session or not message.text:
+        return False
+
+    if message.text.strip().lower() == session["word"]:
+        if message.from_user.id == session["drawer_id"]:
+            return True
+
+        await message.answer(
+            f"🎉 **{message.from_user.full_name}** угадал слово:"
+            f" **{session['word']}**"
+        )
+
+        # Ждём финальный кадр из Mini App
         return True
+
     return False
