@@ -15,11 +15,13 @@
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
         .btn-gray { background: #3a3a3c; }
+        .status { color: #aaa; font-size: 10px; position: absolute; top: 5px; left: 50%; transform: translateX(-50%); pointer-events: none; }
         input[type="color"] { width: 35px; height: 35px; border-radius: 50%; border: none; padding: 0; background: none; }
     </style>
 </head>
 <body>
 
+<div id="status" class="status">Connecting...</div>
 <canvas id="canvas"></canvas>
 
 <div id="drawerTools" class="toolbar hidden">
@@ -41,38 +43,67 @@
     tg.ready();
 
     const roomId = tg.initDataUnsafe.start_param;
-    console.log("App started with roomId:", roomId);
-
-    // Временно включаем всем, пока нет проверки ID
+    const statusEl = document.getElementById('status');
+    
+    // Включаем инструменты
     document.getElementById('drawerTools').classList.remove('hidden');
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     let isDirty = false;
 
+    // --- RESIZE LOGIC ---
     function resize() {
         const h = document.querySelector('.toolbar').offsetHeight;
         const temp = document.createElement('canvas');
         temp.width = canvas.width; temp.height = canvas.height;
-        temp.getContext('2d').drawImage(canvas,0,0);
+        const tCtx = temp.getContext('2d');
+        if (canvas.width > 0) tCtx.drawImage(canvas, 0, 0);
         
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight - h;
         
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
         ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-        if (temp.width > 0) ctx.drawImage(temp,0,0);
+        
+        if (temp.width > 0) ctx.drawImage(temp, 0, 0);
     }
     window.addEventListener('resize', resize);
     resize();
 
+    // --- COMPRESSION LOGIC (CRITICAL FIX) ---
+    // Создаем маленький невидимый канвас для превью
+    const previewCanvas = document.createElement('canvas');
+    const previewCtx = previewCanvas.getContext('2d');
+
+    function getCompressedSnapshot() {
+        // Ограничиваем ширину превью до 300px
+        const MAX_WIDTH = 300;
+        const scale = Math.min(1, MAX_WIDTH / canvas.width);
+        
+        previewCanvas.width = canvas.width * scale;
+        previewCanvas.height = canvas.height * scale;
+        
+        // Рисуем большой канвас в маленький
+        previewCtx.drawImage(canvas, 0, 0, previewCanvas.width, previewCanvas.height);
+        
+        // Получаем легкий JPEG (0.5 качество)
+        return previewCanvas.toDataURL('image/jpeg', 0.5);
+    }
+
     // --- SOCKET ---
-    const socket = io({ transports: ['websocket', 'polling'] });
+    const socket = io({ 
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 5
+    });
 
     socket.on('connect', () => {
-        console.log('Socket connected!');
+        statusEl.innerText = 'Online';
         socket.emit('join_room', { room: roomId });
     });
+    
+    socket.on('disconnect', () => { statusEl.innerText = 'Disconnected'; });
+    socket.on('connect_error', () => { statusEl.innerText = 'Connection Error'; });
 
     socket.on('draw_data', (d) => {
         ctx.strokeStyle = d.color;
@@ -81,13 +112,11 @@
 
     socket.on('new_word_data', (d) => {
         tg.showPopup({ title: 'Новое слово', message: d.word.toUpperCase() });
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     });
 
     // --- DRAWING ---
     let drawing = false, last = {x:0, y:0};
-
     const getPos = (e) => {
         const r = canvas.getBoundingClientRect();
         const t = e.touches ? e.touches[0] : e;
@@ -105,7 +134,7 @@
         ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
         
         socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: color });
-        isDirty = true; // ПОМЕЧАЕМ КАК ИЗМЕНЕННЫЙ
+        isDirty = true;
         last = p;
     }
     const end = () => { drawing = false; }
@@ -128,6 +157,7 @@
     document.getElementById('finishBtn').onclick = () => {
         tg.showConfirm("Отправить рисунок?", (ok) => {
             if(ok) {
+                // Финальный кадр тоже жмем, но не так сильно
                 const img = canvas.toDataURL('image/jpeg', 0.8);
                 socket.emit('final_frame', {room: roomId, image: img});
                 tg.close();
@@ -138,12 +168,19 @@
     // --- PREVIEW SENDER ---
     setInterval(() => {
         if (isDirty && socket.connected) {
-            console.log("Sending preview snapshot...");
-            const img = canvas.toDataURL('image/jpeg', 0.3); // Маленькое качество для скорости
+            statusEl.innerText = 'Sending preview...';
+            
+            // Используем функцию сжатия!
+            const img = getCompressedSnapshot();
+            
             socket.emit('preview_snapshot', { room: roomId, image: img });
             isDirty = false;
+            
+            setTimeout(() => { 
+                if(socket.connected) statusEl.innerText = 'Online'; 
+            }, 1000);
         }
-    }, 2500); // 2.5 сек интервал
+    }, 4000);
 
 </script>
 </body>
