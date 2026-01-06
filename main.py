@@ -684,6 +684,10 @@ async def croc_callback(callback: types.CallbackQuery):
     else:
         await crocodile.handle_callback(callback)
 
+@router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
+async def stop_croc_text(message: types.Message):
+    await crocodile.handle_text_stop(message)
+
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
