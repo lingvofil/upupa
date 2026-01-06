@@ -14,30 +14,29 @@
         .btn { padding: 8px 12px; border-radius: 8px; border: none; font-weight: bold; color: white; cursor: pointer; }
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
+        .btn-gray { background: #555; }
         
-        /* Debug UI */
         #debug {
-            position: absolute; top: 10px; left: 10px; right: 10px;
+            position: absolute; top: 10px; left: 10px; 
             background: rgba(0,0,0,0.8); color: lime;
-            padding: 5px; font-size: 10px; pointer-events: none;
-            height: 40px; overflow: hidden; white-space: pre-wrap;
+            padding: 5px; font-size: 11px; pointer-events: none;
+            border-radius: 4px; z-index: 1000;
         }
-        #testBtn { position: absolute; bottom: 80px; left: 10px; background: blue; color: white; padding: 10px; z-index: 100; }
-        #snapBtn { position: absolute; bottom: 80px; left: 60px; background: green; color: white; padding: 10px; z-index: 100; }
+        #snapBtn { position: absolute; bottom: 70px; right: 10px; background: green; color: white; padding: 8px; z-index: 100; font-size: 10px; }
     </style>
 </head>
 <body>
 
 <div id="debug">Init...</div>
-<button id="testBtn" onclick="sendTest()">T</button>
-<button id="snapBtn" onclick="forceSnap()">S</button>
+<!-- Кнопка принудительной отправки для теста -->
+<button id="snapBtn" onclick="forceSnap()">SEND SNAP</button>
 
 <canvas id="canvas"></canvas>
 
 <div id="toolbar" class="toolbar">
     <div style="display:flex; gap:10px; align-items:center;">
         <input type="color" id="brushColor" value="#000000" style="width:30px;height:30px;border:none;">
-        <button id="clearBtn" class="btn btn-blue" onclick="clearC()">🧹</button>
+        <button id="clearBtn" class="btn btn-gray" onclick="clearC()">🧹</button>
         <button id="skipBtn" class="btn btn-blue" onclick="skip()">🔄</button>
     </div>
     <button id="finishBtn" class="btn btn-red" onclick="finish()">🏁</button>
@@ -56,7 +55,7 @@
         console.log(msg);
     }
 
-    // --- CANVAS SETUP ---
+    // --- CANVAS ---
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     let isDirty = false;
@@ -77,12 +76,41 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // --- SOCKET ---
-    log("Conn: " + roomId);
-    // Force polling to match logs seen
-    const socket = io({ transports: ['polling', 'websocket'] });
+    // --- SNAPSHOT HELPER ---
+    const pCanvas = document.createElement('canvas');
+    const pCtx = pCanvas.getContext('2d');
 
-    socket.on('connect', () => log("CONNECTED " + socket.id));
+    window.forceSnap = () => {
+        // Сжимаем до 200px
+        const scale = Math.min(1, 200 / canvas.width);
+        pCanvas.width = canvas.width * scale;
+        pCanvas.height = canvas.height * scale;
+        pCtx.fillStyle='#fff'; pCtx.fillRect(0,0,pCanvas.width,pCanvas.height);
+        pCtx.drawImage(canvas,0,0,pCanvas.width,pCanvas.height);
+        
+        // Качество 0.4
+        const data = pCanvas.toDataURL('image/jpeg', 0.4);
+        log("Snap: " + data.length + "b");
+        socket.emit('preview_snapshot', { room: roomId, image: data });
+    };
+
+    // --- SOCKET (FORCE POLLING) ---
+    log("Connecting (Polling)...");
+    
+    // ВАЖНО: Принудительный polling
+    const socket = io({ 
+        transports: ['polling'], 
+        upgrade: false,
+        reconnectionDelay: 1000
+    });
+
+    socket.on('connect', () => {
+        log("ONLINE (ID: " + socket.id.substr(0,4) + ")");
+        socket.emit('join_room', { room: roomId });
+        // Проверка связи
+        socket.emit('client_test', { room: roomId, msg: 'Hello' });
+    });
+    
     socket.on('disconnect', () => log("DISCONNECTED"));
     socket.on('connect_error', (e) => log("ERR: " + e.message));
 
@@ -96,29 +124,7 @@
         clearC();
     });
 
-    // --- DEBUG ACTIONS ---
-    window.sendTest = () => {
-        log("Sending TEST...");
-        socket.emit('client_test', { room: roomId, time: Date.now() });
-    };
-
-    const pCanvas = document.createElement('canvas');
-    const pCtx = pCanvas.getContext('2d');
-
-    window.forceSnap = () => {
-        // Compress to 150px
-        const scale = Math.min(1, 150 / canvas.width);
-        pCanvas.width = canvas.width * scale;
-        pCanvas.height = canvas.height * scale;
-        pCtx.fillStyle='#fff'; pCtx.fillRect(0,0,pCanvas.width,pCanvas.height);
-        pCtx.drawImage(canvas,0,0,pCanvas.width,pCanvas.height);
-        
-        const data = pCanvas.toDataURL('image/jpeg', 0.3);
-        log("SNAP: " + data.length + " bytes");
-        socket.emit('preview_snapshot', { room: roomId, image: data });
-    };
-
-    // --- DRAWING ---
+    // --- DRAW LOGIC ---
     let draw = false, last = {x:0, y:0};
     const getPos = (e) => {
         const r = canvas.getBoundingClientRect();
@@ -136,7 +142,6 @@
         ctx.strokeStyle = c;
         ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
         
-        // Emit draw (will not log on server but keeps room alive)
         socket.emit('draw_step', {room:roomId, px:last.x, py:last.y, x:p.x, y:p.y, color:c});
         isDirty = true;
         last = p;
@@ -158,7 +163,7 @@
         tg.close();
     }
 
-    // Auto loop
+    // --- AUTO SENDER ---
     setInterval(() => {
         if(isDirty && socket.connected) {
             forceSnap();
