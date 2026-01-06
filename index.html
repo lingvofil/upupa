@@ -7,9 +7,9 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background: #222; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: monospace; }
-        canvas { flex: 1; background: #fff; display: block; }
-        .toolbar { height: 60px; background: #333; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
+        body { margin: 0; background: #222; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: monospace; touch-action: none; }
+        canvas { flex: 1; background: #fff; display: block; touch-action: none; }
+        .toolbar { height: 60px; background: #333; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; flex-shrink: 0; }
         .hidden { display: none !important; }
         .btn { padding: 8px 12px; border-radius: 8px; border: none; font-weight: bold; color: white; cursor: pointer; }
         .btn-blue { background: #007aff; }
@@ -20,25 +20,23 @@
             position: absolute; top: 10px; left: 10px; right: 10px;
             background: rgba(0,0,0,0.8); color: lime;
             padding: 5px; font-size: 11px; pointer-events: none;
-            border-radius: 4px; z-index: 1000;
+            border-radius: 4px; z-index: 1000; user-select: none;
         }
-        #snapBtn { position: absolute; bottom: 80px; left: 10px; background: orange; color: black; padding: 10px; z-index: 100; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="debug">Init...</div>
-<button id="snapBtn" onclick="sendHttpSnap()">TEST HTTP</button>
 
 <canvas id="canvas"></canvas>
 
 <div id="toolbar" class="toolbar">
     <div style="display:flex; gap:10px; align-items:center;">
         <input type="color" id="brushColor" value="#000000" style="width:30px;height:30px;border:none;">
-        <button id="clearBtn" class="btn btn-gray" onclick="clearC()">🧹</button>
-        <button id="skipBtn" class="btn btn-blue" onclick="skip()">🔄</button>
+        <button class="btn btn-gray" onclick="clearC()">🧹</button>
+        <button class="btn btn-blue" onclick="skip()">🔄</button>
     </div>
-    <button id="finishBtn" class="btn btn-red" onclick="finish()">🏁</button>
+    <button class="btn btn-red" onclick="finish()">🏁</button>
 </div>
 
 <script>
@@ -51,7 +49,6 @@
     
     function log(msg) {
         debugEl.innerText = msg;
-        console.log(msg);
     }
 
     // --- CANVAS ---
@@ -59,28 +56,29 @@
     const ctx = canvas.getContext('2d');
     let isDirty = false;
 
+    // Correct resizing
     function resize() {
-        const h = document.querySelector('.toolbar').offsetHeight;
+        const toolbarH = document.querySelector('.toolbar').offsetHeight;
         const tmp = document.createElement('canvas');
         tmp.width = canvas.width; tmp.height = canvas.height;
         if(canvas.width>0) tmp.getContext('2d').drawImage(canvas,0,0);
         
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight - h;
+        canvas.width = document.body.clientWidth;
+        canvas.height = document.body.clientHeight - toolbarH;
         
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
         ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
         if(tmp.width>0) ctx.drawImage(tmp,0,0);
     }
     window.addEventListener('resize', resize);
-    resize();
+    // Call resize immediately
+    setTimeout(resize, 100);
 
-    // --- SNAPSHOT HELPER ---
+    // --- COMPRESSION ---
     const pCanvas = document.createElement('canvas');
     const pCtx = pCanvas.getContext('2d');
 
-    window.getCompressedImage = () => {
-        // Сжатие до 250px
+    function getCompressedData() {
         const scale = Math.min(1, 250 / canvas.width);
         pCanvas.width = canvas.width * scale;
         pCanvas.height = canvas.height * scale;
@@ -89,25 +87,30 @@
         return pCanvas.toDataURL('image/jpeg', 0.5);
     }
 
-    // --- HTTP SENDER (NEW) ---
-    window.sendHttpSnap = async () => {
-        log("Sending HTTP...");
-        const data = getCompressedImage();
+    // --- HTTP SENDER (XHR) ---
+    function sendHttpSnap() {
+        if(!isDirty) return;
         
-        try {
-            const res = await fetch('/snapshot', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ room: roomId, image: data })
-            });
-            const txt = await res.text();
-            log("HTTP Res: " + txt);
-        } catch (e) {
-            log("HTTP Err: " + e.message);
-        }
-    };
+        const data = getCompressedData();
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/snapshot", true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    log("SENT OK: " + xhr.responseText);
+                } else {
+                    log("HTTP ERR: " + xhr.status);
+                }
+            }
+        };
+        
+        xhr.send(JSON.stringify({ room: roomId, image: data }));
+        isDirty = false;
+    }
 
-    // --- SOCKET (Still used for drawing strokes) ---
+    // --- SOCKET (Only for drawing sync) ---
     log("Connecting Socket...");
     const socket = io({ transports: ['polling'], upgrade: false });
 
@@ -128,39 +131,55 @@
         clearC();
     });
 
-    // --- INPUT ---
-    let draw = false, last = {x:0, y:0};
-    const getPos = (e) => {
+    // --- POINTER EVENTS (Desktop + Mobile) ---
+    let drawing = false;
+    let last = {x:0, y:0};
+
+    function getPos(e) {
+        // e.pageX/Y works better on some desktops than clientX
         const r = canvas.getBoundingClientRect();
-        const t = e.touches ? e.touches[0] : e;
-        return { x: t.clientX-r.left, y: t.clientY-r.top };
+        return { 
+            x: (e.pageX || e.clientX) - r.left, 
+            y: (e.pageY || e.clientY) - r.top 
+        };
     }
 
-    const start = (e) => { draw=true; last=getPos(e); }
-    const move = (e) => {
-        if(!draw) return;
+    canvas.onpointerdown = function(e) {
+        drawing = true;
+        last = getPos(e);
+        canvas.setPointerCapture(e.pointerId);
+    };
+
+    canvas.onpointermove = function(e) {
+        if(!drawing) return;
+        e.preventDefault(); // Stop scrolling
+        
         const p = getPos(e);
-        if(e.touches) e.preventDefault();
+        const color = document.getElementById('brushColor').value;
         
-        const c = document.getElementById('brushColor').value;
-        ctx.strokeStyle = c;
-        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
-        
-        socket.emit('draw_step', {room:roomId, px:last.x, py:last.y, x:p.x, y:p.y, color:c});
+        // Visual debug
+        log(`DRAW: ${Math.round(p.x)},${Math.round(p.y)}`);
+
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+
+        socket.emit('draw_step', {room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: color});
         isDirty = true;
         last = p;
-    }
-    const end = () => { draw=false; }
+    };
 
-    canvas.addEventListener('mousedown', start);
-    canvas.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', end);
-    // Для Desktop тоже нужны touch обработчики, если эмулятор или гибрид
-    canvas.addEventListener('touchstart', start, {passive:false});
-    canvas.addEventListener('touchmove', move, {passive:false});
-    window.addEventListener('touchend', end);
+    canvas.onpointerup = function(e) {
+        drawing = false;
+        canvas.releasePointerCapture(e.pointerId);
+        // Try send immediately on lift
+        sendHttpSnap(); 
+    };
 
-    window.clearC = () => { ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); isDirty=true; }
+    // --- BUTTONS ---
+    window.clearC = () => { ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); isDirty=true; sendHttpSnap(); }
     window.skip = () => socket.emit('skip_turn', {room:roomId});
     window.finish = () => {
         const img = canvas.toDataURL('image/jpeg', 0.8);
@@ -168,13 +187,8 @@
         tg.close();
     }
 
-    // --- AUTO SENDER LOOP ---
-    setInterval(() => {
-        if(isDirty) {
-            sendHttpSnap();
-            isDirty = false;
-        }
-    }, 4000);
+    // --- AUTO SENDER ---
+    setInterval(sendHttpSnap, 3000);
 
 </script>
 </body>
