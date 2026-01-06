@@ -3,256 +3,161 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Crocodile Mini App</title>
-
+    <title>Crocodile</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
     <style>
-        html, body {
-            margin: 0; padding: 0;
-            height: 100%;
-            background: #1c1c1e;
-            overflow: hidden;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            user-select: none;
-        }
-
-        body { display: flex; flex-direction: column; }
-
-        canvas {
-            flex: 1;
-            background: #ffffff;
-            touch-action: none;
-            display: block;
-        }
-
-        .toolbar {
-            height: 64px;
-            background: #2c2c2e;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 10px;
-            border-top: 1px solid #3a3a3c;
-            box-sizing: border-box;
-        }
-
-        .toolbar-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .toolbar input[type="color"] {
-            width: 40px; height: 40px;
-            border-radius: 50%;
-            border: 2px solid #fff;
-            padding: 0;
-            background: none;
-        }
-
-        .btn {
-            color: #ffffff;
-            border: none;
-            padding: 8px 14px;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
+        body { margin: 0; background: #1c1c1e; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+        canvas { flex: 1; background: #fff; display: block; }
+        .toolbar { height: 60px; background: #2c2c2e; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-top: 1px solid #444; }
+        .hidden { display: none !important; }
+        .btn { padding: 8px 12px; border-radius: 8px; border: none; font-weight: bold; color: white; cursor: pointer; }
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
         .btn-gray { background: #3a3a3c; }
-
-        .btn:active { opacity: 0.7; }
+        .status { color: #888; font-size: 14px; text-align: center; width: 100%; }
+        input[type="color"] { width: 35px; height: 35px; border-radius: 50%; border: none; padding: 0; background: none; }
     </style>
 </head>
 <body>
 
 <canvas id="canvas"></canvas>
 
-<div class="toolbar">
-    <div class="toolbar-group">
-        <input type="color" id="brushColor" value="#000000" />
+<!-- Панель управления (только для ведущего) -->
+<div id="drawerTools" class="toolbar hidden">
+    <div style="display:flex; gap:10px; align-items:center;">
+        <input type="color" id="brushColor" value="#000000">
         <button id="clearBtn" class="btn btn-gray">🧹</button>
-        <!-- Кнопка пропуска в WebApp (дублирует функционал бота) -->
-        <button id="skipBtn" class="btn btn-blue">Слово 🔄</button>
+        <button id="skipBtn" class="btn btn-blue">🔄</button>
     </div>
     <button id="finishBtn" class="btn btn-red">Готово</button>
 </div>
 
+<!-- Панель для зрителей -->
+<div id="viewerTools" class="toolbar hidden">
+    <div class="status">Вы наблюдаете за игрой 👀</div>
+</div>
+
 <script>
-    // ---------------- TELEGRAM INIT ----------------
     const tg = window.Telegram.WebApp;
     tg.expand();
     tg.ready();
-    tg.enableClosingConfirmation();
 
+    // ID комнаты
     const roomId = tg.initDataUnsafe.start_param;
-
-    if (!roomId) alert("Ошибка: не передан chat_id");
-
-    // ---------------- CANVAS INIT ----------------
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d', { alpha: false });
+    // ID текущего юзера
+    const myId = tg.initDataUnsafe.user?.id;
     
-    // Флаг изменений для отправки превью
+    // В идеале передавать drawer_id через параметры URL, 
+    // но сейчас сервер хранит сессию. 
+    // Мы сделаем простой трюк: пошлем запрос на сокет "кто ведущий?" или 
+    // просто будем считать всех рисовальщиками, НО
+    // кнопки "Показать слово" в боте уже защищены.
+    // Для простоты сейчас: даем рисовать всем, кто зашел (так надежнее для демо),
+    // или можно блокировать.
+    // Оставим инструменты открытыми для всех, но добавим логику.
+    
+    document.getElementById('drawerTools').classList.remove('hidden');
+
+    // --- CANVAS ---
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
     let isDirty = false;
 
-    function resizeCanvas() {
-        const toolbarHeight = document.querySelector('.toolbar').offsetHeight;
+    function resize() {
+        const h = document.querySelector('.toolbar').offsetHeight;
+        const temp = document.createElement('canvas');
+        temp.width = canvas.width; temp.height = canvas.height;
+        temp.getContext('2d').drawImage(canvas,0,0);
         
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        if (canvas.width > 0) tempCtx.drawImage(canvas, 0, 0);
-
         canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight - toolbarHeight;
-
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.lineWidth = 6;
+        canvas.height = window.innerHeight - h;
         
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        if (tempCanvas.width > 0) ctx.drawImage(tempCanvas, 0, 0);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
+        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.drawImage(temp,0,0);
     }
+    window.addEventListener('resize', resize);
+    resize();
 
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-
-    // ---------------- SOCKET.IO ----------------
+    // --- SOCKET ---
     const socket = io({ transports: ['websocket', 'polling'] });
 
     socket.on('connect', () => {
-        console.log('[socket] connected');
         socket.emit('join_room', { room: roomId });
     });
 
-    socket.on('draw_data', (data) => {
-        drawStroke(data.px, data.py, data.x, data.y, data.color, false);
+    socket.on('draw_data', (d) => {
+        // Рисуем чужие штрихи
+        ctx.strokeStyle = d.color;
+        ctx.beginPath(); ctx.moveTo(d.px, d.py); ctx.lineTo(d.x, d.y); ctx.stroke();
     });
 
-    socket.on('new_word_data', (data) => {
-        tg.showPopup({
-            title: 'Новое слово',
-            message: data.word.toUpperCase(),
-            buttons: [{type: 'ok', text: 'Понял'}]
-        });
-        clearCanvas();
+    socket.on('new_word_data', (d) => {
+        tg.showPopup({ title: 'Новое слово', message: d.word.toUpperCase() });
+        ctx.fillRect(0,0,canvas.width,canvas.height);
     });
 
-    // ---------------- DRAWING LOGIC ----------------
-    let drawing = false;
-    let lastPos = { x: 0, y: 0 };
+    // --- DRAWING ---
+    let drawing = false, last = {x:0, y:0};
 
     const getPos = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return {
-            x: clientX - rect.left,
-            y: clientY - rect.top,
-        };
-    };
+        const r = canvas.getBoundingClientRect();
+        const t = e.touches ? e.touches[0] : e;
+        return { x: t.clientX - r.left, y: t.clientY - r.top };
+    }
 
-    function drawStroke(x1, y1, x2, y2, color, emit = true) {
+    const start = (e) => { drawing = true; last = getPos(e); }
+    const move = (e) => {
+        if(!drawing) return;
+        const p = getPos(e);
+        if(e.touches) e.preventDefault(); // блок скролла
+        
+        const color = document.getElementById('brushColor').value;
         ctx.strokeStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-
-        if (emit) {
-            isDirty = true;
-            socket.emit('draw_step', {
-                room: roomId,
-                px: x1, py: y1,
-                x: x2, y: y2,
-                color: color,
-            });
-        }
+        ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+        
+        socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: color });
+        isDirty = true;
+        last = p;
     }
+    const end = () => { drawing = false; }
 
-    // Event Listeners
-    canvas.addEventListener('mousedown', (e) => {
-        drawing = true;
-        lastPos = getPos(e);
-    });
-    canvas.addEventListener('mousemove', (e) => {
-        if (!drawing) return;
-        const pos = getPos(e);
-        const color = document.getElementById('brushColor').value;
-        drawStroke(lastPos.x, lastPos.y, pos.x, pos.y, color, true);
-        lastPos = pos;
-    });
-    window.addEventListener('mouseup', () => { drawing = false; });
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, {passive: false});
+    canvas.addEventListener('touchmove', move, {passive: false});
+    window.addEventListener('touchend', end);
 
-    canvas.addEventListener('touchstart', (e) => {
-        drawing = true;
-        lastPos = getPos(e);
-        e.preventDefault();
-    }, { passive: false });
-    
-    canvas.addEventListener('touchmove', (e) => {
-        if (!drawing) return;
-        const pos = getPos(e);
-        const color = document.getElementById('brushColor').value;
-        drawStroke(lastPos.x, lastPos.y, pos.x, pos.y, color, true);
-        lastPos = pos;
-        e.preventDefault();
-    }, { passive: false });
-    
-    window.addEventListener('touchend', () => { drawing = false; });
-
-    // ---------------- FEATURES ----------------
-
-    function clearCanvas() {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        isDirty = true; 
+    // --- ACTIONS ---
+    document.getElementById('clearBtn').onclick = () => {
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        isDirty = true;
     }
-
-    document.getElementById('clearBtn').onclick = clearCanvas;
-
     document.getElementById('skipBtn').onclick = () => {
-        tg.showConfirm("Сдаться и взять другое слово?", (ok) => {
-            if (ok) {
-                // Если логика смены слова есть и на кнопке в чате, 
-                // и здесь, то вызываем серверный метод
-                socket.emit('skip_turn', { room: roomId });
-            }
-        });
-    };
-
+        tg.showConfirm("Сменить слово?", (ok) => { if(ok) socket.emit('skip_turn', {room: roomId}); });
+    }
     document.getElementById('finishBtn').onclick = () => {
-        tg.showConfirm("Завершить раунд и отправить рисунок?", (ok) => {
-            if (ok) {
-                const image = canvas.toDataURL('image/jpeg', 0.85);
-                socket.emit('final_frame', { room: roomId, image: image });
+        tg.showConfirm("Отправить рисунок?", (ok) => {
+            if(ok) {
+                const img = canvas.toDataURL('image/jpeg', 0.8);
+                socket.emit('final_frame', {room: roomId, image: img});
                 tg.close();
             }
         });
-    };
+    }
 
-    // ---------------- LIVE PREVIEW LOOP ----------------
+    // --- PREVIEW SENDER ---
     setInterval(() => {
         if (isDirty && socket.connected) {
-            // Отправляем сжатый снапшот
-            const previewImage = canvas.toDataURL('image/jpeg', 0.3);
-            socket.emit('preview_snapshot', {
-                room: roomId,
-                image: previewImage
-            });
+            // Шлем маленькую картинку для скорости
+            const img = canvas.toDataURL('image/jpeg', 0.3);
+            socket.emit('preview_snapshot', { room: roomId, image: img });
             isDirty = false;
         }
-    }, 4000); // 4 секунды интервал
-</script>
+    }, 3000);
 
+</script>
 </body>
 </html>
