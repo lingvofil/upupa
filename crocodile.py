@@ -14,35 +14,29 @@ BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
+PREVIEW_UPDATE_INTERVAL = 4.0 
 
-# Интервал обновления превью (сек)
-PREVIEW_UPDATE_INTERVAL = 3.0 
-
-# Пустой PNG 1x1
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 
-# Список слов (чтобы не тратить лимиты AI и не зависеть от сайтов)
+# Статичный список слов (надежно и бесплатно)
 GAME_WORDS = [
-    "арбуз", "барабан", "велосипед", "гриб", "дом", "еж", "жираф", "зонт", "игла", "кактус",
-    "лампа", "машина", "ножницы", "очки", "паук", "робот", "солнце", "телефон", "улитка", "флаг",
-    "хлеб", "цветок", "чайник", "шар", "щетка", "яблоко", "автобус", "банан", "вертолет", "груша",
-    "дельфин", "елка", "жук", "замок", "индюк", "карандаш", "лодка", "мороженое", "носок", "облако",
-    "пингвин", "ракета", "снеговик", "тыква", "утюг", "фонарь", "холодильник", "цыпленок", "черепаха", "шляпа",
-    "экскаватор", "юла", "якорь", "ананас", "бабочка", "виноград", "гитара", "дверь", "енот", "желудь",
-    "змея", "игрушка", "книга", "лимон", "мяч", "ноутбук", "орех", "пицца", "рыба", "самолет",
-    "торт", "утка", "фотоаппарат", "хомяк", "циркуль", "часы", "шахматы", "щука", "эскимо", "юбка"
+    "трактор", "арбуз", "банан", "жираф", "солнце", "дом", "дерево", "машина", "телефон", "книга",
+    "часы", "яблоко", "кошка", "собака", "рыба", "птица", "самолет", "лодка", "велосипед", "мяч",
+    "кукла", "робот", "звезда", "луна", "облако", "дождь", "снег", "зонт", "шляпа", "очки",
+    "усы", "борода", "волосы", "глаз", "нос", "рот", "ухо", "рука", "нога", "сердце",
+    "цветок", "трава", "лес", "гора", "река", "море", "океан", "остров", "пляж", "песок",
+    "камень", "огонь", "дым", "ветер", "молния", "гром", "радуга", "свет", "тень", "ночь"
 ]
 
-# ================== ХРАНИЛИЩЕ ==================
 game_sessions: dict[str, dict] = {}
 
-# ================== SOCKET.IO ==================
+# Увеличиваем ping_timeout, так как polling через туннели может лагать
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
-    max_http_buffer_size=5 * 1024 * 1024, # 5MB limit
-    ping_timeout=30,
-    ping_interval=10
+    max_http_buffer_size=5 * 1024 * 1024,
+    ping_timeout=60,
+    ping_interval=25
 )
 
 app = web.Application()
@@ -60,6 +54,17 @@ async def join_room(sid, data):
     sio.enter_room(sid, room)
     logging.info(f"[socket] {sid} joined {room}")
 
+@sio.on('*')
+async def catch_all(event, sid, data):
+    """Ловим ВСЕ события для отладки (кроме служебных)"""
+    if event not in ['draw_step', 'join_room']:
+        # Если пришло preview_snapshot, покажем размер
+        if event == 'preview_snapshot':
+            size = len(data.get('image', '')) if isinstance(data, dict) else 0
+            logging.info(f"[DEBUG] INCOMING EVENT: {event} (size: {size} bytes)")
+        else:
+            logging.info(f"[DEBUG] INCOMING EVENT: {event}")
+
 @sio.event
 async def draw_step(sid, data):
     room = str(data.get("room"))
@@ -67,18 +72,17 @@ async def draw_step(sid, data):
 
 @sio.event
 async def preview_snapshot(sid, data):
-    """Прием сжатого превью"""
     try:
         room = str(data.get("room"))
         chat_id = get_chat_id_from_room(room)
         session = game_sessions.get(chat_id)
 
         if not session:
-            # logging.warning(f"[DEBUG] No session for {chat_id}")
+            logging.warning(f"Session not found for room {room}")
             return
 
+        # Троттлинг
         now = time.time()
-        # Пропускаем, если слишком часто
         if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
             return
 
@@ -87,10 +91,7 @@ async def preview_snapshot(sid, data):
             return
 
         img_str = data.get("image", "")
-        if not img_str: 
-            return
-
-        # logging.info(f"[DEBUG] Processing snapshot for {chat_id}, size={len(img_str)}")
+        if not img_str: return
 
         header, encoded = img_str.split(",", 1)
         image_bytes = base64.b64decode(encoded)
@@ -106,19 +107,17 @@ async def preview_snapshot(sid, data):
             message_id=msg_id
         )
         session["last_preview_time"] = now
+        logging.info(f"[SUCCESS] Preview updated for {chat_id}")
 
     except Exception as e:
-        if "message is not modified" in str(e).lower():
-            pass
-        else:
-            logging.error(f"[preview_snapshot] Error: {e}")
+        if "message is not modified" not in str(e).lower():
+            logging.error(f"Preview fail: {e}")
 
 @sio.event
 async def skip_turn(sid, data):
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
-    
     if session:
         new_word = random.choice(GAME_WORDS)
         session["word"] = new_word
@@ -129,14 +128,11 @@ async def final_frame(sid, data):
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
-
-    if not session:
-        return
+    if not session: return
 
     try:
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
-        
         if session.get("preview_message_id"):
             try: await bot.delete_message(chat_id, session["preview_message_id"])
             except: pass
@@ -147,11 +143,11 @@ async def final_frame(sid, data):
             caption=f"🏁 **Стоп игра!**\nСлово было: **{session['word']}**"
         )
     except Exception as e:
-        logging.error(f"Final Frame Error: {e}")
+        logging.error(f"Final error: {e}")
     finally:
         game_sessions.pop(chat_id, None)
 
-# ================== WEB SERVER ==================
+# ================== SERVER & LOGIC ==================
 async def serve_index(request: web.Request):
     return web.FileResponse("index.html")
 
@@ -162,22 +158,16 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Socket server running at http://{SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
+    logging.info(f"Socket running: {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
-# ================== GAME LOGIC ==================
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
-    
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
-            [
-                InlineKeyboardButton(text="👁 Слово", callback_data=f"cr_w_{chat_id}"),
-                InlineKeyboardButton(text="🔄 Следующее", callback_data=f"cr_n_{chat_id}")
-            ]
-        ]
-    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
+        [InlineKeyboardButton(text="👁 Слово", callback_data=f"cr_w_{chat_id}"),
+         InlineKeyboardButton(text="🔄 Другое", callback_data=f"cr_n_{chat_id}")]
+    ])
 
 async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
@@ -185,60 +175,49 @@ async def handle_start_game(message: types.Message):
     
     await message.answer(
         f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
-        reply_markup=get_game_keyboard(chat_id),
+        reply_markup=get_game_keyboard(chat_id)
     )
     
-    # Отправляем белый квадрат (Placeholder)
-    blank_bytes = base64.b64decode(BLANK_PNG_B64)
-    preview_msg = await message.answer_photo(
-        photo=BufferedInputFile(blank_bytes, filename="blank.png"),
-        caption="⏳ *Подготовка холста...*",
-        parse_mode="Markdown"
-    )
+    blank = base64.b64decode(BLANK_PNG_B64)
+    prev = await message.answer_photo(BufferedInputFile(blank, "b.png"), caption="⏳ *Загрузка...*", parse_mode="Markdown")
 
     game_sessions[str(chat_id)] = {
         "word": word,
         "drawer_id": message.from_user.id,
         "drawer_name": message.from_user.full_name,
-        "preview_message_id": preview_msg.message_id,
+        "preview_message_id": prev.message_id,
         "last_preview_time": 0
     }
 
-async def handle_callback(callback: types.CallbackQuery):
-    data = callback.data
+async def handle_callback(cb: types.CallbackQuery):
+    data = cb.data
     chat_id = data.split("_")[-1]
     session = game_sessions.get(chat_id)
+    if not session: return await cb.answer("Игра окончена")
 
-    if not session:
-        return await callback.answer("Игра не активна")
-
-    if callback.from_user.id != session["drawer_id"]:
-        return await callback.answer("Только ведущий!", show_alert=True)
+    if cb.from_user.id != session["drawer_id"]:
+        return await cb.answer("Только ведущий!", show_alert=True)
 
     if data.startswith("cr_w_"):
-        await callback.answer(f"Слово: {session['word'].upper()}", show_alert=True)
+        await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
     elif data.startswith("cr_n_"):
-        new_word = random.choice(GAME_WORDS)
-        session["word"] = new_word
-        await callback.answer(f"Новое: {new_word.upper()}", show_alert=True)
-        
-        room_param = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
-        await sio.emit("new_word_data", {"word": new_word}, room=room_param)
+        new_w = random.choice(GAME_WORDS)
+        session["word"] = new_w
+        await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
+        room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
+        await sio.emit("new_word_data", {"word": new_w}, room=room)
 
-async def check_answer(message: types.Message) -> bool:
-    chat_id = str(message.chat.id)
-    session = game_sessions.get(chat_id)
-
-    if not session or not message.text: return False
-
-    if message.text.strip().lower() == session["word"]:
-        if message.from_user.id == session["drawer_id"]: return True
-
-        await message.answer(f"🎉 **{message.from_user.full_name}** угадал! Это **{session['word'].upper()}**")
-        
-        if session.get("preview_message_id"):
-            try: await bot.delete_message(message.chat.id, session["preview_message_id"])
+async def check_answer(msg: types.Message) -> bool:
+    cid = str(msg.chat.id)
+    sess = game_sessions.get(cid)
+    if not sess or not msg.text: return False
+    
+    if msg.text.strip().lower() == sess["word"]:
+        if msg.from_user.id == sess["drawer_id"]: return True
+        await msg.answer(f"🎉 **{msg.from_user.full_name}** победил! Слово: **{sess['word']}**")
+        if sess.get("preview_message_id"):
+            try: await bot.delete_message(msg.chat.id, sess["preview_message_id"])
             except: pass
-        game_sessions.pop(chat_id, None)
+        game_sessions.pop(cid, None)
         return True
     return False
