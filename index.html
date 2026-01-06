@@ -77,7 +77,7 @@
 </div>
 
 <script>
-  const VERSION = "2026-01-07 SNAP_DEBOUNCE + CANCEL + SMALLER_JPEG";
+  const VERSION = "2026-01-07 FULL FIX: TEST_TINY_SNAP + ULTRA_SMALL_JPEG + FORCE_INTERVAL";
 
   const tg = window.Telegram.WebApp;
   try { tg.expand(); tg.ready(); } catch (_) {}
@@ -92,14 +92,14 @@
   log("VERSION: " + VERSION);
   log("HREF: " + location.href);
 
-  // ROOM id: и из initDataUnsafe, и из URL
+  // room id: initDataUnsafe + url param
   const urlRoom = new URLSearchParams(location.search).get("tgWebAppStartParam");
   const initRoom =
     (tg.initDataUnsafe && (tg.initDataUnsafe.start_param || tg.initDataUnsafe.startapp)) || "";
   const roomId = initRoom || urlRoom || "";
   log("ROOM: " + roomId);
 
-  // CANVAS
+  // canvas
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   let isDirty = false;
@@ -118,21 +118,24 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.lineWidth = 5;
+
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (tmp.width > 0) ctx.drawImage(tmp, 0, 0);
   }
+
   window.addEventListener('resize', resize);
   setTimeout(resize, 100);
 
-  // компрессия (уменьшили сильнее, чтобы Cloudflare точно пропускал)
+  // compression (ultra small)
   const pCanvas = document.createElement('canvas');
   const pCtx = pCanvas.getContext('2d');
 
   function getCompressedData() {
-    const targetW = 180;                 // было 250
+    const targetW = 120;                // максимально маленько, чтобы точно пролезло
     const scale = Math.min(1, targetW / canvas.width);
+
     pCanvas.width  = Math.max(1, Math.floor(canvas.width * scale));
     pCanvas.height = Math.max(1, Math.floor(canvas.height * scale));
 
@@ -140,10 +143,10 @@
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    return pCanvas.toDataURL('image/jpeg', 0.35); // было 0.5
+    return pCanvas.toDataURL('image/jpeg', 0.2); // очень низкое качество
   }
 
-  // SOCKET (polling+ws, Cloudflare friendly)
+  // socket (polling + ws)
   log("Connecting Socket...");
   const socket = io({
     path: "/socket.io",
@@ -154,6 +157,12 @@
   socket.on('connect', () => {
     log("Socket Online: " + socket.id);
     socket.emit('join_room', { room: roomId });
+
+    // TEST: tiny snapshot сразу при connect
+    const tiny = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+    socket.emit('snapshot', { room: roomId, image: tiny }, (resp) => {
+      log("TEST SNAP ACK: " + resp);
+    });
   });
 
   socket.on('disconnect', (r) => log("Socket Off: " + r));
@@ -174,7 +183,6 @@
     clearC();
   });
 
-  // SNAPSHOT
   function sendSnap(force=false) {
     if (!roomId) { log("SNAP: no roomId"); return; }
     if (!socket.connected) { log("SNAP: socket not connected"); return; }
@@ -190,14 +198,14 @@
     isDirty = false;
   }
 
-  // ДЕБАУНС: чтобы снапшоты летели даже без pointerup
+  // debounce snapshot while drawing
   let snapTimer = null;
   function scheduleSnap(delayMs=600) {
     if (snapTimer) clearTimeout(snapTimer);
     snapTimer = setTimeout(() => sendSnap(true), delayMs);
   }
 
-  // POINTER
+  // pointer
   let drawing = false;
   let last = { x: 0, y: 0 };
 
@@ -234,8 +242,7 @@
     isDirty = true;
     last = p;
 
-    // важное: снапшот будет отправлен даже если pointerup не случится
-    scheduleSnap(650);
+    scheduleSnap(650); // снапшот уйдёт даже если up не будет
   };
 
   function stopDrawAndSnap() {
@@ -249,13 +256,12 @@
     stopDrawAndSnap();
   };
 
-  // В Telegram WebApp частенько прилетает cancel вместо up
-  canvas.onpointercancel = function (_e) {
+  canvas.onpointercancel = function () {
     log("CANCEL");
     stopDrawAndSnap();
   };
 
-  // BUTTONS
+  // buttons
   window.clearC = () => {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -272,8 +278,8 @@
     try { tg.close(); } catch (_) {}
   };
 
-  // Диагностика: каждые 2.5 сек пробуем принудительно отправить кадр,
-  // чтобы точно увидеть snapshot в серверных логах
+  // FORCE: раз в 2.5 сек отправляем снапшот принудительно,
+  // чтобы snapshot точно появлялся в server log
   setInterval(() => {
     if (socket.connected && roomId) sendSnap(true);
   }, 2500);
