@@ -1,11 +1,12 @@
 # crocodile.py
+import asyncio
 import base64
 import logging
+import os
 import random
 import time
-import asyncio
-from pathlib import Path
-from typing import Optional
+import json
+from typing import Dict, Optional
 
 from aiohttp import web
 import socketio
@@ -27,39 +28,34 @@ WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-# раз в сколько секунд разрешаем обновлять превью через edit_message_media
-PREVIEW_UPDATE_INTERVAL = 2.5
+# Как часто обновлять картинку в существующем сообщении
+PREVIEW_UPDATE_INTERVAL = 2.5  # сек
 
-# раз в сколько секунд переотправлять превью, чтобы оно снова было внизу чата
-BUMP_INTERVAL = 90
+# Как часто "поднимать" картинку вниз (переотправлять сообщением),
+# чтобы догадки не уводили её далеко вверх.
+# 0 = отключить.
+BUMP_INTERVAL = 90  # сек (можешь менять)
 
-# Где лежит файл со словами
-# 1) /root/upupa/crocowords.txt (как ты хочешь)
-# 2) или рядом с crocodile.py
-WORDS_FILE_CANDIDATES = [
-    Path("/root/upupa/crocowords.txt"),
-    Path(__file__).with_name("crocowords.txt"),
-]
+# Сколько лидеров показывать после игры
+LEADERBOARD_TOP = 10
 
-# 1x1 PNG (белый)
+# Файл со словами
+WORDS_FILE = os.path.join(os.path.dirname(__file__), "crocowords.txt")
+
+# Файл рейтингов
+SCORES_FILE = os.path.join(os.path.dirname(__file__), "crocodile_scores.json")
+
 BLANK_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 )
 
-# fallback на случай пустого файла
-FALLBACK_WORDS = [
-    "кроссовки", "гипноз", "перфоратор", "электросамокат", "калькулятор",
-    "телепорт", "скафандр", "радиатор", "канделябр", "парашют",
-]
-
 # chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
 
-# кеш слов
-_words_cache: list[str] = []
-_words_mtime: float = 0.0
+# chat_id(str) -> { user_id(str): points(int) }
+_scores: Dict[str, Dict[str, int]] = {}
 
-
+# =============== socket.io server ===============
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
@@ -72,6 +68,8 @@ app = web.Application(client_max_size=20 * 1024 * 1024)
 sio.attach(app)
 
 
+# ================== УТИЛИТЫ ==================
+
 def get_chat_id_from_room(room: str) -> str:
     """
     room = tg start_param
@@ -83,84 +81,114 @@ def get_chat_id_from_room(room: str) -> str:
     return room
 
 
-def _decode_data_url(image_data: str) -> Optional[bytes]:
-    """data:image/jpeg;base64,... -> bytes"""
-    try:
-        _, encoded = image_data.split(",", 1)
-        return base64.b64decode(encoded)
-    except Exception:
-        return None
-
-
-def _find_words_file() -> Optional[Path]:
-    for p in WORDS_FILE_CANDIDATES:
-        if p.exists() and p.is_file():
-            return p
-    return None
-
-
-def _load_words_from_file(force: bool = False) -> list[str]:
+def _load_words() -> list[str]:
     """
-    Читает crocowords.txt:
-    - 1 слово/фраза на строку
-    - пустые строки игнорируем
-    - строки с # в начале — комментарии
+    Читает слова из crocowords.txt.
+    Формат: 1 слово/фраза на строку.
+    Пустые строки и строки с # игнорируются.
     """
-    global _words_cache, _words_mtime
-
-    path = _find_words_file()
-    if not path:
-        return []
-
     try:
-        st = path.stat()
-        if (not force) and _words_cache and st.st_mtime == _words_mtime:
-            return _words_cache
+        if not os.path.exists(WORDS_FILE):
+            logging.warning(f"[crocodile] Words file not found: {WORDS_FILE}")
+            return ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
 
-        raw = path.read_text(encoding="utf-8", errors="ignore")
-        words: list[str] = []
-        for line in raw.splitlines():
-            w = line.strip()
-            if not w:
-                continue
-            if w.startswith("#"):
-                continue
-            # ограничим мусор
-            if len(w) < 2:
-                continue
-            words.append(w)
+        out = []
+        with open(WORDS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("#"):
+                    continue
+                out.append(s)
 
-        # уникальные, но сохраняем “примерно” порядок
-        seen = set()
-        uniq = []
-        for w in words:
-            key = w.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            uniq.append(w)
-
-        _words_cache = uniq
-        _words_mtime = st.st_mtime
-        logging.info(f"[crocodile] Loaded {len(_words_cache)} words from {path}")
-        return _words_cache
-
+        if not out:
+            return ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
+        return out
     except Exception as e:
-        logging.error(f"[crocodile] Failed to read words file: {e}", exc_info=True)
-        return []
+        logging.error(f"[crocodile] Failed to load words: {e}", exc_info=True)
+        return ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
 
 
-async def get_new_word() -> str:
-    words = _load_words_from_file()
-    if words:
-        return random.choice(words)
-    return random.choice(FALLBACK_WORDS)
+def _pick_word() -> str:
+    words = _load_words()
+    return random.choice(words)
 
 
-async def _ensure_session(chat_id: str) -> dict | None:
-    """
-    Если сессии нет — пробуем создать превью-сообщение (photo)
-    """
+def _normalize_guess(s: str) -> str:
+    # нормализация для угадывания: нижний регистр, пробелы схлопнуть
+    return " ".join(s.strip().lower().split())
+
+
+def _scores_load():
+    global _scores
+    try:
+        if os.path.exists(SCORES_FILE):
+            with open(SCORES_FILE, "r", encoding="utf-8") as f:
+                _scores = json.load(f)
+        else:
+            _scores = {}
+    except Exception as e:
+        logging.error(f"[scores] load failed: {e}", exc_info=True)
+        _scores = {}
+
+
+def _scores_save():
+    try:
+        with open(SCORES_FILE, "w", encoding="utf-8") as f:
+            json.dump(_scores, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"[scores] save failed: {e}", exc_info=True)
+
+
+def add_point(chat_id: str, user_id: int):
+    cid = str(chat_id)
+    uid = str(user_id)
+    if cid not in _scores:
+        _scores[cid] = {}
+    _scores[cid][uid] = int(_scores[cid].get(uid, 0)) + 1
+    _scores_save()
+
+
+def format_leaderboard(chat_id: str, title: str = "🏆 Список самых умных пидорасов") -> str:
+    cid = str(chat_id)
+    table = _scores.get(cid, {})
+    if not table:
+        return f"{title}\n(пока пусто)"
+
+    # сортируем по очкам desc
+    items = sorted(table.items(), key=lambda x: x[1], reverse=True)[:LEADERBOARD_TOP]
+
+    lines = [title]
+    for i, (uid, pts) in enumerate(items, start=1):
+        # имя красиво подтягивать без базы сложно, поэтому делаем ссылку по user_id
+        # Telegram понимает tg://user?id=
+        lines.append(f"{i}. <a href=\"tg://user?id={uid}\">игрок</a> — <b>{pts}</b>")
+    return "\n".join(lines)
+
+
+async def _safe_delete_message(chat_id: int, message_id: int):
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
+async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, caption: str):
+    media = InputMediaPhoto(
+        media=BufferedInputFile(image_bytes, filename="preview.jpg"),
+        caption=caption,
+        parse_mode="Markdown",
+    )
+    await bot.edit_message_media(
+        media=media,
+        chat_id=chat_id,
+        message_id=message_id,
+    )
+
+
+async def _ensure_session(chat_id: str) -> Optional[dict]:
+    """Если сессии нет — попробуем создать превью-сообщение и восстановить."""
     session = game_sessions.get(chat_id)
     if session:
         return session
@@ -169,7 +197,7 @@ async def _ensure_session(chat_id: str) -> dict | None:
         blank = base64.b64decode(BLANK_PNG_B64)
         new_msg = await bot.send_photo(
             int(chat_id),
-            BufferedInputFile(blank, "blank.png"),
+            BufferedInputFile(blank, "b.png"),
             caption="🔄 Reload",
         )
         session = {
@@ -177,9 +205,9 @@ async def _ensure_session(chat_id: str) -> dict | None:
             "drawer_id": 0,
             "drawer_name": "Player",
             "preview_message_id": new_msg.message_id,
-            "last_preview_time": 0.0,
-            "last_bump_time": 0.0,
+            "last_preview_time": 0,
             "last_preview_bytes": blank,
+            "bump_task": None,
         }
         game_sessions[chat_id] = session
         return session
@@ -188,43 +216,78 @@ async def _ensure_session(chat_id: str) -> dict | None:
         return None
 
 
-async def _bump_preview_if_needed(chat_id: str, session: dict) -> None:
+async def _stop_session(chat_id: str, reason: str = ""):
     """
-    Переотправляем превью, чтобы оно оказалось внизу чата.
-    Старое удаляем (если можем), чтобы не спамить.
+    Останавливает сессию корректно:
+    - отменяет bump_task
+    - удаляет превью (если есть)
+    - убирает из game_sessions
     """
-    now = time.time()
-    last_bump = float(session.get("last_bump_time", 0.0))
-    if now - last_bump < BUMP_INTERVAL:
+    cid = str(chat_id)
+    sess = game_sessions.get(cid)
+    if not sess:
         return
 
-    msg_id = session.get("preview_message_id")
-    media_bytes = session.get("last_preview_bytes")
-
-    if not msg_id or not media_bytes:
-        session["last_bump_time"] = now
-        return
-
-    try:
+    # cancel bump
+    task = sess.get("bump_task")
+    if task and isinstance(task, asyncio.Task) and not task.done():
+        task.cancel()
         try:
-            await bot.delete_message(int(chat_id), int(msg_id))
+            await task
         except Exception:
             pass
 
-        caption = f"🎨 LIVE: {session.get('drawer_name','Player')}..."
-        new_msg = await bot.send_photo(
-            int(chat_id),
-            BufferedInputFile(media_bytes, "preview.jpg"),
-            caption=caption,
-        )
+    # удалить превью-сообщение (последнее)
+    if sess.get("preview_message_id"):
+        await _safe_delete_message(int(cid), int(sess["preview_message_id"]))
 
-        session["preview_message_id"] = new_msg.message_id
-        session["last_bump_time"] = now
-        logging.info(f"⬇️ [bump] preview re-sent chat={chat_id}")
+    game_sessions.pop(cid, None)
+    if reason:
+        logging.info(f"[crocodile] session stopped chat={cid} reason={reason}")
 
+
+async def _bump_loop(chat_id: str):
+    """
+    Переотправляет превью-картинку раз в BUMP_INTERVAL сек, чтобы она была внизу чата.
+    ВАЖНО: это отдельное сообщение (send_photo), не edit_message_media.
+    Старое сообщение удаляем, чтобы не плодить мусор.
+    """
+    if not BUMP_INTERVAL or BUMP_INTERVAL <= 0:
+        return
+
+    cid = str(chat_id)
+    try:
+        while True:
+            await asyncio.sleep(BUMP_INTERVAL)
+
+            sess = game_sessions.get(cid)
+            if not sess:
+                return
+
+            img = sess.get("last_preview_bytes")
+            if not img:
+                # если ещё не было ни одного снапа — не бампим
+                continue
+
+            # удалим старое превью (чтобы не засорять чат)
+            old_mid = sess.get("preview_message_id")
+            if old_mid:
+                await _safe_delete_message(int(cid), int(old_mid))
+
+            # отправим новое
+            msg = await bot.send_photo(
+                int(cid),
+                BufferedInputFile(img, "preview.jpg"),
+                caption=f"🎨 *Ресует:* {sess.get('drawer_name','Player')}",
+                parse_mode="Markdown",
+            )
+            sess["preview_message_id"] = msg.message_id
+            sess["last_preview_time"] = time.time()
+
+    except asyncio.CancelledError:
+        return
     except Exception as e:
-        logging.error(f"[bump] failed: {e}", exc_info=True)
-        session["last_bump_time"] = now
+        logging.error(f"[bump_loop] {e}", exc_info=True)
 
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
@@ -237,46 +300,37 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "No session"
 
     now = time.time()
-    if now - float(session.get("last_preview_time", 0.0)) < PREVIEW_UPDATE_INTERVAL:
-        await _bump_preview_if_needed(chat_id, session)
+    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
         return "Skipped"
 
     msg_id = session.get("preview_message_id")
     if not msg_id:
         return "No preview_message_id"
 
-    image_bytes = _decode_data_url(image_data)
-    if not image_bytes:
+    try:
+        header, encoded = image_data.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+    except Exception:
         return "Bad image"
 
-    # сохраняем байты для bump
+    # сохраним последние байты для bump
     session["last_preview_bytes"] = image_bytes
 
-    logging.info(f"📸 [{source}] Preview update chat={chat_id} bytes={len(image_bytes)}")
-
-    media = InputMediaPhoto(
-        media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-        caption=f"🎨 LIVE: {session.get('drawer_name','Player')}...",
-    )
+    logging.info(f"📸 [{source}] Preview update for {chat_id} (b64={len(encoded)} chars)")
 
     try:
-        await bot.edit_message_media(
-            media=media,
+        await _safe_edit_media(
             chat_id=int(chat_id),
             message_id=int(msg_id),
+            image_bytes=image_bytes,
+            caption=f"🎨 **Ресует:** {session['drawer_name']}",
         )
         session["last_preview_time"] = now
-
-        await _bump_preview_if_needed(chat_id, session)
         return "OK"
-
     except Exception as e:
-        msg = str(e).lower()
-        if "message is not modified" in msg:
+        if "message is not modified" in str(e).lower():
             session["last_preview_time"] = now
-            await _bump_preview_if_needed(chat_id, session)
             return "Not modified"
-
         logging.error(f"[edit_message_media] {e}", exc_info=True)
         return "TG error"
 
@@ -315,7 +369,7 @@ async def skip_turn(sid, data):
     chat_id = get_chat_id_from_room(room)
 
     session = game_sessions.get(chat_id)
-    new_w = await get_new_word()
+    new_w = _pick_word()
     if session:
         session["word"] = new_w
 
@@ -324,6 +378,9 @@ async def skip_turn(sid, data):
 
 @sio.event
 async def final_frame(sid, data):
+    """
+    Завершение игры кнопкой 🏁 в webapp
+    """
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
@@ -331,27 +388,29 @@ async def final_frame(sid, data):
         return
 
     try:
-        image_bytes = _decode_data_url(data.get("image", ""))
-        if not image_bytes:
-            return
+        header, encoded = data["image"].split(",", 1)
+        image_bytes = base64.b64decode(encoded)
 
-        if session.get("preview_message_id"):
-            try:
-                await bot.delete_message(int(chat_id), int(session["preview_message_id"]))
-            except Exception:
-                pass
+        # удаляем превью + останавливаем bump
+        await _stop_session(chat_id, reason="final_frame")
 
         await bot.send_photo(
             chat_id=int(chat_id),
             photo=BufferedInputFile(image_bytes, filename="result.jpg"),
-            caption=f"🏁 Финиш! Слово: {session['word']}",
+            caption=f"🏁 **Финиш!** Слово было: **{session['word']}**",
+            parse_mode="Markdown",
+        )
+
+        # после завершения — покажем рейтинг
+        await bot.send_message(
+            int(chat_id),
+            format_leaderboard(chat_id, "🏆 Рейтинг (после игры)"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
     except Exception as e:
         logging.error(f"[final_frame] {e}", exc_info=True)
-
-    finally:
-        game_sessions.pop(chat_id, None)
 
 
 # ================== HTTP ==================
@@ -380,7 +439,7 @@ async def start_socket_server():
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    v = int(time.time())  # ломаем кэш
+    v = int(time.time())
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
 
     return InlineKeyboardMarkup(
@@ -389,14 +448,19 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="👁 Слово", callback_data=f"cr_w_{chat_id}"),
                 InlineKeyboardButton(text="🔄 Другое", callback_data=f"cr_n_{chat_id}"),
+                InlineKeyboardButton(text="🛑 Стоп", callback_data=f"cr_stop_{chat_id}"),
             ],
         ]
     )
 
 
 async def handle_start_game(message: types.Message):
+    # подгружаем рейтинг один раз
+    if not _scores:
+        _scores_load()
+
     chat_id = message.chat.id
-    word = await get_new_word()
+    word = _pick_word()
 
     await message.answer(
         f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
@@ -406,20 +470,25 @@ async def handle_start_game(message: types.Message):
 
     blank = base64.b64decode(BLANK_PNG_B64)
     prev = await message.answer_photo(
-        BufferedInputFile(blank, "blank.png"),
+        BufferedInputFile(blank, "b.png"),
         caption="⏳ *Запуск...*",
         parse_mode="Markdown",
     )
 
-    game_sessions[str(chat_id)] = {
+    cid = str(chat_id)
+    game_sessions[cid] = {
         "word": word,
         "drawer_id": message.from_user.id,
         "drawer_name": message.from_user.full_name,
         "preview_message_id": prev.message_id,
-        "last_preview_time": 0.0,
-        "last_bump_time": time.time(),
+        "last_preview_time": 0,
         "last_preview_bytes": blank,
+        "bump_task": None,
     }
+
+    # стартуем bump в фоне (если включен)
+    if BUMP_INTERVAL and BUMP_INTERVAL > 0:
+        game_sessions[cid]["bump_task"] = asyncio.create_task(_bump_loop(cid))
 
 
 async def handle_callback(cb: types.CallbackQuery):
@@ -430,41 +499,67 @@ async def handle_callback(cb: types.CallbackQuery):
         return await cb.answer("Игра не найдена")
 
     if data.startswith("cr_w_"):
-        await cb.answer(f"Слово: {str(session['word']).upper()}", show_alert=True)
+        await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
 
     elif data.startswith("cr_n_"):
-        new_w = await get_new_word()
+        new_w = _pick_word()
         session["word"] = new_w
 
         room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
         await sio.emit("new_word_data", {"word": new_w}, room=room)
 
-        await cb.answer(f"Новое: {str(new_w).upper()}", show_alert=True)
+        await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
+
+    elif data.startswith("cr_stop_"):
+        await _stop_session(chat_id, reason="manual stop")
+        await cb.message.answer("🛑 Игра остановлена.")
+        await cb.message.answer(
+            format_leaderboard(chat_id, "🏆 Рейтинг (текущий)"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        await cb.answer("Остановлено")
 
 
 async def check_answer(msg: types.Message) -> bool:
+    """
+    Возвращает True если сообщение обработано крокодилом (т.е. угадали или это ведущий),
+    чтобы main.py мог return и не обрабатывать дальше.
+    """
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
 
     if not sess or not msg.text:
         return False
 
-    if msg.text.strip().lower() == str(sess["word"]).strip().lower():
-        if msg.from_user and msg.from_user.id == sess["drawer_id"]:
-            return True
+    guess = _normalize_guess(msg.text)
+    word = _normalize_guess(sess["word"])
 
+    # ведущий пишет слово — не заканчиваем игру, но считаем сообщение обработанным
+    if msg.from_user and msg.from_user.id == sess["drawer_id"] and guess == word:
+        return True
+
+    if guess == word:
+        # начисляем балл
+        if msg.from_user:
+            add_point(cid, msg.from_user.id)
+
+        # победное сообщение
         await msg.answer(
-            f"🎉 **{msg.from_user.full_name}** победил!\nСлово: **{sess['word']}**",
+            f"🎉 **{msg.from_user.full_name}** пабедил!\nСлово: **{sess['word']}**",
             parse_mode="Markdown",
         )
 
-        if sess.get("preview_message_id"):
-            try:
-                await bot.delete_message(msg.chat.id, sess["preview_message_id"])
-            except Exception:
-                pass
+        # корректно остановим сессию (отменит bump и удалит превью)
+        await _stop_session(cid, reason="guessed")
 
-        game_sessions.pop(cid, None)
+        # покажем рейтинг после игры
+        await bot.send_message(
+            int(cid),
+            format_leaderboard(cid, "🏆 Рейтинг (после игры)"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
         return True
 
     return False
