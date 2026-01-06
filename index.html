@@ -1,119 +1,191 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Upupa Crocodile</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Crocodile Mini App</title>
+
+    <!-- Telegram Mini App SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- Socket.IO client -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
     <style>
-        body { margin: 0; padding: 0; background: #1c1c1d; overflow: hidden; height: 100vh; display: flex; flex-direction: column; font-family: sans-serif; }
-        #canvas { display: block; background: #fff; touch-action: none; width: 100%; flex-grow: 1; }
-        .toolbar { height: 80px; background: #2c2c2e; display: flex; align-items: center; justify-content: space-around; border-top: 1px solid #3a3a3c; }
-        .btn { background: #ff3b30; color: white; border: none; padding: 12px 20px; border-radius: 12px; font-weight: bold; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: #1c1c1e;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        canvas {
+            flex: 1;
+            background: #ffffff;
+            touch-action: none;
+            display: block;
+        }
+
+        .toolbar {
+            height: 64px;
+            background: #2c2c2e;
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            border-top: 1px solid #3a3a3c;
+        }
+
+        .toolbar input[type="color"] {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: none;
+            padding: 0;
+        }
+
+        .toolbar button {
+            background: #ff3b30;
+            color: #ffffff;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
-    <canvas id="canvas"></canvas>
-    <div class="toolbar">
-        <input type="color" id="brushColor" value="#000000" style="width:44px; height:44px; border:2px solid #fff; border-radius:50%;">
-        <button class="btn" id="clearBtn">ОЧИСТИТЬ</button>
-    </div>
 
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        tg.ready();
+<canvas id="canvas"></canvas>
 
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d', { alpha: false });
-        
-        // Добавляем transports для стабильности через туннели
-        const socket = io({
-            transports: ['websocket', 'polling']
-        });
+<div class="toolbar">
+    <input type="color" id="brushColor" value="#000000" />
+    <button id="clearBtn">Очистить</button>
+    <button id="finishBtn">Завершить</button>
+</div>
 
-        const roomId = tg.initDataUnsafe.start_param || 'global';
-        let hasChanges = false;
+<script>
+    // ---------------- TELEGRAM INIT ----------------
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+    tg.ready();
 
-        function resize() {
-            // Уменьшаем внутреннее разрешение в 2 раза для легкости скриншотов
-            const scale = 0.5;
-            canvas.width = canvas.clientWidth * scale;
-            canvas.height = canvas.clientHeight * scale;
-            ctx.scale(scale, scale);
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 10; // Толще линия для низкого разрешения
-            ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width / scale, canvas.height / scale);
-        }
-        window.addEventListener('resize', resize); resize();
+    const roomId = tg.initDataUnsafe.start_param;
+    if (!roomId) {
+        alert("Ошибка: не передан chat_id");
+    }
 
+    // ---------------- CANVAS INIT ----------------
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    function resizeCanvas() {
+        const toolbarHeight = document.querySelector('.toolbar').offsetHeight;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight - toolbarHeight;
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 6;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ---------------- SOCKET.IO ----------------
+    const socket = io({
+        transports: ['websocket', 'polling'],
+    });
+
+    socket.on('connect', () => {
+        console.log('[socket] connected');
         socket.emit('join_room', { room: roomId });
+    });
 
-        let drawing = false;
-        let lastPos = { x: 0, y: 0 };
+    socket.on('connect_error', (err) => {
+        console.error('[socket] error', err);
+    });
 
-        const getPos = (e) => {
-            const rect = canvas.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            // Учитываем масштаб
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    socket.on('draw_data', (data) => {
+        ctx.strokeStyle = data.color;
+        ctx.beginPath();
+        ctx.moveTo(data.px, data.py);
+        ctx.lineTo(data.x, data.y);
+        ctx.stroke();
+    });
+
+    // ---------------- DRAWING ----------------
+    let drawing = false;
+    let lastPos = { x: 0, y: 0 };
+
+    const getPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
         };
+    };
 
-        const start = (e) => { drawing = true; lastPos = getPos(e); };
-        const move = (e) => {
-            if (!drawing) return;
-            if (e.cancelable) e.preventDefault();
-            const pos = getPos(e);
-            const color = document.getElementById('brushColor').value;
-            
-            ctx.strokeStyle = color;
-            ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(pos.x, pos.y); ctx.stroke();
-            
-            socket.emit('draw_step', { x: pos.x, y: pos.y, px: lastPos.x, py: lastPos.y, color: color, room: roomId });
-            lastPos = pos;
-            hasChanges = true;
-        };
+    canvas.addEventListener('pointerdown', (e) => {
+        drawing = true;
+        lastPos = getPos(e);
+    });
 
-        canvas.addEventListener('mousedown', start);
-        canvas.addEventListener('mousemove', move);
-        window.addEventListener('mouseup', () => drawing = false);
-        canvas.addEventListener('touchstart', (e) => { start(e); if(e.cancelable) e.preventDefault(); }, {passive: false});
-        canvas.addEventListener('touchmove', move, {passive: false});
-        window.addEventListener('touchend', () => drawing = false);
+    canvas.addEventListener('pointermove', (e) => {
+        if (!drawing) return;
 
-        // ТАЙМЕР СКРИНШОТОВ (каждые 5 секунд)
-        setInterval(() => {
-            if (hasChanges && socket.connected) {
-                console.log("Generating frame...");
-                try {
-                    // Используем JPEG с низким качеством
-                    const img = canvas.toDataURL('image/jpeg', 0.2);
-                    console.log("Sending frame size:", img.length);
-                    socket.emit('send_frame', { room: roomId, image: img });
-                    hasChanges = false;
-                } catch (err) {
-                    console.error("Frame error:", err);
-                }
-            }
-        }, 5000);
+        const pos = getPos(e);
+        const color = document.getElementById('brushColor').value;
 
-        document.getElementById('clearBtn').onclick = () => {
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width * 2, canvas.height * 2);
-            socket.emit('clear_canvas', { room: roomId });
-            hasChanges = true;
-        };
-        
-        socket.on('clear', () => { 
-            ctx.fillStyle = "#ffffff"; 
-            ctx.fillRect(0, 0, canvas.width * 2, canvas.height * 2); 
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(lastPos.x, lastPos.y);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+
+        socket.emit('draw_step', {
+            room: roomId,
+            px: lastPos.x,
+            py: lastPos.y,
+            x: pos.x,
+            y: pos.y,
+            color: color,
         });
 
-        socket.on('connect', () => console.log("Socket connected!"));
-        socket.on('connect_error', (err) => console.error("Socket error:", err));
-    </script>
+        lastPos = pos;
+    });
+
+    window.addEventListener('pointerup', () => {
+        drawing = false;
+    });
+
+    // ---------------- CONTROLS ----------------
+    document.getElementById('clearBtn').onclick = () => {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    };
+
+    document.getElementById('finishBtn').onclick = () => {
+        if (!confirm('Завершить раунд и отправить рисунок в чат?')) return;
+
+        const image = canvas.toDataURL('image/jpeg', 0.85);
+        socket.emit('final_frame', {
+            room: roomId,
+            image: image,
+        });
+
+        tg.close();
+    };
+</script>
+
 </body>
 </html>
