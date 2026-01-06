@@ -7,7 +7,7 @@ from aiohttp import web
 import socketio
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile, InputMediaPhoto
-from config import bot, model
+from config import bot
 
 # ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
@@ -16,28 +16,39 @@ SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
 # Интервал обновления превью (сек)
-PREVIEW_UPDATE_INTERVAL = 4.0 
+PREVIEW_UPDATE_INTERVAL = 3.0 
 
-# Пустой PNG 1x1 для старта
+# Пустой PNG 1x1
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+
+# Список слов (чтобы не тратить лимиты AI и не зависеть от сайтов)
+GAME_WORDS = [
+    "арбуз", "барабан", "велосипед", "гриб", "дом", "еж", "жираф", "зонт", "игла", "кактус",
+    "лампа", "машина", "ножницы", "очки", "паук", "робот", "солнце", "телефон", "улитка", "флаг",
+    "хлеб", "цветок", "чайник", "шар", "щетка", "яблоко", "автобус", "банан", "вертолет", "груша",
+    "дельфин", "елка", "жук", "замок", "индюк", "карандаш", "лодка", "мороженое", "носок", "облако",
+    "пингвин", "ракета", "снеговик", "тыква", "утюг", "фонарь", "холодильник", "цыпленок", "черепаха", "шляпа",
+    "экскаватор", "юла", "якорь", "ананас", "бабочка", "виноград", "гитара", "дверь", "енот", "желудь",
+    "змея", "игрушка", "книга", "лимон", "мяч", "ноутбук", "орех", "пицца", "рыба", "самолет",
+    "торт", "утка", "фотоаппарат", "хомяк", "циркуль", "часы", "шахматы", "щука", "эскимо", "юбка"
+]
 
 # ================== ХРАНИЛИЩЕ ==================
 game_sessions: dict[str, dict] = {}
 
 # ================== SOCKET.IO ==================
-# Увеличиваем буфер на всякий случай, хотя мы будем сжимать на клиенте
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
-    max_http_buffer_size=10 * 1024 * 1024, 
-    ping_timeout=60,
+    max_http_buffer_size=5 * 1024 * 1024, # 5MB limit
+    ping_timeout=30,
+    ping_interval=10
 )
 
 app = web.Application()
 sio.attach(app)
 
 def get_chat_id_from_room(room: str) -> str:
-    """Универсальное получение ID чата из комнаты"""
     room = str(room)
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -63,10 +74,11 @@ async def preview_snapshot(sid, data):
         session = game_sessions.get(chat_id)
 
         if not session:
+            # logging.warning(f"[DEBUG] No session for {chat_id}")
             return
 
-        # Троттлинг (защита от частых обновлений)
         now = time.time()
+        # Пропускаем, если слишком часто
         if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
             return
 
@@ -74,9 +86,11 @@ async def preview_snapshot(sid, data):
         if not msg_id:
             return
 
-        # Логируем размер пакета (для отладки)
-        img_str = data["image"]
-        # logging.info(f"[DEBUG] Recv snapshot size: {len(img_str)} bytes")
+        img_str = data.get("image", "")
+        if not img_str: 
+            return
+
+        # logging.info(f"[DEBUG] Processing snapshot for {chat_id}, size={len(img_str)}")
 
         header, encoded = img_str.split(",", 1)
         image_bytes = base64.b64decode(encoded)
@@ -94,10 +108,10 @@ async def preview_snapshot(sid, data):
         session["last_preview_time"] = now
 
     except Exception as e:
-        if "message is not modified" in str(e):
+        if "message is not modified" in str(e).lower():
             pass
         else:
-            logging.error(f"[DEBUG] Preview Error: {e}")
+            logging.error(f"[preview_snapshot] Error: {e}")
 
 @sio.event
 async def skip_turn(sid, data):
@@ -106,7 +120,7 @@ async def skip_turn(sid, data):
     session = game_sessions.get(chat_id)
     
     if session:
-        new_word = await generate_game_word()
+        new_word = random.choice(GAME_WORDS)
         session["word"] = new_word
         await sio.emit("new_word_data", {"word": new_word}, room=room)
 
@@ -151,22 +165,7 @@ async def start_socket_server():
     logging.info(f"Socket server running at http://{SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
 # ================== GAME LOGIC ==================
-async def generate_game_word() -> str:
-    try:
-        # Если есть модель:
-        def sync_call():
-             return model.generate_content("Придумай одно простое существительное для игры Крокодил.")
-        response = await asyncio.to_thread(sync_call)
-        w = response.text.strip().lower().split()[0]
-        return "".join(filter(str.isalpha, w)) or "солнце"
-    except:
-        return random.choice(["арбуз", "дом", "дерево", "машина", "кот"])
-
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
-    # Генерируем ссылку. Для групп добавляем префикс 'm' (minus), для лички - нет.
-    # Если chat_id отрицательный -> m12345
-    # Если chat_id положительный -> 12345
-    
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
     
@@ -182,14 +181,14 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
 
 async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
-    word = await generate_game_word()
+    word = random.choice(GAME_WORDS)
     
     await message.answer(
         f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
         reply_markup=get_game_keyboard(chat_id),
     )
     
-    # Отправляем белый квадрат (PlaceHolder)
+    # Отправляем белый квадрат (Placeholder)
     blank_bytes = base64.b64decode(BLANK_PNG_B64)
     preview_msg = await message.answer_photo(
         photo=BufferedInputFile(blank_bytes, filename="blank.png"),
@@ -219,11 +218,10 @@ async def handle_callback(callback: types.CallbackQuery):
     if data.startswith("cr_w_"):
         await callback.answer(f"Слово: {session['word'].upper()}", show_alert=True)
     elif data.startswith("cr_n_"):
-        new_word = await generate_game_word()
+        new_word = random.choice(GAME_WORDS)
         session["word"] = new_word
         await callback.answer(f"Новое: {new_word.upper()}", show_alert=True)
         
-        # Room ID logic
         room_param = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
         await sio.emit("new_word_data", {"word": new_word}, room=room_param)
 
