@@ -3,6 +3,7 @@ import base64
 import logging
 import random
 import time
+import json
 from aiohttp import web
 import socketio
 from aiogram import types
@@ -18,21 +19,20 @@ PREVIEW_UPDATE_INTERVAL = 3.0
 
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 
-GAME_WORDS = ["кот", "дом", "кит", "лес", "лук", "мяч", "нос", "рак", "сыр", "ток", "жук", "зуб"]
+GAME_WORDS = ["арбуз", "дом", "лес", "кит", "кот", "сыр", "сок", "мяч", "жук", "зуб"]
 
 game_sessions: dict[str, dict] = {}
 
-# Настройка Socket.IO
+# Socket.IO (только для штрихов и событий игры)
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
-    max_http_buffer_size=10 * 1024 * 1024, # 10 MB buffer
     ping_timeout=60,
     ping_interval=25
 )
 
-# ВАЖНО: Увеличиваем лимит запроса aiohttp (по дефолту 1MB)
-app = web.Application(client_max_size=20 * 1024 * 1024) 
+# Увеличиваем лимит входящего запроса для картинок (20MB)
+app = web.Application(client_max_size=20*1024*1024)
 sio.attach(app)
 
 def get_chat_id_from_room(room: str) -> str:
@@ -41,78 +41,22 @@ def get_chat_id_from_room(room: str) -> str:
         return str(int(room.replace("m", "-")))
     return room
 
+# ================== SOCKET EVENTS ==================
+
 @sio.event
 async def connect(sid, environ):
     logging.info(f"[socket] CONNECT {sid}")
-
-@sio.event
-async def disconnect(sid):
-    logging.info(f"[socket] DISCONNECT {sid}")
 
 @sio.event
 async def join_room(sid, data):
     room = str(data.get("room"))
     sio.enter_room(sid, room)
     logging.info(f"[socket] JOIN {room}")
-    return "OK" # Ack
 
 @sio.event
 async def draw_step(sid, data):
-    """Логируем рисование, чтобы проверить связь"""
     room = str(data.get("room"))
-    # logging.info(f"[DRAW] {sid} in {room}") 
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
-
-@sio.event
-async def preview_snapshot(sid, data):
-    """Обработка превью с подтверждением (Ack)"""
-    try:
-        room = str(data.get("room"))
-        chat_id = get_chat_id_from_room(room)
-        session = game_sessions.get(chat_id)
-
-        # Лог размера входящего пакета
-        img_len = len(data.get("image", ""))
-        logging.info(f"📸 [SNAPSHOT] Recv {img_len} bytes from {sid}")
-
-        if not session:
-            # Восстановление
-            logging.warning(f"[RECOVERY] Session lost {chat_id}")
-            try:
-                blank = base64.b64decode(BLANK_PNG_B64)
-                new_msg = await bot.send_photo(int(chat_id), BufferedInputFile(blank, "b.png"), caption="🔄 **Reload**")
-                session = {
-                    "word": "???", "drawer_id": 0, "drawer_name": "Player",
-                    "preview_message_id": new_msg.message_id, "last_preview_time": 0
-                }
-                game_sessions[chat_id] = session
-            except: 
-                return "NO_SESSION"
-
-        now = time.time()
-        # Лимит времени
-        if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
-            return "SKIPPED_TIME"
-
-        msg_id = session.get("preview_message_id")
-        header, encoded = data["image"].split(",", 1)
-        image_bytes = base64.b64decode(encoded)
-        
-        media = InputMediaPhoto(
-            media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-            caption=f"🎨 **LIVE:** {session['drawer_name']}..."
-        )
-        
-        await bot.edit_message_media(media=media, chat_id=int(chat_id), message_id=msg_id)
-        session["last_preview_time"] = now
-        
-        return "PROCESSED" # Отправляем подтверждение клиенту
-
-    except Exception as e:
-        if "message is not modified" not in str(e).lower():
-            logging.error(f"[PREVIEW ERROR] {e}")
-            return f"ERROR: {str(e)}"
-        return "NOT_MODIFIED"
 
 @sio.event
 async def skip_turn(sid, data):
@@ -122,10 +66,11 @@ async def skip_turn(sid, data):
     new_w = random.choice(GAME_WORDS)
     if session: session["word"] = new_w
     await sio.emit("new_word_data", {"word": new_w}, room=room)
-    logging.info(f"[SKIP] New word {new_w}")
+    logging.info(f"[SKIP] New word: {new_w}")
 
 @sio.event
 async def final_frame(sid, data):
+    """Финал тоже можно оставить на сокете, или перевести на POST, если будет глючить"""
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
@@ -147,20 +92,77 @@ async def final_frame(sid, data):
     finally:
         game_sessions.pop(chat_id, None)
 
-# ================== SERVER ==================
-async def serve_index(request: web.Request):
+# ================== HTTP POST HANDLER (НОВОЕ) ==================
+
+async def handle_snapshot_upload(request):
+    """Принимает картинку через обычный POST запрос"""
+    try:
+        data = await request.json()
+        room = data.get("room")
+        image_data = data.get("image")
+        
+        if not room or not image_data:
+            return web.Response(text="Missing data", status=400)
+
+        chat_id = get_chat_id_from_room(room)
+        session = game_sessions.get(chat_id)
+        
+        # --- Восстановление сессии ---
+        if not session:
+            try:
+                blank = base64.b64decode(BLANK_PNG_B64)
+                new_msg = await bot.send_photo(int(chat_id), BufferedInputFile(blank, "b.png"), caption="🔄 Reloaded")
+                session = {
+                    "word": "???", "drawer_id": 0, "drawer_name": "Player",
+                    "preview_message_id": new_msg.message_id, "last_preview_time": 0
+                }
+                game_sessions[chat_id] = session
+            except:
+                return web.Response(text="Session lost", status=404)
+
+        # Троттлинг
+        now = time.time()
+        if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
+            return web.Response(text="Skipped (Too fast)", status=200)
+
+        # Обработка картинки
+        msg_id = session.get("preview_message_id")
+        header, encoded = image_data.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+        
+        logging.info(f"📸 [HTTP] Updating preview for {chat_id} ({len(encoded)} bytes)")
+
+        media = InputMediaPhoto(
+            media=BufferedInputFile(image_bytes, filename="preview.jpg"),
+            caption=f"🎨 **LIVE:** {session['drawer_name']}..."
+        )
+        
+        await bot.edit_message_media(media=media, chat_id=int(chat_id), message_id=msg_id)
+        session["last_preview_time"] = now
+        
+        return web.Response(text="Updated", status=200)
+
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            logging.error(f"[HTTP ERROR] {e}")
+            return web.Response(text=str(e), status=500)
+        return web.Response(text="Not modified", status=200)
+
+async def serve_index(request):
     return web.FileResponse("index.html")
 
+# Роутинг
 app.router.add_get("/game", serve_index)
+app.router.add_post("/snapshot", handle_snapshot_upload) # Новый маршрут
 
 async def start_socket_server():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Socket server running on port {SOCKET_SERVER_PORT}")
+    logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
 
-# ================== LOGIC ==================
+# ================== TELEGRAM LOGIC ==================
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
@@ -173,25 +175,15 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
 async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
     word = random.choice(GAME_WORDS)
-    
-    await message.answer(
-        f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
-        reply_markup=get_game_keyboard(chat_id)
-    )
+    await message.answer(f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}", reply_markup=get_game_keyboard(chat_id))
     
     blank = base64.b64decode(BLANK_PNG_B64)
-    prev = await message.answer_photo(
-        photo=BufferedInputFile(blank, "b.png"), 
-        caption="⏳ *Запуск...*", 
-        parse_mode="Markdown"
-    )
+    prev = await message.answer_photo(BufferedInputFile(blank, "b.png"), caption="⏳ *Запуск...*", parse_mode="Markdown")
 
     game_sessions[str(chat_id)] = {
         "word": word,
-        "drawer_id": message.from_user.id,
-        "drawer_name": message.from_user.full_name,
-        "preview_message_id": prev.message_id,
-        "last_preview_time": 0
+        "drawer_id": message.from_user.id, "drawer_name": message.from_user.full_name,
+        "preview_message_id": prev.message_id, "last_preview_time": 0
     }
 
 async def handle_callback(cb: types.CallbackQuery):
