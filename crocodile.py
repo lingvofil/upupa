@@ -1,3 +1,4 @@
+# crocodile.py
 import base64
 import logging
 import random
@@ -37,8 +38,7 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     ping_timeout=60,
     ping_interval=25,
-    # чтобы base64 jpeg превью пролезал
-    max_http_buffer_size=10 * 1024 * 1024,
+    max_http_buffer_size=10 * 1024 * 1024,  # чтобы base64 jpeg превью пролезал
 )
 
 # Лимит 20MB
@@ -80,7 +80,7 @@ async def _ensure_session(chat_id: str) -> dict | None:
         game_sessions[chat_id] = session
         return session
     except Exception as e:
-        logging.error(f"[ensure_session] failed: {e}")
+        logging.error(f"[ensure_session] failed: {e}", exc_info=True)
         return None
 
 
@@ -107,7 +107,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "No preview_message_id"
 
     try:
-        header, encoded = image_data.split(",", 1)
+        _header, encoded = image_data.split(",", 1)
         image_bytes = base64.b64decode(encoded)
     except Exception:
         return "Bad image"
@@ -116,7 +116,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
 
     media = InputMediaPhoto(
         media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-        caption=f"🎨 **LIVE:** {session['drawer_name']}...",
+        caption=f"🎨 **LIVE:** {session.get('drawer_name', 'Player')}...",
         parse_mode="Markdown",
     )
 
@@ -129,10 +129,11 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         session["last_preview_time"] = now
         return "OK"
     except Exception as e:
+        # aiogram часто кидает TelegramBadRequest("message is not modified")
         if "message is not modified" in str(e).lower():
             session["last_preview_time"] = now
             return "Not modified"
-        logging.error(f"[edit_message_media] {e}")
+        logging.error(f"[edit_message_media] {e}", exc_info=True)
         return "TG error"
 
 
@@ -189,24 +190,24 @@ async def final_frame(sid, data):
         return
 
     try:
-        header, encoded = data["image"].split(",", 1)
+        _header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
         if session.get("preview_message_id"):
             try:
-                await bot.delete_message(chat_id, session["preview_message_id"])
+                await bot.delete_message(int(chat_id), session["preview_message_id"])
             except Exception:
                 pass
 
         await bot.send_photo(
-            chat_id=chat_id,
+            chat_id=int(chat_id),
             photo=BufferedInputFile(image_bytes, filename="result.jpg"),
-            caption=f"🏁 **Финиш!** Слово: {session['word']}",
+            caption=f"🏁 **Финиш!** Слово: {session.get('word', '???')}",
             parse_mode="Markdown",
         )
 
     except Exception as e:
-        logging.error(f"[final_frame] {e}")
+        logging.error(f"[final_frame] {e}", exc_info=True)
 
     finally:
         game_sessions.pop(chat_id, None)
@@ -237,7 +238,7 @@ async def start_socket_server():
     logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
 
 
-# ================== BOT LOGIC ==================
+# ================== BOT UI ==================
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
@@ -302,17 +303,23 @@ async def handle_callback(cb: types.CallbackQuery):
         await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
 
 
+# ================== ANSWER CHECK ==================
+
 async def check_answer(msg: types.Message) -> bool:
+    """
+    Возвращает True ТОЛЬКО если это было правильное угадывание
+    и мы обработали победу (т.е. дальнейшая обработка не нужна).
+    """
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
 
     if not sess or not msg.text:
         return False
 
-    if msg.text.strip().lower() == sess["word"]:
-        # ведущий не должен сам угадывать
-        if msg.from_user.id == sess["drawer_id"]:
-            return True
+    if msg.text.strip().lower() == str(sess.get("word", "")).strip().lower():
+        # ведущий не должен сам угадывать — и НЕ должен блокировать остальные команды
+        if msg.from_user and msg.from_user.id == sess.get("drawer_id"):
+            return False
 
         await msg.answer(
             f"🎉 **{msg.from_user.full_name}** победил! Слово: **{sess['word']}**",
@@ -329,3 +336,14 @@ async def check_answer(msg: types.Message) -> bool:
         return True
 
     return False
+
+
+async def is_correct_answer(chat_id: str, text: str) -> bool:
+    """
+    Совместимость с твоим старым кодом.
+    Просто проверка "текст == слово".
+    """
+    sess = game_sessions.get(str(chat_id))
+    if not sess:
+        return False
+    return str(text).strip().lower() == str(sess.get("word", "")).strip().lower()
