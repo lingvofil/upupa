@@ -3,7 +3,10 @@ import base64
 import logging
 import random
 import time
-from aiohttp import web
+import asyncio
+from typing import Optional
+
+from aiohttp import web, ClientSession
 import socketio
 
 from aiogram import types
@@ -24,15 +27,33 @@ WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-# Как часто разрешаем менять превью в чате (сек)
+# как часто разрешаем редактировать превью (сек)
 PREVIEW_UPDATE_INTERVAL = 2.5
 
-# 1x1 прозрачный GIF (минимальный, чтобы send_animation работал сразу)
-BLANK_GIF_B64 = (
-    "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
-)
+# как часто "поднимать" превью в чат (сек)
+# (переотправка сообщения, чтобы оно снова было внизу)
+BUMP_INTERVAL = 90
 
-GAME_WORDS = ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
+# 1x1 прозрачный GIF
+BLANK_GIF_B64 = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+
+# fallback словарь (RU) — используется если API недоступен
+FALLBACK_WORDS_RU = [
+    "электросамокат", "перфоратор", "самогонный аппарат", "пылесос", "пижама",
+    "парашют", "канделябр", "песочные часы", "гравитация", "бумеранг",
+    "кроссовки", "термос", "сковородка", "бронежилет", "радиатор",
+    "алгоритм", "компостер", "гипноз", "фейерверк", "калькулятор",
+    "фломастер", "карантин", "профессор", "телепорт", "аквариум",
+    "скафандр", "шахматист", "бариста", "пилот", "дирижёр",
+    "пианист", "инкассатор", "метеорит", "кочерга", "пингвин",
+    "крокодил", "пирамида", "экскаватор", "светофор", "хамелеон",
+]
+
+# Datamuse — простой сервис слов (англ). Тянем “сложнее” по длине/частоте
+DATAMUSE_URL = "https://api.datamuse.com/words"
+DATAMUSE_MIN_LEN = 6
+DATAMUSE_MAX_LEN = 14
+DATAMUSE_FETCH_N = 40
 
 # chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
@@ -60,10 +81,94 @@ def get_chat_id_from_room(room: str) -> str:
     return room
 
 
+def _decode_data_url(image_data: str) -> Optional[tuple[str, bytes]]:
+    """
+    Возвращает (mime, bytes) из dataURL: data:image/gif;base64,...
+    """
+    try:
+        header, encoded = image_data.split(",", 1)
+        raw = base64.b64decode(encoded)
+        mime = "application/octet-stream"
+        if header.startswith("data:") and ";base64" in header:
+            mime = header.split(";", 1)[0].replace("data:", "").strip()
+        return mime, raw
+    except Exception:
+        return None
+
+
+async def _fetch_words_datamuse() -> list[str]:
+    """
+    Забираем список слов (англ) из Datamuse.
+    Берем "сложнее": длиннее, плюс стараемся убирать очень частотные.
+    """
+    # идеи запросов: темы/подборки, чтобы было разнообразнее
+    topics = ["technology", "science", "animals", "movies", "sports", "music", "history", "space"]
+    topic = random.choice(topics)
+
+    params = {
+        "topics": topic,
+        "max": str(DATAMUSE_FETCH_N),
+    }
+
+    words: list[str] = []
+    try:
+        async with ClientSession() as session:
+            async with session.get(DATAMUSE_URL, params=params, timeout=8) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                for item in data:
+                    w = (item.get("word") or "").strip()
+                    if not w:
+                        continue
+                    if " " in w or "-" in w:
+                        continue
+                    if not (DATAMUSE_MIN_LEN <= len(w) <= DATAMUSE_MAX_LEN):
+                        continue
+                    # простая фильтрация “слишком простых”
+                    if w.lower() in {"animal", "people", "thing"}:
+                        continue
+                    words.append(w.lower())
+    except Exception:
+        return []
+
+    # если мало — пробуем второй раз другой topic
+    if len(words) < 10:
+        try:
+            params["topics"] = random.choice(topics)
+            async with ClientSession() as session:
+                async with session.get(DATAMUSE_URL, params=params, timeout=8) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for item in data:
+                            w = (item.get("word") or "").strip()
+                            if not w or " " in w or "-" in w:
+                                continue
+                            if not (DATAMUSE_MIN_LEN <= len(w) <= DATAMUSE_MAX_LEN):
+                                continue
+                            words.append(w.lower())
+        except Exception:
+            pass
+
+    # уникальные
+    return sorted(set(words))
+
+
+async def _get_new_word() -> str:
+    """
+    Получить новое слово:
+    1) пытаемся Datamuse
+    2) fallback RU список
+    """
+    remote = await _fetch_words_datamuse()
+    if remote:
+        return random.choice(remote)
+    return random.choice(FALLBACK_WORDS_RU)
+
+
 async def _ensure_session(chat_id: str) -> dict | None:
     """
-    Если сессии нет — попробуем создать превью-сообщение (как GIF)
-    и восстановить.
+    Если сессии нет — пробуем восстановить (создать превью как GIF-анимацию)
     """
     session = game_sessions.get(chat_id)
     if session:
@@ -81,7 +186,10 @@ async def _ensure_session(chat_id: str) -> dict | None:
             "drawer_id": 0,
             "drawer_name": "Player",
             "preview_message_id": new_msg.message_id,
-            "last_preview_time": 0,
+            "last_preview_time": 0.0,
+            "last_bump_time": 0.0,
+            "last_preview_bytes": blank,  # держим последнее превью, чтобы можно было переотправить
+            "last_preview_mime": "image/gif",
         }
         game_sessions[chat_id] = session
         return session
@@ -90,27 +198,58 @@ async def _ensure_session(chat_id: str) -> dict | None:
         return None
 
 
-def _decode_data_url(image_data: str) -> tuple[str, bytes] | None:
+async def _bump_preview_if_needed(chat_id: str, session: dict) -> None:
     """
-    Возвращает (mime, bytes) из dataURL: data:image/gif;base64,...
+    Поднимаем превью вниз чата:
+    - удаляем старое превью-сообщение
+    - отправляем новое с последним медиа
     """
+    now = time.time()
+    last_bump = float(session.get("last_bump_time", 0.0))
+    if now - last_bump < BUMP_INTERVAL:
+        return
+
+    msg_id = session.get("preview_message_id")
+    media_bytes = session.get("last_preview_bytes")
+    media_mime = session.get("last_preview_mime", "image/gif")
+
+    if not msg_id or not media_bytes:
+        session["last_bump_time"] = now
+        return
+
     try:
-        header, encoded = image_data.split(",", 1)
-        raw = base64.b64decode(encoded)
-        # header: data:image/gif;base64
-        mime = "application/octet-stream"
-        if header.startswith("data:") and ";base64" in header:
-            mime = header.split(";", 1)[0].replace("data:", "").strip()
-        return mime, raw
-    except Exception:
-        return None
+        # удаляем старое (чтобы не плодить)
+        try:
+            await bot.delete_message(int(chat_id), int(msg_id))
+        except Exception:
+            pass
+
+        caption = f"🎨 LIVE: {session.get('drawer_name','Player')}..."
+
+        if media_mime == "image/gif":
+            new_msg = await bot.send_animation(
+                int(chat_id),
+                BufferedInputFile(media_bytes, "preview.gif"),
+                caption=caption,
+            )
+        else:
+            new_msg = await bot.send_photo(
+                int(chat_id),
+                BufferedInputFile(media_bytes, "preview.jpg"),
+                caption=caption,
+            )
+
+        session["preview_message_id"] = new_msg.message_id
+        session["last_bump_time"] = now
+        logging.info(f"⬇️ [bump] preview re-sent for chat={chat_id}")
+
+    except Exception as e:
+        # не критично
+        logging.error(f"[bump] failed: {e}", exc_info=True)
+        session["last_bump_time"] = now
 
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
-    """
-    Обработка превью.
-    Сейчас клиент шлёт dataURL GIF-анимации (image/gif).
-    """
     if not room or not image_data:
         return "Bad Request"
 
@@ -119,8 +258,11 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
+    # throttling на редактирование
     now = time.time()
-    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
+    if now - float(session.get("last_preview_time", 0.0)) < PREVIEW_UPDATE_INTERVAL:
+        # но bump проверим отдельно (если давно)
+        await _bump_preview_if_needed(chat_id, session)
         return "Skipped"
 
     msg_id = session.get("preview_message_id")
@@ -133,36 +275,42 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
 
     mime, image_bytes = decoded
 
-    # Логи компактные
-    logging.info(f"📸 [{source}] Preview update for {chat_id} mime={mime} bytes={len(image_bytes)}")
+    logging.info(f"📸 [{source}] Preview update chat={chat_id} mime={mime} bytes={len(image_bytes)}")
 
     try:
-        # Если это GIF — шлём как animation (будет "живое" превью)
+        # сохраняем "последнее" — для bump
+        session["last_preview_bytes"] = image_bytes
+        session["last_preview_mime"] = mime
+
         if mime == "image/gif":
             media = InputMediaAnimation(
                 media=BufferedInputFile(image_bytes, filename="preview.gif"),
-                caption=f"🎨 LIVE: {session['drawer_name']}...",
+                caption=f"🎨 LIVE: {session.get('drawer_name','Player')}...",
             )
         else:
-            # fallback на фото
             media = InputMediaPhoto(
                 media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-                caption=f"🎨 LIVE: {session['drawer_name']}...",
+                caption=f"🎨 LIVE: {session.get('drawer_name','Player')}...",
             )
 
         await bot.edit_message_media(
             media=media,
             chat_id=int(chat_id),
-            message_id=msg_id,
+            message_id=int(msg_id),
         )
 
         session["last_preview_time"] = now
+
+        # после успешного апдейта — иногда bump (если чат уехал)
+        await _bump_preview_if_needed(chat_id, session)
+
         return "OK"
 
     except Exception as e:
         msg = str(e).lower()
         if "message is not modified" in msg:
             session["last_preview_time"] = now
+            await _bump_preview_if_needed(chat_id, session)
             return "Not modified"
         logging.error(f"[edit_message_media] {e}", exc_info=True)
         return "TG error"
@@ -184,16 +332,12 @@ async def join_room(sid, data):
 
 @sio.event
 async def draw_step(sid, data):
-    # ретранслируем в webapp другим участникам
     room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 
 @sio.event
 async def snapshot(sid, data):
-    """
-    Клиент шлёт gif dataURL.
-    """
     room = str(data.get("room") or "")
     image_data = data.get("image") or ""
     logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
@@ -206,7 +350,7 @@ async def skip_turn(sid, data):
     chat_id = get_chat_id_from_room(room)
 
     session = game_sessions.get(chat_id)
-    new_w = random.choice(GAME_WORDS)
+    new_w = await _get_new_word()
     if session:
         session["word"] = new_w
 
@@ -215,9 +359,6 @@ async def skip_turn(sid, data):
 
 @sio.event
 async def final_frame(sid, data):
-    """
-    Финальный кадр шлём в чат как обычное фото (большое).
-    """
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
@@ -228,12 +369,12 @@ async def final_frame(sid, data):
         decoded = _decode_data_url(data.get("image", ""))
         if not decoded:
             return
-        mime, image_bytes = decoded
+        _, image_bytes = decoded
 
-        # удаляем превью-сообщение
+        # удаляем превью
         if session.get("preview_message_id"):
             try:
-                await bot.delete_message(int(chat_id), session["preview_message_id"])
+                await bot.delete_message(int(chat_id), int(session["preview_message_id"]))
             except Exception:
                 pass
 
@@ -260,7 +401,6 @@ async def serve_index(request: web.Request):
     return resp
 
 
-# ================== ROUTES ==================
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
 
@@ -293,7 +433,7 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
 
 async def handle_start_game(message: types.Message):
     chat_id = message.chat.id
-    word = random.choice(GAME_WORDS)
+    word = await _get_new_word()
 
     await message.answer(
         f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
@@ -301,7 +441,6 @@ async def handle_start_game(message: types.Message):
         parse_mode="Markdown",
     )
 
-    # создаём превью как анимацию (пустой GIF)
     blank = base64.b64decode(BLANK_GIF_B64)
     prev = await message.answer_animation(
         BufferedInputFile(blank, "blank.gif"),
@@ -314,7 +453,10 @@ async def handle_start_game(message: types.Message):
         "drawer_id": message.from_user.id,
         "drawer_name": message.from_user.full_name,
         "preview_message_id": prev.message_id,
-        "last_preview_time": 0,
+        "last_preview_time": 0.0,
+        "last_bump_time": time.time(),
+        "last_preview_bytes": blank,
+        "last_preview_mime": "image/gif",
     }
 
 
@@ -327,10 +469,10 @@ async def handle_callback(cb: types.CallbackQuery):
         return await cb.answer("Игра не найдена")
 
     if data.startswith("cr_w_"):
-        await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
+        await cb.answer(f"Слово: {str(session['word']).upper()}", show_alert=True)
 
     elif data.startswith("cr_n_"):
-        new_w = random.choice(GAME_WORDS)
+        new_w = await _get_new_word()
         session["word"] = new_w
 
         room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
@@ -346,13 +488,14 @@ async def check_answer(msg: types.Message) -> bool:
     if not sess or not msg.text:
         return False
 
-    if msg.text.strip().lower() == sess["word"]:
-        # ведущий не должен угадывать
-        if msg.from_user.id == sess["drawer_id"]:
+    # сравнение по lower
+    if (msg.text or "").strip().lower() == str(sess["word"]).strip().lower():
+        # ведущий не угадывает
+        if msg.from_user and msg.from_user.id == sess["drawer_id"]:
             return True
 
         await msg.answer(
-            f"🎉 **{msg.from_user.full_name}** победил! Слово: **{sess['word']}**",
+            f"🎉 **{msg.from_user.full_name}** победил!\nСлово: **{sess['word']}**",
             parse_mode="Markdown",
         )
 
