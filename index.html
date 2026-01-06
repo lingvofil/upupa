@@ -2,10 +2,15 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Crocodile</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  />
+  <title>Upupa Crocodile Draw</title>
+
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
   <style>
     body {
       margin: 0;
@@ -17,12 +22,14 @@
       font-family: monospace;
       touch-action: none;
     }
+
     canvas {
       flex: 1;
       background: #fff;
       display: block;
       touch-action: none;
     }
+
     .toolbar {
       height: 60px;
       background: #333;
@@ -32,6 +39,7 @@
       padding: 0 10px;
       flex-shrink: 0;
     }
+
     .btn {
       padding: 8px 12px;
       border-radius: 8px;
@@ -40,11 +48,19 @@
       color: white;
       cursor: pointer;
     }
+
     .btn-blue { background: #007aff; }
     .btn-red { background: #ff3b30; }
     .btn-gray { background: #555; }
 
+    /* DEBUG — скрыт по умолчанию */
     #debug {
+      display: none;
+    }
+
+    /* DEBUG включается только при ?debug=1 */
+    #debug.on {
+      display: block;
       position: absolute;
       top: 10px;
       left: 10px;
@@ -61,15 +77,17 @@
     }
   </style>
 </head>
+
 <body>
 
-<div id="debug">Init...</div>
+<div id="debug"></div>
 
 <canvas id="canvas"></canvas>
 
-<div id="toolbar" class="toolbar">
+<div class="toolbar">
   <div style="display:flex; gap:10px; align-items:center;">
-    <input type="color" id="brushColor" value="#000000" style="width:30px;height:30px;border:none;">
+    <input type="color" id="brushColor" value="#000000"
+           style="width:30px;height:30px;border:none;">
     <button class="btn btn-gray" onclick="clearC()">🧹</button>
     <button class="btn btn-blue" onclick="skip()">🔄</button>
   </div>
@@ -77,98 +95,95 @@
 </div>
 
 <script>
-  const VERSION = "2026-01-07 FULL FIX: TEST_TINY_SNAP + ULTRA_SMALL_JPEG + FORCE_INTERVAL";
+  const VERSION = "2026-01-07 CLEAN_UI_NO_DEBUG";
 
   const tg = window.Telegram.WebApp;
-  try { tg.expand(); tg.ready(); } catch (_) {}
+  tg.expand();
+  tg.ready();
 
-  const debugEl = document.getElementById('debug');
+  const roomId = tg.initDataUnsafe.start_param;
+
+  /* ===== DEBUG ===== */
+  const debugEl = document.getElementById("debug");
+  const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+
+  if (DEBUG) {
+    debugEl.classList.add("on");
+  }
+
   function log(msg) {
+    if (!DEBUG) return;
     const prev = debugEl.innerText || "";
     const lines = (prev + "\n" + msg).trim().split("\n");
-    debugEl.innerText = lines.slice(-14).join("\n");
+    debugEl.innerText = lines.slice(-12).join("\n");
   }
 
   log("VERSION: " + VERSION);
-  log("HREF: " + location.href);
-
-  // room id: initDataUnsafe + url param
-  const urlRoom = new URLSearchParams(location.search).get("tgWebAppStartParam");
-  const initRoom =
-    (tg.initDataUnsafe && (tg.initDataUnsafe.start_param || tg.initDataUnsafe.startapp)) || "";
-  const roomId = initRoom || urlRoom || "";
   log("ROOM: " + roomId);
 
-  // canvas
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
+  /* ===== CANVAS ===== */
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
   let isDirty = false;
 
   function resize() {
-    const toolbarH = document.querySelector('.toolbar').offsetHeight;
-
-    const tmp = document.createElement('canvas');
+    const toolbarH = document.querySelector(".toolbar").offsetHeight;
+    const tmp = document.createElement("canvas");
     tmp.width = canvas.width;
     tmp.height = canvas.height;
-    if (canvas.width > 0) tmp.getContext('2d').drawImage(canvas, 0, 0);
+    if (canvas.width > 0) {
+      tmp.getContext("2d").drawImage(canvas, 0, 0);
+    }
 
     canvas.width = document.body.clientWidth;
     canvas.height = document.body.clientHeight - toolbarH;
 
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.lineWidth = 5;
-
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (tmp.width > 0) ctx.drawImage(tmp, 0, 0);
+    if (tmp.width > 0) {
+      ctx.drawImage(tmp, 0, 0);
+    }
   }
 
-  window.addEventListener('resize', resize);
+  window.addEventListener("resize", resize);
   setTimeout(resize, 100);
 
-  // compression (ultra small)
-  const pCanvas = document.createElement('canvas');
-  const pCtx = pCanvas.getContext('2d');
+  /* ===== SNAPSHOT COMPRESSION ===== */
+  const pCanvas = document.createElement("canvas");
+  const pCtx = pCanvas.getContext("2d");
 
   function getCompressedData() {
-    const targetW = 120;                // максимально маленько, чтобы точно пролезло
-    const scale = Math.min(1, targetW / canvas.width);
-
-    pCanvas.width  = Math.max(1, Math.floor(canvas.width * scale));
+    const scale = Math.min(1, 250 / canvas.width);
+    pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
     pCanvas.height = Math.max(1, Math.floor(canvas.height * scale));
 
-    pCtx.fillStyle = '#fff';
+    pCtx.fillStyle = "#fff";
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    return pCanvas.toDataURL('image/jpeg', 0.2); // очень низкое качество
+    return pCanvas.toDataURL("image/jpeg", 0.5);
   }
 
-  // socket (polling + ws)
-  log("Connecting Socket...");
+  /* ===== SOCKET ===== */
+  log("Connecting socket...");
   const socket = io({
-    path: "/socket.io",
-    transports: ['polling', 'websocket'],
-    upgrade: true
+    transports: ["websocket"],
+    upgrade: false
   });
 
-  socket.on('connect', () => {
-    log("Socket Online: " + socket.id);
-    socket.emit('join_room', { room: roomId });
-
-    // TEST: tiny snapshot сразу при connect
-    const tiny = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
-    socket.emit('snapshot', { room: roomId, image: tiny }, (resp) => {
-      log("TEST SNAP ACK: " + resp);
-    });
+  socket.on("connect", () => {
+    log("Socket connected");
+    socket.emit("join_room", { room: roomId });
   });
 
-  socket.on('disconnect', (r) => log("Socket Off: " + r));
-  socket.on('connect_error', (err) => log("Socket ERR: " + (err?.message || String(err))));
+  socket.on("disconnect", () => log("Socket disconnected"));
+  socket.on("connect_error", (e) => log("Socket error: " + e));
 
-  socket.on('draw_data', (d) => {
+  socket.on("draw_data", (d) => {
     ctx.strokeStyle = d.color;
     ctx.beginPath();
     ctx.moveTo(d.px, d.py);
@@ -176,60 +191,46 @@
     ctx.stroke();
   });
 
-  socket.on('new_word_data', (d) => {
-    const w = String(d.word || "").toUpperCase();
-    try { tg.showPopup({ title: 'Слово', message: w }); }
-    catch (_) { alert("Слово: " + w); }
+  socket.on("new_word_data", (d) => {
+    tg.showPopup({ title: "Слово", message: d.word.toUpperCase() });
     clearC();
   });
 
-  function sendSnap(force=false) {
-    if (!roomId) { log("SNAP: no roomId"); return; }
-    if (!socket.connected) { log("SNAP: socket not connected"); return; }
-    if (!force && !isDirty) return;
+  function sendSnap() {
+    if (!isDirty || !socket.connected) return;
 
     const data = getCompressedData();
-    log("SNAP send len=" + data.length);
-
-    socket.emit('snapshot', { room: roomId, image: data }, (resp) => {
+    socket.emit("snapshot", { room: roomId, image: data }, (resp) => {
       log("SNAP ACK: " + resp);
     });
 
     isDirty = false;
   }
 
-  // debounce snapshot while drawing
-  let snapTimer = null;
-  function scheduleSnap(delayMs=600) {
-    if (snapTimer) clearTimeout(snapTimer);
-    snapTimer = setTimeout(() => sendSnap(true), delayMs);
-  }
-
-  // pointer
+  /* ===== DRAW ===== */
   let drawing = false;
   let last = { x: 0, y: 0 };
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
-    const x = (e.clientX != null ? e.clientX : e.pageX) - r.left;
-    const y = (e.clientY != null ? e.clientY : e.pageY) - r.top;
-    return { x, y };
+    return {
+      x: (e.pageX || e.clientX) - r.left,
+      y: (e.pageY || e.clientY) - r.top
+    };
   }
 
-  canvas.onpointerdown = function (e) {
+  canvas.onpointerdown = (e) => {
     drawing = true;
     last = getPos(e);
     canvas.setPointerCapture(e.pointerId);
-    log("DOWN " + Math.round(last.x) + "," + Math.round(last.y));
-    e.preventDefault();
   };
 
-  canvas.onpointermove = function (e) {
+  canvas.onpointermove = (e) => {
     if (!drawing) return;
     e.preventDefault();
 
     const p = getPos(e);
-    const color = document.getElementById('brushColor').value;
+    const color = document.getElementById("brushColor").value;
 
     ctx.strokeStyle = color;
     ctx.beginPath();
@@ -237,52 +238,42 @@
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
 
-    socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color });
+    socket.emit("draw_step", {
+      room: roomId,
+      px: last.x,
+      py: last.y,
+      x: p.x,
+      y: p.y,
+      color
+    });
 
     isDirty = true;
     last = p;
-
-    scheduleSnap(650); // снапшот уйдёт даже если up не будет
   };
 
-  function stopDrawAndSnap() {
-    if (!drawing) return;
+  canvas.onpointerup = (e) => {
     drawing = false;
-    scheduleSnap(50);
-  }
-
-  canvas.onpointerup = function (e) {
-    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-    stopDrawAndSnap();
+    try { canvas.releasePointerCapture(e.pointerId); } catch {}
+    sendSnap();
   };
 
-  canvas.onpointercancel = function () {
-    log("CANCEL");
-    stopDrawAndSnap();
-  };
-
-  // buttons
+  /* ===== BUTTONS ===== */
   window.clearC = () => {
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     isDirty = true;
-    sendSnap(true);
+    sendSnap();
   };
 
-  window.skip = () => socket.emit('skip_turn', { room: roomId });
+  window.skip = () => socket.emit("skip_turn", { room: roomId });
 
   window.finish = () => {
-    if (!roomId) { log("FINISH: no roomId"); return; }
-    const img = canvas.toDataURL('image/jpeg', 0.6);
-    socket.emit('final_frame', { room: roomId, image: img });
-    try { tg.close(); } catch (_) {}
+    const img = canvas.toDataURL("image/jpeg", 0.8);
+    socket.emit("final_frame", { room: roomId, image: img });
+    tg.close();
   };
 
-  // FORCE: раз в 2.5 сек отправляем снапшот принудительно,
-  // чтобы snapshot точно появлялся в server log
-  setInterval(() => {
-    if (socket.connected && roomId) sendSnap(true);
-  }, 2500);
+  setInterval(sendSnap, 2500);
 </script>
 
 </body>
