@@ -1,47 +1,48 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Crocodile</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background: #1c1c1e; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+        body { margin: 0; background: #222; overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
         canvas { flex: 1; background: #fff; display: block; }
-        .toolbar { height: 60px; background: #2c2c2e; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-top: 1px solid #444; }
+        .toolbar { height: 60px; background: #333; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
         .hidden { display: none !important; }
         .btn { padding: 8px 12px; border-radius: 8px; border: none; font-weight: bold; color: white; cursor: pointer; }
         .btn-blue { background: #007aff; }
         .btn-red { background: #ff3b30; }
-        .btn-gray { background: #3a3a3c; }
+        .btn-gray { background: #555; }
         
-        /* Debug Console */
-        .debug-panel {
-            position: absolute; bottom: 70px; left: 10px; 
-            color: lime; font-size: 10px; pointer-events: none; 
-            background: rgba(0,0,0,0.5); padding: 5px; border-radius: 4px;
+        /* КОНСОЛЬ ОТЛАДКИ */
+        #debugConsole {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0,0,0,0.7); color: #0f0;
+            font-family: monospace; font-size: 11px;
+            padding: 5px; border-radius: 4px; pointer-events: none;
+            max-width: 200px;
+            z-index: 999;
         }
-        
-        input[type="color"] { width: 35px; height: 35px; border-radius: 50%; border: none; padding: 0; background: none; }
     </style>
 </head>
 <body>
 
+<div id="debugConsole">Initializing...</div>
 <canvas id="canvas"></canvas>
-<div id="debug" class="debug-panel">Init...</div>
 
 <div id="drawerTools" class="toolbar hidden">
     <div style="display:flex; gap:10px; align-items:center;">
-        <input type="color" id="brushColor" value="#000000">
+        <input type="color" id="brushColor" value="#000000" style="width:30px;height:30px;border:none;">
         <button id="clearBtn" class="btn btn-gray">🧹</button>
         <button id="skipBtn" class="btn btn-blue">🔄</button>
     </div>
-    <button id="finishBtn" class="btn btn-red">Готово</button>
+    <button id="finishBtn" class="btn btn-red">🏁</button>
 </div>
 
 <div id="viewerTools" class="toolbar hidden">
-    <div style="color:#888; width:100%; text-align:center;">Вы наблюдаете за игрой</div>
+    <div style="color:#aaa; width:100%; text-align:center;">Режим наблюдателя</div>
 </div>
 
 <script>
@@ -50,14 +51,14 @@
     tg.ready();
 
     const roomId = tg.initDataUnsafe.start_param;
-    const debugEl = document.getElementById('debug');
+    const debugEl = document.getElementById('debugConsole');
     
-    function log(msg) {
-        debugEl.innerText = msg;
-        console.log(msg);
+    function log(txt) {
+        debugEl.innerText = txt;
+        console.log(txt);
     }
-
-    // Показываем инструменты всем (пока нет проверки ID)
+    
+    // Показываем инструменты всем для теста
     document.getElementById('drawerTools').classList.remove('hidden');
 
     const canvas = document.getElementById('canvas');
@@ -67,126 +68,114 @@
     // --- RESIZE ---
     function resize() {
         const h = document.querySelector('.toolbar').offsetHeight;
-        const temp = document.createElement('canvas');
-        temp.width = canvas.width; temp.height = canvas.height;
-        const tCtx = temp.getContext('2d');
-        if (canvas.width > 0) tCtx.drawImage(canvas, 0, 0);
+        const tmp = document.createElement('canvas');
+        tmp.width = canvas.width; tmp.height = canvas.height;
+        if(canvas.width>0) tmp.getContext('2d').drawImage(canvas,0,0);
         
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight - h;
         
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 5;
         ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-        
-        if (temp.width > 0) ctx.drawImage(temp, 0, 0);
+        if(tmp.width>0) ctx.drawImage(tmp,0,0);
     }
     window.addEventListener('resize', resize);
     resize();
 
-    // --- COMPRESSION (ULTRA LIGHT) ---
-    const previewCanvas = document.createElement('canvas');
-    const previewCtx = previewCanvas.getContext('2d');
-
-    function getCompressedSnapshot() {
-        // ОЧЕНЬ МАЛЕНЬКИЙ РАЗМЕР (150px)
-        const MAX_WIDTH = 150;
-        const scale = Math.min(1, MAX_WIDTH / canvas.width);
-        
-        previewCanvas.width = canvas.width * scale;
-        previewCanvas.height = canvas.height * scale;
-        
-        // Фон
-        previewCtx.fillStyle = '#fff';
-        previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
-        
-        previewCtx.drawImage(canvas, 0, 0, previewCanvas.width, previewCanvas.height);
-        
-        // Качество 0.3
-        return previewCanvas.toDataURL('image/jpeg', 0.3);
+    // --- COMPRESSOR ---
+    const pCanvas = document.createElement('canvas');
+    const pCtx = pCanvas.getContext('2d');
+    
+    function getSnapshot() {
+        // Жмем до 150px
+        const scale = Math.min(1, 150 / canvas.width);
+        pCanvas.width = canvas.width * scale;
+        pCanvas.height = canvas.height * scale;
+        pCtx.fillStyle='#fff'; pCtx.fillRect(0,0,pCanvas.width,pCanvas.height);
+        pCtx.drawImage(canvas, 0,0,pCanvas.width,pCanvas.height);
+        return pCanvas.toDataURL('image/jpeg', 0.4);
     }
 
     // --- SOCKET ---
-    log("Connecting socket...");
+    log("Connecting...");
     const socket = io({ 
-        transports: ['websocket', 'polling'],
-        upgrade: false // Пытаемся форсировать polling если вебсокет падает
+        transports: ['polling', 'websocket'], // Разрешаем оба
+        reconnectionDelay: 1000
     });
 
     socket.on('connect', () => {
-        log('Socket Online ' + socket.id);
+        log("Connected: " + socket.id);
         socket.emit('join_room', { room: roomId });
     });
     
-    socket.on('disconnect', () => { log('Socket Disconnected'); });
-    socket.on('connect_error', (e) => { log('Socket Error: ' + e.message); });
+    socket.on('disconnect', () => log("Disconnected"));
+    socket.on('connect_error', (e) => log("Err: " + e.message));
 
     socket.on('draw_data', (d) => {
         ctx.strokeStyle = d.color;
-        ctx.beginPath(); ctx.moveTo(d.px, d.py); ctx.lineTo(d.x, d.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(d.px,d.py); ctx.lineTo(d.x,d.y); ctx.stroke();
     });
-
+    
     socket.on('new_word_data', (d) => {
-        tg.showPopup({ title: 'Новое слово', message: d.word.toUpperCase() });
-        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        tg.showPopup({title:'Слово', message: d.word.toUpperCase()});
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     });
 
-    // --- DRAWING ---
-    let drawing = false, last = {x:0, y:0};
+    // --- INPUT ---
+    let draw = false, last = {x:0, y:0};
     const getPos = (e) => {
         const r = canvas.getBoundingClientRect();
         const t = e.touches ? e.touches[0] : e;
-        return { x: t.clientX - r.left, y: t.clientY - r.top };
+        return { x: t.clientX-r.left, y: t.clientY-r.top };
     }
 
-    const start = (e) => { drawing = true; last = getPos(e); }
+    const start = (e) => { draw=true; last=getPos(e); }
     const move = (e) => {
-        if(!drawing) return;
+        if(!draw) return;
         const p = getPos(e);
         if(e.touches) e.preventDefault();
         
-        const color = document.getElementById('brushColor').value;
-        ctx.strokeStyle = color;
-        ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+        const c = document.getElementById('brushColor').value;
+        ctx.strokeStyle = c;
+        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
         
-        socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: color });
+        socket.emit('draw_step', {room:roomId, px:last.x, py:last.y, x:p.x, y:p.y, color:c});
         isDirty = true;
         last = p;
     }
-    const end = () => { drawing = false; }
+    const end = () => { draw=false; }
 
     canvas.addEventListener('mousedown', start);
     canvas.addEventListener('mousemove', move);
     window.addEventListener('mouseup', end);
-    canvas.addEventListener('touchstart', start, {passive: false});
-    canvas.addEventListener('touchmove', move, {passive: false});
+    canvas.addEventListener('touchstart', start, {passive:false});
+    canvas.addEventListener('touchmove', move, {passive:false});
     window.addEventListener('touchend', end);
 
-    // --- ACTIONS ---
+    // --- BUTTONS ---
     document.getElementById('clearBtn').onclick = () => {
-        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-        isDirty = true;
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        isDirty=true;
     }
     document.getElementById('skipBtn').onclick = () => {
-        tg.showConfirm("Сменить слово?", (ok) => { if(ok) socket.emit('skip_turn', {room: roomId}); });
+        tg.showConfirm("Другое слово?", (ok) => { if(ok) socket.emit('skip_turn', {room:roomId}); });
     }
     document.getElementById('finishBtn').onclick = () => {
-        tg.showConfirm("Отправить рисунок?", (ok) => {
+        tg.showConfirm("Отправить?", (ok) => {
             if(ok) {
                 const img = canvas.toDataURL('image/jpeg', 0.8);
-                socket.emit('final_frame', {room: roomId, image: img});
+                socket.emit('final_frame', {room:roomId, image:img});
                 tg.close();
             }
         });
     }
 
-    // --- PREVIEW SENDER LOOP ---
+    // --- LOOP ---
     setInterval(() => {
-        // Пытаемся отправить, даже если сокет думает, что он оффлайн (для polling)
-        if (isDirty) {
-            const img = getCompressedSnapshot();
-            log("Sending preview (" + img.length + "b)...");
-            
-            socket.emit('preview_snapshot', { room: roomId, image: img });
+        if(isDirty) {
+            const shot = getSnapshot();
+            log("Sending... (" + shot.length + ")");
+            socket.emit('preview_snapshot', {room: roomId, image: shot});
             isDirty = false;
         }
     }, 4000);
