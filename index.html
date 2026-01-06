@@ -86,10 +86,9 @@
   const debugEl = document.getElementById('debug');
 
   function log(msg) {
-    // держим последние строки, чтобы не забивать экран
     const prev = debugEl.innerText || "";
     const lines = (prev + "\n" + msg).trim().split("\n");
-    debugEl.innerText = lines.slice(-8).join("\n");
+    debugEl.innerText = lines.slice(-10).join("\n");
   }
 
   // --- CANVAS ---
@@ -143,21 +142,18 @@
     const data = getCompressedData();
     const xhr = new XMLHttpRequest();
 
-    // ВАЖНО:
-    // 1) без ведущего '/' — тогда с /game будет /game/snapshot (а не /snapshot)
-    // 2) на сервере мы добавили /game/snapshot
-    xhr.open("POST", "snapshot", true);
+    // КЛЮЧЕВОЙ ФИКС:
+    // всегда шлём в /game/snapshot (абсолютный путь), чтобы не зависеть от /game vs /game/
+    xhr.open("POST", "/game/snapshot", true);
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.timeout = 8000;
 
     xhr.onload = () => {
       log(`SNAP ${xhr.status}: ${xhr.responseText || ""}`);
     };
-
     xhr.onerror = () => {
       log("SNAP XHR ERROR (network/proxy)");
     };
-
     xhr.ontimeout = () => {
       log("SNAP TIMEOUT");
     };
@@ -194,7 +190,7 @@
     clearC();
   });
 
-  // --- POINTER EVENTS (Desktop + Mobile) ---
+  // --- POINTER EVENTS ---
   let drawing = false;
   let last = { x: 0, y: 0 };
 
@@ -230,7 +226,6 @@
     isDirty = true;
     last = p;
 
-    // чуть меньше спама в дебаге, но видно, что рисование идёт
     log(`DRAW ${Math.round(p.x)},${Math.round(p.y)}`);
   };
 
