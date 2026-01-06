@@ -37,7 +37,7 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     ping_timeout=60,
     ping_interval=25,
-    # чтобы спокойно пролезали base64 jpeg превью
+    # чтобы base64 jpeg превью пролезал
     max_http_buffer_size=10 * 1024 * 1024,
 )
 
@@ -112,9 +112,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     except Exception:
         return "Bad image"
 
-    logging.info(
-        f"📸 [{source}] Preview update for {chat_id} ({len(encoded)} b64 chars)"
-    )
+    logging.info(f"📸 [{source}] Preview update for {chat_id} ({len(encoded)} b64 chars)")
 
     media = InputMediaPhoto(
         media=BufferedInputFile(image_bytes, filename="preview.jpg"),
@@ -154,7 +152,6 @@ async def join_room(sid, data):
 
 @sio.event
 async def draw_step(sid, data):
-    # ретранслируем шаг рисования
     room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
@@ -162,8 +159,7 @@ async def draw_step(sid, data):
 @sio.event
 async def snapshot(sid, data):
     """
-    Превью через socket.io (вместо HTTP).
-    На клиенте используем ack, поэтому возвращаем строку результата.
+    Превью через socket.io (ACK возвращает строку результата).
     """
     room = str(data.get("room") or "")
     image_data = data.get("image") or ""
@@ -216,48 +212,21 @@ async def final_frame(sid, data):
         game_sessions.pop(chat_id, None)
 
 
-# ================== HTTP SNAPSHOT (fallback) ==================
-
-async def handle_snapshot_upload(request: web.Request):
-    logging.info(
-        f"📥 [HTTP] snapshot hit: {request.method} {request.path} len={request.content_length}"
-    )
-    try:
-        data = await request.json()
-        room = str(data.get("room") or "")
-        image_data = data.get("image") or ""
-        result = await _process_snapshot(room, image_data, source="http")
-        return web.Response(text=result, status=200 if result in ("OK", "Skipped", "Not modified") else 400)
-    except Exception as e:
-        logging.error(f"[HTTP ERR] {e}")
-        return web.Response(text="Error", status=500)
-
+# ================== HTTP (index only) ==================
 
 async def serve_index(request: web.Request):
-    return web.FileResponse("index.html")
+    # анти-кэш чтобы Telegram/Cloudflare не держали старую версию
+    resp = web.FileResponse("index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 # ================== ROUTES ==================
 
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
-
-# fallback HTTP (можно потом убрать)
-app.router.add_post("/game/snapshot", handle_snapshot_upload)
-app.router.add_post("/snapshot", handle_snapshot_upload)
-
-
-async def options_handler(request: web.Request):
-    return web.Response(
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        }
-    )
-
-app.router.add_options("/game/snapshot", options_handler)
-app.router.add_options("/snapshot", options_handler)
 
 
 async def start_socket_server():
@@ -272,7 +241,9 @@ async def start_socket_server():
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
+    v = int(time.time())  # ломаем кэш на уровне Telegram/Cloudflare
+    app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎨 Открыть холст", url=app_link)],
