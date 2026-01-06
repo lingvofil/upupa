@@ -19,19 +19,20 @@ PREVIEW_UPDATE_INTERVAL = 4.0
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 
 GAME_WORDS = [
-    "кот", "дом", "кит", "лес", "лук", "мяч", "нос", "оса", "рак", "сок",
-    "суп", "сыр", "ток", "бык", "вол", "год", "дед", "дуб", "жук", "зуб"
+    "кот", "дом", "лес", "нос", "сыр", "мяч", "сок", "лук", "рот", "жук",
+    "кит", "дуб", "сад", "зуб", "лед", "пес", "пол", "суп", "мак", "вол"
 ]
 
 game_sessions: dict[str, dict] = {}
 
-# Увеличиваем таймауты для медленного интернета
+# Настройки для стабильности через туннели
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
     max_http_buffer_size=5 * 1024 * 1024,
-    ping_timeout=60,
-    ping_interval=25
+    ping_timeout=120,    # Увеличили тайм-аут
+    ping_interval=25,
+    always_connect=True  # Всегда принимать соединение
 )
 
 app = web.Application()
@@ -55,18 +56,16 @@ async def disconnect(sid):
 async def join_room(sid, data):
     room = str(data.get("room"))
     sio.enter_room(sid, room)
-    logging.info(f"[socket] {sid} JOINED {room}")
+    logging.info(f"[socket] JOIN ROOM {room}")
 
 @sio.event
 async def client_test(sid, data):
-    """Тестовый пакет от кнопки TEST"""
-    logging.info(f"✅ [DEBUG] RECEIVED TEST PACKET FROM {sid}: {data}")
+    logging.info(f"🔵 [TEST] Packet received: {data}")
 
 @sio.event
 async def draw_step(sid, data):
+    # Ретранслируем штрихи
     room = str(data.get("room"))
-    # Логируем каждый 10-й штрих, чтобы не спамить, но видеть активность
-    # logging.info(f"[draw] step in {room}") 
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 @sio.event
@@ -75,29 +74,28 @@ async def preview_snapshot(sid, data):
         room = str(data.get("room"))
         chat_id = get_chat_id_from_room(room)
         
-        # === АВТО-ВОССТАНОВЛЕНИЕ СЕССИИ ===
-        # Если сессия потерялась (перезапуск бота), создаем "временную"
+        # Восстановление сессии "на лету", если бот перезапускали
         session = game_sessions.get(chat_id)
         if not session:
-            logging.warning(f"[RECOVERY] Session lost for {chat_id}. Creating new one...")
-            # Пытаемся отправить новое сообщение в чат
+            logging.warning(f"[RECOVERY] Re-creating session for {chat_id}")
+            # Пытаемся отправить новое фото-сообщение
             try:
                 blank = base64.b64decode(BLANK_PNG_B64)
                 new_msg = await bot.send_photo(
                     chat_id=int(chat_id),
                     photo=BufferedInputFile(blank, "b.png"),
-                    caption="🔄 **Сессия восстановлена**"
+                    caption="🔄 **Восстановлено**"
                 )
                 session = {
                     "word": "???",
-                    "drawer_id": 0, # Неизвестен
+                    "drawer_id": 0,
                     "drawer_name": "Игрок",
                     "preview_message_id": new_msg.message_id,
                     "last_preview_time": 0
                 }
                 game_sessions[chat_id] = session
             except Exception as e:
-                logging.error(f"[RECOVERY FAILED] {e}")
+                logging.error(f"[RECOVERY FAIL] {e}")
                 return
 
         now = time.time()
@@ -105,9 +103,9 @@ async def preview_snapshot(sid, data):
             return
 
         msg_id = session.get("preview_message_id")
-        
         img_str = data.get("image", "")
-        logging.info(f"📸 [SNAPSHOT] Recv size: {len(img_str)} bytes for {chat_id}")
+        
+        logging.info(f"📸 [PREVIEW] Processing {len(img_str)} bytes for {chat_id}")
 
         header, encoded = img_str.split(",", 1)
         image_bytes = base64.b64decode(encoded)
@@ -136,7 +134,7 @@ async def skip_turn(sid, data):
     new_w = random.choice(GAME_WORDS)
     if session: session["word"] = new_w
     await sio.emit("new_word_data", {"word": new_w}, room=room)
-    logging.info(f"[GAME] New word: {new_w}")
+    logging.info(f"Skipped word in {room}")
 
 @sio.event
 async def final_frame(sid, data):
@@ -194,7 +192,6 @@ async def handle_start_game(message: types.Message):
     )
     
     blank = base64.b64decode(BLANK_PNG_B64)
-    # Посылаем ФОТО, чтобы можно было редактировать медиа
     prev = await message.answer_photo(
         photo=BufferedInputFile(blank, "b.png"), 
         caption="⏳ *Запуск...*", 
@@ -213,7 +210,6 @@ async def handle_callback(cb: types.CallbackQuery):
     data = cb.data
     chat_id = data.split("_")[-1]
     session = game_sessions.get(chat_id)
-    
     if not session: return await cb.answer("Игра не найдена")
 
     if data.startswith("cr_w_"):
