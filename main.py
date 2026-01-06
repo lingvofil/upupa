@@ -674,7 +674,7 @@ async def handle_chobylo(message: types.Message):
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
 # ================== ХЭНДЛЕР ИГРЫ КРОКОДИЛ ==================
-@router.message(F.text.lower() == "крокодил")
+@router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
     await crocodile.handle_start_game(message)
 
