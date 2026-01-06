@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     BufferedInputFile,
     InputMediaPhoto,
+    InputMediaAnimation,
 )
 
 from config import bot
@@ -23,10 +24,12 @@ WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-PREVIEW_UPDATE_INTERVAL = 2.5  # сек
+# Как часто разрешаем менять превью в чате (сек)
+PREVIEW_UPDATE_INTERVAL = 2.5
 
-BLANK_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+# 1x1 прозрачный GIF (минимальный, чтобы send_animation работал сразу)
+BLANK_GIF_B64 = (
+    "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
 )
 
 GAME_WORDS = ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
@@ -42,7 +45,6 @@ sio = socketio.AsyncServer(
     max_http_buffer_size=10 * 1024 * 1024,
 )
 
-# Лимит 20MB
 app = web.Application(client_max_size=20 * 1024 * 1024)
 sio.attach(app)
 
@@ -52,23 +54,26 @@ def get_chat_id_from_room(room: str) -> str:
     room = tg start_param
     пример: m4611982229 -> -4611982229
     """
-    room = str(room or "")
+    room = str(room)
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
     return room
 
 
 async def _ensure_session(chat_id: str) -> dict | None:
-    """Если сессии нет — попробуем создать превью-сообщение и восстановить."""
+    """
+    Если сессии нет — попробуем создать превью-сообщение (как GIF)
+    и восстановить.
+    """
     session = game_sessions.get(chat_id)
     if session:
         return session
 
     try:
-        blank = base64.b64decode(BLANK_PNG_B64)
-        new_msg = await bot.send_photo(
+        blank = base64.b64decode(BLANK_GIF_B64)
+        new_msg = await bot.send_animation(
             int(chat_id),
-            BufferedInputFile(blank, "b.png"),
+            BufferedInputFile(blank, "blank.gif"),
             caption="🔄 Reload",
         )
         session = {
@@ -85,10 +90,26 @@ async def _ensure_session(chat_id: str) -> dict | None:
         return None
 
 
+def _decode_data_url(image_data: str) -> tuple[str, bytes] | None:
+    """
+    Возвращает (mime, bytes) из dataURL: data:image/gif;base64,...
+    """
+    try:
+        header, encoded = image_data.split(",", 1)
+        raw = base64.b64decode(encoded)
+        # header: data:image/gif;base64
+        mime = "application/octet-stream"
+        if header.startswith("data:") and ";base64" in header:
+            mime = header.split(";", 1)[0].replace("data:", "").strip()
+        return mime, raw
+    except Exception:
+        return None
+
+
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     """
-    Универсальная обработка превью.
-    source: 'socket' / 'http' — чисто для логов.
+    Обработка превью.
+    Сейчас клиент шлёт dataURL GIF-анимации (image/gif).
     """
     if not room or not image_data:
         return "Bad Request"
@@ -98,7 +119,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
-    # Throttling
     now = time.time()
     if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
         return "Skipped"
@@ -107,30 +127,41 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not msg_id:
         return "No preview_message_id"
 
-    try:
-        _header, encoded = image_data.split(",", 1)
-        image_bytes = base64.b64decode(encoded)
-    except Exception:
+    decoded = _decode_data_url(image_data)
+    if not decoded:
         return "Bad image"
 
-    logging.info(f"📸 [{source}] Preview update for {chat_id} (b64={len(encoded)} chars)")
+    mime, image_bytes = decoded
 
-    media = InputMediaPhoto(
-        media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-        caption=f"🎨 **LIVE:** {session.get('drawer_name', 'Player')}...",
-        parse_mode="Markdown",
-    )
+    # Логи компактные
+    logging.info(f"📸 [{source}] Preview update for {chat_id} mime={mime} bytes={len(image_bytes)}")
 
     try:
+        # Если это GIF — шлём как animation (будет "живое" превью)
+        if mime == "image/gif":
+            media = InputMediaAnimation(
+                media=BufferedInputFile(image_bytes, filename="preview.gif"),
+                caption=f"🎨 LIVE: {session['drawer_name']}...",
+            )
+        else:
+            # fallback на фото
+            media = InputMediaPhoto(
+                media=BufferedInputFile(image_bytes, filename="preview.jpg"),
+                caption=f"🎨 LIVE: {session['drawer_name']}...",
+            )
+
         await bot.edit_message_media(
             media=media,
             chat_id=int(chat_id),
             message_id=msg_id,
         )
+
         session["last_preview_time"] = now
         return "OK"
+
     except Exception as e:
-        if "message is not modified" in str(e).lower():
+        msg = str(e).lower()
+        if "message is not modified" in msg:
             session["last_preview_time"] = now
             return "Not modified"
         logging.error(f"[edit_message_media] {e}", exc_info=True)
@@ -145,38 +176,33 @@ async def connect(sid, environ):
 
 
 @sio.event
-async def disconnect(sid):
-    logging.info(f"[socket] DISCONNECT {sid}")
-
-
-@sio.event
 async def join_room(sid, data):
-    room = str((data or {}).get("room") or "")
+    room = str(data.get("room"))
     sio.enter_room(sid, room)
     logging.info(f"[socket] JOIN {room}")
 
 
 @sio.event
 async def draw_step(sid, data):
-    room = str((data or {}).get("room") or "")
-    logging.info(f"[socket] draw_step room={room}")
+    # ретранслируем в webapp другим участникам
+    room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
 
 @sio.event
 async def snapshot(sid, data):
     """
-    Превью через socket.io (ACK возвращает строку результата).
+    Клиент шлёт gif dataURL.
     """
-    room = str((data or {}).get("room") or "")
-    image_data = (data or {}).get("image") or ""
+    room = str(data.get("room") or "")
+    image_data = data.get("image") or ""
     logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
     return await _process_snapshot(room, image_data, source="socket")
 
 
 @sio.event
 async def skip_turn(sid, data):
-    room = str((data or {}).get("room") or "")
+    room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
 
     session = game_sessions.get(chat_id)
@@ -189,16 +215,22 @@ async def skip_turn(sid, data):
 
 @sio.event
 async def final_frame(sid, data):
-    room = str((data or {}).get("room") or "")
+    """
+    Финальный кадр шлём в чат как обычное фото (большое).
+    """
+    room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
     if not session:
         return
 
     try:
-        _header, encoded = (data or {}).get("image", "").split(",", 1)
-        image_bytes = base64.b64decode(encoded)
+        decoded = _decode_data_url(data.get("image", ""))
+        if not decoded:
+            return
+        mime, image_bytes = decoded
 
+        # удаляем превью-сообщение
         if session.get("preview_message_id"):
             try:
                 await bot.delete_message(int(chat_id), session["preview_message_id"])
@@ -208,8 +240,7 @@ async def final_frame(sid, data):
         await bot.send_photo(
             chat_id=int(chat_id),
             photo=BufferedInputFile(image_bytes, filename="result.jpg"),
-            caption=f"🏁 **Финиш!** Слово: {session.get('word', '???')}",
-            parse_mode="Markdown",
+            caption=f"🏁 Финиш! Слово: {session['word']}",
         )
 
     except Exception as e:
@@ -219,7 +250,7 @@ async def final_frame(sid, data):
         game_sessions.pop(chat_id, None)
 
 
-# ================== HTTP (index only) ==================
+# ================== HTTP ==================
 
 async def serve_index(request: web.Request):
     resp = web.FileResponse("index.html")
@@ -230,7 +261,6 @@ async def serve_index(request: web.Request):
 
 
 # ================== ROUTES ==================
-
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
 
@@ -247,7 +277,7 @@ async def start_socket_server():
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
-    v = int(time.time())  # ломаем кэш на уровне Telegram/Cloudflare
+    v = int(time.time())
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
 
     return InlineKeyboardMarkup(
@@ -271,9 +301,10 @@ async def handle_start_game(message: types.Message):
         parse_mode="Markdown",
     )
 
-    blank = base64.b64decode(BLANK_PNG_B64)
-    prev = await message.answer_photo(
-        BufferedInputFile(blank, "b.png"),
+    # создаём превью как анимацию (пустой GIF)
+    blank = base64.b64decode(BLANK_GIF_B64)
+    prev = await message.answer_animation(
+        BufferedInputFile(blank, "blank.gif"),
         caption="⏳ *Запуск...*",
         parse_mode="Markdown",
     )
@@ -315,10 +346,10 @@ async def check_answer(msg: types.Message) -> bool:
     if not sess or not msg.text:
         return False
 
-    if msg.text.strip().lower() == str(sess.get("word", "")).strip().lower():
-        # ведущий не должен сам угадывать — и не должен блокировать другие команды
-        if msg.from_user and msg.from_user.id == sess.get("drawer_id"):
-            return False
+    if msg.text.strip().lower() == sess["word"]:
+        # ведущий не должен угадывать
+        if msg.from_user.id == sess["drawer_id"]:
+            return True
 
         await msg.answer(
             f"🎉 **{msg.from_user.full_name}** победил! Слово: **{sess['word']}**",
