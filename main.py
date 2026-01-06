@@ -11,13 +11,11 @@ from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
 from aiogram.filters import CommandStart, Filter
 from aiogram.filters.command import Command
 import json
-import nest_asyncio
 from datetime import datetime, timedelta
 import re
 from typing import Dict
 import requests
 
-nest_asyncio.apply()
 # ================== БЛОК 1: Конфигурация ==================
 from config import (
     bot, dp, router, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
@@ -685,13 +683,6 @@ async def croc_callback(callback: types.CallbackQuery):
         await callback.answer()
     else:
         await crocodile.handle_callback(callback)
-
-# В общем хендлере сообщений
-@router.message()
-async def process_all(message: types.Message):
-    # Пытаемся проверить, не ответ ли это в Крокодиле
-    if await crocodile.check_answer(message):
-        return
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
