@@ -14,25 +14,30 @@ BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
-PREVIEW_UPDATE_INTERVAL = 3.0 
 
-# Белый квадрат 1x1 для инициализации
+# Интервал обновления превью (сек)
+PREVIEW_UPDATE_INTERVAL = 4.0 
+
+# Пустой PNG 1x1 для старта
 BLANK_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 
 # ================== ХРАНИЛИЩЕ ==================
 game_sessions: dict[str, dict] = {}
 
 # ================== SOCKET.IO ==================
+# Увеличиваем буфер на всякий случай, хотя мы будем сжимать на клиенте
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
     cors_allowed_origins="*",
-    max_http_buffer_size=10 * 1024 * 1024,
+    max_http_buffer_size=10 * 1024 * 1024, 
+    ping_timeout=60,
 )
+
 app = web.Application()
 sio.attach(app)
 
 def get_chat_id_from_room(room: str) -> str:
-    """Преобразует roomID (m12345) в chatID (-12345)"""
+    """Универсальное получение ID чата из комнаты"""
     room = str(room)
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -51,29 +56,29 @@ async def draw_step(sid, data):
 
 @sio.event
 async def preview_snapshot(sid, data):
-    """ОБНОВЛЕНИЕ КАРТИНКИ В ЧАТЕ"""
+    """Прием сжатого превью"""
     try:
         room = str(data.get("room"))
         chat_id = get_chat_id_from_room(room)
         session = game_sessions.get(chat_id)
 
         if not session:
-            logging.warning(f"[DEBUG] SESSION NOT FOUND for chat_id={chat_id}. Room={room}")
             return
 
-        # Лимит обновлений
+        # Троттлинг (защита от частых обновлений)
         now = time.time()
         if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
             return
 
         msg_id = session.get("preview_message_id")
         if not msg_id:
-            logging.warning(f"[DEBUG] No preview_message_id for {chat_id}")
             return
 
-        # Декодируем и обновляем
-        logging.info(f"[DEBUG] Updating preview for {chat_id}...")
-        header, encoded = data["image"].split(",", 1)
+        # Логируем размер пакета (для отладки)
+        img_str = data["image"]
+        # logging.info(f"[DEBUG] Recv snapshot size: {len(img_str)} bytes")
+
+        header, encoded = img_str.split(",", 1)
         image_bytes = base64.b64decode(encoded)
         
         media = InputMediaPhoto(
@@ -90,7 +95,7 @@ async def preview_snapshot(sid, data):
 
     except Exception as e:
         if "message is not modified" in str(e):
-            pass # Это нормально, если картинка не изменилась
+            pass
         else:
             logging.error(f"[DEBUG] Preview Error: {e}")
 
@@ -104,7 +109,6 @@ async def skip_turn(sid, data):
         new_word = await generate_game_word()
         session["word"] = new_word
         await sio.emit("new_word_data", {"word": new_word}, room=room)
-        logging.info(f"[GAME] Word skipped. New: {new_word}")
 
 @sio.event
 async def final_frame(sid, data):
@@ -133,7 +137,7 @@ async def final_frame(sid, data):
     finally:
         game_sessions.pop(chat_id, None)
 
-# ================== WEB & LOGIC ==================
+# ================== WEB SERVER ==================
 async def serve_index(request: web.Request):
     return web.FileResponse("index.html")
 
@@ -144,24 +148,27 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Socket server running at {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
+    logging.info(f"Socket server running at http://{SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
+# ================== GAME LOGIC ==================
 async def generate_game_word() -> str:
     try:
-        # model.generate_content... (раскомментируйте, если есть API)
-        # return "слово"
+        # Если есть модель:
         def sync_call():
-             return model.generate_content("Придумай существительное для игры Крокодил")
+             return model.generate_content("Придумай одно простое существительное для игры Крокодил.")
         response = await asyncio.to_thread(sync_call)
         w = response.text.strip().lower().split()[0]
-        return "".join(filter(str.isalpha, w))
+        return "".join(filter(str.isalpha, w)) or "солнце"
     except:
-        return random.choice(["носорог", "вертолет", "пирамида", "ананас"])
+        return random.choice(["арбуз", "дом", "дерево", "машина", "кот"])
 
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
-    # Важно: m-префикс только для групп (отрицательные ID)
-    safe_chat_id = str(chat_id).replace("-", "m")
-    app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={safe_chat_id}"
+    # Генерируем ссылку. Для групп добавляем префикс 'm' (minus), для лички - нет.
+    # Если chat_id отрицательный -> m12345
+    # Если chat_id положительный -> 12345
+    
+    room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
+    app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}"
     
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -178,15 +185,15 @@ async def handle_start_game(message: types.Message):
     word = await generate_game_word()
     
     await message.answer(
-        f"🎮 **ИГРА НАЧАЛАСЬ!**\nВедущий: {message.from_user.full_name}",
+        f"🎮 **КРОКОДИЛ**\nВедущий: {message.from_user.full_name}",
         reply_markup=get_game_keyboard(chat_id),
     )
     
-    # Отправляем белый квадрат как фото
+    # Отправляем белый квадрат (PlaceHolder)
     blank_bytes = base64.b64decode(BLANK_PNG_B64)
     preview_msg = await message.answer_photo(
         photo=BufferedInputFile(blank_bytes, filename="blank.png"),
-        caption="⏳ *Холст готов...*",
+        caption="⏳ *Подготовка холста...*",
         parse_mode="Markdown"
     )
 
@@ -197,7 +204,6 @@ async def handle_start_game(message: types.Message):
         "preview_message_id": preview_msg.message_id,
         "last_preview_time": 0
     }
-    logging.info(f"New session created for {chat_id}")
 
 async def handle_callback(callback: types.CallbackQuery):
     data = callback.data
@@ -205,7 +211,7 @@ async def handle_callback(callback: types.CallbackQuery):
     session = game_sessions.get(chat_id)
 
     if not session:
-        return await callback.answer("Игра не найдена (перезапустите бота)")
+        return await callback.answer("Игра не активна")
 
     if callback.from_user.id != session["drawer_id"]:
         return await callback.answer("Только ведущий!", show_alert=True)
@@ -215,10 +221,11 @@ async def handle_callback(callback: types.CallbackQuery):
     elif data.startswith("cr_n_"):
         new_word = await generate_game_word()
         session["word"] = new_word
-        await callback.answer(f"Новое слово: {new_word.upper()}", show_alert=True)
-        # room ID для сокета: mID для групп, ID для лички
-        room_id = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
-        await sio.emit("new_word_data", {"word": new_word}, room=room_id)
+        await callback.answer(f"Новое: {new_word.upper()}", show_alert=True)
+        
+        # Room ID logic
+        room_param = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
+        await sio.emit("new_word_data", {"word": new_word}, room=room_param)
 
 async def check_answer(message: types.Message) -> bool:
     chat_id = str(message.chat.id)
@@ -231,7 +238,6 @@ async def check_answer(message: types.Message) -> bool:
 
         await message.answer(f"🎉 **{message.from_user.full_name}** угадал! Это **{session['word'].upper()}**")
         
-        # Удаляем превью и сессию
         if session.get("preview_message_id"):
             try: await bot.delete_message(message.chat.id, session["preview_message_id"])
             except: pass
