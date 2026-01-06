@@ -21,7 +21,7 @@ WEB_APP_SHORT_NAME = "upupadile"
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-PREVIEW_UPDATE_INTERVAL = 2.5  # сек (троттлинг превью)
+PREVIEW_UPDATE_INTERVAL = 2.5  # сек
 
 BLANK_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
@@ -37,6 +37,8 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     ping_timeout=60,
     ping_interval=25,
+    # чтобы спокойно пролезали base64 jpeg превью
+    max_http_buffer_size=10 * 1024 * 1024,
 )
 
 # Лимит 20MB
@@ -53,6 +55,87 @@ def get_chat_id_from_room(room: str) -> str:
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
     return room
+
+
+async def _ensure_session(chat_id: str) -> dict | None:
+    """Если сессии нет — попробуем создать превью-сообщение и восстановить."""
+    session = game_sessions.get(chat_id)
+    if session:
+        return session
+
+    try:
+        blank = base64.b64decode(BLANK_PNG_B64)
+        new_msg = await bot.send_photo(
+            int(chat_id),
+            BufferedInputFile(blank, "b.png"),
+            caption="🔄 Reload",
+        )
+        session = {
+            "word": "???",
+            "drawer_id": 0,
+            "drawer_name": "Player",
+            "preview_message_id": new_msg.message_id,
+            "last_preview_time": 0,
+        }
+        game_sessions[chat_id] = session
+        return session
+    except Exception as e:
+        logging.error(f"[ensure_session] failed: {e}")
+        return None
+
+
+async def _process_snapshot(room: str, image_data: str, source: str) -> str:
+    """
+    Универсальная обработка превью.
+    source: 'socket' / 'http' — чисто для логов.
+    """
+    if not room or not image_data:
+        return "Bad Request"
+
+    chat_id = get_chat_id_from_room(room)
+    session = await _ensure_session(chat_id)
+    if not session:
+        return "No session"
+
+    # Throttling
+    now = time.time()
+    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
+        return "Skipped"
+
+    msg_id = session.get("preview_message_id")
+    if not msg_id:
+        return "No preview_message_id"
+
+    try:
+        header, encoded = image_data.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+    except Exception:
+        return "Bad image"
+
+    logging.info(
+        f"📸 [{source}] Preview update for {chat_id} ({len(encoded)} b64 chars)"
+    )
+
+    media = InputMediaPhoto(
+        media=BufferedInputFile(image_bytes, filename="preview.jpg"),
+        caption=f"🎨 **LIVE:** {session['drawer_name']}...",
+        parse_mode="Markdown",
+    )
+
+    try:
+        await bot.edit_message_media(
+            media=media,
+            chat_id=int(chat_id),
+            message_id=msg_id,
+        )
+        session["last_preview_time"] = now
+        return "OK"
+    except Exception as e:
+        if "message is not modified" in str(e).lower():
+            session["last_preview_time"] = now
+            return "Not modified"
+        logging.error(f"[edit_message_media] {e}")
+        return "TG error"
 
 
 # ================== SOCKET EVENTS ==================
@@ -74,6 +157,18 @@ async def draw_step(sid, data):
     # ретранслируем шаг рисования
     room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
+
+
+@sio.event
+async def snapshot(sid, data):
+    """
+    Превью через socket.io (вместо HTTP).
+    На клиенте используем ack, поэтому возвращаем строку результата.
+    """
+    room = str(data.get("room") or "")
+    image_data = data.get("image") or ""
+    logging.info(f"📥 [socket] snapshot event room={room} size={len(image_data)}")
+    return await _process_snapshot(room, image_data, source="socket")
 
 
 @sio.event
@@ -101,7 +196,6 @@ async def final_frame(sid, data):
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
-        # удаляем preview, если есть
         if session.get("preview_message_id"):
             try:
                 await bot.delete_message(chat_id, session["preview_message_id"])
@@ -122,79 +216,20 @@ async def final_frame(sid, data):
         game_sessions.pop(chat_id, None)
 
 
-# ================== HTTP SNAPSHOT ==================
+# ================== HTTP SNAPSHOT (fallback) ==================
 
 async def handle_snapshot_upload(request: web.Request):
-    """
-    Принимает превью-картинку через POST и обновляет preview_message.
-    """
-    # Важно: логируем вход сразу, чтобы увидеть, что запрос ДОШЁЛ
     logging.info(
         f"📥 [HTTP] snapshot hit: {request.method} {request.path} len={request.content_length}"
     )
-
     try:
         data = await request.json()
-        room = data.get("room")
-        image_data = data.get("image")
-
-        if not room or not image_data:
-            return web.Response(text="Bad Request", status=400)
-
-        chat_id = get_chat_id_from_room(room)
-        session = game_sessions.get(chat_id)
-
-        # --- Auto Recovery (если потеряли сессию, но клиент шлёт превью) ---
-        if not session:
-            try:
-                blank = base64.b64decode(BLANK_PNG_B64)
-                new_msg = await bot.send_photo(
-                    int(chat_id),
-                    BufferedInputFile(blank, "b.png"),
-                    caption="🔄 Reload",
-                )
-                session = {
-                    "word": "???",
-                    "drawer_id": 0,
-                    "drawer_name": "Player",
-                    "preview_message_id": new_msg.message_id,
-                    "last_preview_time": 0,
-                }
-                game_sessions[chat_id] = session
-            except Exception as e:
-                logging.error(f"[HTTP] Auto Recovery failed: {e}")
-                return web.Response(text="No session", status=404)
-
-        # Throttling
-        now = time.time()
-        if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
-            return web.Response(text="Skipped", status=200)
-
-        msg_id = session.get("preview_message_id")
-        header, encoded = image_data.split(",", 1)
-        image_bytes = base64.b64decode(encoded)
-
-        logging.info(f"📸 [HTTP] Preview update for {chat_id} ({len(encoded)} b64 chars)")
-
-        media = InputMediaPhoto(
-            media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-            caption=f"🎨 **LIVE:** {session['drawer_name']}...",
-            parse_mode="Markdown",
-        )
-
-        await bot.edit_message_media(
-            media=media,
-            chat_id=int(chat_id),
-            message_id=msg_id,
-        )
-
-        session["last_preview_time"] = now
-        return web.Response(text="OK", status=200)
-
+        room = str(data.get("room") or "")
+        image_data = data.get("image") or ""
+        result = await _process_snapshot(room, image_data, source="http")
+        return web.Response(text=result, status=200 if result in ("OK", "Skipped", "Not modified") else 400)
     except Exception as e:
-        # часто бывает при одинаковых данных
-        if "message is not modified" not in str(e).lower():
-            logging.error(f"[HTTP ERR] {e}")
+        logging.error(f"[HTTP ERR] {e}")
         return web.Response(text="Error", status=500)
 
 
@@ -204,15 +239,14 @@ async def serve_index(request: web.Request):
 
 # ================== ROUTES ==================
 
-# WebApp (и /game и /game/)
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
 
-# Snapshot endpoints: основной /game/snapshot + запасной /snapshot
+# fallback HTTP (можно потом убрать)
 app.router.add_post("/game/snapshot", handle_snapshot_upload)
 app.router.add_post("/snapshot", handle_snapshot_upload)
 
-# CORS for snapshot
+
 async def options_handler(request: web.Request):
     return web.Response(
         headers={
