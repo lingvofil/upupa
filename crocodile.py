@@ -7,7 +7,7 @@ import random
 import time
 import json
 import html
-from typing import Dict, Optional, Set
+from typing import Dict, Set, Optional
 
 from aiohttp import web
 import socketio
@@ -29,9 +29,6 @@ SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
 PREVIEW_UPDATE_INTERVAL = 2.5
-BUMP_INTERVAL = 90
-LEADERBOARD_TOP = 10
-
 WORDS_FILE = os.path.join(os.path.dirname(__file__), "crocowords.txt")
 SCORES_FILE = os.path.join(os.path.dirname(__file__), "crocodile_scores.json")
 
@@ -43,12 +40,8 @@ game_sessions: dict[str, dict] = {}
 _scores: Dict[str, Dict[str, dict]] = {}
 
 # ================= SOCKET =================
-sio = socketio.AsyncServer(
-    async_mode="aiohttp",
-    cors_allowed_origins="*",
-)
-
-app = web.Application(client_max_size=20 * 1024 * 1024)
+sio = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
+app = web.Application()
 sio.attach(app)
 
 # ================= UTIL =================
@@ -78,28 +71,22 @@ def format_leaderboard(chat_id: str, title: str) -> str:
     table = _scores.get(str(chat_id), {})
     if not table:
         return f"{title}\n(пока пусто)"
-
-    items = sorted(table.items(), key=lambda x: x[1]["pts"], reverse=True)[:LEADERBOARD_TOP]
+    items = sorted(table.items(), key=lambda x: x[1]["pts"], reverse=True)
     lines = [title]
-    for i, (uid, d) in enumerate(items, 1):
+    for i, (uid, d) in enumerate(items[:10], 1):
         lines.append(
             f'{i}. <a href="tg://user?id={uid}">{html.escape(d["name"])}</a> — <b>{d["pts"]}</b>'
         )
     return "\n".join(lines)
 
-# ================= SESSION =================
-async def _stop_session(chat_id: str):
-    sess = game_sessions.pop(chat_id, None)
-    if not sess:
-        return
-    task = sess.get("bump_task")
-    if task:
-        task.cancel()
-    if sess.get("preview_message_id"):
-        try:
-            await bot.delete_message(int(chat_id), sess["preview_message_id"])
-        except Exception:
-            pass
+# ================= KEYBOARD =================
+def final_keyboard(chat_id: str, likes: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"❤️ {likes}", callback_data=f"like_{chat_id}")],
+            [InlineKeyboardButton(text="🎨 Хочу рисовать", callback_data=f"draw_{chat_id}")],
+        ]
+    )
 
 # ================= SNAPSHOT =================
 async def _process_snapshot(room: str, image_data: str):
@@ -108,11 +95,10 @@ async def _process_snapshot(room: str, image_data: str):
     if not sess:
         return
 
-    header, encoded = image_data.split(",", 1)
+    _, encoded = image_data.split(",", 1)
     img = base64.b64decode(encoded)
 
-    sess["last_preview_bytes"] = img
-    sess["final_image_bytes"] = img  # ← КЛЮЧЕВОЕ
+    sess["final_image_bytes"] = img
 
     now = time.time()
     if now - sess["last_preview_time"] < PREVIEW_UPDATE_INTERVAL:
@@ -127,14 +113,6 @@ async def _process_snapshot(room: str, image_data: str):
         ),
     )
     sess["last_preview_time"] = now
-
-# ================= LIKE =================
-def like_keyboard(chat_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{chat_id}")]
-        ]
-    )
 
 # ================= SOCKET EVENTS =================
 @sio.event
@@ -162,10 +140,10 @@ async def handle_start_game(message: types.Message):
         "drawer_name": message.from_user.full_name,
         "preview_message_id": prev.message_id,
         "last_preview_time": 0,
-        "last_preview_bytes": blank,
         "final_image_bytes": None,
         "likes": set(),
-        "bump_task": None,
+        "final_message_id": None,
+        "claimed_by": None,
     }
 
 async def check_answer(msg: types.Message) -> bool:
@@ -186,12 +164,13 @@ async def check_answer(msg: types.Message) -> bool:
 
     img = sess.get("final_image_bytes")
     if img:
-        await bot.send_photo(
+        msg_final = await bot.send_photo(
             int(cid),
             BufferedInputFile(img, "final.jpg"),
             caption=f"🎨 Хуйдожник: {sess['drawer_name']}",
-            reply_markup=like_keyboard(cid),
+            reply_markup=final_keyboard(cid, 0),
         )
+        sess["final_message_id"] = msg_final.message_id
 
     await bot.send_message(
         int(cid),
@@ -199,24 +178,51 @@ async def check_answer(msg: types.Message) -> bool:
         parse_mode="HTML",
     )
 
-    await _stop_session(cid)
     return True
 
+# ================= CALLBACK =================
 async def handle_callback(cb: types.CallbackQuery):
-    if not cb.data.startswith("like_"):
-        return
-
-    cid = cb.data.split("_", 1)[1]
+    data = cb.data
+    cid = data.split("_", 1)[1]
     sess = game_sessions.get(cid)
     if not sess:
-        return await cb.answer("Игра уже закончена")
+        return await cb.answer("Игра завершена")
 
-    uid = cb.from_user.id
-    if uid in sess["likes"]:
-        return await cb.answer("Ты уже лайкал")
+    # LIKE
+    if data.startswith("like_"):
+        uid = cb.from_user.id
+        if uid in sess["likes"]:
+            return await cb.answer("Ты уже лайкал")
 
-    sess["likes"].add(uid)
-    await cb.message.answer(
-        f"{cb.from_user.full_name} поставил лайк хуйдожнику"
-    )
-    await cb.answer("❤️")
+        sess["likes"].add(uid)
+        await bot.edit_message_reply_markup(
+            int(cid),
+            sess["final_message_id"],
+            reply_markup=final_keyboard(cid, len(sess["likes"])),
+        )
+        await cb.message.answer(
+            f"{cb.from_user.full_name} поставил лайк хуйдожнику"
+        )
+        return await cb.answer("❤️")
+
+    # CLAIM DRAWER
+    if data.startswith("draw_"):
+        if sess["claimed_by"]:
+            return await cb.answer("Уже занято")
+
+        sess["claimed_by"] = cb.from_user.id
+
+        await cb.message.answer(
+            f"🎨 **{cb.from_user.full_name}** теперь рисует!",
+            parse_mode="Markdown",
+        )
+
+        await handle_start_game(
+            types.Message(
+                chat=cb.message.chat,
+                from_user=cb.from_user,
+                message_id=0,
+                date=None,
+            )
+        )
+        return await cb.answer("Ты ведущий")
