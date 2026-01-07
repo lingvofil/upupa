@@ -192,7 +192,7 @@ async def handle_callback(cb: types.CallbackQuery):
     if data.startswith("like_"):
         uid = cb.from_user.id
         if uid in sess["likes"]:
-            return await cb.answer("Ты уже лайкал")
+            return await cb.answer("Ты уже лайкал уебак")
 
         sess["likes"].add(uid)
         await bot.edit_message_reply_markup(
