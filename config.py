@@ -1,294 +1,295 @@
-#config.py
-import google.generativeai as genai
-from google.api_core import exceptions
-import logging
-from aiogram import Bot, Dispatcher, Router
-import requests
+# =========================
+# config.py (FULL, FIXED)
+# =========================
+
+import os
+import time
 import json
 import random
-from typing import List, Dict, Any, Optional, Union
-from gigachat import GigaChat
-import os
+import logging
+from typing import List, Dict, Optional, Any
 
-# === БЛОК ИМПОРТА КЛЮЧЕЙ ===
+from aiogram import Bot, Dispatcher, Router
+
+import google.generativeai as genai
+from google.api_core import exceptions
+
+from gigachat import GigaChat
+import requests
+
+# =========================
+# KEYS
+# =========================
 try:
     from config_private import (
         API_TOKEN,
-        GENERIC_API_KEY3, GENERIC_API_KEY2, GENERIC_API_KEY4,
-        GENERIC_API_KEY5, GENERIC_API_KEY6, GENERIC_API_KEY,
-        OPENROUTER_API_KEY,
+        GENERIC_API_KEY, GENERIC_API_KEY2, GENERIC_API_KEY3,
+        GENERIC_API_KEY4, GENERIC_API_KEY5, GENERIC_API_KEY6,
         GOOGLE_API_KEY, GOOGLE_API_KEY2,
+        OPENROUTER_API_KEY,
         giphy_api_key,
         KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY,
         GIGACHAT_API_KEY, GIGACHAT_CLIENT_ID,
         CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN,
-        HUGGINGFACE_TOKEN 
+        HUGGINGFACE_TOKEN,
     )
 except ImportError:
-    print("Warning: config_private.py not found. Attempting to load from environment variables.")
-    API_TOKEN = os.getenv('API_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
-    GENERIC_API_KEY = os.getenv('GENERIC_API_KEY', 'YOUR_GEMINI_KEY_RUSIC_HERE')
-    # Заглушки для локального запуска
-    GENERIC_API_KEY2 = os.getenv('GENERIC_API_KEY2', None)
-    GENERIC_API_KEY3 = os.getenv('GENERIC_API_KEY3', None)
-    GENERIC_API_KEY4 = None
-    GENERIC_API_KEY5 = None
-    GENERIC_API_KEY6 = None
-    GOOGLE_API_KEY = None
-    GOOGLE_API_KEY2 = None
-    HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN', None)
+    raise RuntimeError("config_private.py not found")
 
-# === ПУЛ КЛЮЧЕЙ GEMINI ===
-GEMINI_KEYS_POOL = [
-    key for key in [
-        GENERIC_API_KEY, GENERIC_API_KEY2, GENERIC_API_KEY3,
-        GENERIC_API_KEY4, GENERIC_API_KEY5, GENERIC_API_KEY6,
-        GOOGLE_API_KEY, GOOGLE_API_KEY2
-    ] if key
+# =========================
+# GEMINI KEYS POOL
+# =========================
+GEMINI_KEYS_POOL: List[str] = [
+    k for k in [
+        GENERIC_API_KEY,
+        GENERIC_API_KEY2,
+        GENERIC_API_KEY3,
+        GENERIC_API_KEY4,
+        GENERIC_API_KEY5,
+        GENERIC_API_KEY6,
+        GOOGLE_API_KEY,
+        GOOGLE_API_KEY2,
+    ] if k
 ]
 
 if not GEMINI_KEYS_POOL:
-    print("CRITICAL WARNING: No Gemini API keys found!")
-    GEMINI_KEYS_POOL = ["dummy_key"]
+    raise RuntimeError("CRITICAL: No Gemini API keys provided")
 
-SEARCH_ENGINE_ID = "33026288e406447ea"
-GIGACHAT_MODEL = 'GigaChat-2'
-GIGACHAT_MODEL_PRO = 'GigaChat-2-Pro'
-GIGACHAT_MODEL_MAX = 'GigaChat-2-Max'
-
-# === ГЛОБАЛЬНЫЕ НАСТРОЙКИ ЧАТОВ ===
+# =========================
+# GLOBAL CONSTANTS
+# =========================
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
 
-# === НАСТРОЙКА GEMINI ===
-genai.configure(api_key=random.choice(GEMINI_KEYS_POOL))
+SEARCH_ENGINE_ID = "33026288e406447ea"
 
-# 1. Очередь для ВСЕХ чатов (БЕЗ 2.5 Pro)
+GIGACHAT_MODEL = "GigaChat-2"
+GIGACHAT_MODEL_PRO = "GigaChat-2-Pro"
+GIGACHAT_MODEL_MAX = "GigaChat-2-Max"
+
+# =========================
+# MODELS (ONLY REAL)
+# =========================
 MODEL_QUEUE_DEFAULT = [
-    'gemini-2.0-flash',                      # 15 RPM
-    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM    
-    'gemini-2.5-flash-preview-09-2025',      # 10 RPM
-    'gemini-2.5-flash',                      # 10 RPM
-    'gemini-2.5-flash-lite',                 # 15 RPM
-    'gemini-2.0-flash-lite'                  # 30 RPM
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
 ]
 
-# 2. Очередь ТОЛЬКО для специального чата (С 2.5 Pro)
 MODEL_QUEUE_SPECIAL = [
-    'gemini-2.5-flash-lite-preview-09-2025',# 15 RPM
-    'gemini-3-flash-preview',
-    'gemini-2.5-pro',                        # 2 RPM - ставим первой
+    "gemini-2.5-pro",
 ] + MODEL_QUEUE_DEFAULT
 
-class FallbackChatSession:
-    """
-    Класс-обертка для чат-сессии с ротацией ключей и моделей.
-    """
-    def __init__(self, wrapper, initial_history=None, model_queue=None, chat_id=None, user_id=None):
-        self.wrapper = wrapper
-        self.model_queue = model_queue if model_queue else wrapper.default_queue
-        self.chat_id = chat_id
-        self.user_id = user_id
-        self._history = []
-        self._init_real_history(initial_history)
-
-    def _init_real_history(self, initial_history):
-        # Пробуем инициализировать историю на первой работающей модели/ключе
-        for model_name in self.model_queue:
-            keys_to_try = list(GEMINI_KEYS_POOL)
-            random.shuffle(keys_to_try)
-            
-            for api_key in keys_to_try:
-                try:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(model_name)
-                    chat = model.start_chat(history=initial_history)
-                    self._history = chat.history
-                    self.wrapper.last_used_model_name = model_name 
-                    return
-                except Exception:
-                    continue
-        
-        if self._history is None:
-            self._history = []
-
-    @property
-    def history(self):
-        return self._history
-
-    @history.setter
-    def history(self, value):
-        self._history = value
-
-    def send_message(self, content):
-        from statistics import log_model_request
-        last_error = None
-        
-        for model_name in self.model_queue:
-            keys_to_try = list(GEMINI_KEYS_POOL)
-            random.shuffle(keys_to_try)
-
-            for api_key in keys_to_try:
-                try:
-                    genai.configure(api_key=api_key)
-                    current_model = genai.GenerativeModel(model_name)
-                    chat = current_model.start_chat(history=self._history)
-                    response = chat.send_message(content)
-                    self._history = chat.history
-                    self.wrapper.last_used_model_name = model_name
-                    
-                    log_model_request(self.chat_id, self.user_id, model_name, request_type="chat_message")
-                    return response
-
-                except exceptions.ResourceExhausted:
-                    logging.warning(f"⚠️ Quota exceeded on {model_name} (Key ends: ...{api_key[-4:]}). Trying next key.")
-                    continue
-                except Exception as e:
-                    last_error = e
-                    continue
-        
-        raise last_error if last_error else Exception("Все модели и ключи недоступны.")
-
-
-class ModelFallbackWrapper:
-    """
-    Умная обертка, которая выбирает очередь моделей в зависимости от chat_id.
-    """
-    def __init__(self, default_queue, special_queue):
-        self.default_queue = default_queue
-        self.special_queue = special_queue
-        self.last_used_model_name = "Еще не использовалась"
-
-    def _get_queue(self, chat_id=None):
-        if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
-            return self.special_queue
-        return self.default_queue
-
-    def generate_content(self, *args, **kwargs):
-        """
-        Стандартный метод, перебирает модели из очереди.
-        """
-        chat_id = kwargs.pop('chat_id', None)
-        user_id = kwargs.pop('user_id', None)
-        from statistics import log_model_request
-
-        current_queue = self._get_queue(chat_id)
-        last_error = None
-
-        for model_name in current_queue:
-            keys_to_try = list(GEMINI_KEYS_POOL)
-            random.shuffle(keys_to_try)
-
-            for api_key in keys_to_try:
-                try:
-                    genai.configure(api_key=api_key)
-                    current_model = genai.GenerativeModel(model_name)
-                    result = current_model.generate_content(*args, **kwargs)
-                    
-                    self.last_used_model_name = model_name
-                    log_model_request(chat_id, user_id, model_name, request_type="generate_content")
-                    return result
-                    
-                except (exceptions.ResourceExhausted) as e:
-                    logging.warning(f"⚠️ Quota exceeded {model_name} (Key: ...{api_key[-4:]}): {e}")
-                    last_error = e
-                    continue
-                except Exception as e:
-                    logging.warning(f"⚠️ Error on {model_name}: {e}")
-                    last_error = e
-                    continue
-                    
-        raise last_error if last_error else Exception("Все модели исчерпаны.")
-
-    def generate_custom(self, model_name, *args, **kwargs):
-        """
-        Метод для запуска КОНКРЕТНОЙ модели (например, Robotics или Imagen) с ротацией ключей.
-        """
-        chat_id = kwargs.pop('chat_id', None)
-        user_id = kwargs.pop('user_id', None)
-        from statistics import log_model_request
-
-        last_error = None
-        # Перемешиваем ключи
-        keys_to_try = list(GEMINI_KEYS_POOL)
-        random.shuffle(keys_to_try)
-
-        for api_key in keys_to_try:
-            try:
-                genai.configure(api_key=api_key)
-                current_model = genai.GenerativeModel(model_name)
-                # Вызываем generate_content у реальной модели
-                result = current_model.generate_content(*args, **kwargs)
-                
-                log_model_request(chat_id, user_id, model_name, request_type="generate_custom")
-                return result
-                
-            except (exceptions.ResourceExhausted) as e:
-                logging.warning(f"⚠️ Quota exceeded {model_name} (Key: ...{api_key[-4:]}): {e}")
-                last_error = e
-                continue
-            except Exception as e:
-                logging.warning(f"⚠️ Error on {model_name} (custom): {e}")
-                last_error = e
-                continue
-
-        raise last_error if last_error else Exception(f"Модель {model_name} недоступна со всеми ключами.")
-
-    def start_chat(self, history=None, chat_id=None, user_id=None):
-        queue = self._get_queue(chat_id)
-        return FallbackChatSession(self, initial_history=history, model_queue=queue, chat_id=chat_id, user_id=user_id)
-
-    @property
-    def model_names(self):
-        return self.default_queue
-
-# Создаем "умную" модель с двумя списками
-model = ModelFallbackWrapper(MODEL_QUEUE_DEFAULT, MODEL_QUEUE_SPECIAL)
-
-# Остальные модели
-genai.configure(api_key=random.choice(GEMINI_KEYS_POOL)) 
-search_model = genai.GenerativeModel('gemini-2.5-flash') 
-image_model = genai.GenerativeModel("imagen-3.0-generate-001")
-edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
+IMAGE_MODEL_NAME = "imagen-3.0-generate-001"
+EDIT_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
 
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
 
-# === НАСТРОЙКИ И ПЕРЕМЕННЫЕ ===
+# =========================
+# RATE LIMIT CONTROL
+# =========================
+KEY_COOLDOWN_SECONDS = 180        # cooldown after 429
+GLOBAL_MIN_DELAY = 0.35           # ~3 RPS global
+
+_last_global_call = 0.0
+
+
+def global_throttle():
+    global _last_global_call
+    now = time.time()
+    delta = now - _last_global_call
+    if delta < GLOBAL_MIN_DELAY:
+        time.sleep(GLOBAL_MIN_DELAY - delta)
+    _last_global_call = time.time()
+
+
+# =========================
+# GEMINI CLIENT POOL
+# =========================
+class GeminiClientPool:
+    def __init__(self, keys: List[str]):
+        self.keys = keys
+        self.cooldowns: Dict[str, float] = {k: 0.0 for k in keys}
+
+    def available_keys(self) -> List[str]:
+        now = time.time()
+        return [k for k, t in self.cooldowns.items() if now >= t]
+
+    def mark_cooldown(self, key: str):
+        self.cooldowns[key] = time.time() + KEY_COOLDOWN_SECONDS
+
+    def get_model(self, key: str, model_name: str) -> genai.GenerativeModel:
+        genai.configure(api_key=key)
+        return genai.GenerativeModel(model_name)
+
+
+CLIENT_POOL = GeminiClientPool(GEMINI_KEYS_POOL)
+
+# =========================
+# FALLBACK CHAT SESSION
+# =========================
+class FallbackChatSession:
+    def __init__(
+        self,
+        wrapper: "ModelFallbackWrapper",
+        initial_history: Optional[List[Dict[str, Any]]] = None,
+        chat_id: Optional[int] = None,
+        user_id: Optional[int] = None,
+    ):
+        self.wrapper = wrapper
+        self.history: List[Dict[str, Any]] = initial_history or []
+        self.chat_id = chat_id
+        self.user_id = user_id
+
+    def send_message(self, content: str):
+        prompt = list(self.history)
+        prompt.append({"role": "user", "parts": [content]})
+
+        response = self.wrapper.generate_content(
+            prompt,
+            chat_id=self.chat_id,
+            user_id=self.user_id,
+        )
+
+        self.history.append({"role": "model", "parts": [response.text]})
+        return response
+
+
+# =========================
+# MODEL FALLBACK WRAPPER
+# =========================
+class ModelFallbackWrapper:
+    def __init__(self, default_queue: List[str], special_queue: List[str]):
+        self.default_queue = default_queue
+        self.special_queue = special_queue
+        self.last_used_model_name: Optional[str] = None
+
+    def _get_queue(self, chat_id: Optional[int]):
+        if chat_id == SPECIAL_CHAT_ID:
+            return self.special_queue
+        return self.default_queue
+
+    def generate_content(self, prompt, chat_id=None, user_id=None):
+        queue = self._get_queue(chat_id)
+
+        last_error = None
+
+        for model_name in queue:
+            keys = CLIENT_POOL.available_keys()
+            random.shuffle(keys)
+
+            for api_key in keys:
+                try:
+                    global_throttle()
+                    model = CLIENT_POOL.get_model(api_key, model_name)
+                    result = model.generate_content(prompt)
+                    self.last_used_model_name = model_name
+                    return result
+
+                except exceptions.ResourceExhausted as e:
+                    logging.warning(
+                        f"429 Gemini | model={model_name} | key=...{api_key[-4:]}"
+                    )
+                    CLIENT_POOL.mark_cooldown(api_key)
+                    last_error = e
+
+                except Exception as e:
+                    logging.warning(
+                        f"Gemini error | model={model_name} | {e}"
+                    )
+                    last_error = e
+
+        raise last_error or RuntimeError("All Gemini models unavailable")
+
+    def generate_custom(self, model_name: str, prompt, chat_id=None, user_id=None):
+        last_error = None
+        keys = CLIENT_POOL.available_keys()
+        random.shuffle(keys)
+
+        for api_key in keys:
+            try:
+                global_throttle()
+                model = CLIENT_POOL.get_model(api_key, model_name)
+                return model.generate_content(prompt)
+
+            except exceptions.ResourceExhausted as e:
+                CLIENT_POOL.mark_cooldown(api_key)
+                last_error = e
+
+            except Exception as e:
+                last_error = e
+
+        raise last_error or RuntimeError(f"Model {model_name} unavailable")
+
+    def start_chat(self, history=None, chat_id=None, user_id=None):
+        return FallbackChatSession(
+            self,
+            initial_history=history,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
+
+    @property
+    def model_names(self):
+        return self.default_queue
+
+
+# =========================
+# INIT MODELS
+# =========================
+model = ModelFallbackWrapper(
+    MODEL_QUEUE_DEFAULT,
+    MODEL_QUEUE_SPECIAL
+)
+
+image_model = IMAGE_MODEL_NAME
+edit_model = EDIT_IMAGE_MODEL_NAME
+robotics_model = ROBOTICS_MODEL
+tts_models = TTS_MODELS_QUEUE
+
+# =========================
+# FILES / STATE
+# =========================
 CHAT_SETTINGS_FILE = "chat_settings.json"
 LOG_FILE = "user_messages.log"
 STATS_FILE = "message_stats.json"
 CHAT_LIST_FILE = "chats.json"
 SMS_DISABLED_CHATS_FILE = "sms_disabled_chats.json"
-DB_FILE = "statistics.db" 
+DB_FILE = "statistics.db"
 
-# === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ ===
 chat_settings = {}
 conversation_history = {}
 message_stats = {}
-quiz_questions = {} 
-quiz_states = {} 
+quiz_questions = {}
+quiz_states = {}
 chat_list = []
 sms_disabled_chats = set()
 ANTISPAM_ENABLED_CHATS = set()
+
 DAILY_PROMPT = None
 LAST_PROMPT_UPDATE = None
+
 DIALOG_ENABLED = True
 MAX_HISTORY_LENGTH = 20
 
-# === ИНИЦИАЛИЗАЦИЯ ===
+# =========================
+# AIROGRAM
+# =========================
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 
+# =========================
+# LOGGING
+# =========================
 logging.basicConfig(
     level=logging.INFO,
     filename="bot_log.txt",
     filemode="a",
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
 logger = logging.getLogger(__name__)
