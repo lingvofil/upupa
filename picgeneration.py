@@ -284,27 +284,36 @@ async def handle_pun_image_command(message: types.Message):
         await msg.edit_text("Ашипка блядь")
 
 async def handle_redraw_command(message: types.Message):
-    """Перерисовка в стиле всратого детского рисунка"""
+    """Перерисовка: Саркастичная инфографика"""
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
     if not photo: return await message.reply("Нужно фото.")
-    msg = await message.reply("Анализирую тваю мазню...")
+    
+    msg = await message.reply("Ищу скрытый смысл и рисую инфографику...")
+
     try:
         img_bytes = await download_telegram_image(bot, photo)
-        # Просим Gemini описать только суть объектов, чтобы не было конфликта стилей
-        desc = await asyncio.to_thread(lambda: model.generate_content(
-            ["Briefly describe the main objects and actions in this image.", {"mime_type": "image/jpeg", "data": img_bytes}]
-        ))
         
-        # Формируем всратый промпт
-        shitty_prompt = (
-            f"A very bad children's drawing, ugly doodle, mess, crayon style, "
-            f"scribble, naive art, stick figures, white background, masterpiece by 4 year old child of: {desc.text.strip()}"
+        # Новый промпт для анализа изображения через Gemini
+        analysis_prompt = (
+            "найди скрытую логику входящего изображения и сделай на основе этого инфографику, "
+            "объясняющую суть на русском языке, сохранив стиль и эстетику исходного изображения. "
+            "используй сарказм и нецензурную лексику"
         )
         
-        await robust_image_generation(message, shitty_prompt, msg)
+        # Получаем описание/идею от Gemini
+        response = await asyncio.to_thread(lambda: model.generate_content(
+            [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
+        ))
+        
+        # Используем ответ Gemini напрямую как промпт для генератора картинок.
+        # robust_image_generation сама переведет его на английский для Flux или оставит русским для Kandinsky.
+        final_prompt = response.text.strip()
+        
+        await robust_image_generation(message, final_prompt, msg)
+
     except Exception as e:
         logging.error(f"Redraw error: {e}")
-        await msg.edit_text("Ошибка анализа.")
+        await msg.edit_text("Ошибка анализа или генерации.")
 
 async def handle_edit_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
