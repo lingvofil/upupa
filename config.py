@@ -76,7 +76,6 @@ GLOBAL_MIN_DELAY = 0.35
 _key_cooldowns: Dict[str, float] = {k: 0.0 for k in GEMINI_KEYS_POOL}
 _last_global_call = 0.0
 
-
 def _global_throttle():
     global _last_global_call
     now = time.time()
@@ -85,21 +84,17 @@ def _global_throttle():
         time.sleep(GLOBAL_MIN_DELAY - delta)
     _last_global_call = time.time()
 
-
 def _available_keys() -> List[str]:
     now = time.time()
     return [k for k, t in _key_cooldowns.items() if now >= t]
 
-
 def _mark_key_cooldown(key: str):
     _key_cooldowns[key] = time.time() + KEY_COOLDOWN_SECONDS
-
 
 # =========================
 # === ПРОЧИЕ КОНСТАНТЫ ===
 # =========================
 SEARCH_ENGINE_ID = "33026288e406447ea"
-
 GIGACHAT_MODEL = "GigaChat-2"
 GIGACHAT_MODEL_PRO = "GigaChat-2-Pro"
 GIGACHAT_MODEL_MAX = "GigaChat-2-Max"
@@ -154,11 +149,15 @@ class FallbackChatSession:
 
     def send_message(self, content):
         last_error = None
-
         for model_name in self.model_queue:
+            # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
             keys_to_try = _available_keys()
+            # Если нет свободных ключей, пробуем все ключи снова для новой модели
+            if not keys_to_try:
+                keys_to_try = list(GEMINI_KEYS_POOL)
+            
             random.shuffle(keys_to_try)
-
+            
             for api_key in keys_to_try:
                 try:
                     _global_throttle()
@@ -169,19 +168,17 @@ class FallbackChatSession:
                     self._history = chat.history
                     self.wrapper.last_used_model_name = model_name
                     return response
-
                 except exceptions.ResourceExhausted as e:
                     logging.warning(
                         f"⚠️ Quota exceeded {model_name} (key ...{api_key[-4:]})"
                     )
                     _mark_key_cooldown(api_key)
                     last_error = e
-
                 except Exception as e:
+                    logging.error(f"Error in chat with {model_name}: {e}")
                     last_error = e
-
+        
         raise last_error or Exception("Все модели и ключи недоступны")
-
 
 # =========================
 # === MODEL FALLBACK WRAPPER ===
@@ -200,20 +197,28 @@ class ModelFallbackWrapper:
     def generate_content(self, *args, **kwargs):
         chat_id = kwargs.pop("chat_id", None)
         user_id = kwargs.pop("user_id", None)
-
         current_queue = self._get_queue(chat_id)
+        
         last_error = None
-
+        
         for model_name in current_queue:
+            # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
             keys_to_try = _available_keys()
-            random.shuffle(keys_to_try)
+            # Если все ключи в кулдауне (например, от прошлой модели),
+            # даем им шанс сработать на новой модели
+            if not keys_to_try:
+                keys_to_try = list(GEMINI_KEYS_POOL)
 
+            random.shuffle(keys_to_try)
+            
             for api_key in keys_to_try:
                 try:
                     _global_throttle()
                     genai.configure(api_key=api_key)
                     model = genai.GenerativeModel(model_name)
+                    
                     result = model.generate_content(*args, **kwargs)
+                    
                     self.last_used_model_name = model_name
                     return result
 
@@ -223,28 +228,35 @@ class ModelFallbackWrapper:
                     )
                     _mark_key_cooldown(api_key)
                     last_error = e
-
                 except Exception as e:
+                    logging.error(f"Error with {model_name}: {e}")
                     last_error = e
-
-        raise last_error or Exception("Все модели исчерпаны")
+        
+        # Если дошли сюда, значит реально ничего не сработало
+        if last_error:
+            raise last_error
+        else:
+            raise Exception("Все модели исчерпаны (доступных ключей нет)")
 
     def generate_custom(self, model_name, *args, **kwargs):
         last_error = None
+        
+        # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
         keys_to_try = _available_keys()
-        random.shuffle(keys_to_try)
+        if not keys_to_try:
+             keys_to_try = list(GEMINI_KEYS_POOL)
 
+        random.shuffle(keys_to_try)
+        
         for api_key in keys_to_try:
             try:
                 _global_throttle()
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel(model_name)
                 return model.generate_content(*args, **kwargs)
-
             except exceptions.ResourceExhausted as e:
                 _mark_key_cooldown(api_key)
                 last_error = e
-
             except Exception as e:
                 last_error = e
 
@@ -264,7 +276,6 @@ class ModelFallbackWrapper:
     def model_names(self):
         return self.default_queue
 
-
 # =========================
 # === СОЗДАНИЕ МОДЕЛЕЙ ===
 # =========================
@@ -279,7 +290,6 @@ image_model = genai.GenerativeModel("imagen-3.0-generate-001")
 edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
 TEXT_GENERATION_MODEL_LIGHT = "gemini-2.0-flash-lite-preview-02-05"
 ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
-
 TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
@@ -324,5 +334,4 @@ logging.basicConfig(
     filemode="a",
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
 logger = logging.getLogger(__name__)
