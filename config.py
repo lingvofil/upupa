@@ -23,7 +23,6 @@ try:
         GENERIC_API_KEY4,
         GENERIC_API_KEY5,
         GENERIC_API_KEY6,
-        GENERIC_API_KEY7,
         OPENROUTER_API_KEY,
         GOOGLE_API_KEY,
         GOOGLE_API_KEY2,
@@ -45,7 +44,6 @@ except ImportError:
     GENERIC_API_KEY4 = os.getenv("GENERIC_API_KEY4")
     GENERIC_API_KEY5 = os.getenv("GENERIC_API_KEY5")
     GENERIC_API_KEY6 = os.getenv("GENERIC_API_KEY6")
-    GENERIC_API_KEY7 = os.getenv("GENERIC_API_KEY7")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     GOOGLE_API_KEY2 = os.getenv("GOOGLE_API_KEY2")
 
@@ -60,7 +58,6 @@ GEMINI_KEYS_POOL = [
         GENERIC_API_KEY4,
         GENERIC_API_KEY5,
         GENERIC_API_KEY6,
-        GENERIC_API_KEY7
         GOOGLE_API_KEY,
         GOOGLE_API_KEY2
     ] if key
