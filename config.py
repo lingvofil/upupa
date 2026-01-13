@@ -63,15 +63,14 @@ GEMINI_KEYS_POOL = [
 if not GEMINI_KEYS_POOL:
     raise RuntimeError("❌ Gemini API keys not found")
 
-# Gemini лимиты аккаунтные — используем один ключ
 PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0]
 genai.configure(api_key=PRIMARY_GEMINI_KEY)
 
 # =========================
 # === RATE LIMIT CONTROL ===
 # =========================
-GLOBAL_MIN_DELAY = 2.5          # защита RPM
-GEMINI_ACCOUNT_COOLDOWN = 300   # 5 минут
+GLOBAL_MIN_DELAY = 2.5
+GEMINI_ACCOUNT_COOLDOWN = 300
 
 _last_call_ts = 0.0
 _gemini_blocked_until = 0.0
@@ -93,16 +92,17 @@ def _gemini_available() -> bool:
 def _block_gemini():
     global _gemini_blocked_until
     _gemini_blocked_until = time.time() + GEMINI_ACCOUNT_COOLDOWN
-    logging.warning("⛔ Gemini account-level cooldown activated")
+    logging.warning("⛔ Gemini account cooldown activated")
 
 
 # =========================
 # === ПРОЧИЕ КОНСТАНТЫ ===
 # =========================
+SEARCH_ENGINE_ID = "33026288e406447ea"
+
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
-SEARCH_ENGINE_ID = "33026288e406447ea"
 
 # =========================
 # === MODEL QUEUES ===
@@ -115,6 +115,25 @@ MODEL_QUEUE_DEFAULT = [
 MODEL_QUEUE_SPECIAL = [
     "gemini-2.5-pro",
 ] + MODEL_QUEUE_DEFAULT
+
+# =========================
+# === PUBLIC MODEL CONSTANTS (ВОССТАНОВЛЕНЫ) ===
+# =========================
+TEXT_GENERATION_MODEL_LIGHT = "gemini-2.0-flash-lite-preview-02-05"
+ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
+
+TTS_MODELS_QUEUE = [
+    "gemini-2.5-flash-preview-tts"
+]
+
+# =========================
+# === STATIC MODELS (ВОССТАНОВЛЕНЫ) ===
+# =========================
+search_model = genai.GenerativeModel("gemini-2.5-flash")
+image_model = genai.GenerativeModel("imagen-3.0-generate-001")
+edit_model = genai.GenerativeModel(
+    "models/gemini-2.0-flash-preview-image-generation"
+)
 
 # =========================
 # === FALLBACK CHAT SESSION ===
@@ -172,13 +191,7 @@ class ModelFallbackWrapper:
             return self.special_queue
         return self.default_queue
 
-    def generate_content(
-        self,
-        prompt,
-        *,
-        chat_id: Optional[int] = None,
-        **kwargs
-    ):
+    def generate_content(self, prompt, *, chat_id=None, **kwargs):
         if not _gemini_available():
             raise RuntimeError("Gemini temporarily unavailable")
 
@@ -230,7 +243,6 @@ class ModelFallbackWrapper:
 # =========================
 # === PUBLIC CONTRACT ===
 # =========================
-# ВАЖНО: имя `model` сохранено
 model = ModelFallbackWrapper(
     MODEL_QUEUE_DEFAULT,
     MODEL_QUEUE_SPECIAL
