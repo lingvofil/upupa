@@ -233,9 +233,15 @@ async def process_start_command(message: types.Message):
 
 @router.message(lambda message: message.text is not None and message.text.lower() == "очистка" and message.from_user.id not in BLOCKED_USERS)
 async def process_clear_command(message: types.Message):
-    user_id = message.from_user.id
-    conversation_history[user_id] = []
-    await message.reply("Смыто всё говно")
+    """Очищает историю диалога для текущего чата"""
+    chat_id = str(message.chat.id)
+    
+    # Очищаем историю диалога для этого чата
+    if chat_id in conversation_history:
+        conversation_history[chat_id] = []
+        await message.reply("Смыто всё говно")
+    else:
+        await message.reply("История и так пустая, долбоёб")
 
 @router.message(lambda message: message.text and message.text.lower() in ["чоумееш", "справка", "help", "помощь"] and message.from_user.id not in BLOCKED_USERS)
 async def handle_chooumeesh(message: types.Message):
