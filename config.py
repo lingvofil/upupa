@@ -1,18 +1,21 @@
-# config.py
+# =========================
+# === config.py ===
+# =========================
+
+import os
+import time
+import random
+import logging
+from typing import List, Dict, Optional
+
 import google.generativeai as genai
 from google.api_core import exceptions
-import logging
+
 from aiogram import Bot, Dispatcher, Router
-import requests
-import json
-import random
-import time
-from typing import List, Dict, Any, Optional, Union
 from gigachat import GigaChat
-import os
 
 # =========================
-# === БЛОК ИМПОРТА КЛЮЧЕЙ ===
+# === ИМПОРТ СЕКРЕТОВ ===
 # =========================
 try:
     from config_private import (
@@ -36,19 +39,12 @@ try:
         HUGGINGFACE_TOKEN
     )
 except ImportError:
-    print("Warning: config_private.py not found.")
     API_TOKEN = os.getenv("API_TOKEN")
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
-    GENERIC_API_KEY2 = os.getenv("GENERIC_API_KEY2")
-    GENERIC_API_KEY3 = os.getenv("GENERIC_API_KEY3")
-    GENERIC_API_KEY4 = os.getenv("GENERIC_API_KEY4")
-    GENERIC_API_KEY5 = os.getenv("GENERIC_API_KEY5")
-    GENERIC_API_KEY6 = os.getenv("GENERIC_API_KEY6")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GOOGLE_API_KEY2 = os.getenv("GOOGLE_API_KEY2")
 
 # =========================
-# === ПУЛ КЛЮЧЕЙ GEMINI ===
+# === GEMINI KEYS ===
 # =========================
 GEMINI_KEYS_POOL = [
     key for key in [
@@ -59,58 +55,57 @@ GEMINI_KEYS_POOL = [
         GENERIC_API_KEY5,
         GENERIC_API_KEY6,
         GOOGLE_API_KEY,
-        GOOGLE_API_KEY2
-    ] if key
+        GOOGLE_API_KEY2,
+    ]
+    if key
 ]
 
 if not GEMINI_KEYS_POOL:
-    print("CRITICAL WARNING: No Gemini API keys found!")
-    GEMINI_KEYS_POOL = ["dummy_key"]
+    raise RuntimeError("❌ Gemini API keys not found")
+
+# Используем ОДИН ключ (лимиты аккаунтные)
+PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0]
+genai.configure(api_key=PRIMARY_GEMINI_KEY)
 
 # =========================
 # === RATE LIMIT CONTROL ===
 # =========================
-KEY_COOLDOWN_SECONDS = 180
-GLOBAL_MIN_DELAY = 0.35
+GLOBAL_MIN_DELAY = 2.5          # безопасный интервал
+GEMINI_ACCOUNT_COOLDOWN = 300   # 5 минут
 
-_key_cooldowns: Dict[str, float] = {k: 0.0 for k in GEMINI_KEYS_POOL}
-_last_global_call = 0.0
+_last_call_ts = 0.0
+_gemini_blocked_until = 0.0
 
-def _global_throttle():
-    global _last_global_call
+
+def gemini_available() -> bool:
+    return time.time() >= _gemini_blocked_until
+
+
+def mark_gemini_blocked():
+    global _gemini_blocked_until
+    _gemini_blocked_until = time.time() + GEMINI_ACCOUNT_COOLDOWN
+    logging.warning("⛔ Gemini API temporarily blocked (account cooldown)")
+
+
+def global_throttle():
+    global _last_call_ts
     now = time.time()
-    delta = now - _last_global_call
+    delta = now - _last_call_ts
     if delta < GLOBAL_MIN_DELAY:
         time.sleep(GLOBAL_MIN_DELAY - delta)
-    _last_global_call = time.time()
-
-def _available_keys() -> List[str]:
-    now = time.time()
-    return [k for k, t in _key_cooldowns.items() if now >= t]
-
-def _mark_key_cooldown(key: str):
-    _key_cooldowns[key] = time.time() + KEY_COOLDOWN_SECONDS
+    _last_call_ts = time.time()
 
 # =========================
 # === ПРОЧИЕ КОНСТАНТЫ ===
 # =========================
-SEARCH_ENGINE_ID = "33026288e406447ea"
-GIGACHAT_MODEL = "GigaChat-2"
-GIGACHAT_MODEL_PRO = "GigaChat-2-Pro"
-GIGACHAT_MODEL_MAX = "GigaChat-2-Max"
-
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
 
-# =========================
-# === НАСТРОЙКА GEMINI ===
-# =========================
-# ВАЖНО: configure оставляем, но дальше контролируем
-genai.configure(api_key=random.choice(GEMINI_KEYS_POOL))
+SEARCH_ENGINE_ID = "33026288e406447ea"
 
 # =========================
-# === ОЧЕРЕДИ МОДЕЛЕЙ ===
+# === GEMINI MODEL QUEUES ===
 # =========================
 MODEL_QUEUE_DEFAULT = [
     "gemini-2.0-flash",
@@ -122,180 +117,88 @@ MODEL_QUEUE_SPECIAL = [
 ] + MODEL_QUEUE_DEFAULT
 
 # =========================
-# === FALLBACK CHAT SESSION ===
+# === GEMINI FALLBACK WRAPPER ===
 # =========================
-class FallbackChatSession:
-    def __init__(
-        self,
-        wrapper,
-        initial_history=None,
-        model_queue=None,
-        chat_id=None,
-        user_id=None
-    ):
-        self.wrapper = wrapper
-        self.model_queue = model_queue if model_queue else wrapper.default_queue
-        self.chat_id = chat_id
-        self.user_id = user_id
-        self._history = initial_history or []
-
-    @property
-    def history(self):
-        return self._history
-
-    @history.setter
-    def history(self, value):
-        self._history = value
-
-    def send_message(self, content):
-        last_error = None
-        for model_name in self.model_queue:
-            # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
-            keys_to_try = _available_keys()
-            # Если нет свободных ключей, пробуем все ключи снова для новой модели
-            if not keys_to_try:
-                keys_to_try = list(GEMINI_KEYS_POOL)
-            
-            random.shuffle(keys_to_try)
-            
-            for api_key in keys_to_try:
-                try:
-                    _global_throttle()
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(model_name)
-                    chat = model.start_chat(history=self._history)
-                    response = chat.send_message(content)
-                    self._history = chat.history
-                    self.wrapper.last_used_model_name = model_name
-                    return response
-                except exceptions.ResourceExhausted as e:
-                    logging.warning(
-                        f"⚠️ Quota exceeded {model_name} (key ...{api_key[-4:]})"
-                    )
-                    _mark_key_cooldown(api_key)
-                    last_error = e
-                except Exception as e:
-                    logging.error(f"Error in chat with {model_name}: {e}")
-                    last_error = e
-        
-        raise last_error or Exception("Все модели и ключи недоступны")
-
-# =========================
-# === MODEL FALLBACK WRAPPER ===
-# =========================
-class ModelFallbackWrapper:
+class GeminiWrapper:
     def __init__(self, default_queue, special_queue):
         self.default_queue = default_queue
         self.special_queue = special_queue
-        self.last_used_model_name = "Еще не использовалась"
+        self.last_used_model_name: Optional[str] = None
 
-    def _get_queue(self, chat_id=None):
+    def _queue(self, chat_id: Optional[int]):
         if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
 
-    def generate_content(self, *args, **kwargs):
-        chat_id = kwargs.pop("chat_id", None)
-        user_id = kwargs.pop("user_id", None)
-        current_queue = self._get_queue(chat_id)
-        
-        last_error = None
-        
-        for model_name in current_queue:
-            # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
-            keys_to_try = _available_keys()
-            # Если все ключи в кулдауне (например, от прошлой модели),
-            # даем им шанс сработать на новой модели
-            if not keys_to_try:
-                keys_to_try = list(GEMINI_KEYS_POOL)
+    def generate_content(
+        self,
+        prompt,
+        *,
+        chat_id: Optional[int] = None,
+        **kwargs
+    ):
+        if not gemini_available():
+            raise RuntimeError("Gemini temporarily unavailable")
 
-            random.shuffle(keys_to_try)
-            
-            for api_key in keys_to_try:
-                try:
-                    _global_throttle()
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(model_name)
-                    
-                    result = model.generate_content(*args, **kwargs)
-                    
-                    self.last_used_model_name = model_name
-                    return result
-
-                except exceptions.ResourceExhausted as e:
-                    logging.warning(
-                        f"⚠️ Quota exceeded {model_name} (key ...{api_key[-4:]})"
-                    )
-                    _mark_key_cooldown(api_key)
-                    last_error = e
-                except Exception as e:
-                    logging.error(f"Error with {model_name}: {e}")
-                    last_error = e
-        
-        # Если дошли сюда, значит реально ничего не сработало
-        if last_error:
-            raise last_error
-        else:
-            raise Exception("Все модели исчерпаны (доступных ключей нет)")
-
-    def generate_custom(self, model_name, *args, **kwargs):
-        last_error = None
-        
-        # --- ИСПРАВЛЕНИЕ: ПРОВЕРКА КЛЮЧЕЙ ---
-        keys_to_try = _available_keys()
-        if not keys_to_try:
-             keys_to_try = list(GEMINI_KEYS_POOL)
-
-        random.shuffle(keys_to_try)
-        
-        for api_key in keys_to_try:
+        for model_name in self._queue(chat_id):
             try:
-                _global_throttle()
-                genai.configure(api_key=api_key)
+                global_throttle()
                 model = genai.GenerativeModel(model_name)
-                return model.generate_content(*args, **kwargs)
-            except exceptions.ResourceExhausted as e:
-                _mark_key_cooldown(api_key)
-                last_error = e
+                result = model.generate_content(prompt, **kwargs)
+                self.last_used_model_name = model_name
+                return result
+
+            except exceptions.ResourceExhausted:
+                mark_gemini_blocked()
+                raise
+
             except Exception as e:
-                last_error = e
+                logging.error(f"Gemini error [{model_name}]: {e}")
 
-        raise last_error or Exception(f"Модель {model_name} недоступна")
+        raise RuntimeError("All Gemini models failed")
 
-    def start_chat(self, history=None, chat_id=None, user_id=None):
-        queue = self._get_queue(chat_id)
-        return FallbackChatSession(
-            self,
-            initial_history=history,
-            model_queue=queue,
-            chat_id=chat_id,
-            user_id=user_id
-        )
+    def start_chat(
+        self,
+        history=None,
+        *,
+        chat_id: Optional[int] = None
+    ):
+        if not gemini_available():
+            raise RuntimeError("Gemini temporarily unavailable")
 
-    @property
-    def model_names(self):
-        return self.default_queue
+        model_name = self._queue(chat_id)[0]
+        model = genai.GenerativeModel(model_name)
+        chat = model.start_chat(history=history or [])
+        self.last_used_model_name = model_name
+        return chat
+
 
 # =========================
-# === СОЗДАНИЕ МОДЕЛЕЙ ===
+# === ИНИЦИАЛИЗАЦИЯ ===
 # =========================
-model = ModelFallbackWrapper(
+gemini_model = GeminiWrapper(
     MODEL_QUEUE_DEFAULT,
     MODEL_QUEUE_SPECIAL
 )
 
-genai.configure(api_key=random.choice(GEMINI_KEYS_POOL))
-search_model = genai.GenerativeModel("gemini-2.5-flash")
-image_model = genai.GenerativeModel("imagen-3.0-generate-001")
-edit_model = genai.GenerativeModel("models/gemini-2.0-flash-preview-image-generation")
-TEXT_GENERATION_MODEL_LIGHT = "gemini-2.0-flash-lite-preview-02-05"
-ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
-TTS_MODELS_QUEUE = [
-    "gemini-2.5-flash-preview-tts"
-]
+# =========================
+# === GIGACHAT ===
+# =========================
+gigachat = GigaChat(
+    credentials=GIGACHAT_API_KEY,
+    model="GigaChat-2",
+    verify_ssl_certs=False
+)
 
 # =========================
-# === ФАЙЛЫ И СОСТОЯНИЯ ===
+# === AIROGRAM ===
+# =========================
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher()
+router = Router()
+
+# =========================
+# === FILES / STATE ===
 # =========================
 CHAT_SETTINGS_FILE = "chat_settings.json"
 LOG_FILE = "user_messages.log"
@@ -313,17 +216,8 @@ chat_list = []
 sms_disabled_chats = set()
 ANTISPAM_ENABLED_CHATS = set()
 
-DAILY_PROMPT = None
-LAST_PROMPT_UPDATE = None
-DIALOG_ENABLED = True
 MAX_HISTORY_LENGTH = 20
-
-# =========================
-# === AIROGRAM ===
-# =========================
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
-router = Router()
+DIALOG_ENABLED = True
 
 # =========================
 # === LOGGING ===
@@ -334,4 +228,5 @@ logging.basicConfig(
     filemode="a",
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
 logger = logging.getLogger(__name__)
