@@ -106,7 +106,11 @@ from talking import (
     handle_set_participant_prompt_command,
     handle_change_prompt_randomly_command,
     handle_poem_command,
-    process_general_message
+    process_general_message,
+    # НОВЫЕ ИМПОРТЫ:
+    handle_switch_to_gigachat,
+    handle_switch_to_gemini,
+    handle_which_model
 )
 from random_reactions import process_random_reactions
 
@@ -161,9 +165,17 @@ import crocodile
 
 
 # ================== БЛОК 4: ХЭНДЛЕРЫ ==================
+@router.message(F.text.lower() == "упупа гигачат")
+async def switch_to_gigachat(message: types.Message):
+    await handle_switch_to_gigachat(message)
+
+@router.message(F.text.lower() == "упупа гемини")
+async def switch_to_gemini(message: types.Message):
+    await handle_switch_to_gemini(message)
+
 @router.message(F.text.lower() == "какая модель")
-async def check_current_model(message: types.Message):
-    await message.reply(model.last_used_model_name)
+async def which_model(message: types.Message):
+    await handle_which_model(message)
 
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
