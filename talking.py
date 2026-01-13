@@ -8,7 +8,7 @@ from aiogram import types
 # Обновленные импорты
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
-    conversation_history, model, bot
+    conversation_history, model, gigachat_model, bot
 )
 # Функции для работы с файлами и промптами
 from chat_settings import save_chat_settings, add_chat
@@ -23,18 +23,59 @@ from prompts import (
 from lexicon_settings import (save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
-    extract_user_messages, # Добавили, может пригодиться
+    extract_user_messages,
     get_frequent_phrases_from_text
 )
 # Импорт для реакций и статистики
 from random_reactions import process_random_reactions
 from stat_rank_settings import track_message_statistics
 
-# === НОВЫЙ ИМПОРТ ===
+# === ИМПОРТ SMART SEARCH ===
 from smart_search import find_relevant_context
 
 # =============================================================================
-# ОБРАБОТЧИКИ КОМАНД (Без изменений)
+# ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ
+# =============================================================================
+
+async def handle_switch_to_gigachat(message: types.Message):
+    """Переключение на модель GigaChat"""
+    chat_id = str(message.chat.id)
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    current_settings["active_model"] = "gigachat"
+    save_chat_settings()
+    await message.reply("Переключился на GigaChat 🤖")
+
+
+async def handle_switch_to_gemini(message: types.Message):
+    """Переключение на модель Gemini"""
+    chat_id = str(message.chat.id)
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    current_settings["active_model"] = "gemini"
+    save_chat_settings()
+    await message.reply("Переключился на Gemini ✨")
+
+
+async def handle_which_model(message: types.Message):
+    """Показывает текущую активную модель"""
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
+    
+    update_chat_settings(chat_id)
+    current_settings = chat_settings.get(chat_id, {})
+    active_model = current_settings.get("active_model", "gemini")
+    
+    if active_model == "gigachat":
+        model_name = gigachat_model.last_used_model_name or "GigaChat-2"
+        await message.reply(f"🤖 Сейчас использую GigaChat: {model_name}")
+    else:
+        model_name = model.last_used_model_name or "gemini-2.0-flash"
+        await message.reply(f"✨ Сейчас использую Gemini: {model_name}")
+
+
+# =============================================================================
+# ОБРАБОТЧИКИ КОМАНД (существующие)
 # =============================================================================
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -58,7 +99,6 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     try:
         def sync_call():
-            # === ИЗМЕНЕНИЕ 1: Передаем chat_id, чтобы config выбрал правильную очередь моделей ===
             return model.generate_content(full_prompt, chat_id=message.chat.id).text
         response_text = await asyncio.to_thread(sync_call)
     except Exception as e:
@@ -220,7 +260,7 @@ async def handle_change_prompt_randomly_command(message: types.Message):
 
 
 # =============================================================================
-# ОСНОВНАЯ ЛОГИКА ДИАЛОГА (ИЗМЕНЕНО ДЛЯ SMART SEARCH)
+# ОСНОВНАЯ ЛОГИКА ДИАЛОГА (С ПОДДЕРЖКОЙ GIGACHAT)
 # =============================================================================
 
 def update_conversation_history(chat_id: str, name: str, message_text: str, role: str):
@@ -236,18 +276,30 @@ def format_chat_history(chat_id: str) -> str:
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
 
 async def generate_response(prompt: str, chat_id: str, bot_name: str) -> str:
+    """Генерирует ответ с использованием выбранной модели (Gemini или GigaChat)"""
     try:
-        def sync_gemini_call():
-            # === ИЗМЕНЕНИЕ 2: Передаем chat_id, чтобы включить логику балансировки для этого чата ===
-            response = model.generate_content(prompt, chat_id=chat_id)
+        # Определяем активную модель для чата
+        update_chat_settings(chat_id)
+        current_settings = chat_settings.get(chat_id, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        def sync_model_call():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+            else:
+                response = model.generate_content(prompt, chat_id=int(chat_id))
             return response.text
-        gemini_response_text = await asyncio.to_thread(sync_gemini_call)
-        if not gemini_response_text.strip():
-            gemini_response_text = "Я пока не знаю, что ответить... 😅"
-        update_conversation_history(chat_id, bot_name, gemini_response_text, role="assistant")
-        return gemini_response_text[:4000]
+        
+        response_text = await asyncio.to_thread(sync_model_call)
+        
+        if not response_text.strip():
+            response_text = "Я пока не знаю, что ответить... 😅"
+        
+        update_conversation_history(chat_id, bot_name, response_text, role="assistant")
+        return response_text[:4000]
+        
     except Exception as e:
-        logging.error(f"Gemini API Error: {e}")
+        logging.error(f"Model API Error: {e}")
         error_message = "Ошибка блят"
         update_conversation_history(chat_id, bot_name, error_message, role="assistant")
         return error_message
@@ -287,17 +339,12 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
         target_name = imitated_user_data.get("username") or imitated_user_data.get("full_name")
         
         if target_name:
-            # Извлекаем сообщения (кэширование бы не помешало, но пока так)
-            # ВАЖНО: Мы не знаем точно, username это или full_name, пробуем методы
-            # Это может быть медленно, но дает точность
             if imitated_user_data.get("username"):
                 messages = await extract_messages_by_username(imitated_user_data["username"], chat_id)
             else:
                 messages = await extract_messages_by_full_name(imitated_user_data["full_name"], chat_id)
             
             if messages:
-                # Ищем похожие ответы на текущий ввод пользователя
-                # "Как этот пользователь реагировал на похожее дерьмо?"
                 relevant_msgs = await find_relevant_context(user_input, messages, top_k=3)
                 
                 if relevant_msgs:
@@ -314,7 +361,7 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     
     full_prompt = (
         f"{selected_prompt}\n"
-        f"{additional_context}\n" # Вставляем найденный контекст
+        f"{additional_context}\n"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
         f"{prompt_name}:"
@@ -350,8 +397,6 @@ async def process_general_message(message: types.Message):
         await message.reply(response)
         return
 
-    # Здесь мы передаем model как объект. Внутри random_reactions.py будет вызван generate_content БЕЗ chat_id,
-    # поэтому для реакций будет использоваться стандартная очередь (без Pro модели), что нам и нужно.
     reaction_sent = await process_random_reactions(
         message, model, save_user_message, track_message_statistics,
         add_chat, chat_settings, save_chat_settings
@@ -363,7 +408,7 @@ async def process_general_message(message: types.Message):
 
 
 # =============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Без изменений)
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =============================================================================
 
 async def _create_user_style_prompt(messages: list, display_name: str) -> str:
@@ -385,7 +430,6 @@ async def _create_user_style_prompt(messages: list, display_name: str) -> str:
         "- Стиль юмора и тон общения",
         "\nПримеры сообщений (общий стиль):",
     ]
-    # Оставляем немного примеров в базовом промпте для общего тона
     for i, msg in enumerate(sample_messages[:15], 1):
         prompt_parts.append(f"{i}. {msg}")
     if frequent_words:
@@ -410,7 +454,8 @@ def update_chat_settings(chat_id: str) -> None:
             "reactions_enabled": True,
             "prompt": PROMPTS_DICT["врач"],
             "prompt_name": "летописец", 
-            "prompt_source": "daily"
+            "prompt_source": "daily",
+            "active_model": "gemini"  # Модель по умолчанию
         }
 
 def get_current_chat_prompt(chat_id: str) -> tuple:
