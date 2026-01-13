@@ -59,7 +59,7 @@ GEMINI_KEYS_POOL = [
 ]
 
 if not GEMINI_KEYS_POOL:
-    raise RuntimeError("❌ Gemini API keys not found")
+    raise RuntimeError("⚠ Gemini API keys not found")
 
 PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0]
 genai.configure(api_key=PRIMARY_GEMINI_KEY)
@@ -113,6 +113,12 @@ MODEL_QUEUE_DEFAULT = [
 MODEL_QUEUE_SPECIAL = [
     "gemini-2.5-pro",
 ] + MODEL_QUEUE_DEFAULT
+
+# =========================
+# === GIGACHAT MODEL QUEUES ===
+# =========================
+GIGACHAT_MODEL_QUEUE_DEFAULT = ["GigaChat-2"]
+GIGACHAT_MODEL_QUEUE_SPECIAL = ["GigaChat-2-Max"]
 
 # =========================
 # === PUBLIC MODEL CONSTANTS (ВОССТАНОВЛЕНЫ) ===
@@ -239,6 +245,51 @@ class ModelFallbackWrapper:
 
 
 # =========================
+# === GIGACHAT WRAPPER ===
+# =========================
+class GigaChatWrapper:
+    def __init__(self, api_key: str, default_queue: List[str], special_queue: List[str]):
+        self.api_key = api_key
+        self.default_queue = default_queue
+        self.special_queue = special_queue
+        self.last_used_model_name: Optional[str] = None
+
+    def _get_queue(self, chat_id: Optional[int]):
+        if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
+            return self.special_queue
+        return self.default_queue
+
+    def generate_content(self, prompt: str, *, chat_id=None):
+        """Генерация ответа с помощью GigaChat"""
+        queue = self._get_queue(chat_id)
+        
+        for model_name in queue:
+            try:
+                with GigaChat(
+                    credentials=self.api_key,
+                    verify_ssl_certs=False,
+                    temperature=0.7,
+                    max_tokens=500,
+                    model=model_name
+                ) as giga:
+                    response = giga.chat(prompt)
+                    self.last_used_model_name = model_name
+                    
+                    # Создаём объект-обёртку для совместимости с Gemini API
+                    class GigaResponse:
+                        def __init__(self, text):
+                            self.text = text
+                    
+                    return GigaResponse(response.choices[0].message.content)
+                    
+            except Exception as e:
+                logging.error(f"GigaChat error [{model_name}]: {e}")
+                continue
+        
+        raise RuntimeError("All GigaChat models failed")
+
+
+# =========================
 # === PUBLIC CONTRACT ===
 # =========================
 model = ModelFallbackWrapper(
@@ -246,8 +297,14 @@ model = ModelFallbackWrapper(
     MODEL_QUEUE_SPECIAL
 )
 
+gigachat_model = GigaChatWrapper(
+    GIGACHAT_API_KEY,
+    GIGACHAT_MODEL_QUEUE_DEFAULT,
+    GIGACHAT_MODEL_QUEUE_SPECIAL
+)
+
 # =========================
-# === GIGACHAT ===
+# === GIGACHAT (старый объект для совместимости) ===
 # =========================
 gigachat = GigaChat(
     credentials=GIGACHAT_API_KEY,
