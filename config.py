@@ -6,7 +6,7 @@ import os
 import time
 import random
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import google.generativeai as genai
 from google.api_core import exceptions
@@ -63,31 +63,21 @@ GEMINI_KEYS_POOL = [
 if not GEMINI_KEYS_POOL:
     raise RuntimeError("❌ Gemini API keys not found")
 
-# Используем ОДИН ключ (лимиты аккаунтные)
+# Gemini лимиты аккаунтные — используем один ключ
 PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0]
 genai.configure(api_key=PRIMARY_GEMINI_KEY)
 
 # =========================
 # === RATE LIMIT CONTROL ===
 # =========================
-GLOBAL_MIN_DELAY = 2.5          # безопасный интервал
+GLOBAL_MIN_DELAY = 2.5          # защита RPM
 GEMINI_ACCOUNT_COOLDOWN = 300   # 5 минут
 
 _last_call_ts = 0.0
 _gemini_blocked_until = 0.0
 
 
-def gemini_available() -> bool:
-    return time.time() >= _gemini_blocked_until
-
-
-def mark_gemini_blocked():
-    global _gemini_blocked_until
-    _gemini_blocked_until = time.time() + GEMINI_ACCOUNT_COOLDOWN
-    logging.warning("⛔ Gemini API temporarily blocked (account cooldown)")
-
-
-def global_throttle():
+def _global_throttle():
     global _last_call_ts
     now = time.time()
     delta = now - _last_call_ts
@@ -95,17 +85,27 @@ def global_throttle():
         time.sleep(GLOBAL_MIN_DELAY - delta)
     _last_call_ts = time.time()
 
+
+def _gemini_available() -> bool:
+    return time.time() >= _gemini_blocked_until
+
+
+def _block_gemini():
+    global _gemini_blocked_until
+    _gemini_blocked_until = time.time() + GEMINI_ACCOUNT_COOLDOWN
+    logging.warning("⛔ Gemini account-level cooldown activated")
+
+
 # =========================
 # === ПРОЧИЕ КОНСТАНТЫ ===
 # =========================
 BLOCKED_USERS = [354145389]
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
-
 SEARCH_ENGINE_ID = "33026288e406447ea"
 
 # =========================
-# === GEMINI MODEL QUEUES ===
+# === MODEL QUEUES ===
 # =========================
 MODEL_QUEUE_DEFAULT = [
     "gemini-2.0-flash",
@@ -117,15 +117,57 @@ MODEL_QUEUE_SPECIAL = [
 ] + MODEL_QUEUE_DEFAULT
 
 # =========================
-# === GEMINI FALLBACK WRAPPER ===
+# === FALLBACK CHAT SESSION ===
 # =========================
-class GeminiWrapper:
-    def __init__(self, default_queue, special_queue):
+class FallbackChatSession:
+    def __init__(
+        self,
+        wrapper,
+        history: Optional[List[Any]] = None,
+        model_queue: Optional[List[str]] = None,
+        chat_id: Optional[int] = None,
+        user_id: Optional[int] = None
+    ):
+        self.wrapper = wrapper
+        self.history = history or []
+        self.model_queue = model_queue or wrapper.default_queue
+        self.chat_id = chat_id
+        self.user_id = user_id
+
+    def send_message(self, content):
+        if not _gemini_available():
+            raise RuntimeError("Gemini temporarily unavailable")
+
+        for model_name in self.model_queue:
+            try:
+                _global_throttle()
+                model = genai.GenerativeModel(model_name)
+                chat = model.start_chat(history=self.history)
+                response = chat.send_message(content)
+                self.history = chat.history
+                self.wrapper.last_used_model_name = model_name
+                return response
+
+            except exceptions.ResourceExhausted:
+                _block_gemini()
+                raise
+
+            except Exception as e:
+                logging.error(f"Chat error [{model_name}]: {e}")
+
+        raise RuntimeError("All Gemini chat models failed")
+
+
+# =========================
+# === MODEL FALLBACK WRAPPER ===
+# =========================
+class ModelFallbackWrapper:
+    def __init__(self, default_queue: List[str], special_queue: List[str]):
         self.default_queue = default_queue
         self.special_queue = special_queue
         self.last_used_model_name: Optional[str] = None
 
-    def _queue(self, chat_id: Optional[int]):
+    def _get_queue(self, chat_id: Optional[int]):
         if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
@@ -137,46 +179,59 @@ class GeminiWrapper:
         chat_id: Optional[int] = None,
         **kwargs
     ):
-        if not gemini_available():
+        if not _gemini_available():
             raise RuntimeError("Gemini temporarily unavailable")
 
-        for model_name in self._queue(chat_id):
+        for model_name in self._get_queue(chat_id):
             try:
-                global_throttle()
+                _global_throttle()
                 model = genai.GenerativeModel(model_name)
                 result = model.generate_content(prompt, **kwargs)
                 self.last_used_model_name = model_name
                 return result
 
             except exceptions.ResourceExhausted:
-                mark_gemini_blocked()
+                _block_gemini()
                 raise
 
             except Exception as e:
-                logging.error(f"Gemini error [{model_name}]: {e}")
+                logging.error(f"Generate error [{model_name}]: {e}")
 
         raise RuntimeError("All Gemini models failed")
 
-    def start_chat(
-        self,
-        history=None,
-        *,
-        chat_id: Optional[int] = None
-    ):
-        if not gemini_available():
+    def generate_custom(self, model_name: str, *args, **kwargs):
+        if not _gemini_available():
             raise RuntimeError("Gemini temporarily unavailable")
 
-        model_name = self._queue(chat_id)[0]
-        model = genai.GenerativeModel(model_name)
-        chat = model.start_chat(history=history or [])
-        self.last_used_model_name = model_name
-        return chat
+        try:
+            _global_throttle()
+            model = genai.GenerativeModel(model_name)
+            return model.generate_content(*args, **kwargs)
+
+        except exceptions.ResourceExhausted:
+            _block_gemini()
+            raise
+
+    def start_chat(self, history=None, chat_id=None, user_id=None):
+        queue = self._get_queue(chat_id)
+        return FallbackChatSession(
+            self,
+            history=history,
+            model_queue=queue,
+            chat_id=chat_id,
+            user_id=user_id
+        )
+
+    @property
+    def model_names(self):
+        return self.default_queue
 
 
 # =========================
-# === ИНИЦИАЛИЗАЦИЯ ===
+# === PUBLIC CONTRACT ===
 # =========================
-gemini_model = GeminiWrapper(
+# ВАЖНО: имя `model` сохранено
+model = ModelFallbackWrapper(
     MODEL_QUEUE_DEFAULT,
     MODEL_QUEUE_SPECIAL
 )
