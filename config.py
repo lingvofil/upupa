@@ -46,14 +46,12 @@ except ImportError:
 # =========================
 GEMINI_KEYS_POOL = [
     key for key in [
-        GENERIC_API_KEY,
+        #GENERIC_API_KEY,
         GENERIC_API_KEY2,
-        GENERIC_API_KEY3,
-        GENERIC_API_KEY4,
-        GENERIC_API_KEY5,
-        GENERIC_API_KEY6,
-        GOOGLE_API_KEY,
-        GOOGLE_API_KEY2,
+        #GENERIC_API_KEY3,
+        #GENERIC_API_KEY4,
+        #GENERIC_API_KEY5,
+        #GENERIC_API_KEY6,
     ]
     if key
 ]
