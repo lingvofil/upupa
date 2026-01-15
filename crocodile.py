@@ -194,11 +194,12 @@ async def _safe_delete_message(chat_id: int, message_id: int):
 
 
 async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, caption: str):
+    """ИСПРАВЛЕНО: parse_mode='HTML' вместо 'Markdown'"""
     try:
         media = InputMediaPhoto(
             media=BufferedInputFile(image_bytes, filename="preview.jpg"),
             caption=caption,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
         await bot.edit_message_media(
             media=media,
@@ -285,8 +286,8 @@ async def _bump_loop(chat_id: str):
             msg = await bot.send_photo(
                 int(cid),
                 BufferedInputFile(img, "preview.jpg"),
-                caption=f"🎨 *Ресует:* {sess.get('drawer_name','Player')}",
-                parse_mode="Markdown",
+                caption=f"🎨 <b>Рисует:</b> {html.escape(sess.get('drawer_name','Player'))}",
+                parse_mode="HTML",
             )
             sess["preview_message_id"] = msg.message_id
             sess["last_preview_time"] = time.time()
@@ -324,15 +325,17 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     logging.info(f"📸 [{source}] Preview update for {chat_id}")
 
     try:
+        drawer_name = html.escape(session.get('drawer_name', 'Player'))
         await _safe_edit_media(
             chat_id=int(chat_id),
             message_id=int(msg_id),
             image_bytes=image_bytes,
-            caption=f"🎨 **Ресует:** {session['drawer_name']}",
+            caption=f"🎨 <b>Рисует:</b> {drawer_name}",
         )
         session["last_preview_time"] = now
         return "OK"
-    except Exception:
+    except Exception as e:
+        logging.error(f"[_process_snapshot] edit failed: {e}")
         return "Error"
 
 
@@ -359,8 +362,8 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=f"❤️ {likes}", callback_data="btn_like"),
-                InlineKeyboardButton(text="🎨 Хочу рисовать", callback_data="btn_want_draw"),
+                InlineKeyboardButton(text=f"❤️ {likes}", callback_data="cr_like"),
+                InlineKeyboardButton(text="🎨 Хочу рисовать", callback_data="cr_restart"),
             ]
         ]
     )
@@ -369,12 +372,13 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
 
 @sio.event
 async def connect(sid, environ):
-    pass
+    logging.info(f"[socket] Client connected: {sid}")
 
 @sio.event
 async def join_room(sid, data):
     room = str(data.get("room"))
     sio.enter_room(sid, room)
+    logging.info(f"[socket] {sid} joined room {room}")
 
 @sio.event
 async def draw_step(sid, data):
@@ -423,8 +427,8 @@ async def final_frame(sid, data):
         await bot.send_photo(
             chat_id=int(chat_id),
             photo=BufferedInputFile(image_bytes, filename="result.jpg"),
-            caption=f"🏁 **{drawer_name}** завершил рисование!\nСлово было: **{word}**",
-            parse_mode="Markdown",
+            caption=f"🏁 <b>{html.escape(drawer_name)}</b> завершил рисование!\nСлово было: <b>{html.escape(word)}</b>",
+            parse_mode="HTML",
             reply_markup=get_end_game_keyboard(0)
         )
 
@@ -455,7 +459,7 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
+    logging.info(f"[crocodile] Socket server running on {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
 
 # ================== BOT LOGIC ==================
@@ -473,17 +477,17 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
 
     await bot.send_message(
         chat_id,
-        f"🎮 **КРАКАДИЛ**\nХуйдожник: {user_full_name}",
+        f"🎮 <b>КРАКАДИЛ</b>\nХуйдожник: {html.escape(user_full_name)}",
         reply_markup=get_game_keyboard(chat_id),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
     blank = base64.b64decode(BLANK_PNG_B64)
     prev = await bot.send_photo(
         chat_id,
         BufferedInputFile(blank, "b.png"),
-        caption="⏳ *Запуск...*",
-        parse_mode="Markdown",
+        caption="⏳ <i>Запуск...</i>",
+        parse_mode="HTML",
     )
 
     cid = str(chat_id)
@@ -499,6 +503,8 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
 
     if BUMP_INTERVAL and BUMP_INTERVAL > 0:
         game_sessions[cid]["bump_task"] = asyncio.create_task(_bump_loop(cid))
+
+    logging.info(f"[crocodile] New game started in chat {cid}, drawer {user_id}, word: {word}")
 
 
 async def handle_start_game(message: types.Message):
@@ -520,11 +526,11 @@ async def handle_text_stop(message: types.Message):
 
 
 async def handle_callback(cb: types.CallbackQuery):
+    """Обработка всех callback кнопок крокодила"""
     data = cb.data
     
     # === ЛОГИКА ЛАЙКОВ ===
-    if data == "btn_like":
-        # Получаем текущее кол-во лайков из текста кнопки
+    if data == "cr_like":
         try:
             current_kb = cb.message.reply_markup
             if not current_kb or not current_kb.inline_keyboard:
@@ -542,29 +548,28 @@ async def handle_callback(cb: types.CallbackQuery):
             
             # Сообщение в чат
             user_name = cb.from_user.full_name
-            await bot.send_message(cb.message.chat.id, f"❤️ **{user_name}** поставил лайк хуйдожнику!", parse_mode="Markdown")
+            await bot.send_message(
+                cb.message.chat.id, 
+                f"❤️ <b>{html.escape(user_name)}</b> поставил лайк хуйдожнику!", 
+                parse_mode="HTML"
+            )
             
             # Обновляем кнопку
             await cb.message.edit_reply_markup(reply_markup=get_end_game_keyboard(new_count))
             return await cb.answer("Лайк поставлен!")
             
         except Exception as e:
-            logging.error(f"Like error: {e}")
+            logging.error(f"[like] error: {e}", exc_info=True)
             return await cb.answer("Не удалось лайкнуть :(")
 
-    # === ЛОГИКА "ХОЧУ РИСОВАТЬ" ===
-    if data == "btn_want_draw":
-        # Запускаем новую игру от имени нажавшего
-        await cb.answer("Готовим холст...")
-        await start_new_game(cb.message.chat.id, cb.from_user.id, cb.from_user.full_name)
-        return
+    # === ЛОГИКА "ХОЧУ РИСОВАТЬ" (cr_restart обрабатывается в main.py) ===
+    # Это уже обработано в main.py через отдельный хэндлер
 
     # === ИГРОВАЯ ЛОГИКА ===
     chat_id = data.split("_")[-1]
     session = game_sessions.get(chat_id)
     
     if not session:
-        # Если сессии нет, кнопки управления не работают
         if data.startswith("cr_"): 
              return await cb.answer("Игра уже закончилась")
         return
@@ -620,25 +625,26 @@ async def check_answer(msg: types.Message) -> bool:
 
         # 1. Получаем финальную картинку перед удалением сессии
         final_img = sess.get("last_preview_bytes")
+        winner_name = msg.from_user.full_name
+        word_display = sess['word']
 
         # 2. Корректно останавливаем сессию (удаляет превью)
         await _stop_session(cid, reason="guessed")
 
         # 3. Отправляем финальный результат с картинкой
-        caption_text = f"🎉 **{msg.from_user.full_name}** пабедил!\nСлово: **{sess['word']}**"
+        caption_text = f"🎉 <b>{html.escape(winner_name)}</b> пабедил!\nСлово: <b>{html.escape(word_display)}</b>"
         
-        if final_img:
+        if final_img and len(final_img) > 100:  # проверяем что это не пустая картинка
             await msg.answer_photo(
                 BufferedInputFile(final_img, "final.jpg"),
                 caption=caption_text,
-                parse_mode="Markdown",
-                reply_markup=get_end_game_keyboard(0) # Кнопки лайка и рестарта
+                parse_mode="HTML",
+                reply_markup=get_end_game_keyboard(0)
             )
         else:
-            # Если картинки нет (баг или не рисовали), просто текст
             await msg.answer(
                 caption_text, 
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_end_game_keyboard(0)
             )
 
