@@ -152,7 +152,7 @@
 
     canvas.width = document.body.clientWidth;
 
-    // делаем “высокий” холст, чтобы превью в чате было крупнее
+    // делаем "высокий" холст, чтобы превью в чате было крупнее
     const targetH = Math.floor(canvas.width * 1.25);
     const maxH = document.body.clientHeight - toolbarH;
     canvas.height = Math.min(targetH, maxH);
@@ -175,7 +175,7 @@
   const pCtx = pCanvas.getContext('2d', { alpha: false });
 
   function getCompressedJpeg() {
-    const TARGET_W = 420; // можно увеличить, если хочешь еще больше
+    const TARGET_W = 800; // УВЕЛИЧЕНО с 420 до 800
     const scale = Math.min(1, TARGET_W / canvas.width);
 
     pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
@@ -185,8 +185,8 @@
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    // качество 0.65 — нормально и по весу, и по виду
-    return pCanvas.toDataURL('image/jpeg', 0.65);
+    // качество 0.75 для лучшего качества картинки (было 0.65)
+    return pCanvas.toDataURL('image/jpeg', 0.75);
   }
 
   // --- SOCKET ---
@@ -196,6 +196,7 @@
   });
 
   socket.on('connect', () => {
+    console.log('[socket] Connected');
     socket.emit('join_room', { room: roomId });
     // стартовый снап — сразу после подключения
     isDirty = true;
@@ -219,14 +220,19 @@
   let snapInFlight = false;
 
   function sendSnap(force = false) {
-    if (!socket.connected) return;
+    if (!socket.connected) {
+      console.warn('[snapshot] Socket not connected');
+      return;
+    }
     if (snapInFlight) return;
     if (!force && !isDirty) return;
 
     snapInFlight = true;
     const data = getCompressedJpeg();
 
-    socket.emit('snapshot', { room: roomId, image: data }, () => {
+    console.log('[snapshot] Sending preview...');
+    socket.emit('snapshot', { room: roomId, image: data }, (response) => {
+      console.log('[snapshot] Response:', response);
       snapInFlight = false;
     });
 
@@ -283,10 +289,14 @@
     sendSnap(true);
   };
 
-  window.skip = () => socket.emit('skip_turn', { room: roomId });
+  window.skip = () => {
+    console.log('[skip] Requesting new word...');
+    socket.emit('skip_turn', { room: roomId });
+  };
 
   window.finish = () => {
     const img = canvas.toDataURL('image/jpeg', 0.85);
+    console.log('[finish] Sending final frame...');
     socket.emit('final_frame', { room: roomId, image: img });
     tg.close();
   };
