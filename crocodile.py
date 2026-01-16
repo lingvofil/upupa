@@ -308,11 +308,27 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
+    # --- ИСПРАВЛЕНИЕ НАЧАЛО ---
+    # 1. Сначала декодируем и сохраняем байты, чтобы они всегда были актуальными
+    try:
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+        else:
+            encoded = image_data
+        image_bytes = base64.b64decode(encoded)
+        
+        # Сохраняем в сессию ПЕРЕД проверкой времени
+        session["last_preview_bytes"] = image_bytes
+        
+    except Exception:
+        return "Bad image"
+    # --- ИСПРАВЛЕНИЕ КОНЕЦ ---
+
     now = time.time()
-    
-    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Если last_preview_time == 0, значит это первый кадр.
-    # Пропускаем проверку интервала, чтобы сразу показать начало рисования.
     last_time = session.get("last_preview_time", 0)
+
+    # 2. Теперь проверяем интервал
+    # Если прошло мало времени, мы просто выходим, НО байты в session уже новые!
     if last_time != 0 and (now - last_time < PREVIEW_UPDATE_INTERVAL):
         return "Skipped (Throttled)"
 
@@ -320,17 +336,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not msg_id:
         return "No preview_message_id"
 
-    try:
-        if "," in image_data:
-            header, encoded = image_data.split(",", 1)
-        else:
-            encoded = image_data
-        image_bytes = base64.b64decode(encoded)
-    except Exception:
-        return "Bad image"
-
-    session["last_preview_bytes"] = image_bytes
-    
     try:
         await _safe_edit_media(
             chat_id=int(chat_id),
