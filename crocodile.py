@@ -216,16 +216,18 @@ async def _ensure_session(chat_id: str) -> Optional[dict]:
         return session
 
     try:
+        # Если сессия в памяти пропала, пробуем создать минимально рабочую, 
+        # но без данных о слове/художнике она будет "инвалидной"
         blank = base64.b64decode(BLANK_PNG_B64)
         new_msg = await bot.send_photo(
             int(chat_id),
             BufferedInputFile(blank, "b.png"),
-            caption="🔄 Reload",
+            caption="🔄 Сессия восстановлена",
         )
         session = {
             "word": "???",
             "drawer_id": 0,
-            "drawer_name": "Player",
+            "drawer_name": "Художник",
             "preview_message_id": new_msg.message_id,
             "last_preview_time": 0,
             "last_preview_bytes": blank,
@@ -285,7 +287,7 @@ async def _bump_loop(chat_id: str):
             msg = await bot.send_photo(
                 int(cid),
                 BufferedInputFile(img, "preview.jpg"),
-                caption=f"🎨 *Ресует:* {sess.get('drawer_name','Player')}",
+                caption=f"🎨 *Рисует:* {sess.get('drawer_name','Player')}",
                 parse_mode="Markdown",
             )
             sess["preview_message_id"] = msg.message_id
@@ -307,32 +309,39 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "No session"
 
     now = time.time()
-    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
-        return "Skipped"
+    
+    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Если last_preview_time == 0, значит это первый кадр.
+    # Пропускаем проверку интервала, чтобы сразу показать начало рисования.
+    last_time = session.get("last_preview_time", 0)
+    if last_time != 0 and (now - last_time < PREVIEW_UPDATE_INTERVAL):
+        return "Skipped (Throttled)"
 
     msg_id = session.get("preview_message_id")
     if not msg_id:
         return "No preview_message_id"
 
     try:
-        header, encoded = image_data.split(",", 1)
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+        else:
+            encoded = image_data
         image_bytes = base64.b64decode(encoded)
     except Exception:
         return "Bad image"
 
     session["last_preview_bytes"] = image_bytes
-    logging.info(f"📸 [{source}] Preview update for {chat_id}")
-
+    
     try:
         await _safe_edit_media(
             chat_id=int(chat_id),
             message_id=int(msg_id),
             image_bytes=image_bytes,
-            caption=f"🎨 **Ресует:** {session['drawer_name']}",
+            caption=f"🎨 *Рисует:* {session.get('drawer_name', 'Player')}",
         )
         session["last_preview_time"] = now
         return "OK"
-    except Exception:
+    except Exception as e:
+        logging.error(f"Snapshot update error: {e}")
         return "Error"
 
 
@@ -411,7 +420,7 @@ async def final_frame(sid, data):
         return
 
     try:
-        header, encoded = data["image"].split(",", 1)
+        _, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
 
         drawer_name = session.get('drawer_name', 'Художник')
@@ -461,7 +470,7 @@ async def start_socket_server():
 # ================== BOT LOGIC ==================
 
 async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
-    """Запуск новой игры (вынесено в отдельную функцию для реюза)"""
+    """Запуск новой игры"""
     if not _scores:
         _scores_load()
 
@@ -482,7 +491,7 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
     prev = await bot.send_photo(
         chat_id,
         BufferedInputFile(blank, "b.png"),
-        caption="⏳ *Запуск...*",
+        caption="⏳ *Ждем первый мазок...*",
         parse_mode="Markdown",
     )
 
@@ -492,7 +501,7 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
         "drawer_id": user_id,
         "drawer_name": user_full_name,
         "preview_message_id": prev.message_id,
-        "last_preview_time": 0,
+        "last_preview_time": 0, # Оставляем 0 для моментального обновления первого кадра
         "last_preview_bytes": blank,
         "bump_task": None,
     }
@@ -524,37 +533,27 @@ async def handle_callback(cb: types.CallbackQuery):
     
     # === ЛОГИКА ЛАЙКОВ ===
     if data == "btn_like":
-        # Получаем текущее кол-во лайков из текста кнопки
         try:
             current_kb = cb.message.reply_markup
             if not current_kb or not current_kb.inline_keyboard:
                 return await cb.answer("Ошибка кнопки")
             
-            # Находим кнопку лайка (она первая в списке)
             btn = current_kb.inline_keyboard[0][0]
             text = btn.text
-            
-            # Парсим число (❤️ 0 -> 0)
             match = re.search(r'\d+', text)
             count = int(match.group(0)) if match else 0
-            
             new_count = count + 1
             
-            # Сообщение в чат
             user_name = cb.from_user.full_name
             await bot.send_message(cb.message.chat.id, f"❤️ **{user_name}** поставил лайк хуйдожнику!", parse_mode="Markdown")
-            
-            # Обновляем кнопку
             await cb.message.edit_reply_markup(reply_markup=get_end_game_keyboard(new_count))
             return await cb.answer("Лайк поставлен!")
-            
         except Exception as e:
             logging.error(f"Like error: {e}")
             return await cb.answer("Не удалось лайкнуть :(")
 
     # === ЛОГИКА "ХОЧУ РИСОВАТЬ" ===
     if data == "btn_want_draw":
-        # Запускаем новую игру от имени нажавшего
         await cb.answer("Готовим холст...")
         await start_new_game(cb.message.chat.id, cb.from_user.id, cb.from_user.full_name)
         return
@@ -564,7 +563,6 @@ async def handle_callback(cb: types.CallbackQuery):
     session = game_sessions.get(chat_id)
     
     if not session:
-        # Если сессии нет, кнопки управления не работают
         if data.startswith("cr_"): 
              return await cb.answer("Игра уже закончилась")
         return
@@ -598,9 +596,6 @@ async def handle_callback(cb: types.CallbackQuery):
 
 
 async def check_answer(msg: types.Message) -> bool:
-    """
-    Возвращает True если сообщение обработано крокодилом.
-    """
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
 
@@ -610,7 +605,6 @@ async def check_answer(msg: types.Message) -> bool:
     guess = _normalize_guess(msg.text)
     word = _normalize_guess(sess["word"])
 
-    # Художник пишет слово — игнорируем как попытку, но считаем обработанным
     if msg.from_user and msg.from_user.id == sess["drawer_id"] and guess == word:
         return True
 
@@ -618,13 +612,9 @@ async def check_answer(msg: types.Message) -> bool:
         if msg.from_user:
             add_point(cid, msg.from_user.id, msg.from_user.full_name)
 
-        # 1. Получаем финальную картинку перед удалением сессии
         final_img = sess.get("last_preview_bytes")
-
-        # 2. Корректно останавливаем сессию (удаляет превью)
         await _stop_session(cid, reason="guessed")
 
-        # 3. Отправляем финальный результат с картинкой
         caption_text = f"🎉 **{msg.from_user.full_name}** пабедил!\nСлово: **{sess['word']}**"
         
         if final_img:
@@ -632,17 +622,15 @@ async def check_answer(msg: types.Message) -> bool:
                 BufferedInputFile(final_img, "final.jpg"),
                 caption=caption_text,
                 parse_mode="Markdown",
-                reply_markup=get_end_game_keyboard(0) # Кнопки лайка и рестарта
+                reply_markup=get_end_game_keyboard(0)
             )
         else:
-            # Если картинки нет (баг или не рисовали), просто текст
             await msg.answer(
                 caption_text, 
                 parse_mode="Markdown",
                 reply_markup=get_end_game_keyboard(0)
             )
 
-        # 4. Рейтинг
         await bot.send_message(
             int(cid),
             format_leaderboard(cid, "🏆 Самые умные педорасы"),
