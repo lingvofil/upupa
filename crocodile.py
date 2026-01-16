@@ -283,7 +283,8 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
 
     now = time.time()
     last_time = session.get("last_preview_time", 0)
-    if last_time != 0 and (now - last_time < PREVIEW_UPDATE_INTERVAL):
+    # Убираем проверку last_time != 0, чтобы throttling работал всегда
+    if (now - last_time) < PREVIEW_UPDATE_INTERVAL:
         return "Skipped (Throttled)"
 
     msg_id = session.get("preview_message_id")
@@ -300,6 +301,10 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
         return "Bad image"
 
     session["last_preview_bytes"] = image_bytes
+    
+    # Обновляем время ДО попытки отправки, чтобы избежать спама при ошибках
+    session["last_preview_time"] = now
+    
     try:
         await _safe_edit_media(
             chat_id=int(chat_id),
@@ -307,7 +312,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
             image_bytes=image_bytes,
             caption=f"🎨 *Рисует:* {session.get('drawer_name', 'Player')}",
         )
-        session["last_preview_time"] = now
         return "OK"
     except Exception as e:
         logging.error(f"Snapshot update error: {e}")
