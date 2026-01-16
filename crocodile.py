@@ -192,24 +192,6 @@ async def _safe_delete_message(chat_id: int, message_id: int):
     except Exception:
         pass
 
-
-async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, caption: str):
-    try:
-        media = InputMediaPhoto(
-            media=BufferedInputFile(image_bytes, filename="preview.jpg"),
-            caption=caption,
-            parse_mode="Markdown",
-        )
-        await bot.edit_message_media(
-            media=media,
-            chat_id=chat_id,
-            message_id=message_id,
-        )
-    except Exception as e:
-        if "message is not modified" not in str(e).lower():
-            logging.warning(f"Edit media error: {e}")
-
-
 async def _ensure_session(chat_id: str) -> Optional[dict]:
     session = game_sessions.get(chat_id)
     if session:
@@ -268,6 +250,7 @@ async def _bump_loop(chat_id: str):
         return
 
     cid = str(chat_id)
+
     try:
         while True:
             await asyncio.sleep(BUMP_INTERVAL)
@@ -287,9 +270,10 @@ async def _bump_loop(chat_id: str):
             msg = await bot.send_photo(
                 int(cid),
                 BufferedInputFile(img, "preview.jpg"),
-                caption=f"🎨 *Рисует:* {sess.get('drawer_name','Player')}",
-                parse_mode="Markdown",
+                caption=f"🎨 Рисует: {html.escape(sess.get('drawer_name','Player'))}",
+                parse_mode="HTML",
             )
+
             sess["preview_message_id"] = msg.message_id
             sess["last_preview_time"] = time.time()
 
@@ -297,7 +281,6 @@ async def _bump_loop(chat_id: str):
         return
     except Exception as e:
         logging.error(f"[bump_loop] {e}", exc_info=True)
-
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not room or not image_data:
@@ -308,47 +291,43 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     if not session:
         return "No session"
 
-    # --- ИСПРАВЛЕНИЕ НАЧАЛО ---
-    # 1. Сначала декодируем и сохраняем байты, чтобы они всегда были актуальными
-    try:
-        if "," in image_data:
-            header, encoded = image_data.split(",", 1)
-        else:
-            encoded = image_data
-        image_bytes = base64.b64decode(encoded)
-        
-        # Сохраняем в сессию ПЕРЕД проверкой времени
-        session["last_preview_bytes"] = image_bytes
-        
-    except Exception:
-        return "Bad image"
-    # --- ИСПРАВЛЕНИЕ КОНЕЦ ---
-
     now = time.time()
     last_time = session.get("last_preview_time", 0)
 
-    # 2. Теперь проверяем интервал
-    # Если прошло мало времени, мы просто выходим, НО байты в session уже новые!
+    # первый кадр — всегда пропускаем
     if last_time != 0 and (now - last_time < PREVIEW_UPDATE_INTERVAL):
         return "Skipped (Throttled)"
 
-    msg_id = session.get("preview_message_id")
-    if not msg_id:
-        return "No preview_message_id"
+    try:
+        if "," in image_data:
+            _, encoded = image_data.split(",", 1)
+        else:
+            encoded = image_data
+        image_bytes = base64.b64decode(encoded)
+    except Exception:
+        return "Bad image"
+
+    session["last_preview_bytes"] = image_bytes
+
+    old_mid = session.get("preview_message_id")
+    if old_mid:
+        await _safe_delete_message(int(chat_id), int(old_mid))
 
     try:
-        await _safe_edit_media(
-            chat_id=int(chat_id),
-            message_id=int(msg_id),
-            image_bytes=image_bytes,
-            caption=f"🎨 *Рисует:* {session.get('drawer_name', 'Player')}",
+        msg = await bot.send_photo(
+            int(chat_id),
+            BufferedInputFile(image_bytes, "preview.jpg"),
+            caption=f"🎨 Рисует: {html.escape(session.get('drawer_name', 'Player'))}",
+            parse_mode="HTML",
         )
+
+        session["preview_message_id"] = msg.message_id
         session["last_preview_time"] = now
         return "OK"
-    except Exception as e:
-        logging.error(f"Snapshot update error: {e}")
-        return "Error"
 
+    except Exception as e:
+        logging.error(f"[snapshot] send failed: {e}", exc_info=True)
+        return "Error"
 
 # ================== КЛАВИАТУРЫ ==================
 
