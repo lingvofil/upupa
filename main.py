@@ -692,6 +692,7 @@ async def handle_chobylo(message: types.Message):
 # ================== ХЭНДЛЕР ИГРЫ КРОКОДИЛ ==================
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
+    print("CROC BOT ID:", id(bot))
     await crocodile.handle_start_game(message)
 
 @router.callback_query(F.data.startswith("cr_"))
@@ -827,6 +828,7 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
 
     # стартуем polling (БЛОКИРУЮЩИЙ)
+    print("MAIN BOT ID:", id(bot))
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
