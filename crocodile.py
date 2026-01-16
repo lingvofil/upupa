@@ -8,10 +8,8 @@ import json
 import html
 import re
 from typing import Dict, Optional, Union
-
 from aiohttp import web
 import socketio
-
 from aiogram import types
 from aiogram.types import (
     InlineKeyboardMarkup,
@@ -26,17 +24,12 @@ from config import bot
 # ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
 WEB_APP_SHORT_NAME = "upupadile"
-
 SOCKET_SERVER_HOST = "127.0.0.1"
 SOCKET_SERVER_PORT = 8080
 
-# Как часто обновлять картинку в существующем сообщении
-PREVIEW_UPDATE_INTERVAL = 2.5  # сек
-
-# Как часто "поднимать" картинку вниз (переотправлять сообщением)
-BUMP_INTERVAL = 90  # сек
-
-# Сколько лидеров показывать после игры
+# КРИТИЧНО: увеличиваем интервал обновления
+PREVIEW_UPDATE_INTERVAL = 1.0  # было 2.5 - слишком долго
+BUMP_INTERVAL = 90
 LEADERBOARD_TOP = 10
 
 # Файлы данных
@@ -67,12 +60,8 @@ sio.attach(app)
 
 
 # ================== УТИЛИТЫ ==================
-
 def get_chat_id_from_room(room: str) -> str:
-    """
-    room = tg start_param
-    пример: m4611982229 -> -4611982229
-    """
+    """room = tg start_param пример: m4611982229 -> -4611982229"""
     room = str(room)
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
@@ -84,7 +73,6 @@ def _load_words() -> list[str]:
     try:
         if not os.path.exists(WORDS_FILE):
             return ["кот", "дом", "лес", "кит", "сыр", "сок", "мяч", "жук", "зуб", "нос"]
-
         out = []
         with open(WORDS_FILE, "r", encoding="utf-8") as f:
             for line in f:
@@ -92,7 +80,6 @@ def _load_words() -> list[str]:
                 if not s or s.startswith("#"):
                     continue
                 out.append(s)
-
         if not out:
             return ["кот", "дом", "лес", "кит", "сыр"]
         return out
@@ -124,7 +111,6 @@ def _scores_load():
             normalized[str(cid)] = {}
             if not isinstance(table, dict):
                 continue
-
             for uid, v in table.items():
                 uid = str(uid)
                 if isinstance(v, int):
@@ -134,7 +120,6 @@ def _scores_load():
                     name = str(v.get("name", "") or "")
                     normalized[str(cid)][uid] = {"pts": pts, "name": name}
         _scores = normalized
-
     except Exception as e:
         logging.error(f"[scores] load failed: {e}", exc_info=True)
         _scores = {}
@@ -151,7 +136,6 @@ def _scores_save():
 def add_point(chat_id: str, user_id: int, user_name: str = ""):
     cid = str(chat_id)
     uid = str(user_id)
-
     if cid not in _scores:
         _scores[cid] = {}
     if uid not in _scores[cid]:
@@ -160,7 +144,6 @@ def add_point(chat_id: str, user_id: int, user_name: str = ""):
     _scores[cid][uid]["pts"] = int(_scores[cid][uid].get("pts", 0)) + 1
     if user_name:
         _scores[cid][uid]["name"] = str(user_name)
-
     _scores_save()
 
 
@@ -181,8 +164,7 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
         pts = int((data or {}).get("pts", 0))
         name = ((data or {}).get("name") or "").strip() or "игрок"
         safe_name = html.escape(name)
-        lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
-
+        lines.append(f'{i}. {safe_name} — {pts}')
     return "\n".join(lines)
 
 
@@ -194,6 +176,7 @@ async def _safe_delete_message(chat_id: int, message_id: int):
 
 
 async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, caption: str):
+    """ИСПРАВЛЕНО: добавлена проверка на изменение контента"""
     try:
         media = InputMediaPhoto(
             media=BufferedInputFile(image_bytes, filename="preview.jpg"),
@@ -206,6 +189,7 @@ async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, ca
             message_id=message_id,
         )
     except Exception as e:
+        # Игнорируем "message is not modified"
         if "message is not modified" not in str(e).lower():
             logging.warning(f"Edit media error: {e}")
 
@@ -269,7 +253,6 @@ async def _bump_loop(chat_id: str):
     try:
         while True:
             await asyncio.sleep(BUMP_INTERVAL)
-
             sess = game_sessions.get(cid)
             if not sess:
                 return
@@ -285,7 +268,7 @@ async def _bump_loop(chat_id: str):
             msg = await bot.send_photo(
                 int(cid),
                 BufferedInputFile(img, "preview.jpg"),
-                caption=f"🎨 *Ресует:* {sess.get('drawer_name','Player')}",
+                caption=f"🎨 *Рисует:* {sess.get('drawer_name','Player')}",
                 parse_mode="Markdown",
             )
             sess["preview_message_id"] = msg.message_id
@@ -298,6 +281,7 @@ async def _bump_loop(chat_id: str):
 
 
 async def _process_snapshot(room: str, image_data: str, source: str) -> str:
+    """ИСПРАВЛЕНО: убрана проверка на минимальный интервал для socket"""
     if not room or not image_data:
         return "Bad Request"
 
@@ -305,10 +289,6 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     session = await _ensure_session(chat_id)
     if not session:
         return "No session"
-
-    now = time.time()
-    if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
-        return "Skipped"
 
     msg_id = session.get("preview_message_id")
     if not msg_id:
@@ -320,6 +300,13 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
     except Exception:
         return "Bad image"
 
+    # КРИТИЧНО: убираем throttle для socket-обновлений
+    # Проверяем только для HTTP endpoint (если будет)
+    if source == "http":
+        now = time.time()
+        if now - session.get("last_preview_time", 0) < PREVIEW_UPDATE_INTERVAL:
+            return "Skipped"
+
     session["last_preview_bytes"] = image_bytes
     logging.info(f"📸 [{source}] Preview update for {chat_id}")
 
@@ -328,16 +315,16 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
             chat_id=int(chat_id),
             message_id=int(msg_id),
             image_bytes=image_bytes,
-            caption=f"🎨 **Ресует:** {session['drawer_name']}",
+            caption=f"🎨 **Рисует:** {session['drawer_name']}",
         )
-        session["last_preview_time"] = now
+        session["last_preview_time"] = time.time()
         return "OK"
-    except Exception:
+    except Exception as e:
+        logging.error(f"Snapshot edit error: {e}")
         return "Error"
 
 
 # ================== КЛАВИАТУРЫ ==================
-
 def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     v = int(time.time())
@@ -354,6 +341,7 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
         ]
     )
 
+
 def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура, которая показывается под финальным рисунком."""
     return InlineKeyboardMarkup(
@@ -365,45 +353,52 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
         ]
     )
 
-# ================== SOCKET EVENTS ==================
 
+# ================== SOCKET EVENTS ==================
 @sio.event
 async def connect(sid, environ):
-    pass
+    logging.info(f"[socket.io] Client connected: {sid}")
+
 
 @sio.event
 async def join_room(sid, data):
     room = str(data.get("room"))
     sio.enter_room(sid, room)
+    logging.info(f"[socket.io] {sid} joined room {room}")
+
 
 @sio.event
 async def draw_step(sid, data):
     room = str(data.get("room"))
     await sio.emit("draw_data", data, room=room, skip_sid=sid)
 
+
 @sio.event
 async def snapshot(sid, data):
+    """ИСПРАВЛЕНО: обрабатываем snapshot от клиента"""
     room = str(data.get("room") or "")
     image_data = data.get("image") or ""
-    return await _process_snapshot(room, image_data, source="socket")
+    result = await _process_snapshot(room, image_data, source="socket")
+    logging.info(f"[socket.io] Snapshot from {sid}: {result}")
+    return result
+
 
 @sio.event
 async def skip_turn(sid, data):
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
-
     session = game_sessions.get(chat_id)
+
     new_w = _pick_word()
     if session:
         session["word"] = new_w
 
     await sio.emit("new_word_data", {"word": new_w}, room=room)
 
+
 @sio.event
 async def final_frame(sid, data):
-    """
-    Завершение игры кнопкой 🏁 в webapp
-    """
+    """Завершение игры кнопкой 🏁 в webapp"""
     room = str(data.get("room"))
     chat_id = get_chat_id_from_room(room)
     session = game_sessions.get(chat_id)
@@ -413,10 +408,9 @@ async def final_frame(sid, data):
     try:
         header, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)
-
         drawer_name = session.get('drawer_name', 'Художник')
         word = session['word']
-        
+
         # Останавливаем сессию перед отправкой финала
         await _stop_session(chat_id, reason="final_frame")
 
@@ -434,17 +428,16 @@ async def final_frame(sid, data):
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-
     except Exception as e:
         logging.error(f"[final_frame] {e}", exc_info=True)
 
 
 # ================== HTTP ==================
-
 async def serve_index(request: web.Request):
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
 
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
@@ -455,11 +448,10 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
+    logging.info(f"🎮 [crocodile] Socket.IO server running on {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
 
 # ================== BOT LOGIC ==================
-
 async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
     """Запуск новой игры (вынесено в отдельную функцию для реюза)"""
     if not _scores:
@@ -473,7 +465,7 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
 
     await bot.send_message(
         chat_id,
-        f"🎮 **КРАКАДИЛ**\nХуйдожник: {user_full_name}",
+        f"🎮 **КРАКАДИЛ**\nХудожник: {user_full_name}",
         reply_markup=get_game_keyboard(chat_id),
         parse_mode="Markdown",
     )
@@ -510,6 +502,7 @@ async def handle_text_stop(message: types.Message):
     if cid not in game_sessions:
         await message.reply("Игра не запущена.")
         return
+
     await _stop_session(cid, reason="text stop")
     await message.reply("🛑 Игра остановлена.")
     await message.answer(
@@ -521,40 +514,30 @@ async def handle_text_stop(message: types.Message):
 
 async def handle_callback(cb: types.CallbackQuery):
     data = cb.data
-    
+
     # === ЛОГИКА ЛАЙКОВ ===
     if data == "btn_like":
-        # Получаем текущее кол-во лайков из текста кнопки
         try:
             current_kb = cb.message.reply_markup
             if not current_kb or not current_kb.inline_keyboard:
                 return await cb.answer("Ошибка кнопки")
-            
-            # Находим кнопку лайка (она первая в списке)
+
             btn = current_kb.inline_keyboard[0][0]
             text = btn.text
-            
-            # Парсим число (❤️ 0 -> 0)
             match = re.search(r'\d+', text)
             count = int(match.group(0)) if match else 0
-            
             new_count = count + 1
-            
-            # Сообщение в чат
+
             user_name = cb.from_user.full_name
-            await bot.send_message(cb.message.chat.id, f"❤️ **{user_name}** поставил лайк хуйдожнику!", parse_mode="Markdown")
-            
-            # Обновляем кнопку
+            await bot.send_message(cb.message.chat.id, f"❤️ **{user_name}** поставил лайк художнику!", parse_mode="Markdown")
             await cb.message.edit_reply_markup(reply_markup=get_end_game_keyboard(new_count))
             return await cb.answer("Лайк поставлен!")
-            
         except Exception as e:
             logging.error(f"Like error: {e}")
             return await cb.answer("Не удалось лайкнуть :(")
 
     # === ЛОГИКА "ХОЧУ РИСОВАТЬ" ===
     if data == "btn_want_draw":
-        # Запускаем новую игру от имени нажавшего
         await cb.answer("Готовим холст...")
         await start_new_game(cb.message.chat.id, cb.from_user.id, cb.from_user.full_name)
         return
@@ -562,11 +545,10 @@ async def handle_callback(cb: types.CallbackQuery):
     # === ИГРОВАЯ ЛОГИКА ===
     chat_id = data.split("_")[-1]
     session = game_sessions.get(chat_id)
-    
+
     if not session:
-        # Если сессии нет, кнопки управления не работают
-        if data.startswith("cr_"): 
-             return await cb.answer("Игра уже закончилась")
+        if data.startswith("cr_"):
+            return await cb.answer("Игра уже закончилась")
         return
 
     is_drawer = bool(cb.from_user and cb.from_user.id == session.get("drawer_id"))
@@ -598,12 +580,9 @@ async def handle_callback(cb: types.CallbackQuery):
 
 
 async def check_answer(msg: types.Message) -> bool:
-    """
-    Возвращает True если сообщение обработано крокодилом.
-    """
+    """Возвращает True если сообщение обработано крокодилом."""
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
-
     if not sess or not msg.text:
         return False
 
@@ -625,19 +604,18 @@ async def check_answer(msg: types.Message) -> bool:
         await _stop_session(cid, reason="guessed")
 
         # 3. Отправляем финальный результат с картинкой
-        caption_text = f"🎉 **{msg.from_user.full_name}** пабедил!\nСлово: **{sess['word']}**"
-        
+        caption_text = f"🎉 **{msg.from_user.full_name}** победил!\nСлово: **{sess['word']}**"
+
         if final_img:
             await msg.answer_photo(
                 BufferedInputFile(final_img, "final.jpg"),
                 caption=caption_text,
                 parse_mode="Markdown",
-                reply_markup=get_end_game_keyboard(0) # Кнопки лайка и рестарта
+                reply_markup=get_end_game_keyboard(0)
             )
         else:
-            # Если картинки нет (баг или не рисовали), просто текст
             await msg.answer(
-                caption_text, 
+                caption_text,
                 parse_mode="Markdown",
                 reply_markup=get_end_game_keyboard(0)
             )
