@@ -66,7 +66,7 @@ async def handle_switch_to_history(message: types.Message):
     current_settings = chat_settings[chat_id]
     current_settings["active_model"] = "history"
     save_chat_settings()
-    await message.reply("Режим 'По памяти' активирован! 📜\nТеперь я общаюсь только цитатами из истории этого чата.")
+    await message.reply("Режим имитации текущего ебаного чята")
 
 
 async def handle_which_model(message: types.Message):
