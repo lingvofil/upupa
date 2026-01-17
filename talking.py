@@ -301,7 +301,7 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
         if active_model == "history":
             loop = asyncio.get_event_loop()
             # Поиск по логам в фоне, чтобы не блокировать event loop
-            ans = await loop.run_in_executor(None, load_and_find_answer, user_input, chat_id)
+            ans = await loop.run_in_executor(None, load_and_find_answer, user_input, chat_id, 3)
             if ans:
                 update_conversation_history(chat_id, bot_name, ans, role="assistant")
                 return ans
