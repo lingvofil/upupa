@@ -110,7 +110,8 @@ from talking import (
     # НОВЫЕ ИМПОРТЫ:
     handle_switch_to_gigachat,
     handle_switch_to_gemini,
-    handle_which_model
+    handle_which_model,
+    handle_switch_to_history
 )
 from random_reactions import process_random_reactions
 
@@ -755,6 +756,11 @@ async def handle_poem(message: types.Message):
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
     await handle_poem_command(message, poem_type)
 
+@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
+async def cmd_switch_history(message: Message):
+    if message.text.lower() == "упупа нушо":
+        await handle_switch_to_history(message)
+        
 @router.message()
 async def process_message(message: types.Message):
     # 1) Крокодил: перехватываем только правильное угадывание
