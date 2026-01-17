@@ -306,7 +306,7 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                 update_conversation_history(chat_id, bot_name, ans, role="assistant")
                 return ans
             else:
-                return "В моих архивах нет ничего похожего на это... Попробуй сказать что-то другое."
+                return "Отъебись"
 
         # --- КЛАССИЧЕСКАЯ ЛОГИКА: Нейросети ---
         def sync_model_call():
