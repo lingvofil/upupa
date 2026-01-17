@@ -20,7 +20,8 @@ from prompts import (
     DIALOG_TRIGGER_KEYWORDS
 )
 # Функции для извлечения сообщений
-from lexicon_settings import (save_user_message,
+from lexicon_settings import (
+    save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
     extract_user_messages,
@@ -30,8 +31,9 @@ from lexicon_settings import (save_user_message,
 from random_reactions import process_random_reactions
 from stat_rank_settings import track_message_statistics
 
-# === ИМПОРТ SMART SEARCH ===
+# === ИМПОРТ SMART SEARCH И НОВОГО ENGINE ===
 from smart_search import find_relevant_context
+from history_engine import load_and_find_answer
 
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ
@@ -57,6 +59,16 @@ async def handle_switch_to_gemini(message: types.Message):
     await message.reply("Переключился на Gemini ✨")
 
 
+async def handle_switch_to_history(message: types.Message):
+    """Переключение на режим истории (По памяти) - команда 'упупа нушо'"""
+    chat_id = str(message.chat.id)
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    current_settings["active_model"] = "history"
+    save_chat_settings()
+    await message.reply("Режим 'По памяти' активирован! 📜\nТеперь я общаюсь только цитатами из истории этого чата.")
+
+
 async def handle_which_model(message: types.Message):
     """Показывает текущую активную модель"""
     chat_id = str(message.chat.id)
@@ -69,13 +81,15 @@ async def handle_which_model(message: types.Message):
     if active_model == "gigachat":
         model_name = gigachat_model.last_used_model_name or "GigaChat-2"
         await message.reply(f"🤖 Сейчас использую GigaChat: {model_name}")
+    elif active_model == "history":
+        await message.reply("📜 Сейчас я в режиме 'По памяти' (использую историю логов)")
     else:
         model_name = model.last_used_model_name or "gemini-2.0-flash"
         await message.reply(f"✨ Сейчас использую Gemini: {model_name}")
 
 
 # =============================================================================
-# ОБРАБОТЧИКИ КОМАНД (существующие)
+# ОБРАБОТЧИКИ КОМАНД (стихи, промпты)
 # =============================================================================
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -260,7 +274,7 @@ async def handle_change_prompt_randomly_command(message: types.Message):
 
 
 # =============================================================================
-# ОСНОВНАЯ ЛОГИКА ДИАЛОГА (С ПОДДЕРЖКОЙ GIGACHAT)
+# ОСНОВНАЯ ЛОГИКА ДИАЛОГА
 # =============================================================================
 
 def update_conversation_history(chat_id: str, name: str, message_text: str, role: str):
@@ -275,14 +289,26 @@ def format_chat_history(chat_id: str) -> str:
         return "Диалог только начинается."
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
 
-async def generate_response(prompt: str, chat_id: str, bot_name: str) -> str:
-    """Генерирует ответ с использованием выбранной модели (Gemini или GigaChat)"""
+async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input: str = "") -> str:
+    """Генерирует ответ с использованием выбранной модели (Gemini, GigaChat или История)"""
     try:
         # Определяем активную модель для чата
         update_chat_settings(chat_id)
         current_settings = chat_settings.get(chat_id, {})
         active_model = current_settings.get("active_model", "gemini")
         
+        # --- НОВАЯ ЛОГИКА: Режим "По памяти" (без нейросети) ---
+        if active_model == "history":
+            loop = asyncio.get_event_loop()
+            # Поиск по логам в фоне, чтобы не блокировать event loop
+            ans = await loop.run_in_executor(None, load_and_find_answer, user_input, chat_id)
+            if ans:
+                update_conversation_history(chat_id, bot_name, ans, role="assistant")
+                return ans
+            else:
+                return "В моих архивах нет ничего похожего на это... Попробуй сказать что-то другое."
+
+        # --- КЛАССИЧЕСКАЯ ЛОГИКА: Нейросети ---
         def sync_model_call():
             if active_model == "gigachat":
                 response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
@@ -367,7 +393,8 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
         f"{prompt_name}:"
     )
     
-    response_text = await generate_response(full_prompt, chat_id, prompt_name)
+    # Передаем оригинальный user_input в generate_response для режима Истории
+    response_text = await generate_response(full_prompt, chat_id, prompt_name, user_input=user_input)
     return response_text
 
 async def process_general_message(message: types.Message):
@@ -408,7 +435,7 @@ async def process_general_message(message: types.Message):
 
 
 # =============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (имитация стиля, настройки чатов)
 # =============================================================================
 
 async def _create_user_style_prompt(messages: list, display_name: str) -> str:
@@ -452,7 +479,7 @@ def update_chat_settings(chat_id: str) -> None:
         chat_settings[chat_id] = {
             "dialog_enabled": True, 
             "reactions_enabled": True,
-            "prompt": PROMPTS_DICT["врач"],
+            "prompt": PROMPTS_DICT.get("врач", ""),
             "prompt_name": "летописец", 
             "prompt_source": "daily",
             "active_model": "gemini"  # Модель по умолчанию
@@ -461,6 +488,6 @@ def update_chat_settings(chat_id: str) -> None:
 def get_current_chat_prompt(chat_id: str) -> tuple:
     update_chat_settings(chat_id)
     settings = chat_settings.get(chat_id, {})
-    prompt_text = settings.get("prompt", PROMPTS_DICT["летописец"])
+    prompt_text = settings.get("prompt", PROMPTS_DICT.get("летописец", ""))
     prompt_name = settings.get("prompt_name", "летописец")
     return prompt_text, prompt_name
