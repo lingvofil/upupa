@@ -53,20 +53,35 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
 
     try:
         messages = []
+        chat_id_str = str(chat_id)
+        
         with open(log_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-500:] # Читаем хвост файла
-            for line in reversed(lines):
-                match = re.search(r"Chat (\-?\d+).*?\]: (.*?)$", line)
-                if match:
-                    cid, txt = match.groups()
-                    if cid == str(chat_id):
-                        txt = txt.strip()
-                        # Игнорируем команды и слишком короткие фразы
+            # Читаем хвост файла, но обрабатываем аккуратно
+            lines = f.readlines()
+            # Берем последние 1000 строк для большего выбора
+            target_lines = lines[-1000:] if len(lines) > 1000 else lines
+            
+            for line in reversed(target_lines):
+                # Проверяем наличие Chat ID в строке
+                if chat_id_str in line:
+                    # Универсальная регулярка, как в history_engine
+                    # Ищем текст после последнего закрытия квадратной скобки или двоеточия
+                    match = re.search(r"\]:\s*(.*)$", line)
+                    if match:
+                        txt = match.group(1).strip()
+                        # Игнорируем команды, короткие фразы и системные сообщения
                         if txt and not txt.startswith("/") and len(txt) > 3:
+                            # Убираем сообщения, где упоминается сам мем
                             if not any(x in txt.lower() for x in ["мем", "meme"]):
                                 messages.append(txt)
-                if len(messages) > 100: break
-        return random.choice(messages) if messages else "Где все?"
+                
+                if len(messages) >= 50: 
+                    break
+        
+        if messages:
+            return random.choice(messages)
+        return "Где все?"
+        
     except Exception as e:
         logging.error(f"Meme context error: {e}")
         return "Ошибка 404: Юмор не найден"
@@ -102,18 +117,16 @@ async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInp
     return None
 
 async def check_and_send_random_meme(message: Message):
-    """Проверка условий (настройки + настраиваемый шанс) и отправка мема"""
+    """Проверка условий и отправка мема"""
     if not message.text or message.text.startswith("/"):
         return
 
     chat_id_str = str(message.chat.id)
     settings = chat_settings.get(chat_id_str, {})
     
-    # Проверка: включена ли опция в настройках чата
     if not settings.get("random_memes_enabled", False):
         return
 
-    # Получаем шанс из настроек или дефолт 1%
     meme_prob = settings.get("meme_prob", 0.01)
 
     if random.random() < meme_prob:
@@ -122,6 +135,6 @@ async def check_and_send_random_meme(message: Message):
             photo = await create_meme_image(message.chat.id)
             if photo:
                 await message.answer_photo(photo)
-                logging.info(f"Random meme triggered in chat {message.chat.id} with prob {meme_prob}")
+                logging.info(f"Random meme triggered in chat {message.chat.id}")
         except Exception as e:
             logging.error(f"Random meme trigger error: {e}")
