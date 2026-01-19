@@ -3,16 +3,15 @@ import random
 import logging
 import requests
 import re
+import io
 from aiogram import types
-from config import bot, API_TOKEN, model, ROBOTICS_MODEL
+from config import bot, API_TOKEN, model, ROBOTICS_MODEL, groq_ai
 from prompts import PROMPTS_MEDIA
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 
 def get_custom_prompt(message: types.Message) -> str | None:
-    """
-    Извлекает кастомный промпт из сообщения, который идет после 'чотам'.
-    """
+    """ Извлекает кастомный промпт из сообщения, который идет после 'чотам'. """
     text = message.text or message.caption or ""
     if "чотам" in text.lower():
         # Используем re.split для регистронезависимого разделения, чтобы отделить команду от промпта
@@ -23,37 +22,34 @@ def get_custom_prompt(message: types.Message) -> str | None:
 
 # Общая функция для скачивания файлов
 async def download_file(file_id: str, file_name: str) -> bool:
-    """
-    Загружает файл из Telegram.
-    Returns: bool: True если загрузка успешна, False в противном случае
-    """
+    """ Загружает файл из Telegram. Returns: bool: True если загрузка успешна, False в противном случае """
     try:
         file_info = await bot.get_file(file_id)
         file_path = file_info.file_path
         file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
-        
         response = requests.get(file_url)
-        response.raise_for_status() # Вызовет ошибку при плохом ответе
-            
+        response.raise_for_status() 
         with open(file_name, "wb") as f:
             f.write(response.content)
         return True
-        
     except Exception as e:
         logging.error(f"Ошибка при загрузке файла {file_id}: {e}")
         return False
 
 # Общая функция анализа для медиа (принимает путь ИЛИ байты)
 async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_prompt: str | None = None, chat_id: int | str | None = None) -> str:
-    """
-    Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание.
-    """
+    """ Анализирует медиафайл (из пути или байтов) и возвращает текстовое описание. """
     try:
         media_data = None
-        if isinstance(media_source, str): # Если это путь к файлу
+        temp_file_name = "media_input.tmp"
+        
+        if isinstance(media_source, str):
+            # Если это путь к файлу
             with open(media_source, "rb") as media_file:
                 media_data = media_file.read()
-        elif isinstance(media_source, bytes): # Если это уже байты
+            temp_file_name = os.path.basename(media_source)
+        elif isinstance(media_source, bytes):
+            # Если это уже байты
             media_data = media_source
         else:
             raise ValueError("Неверный тип media_source: нужен str (путь) или bytes")
@@ -64,12 +60,32 @@ async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_
         else:
             base_prompt = random.choice(PROMPTS_MEDIA)
             content_prompt = f"{base_prompt}, не более 80 слов"
+
+        # === ЛОГИКА GROQ (Приоритет) ===
         
+        # 1. Фотографии и статические изображения
+        if mime_type.startswith('image/') or mime_type == "image/webp":
+            try:
+                logging.info(f"Использую Groq Vision для {mime_type}")
+                return groq_ai.analyze_image(media_data, content_prompt)
+            except Exception as ge:
+                logging.error(f"Groq Vision failed: {ge}. Falling back to Gemini.")
+
+        # 2. Аудио (Whisper + Llama)
+        elif mime_type.startswith('audio/') or mime_type == "audio/ogg":
+            try:
+                logging.info(f"Использую Groq Whisper для {mime_type}")
+                transcript = groq_ai.transcribe_audio(media_data, temp_file_name)
+                analysis_prompt = f"Это текст из аудиофайла. {content_prompt}\n\nТекст: {transcript}"
+                return groq_ai.generate_text(analysis_prompt)
+            except Exception as ge:
+                logging.error(f"Groq Audio failed: {ge}. Falling back to Gemini.")
+
+        # === ЛОГИКА GEMINI (Видео, ГИФ или Fallback) ===
         contents = [
             {"mime_type": mime_type, "data": media_data},
             content_prompt
         ]
-        
         response = model.generate_content(contents, chat_id=chat_id)
         return response.text
     except Exception as e:
@@ -137,8 +153,8 @@ def extract_image_info(message: types.Message) -> tuple[str | None, str, str | N
     if target_message.photo:
         photo = target_message.photo[-1]
         file_id = photo.file_id
-        file_name = f"photo_{file_id}.jpg" 
-        mime_type = "image/jpeg" 
+        file_name = f"photo_{file_id}.jpg"
+        mime_type = "image/jpeg"
         return file_id, file_name, mime_type
     return None, "", None
 
@@ -166,7 +182,7 @@ def extract_gif_info(message: types.Message) -> tuple[str | None, str, str | Non
     if target_message.animation:
         animation = target_message.animation
         file_id = animation.file_id
-        file_name = f"gif_{file_id}.mp4" 
+        file_name = f"gif_{file_id}.mp4"
         mime_type = animation.mime_type or "image/gif"
         return file_id, file_name, mime_type
     return None, "", None
@@ -222,11 +238,9 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
         logging.error(f"Ошибка при обработке стикера 'чотам': {e}")
         return False, "Ошибка при анализе стикера."
 
-# ================== TEXT ==================
+# ================== TEXT (Groq Priority) ==================
 async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
-    """
-    Обработка текста по команде 'чотам'
-    """
+    """ Обработка текста по команде 'чотам' с использованием Groq """
     try:
         if not (message.reply_to_message and message.reply_to_message.text):
             return False, "Для анализа текста ответьте на сообщение командой 'чотам'."
@@ -239,12 +253,17 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
         else:
             base_prompt = random.choice(PROMPTS_MEDIA)
             content_prompt = f"{base_prompt}, не более 80 слов"
-        
+            
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
         
-        response = model.generate_content(prompt, chat_id=message.chat.id)
-        return True, response.text
-        
+        try:
+            logging.info("Использую Groq для текстового анализа 'чотам'")
+            response_text = groq_ai.generate_text(prompt)
+            return True, response_text
+        except Exception as ge:
+            logging.error(f"Groq text failed: {ge}. Falling back to Gemini.")
+            response = model.generate_content(prompt, chat_id=message.chat.id)
+            return True, response.text
     except Exception as e:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
@@ -255,18 +274,15 @@ def extract_url_from_message(message: types.Message) -> str | None:
     text = message.text or message.caption or ""
     if not text:
         return None
-    
-    # Сначала проверяем entities (более надежно)
+    # Сначала проверяем entities
     if message.entities:
         for entity in message.entities:
             if entity.type == 'url':
                 return text[entity.offset : entity.offset + entity.length]
-                
     if message.caption_entities:
-         for entity in message.caption_entities:
+        for entity in message.caption_entities:
             if entity.type == 'url':
                 return text[entity.offset : entity.offset + entity.length]
-                
     # Если entities нет, ищем простым regex
     match = re.search(r'https?://[^\s]+', text)
     if match:
@@ -274,161 +290,106 @@ def extract_url_from_message(message: types.Message) -> str | None:
     return None
 
 async def process_url_whatisthere(message: types.Message, url: str) -> tuple[bool, str]:
-    """Обрабатывает контент по URL (ручной метод, т.к. url_context недоступен)"""
+    """Обрабатывает контент по URL"""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'} 
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, timeout=10, allow_redirects=True, headers=headers)
         response.raise_for_status()
-        
         content_type = response.headers.get('Content-Type', '').split(';')[0].strip()
         custom_prompt = get_custom_prompt(message)
-
+        
         logging.info(f"URL: {url}, Content-Type: {content_type}")
-
-        # Вариант 1: Медиа (Аудио, Видео, Изображение)
+        
+        # Вариант 1: Медиа
         if content_type.startswith(('audio/', 'video/', 'image/')):
-            logging.info("Тип: Аудио/Видео/Изображение. Загружаю байты...")
+            logging.info("Тип: Медиа. Загружаю...")
             media_data = response.content
             description = await analyze_media_bytes(media_data, content_type, custom_prompt, chat_id=message.chat.id)
             return True, description
             
-        # Вариант 2: HTML или обычный текст
+        # Вариант 2: HTML
         elif content_type.startswith(('text/html', 'text/plain')):
-            logging.info("Тип: HTML/Текст. Парсинг BeautifulSoup...")
-            # Используем .content вместо .text для правильной обработки кодировки
+            logging.info("Тип: Текст/HTML. Парсинг...")
             soup = BeautifulSoup(response.content, 'html.parser')
             text_to_analyze = soup.get_text(separator=' ', strip=True)
-
             if len(text_to_analyze) > 4000:
                 text_to_analyze = text_to_analyze[:4000] + "..."
-            
             if not text_to_analyze.strip():
-                 return False, "Не смог извлечь текст с этой страницы (возможно, это JavaScript-сайт)."
+                return False, "Не смог извлечь текст."
 
-            # Логика анализа текста (как в process_text_whatisthere)
-            if custom_prompt:
-                content_prompt = f"{custom_prompt}, не более 80 слов"
-            else:
-                base_prompt = random.choice(PROMPTS_MEDIA)
-                content_prompt = f"{base_prompt}, не более 80 слов"
-                
-            prompt = f"{content_prompt}\n\nТекст для анализа (взято с сайта {url}): {text_to_analyze}"
+            base_prompt = custom_prompt if custom_prompt else random.choice(PROMPTS_MEDIA)
+            prompt = f"{base_prompt}, не более 80 слов\n\nТекст с сайта {url}: {text_to_analyze}"
             
-            gen_response = model.generate_content(prompt, chat_id=message.chat.id)
-            return True, gen_response.text
-
-        # Вариант 3: Непонятный тип
-        else:
-            logging.warning(f"Неподдерживаемый/неопределенный тип контента по URL: {content_type}")
-            return False, f"Не могу разобрать этот тип контента: {content_type} (URL: {url})"
-            
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Ошибка при загрузке URL {url}: {e}")
-        return False, "Не удалось загрузить контент по ссылке."
+            try:
+                logging.info("Анализ текста ссылки через Groq")
+                res = groq_ai.generate_text(prompt)
+                return True, res
+            except:
+                gen_response = model.generate_content(prompt, chat_id=message.chat.id)
+                return True, gen_response.text
+        return False, f"Неподдерживаемый тип: {content_type}"
     except Exception as e:
-        # Добавляем exc_info=True для полного трейсбека в логах
-        logging.error(f"Ошибка при обработке URL 'чотам': {e}", exc_info=True)
+        logging.error(f"Ошибка при обработке URL 'чотам': {e}")
         return False, "Ошибка при анализе ссылки."
 
 # ================== ROBOTICS / ОПИШИ СИЛЬНО ==================
 async def process_robotics_description(message: types.Message) -> tuple[bool, str]:
-    """
-    Анализ фото/видео/гиф с использованием Gemini Robotics (Embodied Reasoning).
-    Идеально для оценки геометрии, проходимости и физических свойств объектов.
-    """
+    """ Анализ фото/видео/гиф с использованием Gemini Robotics. """
     file_path = None
     try:
-        # 1. Извлекаем медиа (из самого сообщения или реплая)
         target_message = message.reply_to_message if message.reply_to_message else message
+        file_id, file_name, mime_type = None, None, None
         
-        file_id = None
-        file_name = None
-        mime_type = None
-
         if target_message.photo:
             photo = target_message.photo[-1]
-            file_id = photo.file_id
-            file_name = f"robotics_{file_id}.jpg"
-            mime_type = "image/jpeg"
+            file_id, file_name, mime_type = photo.file_id, f"robotics_{photo.file_id}.jpg", "image/jpeg"
         elif target_message.video:
-            file_id = target_message.video.file_id
-            file_name = f"robotics_{file_id}.mp4"
-            mime_type = target_message.video.mime_type or "video/mp4"
+            file_id, file_name, mime_type = target_message.video.file_id, f"robotics_{file_id}.mp4", "video/mp4"
         elif target_message.animation:
-            # В Telegram гифки часто приходят как mp4 без звука
-            file_id = target_message.animation.file_id
-            file_name = f"robotics_{file_id}.mp4"
-            mime_type = target_message.animation.mime_type or "video/mp4"
+            file_id, file_name, mime_type = target_message.animation.file_id, f"robotics_{file_id}.mp4", "video/mp4"
 
         if not file_id:
             return False, "Для мощного анализа нужна фотография, видео или гифка."
             
-        # 2. Скачиваем файл
         if not await download_file(file_id, file_name):
-            return False, "Не удалось скачать файл для анализа."
+            return False, "Не удалось скачать файл."
         file_path = file_name
-
-        # 3. Инициализируем Robotics модель
-        robotics_model = genai.GenerativeModel(ROBOTICS_MODEL)
         
-        # 4. Читаем байты
+        robotics_model = genai.GenerativeModel(ROBOTICS_MODEL)
         with open(file_name, "rb") as f:
             media_data = f.read()
 
-        # 5. Формируем промпт "Сталкер / Инженер"
-        # Robotics модель хорошо понимает физику, поэтому просим её смотреть на мир через эту призму.
-        # Извлекаем "опиши сильно <промпт>" -> <промпт>
         text = message.text or message.caption or ""
         user_add_prompt = None
         if "опиши сильно" in text.lower():
             parts = re.split(r'опиши сильно', text, 1, re.IGNORECASE)
             if len(parts) > 1 and parts[1].strip():
                 user_add_prompt = parts[1].strip()
-        
+
         system_prompt = (
             "Ты — эксперт по физическому взаимодействию и анализу пространства (Embodied AI). "
-            "Проанализируй медиафайл (фото или видео) с точки зрения физики, геометрии, динамики.\n"
-            "Если это локация: оцени проходимость, устойчивость конструкций, возможные пути и риски.\n"
-            "Если это предмет: опиши его материал, примерный вес, как его можно использовать или взять в руки.\n"
-            "Если это видео: обрати внимание на движение, инерцию, изменение состояния объектов.\n"
-            "Отвечай коротко и по делу, как опытный исследователь. используй сильный сарказм и нецензурную лексику, сильно склоняйся к апофении и парейдолии. Не более 100 слов"
+            "Используй сильный сарказм и нецензурную лексику, сильно склоняйся к апофении и парейдолии. Не более 100 слов."
         )
-        
-        full_prompt = f"{system_prompt}\n\nЗадача от пользователя: {user_add_prompt}" if user_add_prompt else system_prompt
-
-        # 6. Генерируем ответ
-        # Передаем контент как mime_type data
+        full_prompt = f"{system_prompt}\n\nЗадача: {user_add_prompt}" if user_add_prompt else system_prompt
         response = robotics_model.generate_content([full_prompt, {"mime_type": mime_type, "data": media_data}])
-        
         return True, response.text
-
     except Exception as e:
-        logging.error(f"Ошибка в process_robotics_description: {e}")
+        logging.error(f"Ошибка Robotics: {e}")
         return False, f"Модуль Robotics выдал ошибку: {e}"
     finally:
-        # Удаляем файл
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-            
+
 # ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
-    """
-    Универсальная функция для обработки всех типов медиа, текста и URL по команде 'чотам'
-    """
+    """ Универсальная функция для обработки всех типов контента """
     target_message = message.reply_to_message if message.reply_to_message else message
-    
-    # В первую очередь ищем URL
-    # Проверяем и в реплае и в самом сообщении
     url = extract_url_from_message(target_message)
-    if not url:
-         # Если в реплае нет, ищем в самом триггер-сообщении
-         if not message.reply_to_message:
-            url = extract_url_from_message(message)
-
+    if not url and not message.reply_to_message:
+        url = extract_url_from_message(message)
     if url:
         return await process_url_whatisthere(message, url)
-        
-    # Определяем тип медиа и вызываем соответствующую функцию
+
     if target_message.audio or target_message.voice:
         return await process_audio_description(message)
     elif target_message.video:
@@ -441,38 +402,24 @@ async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str
         return await process_sticker_whatisthere(message)
     elif target_message.text:
         if message.reply_to_message:
-             return await process_text_whatisthere(message)
+            return await process_text_whatisthere(message)
         else:
-             return False, "Для анализа текста ответьте на сообщение."
+            return False, "Для анализа текста ответьте на сообщение."
     else:
         return False, "Не найдено контента для анализа."
 
 def get_processing_message(message: types.Message) -> str:
-    """
-    Возвращает подходящее сообщение о процессе в зависимости от типа медиа
-    """
+    """ Возвращает подходящее сообщение о процессе """
     target_message = message.reply_to_message if message.reply_to_message else message
-    
-    # Проверка на URL
     url = extract_url_from_message(target_message)
-    if not url:
-        if not message.reply_to_message:
-            url = extract_url_from_message(message)
-
-    if url:
-        return "Лезю по ссылке..."
-        
-    if target_message.audio or target_message.voice:
-        return "Слушою..."
-    elif target_message.video:
-        return "Сматрю..."
-    elif target_message.photo:
-        return "Рассматриваю ето художество..."
-    elif target_message.animation:
-        return "Да не дергайся ты..."
-    elif target_message.sticker:
-        return "Стикер-шмикер..."
-    elif target_message.text:
-        return "Понаписали ебанарот..."
-    else:
-        return "Анализирую..."
+    if not url and not message.reply_to_message:
+        url = extract_url_from_message(message)
+    if url: return "Лезю по ссылке..."
+    
+    if target_message.audio or target_message.voice: return "Слушою через Groq..."
+    elif target_message.video: return "Сматрю..."
+    elif target_message.photo: return "Рассматриваю ето художество в Groq..."
+    elif target_message.animation: return "Да не дергайся ты..."
+    elif target_message.sticker: return "Стикер-шмикер..."
+    elif target_message.text: return "Понаписали ебанарот..."
+    else: return "Анализирую..."
