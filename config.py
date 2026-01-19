@@ -51,22 +51,33 @@ except ImportError:
 class GroqWrapper:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
-        self.vision_model = "llama-3.2-11b-vision-preview"
+        # Обновленные модели (llama-3.2-11b-vision-preview больше не работает)
+        self.vision_model = "llama-3.2-11b-vision-pixtral" 
         self.text_model = "llama-3.3-70b-versatile"
         self.audio_model = "whisper-large-v3"
 
     def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
         """Анализ изображений (Vision)"""
         if not self.client: return "Ключ Groq не настроен"
+        
+        # Ограничение Groq на размер изображения (лучше сжимать, если файл > 4MB)
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
         try:
             completion = self.client.chat.completions.create(
                 model=self.vision_model,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]}],
-                temperature=0.7
+                messages=[{
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url", 
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }],
+                temperature=0.7,
+                max_tokens=1024
             )
             return completion.choices[0].message.content
         except Exception as e:
@@ -91,7 +102,6 @@ class GroqWrapper:
         """Транскрибация аудио (Whisper)"""
         if not self.client: return "Ключ Groq не настроен"
         try:
-            # Groq ожидает файлоподобный объект с именем
             audio_file = io.BytesIO(audio_bytes)
             audio_file.name = file_name 
             
