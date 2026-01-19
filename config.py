@@ -6,6 +6,7 @@ import random
 import logging
 from typing import List, Dict, Optional, Any
 from groq import Groq
+from PIL import Image
 import base64
 import io
 import google.generativeai as genai
@@ -51,27 +52,43 @@ except ImportError:
 class GroqWrapper:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
-        # Обновленные модели (llama-3.2-11b-vision-preview больше не работает)
-        self.vision_model = "llama-3.2-11b-vision-pixtral" 
+        # Актуальные модели на текущий момент
+        self.vision_model = "llama-3.2-90b-vision-preview" 
         self.text_model = "llama-3.3-70b-versatile"
         self.audio_model = "whisper-large-v3"
 
+    def _prepare_image(self, image_bytes: bytes) -> str:
+        """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        # Конвертируем в RGB если нужно (для PNG/WebP с прозрачностью)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        # Если картинка слишком большая, уменьшаем её (Groq рекомендует до 1-2МБ)
+        max_size = 1280
+        if max(img.size) > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
     def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
-        """Анализ изображений (Vision)"""
+        """Анализ изображений (Vision) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
         
-        # Ограничение Groq на размер изображения (лучше сжимать, если файл > 4MB)
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
         try:
+            base64_image = self._prepare_image(image_bytes)
+            
             completion = self.client.chat.completions.create(
                 model=self.vision_model,
                 messages=[{
-                    "role": "user", 
+                    "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
                         {
-                            "type": "image_url", 
+                            "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
                         }
                     ]
@@ -85,13 +102,14 @@ class GroqWrapper:
             raise
 
     def generate_text(self, prompt: str) -> str:
-        """Генерация текста (LLM)"""
+        """Генерация текста (LLM) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
         try:
             completion = self.client.chat.completions.create(
                 model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7
+                temperature=0.7,
+                max_tokens=1024
             )
             return completion.choices[0].message.content
         except Exception as e:
@@ -99,7 +117,7 @@ class GroqWrapper:
             raise
 
     def transcribe_audio(self, audio_bytes: bytes, file_name: str) -> str:
-        """Транскрибация аудио (Whisper)"""
+        """Транскрибация аудио (Whisper) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
         try:
             audio_file = io.BytesIO(audio_bytes)
@@ -116,6 +134,11 @@ class GroqWrapper:
             raise
 
 # Инициализация
+try:
+    from config_private import GROQ_API_KEY
+except ImportError:
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
 groq_ai = GroqWrapper(GROQ_API_KEY)
 
 # =========================
