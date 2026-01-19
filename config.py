@@ -5,7 +5,9 @@ import time
 import random
 import logging
 from typing import List, Dict, Optional, Any
-
+from groq import Groq
+import base64
+import io
 import google.generativeai as genai
 from google.api_core import exceptions
 
@@ -34,12 +36,77 @@ try:
         GIGACHAT_CLIENT_ID,
         CLOUDFLARE_ACCOUNT_ID,
         CLOUDFLARE_API_TOKEN,
-        HUGGINGFACE_TOKEN
+        HUGGINGFACE_TOKEN,
+        GROQ_API_KEY
     )
 except ImportError:
     API_TOKEN = os.getenv("API_TOKEN")
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# =========================
+# === GROQ WRAPPER ===
+# =========================
+class GroqWrapper:
+    def __init__(self, api_key: str):
+        self.client = Groq(api_key=api_key) if api_key else None
+        self.vision_model = "llama-3.2-11b-vision-preview"
+        self.text_model = "llama-3.3-70b-versatile"
+        self.audio_model = "whisper-large-v3"
+
+    def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
+        """Анализ изображений (Vision)"""
+        if not self.client: return "Ключ Groq не настроен"
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.vision_model,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]}],
+                temperature=0.7
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Groq Vision Error: {e}")
+            raise
+
+    def generate_text(self, prompt: str) -> str:
+        """Генерация текста (LLM)"""
+        if not self.client: return "Ключ Groq не настроен"
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.text_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Groq Text Error: {e}")
+            raise
+
+    def transcribe_audio(self, audio_bytes: bytes, file_name: str) -> str:
+        """Транскрибация аудио (Whisper)"""
+        if not self.client: return "Ключ Groq не настроен"
+        try:
+            # Groq ожидает файлоподобный объект с именем
+            audio_file = io.BytesIO(audio_bytes)
+            audio_file.name = file_name 
+            
+            transcription = self.client.audio.transcriptions.create(
+                file=audio_file,
+                model=self.audio_model,
+                response_format="text"
+            )
+            return transcription
+        except Exception as e:
+            logging.error(f"Groq Whisper Error: {e}")
+            raise
+
+# Инициализация
+groq_ai = GroqWrapper(GROQ_API_KEY)
 
 # =========================
 # === GEMINI KEYS ===
