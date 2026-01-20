@@ -55,7 +55,7 @@ class GroqWrapper:
         self.client = Groq(api_key=api_key) if api_key else None
         # Актуальные модели на текущий момент
         self.vision_model = "llama-3.2-90b-vision-preview" 
-        self.text_model = "moonshotai/kimi-k2"  # Изменили на более стабильную модель
+        self.text_model = "llama-3.3-70b-versatile"  # Изменили на более стабильную модель
         self.audio_model = "whisper-large-v3"
     
     def _prepare_image(self, image_bytes: bytes) -> str:
