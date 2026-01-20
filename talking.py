@@ -1,3 +1,4 @@
+#talking.py
 import random
 import logging
 import asyncio
@@ -8,7 +9,7 @@ from aiogram import types
 # Обновленные импорты
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
-    conversation_history, model, gigachat_model, bot
+    conversation_history, model, gigachat_model, bot, groq_ai, ADMIN_ID
 )
 # Функции для работы с файлами и промптами
 from chat_settings import save_chat_settings, add_chat
@@ -36,41 +37,59 @@ from smart_search import find_relevant_context
 from history_engine import load_and_find_answer
 
 # =============================================================================
-# ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ
+# ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ (ГЛОБАЛЬНО ДЛЯ ВСЕХ ЧАТОВ)
 # =============================================================================
 
 async def handle_switch_to_gigachat(message: types.Message):
-    """Переключение на модель GigaChat"""
-    chat_id = str(message.chat.id)
-    update_chat_settings(chat_id)
-    current_settings = chat_settings[chat_id]
-    current_settings["active_model"] = "gigachat"
+    """Переключение на модель GigaChat для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "gigachat"
     save_chat_settings()
-    await message.reply("Переключился на GigaChat 🤖")
+    await message.reply("🤖 Все чаты переключены на GigaChat")
 
 
 async def handle_switch_to_gemini(message: types.Message):
-    """Переключение на модель Gemini"""
-    chat_id = str(message.chat.id)
-    update_chat_settings(chat_id)
-    current_settings = chat_settings[chat_id]
-    current_settings["active_model"] = "gemini"
+    """Переключение на модель Gemini для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "gemini"
     save_chat_settings()
-    await message.reply("Переключился на Gemini ✨")
+    await message.reply("✨ Все чаты переключены на Gemini")
+
+
+async def handle_switch_to_groq(message: types.Message):
+    """Переключение на модель Groq для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "groq"
+    save_chat_settings()
+    await message.reply("⚡ Все чаты переключены на Groq")
 
 
 async def handle_switch_to_history(message: types.Message):
-    """Переключение на режим истории (По памяти) - команда 'упупа нушо'"""
-    chat_id = str(message.chat.id)
-    update_chat_settings(chat_id)
-    current_settings = chat_settings[chat_id]
-    current_settings["active_model"] = "history"
+    """Переключение на режим истории (По памяти) для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "history"
     save_chat_settings()
-    await message.reply("Режим имитации текущего ебаного чята")
+    await message.reply("📜 Все чаты переключены на режим 'По памяти'")
 
 
 async def handle_which_model(message: types.Message):
-    """Показывает текущую активную модель"""
+    """Показывает текущую активную модель в этом чате"""
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
     
@@ -78,15 +97,15 @@ async def handle_which_model(message: types.Message):
     current_settings = chat_settings.get(chat_id, {})
     active_model = current_settings.get("active_model", "gemini")
     
-    if active_model == "gigachat":
-        model_name = gigachat_model.last_used_model_name or "GigaChat-2"
-        await message.reply(f"🤖 Сейчас использую GigaChat: {model_name}")
-    elif active_model == "history":
-        await message.reply("📜 Сейчас я в режиме 'По памяти' (использую историю логов)")
-    else:
-        model_name = model.last_used_model_name or "gemini-2.0-flash"
-        await message.reply(f"✨ Сейчас использую Gemini: {model_name}")
-
+    model_messages = {
+        "gigachat": lambda: f"🤖 Сейчас использую GigaChat: {gigachat_model.last_used_model_name or 'GigaChat-2'}",
+        "history": lambda: "📜 Сейчас я в режиме 'По памяти' (использую историю логов)",
+        "groq": lambda: f"⚡ Сейчас использую Groq: {groq_ai.text_model}",
+        "gemini": lambda: f"✨ Сейчас использую Gemini: {model.last_used_model_name or 'gemini-2.0-flash'}"
+    }
+    
+    response = model_messages.get(active_model, model_messages["gemini"])()
+    await message.reply(response)
 
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД (стихи, промпты)
@@ -290,17 +309,15 @@ def format_chat_history(chat_id: str) -> str:
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
 
 async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input: str = "") -> str:
-    """Генерирует ответ с использованием выбранной модели (Gemini, GigaChat или История)"""
+    """Генерирует ответ с использованием выбранной модели (Gemini, GigaChat, Groq или История)"""
     try:
-        # Определяем активную модель для чата
         update_chat_settings(chat_id)
         current_settings = chat_settings.get(chat_id, {})
         active_model = current_settings.get("active_model", "gemini")
         
-        # --- НОВАЯ ЛОГИКА: Режим "По памяти" (без нейросети) ---
+        # --- РЕЖИМ "ПО ПАМЯТИ" (без нейросети) ---
         if active_model == "history":
             loop = asyncio.get_event_loop()
-            # Поиск по логам в фоне, чтобы не блокировать event loop
             ans = await loop.run_in_executor(None, load_and_find_answer, user_input, chat_id, 3)
             if ans:
                 update_conversation_history(chat_id, bot_name, ans, role="assistant")
@@ -308,13 +325,16 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
             else:
                 return "Отъебись"
 
-        # --- КЛАССИЧЕСКАЯ ЛОГИКА: Нейросети ---
+        # --- ГЕНЕРАЦИЯ ЧЕРЕЗ НЕЙРОСЕТИ ---
         def sync_model_call():
             if active_model == "gigachat":
                 response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
-            else:
+                return response.text
+            elif active_model == "groq":
+                return groq_ai.generate_text(prompt)
+            else:  # gemini
                 response = model.generate_content(prompt, chat_id=int(chat_id))
-            return response.text
+                return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
         
