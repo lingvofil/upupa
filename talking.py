@@ -113,6 +113,39 @@ async def handle_which_model(message: types.Message):
 
 # talking.py
 
+async def generate_simple_response(prompt: str, chat_id: str) -> str:
+    """Генерирует простой ответ без истории диалога (для пирожков, порошков и т.д.)"""
+    try:
+        update_chat_settings(chat_id)
+        current_settings = chat_settings.get(chat_id, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        # Режим истории не подходит для генерации стихов
+        if active_model == "history":
+            active_model = "gemini"
+        
+        def sync_model_call():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+                return response.text
+            elif active_model == "groq":
+                return groq_ai.generate_text(prompt)
+            else:  # gemini
+                response = model.generate_content(prompt, chat_id=int(chat_id))
+                return response.text
+        
+        response_text = await asyncio.to_thread(sync_model_call)
+        
+        if not response_text.strip():
+            response_text = "Я пока не знаю, что ответить... 😅"
+        
+        return response_text[:4000]
+        
+    except Exception as e:
+        logging.error(f"Model API Error: {e}")
+        return "Ошибка блят"
+
+
 async def handle_poem_command(message: types.Message, poem_type: str):
     """
     Универсальный обработчик для генерации стихов ('пирожок' или 'порошок').
@@ -134,13 +167,12 @@ async def handle_poem_command(message: types.Message, poem_type: str):
     full_prompt = base_prompt + characters
 
     try:
-        # Используем generate_response вместо прямого вызова model.generate_content
-        response_text = await generate_response(full_prompt, chat_id, "Bot")
+        response_text = await generate_simple_response(full_prompt, chat_id)
     except Exception as e:
         logging.error(f"API Error for {poem_type}: {e}")
         response_text = error_response
 
-    await message.reply(response_text[:4000])
+    await message.reply(response_text)
 
 
 async def handle_list_prompts_command(message: types.Message):
