@@ -130,13 +130,19 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     full_prompt = base_prompt + characters
 
+    chat_id = str(message.chat.id)
+    
     try:
-        def sync_call():
-            return model.generate_content(full_prompt, chat_id=message.chat.id).text
-        response_text = await asyncio.to_thread(sync_call)
+        response_text = await generate_response(
+            prompt=full_prompt,
+            chat_id=chat_id,
+            bot_name="Пирожковый дух",
+            user_input=full_prompt
+        )
     except Exception as e:
-        logging.error(f"Gemini API Error for {poem_type}: {e}")
+        logging.error(f"Poem generation error for {poem_type}: {e}")
         response_text = error_response
+
 
     await message.reply(response_text[:4000])
 
