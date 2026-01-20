@@ -110,6 +110,7 @@ from talking import (
     # НОВЫЕ ИМПОРТЫ:
     handle_switch_to_gigachat,
     handle_switch_to_gemini,
+    handle_switch_to_groq,
     handle_which_model,
     handle_switch_to_history
 )
@@ -173,6 +174,14 @@ async def switch_to_gigachat(message: types.Message):
 @router.message(F.text.lower() == "упупа гемини")
 async def switch_to_gemini(message: types.Message):
     await handle_switch_to_gemini(message)
+
+@router.message(F.text.lower() == "упупа грок")
+async def switch_to_groq(message: types.Message):
+    await handle_switch_to_groq(message)
+
+@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
+async def cmd_switch_history(message: Message):
+    await handle_switch_to_history(message)
 
 @router.message(F.text.lower() == "какая модель")
 async def which_model(message: types.Message):
@@ -756,10 +765,6 @@ async def handle_poem(message: types.Message):
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
     await handle_poem_command(message, poem_type)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
-async def cmd_switch_history(message: Message):
-    if message.text.lower() == "упупа нушо":
-        await handle_switch_to_history(message)
         
 @router.message()
 async def process_message(message: types.Message):
