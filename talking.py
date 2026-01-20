@@ -111,11 +111,14 @@ async def handle_which_model(message: types.Message):
 # ОБРАБОТЧИКИ КОМАНД (стихи, промпты)
 # =============================================================================
 
+# talking.py
+
 async def handle_poem_command(message: types.Message, poem_type: str):
     """
     Универсальный обработчик для генерации стихов ('пирожок' или 'порошок').
     """
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
     logging.info(f"Обработчик для '{poem_type}' вызван")
 
     parts = message.text.lower().split(maxsplit=1)
@@ -130,19 +133,12 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     full_prompt = base_prompt + characters
 
-    chat_id = str(message.chat.id)
-    
     try:
-        response_text = await generate_response(
-            prompt=full_prompt,
-            chat_id=chat_id,
-            bot_name="Пирожковый дух",
-            user_input=full_prompt
-        )
+        # Используем generate_response вместо прямого вызова model.generate_content
+        response_text = await generate_response(full_prompt, chat_id, "Bot")
     except Exception as e:
-        logging.error(f"Poem generation error for {poem_type}: {e}")
+        logging.error(f"API Error for {poem_type}: {e}")
         response_text = error_response
-
 
     await message.reply(response_text[:4000])
 
