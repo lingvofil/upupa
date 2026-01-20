@@ -49,14 +49,15 @@ except ImportError:
 # =========================
 # === GROQ WRAPPER ===
 # =========================
+
 class GroqWrapper:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
         # Актуальные модели на текущий момент
         self.vision_model = "llama-3.2-90b-vision-preview" 
-        self.text_model = "openai/gpt-oss-120b"
+        self.text_model = "llama-3.3-70b-versatile"  # Изменили на более стабильную модель
         self.audio_model = "whisper-large-v3"
-
+    
     def _prepare_image(self, image_bytes: bytes) -> str:
         """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
         img = Image.open(io.BytesIO(image_bytes))
@@ -73,7 +74,7 @@ class GroqWrapper:
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
-
+    
     def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
         """Анализ изображений (Vision) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
@@ -96,12 +97,12 @@ class GroqWrapper:
                 temperature=0.7,
                 max_tokens=1024
             )
-            return completion.choices[0].message.content
+            return completion.choices[0].message.content or ""
         except Exception as e:
             logging.error(f"Groq Vision Error: {e}")
             raise
-
-    def generate_text(self, prompt: str) -> str:
+    
+    def generate_text(self, prompt: str, max_tokens: int = 1024) -> str:
         """Генерация текста (LLM) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
         try:
@@ -109,13 +110,15 @@ class GroqWrapper:
                 model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=1024
+                max_tokens=max_tokens
             )
-            return completion.choices[0].message.content
+            result = completion.choices[0].message.content
+            logging.info(f"Groq generate_text: модель={self.text_model}, результат_длина={len(result) if result else 0}")
+            return result or ""
         except Exception as e:
-            logging.error(f"Groq Text Error: {e}")
+            logging.error(f"Groq Text Error: {e}", exc_info=True)
             raise
-
+    
     def transcribe_audio(self, audio_bytes: bytes, file_name: str) -> str:
         """Транскрибация аудио (Whisper) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
