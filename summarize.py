@@ -10,8 +10,9 @@ import random
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-from config import LOG_FILE, model 
-from prompts import actions 
+from config import LOG_FILE, model, gigachat_model, groq_ai, chat_settings
+from prompts import actions
+from chat_settings import save_chat_settings
 
 def _get_chat_messages(log_file_path: str, chat_id: str, start_time: datetime):
     """
@@ -67,6 +68,62 @@ def _get_chat_messages(log_file_path: str, chat_id: str, start_time: datetime):
 
     return messages, users_found, chat_name
 
+
+def _get_active_model(chat_id: str):
+    """Определяет активную модель для чата"""
+    current_settings = chat_settings.get(chat_id, {})
+    active_model = current_settings.get("active_model", "gemini")
+    return active_model
+
+
+async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings=None):
+    """Генерирует текст с использованием активной модели чата"""
+    active_model = _get_active_model(chat_id)
+    
+    # Режим истории не подходит для суммаризации
+    if active_model == "history":
+        active_model = "gemini"
+        logging.info("Summarize: режим 'history' не поддерживается, используем Gemini")
+    
+    logging.info(f"Summarize: используется модель {active_model}")
+    
+    def sync_model_call_with_retry():
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                if active_model == "gigachat":
+                    response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+                    return response.text
+                elif active_model == "groq":
+                    # Groq не поддерживает safety_settings, но это OK
+                    result = groq_ai.generate_text(prompt, max_tokens=2048)
+                    return result or "Groq вернул пустой ответ"
+                else:  # gemini
+                    response = model.generate_content(
+                        prompt, 
+                        safety_settings=safety_settings,
+                        chat_id=int(chat_id)
+                    )
+                    return response.text
+                    
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str:
+                    if attempt < max_retries:
+                        wait_time = 30
+                        logging.warning(f"Quota 429. Waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise e
+                elif "PROHIBITED" in error_str or "block_reason" in error_str:
+                    return "Google зассал и заблокировал ответ из-за 'недопустимого контента'. Слишком грязно ругаетесь."
+                else:
+                    raise e
+    
+    return await asyncio.to_thread(sync_model_call_with_retry)
+
+
 async def summarize_chat_history(message: types.Message, chat_model, log_file_path: str, action_list: list):
     """
     Обычная сводка за последние 12 часов.
@@ -102,7 +159,8 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
     Суммаризация:
     """
 
-    await _generate_and_send_summary(message, chat_model, summary_prompt, action_list, "Пишу доклад...")
+    await _generate_and_send_summary(message, chat_id, summary_prompt, action_list, "Пишу доклад...")
+
 
 async def summarize_year(message: types.Message, chat_model, log_file_path: str, action_list: list):
     """
@@ -157,9 +215,10 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     {summary_input_text}
     """
 
-    await _generate_and_send_summary(message, chat_model, summary_prompt, action_list, "Анализирую этот пиздец...", status_msg)
+    await _generate_and_send_summary(message, chat_id, summary_prompt, action_list, "Анализирую этот пиздец...", status_msg)
 
-async def _generate_and_send_summary(message: types.Message, chat_model, prompt: str, action_list: list, wait_text: str, prev_msg: types.Message = None):
+
+async def _generate_and_send_summary(message: types.Message, chat_id: str, prompt: str, action_list: list, wait_text: str, prev_msg: types.Message = None):
     """
     Отправка в LLM с ретраями и разбивкой длинных сообщений.
     """
@@ -176,7 +235,7 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
         else:
             processing_msg = await message.reply(wait_text)
 
-        # Отключение фильтров безопасности
+        # Отключение фильтров безопасности (только для Gemini)
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -184,32 +243,7 @@ async def _generate_and_send_summary(message: types.Message, chat_model, prompt:
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        def sync_gemini_call_with_retry():
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    response = chat_model.generate_content(
-                        prompt, 
-                        safety_settings=safety_settings,
-                        chat_id=message.chat.id
-                    )
-                    return response.text
-                except Exception as e:
-                    error_str = str(e)
-                    if "429" in error_str:
-                        if attempt < max_retries:
-                            wait_time = 30
-                            logging.warning(f"Quota 429. Waiting {wait_time}s...")
-                            time.sleep(wait_time) 
-                            continue
-                        else:
-                            raise e
-                    elif "PROHIBITED" in error_str or "block_reason" in error_str:
-                        return "Google зассал и заблокировал ответ из-за 'недопустимого контента'. Слишком грязно ругаетесь."
-                    else:
-                        raise e
-
-        summary_response = await asyncio.to_thread(sync_gemini_call_with_retry)
+        summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings)
         
         await processing_msg.delete()
 
