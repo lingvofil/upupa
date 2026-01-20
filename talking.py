@@ -124,25 +124,34 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
         if active_model == "history":
             active_model = "gemini"
         
+        logging.info(f"generate_simple_response: используется модель {active_model}")
+        logging.info(f"generate_simple_response: промпт = {prompt[:200]}...")  # Первые 200 символов
+        
         def sync_model_call():
             if active_model == "gigachat":
                 response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
                 return response.text
             elif active_model == "groq":
-                return groq_ai.generate_text(prompt)
+                result = groq_ai.generate_text(prompt)
+                logging.info(f"Groq вернул: '{result}'")
+                return result
             else:  # gemini
                 response = model.generate_content(prompt, chat_id=int(chat_id))
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
         
+        logging.info(f"generate_simple_response: получен ответ длиной {len(response_text)} символов")
+        logging.info(f"generate_simple_response: ответ = '{response_text[:200]}'")
+        
         if not response_text.strip():
+            logging.warning("generate_simple_response: ответ пустой!")
             response_text = "Я пока не знаю, что ответить... 😅"
         
         return response_text[:4000]
         
     except Exception as e:
-        logging.error(f"Model API Error: {e}")
+        logging.error(f"Model API Error in generate_simple_response: {e}", exc_info=True)
         return "Ошибка блят"
 
 
