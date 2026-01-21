@@ -102,41 +102,57 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
 async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
     """
-    Использует Groq TTS (Orpheus) для генерации аудио.
+    Использует Groq TTS (canopylabs/orpheus-v1-english) для генерации аудио.
+    Случайно выбирает допустимый голос Groq.
     """
     try:
         if not groq_ai.client:
             logging.error("Groq client not initialized")
             return False
-        
+
+        # ✅ Единственно допустимые голоса Groq Orpheus
+        GROQ_TTS_VOICES = [
+            "autumn",
+            "diana",
+            "hannah",
+            "austin",
+            "daniel",
+            "troy",
+        ]
+
         def sync_groq_tts():
             try:
-                # Groq TTS возвращает MP3 напрямую
+                selected_voice = random.choice(GROQ_TTS_VOICES)
+                logging.info(f"🎙 Groq TTS voice selected: {selected_voice}")
+
                 response = groq_ai.client.audio.speech.create(
                     model="canopylabs/orpheus-v1-english",
                     input=text,
-                    voice="alloy",  # Groq поддерживает: alloy, echo, fable, onyx, nova, shimmer
+                    voice=selected_voice,
                     response_format="mp3"
                 )
+
                 return response.content
+
             except Exception as e:
-                logging.error(f"Groq TTS API Error: {e}")
+                logging.error(f"Groq TTS API Error: {e}", exc_info=True)
                 return None
-        
+
         audio_bytes = await asyncio.to_thread(sync_groq_tts)
-        
+
         if not audio_bytes:
+            logging.error("Groq TTS returned empty audio")
             return False
-        
-        # Конвертируем MP3 в WAV для совместимости с distortion
+
+        # Groq возвращает MP3 → конвертируем в WAV для distortion
         audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
         audio.export(output_path, format="wav")
-        
+
         logging.info(f"✅ Groq TTS успешно сгенерировал аудио: {output_path}")
         return True
-        
+
     except Exception as e:
-        logging.error(f"Groq TTS Error: {e}")
+        logging.error(f"Groq TTS Fatal Error: {e}", exc_info=True)
         return False
 
 
