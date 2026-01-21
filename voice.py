@@ -102,15 +102,14 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
 async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
     """
-    Использует Groq TTS (canopylabs/orpheus-v1-english) для генерации аудио.
-    Случайно выбирает допустимый голос Groq.
+    Groq TTS (canopylabs/orpheus-v1-english)
+    Возвращает WAV напрямую (MP3 не поддерживается).
     """
     try:
         if not groq_ai.client:
             logging.error("Groq client not initialized")
             return False
 
-        # ✅ Единственно допустимые голоса Groq Orpheus
         GROQ_TTS_VOICES = [
             "autumn",
             "diana",
@@ -129,7 +128,7 @@ async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
                     model="canopylabs/orpheus-v1-english",
                     input=text,
                     voice=selected_voice,
-                    response_format="mp3"
+                    response_format="wav"  # ✅ ТОЛЬКО WAV
                 )
 
                 return response.content
@@ -144,17 +143,16 @@ async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
             logging.error("Groq TTS returned empty audio")
             return False
 
-        # Groq возвращает MP3 → конвертируем в WAV для distortion
-        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        audio.export(output_path, format="wav")
+        # Groq уже вернул WAV → просто сохраняем
+        with open(output_path, "wb") as f:
+            f.write(audio_bytes)
 
-        logging.info(f"✅ Groq TTS успешно сгенерировал аудио: {output_path}")
+        logging.info(f"✅ Groq TTS успешно сгенерировал WAV: {output_path}")
         return True
 
     except Exception as e:
         logging.error(f"Groq TTS Fatal Error: {e}", exc_info=True)
         return False
-
 
 async def generate_audio_from_text_gemini(text: str, output_path: str) -> bool:
     """
