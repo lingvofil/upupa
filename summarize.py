@@ -76,7 +76,7 @@ def _get_active_model(chat_id: str):
     return active_model
 
 
-async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings=None):
+async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings=None, is_summarization=False):
     """Генерирует текст с использованием активной модели чата"""
     active_model = _get_active_model(chat_id)
     
@@ -95,8 +95,19 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                     response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
                     return response.text
                 elif active_model == "groq":
-                    # Groq не поддерживает safety_settings, но это OK
-                    result = groq_ai.generate_text(prompt, max_tokens=2048)
+                    # Используем специальную модель для суммаризации
+                    if is_summarization:
+                        logging.info(f"Используется модель суммаризации: {groq_ai.summarization_model}")
+                        # Временно меняем модель
+                        original_model = groq_ai.text_model
+                        groq_ai.text_model = groq_ai.summarization_model
+                        try:
+                            result = groq_ai.generate_text(prompt, max_tokens=2048)
+                        finally:
+                            # Восстанавливаем исходную модель
+                            groq_ai.text_model = original_model
+                    else:
+                        result = groq_ai.generate_text(prompt, max_tokens=2048)
                     return result or "Groq вернул пустой ответ"
                 else:  # gemini
                     response = model.generate_content(
@@ -243,7 +254,7 @@ async def _generate_and_send_summary(message: types.Message, chat_id: str, promp
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings)
+        summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings, is_summarization=True)
         
         await processing_msg.delete()
 
