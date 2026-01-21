@@ -57,6 +57,7 @@ class GroqWrapper:
         self.vision_model = "llama-3.2-90b-vision-preview" 
         self.text_model = "llama-3.3-70b-versatile"  # Изменили на более стабильную модель
         self.audio_model = "whisper-large-v3"
+        self.tts_model = "canopylabs/orpheus-v1-english"
     
     def _prepare_image(self, image_bytes: bytes) -> str:
         """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
