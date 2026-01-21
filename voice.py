@@ -1,13 +1,16 @@
+#voice.py
 import os
 import random
 import asyncio
 import logging
-import base64
 import wave
 import time
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
-from config import model, chat_settings, conversation_history, MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
+from config import (
+    model, gigachat_model, groq_ai, chat_settings, conversation_history, 
+    MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
+)
 from talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
 from distortion import apply_ffmpeg_audio_distortion
 import google.generativeai as genai
@@ -40,9 +43,12 @@ DEFAULT_DISTORTION_INTENSITY = 60
 async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str:
     """
     Генерирует текстовый ответ от имени персонажа.
-    ИСПОЛЬЗУЕТ ЛЕГКУЮ МОДЕЛЬ, чтобы не тратить лимиты основной очереди.
+    ИСПОЛЬЗУЕТ АКТИВНУЮ МОДЕЛЬ из настроек чата.
     """
     update_chat_settings(chat_id)
+    current_settings = chat_settings.get(chat_id, {})
+    active_model = current_settings.get("active_model", "gemini")
+    
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
     chat_history_formatted = format_chat_history(chat_id)
     
@@ -55,14 +61,25 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
     )
 
     try:
-        def sync_gemini_call():
-            # ВМЕСТО model.generate_content (который берет тяжелую модель)
-            # Мы используем легкую модель специально для этого таска
-            light_model = genai.GenerativeModel(TEXT_GENERATION_MODEL_LIGHT)
-            response = light_model.generate_content(full_prompt)
-            return response.text
+        # Режим истории не подходит для голоса (нужен текст от нейросети)
+        if active_model == "history":
+            logging.info("Voice: режим 'history' не поддерживается, переключаюсь на gemini")
+            active_model = "gemini"
+        
+        logging.info(f"Voice text generation: используется модель {active_model}")
+        
+        def sync_model_call():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(full_prompt, chat_id=int(chat_id))
+                return response.text
+            elif active_model == "groq":
+                return groq_ai.generate_text(full_prompt, max_tokens=500)
+            else:  # gemini
+                light_model = genai.GenerativeModel(TEXT_GENERATION_MODEL_LIGHT)
+                response = light_model.generate_content(full_prompt)
+                return response.text
             
-        text_response = await asyncio.to_thread(sync_gemini_call)
+        text_response = await asyncio.to_thread(sync_model_call)
         
         # Историю сохраняем как обычно
         update_conversation_history(chat_id, "User (Voice)", user_query, role="user")
@@ -70,16 +87,16 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
         
         return text_response
     except Exception as e:
-        logging.error(f"Voice Text Gen Error ({TEXT_GENERATION_MODEL_LIGHT}): {e}")
-        # Если легкая упала, можно попробовать через основную очередь как fallback
+        logging.error(f"Voice Text Gen Error ({active_model}): {e}")
+        # Fallback на основную модель Gemini
         try:
-             logging.info("Fallback to main model queue for voice text...")
-             def sync_fallback_call():
-                 return model.generate_content(full_prompt, chat_id=chat_id).text
-             return await asyncio.to_thread(sync_fallback_call)
+            logging.info("Fallback to main Gemini model for voice text...")
+            def sync_fallback_call():
+                return model.generate_content(full_prompt, chat_id=int(chat_id)).text
+            return await asyncio.to_thread(sync_fallback_call)
         except Exception as e2:
-             logging.error(f"Fallback Voice Text Gen Error: {e2}")
-             return "Кхе-кхе... Что-то горло першит, не могу говорить."
+            logging.error(f"Fallback Voice Text Gen Error: {e2}")
+            return "Кхе-кхе... Что-то горло першит, не могу говорить."
 
 async def generate_audio_from_text(text: str, output_path: str) -> bool:
     """
@@ -126,8 +143,8 @@ async def generate_audio_from_text(text: str, output_path: str) -> bool:
                             
                     except Exception as e:
                         if "404" in str(e):
-                             logging.error(f"❌ Model {model_name} not found (404). Skipping.")
-                             break
+                            logging.error(f"❌ Model {model_name} not found (404). Skipping.")
+                            break
                         logging.error(f"Error with model {model_name}: {e}")
                         if attempt < max_retries - 1:
                             time.sleep(5)
@@ -198,7 +215,6 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         await bot.send_voice(
             chat_id=message.chat.id,
             voice=audio_file,
-            #caption=f"🗣 Ответ на: {user_query[:20]}...",
             reply_to_message_id=message.message_id
         )
         
