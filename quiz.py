@@ -1,3 +1,4 @@
+#quiz.py
 import asyncio
 import logging
 import random
@@ -11,8 +12,9 @@ import aiofiles
 from aiogram.types import Message, PollAnswer
 from aiogram import Bot
 
-# Обновленные импорты для Gemini
-from config import LOG_FILE, quiz_questions, quiz_states, model
+# Обновленные импорты для мультимодельности
+from config import LOG_FILE, quiz_questions, quiz_states, model, gigachat_model, groq_ai, chat_settings
+from talking import update_chat_settings
 
 
 # Функция для получения временного диапазона
@@ -69,8 +71,42 @@ async def extract_messages(log_file, chat_id=None, limit=100, days=1):
         logging.error(f"Ошибка при извлечении сообщений: {e}")
         return []
 
-# Обновленная функция генерации вопросов с Gemini
-async def generate_quiz_with_gemini(messages, num_questions=1):
+# Универсальная функция генерации через любую модель
+async def generate_with_active_model(prompt: str, chat_id: str) -> str:
+    """
+    Генерирует текст используя активную модель из настроек чата.
+    Режим 'history' НЕ поддерживается для викторин (нужна генерация).
+    """
+    update_chat_settings(chat_id)
+    current_settings = chat_settings.get(chat_id, {})
+    active_model = current_settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для генерации вопросов
+    if active_model == "history":
+        logging.info("Quiz: режим 'history' не поддерживается, переключаюсь на gemini")
+        active_model = "gemini"
+    
+    logging.info(f"Quiz generation: используется модель {active_model}")
+    
+    try:
+        def sync_model_call():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+                return response.text
+            elif active_model == "groq":
+                return groq_ai.generate_text(prompt, max_tokens=2048)
+            else:  # gemini
+                response = model.generate_content(prompt)
+                return response.text
+        
+        return await asyncio.to_thread(sync_model_call)
+        
+    except Exception as e:
+        logging.error(f"Quiz generation error ({active_model}): {e}")
+        raise
+
+# Обновленная функция генерации вопросов
+async def generate_quiz_with_gemini(messages, chat_id: str, num_questions=1):
     if not messages:
         return []
     
@@ -97,11 +133,7 @@ async def generate_quiz_with_gemini(messages, num_questions=1):
     """
     
     try:
-        def sync_model_call():
-            response = model.generate_content(prompt)
-            return response.text
-
-        response_text = await asyncio.to_thread(sync_model_call)
+        response_text = await generate_with_active_model(prompt, chat_id)
         
         json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
         json_str = json_match.group(1) if json_match else response_text.strip()
@@ -133,7 +165,7 @@ async def send_daily_quiz(bot: Bot, chat_id: int):
         await bot.send_message(chat_id, "Недостаточно сообщений для создания викторины.")
         return
 
-    questions = await generate_quiz_with_gemini(messages)
+    questions = await generate_quiz_with_gemini(messages, str(chat_id))
     
     if not questions:
         await bot.send_message(chat_id, "Не удалось создать викторину.")
@@ -212,7 +244,7 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
 
         num_questions = 1 if chat_id_str == '-1001781970364' else 5
         
-        questions = await generate_quiz_with_gemini(messages, num_questions)
+        questions = await generate_quiz_with_gemini(messages, chat_id_str, num_questions)
         logging.info(f"Сгенерировано {len(questions)} вопросов")
         
         if not questions:
@@ -252,7 +284,7 @@ async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
         logging.error(f"Ошибка при обработке ответа на опрос: {e}")
 
 # Новая функция для генерации викторины по участникам
-async def generate_participant_quiz(messages, num_questions=5):
+async def generate_participant_quiz(messages, chat_id: str, num_questions=5):
     if not messages:
         return []
 
@@ -290,11 +322,7 @@ async def generate_participant_quiz(messages, num_questions=5):
     """
 
     try:
-        def sync_model_call():
-            response = model.generate_content(prompt)
-            return response.text
-
-        response_text = await asyncio.to_thread(sync_model_call)
+        response_text = await generate_with_active_model(prompt, chat_id)
         
         json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
         json_str = json_match.group(1) if json_match else response_text.strip()
@@ -333,7 +361,7 @@ async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bo
         if len(messages) < 20:
             return False, "Слишком мало сообщений в чате, чтобы понять, кто тут что высирает. Общайтесь больше, далбаёбы!"
 
-        questions = await generate_participant_quiz(messages, num_questions=5)
+        questions = await generate_participant_quiz(messages, chat_id_str, num_questions=5)
         
         if not questions:
             logging.error("Не удалось сгенерировать вопросы для викторины по участникам.")
