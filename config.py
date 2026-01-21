@@ -55,9 +55,10 @@ class GroqWrapper:
         self.client = Groq(api_key=api_key) if api_key else None
         # Актуальные модели на текущий момент
         self.vision_model = "llama-3.2-90b-vision-preview" 
-        self.text_model = "llama-3.3-70b-versatile"  # Изменили на более стабильную модель
+        self.text_model = "llama-3.3-70b-versatile"
         self.audio_model = "whisper-large-v3"
         self.tts_model = "canopylabs/orpheus-v1-english"
+        self.summarization_model = "groq/compound-mini"  # Добавить эту строку
     
     def _prepare_image(self, image_bytes: bytes) -> str:
         """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
