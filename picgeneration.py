@@ -236,11 +236,21 @@ async def handle_kandinsky_generation_command(message: types.Message):
 
 async def handle_pun_image_command(message: types.Message):
     """Каламбур с картинкой"""
-    await bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
     msg = await message.reply("🤔 Придумываю калом бур...")
     
     try:
-        # Максимально строгий промпт для Gemini
+        # Определяем активную модель из настроек чата
+        from chat_settings import chat_settings
+        current_settings = chat_settings.get(chat_id, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        # Режим истории не подходит для генерации каламбуров
+        if active_model == "history":
+            active_model = "gemini"
+        
+        # Максимально строгий промпт для генерации каламбура
         pun_prompt = (
             "Придумай смешной визуальный каламбур на русском языке. "
             "Ответ дай СТРОГО одной строкой в формате: слово1+слово2 = итоговоеслово. "
@@ -248,7 +258,18 @@ async def handle_pun_image_command(message: types.Message):
             "Больше ничего не пиши, никаких описаний и пояснений."
         )
         
-        pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt).text.strip())
+        # Генерируем каламбур через выбранную модель
+        if active_model == "gigachat":
+            from config import gigachat_model
+            pun_res = await asyncio.to_thread(
+                lambda: gigachat_model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip()
+            )
+        elif active_model == "groq":
+            from config import groq_ai
+            pun_res = await asyncio.to_thread(lambda: groq_ai.generate_text(pun_prompt))
+        else:  # gemini
+            pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip())
+        
         pun_res = pun_res.replace('*', '').replace('"', '').replace("'", "").strip()
         
         if '=' not in pun_res:
