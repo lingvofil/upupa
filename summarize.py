@@ -184,7 +184,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
     if active_model == "groq":
         messages_to_summarize, compression_ratio = _compress_messages_for_groq(messages_to_summarize, max_chars=15000)
         if compression_ratio > 1:
-            await message.reply(f"⚙️ Groq mode: читаю каждое {compression_ratio}-е сообщение из-за лимитов API...")
+            await message.reply(f"пишу доклад")
 
     summary_input_text = f"Сообщения из чата {chat_name} за последние 12 часов (всего {len(messages_to_summarize)} сообщений):\n\n"
     for msg in messages_to_summarize:
