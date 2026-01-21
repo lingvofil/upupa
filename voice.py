@@ -15,6 +15,8 @@ from talking import update_chat_settings, get_current_chat_prompt, update_conver
 from distortion import apply_ffmpeg_audio_distortion
 import google.generativeai as genai
 from google.api_core import exceptions
+import io
+from pydub import AudioSegment
 
 # Fallbacks
 if not 'TTS_MODELS_QUEUE' in locals() and not 'TTS_MODELS_QUEUE' in globals():
@@ -98,7 +100,47 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
             logging.error(f"Fallback Voice Text Gen Error: {e2}")
             return "Кхе-кхе... Что-то горло першит, не могу говорить."
 
-async def generate_audio_from_text(text: str, output_path: str) -> bool:
+async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
+    """
+    Использует Groq TTS (Orpheus) для генерации аудио.
+    """
+    try:
+        if not groq_ai.client:
+            logging.error("Groq client not initialized")
+            return False
+        
+        def sync_groq_tts():
+            try:
+                # Groq TTS возвращает MP3 напрямую
+                response = groq_ai.client.audio.speech.create(
+                    model="canopylabs/orpheus-v1-english",
+                    input=text,
+                    voice="alloy",  # Groq поддерживает: alloy, echo, fable, onyx, nova, shimmer
+                    response_format="mp3"
+                )
+                return response.content
+            except Exception as e:
+                logging.error(f"Groq TTS API Error: {e}")
+                return None
+        
+        audio_bytes = await asyncio.to_thread(sync_groq_tts)
+        
+        if not audio_bytes:
+            return False
+        
+        # Конвертируем MP3 в WAV для совместимости с distortion
+        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+        audio.export(output_path, format="wav")
+        
+        logging.info(f"✅ Groq TTS успешно сгенерировал аудио: {output_path}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Groq TTS Error: {e}")
+        return False
+
+
+async def generate_audio_from_text_gemini(text: str, output_path: str) -> bool:
     """
     Использует Gemini TTS для генерации аудио с Retry.
     """
@@ -187,6 +229,11 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         await message.reply("А что сказать-то, епта?")
         return
 
+    # Определяем активную модель для выбора TTS
+    update_chat_settings(chat_id)
+    current_settings = chat_settings.get(chat_id, {})
+    active_model = current_settings.get("active_model", "gemini")
+    
     await bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
     processing_msg = await message.reply("🎤 Записываю голосовое...")
 
@@ -199,7 +246,14 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         if len(text_response) > 500:
             text_response = text_response[:500] + "..."
 
-        tts_success = await generate_audio_from_text(text_response, temp_wav)
+        # Выбираем TTS движок в зависимости от активной модели
+        if active_model == "groq":
+            logging.info("🎤 Используем Groq TTS (Orpheus)")
+            tts_success = await generate_audio_from_text_groq(text_response, temp_wav)
+        else:
+            # Для Gemini, GigaChat и History используем Gemini TTS
+            logging.info("🎤 Используем Gemini TTS")
+            tts_success = await generate_audio_from_text_gemini(text_response, temp_wav)
         
         if not tts_success:
             await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены, я подождал, но не вышло).")
