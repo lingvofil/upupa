@@ -76,6 +76,27 @@ def _get_active_model(chat_id: str):
     return active_model
 
 
+def _compress_messages_for_groq(messages: list, max_chars: int = 15000) -> tuple[list, int]:
+    """
+    Сжимает сообщения для Groq API с учетом лимитов.
+    Возвращает (сжатые_сообщения, коэффициент_сжатия)
+    """
+    total_chars = sum(len(m['text']) for m in messages)
+    
+    if total_chars <= max_chars:
+        return messages, 1
+    
+    # Вычисляем коэффициент сжатия
+    compression_ratio = max(2, total_chars // max_chars + 1)
+    
+    # Берём каждое N-е сообщение
+    compressed = messages[::compression_ratio]
+    
+    logging.info(f"Groq compression: {len(messages)} msgs → {len(compressed)} msgs (ratio: {compression_ratio})")
+    
+    return compressed, compression_ratio
+
+
 async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings=None, is_summarization=False):
     """Генерирует текст с использованием активной модели чата"""
     active_model = _get_active_model(chat_id)
@@ -127,6 +148,9 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                         continue
                     else:
                         raise e
+                elif "413" in error_str or "request_too_large" in error_str:
+                    # Специфичная ошибка Groq - промпт слишком большой
+                    return "⚠️ Логов слишком много для Groq. Переключитесь на Gemini командой 'упупа модель gemini' или попробуйте меньший период."
                 elif "PROHIBITED" in error_str or "block_reason" in error_str:
                     return "Google зассал и заблокировал ответ из-за 'недопустимого контента'. Слишком грязно ругаетесь."
                 else:
@@ -152,6 +176,15 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
     if not messages_to_summarize:
         await message.reply(f"За последние 12 часов в чате {chat_name or chat_id} нихуя не было.")
         return
+
+    # Сжатие для Groq, если используется
+    active_model = _get_active_model(chat_id)
+    compression_ratio = 1
+    
+    if active_model == "groq":
+        messages_to_summarize, compression_ratio = _compress_messages_for_groq(messages_to_summarize, max_chars=15000)
+        if compression_ratio > 1:
+            await message.reply(f"⚙️ Groq mode: читаю каждое {compression_ratio}-е сообщение из-за лимитов API...")
 
     summary_input_text = f"Сообщения из чата {chat_name} за последние 12 часов (всего {len(messages_to_summarize)} сообщений):\n\n"
     for msg in messages_to_summarize:
@@ -191,15 +224,24 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
         await status_msg.edit_text("За последний год логов не найдено. Видимо, я спал.")
         return
 
-    # Сжатие для избежания лимитов API
+    # Определяем активную модель для выбора лимита сжатия
+    active_model = _get_active_model(chat_id)
+    
+    # Для Groq - более агрессивное сжатие
+    if active_model == "groq":
+        max_safe_chars = 12000  # Groq имеет меньший контекст
+    else:
+        max_safe_chars = 30000  # Gemini/GigaChat
+    
     total_chars_approx = sum(len(m['text']) for m in messages_to_summarize)
-    MAX_SAFE_CHARS = 30000 
+    compression_ratio = 1
 
-    if total_chars_approx > MAX_SAFE_CHARS:
-        step = (total_chars_approx // MAX_SAFE_CHARS) + 1
+    if total_chars_approx > max_safe_chars:
+        step = (total_chars_approx // max_safe_chars) + 1
         messages_to_summarize = messages_to_summarize[::step]
+        compression_ratio = step
         logging.info(f"Log compressed. Original chars: {total_chars_approx}. New count: {len(messages_to_summarize)} msgs.")
-        await status_msg.edit_text(f"Логов дохера ({total_chars_approx} симв.), читаю каждое {step}-е сообщение, чтобы Google не лопнул...")
+        await status_msg.edit_text(f"Логов дохера ({total_chars_approx} симв.), читаю каждое {step}-е сообщение...")
     
     summary_input_text = f"Хронология сообщений чата {chat_name} за ГОД (выборка):\n\n"
     for msg in messages_to_summarize:
