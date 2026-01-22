@@ -1,14 +1,12 @@
-# profession.py
+#profession.py
 import requests
 import io
 import codecs
 import re
 import random
-from config import model # Импортируем модель Gemini из Config.py
-from prompts import actions # <--- ИЗМЕНЕНО: Импортируем actions из Prompts.py
-
-# URL для загрузки файла ОКВЭД
-OKVED_URL = "https://classifikators.ru/assets/downloads/okved/okved.csv"
+import asyncio
+from config import model, gigachat_model, groq_ai, chat_settings
+from prompts import actions
 
 async def get_random_okved_and_commentary(message):
     """
@@ -21,8 +19,8 @@ async def get_random_okved_and_commentary(message):
 
     try:
         # 1. Скачиваем файл ОКВЭД
-        response = requests.get(OKVED_URL)
-        response.raise_for_status() # Проверка на ошибки HTTP
+        response = await asyncio.to_thread(requests.get, OKVED_URL)
+        response.raise_for_status()
 
         # 2. Декодируем содержимое из windows-1251 в utf-8
         decoded_content = codecs.decode(response.content, 'windows-1251')
@@ -44,7 +42,15 @@ async def get_random_okved_and_commentary(message):
         # 4. Выбираем случайное описание
         random_okved_description = random.choice(descriptions)
 
-        # 5. Генерируем саркастический комментарий с помощью ИИ (Gemini)
+        # 5. Генерируем саркастический комментарий с помощью выбранной модели
+        chat_id = str(message.chat.id)
+        current_settings = chat_settings.get(chat_id, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        # Режим истории не подходит
+        if active_model == "history":
+            active_model = "gemini"
+        
         prompt = (
             f"Тебе дали описание профессии: '{random_okved_description}'. "
             "Твоя задача - высмеять эту профессию с использованием сарказма и немного бранной лексики, "
@@ -54,8 +60,18 @@ async def get_random_okved_and_commentary(message):
             "Используй грубую речь, не стесняйся. Сарказм, унижение. Потоки брани, но чтобы не переборщить."
         )
 
-        ai_response = model.generate_content(prompt) # Используем 'model' из Config.py
-        commentary = ai_response.text.strip()
+        # Генерируем через активную модель
+        def sync_generate():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+                return response.text.strip()
+            elif active_model == "groq":
+                return groq_ai.generate_text(prompt)
+            else:  # gemini
+                response = model.generate_content(prompt, chat_id=int(chat_id))
+                return response.text.strip()
+        
+        commentary = await asyncio.to_thread(sync_generate)
 
         final_message = (
             f"ОКВЭД: \"{random_okved_description}\"\n"
