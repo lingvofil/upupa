@@ -1,9 +1,11 @@
+#dnd.py
+
 import asyncio
 import random
 import re
 from aiogram import Router, F, Bot
 from aiogram.types import Message, PollAnswer
-from config import model
+from config import model, gigachat_model, groq_ai, chat_settings  # Импорт моделей и настроек
 
 dnd_router = Router()
 
@@ -36,20 +38,46 @@ DND_SYSTEM_PROMPT = """
 [ACTION:END]
 """
 
+def get_active_model(chat_id):
+    """Возвращает активную модель для DND на основе настроек чата"""
+    settings = chat_settings.get(str(chat_id), {})
+    active_model = settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для DND
+    if active_model == "history":
+        active_model = "gemini"
+    
+    return active_model
+
 class GameSession:
     def __init__(self, chat_id, starter_name):
         self.chat_id = chat_id
         self.history = []
-        # Инициализация чата с моделью, передаем chat_id для балансировки нагрузки
-        self.chat_session = model.start_chat(
-            chat_id=chat_id,
-            history=[
-                {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."]},
-                {"role": "model", "parts": ["Погнали."]}
+        self.active_model = get_active_model(chat_id)
+        
+        # Инициализация в зависимости от модели
+        if self.active_model == "gemini":
+            self.chat_session = model.start_chat(
+                chat_id=chat_id,
+                history=[
+                    {"role": "user", "parts": [f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."]},
+                    {"role": "model", "parts": ["Погнали."]}
+                ]
+            )
+            # Инъекция системного промпта для Gemini
+            self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n\n" + self.chat_session.history[0].parts[0].text
+        elif self.active_model == "gigachat":
+            # GigaChat не поддерживает start_chat, используем историю вручную
+            self.manual_history = [
+                {"role": "system", "content": DND_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."}
             ]
-        )
-        # Инъекция системного промпта
-        self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n\n" + self.chat_session.history[0].parts[0].text
+        elif self.active_model == "groq":
+            # Groq тоже без start_chat
+            self.manual_history = [
+                {"role": "system", "content": DND_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Начинай игру. Инициатор: {starter_name}. Помни: не более 100 слов."}
+            ]
         
         self.state = "WAITING_BACKSTORY" 
         self.last_roll_stat = None
@@ -58,6 +86,25 @@ class GameSession:
         self.current_poll_id = None
         self.poll_has_votes = False
         self.waiting_for_first_vote = False
+    
+    def send_message(self, message_text):
+        """Универсальная отправка сообщения в зависимости от модели"""
+        if self.active_model == "gemini":
+            response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
+            return response.text
+        elif self.active_model == "gigachat":
+            self.manual_history.append({"role": "user", "content": message_text})
+            full_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in self.manual_history])
+            response = gigachat_model.generate_content(full_prompt, chat_id=self.chat_id)
+            result = response.text
+            self.manual_history.append({"role": "assistant", "content": result})
+            return result
+        elif self.active_model == "groq":
+            self.manual_history.append({"role": "user", "content": message_text})
+            full_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in self.manual_history])
+            result = groq_ai.generate_text(full_prompt, max_tokens=512)
+            self.manual_history.append({"role": "assistant", "content": result})
+            return result
 
 async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     session = dnd_sessions.get(chat_id)
@@ -78,6 +125,8 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
         return
 
     command_str = action_match.group(1)
+    
+    # === ОБРАБОТКА ДЕЙСТВИЙ ===
     
     if command_str.startswith("POLL"):
         try:
@@ -156,19 +205,13 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
             del poll_map[session.current_poll_id]
         session.current_poll_id = None
 
-        response = session.chat_session.send_message(
-            f"Результат: {outcome}. Продолжай (до 100 слов).",
-            chat_id=chat_id
-        )
-        await parse_and_execute_turn(bot, chat_id, response.text)
+        response_text = session.send_message(f"Результат: {outcome}. Продолжай (до 100 слов).")
+        await parse_and_execute_turn(bot, chat_id, response_text)
             
     except Exception as e:
         print(f"Poll Error: {e}")
-        response = session.chat_session.send_message(
-            "Опрос завершен. Продолжай.",
-            chat_id=chat_id
-        )
-        await parse_and_execute_turn(bot, chat_id, response.text)
+        response_text = session.send_message("Опрос завершен. Продолжай.")
+        await parse_and_execute_turn(bot, chat_id, response_text)
 
 async def wait_for_poll_timeout(bot: Bot, chat_id: int, poll_chat_id: int, message_id: int, options: list, poll_id: str):
     """Ждет 10 минут. Если голосов нет — ждет первого героя."""
@@ -204,16 +247,22 @@ async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
         if data:
             await finalize_poll(bot, chat_id, data['message_id'], data['options'])
 
-# ИСПРАВЛЕНО: Используем lambda вместо F.text.lower().startswith()
-@dnd_router.message(lambda message: message.text and message.text.lower().startswith("упупа начни историю"))
+@dnd_router.message(lambda m: m.text and m.text.lower().startswith("упупа начни историю"))
 async def cmd_start_dnd(message: Message):
     user_name = message.from_user.first_name
     cleanup_session(message.chat.id)
     dnd_sessions[message.chat.id] = GameSession(message.chat.id, user_name)
-    await message.answer(f"Лады, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
+    
+    # Показываем какая модель используется
+    active_model = dnd_sessions[message.chat.id].active_model
+    model_names = {
+        "gemini": "✨ Gemini",
+        "gigachat": "🤖 GigaChat",
+        "groq": "⚡ Groq"
+    }
+    await message.answer(f"Лады, {user_name}. Используем {model_names.get(active_model, active_model)}. Какую предысторию хочешь? (Ответь реплаем)")
 
-# ИСПРАВЛЕНО: Используем lambda
-@dnd_router.message(lambda message: message.text and (message.text.lower().startswith("упупа заверши историю") or message.text.lower().startswith("упупа закончи историю")))
+@dnd_router.message(F.text.lower().startswith(("упупа заверши историю", "упупа закончи историю")))
 async def cmd_stop_dnd(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session:
@@ -221,11 +270,8 @@ async def cmd_stop_dnd(message: Message):
         return
     
     try:
-        response = session.chat_session.send_message(
-            "Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]",
-            chat_id=message.chat.id
-        )
-        await parse_and_execute_turn(message.bot, message.chat.id, response.text)
+        response_text = session.send_message("Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]")
+        await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except:
         cleanup_session(message.chat.id)
         await message.answer("Игра окончена.")
@@ -237,20 +283,14 @@ async def handle_backstory(message: Message):
     msg = await message.answer("Генерирую...")
     
     try:
-        response = session.chat_session.send_message(
-            f"Предыстория: {backstory}. Начинай.",
-            chat_id=message.chat.id
-        )
-        try: 
-            await message.bot.delete_message(message.chat.id, msg.message_id)
-        except: 
-            pass
-        await parse_and_execute_turn(message.bot, message.chat.id, response.text)
+        response_text = session.send_message(f"Предыстория: {backstory}. Начинай.")
+        try: await message.bot.delete_message(message.chat.id, msg.message_id)
+        except: pass
+        await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
 
-# ИСПРАВЛЕНО: Используем lambda вместо F.text.lower().contains()
-@dnd_router.message(lambda message: message.text and "кидаю" in message.text.lower())
+@dnd_router.message(F.text.lower().contains("кидаю"))
 async def handle_roll(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session or session.state != "WAITING_ROLL":
@@ -261,23 +301,16 @@ async def handle_roll(message: Message):
     
     await message.answer(f"🎲 {message.from_user.first_name}: {stat} -> **{roll_result}**", parse_mode="Markdown")
     
-    response = session.chat_session.send_message(
-        f"Игрок кинул на {stat}: {roll_result}. Продолжай.",
-        chat_id=message.chat.id
-    )
-    await parse_and_execute_turn(message.bot, message.chat.id, response.text)
+    response_text = session.send_message(f"Игрок кинул на {stat}: {roll_result}. Продолжай.")
+    await parse_and_execute_turn(message.bot, message.chat.id, response_text)
 
 @dnd_router.message(lambda m: dnd_sessions.get(m.chat.id) and dnd_sessions[m.chat.id].state == "WAITING_ACTION")
 async def handle_free_action(message: Message):
-    if message.text and message.text.lower().startswith("упупа"): 
-        return
+    if message.text.lower().startswith("упупа"): return
     
     session = dnd_sessions[message.chat.id]
     user_action = message.text
     user_name = message.from_user.first_name
     
-    response = session.chat_session.send_message(
-        f"{user_name}: {user_action}. Продолжай.",
-        chat_id=message.chat.id
-    )
-    await parse_and_execute_turn(message.bot, message.chat.id, response.text)
+    response_text = session.send_message(f"{user_name}: {user_action}. Продолжай.")
+    await parse_and_execute_turn(message.bot, message.chat.id, response_text)
