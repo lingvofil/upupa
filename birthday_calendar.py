@@ -1,3 +1,5 @@
+#birthday_calendar.py
+
 import json
 import re
 import asyncio
@@ -8,7 +10,8 @@ from aiogram import types
 from aiogram.types import Message
 import logging
 import traceback
-from config import model, LOG_FILE, ADMIN_ID
+from config import model, LOG_FILE, ADMIN_ID, gigachat_model, groq_ai, chat_settings
+from chat_settings import save_chat_settings
 
 # Файл для хранения дней рождения
 BIRTHDAY_FILE = "birthdays.json"
@@ -107,8 +110,8 @@ def get_user_messages_from_log(user_id: int, chat_id: int, limit: int = 100) -> 
     
     return messages
 
-async def generate_birthday_greeting(user_name: str, user_messages: List[str]) -> str:
-    """Генерация саркастичного поздравления с использованием Gemini"""
+async def generate_birthday_greeting(user_name: str, user_messages: List[str], chat_id: int) -> str:
+    """Генерация саркастичного поздравления с использованием выбранной модели"""
     messages_context = "\n".join(user_messages[:80])
     
     prompt = f"""
@@ -132,8 +135,27 @@ async def generate_birthday_greeting(user_name: str, user_messages: List[str]) -
     """
     
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        # Получаем активную модель для чата
+        chat_key = str(chat_id)
+        current_settings = chat_settings.get(chat_key, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        # Режим истории не подходит для генерации поздравлений
+        if active_model == "history":
+            active_model = "gemini"
+        
+        logging.info(f"Генерация поздравления для {user_name} с моделью {active_model}")
+        
+        # Генерируем через выбранную модель
+        if active_model == "gigachat":
+            response = gigachat_model.generate_content(prompt, chat_id=chat_id)
+            return response.text.strip()
+        elif active_model == "groq":
+            return groq_ai.generate_text(prompt)
+        else:  # gemini
+            response = model.generate_content(prompt, chat_id=chat_id)
+            return response.text.strip()
+            
     except Exception as e:
         logging.error(f"Ошибка генерации поздравления: {e}")
         return f"С днюхой, {user_name}! Бот сломался, но поздравить тебя не забыл, ублюдок! Желаю тебе в новом году меньше багов и больше радости! 🎉"
