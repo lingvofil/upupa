@@ -10,7 +10,7 @@ from lexicon_settings import (
     extract_messages_by_full_name,
     extract_chat_messages
 )
-from config import model, LOG_FILE
+from config import model, LOG_FILE, gigachat_model, groq_ai, chat_settings
 from prompts import actions, PARODY_PROMPT
 
 # --- ПРОМПТЫ ---
@@ -57,6 +57,35 @@ async def send_long_message(message: types.Message, text: str):
             # Небольшая пауза, чтобы не поймать Flood Limit от Telegram
             await asyncio.sleep(0.5)
 
+async def generate_with_active_model(prompt: str, chat_id: int) -> str:
+    """Генерирует ответ с использованием активной модели для чата"""
+    try:
+        chat_key = str(chat_id)
+        current_settings = chat_settings.get(chat_key, {})
+        active_model = current_settings.get("active_model", "gemini")
+        
+        # Режим истории не подходит для анализа
+        if active_model == "history":
+            active_model = "gemini"
+        
+        logging.info(f"Генерация с моделью {active_model} для чата {chat_id}")
+        
+        def sync_generate():
+            if active_model == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=chat_id)
+                return response.text
+            elif active_model == "groq":
+                return groq_ai.generate_text(prompt)
+            else:  # gemini
+                response = model.generate_content(prompt, chat_id=chat_id)
+                return response.text
+        
+        return await asyncio.to_thread(sync_generate)
+        
+    except Exception as e:
+        logging.error(f"Ошибка при генерации с активной моделью: {e}")
+        raise
+
 # --- ОСНОВНАЯ ЛОГИКА ---
 
 async def process_user_profile(user_id, chat_id, message: types.Message):
@@ -79,8 +108,7 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
         random_action = random.choice(actions)
         await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
         
-        response = model.generate_content(prompt)
-        description = response.text
+        description = await generate_with_active_model(prompt, chat_id)
     except Exception as e:
         logging.error(f"Ошибка при анализе личности 'кто я': {e}")
         description = f"Не могу составить твой портрет, ты слишком сложная и непонятная хуйня. Ошибка: {e}"
@@ -110,8 +138,7 @@ async def process_chat_profile(message: types.Message):
     try:
         random_action = random.choice(actions)
         await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-        response = model.generate_content(prompt)
-        description = response.text
+        description = await generate_with_active_model(prompt, chat_id)
     except Exception as e:
         logging.error(f"Ошибка при генерации характеристики чата: {e}")
         description = "Не могу понять, что это за притон. Слишком много кринжа."
@@ -145,8 +172,7 @@ async def process_parody(message: types.Message, chat_id: int):
    prompt = PARODY_PROMPT.format(phrases="\n".join(parody_lines))
    
    try:
-       response = model.generate_content(prompt)
-       parody_text = response.text
+       parody_text = await generate_with_active_model(prompt, chat_id)
    except Exception as e:
        logging.error(f"Ошибка генерации пародии: {e}")
        parody_text = "Ошибка при создании пародии."
