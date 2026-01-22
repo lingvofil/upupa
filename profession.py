@@ -8,6 +8,9 @@ import asyncio
 from config import model, gigachat_model, groq_ai, chat_settings
 from prompts import actions
 
+# URL для загрузки файла ОКВЭД
+OKVED_URL = "https://classifikators.ru/assets/downloads/okved/okved.csv"
+
 async def get_random_okved_and_commentary(message):
     """
     Скачивает случайное описание ОКВЭД, получает саркастичный комментарий от ИИ,
