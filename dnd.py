@@ -260,7 +260,7 @@ async def cmd_start_dnd(message: Message):
         "gigachat": "🤖 GigaChat",
         "groq": "⚡ Groq"
     }
-    await message.answer(f"Лады, {user_name}. Используем {model_names.get(active_model, active_model)}. Какую предысторию хочешь? (Ответь реплаем)")
+    await message.answer(f"Ладно, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
 
 @dnd_router.message(F.text.lower().startswith(("упупа заверши историю", "упупа закончи историю")))
 async def cmd_stop_dnd(message: Message):
