@@ -1,3 +1,5 @@
+#adddescribe.py
+
 import base64
 import logging
 import os
@@ -10,8 +12,19 @@ from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.types import FSInputFile
 
-from config import API_TOKEN, model, bot 
+from config import API_TOKEN, model, bot, gigachat_model, groq_ai, chat_settings
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
+
+def get_active_model(chat_id: str) -> str:
+    """Возвращает активную модель для чата"""
+    settings = chat_settings.get(str(chat_id), {})
+    active_model = settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для анализа изображений
+    if active_model == "history":
+        active_model = "gemini"
+    
+    return active_model
 
 # =============================================================================
 # НОВАЯ ФУНКЦИЯ-ОБРАБОТЧИК
@@ -41,7 +54,6 @@ async def handle_add_text_command(message: types.Message):
             generated_text = user_text
         else:
             logging.info("Генерируем текст через AI")
-            # Передаем chat_id
             generated_text = await process_image(image_bytes, message.chat.id)
         
         modified_image_path = overlay_text_on_image(image_bytes, generated_text)
@@ -69,7 +81,6 @@ def extract_user_text(message: types.Message) -> str | None:
         if message.caption:
             text = message.caption.lower()
             if "добавь" in text:
-                # Находим позицию слова "добавь" и берем все после него
                 idx = text.find("добавь")
                 user_text = message.caption[idx + 6:].strip()
                 return user_text if user_text else None
@@ -106,7 +117,6 @@ async def process_image_description(bot, message: types.Message) -> tuple[bool, 
         if not image_data:
             return False, "Не удалось загрузить изображение."
         
-        # Передаем chat_id
         success, description = await generate_image_description(image_data, message.chat.id)
         
         if success:
@@ -140,15 +150,32 @@ async def download_image(bot, file_id: str) -> bytes | None:
 
 async def generate_image_description(image_data: bytes, chat_id: int) -> tuple[bool, str]:
     """
-    Генерирует описание изображения с помощью AI модели. Теперь принимает chat_id.
+    Генерирует описание изображения с помощью AI модели с поддержкой разных моделей
     """
     try:
-        response = model.generate_content([
-            PROMPT_DESCRIBE,
-            {"mime_type": "image/jpeg", "data": image_data}
-        ], chat_id=chat_id) # Передача chat_id
+        active_model = get_active_model(str(chat_id))
+        logging.info(f"generate_image_description: используется модель {active_model}")
         
-        description = response.text
+        if active_model == "groq":
+            logging.info("Используем Groq Maverick для описания изображения")
+            description = await asyncio.to_thread(
+                lambda: groq_ai.analyze_image(image_data, PROMPT_DESCRIBE)
+            )
+        elif active_model == "gigachat":
+            logging.info("Используем GigaChat для описания изображения")
+            response = await asyncio.to_thread(lambda: gigachat_model.generate_content([
+                PROMPT_DESCRIBE,
+                {"mime_type": "image/jpeg", "data": image_data}
+            ], chat_id=chat_id))
+            description = response.text
+        else:  # gemini
+            logging.info("Используем Gemini для описания изображения")
+            response = await asyncio.to_thread(lambda: model.generate_content([
+                PROMPT_DESCRIBE,
+                {"mime_type": "image/jpeg", "data": image_data}
+            ], chat_id=chat_id))
+            description = response.text
+        
         logging.info(f"Сгенерированное описание: {description}")
         return True, description
         
@@ -201,17 +228,35 @@ async def download_telegram_image(bot, photo):
 
 async def process_image(image_bytes: bytes, chat_id: int) -> str:
     """
-    Обрабатывает изображение и генерирует текст для команды "добавь".
-    Теперь принимает chat_id.
+    Обрабатывает изображение и генерирует текст для команды "добавь" с поддержкой разных моделей
     """
     try:
-        response = model.generate_content([
-            SPECIAL_PROMPT,
-            {"mime_type": "image/jpeg", "data": image_bytes}
-        ], chat_id=chat_id) # Передача chat_id
-        generated_text = response.text
+        active_model = get_active_model(str(chat_id))
+        logging.info(f"process_image: используется модель {active_model}")
+        
+        if active_model == "groq":
+            logging.info("Используем Groq Maverick для генерации текста")
+            generated_text = await asyncio.to_thread(
+                lambda: groq_ai.analyze_image(image_bytes, SPECIAL_PROMPT)
+            )
+        elif active_model == "gigachat":
+            logging.info("Используем GigaChat для генерации текста")
+            response = await asyncio.to_thread(lambda: gigachat_model.generate_content([
+                SPECIAL_PROMPT,
+                {"mime_type": "image/jpeg", "data": image_bytes}
+            ], chat_id=chat_id))
+            generated_text = response.text
+        else:  # gemini
+            logging.info("Используем Gemini для генерации текста")
+            response = await asyncio.to_thread(lambda: model.generate_content([
+                SPECIAL_PROMPT,
+                {"mime_type": "image/jpeg", "data": image_bytes}
+            ], chat_id=chat_id))
+            generated_text = response.text
+        
         logging.info(f"Сгенерированный текст: {generated_text}")
         return generated_text
+        
     except Exception as e:
         logging.error(f"Ошибка обработки изображения: {str(e)}", exc_info=True)
         raise RuntimeError(f"Ошибка генерации текста: {str(e)}") from e
