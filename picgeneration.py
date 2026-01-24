@@ -312,15 +312,14 @@ async def handle_redraw_command(message: types.Message):
     chat_id = str(message.chat.id)
     active_model = get_active_model(chat_id)
     
-    msg = await message.reply("Ищу скрытый смысл и рисую инфографику...")
+    msg = await message.reply("Анал лизирую тваю мазню")
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
         
         analysis_prompt = (
-            "найди скрытую логику входящего изображения и сделай на основе этого инфографику, "
-            "объясняющую суть на русском языке, сохранив стиль и эстетику исходного изображения. "
-            "используй сарказм и нецензурную лексику"
+            "A very bad children's drawing, ugly doodle, mess, crayon style, "
+            "scribble, naive art, stick figures, white background, masterpiece by 4 year old child "
         )
         
         # Анализируем изображение через выбранную модель
