@@ -4,12 +4,13 @@ import logging
 import requests
 import textwrap
 from io import BytesIO
+from urllib.parse import urlparse
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from aiogram import types
 from aiogram.types import FSInputFile, Message
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-from google.generativeai import protos # <--- ВАЖНЫЙ ИМПОРТ
+from google.generativeai import protos
 from collections import deque
 import hashlib
 
@@ -26,7 +27,18 @@ from config import (
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 # Кэш последних показанных картинок (храним хеши URL)
-recent_images_cache = deque(maxlen=50)  # Последние 50 картинок
+recent_images_cache = deque(maxlen=50)
+
+# Домены, которые блокируют скачивание
+BLOCKED_DOMAINS = [
+    'shutterstock.com',
+    'gettyimages.com',
+    'istockphoto.com',
+    'alamy.com',
+    'depositphotos.com',
+    'dreamstime.com',
+    '123rf.com',
+]
 
 # =============================================================================
 # LEGACY: ПОИСК КАРТИНОК (GOOGLE CUSTOM SEARCH)
@@ -39,9 +51,43 @@ def _get_url_hash(url: str) -> str:
     """Создает короткий хеш URL для кэша."""
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
+def is_url_allowed(url: str) -> bool:
+    """Проверяет, не из заблокированного ли домена URL."""
+    domain = urlparse(url).netloc.lower()
+    return not any(blocked in domain for blocked in BLOCKED_DOMAINS)
+
+def download_image_with_headers(url: str, timeout: int = 10) -> bytes | None:
+    """Скачивает изображение с proper headers для обхода блокировок."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.google.com/',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        
+        # Проверяем, что это действительно изображение
+        content_type = response.headers.get('Content-Type', '')
+        if response.status_code == 200 and 'image' in content_type:
+            return response.content
+        else:
+            logging.warning(f"Не удалось скачать изображение: {url}, status: {response.status_code}, content-type: {content_type}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logging.error(f"Timeout при скачивании: {url}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Ошибка при скачивании {url}: {e}")
+        return None
+
 def search_images(query: str, randomize: bool = True):
     """
-    Поиск картинок с рандомизацией выдачи.
+    Поиск картинок с рандомизацией выдачи и фильтрацией проблемных доменов.
     
     Args:
         query: поисковый запрос
@@ -50,28 +96,30 @@ def search_images(query: str, randomize: bool = True):
     try:
         service = get_google_service()
         
-        # Рандомизация: случайное смещение от 0 до 40 (Google позволяет до 100)
+        # Рандомизация: случайное смещение от 0 до 40
         start_index = random.randint(0, 40) if randomize else 1
         
         result = service.cse().list(
             q=query, 
             cx=SEARCH_ENGINE_ID, 
             searchType='image',
-            start=start_index,  # Добавляем смещение
-            num=10  # Берем 10 результатов
+            start=start_index,
+            num=10
         ).execute()
         
         items = result.get("items", [])
         image_urls = [item["link"] for item in items]
         
-        # Фильтруем уже показанные картинки
-        fresh_urls = [url for url in image_urls if _get_url_hash(url) not in recent_images_cache]
+        # Фильтруем заблокированные домены
+        allowed_urls = [url for url in image_urls if is_url_allowed(url)]
         
-        # Если все картинки уже были показаны, очищаем кэш и используем все
+        # Фильтруем уже показанные картинки
+        fresh_urls = [url for url in allowed_urls if _get_url_hash(url) not in recent_images_cache]
+        
         if not fresh_urls:
-            logging.info("Все картинки из выдачи уже показывались, очищаем кэш")
+            logging.info("Все картинки из выдачи уже показывались или заблокированы, очищаем кэш")
             recent_images_cache.clear()
-            fresh_urls = image_urls
+            fresh_urls = allowed_urls if allowed_urls else image_urls
         
         return fresh_urls
         
@@ -82,46 +130,70 @@ def search_images(query: str, randomize: bool = True):
 async def handle_message(message: types.Message, query, temp_img_path, error_msg):
     try:
         image_urls = search_images(query, randomize=True)
-        if image_urls:
-            random_image_url = random.choice(image_urls)
+        if not image_urls:
+            await message.reply(error_msg)
+            return
+        
+        # Пытаемся скачать несколько картинок
+        for image_url in image_urls[:5]:  # Пробуем первые 5
+            image_data = download_image_with_headers(image_url)
             
-            # Добавляем в кэш показанных
-            recent_images_cache.append(_get_url_hash(random_image_url))
-            
-            img_response = requests.get(random_image_url, timeout=10)
-            if img_response.status_code == 200:
+            if image_data:
+                recent_images_cache.append(_get_url_hash(image_url))
+                
                 with open(temp_img_path, "wb") as f:
-                    f.write(img_response.content)
+                    f.write(image_data)
                 photo = FSInputFile(temp_img_path)
                 await message.reply_photo(photo=photo)
                 os.remove(temp_img_path)
-            else:
-                await message.reply(f"Не удалось скачать: {random_image_url}")
-        else:
-            await message.reply(error_msg)
+                return
+        
+        # Если ни одна не скачалась
+        await message.reply("Все ссылки оказались битыми 😢")
+        
     except Exception as e:
         logging.error(f"Ошибка handle_message: {e}")
         await message.reply("Ошибка при поиске.")
 
-async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
+async def process_image_search(query: str, max_attempts: int = 5) -> tuple[bool, str, bytes | None]:
+    """
+    Ищет и скачивает изображение с несколькими попытками.
+    
+    Args:
+        query: поисковый запрос
+        max_attempts: максимальное количество попыток скачать разные картинки
+    """
     if not query:
         return False, "Шо тебе найти блядь", None
+    
     try:
         image_urls = search_images(query, randomize=True)
         if not image_urls:
             return False, "Хуй", None
         
-        random_image_url = random.choice(image_urls)
+        # Пытаемся скачать несколько картинок, пока не найдем рабочую
+        attempts = 0
+        random.shuffle(image_urls)
         
-        # Добавляем в кэш показанных
-        recent_images_cache.append(_get_url_hash(random_image_url))
+        for image_url in image_urls:
+            if attempts >= max_attempts:
+                break
+                
+            attempts += 1
+            logging.info(f"Попытка {attempts}/{max_attempts}: {image_url}")
+            
+            image_data = download_image_with_headers(image_url)
+            
+            if image_data:
+                recent_images_cache.append(_get_url_hash(image_url))
+                return True, "", image_data
+            else:
+                logging.warning(f"Пропускаем битую ссылку: {image_url}")
+                continue
         
-        img_response = requests.get(random_image_url, timeout=10)
+        # Если все попытки неудачны
+        return False, "Все ссылки оказались битыми, попробуй другой запрос", None
         
-        if img_response.status_code == 200:
-            return True, "", img_response.content
-        else:
-            return False, f"Ссылка битая: {random_image_url}", None
     except Exception as e:
         logging.error(f"Ошибка process_image_search: {e}")
         return False, f"Ошибка: {e}", None
@@ -204,7 +276,6 @@ async def process_grounding_search(query: str) -> str:
     try:
         prompt = f"Найди актуальную информацию по запросу: {query}. Ответь развернуто и по делу."
         
-        # ИСПОЛЬЗУЕМ PROTOS ДЛЯ ТОЧНОГО ОПРЕДЕЛЕНИЯ ИНСТРУМЕНТА
         tool_config = [protos.Tool(google_search=protos.GoogleSearch())]
         
         response = await search_model.generate_content_async(
@@ -220,7 +291,6 @@ async def process_grounding_search(query: str) -> str:
         if response.text:
             return response.text
         elif response.parts:
-            # Собираем текст из частей, если ответ разбит
             return "".join([part.text for part in response.parts])
         else:
             return "Гугл молчит, как партизан. Ничего не нашел."
@@ -239,7 +309,6 @@ async def process_location_search(address: str, user_request: str) -> str:
             f"Не будь душным, будь дерзким, но дай полезную информацию (названия, рейтинг, открыто ли)."
         )
         
-        # ИСПОЛЬЗУЕМ PROTOS ДЛЯ ТОЧНОГО ОПРЕДЕЛЕНИЯ ИНСТРУМЕНТА
         tool_config = [protos.Tool(google_search=protos.GoogleSearch())]
         
         response = await search_model.generate_content_async(
