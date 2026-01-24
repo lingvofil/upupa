@@ -54,7 +54,7 @@ class GroqWrapper:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
         # Актуальные модели на текущий момент
-        self.vision_model = "Llama-4-Scout-17B" 
+        self.vision_model = "meta-llama/llama-4-maverick-17b-128e-instruct" 
         self.text_model = "llama-3.3-70b-versatile"
         self.audio_model = "whisper-large-v3"
         self.tts_model = "canopylabs/orpheus-v1-english"
