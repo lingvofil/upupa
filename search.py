@@ -10,6 +10,8 @@ from aiogram import types
 from aiogram.types import FSInputFile, Message
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from google.generativeai import protos # <--- ВАЖНЫЙ ИМПОРТ
+from collections import deque
+import hashlib
 
 # Импортируем ключи и объекты из config
 from config import (
@@ -23,6 +25,9 @@ from config import (
 )
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
+# Кэш последних показанных картинок (храним хеши URL)
+recent_images_cache = deque(maxlen=50)  # Последние 50 картинок
+
 # =============================================================================
 # LEGACY: ПОИСК КАРТИНОК (GOOGLE CUSTOM SEARCH)
 # =============================================================================
@@ -30,22 +35,60 @@ from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 def get_google_service():
     return build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
 
-def search_images(query: str):
+def _get_url_hash(url: str) -> str:
+    """Создает короткий хеш URL для кэша."""
+    return hashlib.md5(url.encode()).hexdigest()[:16]
+
+def search_images(query: str, randomize: bool = True):
+    """
+    Поиск картинок с рандомизацией выдачи.
+    
+    Args:
+        query: поисковый запрос
+        randomize: если True, добавляет случайное смещение к результатам
+    """
     try:
         service = get_google_service()
-        result = service.cse().list(q=query, cx=SEARCH_ENGINE_ID, searchType='image').execute()
+        
+        # Рандомизация: случайное смещение от 0 до 40 (Google позволяет до 100)
+        start_index = random.randint(0, 40) if randomize else 1
+        
+        result = service.cse().list(
+            q=query, 
+            cx=SEARCH_ENGINE_ID, 
+            searchType='image',
+            start=start_index,  # Добавляем смещение
+            num=10  # Берем 10 результатов
+        ).execute()
+        
         items = result.get("items", [])
-        return [item["link"] for item in items]
+        image_urls = [item["link"] for item in items]
+        
+        # Фильтруем уже показанные картинки
+        fresh_urls = [url for url in image_urls if _get_url_hash(url) not in recent_images_cache]
+        
+        # Если все картинки уже были показаны, очищаем кэш и используем все
+        if not fresh_urls:
+            logging.info("Все картинки из выдачи уже показывались, очищаем кэш")
+            recent_images_cache.clear()
+            fresh_urls = image_urls
+        
+        return fresh_urls
+        
     except Exception as e:
         logging.error(f"Google API Error: {e}")
         return []
 
 async def handle_message(message: types.Message, query, temp_img_path, error_msg):
     try:
-        image_urls = search_images(query)
+        image_urls = search_images(query, randomize=True)
         if image_urls:
             random_image_url = random.choice(image_urls)
-            img_response = requests.get(random_image_url)
+            
+            # Добавляем в кэш показанных
+            recent_images_cache.append(_get_url_hash(random_image_url))
+            
+            img_response = requests.get(random_image_url, timeout=10)
             if img_response.status_code == 200:
                 with open(temp_img_path, "wb") as f:
                     f.write(img_response.content)
@@ -64,12 +107,16 @@ async def process_image_search(query: str) -> tuple[bool, str, bytes | None]:
     if not query:
         return False, "Шо тебе найти блядь", None
     try:
-        image_urls = search_images(query)
+        image_urls = search_images(query, randomize=True)
         if not image_urls:
             return False, "Хуй", None
         
         random_image_url = random.choice(image_urls)
-        img_response = requests.get(random_image_url)
+        
+        # Добавляем в кэш показанных
+        recent_images_cache.append(_get_url_hash(random_image_url))
+        
+        img_response = requests.get(random_image_url, timeout=10)
         
         if img_response.status_code == 200:
             return True, "", img_response.content
