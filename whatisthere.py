@@ -1,3 +1,5 @@
+#whatisthere.py
+
 import os
 import random
 import logging
@@ -5,16 +7,26 @@ import requests
 import re
 import io
 from aiogram import types
-from config import bot, API_TOKEN, model, ROBOTICS_MODEL, groq_ai
+from config import bot, API_TOKEN, model, ROBOTICS_MODEL, groq_ai, gigachat_model, chat_settings
 from prompts import PROMPTS_MEDIA
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+
+def get_active_model(chat_id: str) -> str:
+    """Возвращает активную модель для чата"""
+    settings = chat_settings.get(str(chat_id), {})
+    active_model = settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для анализа медиа
+    if active_model == "history":
+        active_model = "gemini"
+    
+    return active_model
 
 def get_custom_prompt(message: types.Message) -> str | None:
     """ Извлекает кастомный промпт из сообщения, который идет после 'чотам'. """
     text = message.text or message.caption or ""
     if "чотам" in text.lower():
-        # Используем re.split для регистронезависимого разделения, чтобы отделить команду от промпта
         parts = re.split(r'чотам', text, 1, re.IGNORECASE)
         if len(parts) > 1 and parts[1].strip():
             return parts[1].strip()
@@ -44,12 +56,10 @@ async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_
         temp_file_name = "media_input.tmp"
         
         if isinstance(media_source, str):
-            # Если это путь к файлу
             with open(media_source, "rb") as media_file:
                 media_data = media_file.read()
             temp_file_name = os.path.basename(media_source)
         elif isinstance(media_source, bytes):
-            # Если это уже байты
             media_data = media_source
         else:
             raise ValueError("Неверный тип media_source: нужен str (путь) или bytes")
@@ -61,33 +71,66 @@ async def analyze_media_bytes(media_source: str | bytes, mime_type: str, custom_
             base_prompt = random.choice(PROMPTS_MEDIA)
             content_prompt = f"{base_prompt}, не более 80 слов"
 
-        # === ЛОГИКА GROQ (Приоритет) ===
-        
-        # 1. Фотографии и статические изображения
+        # Определяем активную модель
+        active_model = get_active_model(str(chat_id)) if chat_id else "gemini"
+        logging.info(f"analyze_media_bytes: используется модель {active_model} для {mime_type}")
+
+        # === ИЗОБРАЖЕНИЯ ===
         if mime_type.startswith('image/') or mime_type == "image/webp":
-            try:
-                logging.info(f"Использую Groq Vision для {mime_type}")
-                return groq_ai.analyze_image(media_data, content_prompt)
-            except Exception as ge:
-                logging.error(f"Groq Vision failed: {ge}. Falling back to Gemini.")
+            if active_model == "groq":
+                try:
+                    logging.info(f"Использую Groq с {groq_ai.vision_model} для {mime_type}")
+                    return groq_ai.analyze_image(media_data, content_prompt)
+                except Exception as ge:
+                    logging.error(f"Groq Vision failed: {ge}. Falling back to Gemini.")
+            elif active_model == "gigachat":
+                try:
+                    logging.info(f"Использую GigaChat для {mime_type}")
+                    contents = [
+                        {"mime_type": mime_type, "data": media_data},
+                        content_prompt
+                    ]
+                    response = gigachat_model.generate_content(contents, chat_id=int(chat_id))
+                    return response.text
+                except Exception as ge:
+                    logging.error(f"GigaChat failed: {ge}. Falling back to Gemini.")
 
-        # 2. Аудио (Whisper + Llama)
+        # === АУДИО ===
         elif mime_type.startswith('audio/') or mime_type == "audio/ogg":
-            try:
-                logging.info(f"Использую Groq Whisper для {mime_type}")
-                transcript = groq_ai.transcribe_audio(media_data, temp_file_name)
-                analysis_prompt = f"Это текст из аудиофайла. {content_prompt}\n\nТекст: {transcript}"
-                return groq_ai.generate_text(analysis_prompt)
-            except Exception as ge:
-                logging.error(f"Groq Audio failed: {ge}. Falling back to Gemini.")
+            if active_model == "groq":
+                try:
+                    logging.info(f"Использую Groq Whisper для {mime_type}")
+                    transcript = groq_ai.transcribe_audio(media_data, temp_file_name)
+                    analysis_prompt = f"Это текст из аудиофайла. {content_prompt}\n\nТекст: {transcript}"
+                    return groq_ai.generate_text(analysis_prompt)
+                except Exception as ge:
+                    logging.error(f"Groq Audio failed: {ge}. Falling back to Gemini.")
+            elif active_model == "gigachat":
+                try:
+                    logging.info(f"Использую GigaChat для аудио {mime_type}")
+                    contents = [
+                        {"mime_type": mime_type, "data": media_data},
+                        content_prompt
+                    ]
+                    response = gigachat_model.generate_content(contents, chat_id=int(chat_id))
+                    return response.text
+                except Exception as ge:
+                    logging.error(f"GigaChat Audio failed: {ge}. Falling back to Gemini.")
 
-        # === ЛОГИКА GEMINI (Видео, ГИФ или Fallback) ===
+        # === ВИДЕО и ГИФ (только Gemini поддерживает нативно) ===
+        elif mime_type.startswith('video/') or mime_type == "image/gif":
+            if active_model in ["groq", "gigachat"]:
+                logging.info(f"Видео/GIF: Groq и GigaChat не поддерживают видео, переключаемся на Gemini")
+
+        # === FALLBACK на Gemini для всех типов ===
+        logging.info(f"Использую Gemini (fallback) для {mime_type}")
         contents = [
             {"mime_type": mime_type, "data": media_data},
             content_prompt
         ]
         response = model.generate_content(contents, chat_id=chat_id)
         return response.text
+        
     except Exception as e:
         logging.error(f"Ошибка при анализе медиа байтов ({mime_type}): {e}")
         return "Нихуя не понял, давай еще раз."
@@ -238,9 +281,9 @@ async def process_sticker_whatisthere(message: types.Message) -> tuple[bool, str
         logging.error(f"Ошибка при обработке стикера 'чотам': {e}")
         return False, "Ошибка при анализе стикера."
 
-# ================== TEXT (Groq Priority) ==================
+# ================== TEXT ==================
 async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
-    """ Обработка текста по команде 'чотам' с использованием Groq """
+    """ Обработка текста по команде 'чотам' """
     try:
         if not (message.reply_to_message and message.reply_to_message.text):
             return False, "Для анализа текста ответьте на сообщение командой 'чотам'."
@@ -256,14 +299,26 @@ async def process_text_whatisthere(message: types.Message) -> tuple[bool, str]:
             
         prompt = f"{content_prompt}\n\nТекст для анализа: {text_to_analyze}"
         
+        # Определяем модель
+        active_model = get_active_model(str(message.chat.id))
+        
         try:
-            logging.info("Использую Groq для текстового анализа 'чотам'")
-            response_text = groq_ai.generate_text(prompt)
-            return True, response_text
-        except Exception as ge:
-            logging.error(f"Groq text failed: {ge}. Falling back to Gemini.")
+            if active_model == "groq":
+                logging.info("Использую Groq для текстового анализа 'чотам'")
+                return True, groq_ai.generate_text(prompt)
+            elif active_model == "gigachat":
+                logging.info("Использую GigaChat для текстового анализа 'чотам'")
+                response = gigachat_model.generate_content(prompt, chat_id=message.chat.id)
+                return True, response.text
+            else:  # gemini
+                logging.info("Использую Gemini для текстового анализа 'чотам'")
+                response = model.generate_content(prompt, chat_id=message.chat.id)
+                return True, response.text
+        except Exception as e:
+            logging.error(f"Ошибка модели {active_model}: {e}. Fallback на Gemini.")
             response = model.generate_content(prompt, chat_id=message.chat.id)
             return True, response.text
+            
     except Exception as e:
         logging.error(f"Ошибка при обработке текста 'чотам': {e}")
         return False, "Ошибка при анализе текста."
@@ -274,7 +329,6 @@ def extract_url_from_message(message: types.Message) -> str | None:
     text = message.text or message.caption or ""
     if not text:
         return None
-    # Сначала проверяем entities
     if message.entities:
         for entity in message.entities:
             if entity.type == 'url':
@@ -283,7 +337,6 @@ def extract_url_from_message(message: types.Message) -> str | None:
         for entity in message.caption_entities:
             if entity.type == 'url':
                 return text[entity.offset : entity.offset + entity.length]
-    # Если entities нет, ищем простым regex
     match = re.search(r'https?://[^\s]+', text)
     if match:
         return match.group(0)
@@ -320,13 +373,26 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
             base_prompt = custom_prompt if custom_prompt else random.choice(PROMPTS_MEDIA)
             prompt = f"{base_prompt}, не более 80 слов\n\nТекст с сайта {url}: {text_to_analyze}"
             
+            # Определяем модель
+            active_model = get_active_model(str(message.chat.id))
+            
             try:
-                logging.info("Анализ текста ссылки через Groq")
-                res = groq_ai.generate_text(prompt)
-                return True, res
-            except:
+                if active_model == "groq":
+                    logging.info("Анализ текста ссылки через Groq")
+                    return True, groq_ai.generate_text(prompt)
+                elif active_model == "gigachat":
+                    logging.info("Анализ текста ссылки через GigaChat")
+                    gen_response = gigachat_model.generate_content(prompt, chat_id=message.chat.id)
+                    return True, gen_response.text
+                else:  # gemini
+                    logging.info("Анализ текста ссылки через Gemini")
+                    gen_response = model.generate_content(prompt, chat_id=message.chat.id)
+                    return True, gen_response.text
+            except Exception as e:
+                logging.error(f"Ошибка модели {active_model}: {e}. Fallback на Gemini.")
                 gen_response = model.generate_content(prompt, chat_id=message.chat.id)
                 return True, gen_response.text
+                
         return False, f"Неподдерживаемый тип: {content_type}"
     except Exception as e:
         logging.error(f"Ошибка при обработке URL 'чотам': {e}")
@@ -414,11 +480,23 @@ def get_processing_message(message: types.Message) -> str:
     url = extract_url_from_message(target_message)
     if not url and not message.reply_to_message:
         url = extract_url_from_message(message)
+    
+    # Определяем активную модель для персонализированных сообщений
+    active_model = get_active_model(str(message.chat.id))
+    model_names = {
+        "groq": "Groq Maverick",
+        "gigachat": "GigaChat",
+        "gemini": "Gemini"
+    }
+    model_name = model_names.get(active_model, "нейросеть")
+    
     if url: return "Лезю по ссылке..."
     
-    if target_message.audio or target_message.voice: return "Слушою через Groq..."
+    if target_message.audio or target_message.voice: 
+        return f"Слушою через {model_name}..." if active_model in ["groq", "gigachat"] else "Слушою..."
     elif target_message.video: return "Сматрю..."
-    elif target_message.photo: return "Рассматриваю ето художество в Groq..."
+    elif target_message.photo: 
+        return f"Рассматриваю ето художество в {model_name}..."
     elif target_message.animation: return "Да не дергайся ты..."
     elif target_message.sticker: return "Стикер-шмикер..."
     elif target_message.text: return "Понаписали ебанарот..."
