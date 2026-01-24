@@ -17,7 +17,7 @@ from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 
 import config
-from config import bot, model, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN
+from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN
 from prompts import actions
 from adddescribe import download_telegram_image
 
@@ -28,6 +28,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 CF_ACCOUNT_ID = getattr(config, 'CLOUDFLARE_ACCOUNT_ID', None)
 CF_API_TOKEN = getattr(config, 'CLOUDFLARE_API_TOKEN', None)
 HF_TOKEN = getattr(config, 'HUGGINGFACE_TOKEN', None)
+
+def get_active_model(chat_id: str) -> str:
+    """Возвращает активную модель для чата"""
+    settings = chat_settings.get(str(chat_id), {})
+    active_model = settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для генерации
+    if active_model == "history":
+        active_model = "gemini"
+    
+    return active_model
 
 # =============================================================================
 # КЛАСС KANDINSKY (FUSIONBRAIN)
@@ -190,7 +201,6 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
     
     # 1. Flux (Pollinations)
     await processing_msg.edit_text("Использую ебучий Flux...")
-    # Если в промпте уже есть английские "badly drawn", translate_to_en не должен это испортить
     prompt_en = await translate_to_en(prompt_ru)
     img = await pollinations_generate(prompt_en)
     if img:
@@ -241,16 +251,8 @@ async def handle_pun_image_command(message: types.Message):
     msg = await message.reply("🤔 Придумываю калом бур...")
     
     try:
-        # Определяем активную модель из настроек чата
-        from chat_settings import chat_settings
-        current_settings = chat_settings.get(chat_id, {})
-        active_model = current_settings.get("active_model", "gemini")
+        active_model = get_active_model(chat_id)
         
-        # Режим истории не подходит для генерации каламбуров
-        if active_model == "history":
-            active_model = "gemini"
-        
-        # Максимально строгий промпт для генерации каламбура
         pun_prompt = (
             "Придумай смешной визуальный каламбур на русском языке. "
             "Ответ дай СТРОГО одной строкой в формате: слово1+слово2 = итоговоеслово. "
@@ -260,12 +262,10 @@ async def handle_pun_image_command(message: types.Message):
         
         # Генерируем каламбур через выбранную модель
         if active_model == "gigachat":
-            from config import gigachat_model
             pun_res = await asyncio.to_thread(
                 lambda: gigachat_model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip()
             )
         elif active_model == "groq":
-            from config import groq_ai
             pun_res = await asyncio.to_thread(lambda: groq_ai.generate_text(pun_prompt))
         else:  # gemini
             pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip())
@@ -283,7 +283,7 @@ async def handle_pun_image_command(message: types.Message):
         
         prompt_en = await translate_to_en(f"A creative surreal hybrid of {source_raw}, visual pun, digital art, high resolution")
         
-        # Генерируем
+        # Генерируем картинку
         img_data = await pollinations_generate(prompt_en)
         if not img_data:
             global PIPELINE_ID
@@ -305,30 +305,44 @@ async def handle_pun_image_command(message: types.Message):
         await msg.edit_text("Ашипка блядь")
 
 async def handle_redraw_command(message: types.Message):
-    """Перерисовка: Саркастичная инфографика"""
+    """Перерисовка: Саркастичная инфографика с поддержкой разных моделей"""
     photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
     if not photo: return await message.reply("Нужно фото.")
+    
+    chat_id = str(message.chat.id)
+    active_model = get_active_model(chat_id)
     
     msg = await message.reply("Ищу скрытый смысл и рисую инфографику...")
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
         
-        # Новый промпт для анализа изображения через Gemini
         analysis_prompt = (
             "найди скрытую логику входящего изображения и сделай на основе этого инфографику, "
             "объясняющую суть на русском языке, сохранив стиль и эстетику исходного изображения. "
             "используй сарказм и нецензурную лексику"
         )
         
-        # Получаем описание/идею от Gemini
-        response = await asyncio.to_thread(lambda: model.generate_content(
-            [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
-        ))
-        
-        # Используем ответ Gemini напрямую как промпт для генератора картинок.
-        # robust_image_generation сама переведет его на английский для Flux или оставит русским для Kandinsky.
-        final_prompt = response.text.strip()
+        # Анализируем изображение через выбранную модель
+        if active_model == "groq":
+            logging.info("Используем Groq Maverick для анализа изображения")
+            final_prompt = await asyncio.to_thread(
+                lambda: groq_ai.analyze_image(img_bytes, analysis_prompt)
+            )
+        elif active_model == "gigachat":
+            logging.info("Используем GigaChat для анализа изображения")
+            response = await asyncio.to_thread(lambda: gigachat_model.generate_content(
+                [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
+                chat_id=int(chat_id)
+            ))
+            final_prompt = response.text.strip()
+        else:  # gemini
+            logging.info("Используем Gemini для анализа изображения")
+            response = await asyncio.to_thread(lambda: model.generate_content(
+                [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
+                chat_id=int(chat_id)
+            ))
+            final_prompt = response.text.strip()
         
         await robust_image_generation(message, final_prompt, msg)
 
