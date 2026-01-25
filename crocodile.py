@@ -1,3 +1,5 @@
+#crocodile.py
+
 import asyncio
 import base64
 import logging
@@ -489,68 +491,78 @@ async def handle_text_stop(message: types.Message):
 
 
 async def handle_callback(cb: types.CallbackQuery):
+    """Обработчик всех callback-кнопок в игре Крокодил"""
     data = cb.data
-    # === ЛОГИКА ЛАЙКОВ ===
+    
+    # === ЛОГИКА ЛАЙКОВ (работает БЕЗ активной сессии) ===
     if data == "btn_like":
         try:
             current_kb = cb.message.reply_markup
             if not current_kb or not current_kb.inline_keyboard:
                 return await cb.answer("Ошибка кнопки")
+            
             btn = current_kb.inline_keyboard[0][0]
             text = btn.text
             match = re.search(r'\d+', text)
             count = int(match.group(0)) if match else 0
             new_count = count + 1
+            
             user_name = cb.from_user.full_name
             await bot.send_message(
                 cb.message.chat.id,
                 f"❤️ **{user_name}** поставил лайк хуйдожнику!",
                 parse_mode="Markdown"
             )
+            
             await cb.message.edit_reply_markup(reply_markup=get_end_game_keyboard(new_count))
             return await cb.answer("Лайк поставлен!")
         except Exception as e:
-            logging.error(f"Like error: {e}")
+            logging.error(f"Like error: {e}", exc_info=True)
             return await cb.answer("Не удалось лайкнуть :(")
 
-    # === ЛОГИКА "ХОЧУ РИСОВАТЬ" ===
+    # === ЛОГИКА "ХОЧУ РИСОВАТЬ" (работает БЕЗ активной сессии) ===
     if data == "btn_want_draw":
-        await cb.answer("Готовим холст...")
-        await start_new_game(cb.message.chat.id, cb.from_user.id, cb.from_user.full_name)
-        return
+        try:
+            await cb.answer("Готовим холст...")
+            await start_new_game(cb.message.chat.id, cb.from_user.id, cb.from_user.full_name)
+            return
+        except Exception as e:
+            logging.error(f"Want draw error: {e}", exc_info=True)
+            return await cb.answer("Не удалось запустить игру :(")
 
-    # === ИГРОВАЯ ЛОГИКА ===
-    chat_id = data.split("_")[-1]
-    session = game_sessions.get(chat_id)
-    if not session:
-        if data.startswith("cr_"):
+    # === ИГРОВАЯ ЛОГИКА (требует активную сессию) ===
+    if data.startswith("cr_"):
+        chat_id = data.split("_")[-1]
+        session = game_sessions.get(chat_id)
+        
+        if not session:
             return await cb.answer("Игра уже закончилась")
-        return
 
-    is_drawer = bool(cb.from_user and cb.from_user.id == session.get("drawer_id"))
-    if data.startswith("cr_w_"):
-        if not is_drawer:
-            return await cb.answer("Это может смотреть только загадывающий 👀", show_alert=True)
-        return await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
+        is_drawer = bool(cb.from_user and cb.from_user.id == session.get("drawer_id"))
+        
+        if data.startswith("cr_w_"):
+            if not is_drawer:
+                return await cb.answer("Это может смотреть только загадывающий 👀", show_alert=True)
+            return await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
 
-    elif data.startswith("cr_n_"):
-        if not is_drawer:
-            return await cb.answer("Менять слово может только загадывающий 🔒", show_alert=True)
-        new_w = _pick_word()
-        session["word"] = new_w
-        room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
-        await sio.emit("new_word_data", {"word": new_w}, room=room)
-        return await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
+        elif data.startswith("cr_n_"):
+            if not is_drawer:
+                return await cb.answer("Менять слово может только загадывающий 🔒", show_alert=True)
+            new_w = _pick_word()
+            session["word"] = new_w
+            room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
+            await sio.emit("new_word_data", {"word": new_w}, room=room)
+            return await cb.answer(f"Новое: {new_w.upper()}", show_alert=True)
 
-    elif data.startswith("cr_stop_"):
-        await _stop_session(chat_id, reason="manual stop")
-        await cb.message.answer("🛑 Игра остановлена.")
-        await cb.message.answer(
-            format_leaderboard(chat_id, "🏆 Рейтинг (текущий)"),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
-        return await cb.answer("Остановлено")
+        elif data.startswith("cr_stop_"):
+            await _stop_session(chat_id, reason="manual stop")
+            await cb.message.answer("🛑 Игра остановлена.")
+            await cb.message.answer(
+                format_leaderboard(chat_id, "🏆 Рейтинг (текущий)"),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return await cb.answer("Остановлено")
 
 
 async def check_answer(msg: types.Message) -> bool:
