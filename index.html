@@ -8,6 +8,12 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
   <style>
+    * {
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
     body {
       margin: 0;
       background: #222;
@@ -17,12 +23,14 @@
       height: 100vh;
       font-family: system-ui, -apple-system, sans-serif;
       touch-action: none;
+      overscroll-behavior: none;
     }
     canvas {
       flex: 1;
       background: #fff;
       display: block;
       touch-action: none;
+      cursor: crosshair;
     }
     .toolbar {
       min-height: 78px;
@@ -152,7 +160,7 @@
 
     canvas.width = document.body.clientWidth;
 
-    // делаем “высокий” холст, чтобы превью в чате было крупнее
+    // делаем "высокий" холст, чтобы превью в чате было крупнее
     const targetH = Math.floor(canvas.width * 1.25);
     const maxH = document.body.clientHeight - toolbarH;
     canvas.height = Math.min(targetH, maxH);
@@ -175,7 +183,7 @@
   const pCtx = pCanvas.getContext('2d', { alpha: false });
 
   function getCompressedJpeg() {
-    const TARGET_W = 420; // можно увеличить, если хочешь еще больше
+    const TARGET_W = 420;
     const scale = Math.min(1, TARGET_W / canvas.width);
 
     pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
@@ -185,7 +193,6 @@
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    // качество 0.65 — нормально и по весу, и по виду
     return pCanvas.toDataURL('image/jpeg', 0.65);
   }
 
@@ -197,7 +204,6 @@
 
   socket.on('connect', () => {
     socket.emit('join_room', { room: roomId });
-    // стартовый снап — сразу после подключения
     isDirty = true;
     sendSnap(true);
   });
@@ -233,25 +239,88 @@
     isDirty = false;
   }
 
-  // --- DRAWING ---
+  // --- DRAWING (УЛУЧШЕННАЯ ВЕРСИЯ ДЛЯ МОБИЛЬНЫХ) ---
   let drawing = false;
   let last = { x: 0, y: 0 };
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
+    let clientX, clientY;
+    
+    // Поддержка touch-событий
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+      clientX = e.changedTouches[0].clientX;
+      clientY = e.changedTouches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    
     return {
-      x: (e.pageX || e.clientX) - r.left,
-      y: (e.pageY || e.clientY) - r.top
+      x: clientX - r.left,
+      y: clientY - r.top
     };
   }
 
+  // Touch события
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    drawing = true;
+    last = getPos(e);
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (!drawing) return;
+
+    const p = getPos(e);
+
+    ctx.strokeStyle = currentColor;
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+
+    socket.emit('draw_step', { 
+      room: roomId, 
+      px: last.x, 
+      py: last.y, 
+      x: p.x, 
+      y: p.y, 
+      color: currentColor 
+    });
+
+    isDirty = true;
+    last = p;
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    drawing = false;
+    sendSnap(false);
+  }, { passive: false });
+
+  canvas.addEventListener('touchcancel', function(e) {
+    e.preventDefault();
+    drawing = false;
+  }, { passive: false });
+
+  // Pointer события (для десктопа и гибридных устройств)
   canvas.onpointerdown = function (e) {
+    // Игнорируем pointer события если это touch (обрабатываем через touch)
+    if (e.pointerType === 'touch') return;
+    
     drawing = true;
     last = getPos(e);
     canvas.setPointerCapture(e.pointerId);
   };
 
   canvas.onpointermove = function (e) {
+    // Игнорируем pointer события если это touch
+    if (e.pointerType === 'touch') return;
     if (!drawing) return;
     e.preventDefault();
 
@@ -263,13 +332,23 @@
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
 
-    socket.emit('draw_step', { room: roomId, px: last.x, py: last.y, x: p.x, y: p.y, color: currentColor });
+    socket.emit('draw_step', { 
+      room: roomId, 
+      px: last.x, 
+      py: last.y, 
+      x: p.x, 
+      y: p.y, 
+      color: currentColor 
+    });
 
     isDirty = true;
     last = p;
   };
 
   canvas.onpointerup = function (e) {
+    // Игнорируем pointer события если это touch
+    if (e.pointerType === 'touch') return;
+    
     drawing = false;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     sendSnap(false);
@@ -293,6 +372,11 @@
 
   // авто-снап раз в 2.5 сек
   setInterval(() => sendSnap(false), 2500);
+
+  // Предотвращаем зум и прокрутку
+  document.addEventListener('gesturestart', e => e.preventDefault());
+  document.addEventListener('gesturechange', e => e.preventDefault());
+  document.addEventListener('gestureend', e => e.preventDefault());
 </script>
 
 </body>
