@@ -542,12 +542,12 @@ async def handle_callback(cb: types.CallbackQuery):
         
         if data.startswith("cr_w_"):
             if not is_drawer:
-                return await cb.answer("Это может смотреть только загадывающий 👀", show_alert=True)
+                return await cb.answer("Это может смотреть только загадывающий, пошел нахуй", show_alert=True)
             return await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
 
         elif data.startswith("cr_n_"):
             if not is_drawer:
-                return await cb.answer("Менять слово может только загадывающий 🔒", show_alert=True)
+                return await cb.answer("Менять слово может только загадывающий, а ты кто такой блядь 🔒", show_alert=True)
             new_w = _pick_word()
             session["word"] = new_w
             room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
