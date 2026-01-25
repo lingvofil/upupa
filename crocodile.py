@@ -348,13 +348,19 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
 # ================== SOCKET EVENTS ==================
 @sio.event
 async def connect(sid, environ):
-    pass
+    logging.info(f"[socket] Client connected: {sid}")
+
+
+@sio.event
+async def disconnect(sid):
+    logging.info(f"[socket] Client disconnected: {sid}")
 
 
 @sio.event
 async def join_room(sid, data):
     room = str(data.get("room"))
     sio.enter_room(sid, room)
+    logging.info(f"[socket] {sid} joined room {room}")
 
 
 @sio.event
@@ -365,9 +371,12 @@ async def draw_step(sid, data):
 
 @sio.event
 async def snapshot(sid, data):
+    """ИСПРАВЛЕНО: теперь возвращает результат клиенту через callback"""
     room = str(data.get("room") or "")
     image_data = data.get("image") or ""
-    return await _process_snapshot(room, image_data, source="socket")
+    result = await _process_snapshot(room, image_data, source="socket")
+    logging.info(f"[snapshot] room={room} result={result}")
+    return result
 
 
 @sio.event
@@ -430,7 +439,7 @@ async def start_socket_server():
     await runner.setup()
     site = web.TCPSite(runner, SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     await site.start()
-    logging.info(f"Server running on port {SOCKET_SERVER_PORT}")
+    logging.info(f"[crocodile] Socket.io server running on {SOCKET_SERVER_HOST}:{SOCKET_SERVER_PORT}")
 
 
 # ================== BOT LOGIC ==================
@@ -542,12 +551,12 @@ async def handle_callback(cb: types.CallbackQuery):
         
         if data.startswith("cr_w_"):
             if not is_drawer:
-                return await cb.answer("Это может смотреть только загадывающий, пошел нахуй", show_alert=True)
+                return await cb.answer("Это может смотреть только загадывающий 👀", show_alert=True)
             return await cb.answer(f"Слово: {session['word'].upper()}", show_alert=True)
 
         elif data.startswith("cr_n_"):
             if not is_drawer:
-                return await cb.answer("Менять слово может только загадывающий, а ты кто такой блядь 🔒", show_alert=True)
+                return await cb.answer("Менять слово может только загадывающий 🔒", show_alert=True)
             new_w = _pick_word()
             session["word"] = new_w
             room = f"m{chat_id.replace('-', '')}" if chat_id.startswith("-") else chat_id
