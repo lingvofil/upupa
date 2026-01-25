@@ -21,6 +21,8 @@
       display: flex;
       flex-direction: column;
       height: 100vh;
+      width: 100vw;
+      position: fixed;
       font-family: system-ui, -apple-system, sans-serif;
       touch-action: none;
       overscroll-behavior: none;
@@ -30,7 +32,8 @@
       background: #fff;
       display: block;
       touch-action: none;
-      cursor: crosshair;
+      width: 100%;
+      height: auto;
     }
     .toolbar {
       min-height: 78px;
@@ -42,6 +45,7 @@
       gap: 10px;
       flex-shrink: 0;
       flex-wrap: wrap;
+      touch-action: auto;
     }
     .btn {
       padding: 10px 12px;
@@ -51,6 +55,7 @@
       color: white;
       cursor: pointer;
       white-space: nowrap;
+      touch-action: auto;
     }
     .btn-blue { background: #007aff; }
     .btn-red { background: #ff3b30; }
@@ -69,6 +74,7 @@
       border: 2px solid rgba(255,255,255,0.6);
       box-sizing: border-box;
       padding: 0;
+      touch-action: auto;
     }
     .swatch.active {
       border: 2px solid #fff;
@@ -81,11 +87,26 @@
       border: none;
       padding: 0;
       background: transparent;
+      touch-action: auto;
+    }
+    #debug {
+      position: fixed;
+      top: 0;
+      left: 0;
+      background: rgba(0,0,0,0.8);
+      color: #0f0;
+      padding: 5px;
+      font-size: 10px;
+      max-width: 200px;
+      z-index: 9999;
+      pointer-events: none;
+      display: none;
     }
   </style>
 </head>
 <body>
 
+<div id="debug"></div>
 <canvas id="canvas"></canvas>
 
 <div id="toolbar" class="toolbar">
@@ -99,11 +120,23 @@
 </div>
 
 <script>
+  const debugEl = document.getElementById('debug');
+  let debugLines = [];
+  
+  function log(msg) {
+    console.log(msg);
+    debugLines.push(new Date().toLocaleTimeString() + ': ' + msg);
+    if (debugLines.length > 8) debugLines.shift();
+    debugEl.textContent = debugLines.join('\n');
+    debugEl.style.display = 'block';
+  }
+
   const tg = window.Telegram.WebApp;
   tg.expand();
   tg.ready();
 
   const roomId = tg.initDataUnsafe.start_param;
+  log('Room: ' + roomId);
 
   // --- COLORS ---
   const paletteEl = document.getElementById("palette");
@@ -147,7 +180,7 @@
 
   // --- CANVAS ---
   const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d', { alpha: false });
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
   let isDirty = false;
 
   function resize() {
@@ -156,13 +189,14 @@
     const tmp = document.createElement('canvas');
     tmp.width = canvas.width;
     tmp.height = canvas.height;
-    if (canvas.width > 0) tmp.getContext('2d').drawImage(canvas, 0, 0);
+    if (canvas.width > 0) {
+      const tmpCtx = tmp.getContext('2d');
+      tmpCtx.drawImage(canvas, 0, 0);
+    }
 
-    canvas.width = document.body.clientWidth;
-
-    // делаем "высокий" холст, чтобы превью в чате было крупнее
+    canvas.width = window.innerWidth;
     const targetH = Math.floor(canvas.width * 1.25);
-    const maxH = document.body.clientHeight - toolbarH;
+    const maxH = window.innerHeight - toolbarH;
     canvas.height = Math.min(targetH, maxH);
 
     ctx.lineCap = 'round';
@@ -172,11 +206,16 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (tmp.width > 0) ctx.drawImage(tmp, 0, 0);
+    if (tmp.width > 0) {
+      ctx.drawImage(tmp, 0, 0);
+    }
+    
+    log('Canvas: ' + canvas.width + 'x' + canvas.height);
   }
 
   window.addEventListener('resize', resize);
-  setTimeout(resize, 80);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 100));
+  setTimeout(resize, 100);
 
   // --- PREVIEW COMPRESSION ---
   const pCanvas = document.createElement('canvas');
@@ -199,13 +238,23 @@
   // --- SOCKET ---
   const socket = io({
     transports: ['websocket'],
-    upgrade: false
+    upgrade: false,
+    reconnection: true
   });
 
   socket.on('connect', () => {
+    log('Socket connected');
     socket.emit('join_room', { room: roomId });
     isDirty = true;
     sendSnap(true);
+  });
+
+  socket.on('disconnect', () => {
+    log('Socket disconnected');
+  });
+
+  socket.on('connect_error', (err) => {
+    log('Socket error: ' + err.message);
   });
 
   socket.on('draw_data', (d) => {
@@ -223,31 +272,44 @@
 
   // --- SNAPSHOT ---
   let snapInFlight = false;
+  let snapCount = 0;
 
   function sendSnap(force = false) {
-    if (!socket.connected) return;
-    if (snapInFlight) return;
-    if (!force && !isDirty) return;
+    if (!socket.connected) {
+      log('Skip snap: no socket');
+      return;
+    }
+    if (snapInFlight) {
+      log('Skip snap: in flight');
+      return;
+    }
+    if (!force && !isDirty) {
+      return;
+    }
 
     snapInFlight = true;
     const data = getCompressedJpeg();
+    snapCount++;
 
-    socket.emit('snapshot', { room: roomId, image: data }, () => {
+    log('Sending snap #' + snapCount);
+
+    socket.emit('snapshot', { room: roomId, image: data }, (response) => {
       snapInFlight = false;
+      log('Snap response: ' + response);
     });
 
     isDirty = false;
   }
 
-  // --- DRAWING (УЛУЧШЕННАЯ ВЕРСИЯ ДЛЯ МОБИЛЬНЫХ) ---
+  // --- DRAWING ---
   let drawing = false;
   let last = { x: 0, y: 0 };
+  let strokeCount = 0;
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
     let clientX, clientY;
     
-    // Поддержка touch-событий
     if (e.touches && e.touches.length > 0) {
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
@@ -265,11 +327,20 @@
     };
   }
 
-  // Touch события
+  function drawLine(from, to, color) {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  }
+
+  // Touch события для мобильных
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
     drawing = true;
     last = getPos(e);
+    log('Touch start: ' + Math.round(last.x) + ',' + Math.round(last.y));
   }, { passive: false });
 
   canvas.addEventListener('touchmove', function(e) {
@@ -277,13 +348,10 @@
     if (!drawing) return;
 
     const p = getPos(e);
+    drawLine(last, p, currentColor);
 
-    ctx.strokeStyle = currentColor;
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-
+    strokeCount++;
+    
     socket.emit('draw_step', { 
       room: roomId, 
       px: last.x, 
@@ -292,6 +360,10 @@
       y: p.y, 
       color: currentColor 
     });
+
+    if (strokeCount % 20 === 0) {
+      log('Strokes: ' + strokeCount);
+    }
 
     isDirty = true;
     last = p;
@@ -299,38 +371,33 @@
 
   canvas.addEventListener('touchend', function(e) {
     e.preventDefault();
+    if (!drawing) return;
     drawing = false;
+    log('Touch end, sending snap');
     sendSnap(false);
   }, { passive: false });
 
   canvas.addEventListener('touchcancel', function(e) {
     e.preventDefault();
     drawing = false;
+    log('Touch cancel');
   }, { passive: false });
 
-  // Pointer события (для десктопа и гибридных устройств)
-  canvas.onpointerdown = function (e) {
-    // Игнорируем pointer события если это touch (обрабатываем через touch)
+  // Mouse события для десктопа
+  canvas.addEventListener('mousedown', function(e) {
     if (e.pointerType === 'touch') return;
-    
     drawing = true;
     last = getPos(e);
-    canvas.setPointerCapture(e.pointerId);
-  };
+    log('Mouse down: ' + Math.round(last.x) + ',' + Math.round(last.y));
+  });
 
-  canvas.onpointermove = function (e) {
-    // Игнорируем pointer события если это touch
+  canvas.addEventListener('mousemove', function(e) {
     if (e.pointerType === 'touch') return;
     if (!drawing) return;
     e.preventDefault();
 
     const p = getPos(e);
-
-    ctx.strokeStyle = currentColor;
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
+    drawLine(last, p, currentColor);
 
     socket.emit('draw_step', { 
       room: roomId, 
@@ -343,16 +410,14 @@
 
     isDirty = true;
     last = p;
-  };
+  });
 
-  canvas.onpointerup = function (e) {
-    // Игнорируем pointer события если это touch
+  canvas.addEventListener('mouseup', function(e) {
     if (e.pointerType === 'touch') return;
-    
+    if (!drawing) return;
     drawing = false;
-    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     sendSnap(false);
-  };
+  });
 
   // --- BUTTONS ---
   window.clearC = () => {
@@ -360,14 +425,19 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     isDirty = true;
     sendSnap(true);
+    log('Canvas cleared');
   };
 
-  window.skip = () => socket.emit('skip_turn', { room: roomId });
+  window.skip = () => {
+    socket.emit('skip_turn', { room: roomId });
+    log('Skip turn');
+  };
 
   window.finish = () => {
+    log('Finishing...');
     const img = canvas.toDataURL('image/jpeg', 0.85);
     socket.emit('final_frame', { room: roomId, image: img });
-    tg.close();
+    setTimeout(() => tg.close(), 500);
   };
 
   // авто-снап раз в 2.5 сек
@@ -377,6 +447,11 @@
   document.addEventListener('gesturestart', e => e.preventDefault());
   document.addEventListener('gesturechange', e => e.preventDefault());
   document.addEventListener('gestureend', e => e.preventDefault());
+  
+  // Отключаем дебаг через 10 секунд
+  setTimeout(() => {
+    debugEl.style.display = 'none';
+  }, 10000);
 </script>
 
 </body>
