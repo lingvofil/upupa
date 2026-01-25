@@ -370,12 +370,16 @@ async def draw_step(sid, data):
 
 
 @sio.event
-async def snapshot(sid, data):
-    """ИСПРАВЛЕНО: теперь возвращает результат клиенту через callback"""
+async def snapshot(sid, data, callback=None):
+    """ИСПРАВЛЕНО: явный callback для возврата результата"""
     room = str(data.get("room") or "")
     image_data = data.get("image") or ""
     result = await _process_snapshot(room, image_data, source="socket")
-    logging.info(f"[snapshot] room={room} result={result}")
+    logging.info(f"[snapshot] sid={sid} room={room} result={result}")
+    
+    # Возвращаем результат через callback
+    if callback:
+        await callback(result)
     return result
 
 
