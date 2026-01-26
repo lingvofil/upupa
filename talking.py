@@ -9,7 +9,8 @@ from aiogram import types
 # Обновленные импорты
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
-    conversation_history, model, gigachat_model, bot, groq_ai, ADMIN_ID
+    conversation_history, model, gigachat_model, bot, groq_ai, ADMIN_ID, 
+    serious_mode_messages
 )
 # Функции для работы с файлами и промптами
 from chat_settings import save_chat_settings, add_chat
@@ -110,8 +111,6 @@ async def handle_which_model(message: types.Message):
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД (стихи, промпты)
 # =============================================================================
-
-# talking.py
 
 async def generate_simple_response(prompt: str, chat_id: str) -> str:
     """Генерирует простой ответ без истории диалога (для пирожков, порошков и т.д.)"""
@@ -344,7 +343,7 @@ async def handle_serious_mode_command(message: types.Message):
     # Извлекаем вопрос
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
-        await message.reply("Задай вопрос после 'упупа умоляю', например: упупа умоляю как работает квантовая механика?")
+        await message.reply("Задай вопрос после 'упупа умоляю', например: упупа умоляю почему я такой пидорас?")
         return
     
     user_question = parts[2].strip()
@@ -358,11 +357,24 @@ async def handle_serious_mode_command(message: types.Message):
     
     try:
         response_text = await generate_simple_response(full_prompt, chat_id)
-        await message.reply(response_text)
+        sent_message = await message.reply(response_text)
+        
+        # Сохраняем ID отправленного сообщения для отслеживания реплаев
+        serious_mode_messages[sent_message.message_id] = chat_id
+        
     except Exception as e:
         logging.error(f"Serious mode error: {e}")
         await message.reply("Ошибка при обработке запроса, попробуй ещё раз.")
 
+def is_reply_to_serious_mode(message: types.Message) -> bool:
+    """
+    Проверяет, является ли сообщение реплаем на сообщение в серьёзном режиме.
+    """
+    if not message.reply_to_message:
+        return False
+    
+    reply_msg_id = message.reply_to_message.message_id
+    return reply_msg_id in serious_mode_messages
 
 # =============================================================================
 # ОСНОВНАЯ ЛОГИКА ДИАЛОГА
