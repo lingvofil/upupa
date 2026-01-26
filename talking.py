@@ -334,6 +334,35 @@ async def handle_change_prompt_randomly_command(message: types.Message):
     save_chat_settings()
     await message.reply(f"Теперь я {new_prompt_name} нахуй!")
 
+async def handle_serious_mode_command(message: types.Message):
+    """
+    Обрабатывает команду 'упупа умоляю' для серьёзного и вдумчивого ответа.
+    """
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action="typing")
+    
+    # Извлекаем вопрос
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply("Задай вопрос после 'упупа умоляю', например: упупа умоляю как работает квантовая механика?")
+        return
+    
+    user_question = parts[2].strip()
+    if not user_question:
+        await message.reply("Хули молчишь? Задай вопрос!")
+        return
+    
+    # Используем серьёзный промпт
+    from prompts import PROMPT_SERIOUS_MODE
+    full_prompt = f"{PROMPT_SERIOUS_MODE}\n\nВопрос: {user_question}"
+    
+    try:
+        response_text = await generate_simple_response(full_prompt, chat_id)
+        await message.reply(response_text)
+    except Exception as e:
+        logging.error(f"Serious mode error: {e}")
+        await message.reply("Ошибка при обработке запроса, попробуй ещё раз.")
+
 
 # =============================================================================
 # ОСНОВНАЯ ЛОГИКА ДИАЛОГА
