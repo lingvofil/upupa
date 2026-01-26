@@ -54,11 +54,22 @@ class GroqWrapper:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key) if api_key else None
         # Актуальные модели на текущий момент
-        self.vision_model = "meta-llama/llama-4-maverick-17b-128e-instruct" 
-        self.text_model = "llama-3.3-70b-versatile"
-        self.audio_model = "whisper-large-v3"
+        
+        # для чотам (картинки: считывание), скаламбурь, добавь, нарисуй, опиши
+        self.vision_model = "meta-llama/llama-4-maverick-17b-128e-instruct"
+        
+        # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
+        # пародия, кто я, что за чат, кем стать, викторина
+        self.text_model = "openai/gpt-oss-120b" 
+
+        # для чотам (аудио)
+        self.audio_model = "whisper-large-v3" 
+
+        # для упупа скажи
         self.tts_model = "canopylabs/orpheus-v1-english"
-        self.summarization_model = "groq/compound-mini"  # Добавить эту строку
+
+        # для чобыло
+        self.summarization_model = "groq/compound-mini"  
     
     def _prepare_image(self, image_bytes: bytes) -> str:
         """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
