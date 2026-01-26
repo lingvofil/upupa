@@ -112,7 +112,8 @@ from talking import (
     handle_switch_to_gemini,
     handle_switch_to_groq,
     handle_which_model,
-    handle_switch_to_history
+    handle_switch_to_history,
+    handle_serious_mode_command
 )
 from random_reactions import process_random_reactions
 
@@ -265,7 +266,6 @@ async def help_callback_handler(query: types.CallbackQuery):
 async def handle_broadcast(message: types.Message):
     await handle_broadcast_command(message)
 
-# ================== НАЧАЛО БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК ==================
 @router.message(F.text.lower() == "упупа настройки")
 async def settings_command_handler(message: types.Message):
     await send_settings_menu(message)
@@ -273,14 +273,12 @@ async def settings_command_handler(message: types.Message):
 @router.callback_query(F.data.startswith("settings:"))
 async def settings_callback_handler(query: types.CallbackQuery):
     await handle_settings_callback(query)
-# ================== КОНЕЦ БЛОКА ИНТЕРАКТИВНЫХ НАСТРОЕК ==================
 
 @router.message(lambda message: message.text and message.text.lower() == "упупа выйди из чатов хуесосов")
 async def leave_empty_chats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("Еще чо сделать?")
         return
-    
     await process_leave_empty_chats(message)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
@@ -699,7 +697,6 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
-# ================== ХЭНДЛЕР ИГРЫ КРОКОДИЛ ==================
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
     print("CROC BOT ID:", id(bot))
@@ -765,6 +762,9 @@ async def handle_poem(message: types.Message):
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
     await handle_poem_command(message, poem_type)
 
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа умоляю"))
+async def serious_mode_command(message: types.Message):
+    await handle_serious_mode_command(message)
         
 @router.message()
 async def process_message(message: types.Message):
