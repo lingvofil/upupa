@@ -39,13 +39,15 @@ try:
         CLOUDFLARE_ACCOUNT_ID,
         CLOUDFLARE_API_TOKEN,
         HUGGINGFACE_TOKEN,
-        GROQ_API_KEY
+        GROQ_API_KEY,
+        POLLINATIONS_API_KEY
     )
 except ImportError:
     API_TOKEN = os.getenv("API_TOKEN")
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
 # =========================
 # === GROQ WRAPPER ===
