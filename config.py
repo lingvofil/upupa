@@ -11,6 +11,7 @@ import base64
 import io
 import google.generativeai as genai
 from google.api_core import exceptions
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, Router
 from gigachat import GigaChat
@@ -451,6 +452,17 @@ quiz_states = {}
 chat_list = []
 sms_disabled_chats = set()
 ANTISPAM_ENABLED_CHATS = set()
+
+serious_mode_messages = {}
+def cleanup_old_serious_messages():
+    """Очистка записей старше 24 часов"""
+    cutoff = datetime.now() - timedelta(hours=24)
+    to_remove = [
+        msg_id for msg_id, data in serious_mode_messages.items()
+        if isinstance(data, dict) and data.get('timestamp', datetime.now()) < cutoff
+    ]
+    for msg_id in to_remove:
+        del serious_mode_messages[msg_id]
 
 MAX_HISTORY_LENGTH = 20
 DIALOG_ENABLED = True
