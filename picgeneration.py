@@ -17,7 +17,7 @@ from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 
 import config
-from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN
+from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY
 from prompts import actions
 from adddescribe import download_telegram_image
 
@@ -168,9 +168,21 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 
 async def pollinations_generate(prompt: str) -> Optional[bytes]:
     model_choice = random.choice(['flux', 'flux-pro'])
+    
+    # Базовый URL
     url = f"https://image.pollinations.ai/prompt/{prompt}?width=1024&height=1024&nologo=true&model={model_choice}&seed={random.randint(1, 99999)}"
+    
+    # Подготовка заголовков
+    headers = {}
+    if POLLINATIONS_API_KEY:
+        headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+        # Для платных аккаунтов иногда рекомендуется использовать gen.pollinations.ai, 
+        # но image.pollinations.ai обычно проксирует auth.
+        # Если возникнут проблемы, можно попробовать заменить домен:
+        # url = url.replace("image.pollinations.ai", "gen.pollinations.ai").replace("/prompt/", "/image/")
+
     try:
-        r = await asyncio.to_thread(lambda: requests.get(url, timeout=35))
+        r = await asyncio.to_thread(lambda: requests.get(url, headers=headers, timeout=35))
         return r.content if r.status_code == 200 else None
     except: return None
 
