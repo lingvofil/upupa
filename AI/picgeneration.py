@@ -19,7 +19,7 @@ from aiogram.exceptions import TelegramBadRequest
 import config
 from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY
 from prompts import actions
-from adddescribe import download_telegram_image
+from AI.adddescribe import download_telegram_image
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
