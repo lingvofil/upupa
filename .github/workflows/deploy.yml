@@ -25,7 +25,7 @@ jobs:
           # и что у пользователя root есть доступ по SSH с этим ключом
           # или используйте другого пользователя, если root по SSH отключен
           
-          ssh -o StrictHostKeyChecking=no root@31.56.240.156 "cd /root/upupa/ && \
+          ssh -o StrictHostKeyChecking=no root@88.218.122.208 "cd /root/upupa/ && \
             # --- Добавляем эту команду, чтобы настроить origin на SSH URL ---
             git remote set-url origin git@github.com:lingvofil/upupa.git && \
             # Теперь git pull будет использовать SSH-ключ для аутентификации с GitHub
