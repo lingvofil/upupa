@@ -1,32 +1,3 @@
-```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+Nothing should be ignored in this case. The changes consist only of Python source files (`.py`), which are core project files that should be tracked in version control. There are no build artifacts, dependency directories, temporary files, or other items that typically warrant being added to `.gitignore`.
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-
-# Build artifacts
-dist/
-build/
-target/
-```
+The current `.gitignore` content is empty, and no new ignore rules are needed based on the provided file changes.

@@ -22,7 +22,7 @@ except ImportError:
 
 # Импортируем общие функции из вашего проекта
 from config import bot as main_bot_instance
-from whatisthere import download_file
+from AI.whatisthere import download_file
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
