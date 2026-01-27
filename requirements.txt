@@ -1,0 +1,32 @@
+# requirements for lingvofil/upupa
+# Проверьте и при необходимости зафиксируйте версии (например package==1.2.3)
+# Системные зависимости:
+# - ffmpeg (для pydub) — устанавливается через пакетный менеджер ОС
+# - Playwright: после установки пакета выполните `playwright install` для загрузки браузеров
+
+aiogram
+aiohttp
+aiofiles
+beautifulsoup4
+gigachat
+# альтернатива/вариант: gigachat-sdk
+google-api-core
+google-api-python-client
+google-generativeai
+groq
+httpx
+nltk
+numpy
+Pillow
+playwright
+pydub
+python-socketio
+pytz
+requests
+seam-carving
+thefuzz
+transliterate
+
+# Необязательные / возможно полезные (проверьте, нужны ли в проекте):
+# python-dotenv
+# python-multipart
