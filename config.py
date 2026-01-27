@@ -17,7 +17,7 @@ from aiogram import Bot, Dispatcher, Router
 from gigachat import GigaChat
 
 # Импорт GroqWrapper из отдельного модуля
-from groq_wrapper import GroqWrapper
+from AI.groq_wrapper import GroqWrapper
 
 # =========================
 # === ИМПОРТ СЕКРЕТОВ ===

@@ -11,7 +11,7 @@ from config import (
     model, gigachat_model, groq_ai, chat_settings, conversation_history, 
     MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
 )
-from talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
+from AI.talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
 from distortion import apply_ffmpeg_audio_distortion
 import google.generativeai as genai
 from google.api_core import exceptions

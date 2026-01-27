@@ -48,23 +48,23 @@ from sms_settings import (
 )
 
 # ================== БЛОК 3.6: НАСТРОЙКА КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
-from whoparody import (
+from AI.whoparody import (
     process_user_profile,
     process_chat_profile,
     process_parody
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ВИКТОРИНА ==================
-from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
+from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
 
 # ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
-from adddescribe import (
+from AI.adddescribe import (
     process_image_description,
     handle_add_text_command
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ЧОТАМ ==================
-from whatisthere import (
+from AI.whatisthere import (
     process_whatisthere_unified,
     get_processing_message,
     process_robotics_description
@@ -85,7 +85,7 @@ from search import (
 )
 
 # ================== БЛОК 3.12: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
-from picgeneration import (
+from AI.picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
     handle_redraw_command,
@@ -99,7 +99,7 @@ from weather import (
     handle_weekly_forecast_command
 )
 # ================== БЛОК 3.14: НАСТРОЙКА ГОВОРИЛКИ ==================
-from talking import (
+from AI.talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
     handle_set_prompt_command,
@@ -121,20 +121,20 @@ from random_reactions import process_random_reactions
 from nameinfo import process_name_info
 
 # ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО И ИТОГИ ГОДА ==================
-from summarize import summarize_chat_history, summarize_year
+from AI.summarize import summarize_chat_history, summarize_year
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
 from egra import start_egra, handle_egra_answer, handle_final_button_press
 
 # ================== БЛОК 3.18: НАСТРОЙКА ПРОФЕССИЙ ==================
-from profession import get_random_okved_and_commentary 
+from AI.profession import get_random_okved_and_commentary 
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
 import statistics as bot_statistics
 from statistics import PrivateRateLimitMiddleware
 
 # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
-from birthday_calendar import (
+from AI.birthday_calendar import (
     handle_birthday_command,
     handle_birthday_list_command,
     handle_test_greeting_command,
@@ -155,7 +155,7 @@ from interactive_settings import send_settings_menu, handle_settings_callback, s
 from content_filter import ContentFilterMiddleware
 
 # ================== БЛОК 3.23 ДНД ==================
-from dnd import dnd_router 
+from AI.dnd import dnd_router 
 
 # ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
 from voice import handle_voice_command
