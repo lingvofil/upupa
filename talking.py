@@ -10,7 +10,7 @@ from aiogram import types
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
     conversation_history, model, gigachat_model, bot, groq_ai, ADMIN_ID, 
-    serious_mode_messages
+    serious_mode_messages, cleanup_old_serious_messages
 )
 # Функции для работы с файлами и промптами
 from chat_settings import save_chat_settings, add_chat
@@ -359,22 +359,86 @@ async def handle_serious_mode_command(message: types.Message):
         response_text = await generate_simple_response(full_prompt, chat_id)
         sent_message = await message.reply(response_text)
         
-        # Сохраняем ID отправленного сообщения для отслеживания реплаев
-        serious_mode_messages[sent_message.message_id] = chat_id
+        # Сохраняем данные о серьёзном диалоге с историей
+        from datetime import datetime
+        serious_mode_messages[sent_message.message_id] = {
+            'chat_id': chat_id,
+            'timestamp': datetime.now(),
+            'history': [
+                {'role': 'user', 'content': user_question},
+                {'role': 'assistant', 'content': response_text}
+            ]
+        }
         
     except Exception as e:
         logging.error(f"Serious mode error: {e}")
         await message.reply("Ошибка при обработке запроса, попробуй ещё раз.")
 
-def is_reply_to_serious_mode(message: types.Message) -> bool:
+async def handle_serious_mode_reply(message: types.Message) -> bool:
     """
-    Проверяет, является ли сообщение реплаем на сообщение в серьёзном режиме.
+    Обрабатывает реплай на сообщение в серьёзном режиме.
+    Возвращает True, если сообщение было обработано в этом режиме.
     """
     if not message.reply_to_message:
         return False
     
     reply_msg_id = message.reply_to_message.message_id
-    return reply_msg_id in serious_mode_messages
+    
+    if reply_msg_id not in serious_mode_messages:
+        return False
+    
+    # Очищаем старые записи перед обработкой
+    cleanup_old_serious_messages()
+    
+    # Проверяем, что запись ещё существует после очистки
+    if reply_msg_id not in serious_mode_messages:
+        return False
+    
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action="typing")
+    
+    session_data = serious_mode_messages[reply_msg_id]
+    history = session_data.get('history', [])
+    
+    # Добавляем новый вопрос пользователя
+    user_question = message.text.strip()
+    history.append({'role': 'user', 'content': user_question})
+    
+    # Формируем промпт с историей диалога
+    from prompts import PROMPT_SERIOUS_MODE
+    
+    history_text = "\n".join([
+        f"{'Пользователь' if msg['role'] == 'user' else 'Ты'}: {msg['content']}"
+        for msg in history
+    ])
+    
+    full_prompt = (
+        f"{PROMPT_SERIOUS_MODE}\n\n"
+        f"История диалога:\n{history_text}\n\n"
+        f"Продолжи серьёзный и вдумчивый диалог, отвечая на последний вопрос пользователя."
+    )
+    
+    try:
+        response_text = await generate_simple_response(full_prompt, chat_id)
+        sent_message = await message.reply(response_text)
+        
+        # Обновляем историю
+        history.append({'role': 'assistant', 'content': response_text})
+        
+        # Сохраняем новое сообщение с обновлённой историей
+        from datetime import datetime
+        serious_mode_messages[sent_message.message_id] = {
+            'chat_id': chat_id,
+            'timestamp': datetime.now(),
+            'history': history
+        }
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Serious mode reply error: {e}")
+        await message.reply("Ошибка при обработке ответа.")
+        return True
 
 # =============================================================================
 # ОСНОВНАЯ ЛОГИКА ДИАЛОГА
@@ -503,6 +567,11 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
 
 async def process_general_message(message: types.Message):
     chat_id = str(message.chat.id)
+    
+    # ПРИОРИТЕТ 1: Проверяем серьёзный режим ПЕРВЫМ
+    if await handle_serious_mode_reply(message):
+        return
+    
     update_chat_settings(chat_id)
     current_settings = chat_settings.get(chat_id, {})
 
