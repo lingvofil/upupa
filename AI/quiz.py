@@ -14,7 +14,7 @@ from aiogram import Bot
 
 # Обновленные импорты для мультимодельности
 from config import LOG_FILE, quiz_questions, quiz_states, model, gigachat_model, groq_ai, chat_settings
-from talking import update_chat_settings
+from AI.talking import update_chat_settings
 
 
 # Функция для получения временного диапазона
