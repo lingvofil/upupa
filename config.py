@@ -57,21 +57,6 @@ except ImportError:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
-# Инициализация Groq
-try:
-    from config_private import GROQ_API_KEY
-except ImportError:
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-groq_ai = GroqWrapper(
-    GROQ_API_KEY,
-    vision_model=GROQ_VISION_MODEL,
-    text_model=GROQ_TEXT_MODEL,
-    audio_model=GROQ_AUDIO_MODEL,
-    tts_model=GROQ_TTS_MODEL,
-    summarization_model=GROQ_SUMMARIZATION_MODEL
-)
-
 # =========================
 # === GEMINI KEYS ===
 # =========================
@@ -144,6 +129,18 @@ GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
 
 # для чобыло
 GROQ_SUMMARIZATION_MODEL = "groq/compound-mini"
+
+# =========================
+# === ИНИЦИАЛИЗАЦИЯ GROQ (ПОСЛЕ ОБЪЯВЛЕНИЯ КОНСТАНТ) ===
+# =========================
+groq_ai = GroqWrapper(
+    GROQ_API_KEY,
+    vision_model=GROQ_VISION_MODEL,
+    text_model=GROQ_TEXT_MODEL,
+    audio_model=GROQ_AUDIO_MODEL,
+    tts_model=GROQ_TTS_MODEL,
+    summarization_model=GROQ_SUMMARIZATION_MODEL
+)
 
 # =========================
 # === STATIC MODELS ===
