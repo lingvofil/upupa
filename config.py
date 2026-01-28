@@ -201,6 +201,7 @@ sms_disabled_chats = set()
 ANTISPAM_ENABLED_CHATS = set()
 
 serious_mode_messages = {}
+
 def cleanup_old_serious_messages():
     """Очистка записей старше 24 часов"""
     cutoff = datetime.now() - timedelta(hours=24)
@@ -210,6 +211,9 @@ def cleanup_old_serious_messages():
     ]
     for msg_id in to_remove:
         del serious_mode_messages[msg_id]
+    
+    if to_remove:
+        logger.info(f"Очищено {len(to_remove)} старых записей серьёзного режима")
 
 MAX_HISTORY_LENGTH = 20
 DIALOG_ENABLED = True
