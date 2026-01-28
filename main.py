@@ -107,13 +107,13 @@ from talking import (
     handle_change_prompt_randomly_command,
     handle_poem_command,
     process_general_message,
-    # НОВЫЕ ИМПОРТЫ:
     handle_switch_to_gigachat,
     handle_switch_to_gemini,
     handle_switch_to_groq,
     handle_which_model,
     handle_switch_to_history,
-    handle_serious_mode_command
+    handle_serious_mode_command,
+     handle_serious_mode_reply
 )
 from random_reactions import process_random_reactions
 
