@@ -58,7 +58,7 @@ from whoparody import (
 from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
 
 # ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
-from adddescribe import (
+from AI.adddescribe import (
     process_image_description,
     handle_add_text_command
 )
