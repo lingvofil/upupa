@@ -55,7 +55,7 @@ from whoparody import (
 )
 
 # ================== БЛОК 3.7: НАСТРОЙКА ВИКТОРИНА ==================
-from quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
+from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
 
 # ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
 from AI.adddescribe import (
