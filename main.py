@@ -79,9 +79,7 @@ from search import (
     process_image_search,
     save_and_send_searched_image,
     process_gif_search,
-    save_and_send_gif,
-    process_grounding_search, 
-    process_location_search      
+    save_and_send_gif   
 )
 
 # ================== БЛОК 3.12: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
