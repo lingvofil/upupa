@@ -17,7 +17,7 @@ from aiogram import Bot, Dispatcher, Router
 from gigachat import GigaChat
 
 # Импорт всех wrapper-классов из нового модуля
-from wrapper import (
+from AI.wrapper import (
     GroqWrapper,
     ModelFallbackWrapper,
     GigaChatWrapper,
