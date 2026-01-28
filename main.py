@@ -48,7 +48,7 @@ from sms_settings import (
 )
 
 # ================== БЛОК 3.6: НАСТРОЙКА КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
-from whoparody import (
+from AI.whoparody import (
     process_user_profile,
     process_chat_profile,
     process_parody
@@ -64,7 +64,7 @@ from AI.adddescribe import (
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ЧОТАМ ==================
-from whatisthere import (
+from AI.whatisthere import (
     process_whatisthere_unified,
     get_processing_message,
     process_robotics_description
@@ -99,7 +99,7 @@ from weather import (
     handle_weekly_forecast_command
 )
 # ================== БЛОК 3.14: НАСТРОЙКА ГОВОРИЛКИ ==================
-from talking import (
+from AI.talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
     handle_set_prompt_command,
