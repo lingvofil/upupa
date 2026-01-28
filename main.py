@@ -121,7 +121,7 @@ from random_reactions import process_random_reactions
 from nameinfo import process_name_info
 
 # ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО И ИТОГИ ГОДА ==================
-from summarize import summarize_chat_history, summarize_year
+from AI.summarize import summarize_chat_history, summarize_year
 
 # ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
 from egra import start_egra, handle_egra_answer, handle_final_button_press
