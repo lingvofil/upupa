@@ -158,7 +158,7 @@ from content_filter import ContentFilterMiddleware
 from AI.dnd import dnd_router 
 
 # ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
-from voice import handle_voice_command
+from AI.voice import handle_voice_command
 
 # ================== БЛОК 3.25 МЕМЫ ==================
 import memegenerator
