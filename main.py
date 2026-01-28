@@ -85,7 +85,7 @@ from search import (
 )
 
 # ================== БЛОК 3.12: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
-from picgeneration import (
+from AI.picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
     handle_redraw_command,
