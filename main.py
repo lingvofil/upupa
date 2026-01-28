@@ -127,7 +127,7 @@ from summarize import summarize_chat_history, summarize_year
 from egra import start_egra, handle_egra_answer, handle_final_button_press
 
 # ================== БЛОК 3.18: НАСТРОЙКА ПРОФЕССИЙ ==================
-from profession import get_random_okved_and_commentary 
+from AI.profession import get_random_okved_and_commentary 
 
 # ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
 import statistics as bot_statistics
