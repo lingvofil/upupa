@@ -25,6 +25,8 @@ from config import (
 # ================== БЛОК 2: СПРАВКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
 from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 
+# ================== БЛОК 3: НАСТРОЙКИ БЕЗ AI ==================
+
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
 from common_settings import process_leave_chat, process_leave_empty_chats
         
@@ -47,33 +49,10 @@ from sms_settings import (
     process_send_sms, process_send_mms
 )
 
-# ================== БЛОК 3.6: НАСТРОЙКА КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
-from AI.whoparody import (
-    process_user_profile,
-    process_chat_profile,
-    process_parody
-)
-
-# ================== БЛОК 3.7: НАСТРОЙКА ВИКТОРИНА ==================
-from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
-
-# ================== БЛОК 3.8: НАСТРОЙКА ДОБАВЬ ОПИШИ ==================
-from AI.adddescribe import (
-    process_image_description,
-    handle_add_text_command
-)
-
-# ================== БЛОК 3.9: НАСТРОЙКА ЧОТАМ ==================
-from AI.whatisthere import (
-    process_whatisthere_unified,
-    get_processing_message,
-    process_robotics_description
-)
-
-# ================== БЛОК 3.10: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
+# ================== БЛОК 3.6: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
 from channels_settings import process_channel_command
 
-# ================== БЛОК 3.11: НАСТРОЙКА ПОИСКА ==================
+# ================== БЛОК 3.7: НАСТРОЙКА ПОИСКА ==================
 from search import (
     handle_message,
     process_image_search,
@@ -82,7 +61,70 @@ from search import (
     save_and_send_gif   
 )
 
-# ================== БЛОК 3.12: НАСТРОЙКА ГЕНЕРАЦИИ КАРТИНОК ==================
+# ================== БЛОК 3.8: НАСТРОЙКА ПОГОДЫ ==================
+from weather import (
+    handle_current_weather_command, 
+    handle_weekly_forecast_command
+)
+
+# ================== БЛОК 3.9: НАСТРОЙКА ИМЕНИ ==================
+from nameinfo import process_name_info
+
+# ================== БЛОК 3.10 ПРЕКОЛЬНАЯ ЕГРА ==================
+from egra import start_egra, handle_egra_answer, handle_final_button_press
+
+# ================== БЛОК 3.11: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
+import statistics as bot_statistics
+from statistics import PrivateRateLimitMiddleware
+
+# ================== БЛОК 3.12: НАСТРОЙКИ ДИСТОРШН ==================
+from distortion import is_distortion_command, handle_distortion_request
+
+# ================== БЛОК 3.13 РАССЫЛКИ ==================
+from broadcast import handle_broadcast_command, is_broadcast_command
+
+# ================== БЛОК 3.14: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
+from interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
+
+# ================== БЛОК 3.15 КОНТЕНТ-ФИЛЬТРА ==================
+from content_filter import ContentFilterMiddleware
+
+# ================== БЛОК 3.16 МЕМЫ ==================
+import memegenerator
+
+# ================== БЛОК 3.17 КРОКОДИЛ ==================
+import crocodile
+
+# ================== БЛОК 3.18 СЛУЧАЙНЫЕ РЕАКЦИИ ==================
+from random_reactions import process_random_reactions
+
+
+# ================== БЛОК 4: НАСТРОЙКИ AI ==================
+
+# ================== БЛОК 4.1: КТО Я, ЧТО ЗА ЧАТ, ПАРОДИЯ ==================
+from AI.whoparody import (
+    process_user_profile,
+    process_chat_profile,
+    process_parody
+)
+
+# ================== БЛОК 4.2: ВИКТОРИНА ==================
+from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
+
+# ================== БЛОК 4.3: ДОБАВЬ ОПИШИ ==================
+from AI.adddescribe import (
+    process_image_description,
+    handle_add_text_command
+)
+
+# ================== БЛОК 4.4: ЧОТАМ ==================
+from AI.whatisthere import (
+    process_whatisthere_unified,
+    get_processing_message,
+    process_robotics_description
+)
+
+# ================== БЛОК 4.5: ГЕНЕРАЦИЯ КАРТИНОК ==================
 from AI.picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
@@ -91,12 +133,7 @@ from AI.picgeneration import (
     handle_kandinsky_generation_command
 )
 
-# ================== БЛОК 3.13: НАСТРОЙКА ПОГОДЫ ==================
-from weather import (
-    handle_current_weather_command, 
-    handle_weekly_forecast_command
-)
-# ================== БЛОК 3.14: НАСТРОЙКА ГОВОРИЛКИ ==================
+# ================== БЛОК 4.6: ГОВОРИЛКА ==================
 from AI.talking import (
     handle_list_prompts_command,
     handle_current_prompt_command,
@@ -113,25 +150,14 @@ from AI.talking import (
     handle_serious_mode_command,
      handle_serious_mode_reply
 )
-from random_reactions import process_random_reactions
 
-# ================== БЛОК 3.15: НАСТРОЙКА ИМЕНИ ==================
-from nameinfo import process_name_info
-
-# ================== БЛОК 3.16: НАСТРОЙКА ЧОБЫЛО И ИТОГИ ГОДА ==================
+# ================== БЛОК 4.7: ЧОБЫЛО И ИТОГИ ГОДА ==================
 from AI.summarize import summarize_chat_history, summarize_year
 
-# ================== БЛОК 3.17 ПРЕКОЛЬНАЯ ЕГРА ==================
-from egra import start_egra, handle_egra_answer, handle_final_button_press
-
-# ================== БЛОК 3.18: НАСТРОЙКА ПРОФЕССИЙ ==================
+# ================== БЛОК 4.8: ПРОФЕССИИ ==================
 from AI.profession import get_random_okved_and_commentary 
 
-# ================== БЛОК 3.18: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
-import statistics as bot_statistics
-from statistics import PrivateRateLimitMiddleware
-
-# ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
+# ================== БЛОК 4.9: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
 from AI.birthday_calendar import (
     handle_birthday_command,
     handle_birthday_list_command,
@@ -140,58 +166,117 @@ from AI.birthday_calendar import (
     birthday_scheduler
 )
 
-# ================== БЛОК 3.20: НАСТРОЙКИ ДИСТОРШН ==================
-from distortion import is_distortion_command, handle_distortion_request
-
-# ================== БЛОК РАССЫЛКИ ==================
-from broadcast import handle_broadcast_command, is_broadcast_command
-
-# ================== БЛОК 3.21: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
-from interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
-
-# ================== БЛОК 3.22 КОНТЕНТ-ФИЛЬТРА ==================
-from content_filter import ContentFilterMiddleware
-
-# ================== БЛОК 3.23 ДНД ==================
+# ================== БЛОК 4.10 ДНД ==================
 from AI.dnd import dnd_router 
 
-# ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
+# ================== БЛОК 4.11 ГОЛОСОВОЙ МОДУЛЬ ==================
 from AI.voice import handle_voice_command
 
-# ================== БЛОК 3.25 МЕМЫ ==================
-import memegenerator
 
-# ================== БЛОК 3.26 КРОКОДИЛ ==================
-import crocodile
-
-
-# ================== БЛОК 4: ХЭНДЛЕРЫ ==================
-@router.message(F.text.lower() == "упупа гигачат")
-async def switch_to_gigachat(message: types.Message):
-    await handle_switch_to_gigachat(message)
-
-@router.message(F.text.lower() == "упупа гемини")
-async def switch_to_gemini(message: types.Message):
-    await handle_switch_to_gemini(message)
-
-@router.message(F.text.lower() == "упупа грок")
-async def switch_to_groq(message: types.Message):
-    await handle_switch_to_groq(message)
-
-@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
-async def cmd_switch_history(message: Message):
-    await handle_switch_to_history(message)
-
-@router.message(F.text.lower() == "какая модель")
-async def which_model(message: types.Message):
-    await handle_which_model(message)
+# ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
 
+# ================== БЛОК 5.1: БАЗОВЫЕ КОМАНДЫ ==================
+
+@router.message(CommandStart())
+async def process_start_command(message: types.Message):
+    await message.reply("Я пидорас")
+
+@router.message(lambda message: message.text is not None and message.text.lower() == "очистка" and message.from_user.id not in BLOCKED_USERS)
+async def process_clear_command(message: types.Message):
+    chat_id = str(message.chat.id)
+    if chat_id in conversation_history:
+        conversation_history[chat_id] = []
+        await message.reply("Смыто всё говно")
+    else:
+        await message.reply("История и так пустая, долбоёб")
+
+# ================== БЛОК 5.2: СПРАВКА И НАСТРОЙКИ ==================
+
+@router.message(lambda message: message.text and message.text.lower() in ["чоумееш", "справка", "help", "помощь"] and message.from_user.id not in BLOCKED_USERS)
+async def handle_chooumeesh(message: types.Message):
+    await send_help_menu(message)
+    
+@router.callback_query(F.data.startswith("help:"))
+async def help_callback_handler(query: types.CallbackQuery):
+    await handle_help_callback(query)
+
+@router.message(F.text.lower() == "упупа настройки")
+async def settings_command_handler(message: types.Message):
+    await send_settings_menu(message)
+
+@router.callback_query(F.data.startswith("settings:"))
+async def settings_callback_handler(query: types.CallbackQuery):
+    await handle_settings_callback(query)
+
+# ================== БЛОК 5.3: УПРАВЛЕНИЕ ЧАТАМИ ==================
+
+@router.message(lambda message: message.text and message.text.lower() == "упупа выйди из чатов хуесосов")
+async def leave_empty_chats(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Еще чо сделать?")
+        return
+    await process_leave_empty_chats(message)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
+async def leave_chat(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Еще чо сделать?")
+        return
+    chat_identifier = message.text[14:].strip()
+    await process_leave_chat(message, chat_identifier)
+    
+@router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
+async def update_all_chats(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Иди нахуй, у тебя нет прав на это.")
+        return
+    await process_update_all_chats(message, bot)
+
+@router.message(lambda message: message.text and message.text.lower() == "где сидишь")
+async def handle_where_sits(message: types.Message):
+    response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
+    await message.reply(response)
+
+# ================== БЛОК 5.4: СМС И ММС ==================
+
+@router.message(lambda message: message.text and message.text.lower() == "отключи смс")
+async def disable_sms(message: types.Message):
+    chat_id = str(message.chat.id)
+    user_id = message.from_user.id
+    response = await process_disable_sms(chat_id, user_id, bot)
+    await message.reply(response)
+
+@router.message(lambda message: message.text and message.text.lower() == "включи смс")
+async def enable_sms(message: types.Message):
+    chat_id = str(message.chat.id)
+    user_id = message.from_user.id
+    response = await process_enable_sms(chat_id, user_id, bot)
+    await message.reply(response)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("смс "))
+async def handle_send_sms(message: types.Message):
+    chat_id = str(message.chat.id)
+    if chat_id in sms_disabled_chats:
+        await message.reply("СМС и ММС отключены в этом чате.")
+        return
+    await process_send_sms(message, chat_list, bot)
+
+@router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
+                                 (message.caption and message.caption.lower().startswith("ммс ")))
+async def handle_send_mms(message: types.Message):
+    chat_id = str(message.chat.id)
+    if chat_id in sms_disabled_chats:
+        await message.reply("СМС и ММС отключены в этом чате.")
+        return
+    await process_send_mms(message, chat_list, bot)
+
+# ================== БЛОК 5.5: СТАТИСТИКА И ЛЕКСИКОН ==================
+
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
     parts = [f"📊 *{title}*"]
-
     if stats.get("model_usage"):
         parts.append("\n🤖 *НАГРУЗКА НА GEMINI (Запросы):*")
         sorted_usage = sorted(stats["model_usage"].items(), key=lambda item: item[1], reverse=True)
@@ -236,100 +321,22 @@ async def cmd_stats_1h(message: Message):
     reply_text = format_stats_message(stats_data, "Статистика за час")
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(CommandStart())
-async def process_start_command(message: types.Message):
-    await message.reply("Я пидорас")
-
-@router.message(lambda message: message.text is not None and message.text.lower() == "очистка" and message.from_user.id not in BLOCKED_USERS)
-async def process_clear_command(message: types.Message):
-    """Очищает историю диалога для текущего чата"""
+@router.message(F.text.lower() == "моя статистика")
+async def show_personal_stats(message: types.Message):
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    logging.info(f"Команда 'моя статистика' вызвана пользователем {message.from_user.id} в чате {message.chat.id}")
     chat_id = str(message.chat.id)
-    
-    # Очищаем историю диалога для этого чата
-    if chat_id in conversation_history:
-        conversation_history[chat_id] = []
-        await message.reply("Смыто всё говно")
-    else:
-        await message.reply("История и так пустая, долбоёб")
-
-@router.message(lambda message: message.text and message.text.lower() in ["чоумееш", "справка", "help", "помощь"] and message.from_user.id not in BLOCKED_USERS)
-async def handle_chooumeesh(message: types.Message):
-    await send_help_menu(message)
-    
-@router.callback_query(F.data.startswith("help:"))
-async def help_callback_handler(query: types.CallbackQuery):
-    await handle_help_callback(query)
-    
-@router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)
-async def handle_broadcast(message: types.Message):
-    await handle_broadcast_command(message)
-
-@router.message(F.text.lower() == "упупа настройки")
-async def settings_command_handler(message: types.Message):
-    await send_settings_menu(message)
-
-@router.callback_query(F.data.startswith("settings:"))
-async def settings_callback_handler(query: types.CallbackQuery):
-    await handle_settings_callback(query)
-
-@router.message(lambda message: message.text and message.text.lower() == "упупа выйди из чатов хуесосов")
-async def leave_empty_chats(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("Еще чо сделать?")
-        return
-    await process_leave_empty_chats(message)
-
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
-async def leave_chat(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("Еще чо сделать?")
-        return
-    
-    chat_identifier = message.text[14:].strip()
-    await process_leave_chat(message, chat_identifier)
-    
-@router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
-async def update_all_chats(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("Иди нахуй, у тебя нет прав на это.")
-        return
-    await process_update_all_chats(message, bot)
-
-@router.message(lambda message: message.text and message.text.lower() == "где сидишь")
-async def handle_where_sits(message: types.Message):
-    response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
+    user_id = str(message.from_user.id)
+    response, has_stats = await get_user_statistics(chat_id, user_id)
     await message.reply(response)
 
-@router.message(lambda message: message.text and message.text.lower() == "отключи смс")
-async def disable_sms(message: types.Message):
-    chat_id = str(message.chat.id)
-    user_id = message.from_user.id
-    response = await process_disable_sms(chat_id, user_id, bot)
-    await message.reply(response)
-
-@router.message(lambda message: message.text and message.text.lower() == "включи смс")
-async def enable_sms(message: types.Message):
-    chat_id = str(message.chat.id)
-    user_id = message.from_user.id
-    response = await process_enable_sms(chat_id, user_id, bot)
-    await message.reply(response)
-
-@router.message(lambda message: message.text and message.text.lower().startswith("смс "))
-async def handle_send_sms(message: types.Message):
-    chat_id = str(message.chat.id)
-    if chat_id in sms_disabled_chats:
-        await message.reply("СМС и ММС отключены в этом чате.")
-        return
-    await process_send_sms(message, chat_list, bot)
-
-@router.message(lambda message: (message.text and message.text.lower().startswith("ммс ")) or 
-                                 (message.caption and message.caption.lower().startswith("ммс ")))
-async def handle_send_mms(message: types.Message):
-    chat_id = str(message.chat.id)
-    if chat_id in sms_disabled_chats:
-        await message.reply("СМС и ММС отключены в этом чате.")
-        return
-    await process_send_mms(message, chat_list, bot)
+@router.message(F.text.lower() == "статистика чат")
+async def show_chat_stats(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    report = await generate_chat_stats_report(str(message.chat.id))
+    reply_text = report if report else "В этом чате нет корректных статистических данных."
+    await message.reply(reply_text, parse_mode="HTML")
 
 @router.message(lambda message: message.text and message.text.lower() == "мой лексикон")
 async def handle_my_lexicon(message: types.Message):
@@ -356,22 +363,135 @@ async def handle_user_lexicon(message: types.Message):
     chat_id = message.chat.id
     await process_user_lexicon(username_or_name, chat_id, message)
 
-@router.message(F.text.lower() == "моя статистика")
-async def show_personal_stats(message: types.Message):
+# ================== БЛОК 5.6: ПОИСК И МЕДИА ==================
+
+@router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
+async def send_random_media(message: types.Message):
+    await process_channel_command(message, CHANNEL_SETTINGS)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
+async def handle_image_search(message: Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    logging.info(f"Команда 'моя статистика' вызвана пользователем {message.from_user.id} в чате {message.chat.id}")
-    chat_id = str(message.chat.id)
-    user_id = str(message.from_user.id)
-    response, has_stats = await get_user_statistics(chat_id, user_id)
+    query = message.text[len("найди"):].strip()
+    success, response_message, image_data = await process_image_search(query)
+    if success and image_data:
+        await save_and_send_searched_image(message, image_data)
+    elif response_message:
+        await message.reply(response_message)
+
+@router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
+async def universal_handler(message: types.Message):
+    keyword = message.text.lower()
+    query, temp_img_path, error_msg = queries[keyword]
+    await handle_message(message, query, temp_img_path, error_msg)
+
+@router.message(lambda message: message.text and message.text.lower().replace(" ", "") == "котогиф" and message.from_user.id not in BLOCKED_USERS)
+async def send_kotogif(message: types.Message):
+    random_action = random.choice(actions)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
+    await message.reply("Ща ща")
+    success, error_message, gif_data = await process_gif_search("cat")
+    if success and gif_data:
+        await save_and_send_gif(message, gif_data)
+    elif error_message:
+        await message.reply(error_message)
+
+# ================== БЛОК 5.7: РАЗНОЕ ==================
+
+@router.message(lambda message: 
+    message.text and 
+    message.text.lower().startswith("имя ") and 
+    message.from_user and
+    message.from_user.id not in BLOCKED_USERS
+)
+async def handle_name_info(message: types.Message):
+    random_action = random.choice(actions)
+    success, response = await process_name_info(message)
     await message.reply(response)
 
-@router.message(F.text.lower() == "статистика чат")
-async def show_chat_stats(message: types.Message):
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    report = await generate_chat_stats_report(str(message.chat.id))
-    reply_text = report if report else "В этом чате нет корректных статистических данных."
-    await message.reply(reply_text, parse_mode="HTML")
+@router.message(is_distortion_command)
+async def handle_distortion_command(message: types.Message):
+    await handle_distortion_request(message)
+
+@router.message(lambda message: message.text and is_broadcast_command(message.text) and message.from_user.id not in BLOCKED_USERS)
+async def handle_broadcast(message: types.Message):
+    await handle_broadcast_command(message)
+
+@router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
+async def handle_weather_command(message: types.Message):
+    await handle_current_weather_command(message)
+        
+@router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
+async def handle_weekly_forecast(message: types.Message):
+    await handle_weekly_forecast_command(message)
+
+@router.message(F.text.lower() == "егра")
+async def egra_command_handler(message: types.Message):
+    await start_egra(message, bot)
+
+@router.poll_answer()
+async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
+    is_egra_handled = await handle_egra_answer(poll_answer, bot)
+    if not is_egra_handled:
+        await process_poll_answer(poll_answer, bot)
+
+@router.callback_query(F.data == "egra_final_choice")
+async def egra_callback_handler(callback_query: types.CallbackQuery):
+    await handle_final_button_press(callback_query, bot)
+
+@router.message(F.text.lower().in_(["мем", "meme"]))
+async def meme_command_handler(message: Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+    reply_text = message.reply_to_message.text if message.reply_to_message else None
+    photo = await memegenerator.create_meme_image(message.chat.id, reply_text)
+    if photo:
+        await message.answer_photo(photo)
+    else:
+        await message.answer("Ошибка при создании мема.")
+
+@router.message(F.text.lower() == "кракадил")
+async def start_croc(message: types.Message):
+    print("CROC BOT ID:", id(bot))
+    await crocodile.handle_start_game(message)
+
+@router.callback_query(F.data.startswith("cr_"))
+async def croc_callback(callback: types.CallbackQuery):
+    if callback.data == "cr_restart":
+        await crocodile.handle_start_game(callback.message)
+        await callback.answer()
+    else:
+        await crocodile.handle_callback(callback)
+
+@router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
+async def stop_croc_text(message: types.Message):
+    await crocodile.handle_text_stop(message)
+
+
+# ================== БЛОК 6: ХЭНДЛЕРЫ С AI ==================
+
+# ================== БЛОК 6.1: ПЕРЕКЛЮЧЕНИЕ МОДЕЛЕЙ ==================
+
+@router.message(F.text.lower() == "упупа гигачат")
+async def switch_to_gigachat(message: types.Message):
+    await handle_switch_to_gigachat(message)
+
+@router.message(F.text.lower() == "упупа гемини")
+async def switch_to_gemini(message: types.Message):
+    await handle_switch_to_gemini(message)
+
+@router.message(F.text.lower() == "упупа грок")
+async def switch_to_groq(message: types.Message):
+    await handle_switch_to_groq(message)
+
+@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
+async def cmd_switch_history(message: Message):
+    await handle_switch_to_history(message)
+
+@router.message(F.text.lower() == "какая модель")
+async def which_model(message: types.Message):
+    await handle_which_model(message)
+
+# ================== БЛОК 6.2: ПРОФИЛИ И ПАРОДИЯ ==================
 
 @router.message(lambda message: message.text and message.text.lower() == "что за чат")
 async def handle_chat_profile(message: types.Message):
@@ -392,14 +512,14 @@ async def handle_parody(message: types.Message):
     chat_id = message.chat.id
     await process_parody(message, chat_id)
 
+# ================== БЛОК 6.3: ВИКТОРИНЫ И ПРОФЕССИИ ==================
+
 @router.message(F.text.lower() == "викторина участники")
 async def start_participant_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     processing_msg = await message.reply("ищем цитаты великих людей...")
-    
     success, error_message = await process_participant_quiz_start(message, bot)
-    
     await processing_msg.delete()
     if not success:
         await message.reply(error_message)
@@ -414,105 +534,17 @@ async def start_quiz(message: Message, bot: Bot):
     if not success:
         await message.reply(error_message)
 
-@router.message(F.text.lower() == "егра")
-async def egra_command_handler(message: types.Message):
-    await start_egra(message, bot)
-
-@router.poll_answer()
-async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
-    is_egra_handled = await handle_egra_answer(poll_answer, bot)
-    
-    if not is_egra_handled:
-        await process_poll_answer(poll_answer, bot)
-
-@router.callback_query(F.data == "egra_final_choice")
-async def egra_callback_handler(callback_query: types.CallbackQuery):
-    await handle_final_button_press(callback_query, bot)
-
-@router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
-async def send_random_media(message: types.Message):
-    await process_channel_command(message, CHANNEL_SETTINGS)
-
-@router.message(lambda message: 
-    message.text and 
-    message.text.lower().startswith("имя ") and 
-    message.from_user and
-    message.from_user.id not in BLOCKED_USERS
-)
-async def handle_name_info(message: types.Message):
-    random_action = random.choice(actions)
-    success, response = await process_name_info(message)
-    await message.reply(response)
-
 @router.message(F.text.lower() == "кем стать") 
 async def choose_profession_command(message: types.Message):
     await get_random_okved_and_commentary(message)
-    
-@router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
-async def handle_image_search(message: Message):
-    random_action = random.choice(actions)
-    query = message.text[len("найди"):].strip()
-    success, response_message, image_data = await process_image_search(query)
-    if success and image_data:
-        await save_and_send_searched_image(message, image_data)
-    elif response_message:
-        await message.reply(response_message)
+
+# ================== БЛОК 6.4: ГОЛОС ==================
 
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
 async def handle_voice_msg_cmd(message: Message):
     await handle_voice_command(message, bot)
 
-@router.message(lambda m: m.text and m.text.lower().startswith("упупа локация") and m.from_user.id not in BLOCKED_USERS)
-async def handle_location_start(message: Message):
-    try:
-        raw = message.text[len("упупа локация"):].strip()
-        if "|" not in raw:
-            await message.reply("Формат, долбоёб:\nупупа локация <адрес> | <что искать>")
-            return
-        address, user_request = map(str.strip, raw.split("|", 1))
-        await message.reply("Ща посмотрю, не ссы…")
-        result = await process_location_search(address, user_request)
-        await message.reply(result)
-    except Exception as e:
-        logging.error(f"Location handler error: {e}", exc_info=True)
-        await message.reply("Я обосрался где-то по дороге.")
-
-@router.message(
-    F.reply_to_message & 
-    F.reply_to_message.text & 
-    F.reply_to_message.text.lower().startswith("ну и хули ты хочешь по адресу")
-)
-async def handle_location_followup(message: Message):
-    if message.from_user.id in BLOCKED_USERS:
-        return
-    bot_text = message.reply_to_message.text
-    prefix_check = "ну и хули ты хочешь по адресу "
-    address = bot_text[len(prefix_check):]
-    user_query = message.text
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    result = await process_location_search(address, user_query)
-    await message.reply(result)
-
-@router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
-async def universal_handler(message: types.Message):
-    keyword = message.text.lower()
-    query, temp_img_path, error_msg = queries[keyword]
-    await handle_message(message, query, temp_img_path, error_msg)
-
-@router.message(lambda message: message.text and message.text.lower().replace(" ", "") == "котогиф" and message.from_user.id not in BLOCKED_USERS)
-async def send_kotogif(message: types.Message):
-    random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    await message.reply("Ща ща")
-    success, error_message, gif_data = await process_gif_search("cat")
-    if success and gif_data:
-        await save_and_send_gif(message, gif_data)
-    elif error_message:
-        await message.reply(error_message)
-
-@router.message(is_distortion_command)
-async def handle_distortion_command(message: types.Message):
-    await handle_distortion_request(message)
+# ================== БЛОК 6.5: ЧОТАМ И ОПИСАНИЯ ==================
 
 @router.message(lambda message: 
     (
@@ -565,11 +597,8 @@ async def handle_whatisthere_unified(message: types.Message):
 async def handle_robotics_description(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-    
     processing = await message.reply("Включаю модули анализа... (Robotics 1.5)")
-    
     success, response = await process_robotics_description(message)
-    
     await processing.delete()
     await message.reply(response)
 
@@ -585,6 +614,8 @@ async def describe_image(message: types.Message):
     success, response = await process_image_description(bot, message)
     await message.reply(response)
 
+# ================== БЛОК 6.6: ГЕНЕРАЦИЯ И РЕДАКТИРОВАНИЕ ИЗОБРАЖЕНИЙ ==================
+
 @router.message(
     lambda message: (
         (
@@ -597,7 +628,6 @@ async def describe_image(message: types.Message):
 )
 async def edit_image(message: types.Message):
     await handle_edit_command(message)
-
 
 @router.message(
     lambda message: (
@@ -653,23 +683,7 @@ async def generate_pun_with_image(message: types.Message):
 async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
 
-@router.message(F.text.lower().in_(["мем", "meme"]))
-async def meme_command_handler(message: Message):
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
-    reply_text = message.reply_to_message.text if message.reply_to_message else None
-    photo = await memegenerator.create_meme_image(message.chat.id, reply_text)
-    if photo:
-        await message.answer_photo(photo)
-    else:
-        await message.answer("Ошибка при создании мема.")
-
-@router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
-async def handle_weather_command(message: types.Message):
-    await handle_current_weather_command(message)
-        
-@router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
-async def handle_weekly_forecast(message: types.Message):
-    await handle_weekly_forecast_command(message)
+# ================== БЛОК 6.7: ДНИ РОЖДЕНИЯ ==================
     
 @router.message(lambda message: message.text and 
                 (message.text.lower().startswith("упупа запомни: мой др") or 
@@ -690,32 +704,19 @@ async def test_greeting_command(message: types.Message):
 async def admin_birthday_list_command(message: types.Message):
     await handle_admin_birthday_list_command(message)
 
+# ================== БЛОК 6.8: ЧОБЫЛО И ИТОГИ ГОДА ==================
+
 @router.message(F.text.lower() == "чобыло")
 async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
-@router.message(F.text.lower() == "кракадил")
-async def start_croc(message: types.Message):
-    print("CROC BOT ID:", id(bot))
-    await crocodile.handle_start_game(message)
-
-@router.callback_query(F.data.startswith("cr_"))
-async def croc_callback(callback: types.CallbackQuery):
-    if callback.data == "cr_restart":
-        await crocodile.handle_start_game(callback.message)
-        await callback.answer()
-    else:
-        await crocodile.handle_callback(callback)
-
-@router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
-async def stop_croc_text(message: types.Message):
-    await crocodile.handle_text_stop(message)
-
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
     await summarize_year(message, model, LOG_FILE, actions)
+
+# ================== БЛОК 6.9: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
 
 @router.message(F.text.lower() == "упупа не болтай")
 async def disable_dialog(message: types.Message):
@@ -763,6 +764,8 @@ async def handle_poem(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith("упупа умоляю"))
 async def serious_mode_command(message: types.Message):
     await handle_serious_mode_command(message)
+
+# ================== БЛОК 6.10: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
         
 @router.message()
 async def process_message(message: types.Message):
@@ -798,7 +801,7 @@ async def process_message(message: types.Message):
     except Exception as e:
         logging.error(f"Failed to log message stats: {e}")
     
-# ================== БЛОК 5: ЗАПУСК БОТА ==================
+# ================== БЛОК 7: ЗАПУСК БОТА ==================
 async def main():
     # --- антиспам ---
     from content_filter import load_antispam_settings
