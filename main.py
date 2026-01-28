@@ -155,7 +155,7 @@ from interactive_settings import send_settings_menu, handle_settings_callback, s
 from content_filter import ContentFilterMiddleware
 
 # ================== БЛОК 3.23 ДНД ==================
-from dnd import dnd_router 
+from AI.dnd import dnd_router 
 
 # ================== БЛОК 3.24 ГОЛОСОВОЙ МОДУЛЬ ==================
 from voice import handle_voice_command
