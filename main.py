@@ -134,7 +134,7 @@ import statistics as bot_statistics
 from statistics import PrivateRateLimitMiddleware
 
 # ================== БЛОК 3.19: КАЛЕНДАРЬ ДНЕЙ РОЖДЕНИЯ ==================
-from birthday_calendar import (
+from AI.birthday_calendar import (
     handle_birthday_command,
     handle_birthday_list_command,
     handle_test_greeting_command,
