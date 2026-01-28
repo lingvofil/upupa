@@ -1,17 +1,17 @@
-# === wrapper.py (moved from groq_wrapper.py) ===
+# === wrapper.py ===
 
 import os
-import logging
 import time
+import logging
 from typing import Optional, List, Any
 from groq import Groq
 from PIL import Image
 import base64
 import io
-
 import google.generativeai as genai
 from google.api_core import exceptions
 from gigachat import GigaChat
+
 
 # =========================
 # === RATE LIMIT CONTROL ===
@@ -42,94 +42,12 @@ def _block_gemini():
     logging.warning("⛔ Gemini account cooldown activated")
 
 
-class GroqWrapper:
-    def __init__(self, api_key: str):
-        self.client = Groq(api_key=api_key) if api_key else None
-        # Актуальные модели на текущий момент
-        
-        # для чотам (картинки: считывание), скаламбурь, добавь, нарисуй, опиши
-        self.vision_model = "meta-llama/llama-4-maverick-17b-128e-instruct"
-        
-        # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
-        # пародия, кто я, что за чат, кем стать, викторина
-        self.text_model = "openai/gpt-oss-120b" 
-
-        # для чотам (аудио)
-        self.audio_model = "whisper-large-v3" 
-
-        # для упупа скажи
-        self.tts_model = "canopylabs/orpheus-v1-english"
-
-        # для чобыло
-        self.summarization_model = "groq/compound-mini"  
-    
-    def _prepare_image(self, image_bytes: bytes) -> str:
-        """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
-        img = Image.open(io.BytesIO(image_bytes))
-        
-        # Конвертируем в RGB если нужно (для PNG/WebP с прозрачностью)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-            
-        # Если картинка слишком большая, уменьшаем её (Groq рекомендует до 1-2МБ)
-        max_size = 1280
-        if max(img.size) > max_size:
-            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-            
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85)
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
-    
-    def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
-        """Анализ изображений (Vision) через Groq"""
-        if not self.client: return "Ключ Groq не настроен"
-        
-        try:
-            base64_image = self._prepare_image(image_bytes)
-            
-            completion = self.client.chat.completions.create(
-                model=self.vision_model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{{base64_image}}"}
-                        }
-                    ]
-                }],
-                temperature=0.7,
-                max_tokens=1024
-            )
-            return completion.choices[0].message.content or ""
-        except Exception as e:
-            logging.error(f"Groq Vision Error: {{e}}")
-            raise
-    
-    def generate_text(self, prompt: str, max_tokens: int = 1024) -> str:
-        """Генерация текста через Groq"""
-        if not self.client:
-            return "Ключ Groq не настроен"
-        try:
-            completion = self.client.chat.completions.create(
-                model=self.text_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=max_tokens
-            )
-            return completion.choices[0].message.content or ""
-        except Exception as e:
-            logging.error(f"Groq Text Error: {{e}}")
-            raise
-
-
 # =========================
 # === FALLBACK CHAT SESSION ===
-# (перенесено из config.py)
 # =========================
 class FallbackChatSession:
-    def __init__(self,
+    def __init__(
+        self,
         wrapper,
         history: Optional[List[Any]] = None,
         model_queue: Optional[List[str]] = None,
@@ -161,24 +79,23 @@ class FallbackChatSession:
                 raise
 
             except Exception as e:
-                logging.error(f"Chat error [{{model_name}}]: {{e}}")
+                logging.error(f"Chat error [{model_name}]: {e}")
 
         raise RuntimeError("All Gemini chat models failed")
 
 
 # =========================
 # === MODEL FALLBACK WRAPPER ===
-# (перенесено из config.py)
 # =========================
 class ModelFallbackWrapper:
-    def __init__(self, default_queue: List[str], special_queue: List[str], special_chat_id: Optional[int] = None):
+    def __init__(self, default_queue: List[str], special_queue: List[str]):
         self.default_queue = default_queue
         self.special_queue = special_queue
-        self.special_chat_id = special_chat_id
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
-        if self.special_chat_id is not None and chat_id and str(chat_id) == str(self.special_chat_id):
+        from config import SPECIAL_CHAT_ID
+        if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
 
@@ -199,7 +116,7 @@ class ModelFallbackWrapper:
                 raise
 
             except Exception as e:
-                logging.error(f"Generate error [{{model_name}}]: {{e}}")
+                logging.error(f"Generate error [{model_name}]: {e}")
 
         raise RuntimeError("All Gemini models failed")
 
@@ -233,18 +150,17 @@ class ModelFallbackWrapper:
 
 # =========================
 # === GIGACHAT WRAPPER ===
-# (перенесено из config.py)
 # =========================
 class GigaChatWrapper:
-    def __init__(self, api_key: str, default_queue: List[str], special_queue: List[str], special_chat_id: Optional[int] = None):
+    def __init__(self, api_key: str, default_queue: List[str], special_queue: List[str]):
         self.api_key = api_key
         self.default_queue = default_queue
         self.special_queue = special_queue
-        self.special_chat_id = special_chat_id
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
-        if self.special_chat_id is not None and chat_id and str(chat_id) == str(self.special_chat_id):
+        from config import SPECIAL_CHAT_ID
+        if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
 
@@ -272,7 +188,117 @@ class GigaChatWrapper:
                     return GigaResponse(response.choices[0].message.content)
                     
             except Exception as e:
-                logging.error(f"GigaChat error [{{model_name}}]: {{e}}")
+                logging.error(f"GigaChat error [{model_name}]: {e}")
                 continue
         
         raise RuntimeError("All GigaChat models failed")
+
+
+# =========================
+# === GROQ WRAPPER ===
+# =========================
+class GroqWrapper:
+    def __init__(
+        self, 
+        api_key: str,
+        vision_model: str = "meta-llama/llama-4-maverick-17b-128e-instruct",
+        text_model: str = "openai/gpt-oss-120b",
+        audio_model: str = "whisper-large-v3",
+        tts_model: str = "canopylabs/orpheus-v1-english",
+        summarization_model: str = "groq/compound-mini"
+    ):
+        self.client = Groq(api_key=api_key) if api_key else None
+        
+        # для чотам (картинки: считывание), скаламбурь, добавь, нарисуй, опиши
+        self.vision_model = vision_model
+        
+        # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
+        # пародия, кто я, что за чат, кем стать, викторина
+        self.text_model = text_model
+
+        # для чотам (аудио)
+        self.audio_model = audio_model
+
+        # для упупа скажи
+        self.tts_model = tts_model
+
+        # для чобыло
+        self.summarization_model = summarization_model  
+    
+    def _prepare_image(self, image_bytes: bytes) -> str:
+        """Оптимизация изображения для Groq (сжатие и конвертация в base64)"""
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        # Конвертируем в RGB если нужно (для PNG/WebP с прозрачностью)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        # Если картинка слишком большая, уменьшаем её (Groq рекомендует до 1-2МБ)
+        max_size = 1280
+        if max(img.size) > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+    
+    def analyze_image(self, image_bytes: bytes, prompt: str) -> str:
+        """Анализ изображений (Vision) через Groq"""
+        if not self.client: return "Ключ Groq не настроен"
+        
+        try:
+            base64_image = self._prepare_image(image_bytes)
+            
+            completion = self.client.chat.completions.create(
+                model=self.vision_model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }],
+                temperature=0.7,
+                max_tokens=1024
+            )
+            return completion.choices[0].message.content or ""
+        except Exception as e:
+            logging.error(f"Groq Vision Error: {e}")
+            raise
+    
+    def generate_text(self, prompt: str, max_tokens: int = 1024) -> str:
+        """Генерация текста (LLM) через Groq"""
+        if not self.client: return "Ключ Groq не настроен"
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.text_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=max_tokens
+            )
+            result = completion.choices[0].message.content
+            logging.info(f"Groq generate_text: модель={self.text_model}, результат_длина={len(result) if result else 0}")
+            return result or ""
+        except Exception as e:
+            logging.error(f"Groq Text Error: {e}", exc_info=True)
+            raise
+    
+    def transcribe_audio(self, audio_bytes: bytes, file_name: str) -> str:
+        """Транскрибация аудио (Whisper) через Groq"""
+        if not self.client: return "Ключ Groq не настроен"
+        try:
+            audio_file = io.BytesIO(audio_bytes)
+            audio_file.name = file_name 
+            
+            transcription = self.client.audio.transcriptions.create(
+                file=audio_file,
+                model=self.audio_model,
+                response_format="text"
+            )
+            return transcription
+        except Exception as e:
+            logging.error(f"Groq Whisper Error: {e}")
+            raise
