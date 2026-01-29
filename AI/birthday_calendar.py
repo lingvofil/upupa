@@ -241,7 +241,12 @@ async def check_birthdays_and_send_greetings(bot):
                             if not user_messages:
                                 greeting = f"С днюхой, {user_name}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
                             else:
-                                greeting = await generate_birthday_greeting(user_name, user_messages)
+                                greeting = await generate_birthday_greeting(
+                                    user_name=user_name,
+                                    user_messages=user_messages,
+                                    chat_id=chat_id_int
+                                )
+
                             
                             user_tag = f"[{user_name}](tg://user?id={user_id})"
                             final_greeting = f"{user_tag}\n\n{greeting}"
@@ -270,15 +275,18 @@ async def check_birthdays_and_send_greetings(bot):
         logging.error(f"Traceback: {traceback.format_exc()}")
 
 async def birthday_scheduler(bot):
-    """Планировщик проверки дней рождения"""
+    last_run_date = None
     while True:
         try:
             now = datetime.now()
-            if now.hour == 12 and now.minute == 0:
+            today = now.date()
+
+            if now.hour == 12 and last_run_date != today:
                 await check_birthdays_and_send_greetings(bot)
-                await asyncio.sleep(60)
-            else:
-                await asyncio.sleep(60)
+                last_run_date = today
+
+            await asyncio.sleep(60)
+
         except Exception as e:
             logging.error(f"Ошибка в birthday_scheduler: {e}")
             await asyncio.sleep(60)
@@ -391,7 +399,12 @@ async def handle_test_greeting_command(message: Message):
         if not user_messages:
             greeting = f"С днюхой, {user_data['name']}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
         else:
-            greeting = await generate_birthday_greeting(user_data['name'], user_messages)
+            greeting = await generate_birthday_greeting(
+                user_name=user_name,
+                user_messages=user_messages,
+                chat_id=chat_id_int
+            )
+
         
         user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
         
