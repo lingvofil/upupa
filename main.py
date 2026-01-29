@@ -22,6 +22,9 @@ from config import (
     chat_settings, chat_list, sms_disabled_chats, LOG_FILE
 )
 
+# Импорт функции нормализации команд с "упупа"
+from upupa_utils import normalize_upupa_command
+
 # ================== БЛОК 2: СПРАВКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
 from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 
@@ -203,7 +206,7 @@ async def handle_chooumeesh(message: types.Message):
 async def help_callback_handler(query: types.CallbackQuery):
     await handle_help_callback(query)
 
-@router.message(F.text.lower() == "упупа настройки")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа настройки")
 async def settings_command_handler(message: types.Message):
     await send_settings_menu(message)
 
@@ -213,19 +216,21 @@ async def settings_callback_handler(query: types.CallbackQuery):
 
 # ================== БЛОК 5.3: УПРАВЛЕНИЕ ЧАТАМИ ==================
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа выйди из чатов хуесосов")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа выйди из чатов хуесосов")
 async def leave_empty_chats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("Еще чо сделать?")
         return
     await process_leave_empty_chats(message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа выйди из "))
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа выйди из "))
 async def leave_chat(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("Еще чо сделать?")
         return
-    chat_identifier = message.text[14:].strip()
+    # Извлекаем идентификатор чата из нормализованного текста
+    normalized = normalize_upupa_command(message.text)
+    chat_identifier = normalized[len("упупа выйди из "):].strip()
     await process_leave_chat(message, chat_identifier)
     
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
@@ -417,7 +422,7 @@ async def handle_distortion_command(message: types.Message):
 async def handle_broadcast(message: types.Message):
     await handle_broadcast_command(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа погода" and message.from_user.id not in BLOCKED_USERS)
 async def handle_weather_command(message: types.Message):
     await handle_current_weather_command(message)
         
@@ -471,19 +476,19 @@ async def stop_croc_text(message: types.Message):
 
 # ================== БЛОК 6.1: ПЕРЕКЛЮЧЕНИЕ МОДЕЛЕЙ ==================
 
-@router.message(F.text.lower() == "упупа гигачат")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа гигачат")
 async def switch_to_gigachat(message: types.Message):
     await handle_switch_to_gigachat(message)
 
-@router.message(F.text.lower() == "упупа гемини")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа гемини")
 async def switch_to_gemini(message: types.Message):
     await handle_switch_to_gemini(message)
 
-@router.message(F.text.lower() == "упупа грок")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа грок")
 async def switch_to_groq(message: types.Message):
     await handle_switch_to_groq(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа нушо")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа нушо")
 async def cmd_switch_history(message: Message):
     await handle_switch_to_history(message)
 
@@ -540,7 +545,7 @@ async def choose_profession_command(message: types.Message):
 
 # ================== БЛОК 6.4: ГОЛОС ==================
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа скажи") and message.from_user.id not in BLOCKED_USERS)
 async def handle_voice_msg_cmd(message: Message):
     await handle_voice_command(message, bot)
 
@@ -686,21 +691,21 @@ async def add_text_to_image(message: types.Message):
 # ================== БЛОК 6.7: ДНИ РОЖДЕНИЯ ==================
     
 @router.message(lambda message: message.text and 
-                (message.text.lower().startswith("упупа запомни: мой др") or 
-                 message.text.lower().startswith("упупа запомни мой др")) and 
+                (normalize_upupa_command(message.text).startswith("упупа запомни: мой др") or 
+                 normalize_upupa_command(message.text).startswith("упупа запомни мой др")) and 
                  message.from_user.id not in BLOCKED_USERS)
 async def handle_birthday_save_command(message: types.Message):
     await handle_birthday_command(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа дни рождения" and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа дни рождения" and message.from_user.id not in BLOCKED_USERS)
 async def birthday_list_command(message: types.Message):
     await handle_birthday_list_command(message)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа поздравь ") and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа поздравь ") and message.from_user.id not in BLOCKED_USERS)
 async def test_greeting_command(message: types.Message):
     await handle_test_greeting_command(message)
 
-@router.message(lambda message: message.text and message.text.lower() == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа все дни рождения" and message.from_user.id not in BLOCKED_USERS)
 async def admin_birthday_list_command(message: types.Message):
     await handle_admin_birthday_list_command(message)
 
@@ -718,7 +723,7 @@ async def handle_year_results(message: types.Message):
 
 # ================== БЛОК 6.9: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
 
-@router.message(F.text.lower() == "упупа не болтай")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа не болтай")
 async def disable_dialog(message: types.Message):
     chat_id = str(message.chat.id)
     if chat_id not in chat_settings:
@@ -727,7 +732,7 @@ async def disable_dialog(message: types.Message):
     save_chat_settings()
     await message.reply("Лана отъебитесь.")
 
-@router.message(F.text.lower() == "упупа говори")
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа говори")
 async def enable_dialog(message: types.Message):
     chat_id = str(message.chat.id)
     if chat_id not in chat_settings:
@@ -761,7 +766,7 @@ async def handle_poem(message: types.Message):
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
     await handle_poem_command(message, poem_type)
 
-@router.message(lambda message: message.text and message.text.lower().startswith("упупа умоляю"))
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа умоляю"))
 async def serious_mode_command(message: types.Message):
     await handle_serious_mode_command(message)
 
