@@ -6,6 +6,9 @@ import os
 import json
 from aiogram import types
 
+# Импорт функции нормализации команд с "упупа"
+from upupa_utils import normalize_upupa_command
+
 # Обновленные импорты
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
@@ -506,7 +509,13 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     
     # Подготовка ввода пользователя
     user_input = message.text
-    temp_input_lower = user_input.lower()
+    
+    # Нормализуем для команд с "упупа"
+    if user_input.lower().startswith('упупа'):
+        temp_input_lower = normalize_upupa_command(user_input)
+    else:
+        temp_input_lower = user_input.lower()
+    
     for keyword in DIALOG_TRIGGER_KEYWORDS:
         if temp_input_lower.startswith(keyword):
             user_input = user_input[len(keyword):].lstrip(' ,')
@@ -580,10 +589,17 @@ async def process_general_message(message: types.Message):
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
     
     if message.text:
-        text_lower = message.text.lower()
-        if (text_lower.startswith("пися ") or
-            any(kw in text_lower.split() for kw in KEYWORDS if kw not in ["пирожок", "порошок"])):
+        # Нормализуем команды с "упупа"
+        if message.text.lower().startswith('упупа'):
+            text_lower = normalize_upupa_command(message.text)
+        else:
+            text_lower = message.text.lower()
+        
+        # Проверка на прямое обращение
+        if (text_lower.startswith("пися") or
+            any(kw in text_lower.split() for kw in [k.lower() for k in KEYWORDS if k not in ["пирожок", "порошок"]])):
             is_direct_appeal = True
+            
         if not is_direct_appeal and message.entities:
             for entity in message.entities:
                 if entity.type == "mention" and message.text[entity.offset:entity.offset + entity.length] == "@" + (await bot.get_me()).username:
