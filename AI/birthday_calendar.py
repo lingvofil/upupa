@@ -376,9 +376,10 @@ async def handle_test_greeting_command(message: Message):
     """Обработка тестовой команды поздравления"""
     if message.from_user.id != ADMIN_ID:
         return
-    
+
     try:
-        text = message.text
+        text = message.text or ""
+
         if text.lower().startswith("упупа поздравь "):
             identifier = text[15:].strip()
         elif text.lower().startswith("поздравь "):
@@ -386,34 +387,52 @@ async def handle_test_greeting_command(message: Message):
         else:
             await message.reply("Используй: упупа поздравь [имя/username]")
             return
-            
+
+        if not identifier:
+            await message.reply("Укажи имя или username пользователя")
+            return
+
         user_info = find_user_in_chat_birthdays(message.chat.id, identifier)
         if not user_info:
-            await message.reply(f"Пользователь '{identifier}' не найден в базе дней рождения этого чата")
+            await message.reply(
+                f"Пользователь '{identifier}' не найден в базе дней рождения этого чата"
+            )
             return
-        
+
         user_id, user_data = user_info
-        
-        user_messages = get_user_messages_from_log(int(user_id), message.chat.id)
-        
+
+        user_messages = get_user_messages_from_log(
+            int(user_id),
+            message.chat.id
+        )
+
         if not user_messages:
-            greeting = f"С днюхой, {user_data['name']}! Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! Желаю тебе в новом году больше активности в чате! 🎉"
+            greeting = (
+                f"С днюхой, {user_data['name']}! "
+                f"Хоть сообщений от тебя и нет, но поздравить забыть не могу, ублюдок! "
+                f"Желаю тебе в новом году больше активности в чате! 🎉"
+            )
         else:
             greeting = await generate_birthday_greeting(
-                user_name=user_name,
+                user_name=user_data["name"],
                 user_messages=user_messages,
-                chat_id=chat_id_int
+                chat_id=message.chat.id
             )
 
-        
         user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
-        
-        test_message = f"🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n{user_tag}\n\n{greeting}"
+
+        test_message = (
+            "🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n"
+            f"{user_tag}\n\n"
+            f"{greeting}"
+        )
+
         await message.reply(test_message, parse_mode="Markdown")
-        
+
     except Exception as e:
-        logging.error(f"Ошибка в handle_test_greeting_command: {e}")
+        logging.exception("Ошибка в handle_test_greeting_command")
         await message.reply("Ошибка при генерации тестового поздравления")
+
 
 async def handle_birthday_list_command(message: Message):
     """Обработка команды просмотра списка дней рождения для текущего чата"""
