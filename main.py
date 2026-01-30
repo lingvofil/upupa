@@ -176,7 +176,7 @@ from AI.dnd import dnd_router
 from AI.voice import handle_voice_command
 
 # ================== БЛОК 4.12 LEVEL TRAVEL ==================
-from leveltravel import process_tours_command
+from AI.leveltravel import process_tours_command
 
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
