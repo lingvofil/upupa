@@ -37,6 +37,58 @@ COUNTRY_MAPPING = {
 # Город вылета по умолчанию
 DEFAULT_DEPARTURE_CITY = "moscow"  # Москва
 
+# Эвристики по направлениям
+DESTINATION_INFO = {
+    "north-goa": {
+        "party": True,
+        "best_months": [11, 12, 1, 2, 3],  # Ноябрь-март
+        "sea_temp_ok": [11, 12, 1, 2, 3, 4],
+        "description": "тусовочное место с пляжами и ночной жизнью"
+    },
+    "mv": {  # Мальдивы
+        "party": False,
+        "best_months": [11, 12, 1, 2, 3, 4],
+        "sea_temp_ok": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "description": "спокойный пляжный отдых, романтика"
+    },
+    "lk": {  # Шри-Ланка
+        "party": False,
+        "best_months": [12, 1, 2, 3, 4],
+        "sea_temp_ok": [11, 12, 1, 2, 3, 4, 5],
+        "description": "пляжи, культура, природа"
+    },
+    "vn": {  # Вьетнам
+        "party": True,
+        "best_months": [11, 12, 1, 2, 3, 4],
+        "sea_temp_ok": [1, 2, 3, 4, 5, 11, 12],
+        "description": "разнообразный отдых"
+    },
+    "phu-quoc": {
+        "party": False,
+        "best_months": [11, 12, 1, 2, 3, 4],
+        "sea_temp_ok": [11, 12, 1, 2, 3, 4, 5],
+        "description": "тихие пляжи, природа"
+    },
+    "nha-trang": {
+        "party": True,
+        "best_months": [1, 2, 3, 4, 5],
+        "sea_temp_ok": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "description": "активный пляжный отдых, развлечения"
+    },
+    "tr": {  # Турция
+        "party": True,
+        "best_months": [5, 6, 7, 8, 9, 10],
+        "sea_temp_ok": [5, 6, 7, 8, 9, 10],
+        "description": "all inclusive, пляжи, инфраструктура"
+    },
+    "bali": {
+        "party": True,
+        "best_months": [4, 5, 6, 7, 8, 9, 10],
+        "sea_temp_ok": [4, 5, 6, 7, 8, 9, 10, 11],
+        "description": "серфинг, тусовки, культура"
+    },
+}
+
 # Маппинг месяцев
 MONTH_MAPPING = {
     "январь": 1, "января": 1, "янв": 1,
@@ -176,7 +228,7 @@ async def scrape_leveltravel(
     
     Args:
         country_code: код страны (например, "lk" для Шри-Ланки)
-        dates: список дат вылета
+        dates: список дат вылета (используется первая дата для начального поиска)
         adults: количество взрослых
         nights_from: минимум ночей
         nights_to: максимум ночей
@@ -207,53 +259,116 @@ async def scrape_leveltravel(
             page = await context.new_page()
             
             try:
-                # Формируем URL для поиска
-                # Базовый формат Level.Travel с Москвы:
-                # https://level.travel/search?country=LK&from=moscow&adults=2&nights_from=7&nights_to=14
-                search_params = [
-                    f"country={country_code.upper()}",
-                    f"from={departure_city}",
-                    f"adults={adults}",
-                    f"nights_from={nights_from}",
-                    f"nights_to={nights_to}"
-                ]
+                # Level.Travel реально работает через форму поиска, а не через query params
+                # Поэтому мы идём на главную и заполняем форму
+                logging.info(f"Открываю Level.Travel главную страницу")
                 
-                # Добавляем курорт/регион, если указан
-                if resort:
-                    search_params.append(f"resort={resort}")
+                await page.goto(LEVELTRAVEL_BASE_URL, timeout=60000, wait_until='domcontentloaded')
+                await page.wait_for_timeout(3000)
                 
-                search_url = f"{LEVELTRAVEL_BASE_URL}/search?{'&'.join(search_params)}"
+                # Пытаемся найти и заполнить форму поиска
+                try:
+                    # Ищем поле "Куда"
+                    destination_input = await page.wait_for_selector(
+                        'input[placeholder*="Куда"], input[name*="country"], [data-testid*="destination"]',
+                        timeout=10000
+                    )
+                    
+                    if destination_input:
+                        # Вводим направление (по коду страны или тексту)
+                        destination_text = country_code.upper()
+                        if country_code == "in" and resort == "north-goa":
+                            destination_text = "Гоа"
+                        elif country_code == "lk":
+                            destination_text = "Шри-Ланка"
+                        elif country_code == "mv":
+                            destination_text = "Мальдивы"
+                        elif country_code == "vn" and resort == "phu-quoc":
+                            destination_text = "Фукуок"
+                        elif country_code == "vn" and resort == "nha-trang":
+                            destination_text = "Нячанг"
+                        elif country_code == "vn":
+                            destination_text = "Вьетнам"
+                        elif country_code == "tr":
+                            destination_text = "Турция"
+                        elif country_code == "id":
+                            destination_text = "Бали"
+                        
+                        await destination_input.fill(destination_text)
+                        await page.wait_for_timeout(1000)
+                        
+                        # Пытаемся выбрать из выпадающего списка
+                        try:
+                            suggestion = await page.wait_for_selector(
+                                f'[class*="suggest"] >> text=/{destination_text}/i',
+                                timeout=3000
+                            )
+                            if suggestion:
+                                await suggestion.click()
+                                await page.wait_for_timeout(1000)
+                        except Exception:
+                            pass
+                    
+                    # Кликаем "Найти туры" или аналогичную кнопку
+                    search_button = await page.query_selector(
+                        'button[type="submit"], button:has-text("Найти"), [data-testid*="search"]'
+                    )
+                    if search_button:
+                        await search_button.click()
+                        await page.wait_for_timeout(3000)
                 
-                logging.info(f"Открываю Level.Travel: {search_url}")
-                
-                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
+                except Exception as e:
+                    logging.warning(f"Не удалось заполнить форму, пробуем прямую ссылку: {e}")
+                    # Fallback: прямая ссылка
+                    search_params = [
+                        f"country={country_code.upper()}",
+                        f"from={departure_city}",
+                        f"adults={adults}",
+                        f"nights_from={nights_from}",
+                        f"nights_to={nights_to}"
+                    ]
+                    
+                    # Используем первую дату из списка
+                    if dates:
+                        search_params.append(f"date={dates[0]}")
+                    
+                    search_url = f"{LEVELTRAVEL_BASE_URL}/search?{'&'.join(search_params)}"
+                    logging.info(f"Переход на: {search_url}")
+                    await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
                 
                 # Ждем загрузки результатов
                 try:
-                    await page.wait_for_selector('.tour-card, [class*="tour"], [class*="hotel"]', timeout=15000)
+                    await page.wait_for_selector(
+                        '[class*="tour"], [class*="hotel"], [class*="offer"], [data-testid*="tour"]',
+                        timeout=15000
+                    )
                 except Exception:
                     logging.warning("Не дождался загрузки карточек туров")
                 
                 await page.wait_for_timeout(5000)
                 
-                # Скроллим страницу для подгрузки lazy-load контента
-                for _ in range(3):
+                # Скроллим для подгрузки lazy-load контента
+                for _ in range(5):
                     await page.evaluate('window.scrollBy(0, 1000)')
                     await page.wait_for_timeout(1000)
                 
-                # Извлекаем данные о турах
+                # Извлекаем данные о турах с улучшенными селекторами
                 tours_data = await page.evaluate("""
                     () => {
                         let results = [];
                         
-                        // Ищем карточки туров по различным селекторам
+                        // Более агрессивный поиск карточек
                         const selectors = [
+                            '[data-testid*="tour"]',
+                            '[data-testid*="offer"]',
+                            '[data-testid*="hotel"]',
+                            '[class*="TourCard"]',
+                            '[class*="OfferCard"]',
+                            '[class*="HotelCard"]',
                             '[class*="tour-card"]',
                             '[class*="hotel-card"]',
-                            '[class*="SearchResult"]',
-                            '[data-testid*="tour"]',
-                            '.tour-item',
-                            '.hotel-item'
+                            'article',
+                            '[role="article"]',
                         ];
                         
                         let cards = [];
@@ -261,8 +376,18 @@ async def scrape_leveltravel(
                             const elements = document.querySelectorAll(selector);
                             if (elements.length > 0) {
                                 cards = Array.from(elements);
+                                console.log(`Найдено ${cards.length} карточек по селектору: ${selector}`);
                                 break;
                             }
+                        }
+                        
+                        if (cards.length === 0) {
+                            // Последняя попытка - любые div с ценой
+                            cards = Array.from(document.querySelectorAll('div')).filter(div => {
+                                const text = div.textContent || '';
+                                return /\d{3,6}\s*₽|руб/.test(text) && div.querySelectorAll('*').length > 3;
+                            });
+                            console.log(`Fallback: найдено ${cards.length} элементов с ценой`);
                         }
                         
                         cards.forEach((card, index) => {
@@ -280,85 +405,112 @@ async def scrape_leveltravel(
                                     departure_date: '',
                                     nights: 0,
                                     meal_type: '',
-                                    has_ac: false,
                                     description: ''
                                 };
                                 
-                                // Название отеля
-                                const nameEl = card.querySelector('[class*="hotel-name"], [class*="name"], h2, h3');
-                                if (nameEl) tour.hotel_name = nameEl.textContent.trim();
+                                // Название отеля - более широкий поиск
+                                const nameSelectors = [
+                                    '[data-testid*="hotel-name"]',
+                                    '[data-testid*="name"]',
+                                    '[class*="hotel-name"]',
+                                    '[class*="HotelName"]',
+                                    '[class*="name"]',
+                                    'h2', 'h3', 'h4',
+                                    '[class*="title"]'
+                                ];
                                 
-                                // Цена (ищем числа)
-                                const priceEl = card.querySelector('[class*="price"], [class*="cost"]');
-                                if (priceEl) {
-                                    const priceText = priceEl.textContent.replace(/\s/g, '');
-                                    const priceMatch = priceText.match(/(\d+)/);
-                                    if (priceMatch) tour.price = parseInt(priceMatch[1]);
+                                for (const sel of nameSelectors) {
+                                    const el = card.querySelector(sel);
+                                    if (el && el.textContent.trim().length > 3) {
+                                        tour.hotel_name = el.textContent.trim();
+                                        break;
+                                    }
                                 }
                                 
-                                // Рейтинг
-                                const ratingEl = card.querySelector('[class*="rating"], [class*="stars"]');
-                                if (ratingEl) {
-                                    const ratingText = ratingEl.textContent;
-                                    const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
-                                    if (ratingMatch) tour.rating = parseFloat(ratingMatch[1]);
+                                // Цена - улучшенный поиск
+                                const priceSelectors = [
+                                    '[data-testid*="price"]',
+                                    '[class*="price"]',
+                                    '[class*="Price"]',
+                                    '[class*="cost"]'
+                                ];
+                                
+                                for (const sel of priceSelectors) {
+                                    const el = card.querySelector(sel);
+                                    if (el) {
+                                        const priceText = el.textContent.replace(/\s/g, '');
+                                        const priceMatch = priceText.match(/(\d{3,7})/);
+                                        if (priceMatch) {
+                                            tour.price = parseInt(priceMatch[1]);
+                                            break;
+                                        }
+                                    }
                                 }
                                 
-                                // Количество отзывов
-                                const reviewsEl = card.querySelector('[class*="review"]');
-                                if (reviewsEl) {
-                                    const reviewsText = reviewsEl.textContent;
-                                    const reviewsMatch = reviewsText.match(/(\d+)/);
-                                    if (reviewsMatch) tour.reviews_count = parseInt(reviewsMatch[1]);
+                                // Если не нашли, ищем любое число похожее на цену
+                                if (!tour.price) {
+                                    const allText = card.textContent || '';
+                                    const prices = allText.match(/(\d{4,7})\s*(?:₽|руб)/g);
+                                    if (prices && prices.length > 0) {
+                                        const numMatch = prices[0].match(/(\d{4,7})/);
+                                        if (numMatch) tour.price = parseInt(numMatch[1]);
+                                    }
                                 }
                                 
-                                // Локация
-                                const locationEl = card.querySelector('[class*="location"], [class*="city"], [class*="region"]');
-                                if (locationEl) tour.location = locationEl.textContent.trim();
+                                // Рейтинг (более гибкий поиск)
+                                const ratingText = card.textContent || '';
+                                const ratingMatch = ratingText.match(/(\d\.?\d?)\s*\/\s*10|рейтинг[:\s]*(\d\.?\d?)/i);
+                                if (ratingMatch) {
+                                    tour.rating = parseFloat(ratingMatch[1] || ratingMatch[2]);
+                                }
                                 
-                                // Звездность отеля
-                                const starsEl = card.querySelector('[class*="stars"]');
-                                if (starsEl) {
-                                    const starsMatch = starsEl.textContent.match(/(\d+)/);
-                                    if (starsMatch) tour.stars = parseInt(starsMatch[1]);
+                                // Отзывы
+                                const reviewMatch = ratingText.match(/(\d+)\s*отзыв/i);
+                                if (reviewMatch) {
+                                    tour.reviews_count = parseInt(reviewMatch[1]);
+                                }
+                                
+                                // Звёзды отеля
+                                const starsMatch = ratingText.match(/(\d)\s*(?:звезд|★)/i);
+                                if (starsMatch) {
+                                    tour.stars = parseInt(starsMatch[1]);
+                                }
+                                
+                                // Количество ночей
+                                const nightsMatch = ratingText.match(/(\d+)\s*(?:ночей|ночи|ночь)/i);
+                                if (nightsMatch) {
+                                    tour.nights = parseInt(nightsMatch[1]);
+                                }
+                                
+                                // Дата вылета
+                                const dateMatch = ratingText.match(/(\d{1,2})\s+([а-я]+)/i);
+                                if (dateMatch) {
+                                    tour.departure_date = `${dateMatch[1]} ${dateMatch[2]}`;
+                                }
+                                
+                                // Питание
+                                const mealMatch = ratingText.match(/(all inclusive|всё включено|завтрак|HB|FB|BB|AI|UAI)/i);
+                                if (mealMatch) {
+                                    tour.meal_type = mealMatch[1];
                                 }
                                 
                                 // Ссылка
-                                const linkEl = card.querySelector('a[href]');
+                                const linkEl = card.querySelector('a[href*="/tour/"], a[href*="/hotel/"], a[href]');
                                 if (linkEl) {
                                     tour.url = linkEl.getAttribute('href');
-                                    if (!tour.url.startsWith('http')) {
+                                    if (tour.url && !tour.url.startsWith('http')) {
                                         tour.url = 'https://level.travel' + tour.url;
                                     }
                                 }
                                 
-                                // Дата вылета
-                                const dateEl = card.querySelector('[class*="date"], [class*="departure"]');
-                                if (dateEl) tour.departure_date = dateEl.textContent.trim();
-                                
-                                // Количество ночей
-                                const nightsEl = card.querySelector('[class*="night"], [class*="duration"]');
-                                if (nightsEl) {
-                                    const nightsMatch = nightsEl.textContent.match(/(\d+)/);
-                                    if (nightsMatch) tour.nights = parseInt(nightsMatch[1]);
+                                // Локация
+                                const locationMatch = ratingText.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?),\s*([А-ЯЁ][а-яё]+)/);
+                                if (locationMatch) {
+                                    tour.location = `${locationMatch[1]}, ${locationMatch[2]}`;
                                 }
                                 
-                                // Тип питания
-                                const mealEl = card.querySelector('[class*="meal"], [class*="food"]');
-                                if (mealEl) tour.meal_type = mealEl.textContent.trim();
-                                
-                                // Проверка на кондиционер
-                                const amenitiesEl = card.querySelector('[class*="amenities"], [class*="facilities"]');
-                                if (amenitiesEl) {
-                                    const amenitiesText = amenitiesEl.textContent.toLowerCase();
-                                    tour.has_ac = amenitiesText.includes('кондиционер') || amenitiesText.includes('ac') || amenitiesText.includes('air');
-                                }
-                                
-                                // Описание
-                                const descEl = card.querySelector('[class*="description"], p');
-                                if (descEl) tour.description = descEl.textContent.trim();
-                                
-                                if (tour.hotel_name && tour.price > 0) {
+                                // Добавляем если есть минимальные данные
+                                if ((tour.hotel_name || tour.location) && tour.price > 10000) {
                                     results.push(tour);
                                 }
                             } catch (e) {
@@ -366,6 +518,7 @@ async def scrape_leveltravel(
                             }
                         });
                         
+                        console.log(`Итого собрано туров: ${results.length}`);
                         return results;
                     }
                 """)
@@ -402,48 +555,105 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
     if not tours:
         return []
     
-    # Формируем промпт для анализа
+    # ПРЕДФИЛЬТРАЦИЯ на Python
+    filtered_tours = []
+    for tour in tours:
+        # Базовые фильтры
+        if tour.get('price', 0) < 10000:  # Слишком дешево = подозрительно
+            continue
+        
+        # Фильтр по рейтингу ИЛИ отзывам (если есть данные)
+        has_good_rating = tour.get('rating', 0) >= 4.0
+        has_reviews = tour.get('reviews_count', 0) >= 10
+        
+        # Пропускаем только если есть явно плохой рейтинг
+        if tour.get('rating', 0) > 0 and tour.get('rating') < 3.5:
+            continue
+        
+        filtered_tours.append(tour)
+    
+    if not filtered_tours:
+        # Если после фильтрации ничего не осталось, берём исходные
+        filtered_tours = tours
+    
+    logging.info(f"После предфильтрации осталось {len(filtered_tours)} туров из {len(tours)}")
+    
+    # Получаем информацию о направлении
+    destination_key = params.get('resort') or params.get('country_code')
+    destination_meta = DESTINATION_INFO.get(destination_key, {})
+    
     month_name = None
     if params.get("month"):
         month_name = [k for k, v in MONTH_MAPPING.items() if v == params["month"] and len(k) > 3][0]
     
     country_name = params.get("country_name", "неизвестная страна")
     
-    prompt = f"""Проанализируй туры в {country_name.capitalize()} {f'в {month_name}' if month_name else ''} и выбери ТОП-10 самых релевантных вариантов.
+    # Формируем улучшенный промпт с эвристиками
+    season_info = ""
+    if params.get("month"):
+        month_num = params["month"]
+        best_months = destination_meta.get('best_months', [])
+        sea_ok = destination_meta.get('sea_temp_ok', [])
+        
+        if month_num in best_months:
+            season_info = f"✅ {month_name.capitalize()} - ОТЛИЧНЫЙ сезон для {country_name}"
+        elif month_num in sea_ok:
+            season_info = f"⚠️ {month_name.capitalize()} - приемлемый сезон, но не идеальный"
+        else:
+            season_info = f"❌ {month_name.capitalize()} - НЕ сезон для {country_name} (дожди/холодно)"
+    
+    party_info = ""
+    if destination_meta.get('party'):
+        party_info = "✅ Место ТУСОВОЧНОЕ - есть ночная жизнь, бары, развлечения"
+    else:
+        party_info = "⚠️ Место СПОКОЙНОЕ - больше для релакса и романтики"
+    
+    dest_description = destination_meta.get('description', '')
+    
+    prompt = f"""Ты - эксперт по турам. Проанализируй туры в {country_name.capitalize()} и выбери ТОП-10.
 
-Критерии отбора (по важности):
-1. Положительные отзывы и высокий рейтинг отеля
-2. Сезон должен быть комфортным для купания в море (тёплая погода, не сезон дождей)
-3. Место должно быть достаточно тусовочным и нескучным (хорошая инфраструктура, развлечения)
-4. Наличие кондиционера в номере
-5. Оптимальное соотношение цена/качество
+КОНТЕКСТ НАПРАВЛЕНИЯ:
+{dest_description}
+{season_info}
+{party_info}
 
-Список туров для анализа:
-{json.dumps(tours, ensure_ascii=False, indent=2)}
+КРИТЕРИИ ОТБОРА (по важности):
+1. **Сезонность и погода** - комфортно ли купаться в указанный период
+2. **Рейтинг и отзывы** - чем выше, тем лучше (но учти, что у многих туров рейтинга нет)
+3. **Инфраструктура** - {party_info.split('-')[1].strip() if '-' in party_info else 'развлечения'}
+4. **Цена/качество** - оптимальное соотношение
+5. **Звёздность отеля** - предпочтение 4-5 звёздам
 
-Выведи результат СТРОГО в формате JSON (массив объектов):
+ВАЖНО:
+- У многих туров рейтинг = 0 (данных нет) - это НОРМАЛЬНО, не штрафуй за это
+- Кондиционеры есть почти везде в тёплых странах, это не критично
+- Если месяц не в сезон - честно скажи об этом в reason
+
+СПИСОК ТУРОВ:
+{json.dumps(filtered_tours[:30], ensure_ascii=False, indent=2)}
+
+ФОРМАТ ОТВЕТА - СТРОГО JSON (массив):
 [
   {{
-    "index": <индекс тура из исходного списка>,
-    "score": <оценка от 1 до 10>,
-    "reason": "<краткое объяснение, почему этот вариант хорош (1-2 предложения)>"
-  }},
-  ...
+    "index": <индекс из списка>,
+    "score": <оценка 1-10>,
+    "reason": "<почему этот вариант хорош: сезон, цена, звёзды, локация - 1-2 предложения>"
+  }}
 ]
 
-Верни ТОЛЬКО JSON, без дополнительного текста."""
+Верни ТОЛЬКО JSON массив, без markdown и комментариев."""
 
     try:
         # Вызываем Groq для анализа
         response = await groq_ai.generate_text(prompt, temperature=0.3)
         
         # Парсим JSON из ответа
-        # Ищем JSON в ответе (может быть обернут в markdown)
         json_match = re.search(r'\[[\s\S]*\]', response)
         if not json_match:
             logging.error("Groq не вернул валидный JSON")
-            # Возвращаем первые 10 туров без анализа
-            return tours[:10]
+            # Возвращаем топ по цене
+            sorted_tours = sorted(filtered_tours, key=lambda x: x.get('price', 999999))
+            return sorted_tours[:10]
         
         analysis_results = json.loads(json_match.group(0))
         
@@ -454,8 +664,8 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
         analyzed_tours = []
         for result in analysis_results[:10]:
             index = result.get("index", 0)
-            if 0 <= index < len(tours):
-                tour = tours[index].copy()
+            if 0 <= index < len(filtered_tours):
+                tour = filtered_tours[index].copy()
                 tour["ai_score"] = result.get("score", 0)
                 tour["ai_reason"] = result.get("reason", "")
                 analyzed_tours.append(tour)
@@ -464,8 +674,13 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
         
     except Exception as e:
         logging.error(f"Ошибка при анализе туров через Groq: {e}")
-        # Возвращаем первые 10 туров без анализа
-        return tours[:10]
+        # Возвращаем топ по рейтингу или цене
+        sorted_tours = sorted(
+            filtered_tours,
+            key=lambda x: (x.get('rating', 0), -x.get('price', 999999)),
+            reverse=True
+        )
+        return sorted_tours[:10]
 
 
 # =============================================================================
@@ -491,29 +706,29 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
     if params.get("month"):
         month_name = [k for k, v in MONTH_MAPPING.items() if v == params["month"] and len(k) > 3][0]
     
-    header = f"🏖 <b>Топ-{len(tours)} туров в {country_name.capitalize()}</b>"
+    header = f"🏖 <b>Топ-{len(tours)} туров: {country_name.capitalize()}</b>"
     if month_name:
         header += f" <b>({month_name})</b>"
-    header += f"\n👥 {params['adults']} взрослых | 🌙 {params['nights_from']}-{params['nights_to']} ночей\n"
+    header += f"\n👥 {params['adults']} взрослых | 🌙 {params['nights_from']}-{params['nights_to']} ночей | ✈️ из Москвы\n"
     
     lines = [header]
     
     for i, tour in enumerate(tours, 1):
-        lines.append(f"\n<b>{i}. {tour.get('hotel_name', 'Отель')}</b>")
+        lines.append(f"\n<b>{i}. {tour.get('hotel_name', tour.get('location', 'Отель'))}</b>")
         
         # Основная информация
         details = []
         
         if tour.get('price'):
-            details.append(f"💰 {tour['price']:,} {tour.get('currency', 'RUB')}")
+            details.append(f"💰 {tour['price']:,} ₽")
         
         if tour.get('stars'):
             details.append(f"⭐️ {'★' * tour['stars']}")
         
-        if tour.get('rating'):
+        if tour.get('rating') and tour['rating'] > 0:
             details.append(f"📊 {tour['rating']}/10")
         
-        if tour.get('reviews_count'):
+        if tour.get('reviews_count') and tour['reviews_count'] > 0:
             details.append(f"💬 {tour['reviews_count']} отзывов")
         
         if tour.get('location'):
@@ -525,9 +740,6 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
         if tour.get('meal_type'):
             details.append(f"🍽 {tour['meal_type']}")
         
-        if tour.get('has_ac'):
-            details.append("❄️ Кондиционер")
-        
         if tour.get('departure_date'):
             details.append(f"📅 {tour['departure_date']}")
         
@@ -536,14 +748,14 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
         
         # AI анализ
         if tour.get('ai_score'):
-            lines.append(f"🤖 Оценка: {tour['ai_score']}/10")
+            lines.append(f"🤖 Оценка AI: {tour['ai_score']}/10")
         
         if tour.get('ai_reason'):
             lines.append(f"💡 {tour['ai_reason']}")
         
         # Ссылка
         if tour.get('url'):
-            lines.append(f"🔗 <a href='{tour['url']}'>Подробнее</a>")
+            lines.append(f"🔗 <a href='{tour['url']}'>Подробнее на Level.Travel</a>")
     
     return "\n".join(lines)
 
