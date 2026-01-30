@@ -496,7 +496,7 @@ def get_processing_message(message: types.Message) -> str:
         return f"Слушою через {model_name}..." if active_model in ["groq", "gigachat"] else "Слушою..."
     elif target_message.video: return "Сматрю..."
     elif target_message.photo: 
-        return f"Рассматриваю ето художество в {model_name}..."
+        return f"Рассматриваю ето художество"
     elif target_message.animation: return "Да не дергайся ты..."
     elif target_message.sticker: return "Стикер-шмикер..."
     elif target_message.text: return "Понаписали ебанарот..."
