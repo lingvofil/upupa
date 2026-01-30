@@ -175,6 +175,8 @@ from AI.dnd import dnd_router
 # ================== БЛОК 4.11 ГОЛОСОВОЙ МОДУЛЬ ==================
 from AI.voice import handle_voice_command
 
+# ================== БЛОК 4.12 LEVEL TRAVEL ==================
+from leveltravel import process_tours_command
 
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
@@ -721,7 +723,17 @@ async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
     await summarize_year(message, model, LOG_FILE, actions)
 
-# ================== БЛОК 6.9: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
+# ================== БЛОК 6.9: LEVEL TRAVEL  ==================
+
+@router.message(lambda message: 
+    message.text and 
+    message.text.lower().startswith("туры") and 
+    message.from_user.id not in BLOCKED_USERS
+)
+async def handle_tours_command(message: types.Message):
+    await process_tours_command(message)
+       
+# ================== БЛОК 6.10: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа не болтай")
 async def disable_dialog(message: types.Message):
@@ -770,7 +782,7 @@ async def handle_poem(message: types.Message):
 async def serious_mode_command(message: types.Message):
     await handle_serious_mode_command(message)
 
-# ================== БЛОК 6.10: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
+# ================== БЛОК 6.11: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
         
 @router.message()
 async def process_message(message: types.Message):
