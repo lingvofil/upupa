@@ -6,6 +6,7 @@ from typing import List, Dict, Optional, Tuple
 from playwright.async_api import async_playwright
 from aiogram import types
 import json
+import httpx  # Для прямых API запросов
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
@@ -211,6 +212,211 @@ def generate_date_range(month: Optional[int] = None) -> List[str]:
 
 # =============================================================================
 # ПАРСИНГ LEVEL.TRAVEL
+# =============================================================================
+
+# =============================================================================
+# ПРЯМОЙ API ЗАПРОС (НОВЫЙ МЕТОД)
+# =============================================================================
+
+async def direct_api_search(
+    country_code: str,
+    date: str,
+    adults: int = 2,
+    nights_from: int = 7,
+    nights_to: int = 14,
+    departure_city: str = "moscow"
+) -> List[Dict]:
+    """
+    Прямой запрос к API Level.Travel (без Playwright)
+    
+    Args:
+        country_code: код страны
+        date: дата вылета YYYY-MM-DD
+        adults: количество взрослых
+        nights_from: минимум ночей
+        nights_to: максимум ночей
+        departure_city: город вылета
+    
+    Returns:
+        List туров
+    """
+    tours = []
+    
+    try:
+        # API endpoint Level.Travel (может потребоваться уточнение)
+        # Это примерный URL, реальный может отличаться
+        api_url = "https://api.level.travel/search/start"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Referer': 'https://level.travel/',
+            'Origin': 'https://level.travel'
+        }
+        
+        payload = {
+            "country": country_code.upper(),
+            "from_city": departure_city,
+            "start_date": date,
+            "adults": adults,
+            "nights_min": nights_from,
+            "nights_max": nights_to,
+            "currency": "rub"
+        }
+        
+        logging.info(f"Прямой API запрос к Level.Travel: {api_url}")
+        logging.info(f"Параметры: {payload}")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(api_url, json=payload, headers=headers)
+            
+            logging.info(f"API ответ: status={response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logging.info(f"Получен JSON от API")
+                
+                # Пробуем найти туры в разных ключах
+                tours_data = None
+                if isinstance(data, list):
+                    tours_data = data
+                elif isinstance(data, dict):
+                    for key in ['tours', 'offers', 'hotels', 'results', 'data', 'items']:
+                        if key in data:
+                            tours_data = data[key]
+                            break
+                
+                if tours_data and isinstance(tours_data, list):
+                    logging.info(f"Найдено туров в API: {len(tours_data)}")
+                    
+                    for item in tours_data:
+                        tour = parse_tour_from_api(item)
+                        if tour and tour.get('price', 0) > 10000:
+                            tours.append(tour)
+                else:
+                    logging.warning(f"Структура API ответа неожиданная. Ключи: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+            else:
+                logging.error(f"API вернул ошибку: {response.status_code} - {response.text[:200]}")
+                
+    except Exception as e:
+        logging.error(f"Ошибка прямого API запроса: {e}")
+    
+    return tours
+
+
+def parse_tour_from_api(item: Dict) -> Optional[Dict]:
+    """
+    Парсит тур из JSON ответа API
+    
+    Args:
+        item: элемент из API ответа
+    
+    Returns:
+        Dict с данными тура или None
+    """
+    try:
+        tour = {
+            'hotel_name': '',
+            'price': 0,
+            'currency': 'RUB',
+            'rating': 0,
+            'reviews_count': 0,
+            'location': '',
+            'stars': 0,
+            'url': '',
+            'departure_date': '',
+            'nights': 0,
+            'meal_type': '',
+        }
+        
+        # Название отеля
+        for key in ['hotel_name', 'hotelName', 'name', 'title', 'hotel']:
+            if key in item and item[key]:
+                tour['hotel_name'] = str(item[key])
+                break
+        
+        # Цена
+        for key in ['price', 'cost', 'total_price', 'totalPrice', 'amount']:
+            if key in item and item[key]:
+                try:
+                    tour['price'] = int(float(item[key]))
+                    break
+                except:
+                    pass
+        
+        # Рейтинг
+        for key in ['rating', 'hotel_rating', 'hotelRating', 'stars_rating']:
+            if key in item and item[key]:
+                try:
+                    tour['rating'] = float(item[key])
+                    break
+                except:
+                    pass
+        
+        # Отзывы
+        for key in ['reviews', 'reviews_count', 'reviewsCount']:
+            if key in item and item[key]:
+                try:
+                    tour['reviews_count'] = int(item[key])
+                    break
+                except:
+                    pass
+        
+        # Звёзды
+        for key in ['stars', 'hotel_stars', 'hotelStars', 'star']:
+            if key in item and item[key]:
+                try:
+                    tour['stars'] = int(float(item[key]))
+                    break
+                except:
+                    pass
+        
+        # Локация
+        for key in ['location', 'city', 'region', 'resort']:
+            if key in item and item[key]:
+                tour['location'] = str(item[key])
+                break
+        
+        # URL
+        for key in ['url', 'link', 'href', 'tour_url']:
+            if key in item and item[key]:
+                url = str(item[key])
+                if not url.startswith('http'):
+                    url = LEVELTRAVEL_BASE_URL + url
+                tour['url'] = url
+                break
+        
+        # Дата
+        for key in ['departure_date', 'departureDate', 'date', 'start_date']:
+            if key in item and item[key]:
+                tour['departure_date'] = str(item[key])
+                break
+        
+        # Ночи
+        for key in ['nights', 'duration', 'nights_count']:
+            if key in item and item[key]:
+                try:
+                    tour['nights'] = int(item[key])
+                    break
+                except:
+                    pass
+        
+        # Питание
+        for key in ['meal', 'meal_type', 'mealType', 'food']:
+            if key in item and item[key]:
+                tour['meal_type'] = str(item[key])
+                break
+        
+        return tour if tour['hotel_name'] or tour['location'] else None
+        
+    except Exception as e:
+        logging.warning(f"Ошибка парсинга тура из API: {e}")
+        return None
+
+
+# =============================================================================
+# ПАРСИНГ LEVEL.TRAVEL ЧЕРЕЗ PLAYWRIGHT
 # =============================================================================
 
 async def scrape_leveltravel(
@@ -901,24 +1107,50 @@ async def process_tours_command(message: types.Message):
             f"Это может занять некоторое время ⏳"
         )
         
-        # Скрапим Level.Travel
-        tours = await scrape_leveltravel(
-            country_code=params["country_code"],
-            dates=dates,
-            adults=params["adults"],
-            nights_from=params["nights_from"],
-            nights_to=params["nights_to"],
-            resort=params.get("resort"),
-            departure_city=params["departure_city"],
-            max_results=50
-        )
+        tours = []
+        
+        # МЕТОД 1: Прямой API запрос (быстрее и надёжнее)
+        try:
+            logging.info("Пробуем прямой API запрос...")
+            if dates:
+                tours = await direct_api_search(
+                    country_code=params["country_code"],
+                    date=dates[0],
+                    adults=params["adults"],
+                    nights_from=params["nights_from"],
+                    nights_to=params["nights_to"],
+                    departure_city=params["departure_city"]
+                )
+                
+                if tours:
+                    logging.info(f"✅ Прямой API дал результат: {len(tours)} туров")
+        except Exception as e:
+            logging.error(f"Прямой API не сработал: {e}")
+        
+        # МЕТОД 2: Playwright (если API не дал результата)
+        if not tours:
+            logging.info("Прямой API не дал результатов, пробуем Playwright...")
+            tours = await scrape_leveltravel(
+                country_code=params["country_code"],
+                dates=dates,
+                adults=params["adults"],
+                nights_from=params["nights_from"],
+                nights_to=params["nights_to"],
+                resort=params.get("resort"),
+                departure_city=params["departure_city"],
+                max_results=50
+            )
         
         if not tours:
             await search_msg.edit_text(
                 "😕 Не удалось найти туры. Возможно:\n"
-                "• Сайт изменил структуру\n"
-                "• Нет доступных предложений\n"
-                "• Неверные параметры поиска"
+                "• Сайт изменил структуру API\n"
+                "• Нет доступных предложений по заданным параметрам\n"
+                "• Требуется другой метод поиска\n\n"
+                "💡 Попробуйте:\n"
+                "- Изменить даты (другой месяц)\n"
+                "- Изменить продолжительность\n"
+                "- Выбрать другое направление"
             )
             return
         
