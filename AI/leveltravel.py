@@ -312,18 +312,22 @@ async def scrape_leveltravel(
                     }
                 """)
                 
-                # ЖДЁМ API запрос с турами (НЕ ПРОСТО sleep!)
+                # ЖДЁМ API запрос с турами (правильный синтаксис для Playwright Python)
                 logging.info("Ожидаем API ответ с турами...")
                 try:
-                    await page.wait_for_response(
-                        lambda r: (
-                            'level.travel' in r.url.lower() and
-                            any(x in r.url.lower() for x in ['offers', 'searches', 'hotels']) and
-                            r.status == 200
+                    async with page.expect_response(
+                        lambda response: (
+                            'level.travel' in response.url.lower() and
+                            any(x in response.url.lower() for x in ['offers', 'searches', 'hotels']) and
+                            response.status == 200
                         ),
                         timeout=20000
-                    )
-                    logging.info("✅ Поймали API ответ!")
+                    ) as response_info:
+                        # Ждём пока придёт нужный ответ
+                        await page.wait_for_timeout(1000)
+                    
+                    response = await response_info.value
+                    logging.info(f"✅ Поймали API ответ: {response.url}")
                 except Exception as e:
                     logging.warning(f"⚠️ Не дождались API с турами за 20 сек: {e}")
                 
@@ -359,15 +363,16 @@ async def scrape_leveltravel(
                         }
                     """)
                     
-                    # Ждём API
-                    await page.wait_for_response(
-                        lambda r: (
-                            'level.travel' in r.url.lower() and
-                            any(x in r.url.lower() for x in ['offers', 'searches']) and
-                            r.status == 200
+                    # Ждём API (правильный синтаксис)
+                    async with page.expect_response(
+                        lambda response: (
+                            'level.travel' in response.url.lower() and
+                            any(x in response.url.lower() for x in ['offers', 'searches']) and
+                            response.status == 200
                         ),
                         timeout=20000
-                    )
+                    ) as response_info:
+                        await page.wait_for_timeout(1000)
                 except Exception:
                     logging.warning("Fallback тоже не сработал")
                 
