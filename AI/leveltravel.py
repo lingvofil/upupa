@@ -224,11 +224,11 @@ async def scrape_leveltravel(
     max_results: int = 50
 ) -> List[Dict]:
     """
-    Скрапит туры с Level.Travel
+    Скрапит туры с Level.Travel через перехват API запросов
     
     Args:
         country_code: код страны (например, "lk" для Шри-Ланки)
-        dates: список дат вылета (используется первая дата для начального поиска)
+        dates: список дат вылета (используется первая)
         adults: количество взрослых
         nights_from: минимум ночей
         nights_to: максимум ночей
@@ -258,27 +258,50 @@ async def scrape_leveltravel(
             
             page = await context.new_page()
             
+            # Список для сохранения API ответов
+            api_responses = []
+            
+            # Перехватчик API запросов
+            async def handle_response(response):
+                try:
+                    url = response.url
+                    # Ловим запросы к API Level.Travel
+                    if any(keyword in url.lower() for keyword in ['/api/', '/search', '/offers', '/tours', '/hotel']):
+                        if response.status == 200:
+                            try:
+                                data = await response.json()
+                                api_responses.append({
+                                    'url': url,
+                                    'data': data
+                                })
+                                logging.info(f"Перехвачен API запрос: {url[:100]}...")
+                            except Exception:
+                                pass
+                except Exception as e:
+                    pass
+            
+            page.on('response', handle_response)
+            
             try:
-                # Level.Travel реально работает через форму поиска, а не через query params
-                # Поэтому мы идём на главную и заполняем форму
+                # Сначала пробуем через главную страницу с формой
                 logging.info(f"Открываю Level.Travel главную страницу")
                 
                 await page.goto(LEVELTRAVEL_BASE_URL, timeout=60000, wait_until='domcontentloaded')
                 await page.wait_for_timeout(3000)
                 
-                # Пытаемся найти и заполнить форму поиска
+                # Пытаемся заполнить форму поиска
                 try:
                     # Ищем поле "Куда"
                     destination_input = await page.wait_for_selector(
-                        'input[placeholder*="Куда"], input[name*="country"], [data-testid*="destination"]',
-                        timeout=10000
+                        'input[placeholder*="Куда"], input[placeholder*="куда"], input[name*="country"], [data-testid*="destination"], input[type="text"]',
+                        timeout=5000
                     )
                     
                     if destination_input:
-                        # Вводим направление (по коду страны или тексту)
+                        # Определяем текст для направления
                         destination_text = country_code.upper()
                         if country_code == "in" and resort == "north-goa":
-                            destination_text = "Гоа"
+                            destination_text = "Северный Гоа"
                         elif country_code == "lk":
                             destination_text = "Шри-Ланка"
                         elif country_code == "mv":
@@ -294,31 +317,46 @@ async def scrape_leveltravel(
                         elif country_code == "id":
                             destination_text = "Бали"
                         
+                        logging.info(f"Вводим направление: {destination_text}")
+                        await destination_input.click()
                         await destination_input.fill(destination_text)
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(2000)
                         
-                        # Пытаемся выбрать из выпадающего списка
+                        # Пытаемся выбрать из саджестов
                         try:
-                            suggestion = await page.wait_for_selector(
-                                f'[class*="suggest"] >> text=/{destination_text}/i',
-                                timeout=3000
+                            # Ищем dropdown с вариантами
+                            suggestions = await page.query_selector_all(
+                                '[class*="suggest"], [class*="dropdown"], [class*="autocomplete"], li, [role="option"]'
                             )
-                            if suggestion:
-                                await suggestion.click()
-                                await page.wait_for_timeout(1000)
-                        except Exception:
-                            pass
+                            
+                            for suggestion in suggestions[:5]:  # Проверяем первые 5
+                                text = await suggestion.text_content()
+                                if text and destination_text.lower() in text.lower():
+                                    logging.info(f"Кликаем на вариант: {text[:50]}")
+                                    await suggestion.click()
+                                    await page.wait_for_timeout(1000)
+                                    break
+                        except Exception as e:
+                            logging.warning(f"Не удалось выбрать из саджестов: {e}")
                     
-                    # Кликаем "Найти туры" или аналогичную кнопку
+                    # Ищем кнопку поиска
                     search_button = await page.query_selector(
-                        'button[type="submit"], button:has-text("Найти"), [data-testid*="search"]'
+                        'button[type="submit"], button:has-text("Найти"), button:has-text("найти"), [data-testid*="search"], button:has-text("Поиск")'
                     )
+                    
                     if search_button:
+                        logging.info("Нажимаем кнопку поиска")
                         await search_button.click()
-                        await page.wait_for_timeout(3000)
+                        
+                        # ЖДЁМ API ОТВЕТ с турами
+                        logging.info("Ожидаем API ответ с турами...")
+                        await page.wait_for_timeout(10000)  # даём время на загрузку
+                    else:
+                        logging.warning("Кнопка поиска не найдена")
                 
                 except Exception as e:
-                    logging.warning(f"Не удалось заполнить форму, пробуем прямую ссылку: {e}")
+                    logging.warning(f"Не удалось работать через форму: {e}")
+                    
                     # Fallback: прямая ссылка
                     search_params = [
                         f"country={country_code.upper()}",
@@ -328,203 +366,249 @@ async def scrape_leveltravel(
                         f"nights_to={nights_to}"
                     ]
                     
-                    # Используем первую дату из списка
                     if dates:
                         search_params.append(f"date={dates[0]}")
                     
                     search_url = f"{LEVELTRAVEL_BASE_URL}/search?{'&'.join(search_params)}"
-                    logging.info(f"Переход на: {search_url}")
+                    logging.info(f"Fallback: переход на {search_url}")
+                    
                     await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
+                    
+                    # Ждём API ответ
+                    await page.wait_for_timeout(10000)
                 
-                # Ждем загрузки результатов
-                try:
-                    await page.wait_for_selector(
-                        '[class*="tour"], [class*="hotel"], [class*="offer"], [data-testid*="tour"]',
-                        timeout=15000
-                    )
-                except Exception:
-                    logging.warning("Не дождался загрузки карточек туров")
-                
-                await page.wait_for_timeout(5000)
-                
-                # Скроллим для подгрузки lazy-load контента
-                for _ in range(5):
+                # Дополнительно скроллим для триггера lazy load
+                for _ in range(3):
                     await page.evaluate('window.scrollBy(0, 1000)')
                     await page.wait_for_timeout(1000)
                 
-                # Извлекаем данные о турах с улучшенными селекторами
-                tours_data = await page.evaluate("""
-                    () => {
-                        let results = [];
+                # Теперь парсим данные из перехваченных API ответов
+                logging.info(f"Перехвачено API запросов: {len(api_responses)}")
+                
+                if api_responses:
+                    # Ищем ответ с турами
+                    for api_resp in api_responses:
+                        data = api_resp.get('data', {})
                         
-                        // Более агрессивный поиск карточек
-                        const selectors = [
-                            '[data-testid*="tour"]',
-                            '[data-testid*="offer"]',
-                            '[data-testid*="hotel"]',
-                            '[class*="TourCard"]',
-                            '[class*="OfferCard"]',
-                            '[class*="HotelCard"]',
-                            '[class*="tour-card"]',
-                            '[class*="hotel-card"]',
-                            'article',
-                            '[role="article"]',
-                        ];
+                        # Пробуем разные структуры данных
+                        tours_data = None
                         
-                        let cards = [];
-                        for (const selector of selectors) {
-                            const elements = document.querySelectorAll(selector);
-                            if (elements.length > 0) {
-                                cards = Array.from(elements);
-                                console.log(`Найдено ${cards.length} карточек по селектору: ${selector}`);
-                                break;
-                            }
-                        }
+                        if isinstance(data, list):
+                            tours_data = data
+                        elif isinstance(data, dict):
+                            # Пробуем разные ключи
+                            for key in ['tours', 'offers', 'hotels', 'results', 'data', 'items']:
+                                if key in data:
+                                    tours_data = data[key]
+                                    break
                         
-                        if (cards.length === 0) {
-                            // Последняя попытка - любые div с ценой
-                            cards = Array.from(document.querySelectorAll('div')).filter(div => {
-                                const text = div.textContent || '';
-                                return /\d{3,6}\s*₽|руб/.test(text) && div.querySelectorAll('*').length > 3;
-                            });
-                            console.log(`Fallback: найдено ${cards.length} элементов с ценой`);
-                        }
-                        
-                        cards.forEach((card, index) => {
-                            try {
-                                const tour = {
-                                    index: index,
-                                    hotel_name: '',
-                                    price: 0,
-                                    currency: 'RUB',
-                                    rating: 0,
-                                    reviews_count: 0,
-                                    location: '',
-                                    stars: 0,
-                                    url: '',
-                                    departure_date: '',
-                                    nights: 0,
-                                    meal_type: '',
-                                    description: ''
-                                };
-                                
-                                // Название отеля - более широкий поиск
-                                const nameSelectors = [
-                                    '[data-testid*="hotel-name"]',
-                                    '[data-testid*="name"]',
-                                    '[class*="hotel-name"]',
-                                    '[class*="HotelName"]',
-                                    '[class*="name"]',
-                                    'h2', 'h3', 'h4',
-                                    '[class*="title"]'
-                                ];
-                                
-                                for (const sel of nameSelectors) {
-                                    const el = card.querySelector(sel);
-                                    if (el && el.textContent.trim().length > 3) {
-                                        tour.hotel_name = el.textContent.trim();
-                                        break;
+                        if tours_data and isinstance(tours_data, list):
+                            logging.info(f"Найдены туры в API ответе: {len(tours_data)} шт.")
+                            
+                            # Парсим данные из API
+                            for item in tours_data[:max_results]:
+                                try:
+                                    tour = {
+                                        'hotel_name': '',
+                                        'price': 0,
+                                        'currency': 'RUB',
+                                        'rating': 0,
+                                        'reviews_count': 0,
+                                        'location': '',
+                                        'stars': 0,
+                                        'url': '',
+                                        'departure_date': '',
+                                        'nights': 0,
+                                        'meal_type': '',
                                     }
+                                    
+                                    # Название отеля
+                                    for key in ['hotel_name', 'hotelName', 'name', 'title', 'hotel']:
+                                        if key in item and item[key]:
+                                            tour['hotel_name'] = str(item[key])
+                                            break
+                                    
+                                    # Цена
+                                    for key in ['price', 'cost', 'total_price', 'totalPrice', 'amount']:
+                                        if key in item and item[key]:
+                                            try:
+                                                tour['price'] = int(float(item[key]))
+                                                break
+                                            except:
+                                                pass
+                                    
+                                    # Рейтинг
+                                    for key in ['rating', 'hotel_rating', 'hotelRating', 'stars_rating']:
+                                        if key in item and item[key]:
+                                            try:
+                                                tour['rating'] = float(item[key])
+                                                break
+                                            except:
+                                                pass
+                                    
+                                    # Отзывы
+                                    for key in ['reviews', 'reviews_count', 'reviewsCount']:
+                                        if key in item and item[key]:
+                                            try:
+                                                tour['reviews_count'] = int(item[key])
+                                                break
+                                            except:
+                                                pass
+                                    
+                                    # Звёзды отеля
+                                    for key in ['stars', 'hotel_stars', 'hotelStars', 'star']:
+                                        if key in item and item[key]:
+                                            try:
+                                                tour['stars'] = int(float(item[key]))
+                                                break
+                                            except:
+                                                pass
+                                    
+                                    # Локация
+                                    for key in ['location', 'city', 'region', 'resort']:
+                                        if key in item and item[key]:
+                                            tour['location'] = str(item[key])
+                                            break
+                                    
+                                    # URL
+                                    for key in ['url', 'link', 'href', 'tour_url']:
+                                        if key in item and item[key]:
+                                            url = str(item[key])
+                                            if not url.startswith('http'):
+                                                url = LEVELTRAVEL_BASE_URL + url
+                                            tour['url'] = url
+                                            break
+                                    
+                                    # Дата вылета
+                                    for key in ['departure_date', 'departureDate', 'date', 'start_date']:
+                                        if key in item and item[key]:
+                                            tour['departure_date'] = str(item[key])
+                                            break
+                                    
+                                    # Ночи
+                                    for key in ['nights', 'duration', 'nights_count']:
+                                        if key in item and item[key]:
+                                            try:
+                                                tour['nights'] = int(item[key])
+                                                break
+                                            except:
+                                                pass
+                                    
+                                    # Питание
+                                    for key in ['meal', 'meal_type', 'mealType', 'food']:
+                                        if key in item and item[key]:
+                                            tour['meal_type'] = str(item[key])
+                                            break
+                                    
+                                    # Добавляем если есть минимальные данные
+                                    if (tour['hotel_name'] or tour['location']) and tour['price'] > 10000:
+                                        tours.append(tour)
+                                        
+                                except Exception as e:
+                                    logging.warning(f"Ошибка парсинга тура из API: {e}")
+                                    continue
+                            
+                            if tours:
+                                break  # Нашли туры, выходим
+                
+                # Если API не дал результатов, пробуем парсить DOM (как fallback)
+                if not tours:
+                    logging.info("API не дал результатов, пробуем парсить DOM...")
+                    
+                    tours_data = await page.evaluate("""
+                        () => {
+                            let results = [];
+                            
+                            // Ищем карточки туров
+                            const selectors = [
+                                '[data-testid*="tour"]',
+                                '[data-testid*="offer"]',
+                                '[class*="TourCard"]',
+                                '[class*="OfferCard"]',
+                                'article',
+                            ];
+                            
+                            let cards = [];
+                            for (const selector of selectors) {
+                                const elements = document.querySelectorAll(selector);
+                                if (elements.length > 0) {
+                                    cards = Array.from(elements);
+                                    break;
                                 }
-                                
-                                // Цена - улучшенный поиск
-                                const priceSelectors = [
-                                    '[data-testid*="price"]',
-                                    '[class*="price"]',
-                                    '[class*="Price"]',
-                                    '[class*="cost"]'
-                                ];
-                                
-                                for (const sel of priceSelectors) {
-                                    const el = card.querySelector(sel);
-                                    if (el) {
-                                        const priceText = el.textContent.replace(/\s/g, '');
-                                        const priceMatch = priceText.match(/(\d{3,7})/);
-                                        if (priceMatch) {
-                                            tour.price = parseInt(priceMatch[1]);
-                                            break;
+                            }
+                            
+                            // Fallback: любые div с ценой
+                            if (cards.length === 0) {
+                                cards = Array.from(document.querySelectorAll('div')).filter(div => {
+                                    const text = div.textContent || '';
+                                    return /\d{4,7}\s*₽/.test(text) && div.querySelectorAll('*').length > 3;
+                                });
+                            }
+                            
+                            cards.forEach((card, index) => {
+                                try {
+                                    const allText = card.textContent || '';
+                                    
+                                    const tour = {
+                                        index: index,
+                                        hotel_name: '',
+                                        price: 0,
+                                        rating: 0,
+                                        reviews_count: 0,
+                                        stars: 0,
+                                        nights: 0,
+                                        location: '',
+                                        departure_date: '',
+                                        meal_type: '',
+                                        url: ''
+                                    };
+                                    
+                                    // Название
+                                    const nameEl = card.querySelector('h2, h3, h4, [class*="name"]');
+                                    if (nameEl) tour.hotel_name = nameEl.textContent.trim();
+                                    
+                                    // Цена
+                                    const priceMatch = allText.match(/(\d{4,7})\s*₽/);
+                                    if (priceMatch) tour.price = parseInt(priceMatch[1]);
+                                    
+                                    // Рейтинг
+                                    const ratingMatch = allText.match(/(\d\.?\d?)\s*\/\s*10/);
+                                    if (ratingMatch) tour.rating = parseFloat(ratingMatch[1]);
+                                    
+                                    // Отзывы
+                                    const reviewMatch = allText.match(/(\d+)\s*отзыв/i);
+                                    if (reviewMatch) tour.reviews_count = parseInt(reviewMatch[1]);
+                                    
+                                    // Звёзды
+                                    const starsMatch = allText.match(/(\d)\s*(?:звезд|★)/i);
+                                    if (starsMatch) tour.stars = parseInt(starsMatch[1]);
+                                    
+                                    // Ночи
+                                    const nightsMatch = allText.match(/(\d+)\s*(?:ночей|ночи)/i);
+                                    if (nightsMatch) tour.nights = parseInt(nightsMatch[1]);
+                                    
+                                    // Ссылка
+                                    const linkEl = card.querySelector('a[href]');
+                                    if (linkEl) {
+                                        tour.url = linkEl.getAttribute('href');
+                                        if (tour.url && !tour.url.startsWith('http')) {
+                                            tour.url = 'https://level.travel' + tour.url;
                                         }
                                     }
-                                }
-                                
-                                // Если не нашли, ищем любое число похожее на цену
-                                if (!tour.price) {
-                                    const allText = card.textContent || '';
-                                    const prices = allText.match(/(\d{4,7})\s*(?:₽|руб)/g);
-                                    if (prices && prices.length > 0) {
-                                        const numMatch = prices[0].match(/(\d{4,7})/);
-                                        if (numMatch) tour.price = parseInt(numMatch[1]);
+                                    
+                                    if ((tour.hotel_name || tour.location) && tour.price > 10000) {
+                                        results.push(tour);
                                     }
-                                }
-                                
-                                // Рейтинг (более гибкий поиск)
-                                const ratingText = card.textContent || '';
-                                const ratingMatch = ratingText.match(/(\d\.?\d?)\s*\/\s*10|рейтинг[:\s]*(\d\.?\d?)/i);
-                                if (ratingMatch) {
-                                    tour.rating = parseFloat(ratingMatch[1] || ratingMatch[2]);
-                                }
-                                
-                                // Отзывы
-                                const reviewMatch = ratingText.match(/(\d+)\s*отзыв/i);
-                                if (reviewMatch) {
-                                    tour.reviews_count = parseInt(reviewMatch[1]);
-                                }
-                                
-                                // Звёзды отеля
-                                const starsMatch = ratingText.match(/(\d)\s*(?:звезд|★)/i);
-                                if (starsMatch) {
-                                    tour.stars = parseInt(starsMatch[1]);
-                                }
-                                
-                                // Количество ночей
-                                const nightsMatch = ratingText.match(/(\d+)\s*(?:ночей|ночи|ночь)/i);
-                                if (nightsMatch) {
-                                    tour.nights = parseInt(nightsMatch[1]);
-                                }
-                                
-                                // Дата вылета
-                                const dateMatch = ratingText.match(/(\d{1,2})\s+([а-я]+)/i);
-                                if (dateMatch) {
-                                    tour.departure_date = `${dateMatch[1]} ${dateMatch[2]}`;
-                                }
-                                
-                                // Питание
-                                const mealMatch = ratingText.match(/(all inclusive|всё включено|завтрак|HB|FB|BB|AI|UAI)/i);
-                                if (mealMatch) {
-                                    tour.meal_type = mealMatch[1];
-                                }
-                                
-                                // Ссылка
-                                const linkEl = card.querySelector('a[href*="/tour/"], a[href*="/hotel/"], a[href]');
-                                if (linkEl) {
-                                    tour.url = linkEl.getAttribute('href');
-                                    if (tour.url && !tour.url.startsWith('http')) {
-                                        tour.url = 'https://level.travel' + tour.url;
-                                    }
-                                }
-                                
-                                // Локация
-                                const locationMatch = ratingText.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?),\s*([А-ЯЁ][а-яё]+)/);
-                                if (locationMatch) {
-                                    tour.location = `${locationMatch[1]}, ${locationMatch[2]}`;
-                                }
-                                
-                                // Добавляем если есть минимальные данные
-                                if ((tour.hotel_name || tour.location) && tour.price > 10000) {
-                                    results.push(tour);
-                                }
-                            } catch (e) {
-                                console.error('Ошибка парсинга карточки:', e);
-                            }
-                        });
-                        
-                        console.log(`Итого собрано туров: ${results.length}`);
-                        return results;
-                    }
-                """)
+                                } catch (e) {}
+                            });
+                            
+                            return results;
+                        }
+                    """)
+                    
+                    tours.extend(tours_data)
                 
-                tours.extend(tours_data)
-                logging.info(f"Найдено туров: {len(tours_data)}")
+                logging.info(f"Найдено туров (итого): {len(tours)}")
                 
             finally:
                 await context.close()
@@ -533,7 +617,6 @@ async def scrape_leveltravel(
     except Exception as e:
         logging.error(f"Ошибка при скрапинге Level.Travel: {e}")
     
-    # Ограничиваем количество результатов
     return tours[:max_results]
 
 
