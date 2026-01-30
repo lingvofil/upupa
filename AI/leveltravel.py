@@ -261,121 +261,117 @@ async def scrape_leveltravel(
             # Список для сохранения API ответов
             api_responses = []
             
-            # Перехватчик API запросов
+            # Перехватчик API запросов (ИСПРАВЛЕННЫЙ)
             async def handle_response(response):
                 try:
-                    url = response.url
-                    # Ловим запросы к API Level.Travel
-                    if any(keyword in url.lower() for keyword in ['/api/', '/search', '/offers', '/tours', '/hotel']):
-                        if response.status == 200:
-                            try:
-                                data = await response.json()
-                                api_responses.append({
-                                    'url': url,
-                                    'data': data
-                                })
-                                logging.info(f"Перехвачен API запрос: {url[:100]}...")
-                            except Exception:
-                                pass
+                    url = response.url.lower()
+                    
+                    # ❌ Игнорируем Sentry и аналитику
+                    if any(x in url for x in ['sentry', 'metrics', 'analytics', 'gtag', 'google', 'facebook']):
+                        return
+                    
+                    # ✅ Реальные API Level.Travel
+                    if any(x in url for x in [
+                        'level.travel/api',
+                        'b2c-api.level.travel',
+                        '/searches',
+                        '/offers',
+                        '/hotels'
+                    ]) and response.status == 200:
+                        
+                        ct = response.headers.get('content-type', '')
+                        if 'json' not in ct:
+                            return
+                        
+                        data = await response.json()
+                        api_responses.append({
+                            'url': response.url,
+                            'data': data
+                        })
+                        
+                        logging.info(f"🔥 API TOUR DATA: {response.url}")
+                        
                 except Exception as e:
-                    pass
+                    logging.debug(f"API parse skip: {e}")
             
             page.on('response', handle_response)
             
             try:
-                # Сначала пробуем через главную страницу с формой
+                # СТРАТЕГИЯ: идём на главную, триггерим JS-поиск, ждём API
                 logging.info(f"Открываю Level.Travel главную страницу")
                 
                 await page.goto(LEVELTRAVEL_BASE_URL, timeout=60000, wait_until='domcontentloaded')
+                await page.wait_for_timeout(2000)
+                
+                # Триггерим JS-событие поиска (работает на Level.Travel)
+                logging.info("Триггерим поиск через JS event")
+                await page.evaluate("""
+                    () => {
+                        const ev = new Event('search', { bubbles: true });
+                        window.dispatchEvent(ev);
+                    }
+                """)
+                
+                # ЖДЁМ API запрос с турами (НЕ ПРОСТО sleep!)
+                logging.info("Ожидаем API ответ с турами...")
+                try:
+                    await page.wait_for_response(
+                        lambda r: (
+                            'level.travel' in r.url.lower() and
+                            any(x in r.url.lower() for x in ['offers', 'searches', 'hotels']) and
+                            r.status == 200
+                        ),
+                        timeout=20000
+                    )
+                    logging.info("✅ Поймали API ответ!")
+                except Exception as e:
+                    logging.warning(f"⚠️ Не дождались API с турами за 20 сек: {e}")
+                
+                # Даём время на обработку ответа
                 await page.wait_for_timeout(3000)
                 
-                # Пытаемся заполнить форму поиска
-                try:
-                    # Ищем поле "Куда"
-                    destination_input = await page.wait_for_selector(
-                        'input[placeholder*="Куда"], input[placeholder*="куда"], input[name*="country"], [data-testid*="destination"], input[type="text"]',
-                        timeout=5000
-                    )
-                    
-                    if destination_input:
-                        # Определяем текст для направления
-                        destination_text = country_code.upper()
-                        if country_code == "in" and resort == "north-goa":
-                            destination_text = "Северный Гоа"
-                        elif country_code == "lk":
-                            destination_text = "Шри-Ланка"
-                        elif country_code == "mv":
-                            destination_text = "Мальдивы"
-                        elif country_code == "vn" and resort == "phu-quoc":
-                            destination_text = "Фукуок"
-                        elif country_code == "vn" and resort == "nha-trang":
-                            destination_text = "Нячанг"
-                        elif country_code == "vn":
-                            destination_text = "Вьетнам"
-                        elif country_code == "tr":
-                            destination_text = "Турция"
-                        elif country_code == "id":
-                            destination_text = "Бали"
-                        
-                        logging.info(f"Вводим направление: {destination_text}")
-                        await destination_input.click()
-                        await destination_input.fill(destination_text)
-                        await page.wait_for_timeout(2000)
-                        
-                        # Пытаемся выбрать из саджестов
-                        try:
-                            # Ищем dropdown с вариантами
-                            suggestions = await page.query_selector_all(
-                                '[class*="suggest"], [class*="dropdown"], [class*="autocomplete"], li, [role="option"]'
-                            )
-                            
-                            for suggestion in suggestions[:5]:  # Проверяем первые 5
-                                text = await suggestion.text_content()
-                                if text and destination_text.lower() in text.lower():
-                                    logging.info(f"Кликаем на вариант: {text[:50]}")
-                                    await suggestion.click()
-                                    await page.wait_for_timeout(1000)
-                                    break
-                        except Exception as e:
-                            logging.warning(f"Не удалось выбрать из саджестов: {e}")
-                    
-                    # Ищем кнопку поиска
-                    search_button = await page.query_selector(
-                        'button[type="submit"], button:has-text("Найти"), button:has-text("найти"), [data-testid*="search"], button:has-text("Поиск")'
-                    )
-                    
-                    if search_button:
-                        logging.info("Нажимаем кнопку поиска")
-                        await search_button.click()
-                        
-                        # ЖДЁМ API ОТВЕТ с турами
-                        logging.info("Ожидаем API ответ с турами...")
-                        await page.wait_for_timeout(10000)  # даём время на загрузку
-                    else:
-                        logging.warning("Кнопка поиска не найдена")
+            except Exception as e:
+                logging.warning(f"Ошибка при работе с главной: {e}")
                 
-                except Exception as e:
-                    logging.warning(f"Не удалось работать через форму: {e}")
+                # Fallback: прямая ссылка (но она скорее всего не сработает)
+                search_params = [
+                    f"country={country_code.upper()}",
+                    f"from={departure_city}",
+                    f"adults={adults}",
+                    f"nights_from={nights_from}",
+                    f"nights_to={nights_to}"
+                ]
+                
+                if dates:
+                    search_params.append(f"date={dates[0]}")
+                
+                search_url = f"{LEVELTRAVEL_BASE_URL}/search?{'&'.join(search_params)}"
+                logging.info(f"Fallback: переход на {search_url}")
+                
+                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
+                
+                # Пробуем триггернуть поиск и там
+                try:
+                    await page.evaluate("""
+                        () => {
+                            const ev = new Event('search', { bubbles: true });
+                            window.dispatchEvent(ev);
+                        }
+                    """)
                     
-                    # Fallback: прямая ссылка
-                    search_params = [
-                        f"country={country_code.upper()}",
-                        f"from={departure_city}",
-                        f"adults={adults}",
-                        f"nights_from={nights_from}",
-                        f"nights_to={nights_to}"
-                    ]
-                    
-                    if dates:
-                        search_params.append(f"date={dates[0]}")
-                    
-                    search_url = f"{LEVELTRAVEL_BASE_URL}/search?{'&'.join(search_params)}"
-                    logging.info(f"Fallback: переход на {search_url}")
-                    
-                    await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
-                    
-                    # Ждём API ответ
-                    await page.wait_for_timeout(10000)
+                    # Ждём API
+                    await page.wait_for_response(
+                        lambda r: (
+                            'level.travel' in r.url.lower() and
+                            any(x in r.url.lower() for x in ['offers', 'searches']) and
+                            r.status == 200
+                        ),
+                        timeout=20000
+                    )
+                except Exception:
+                    logging.warning("Fallback тоже не сработал")
+                
+                await page.wait_for_timeout(3000)
                 
                 # Дополнительно скроллим для триггера lazy load
                 for _ in range(3):
@@ -384,6 +380,12 @@ async def scrape_leveltravel(
                 
                 # Теперь парсим данные из перехваченных API ответов
                 logging.info(f"Перехвачено API запросов: {len(api_responses)}")
+                
+                # ОТЛАДКА: логируем все URL
+                if api_responses:
+                    logging.info("Перехваченные URL:")
+                    for resp in api_responses:
+                        logging.info(f"  - {resp['url']}")
                 
                 if api_responses:
                     # Ищем ответ с турами
