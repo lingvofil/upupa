@@ -6,9 +6,9 @@ from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
 import json
-import httpx
 
-# Импортируем Groq wrapper из config
+# Импортируем Groq wrapper из config (предполагается, что файл config.py существует)
+# Если у вас нет config.py, закомментируйте эту строку и удалите использование groq_ai
 from config import groq_ai, ADMIN_ID
 
 # =============================================================================
@@ -16,7 +16,6 @@ from config import groq_ai, ADMIN_ID
 # =============================================================================
 
 LEVELTRAVEL_WEB_URL = "https://level.travel"
-LEVELTRAVEL_API_URL = "https://api.level.travel"
 
 # Маппинг месяцев
 MONTH_MAPPING = {
@@ -49,7 +48,7 @@ COUNTRY_MAPPING = {
     "индонезия": "ID",
 }
 
-# Эвристики
+# Эвристики для AI анализа
 DESTINATION_INFO = {
     "IN": {"party": True, "best_months": [11, 12, 1, 2, 3], "description": "тусовки и пляжи"},
     "MV": {"party": False, "best_months": [11, 12, 1, 2, 3, 4], "description": "романтика"},
@@ -61,7 +60,7 @@ DESTINATION_INFO = {
 
 
 def generate_date_range(month: Optional[int] = None) -> List[str]:
-    """Генерирует даты"""
+    """Генерирует список дат для поиска (1, 8, 15 числа месяца или ближайшие даты)."""
     dates = []
     today = datetime.now()
     
@@ -83,7 +82,7 @@ def generate_date_range(month: Optional[int] = None) -> List[str]:
 
 
 def parse_tour_command(text: str) -> Dict:
-    """Парсит команду"""
+    """Парсит текст команды от пользователя."""
     text_lower = text.lower().strip()
     if text_lower.startswith("туры"):
         text_lower = text_lower[4:].strip()
@@ -91,29 +90,30 @@ def parse_tour_command(text: str) -> Dict:
     params = {
         "month": None,
         "country_code": None,
+        "country_name": None,
         "adults": 2,
         "nights": 10,
     }
     
-    # Месяц
+    # Поиск месяца
     for word in text_lower.split():
         if word in MONTH_MAPPING:
             params["month"] = MONTH_MAPPING[word]
             break
     
-    # Направление
+    # Поиск направления
     for dest_name, code in COUNTRY_MAPPING.items():
         if dest_name in text_lower:
             params["country_code"] = code
             params["country_name"] = dest_name
             break
     
-    # Взрослые
+    # Поиск количества взрослых (цифра от 1 до 9)
     numbers = re.findall(r'\b([1-9])\b', text_lower)
     if numbers:
         params["adults"] = int(numbers[0])
     
-    # Ночи
+    # Поиск количества ночей
     nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь)', text_lower)
     if nights_match:
         params["nights"] = int(nights_match.group(1))
@@ -128,24 +128,22 @@ async def get_tours_hybrid(
     nights: int
 ) -> List[Dict]:
     """
-    ГИБРИДНЫЙ ПОДХОД:
-    1. Playwright открывает страницу поиска
-    2. Перехватываем request_id из Network
-    3. Парсим DOM после загрузки
+    Открывает страницу поиска, ждет загрузки и парсит данные из DOM, используя точные селекторы.
     """
     tours = []
     
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(headless=True) # Можно поставить False для отладки
             context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                viewport={'width': 1920, 'height': 1080}
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                viewport={'width': 1920, 'height': 1080},
+                locale='ru-RU'
             )
             page = await context.new_page()
             
             try:
-                # URL Level.Travel
+                # Формируем URL
                 search_url = (
                     f"{LEVELTRAVEL_WEB_URL}/search/"
                     f"Moscow-RU-to-Any-{country_code}-"
@@ -157,164 +155,115 @@ async def get_tours_hybrid(
                 
                 logging.info(f"Открываю: {search_url}")
                 
-                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
+                # Переходим на страницу
+                await page.goto(search_url, timeout=90000, wait_until='domcontentloaded')
                 
-                # Ждём загрузки контента
-                logging.info("Ожидаю загрузку туров...")
-                await page.wait_for_timeout(15000)
-                
-                # Скроллим
-                for i in range(10):
-                    await page.evaluate('window.scrollBy(0, 800)')
-                    await page.wait_for_timeout(1000)
-                
-                # ОТЛАДКА: Скриншот и HTML
+                # ВАЖНО: Ждем появления контейнера с карточками отелей
+                logging.info("Ожидаю появления карточек...")
                 try:
-                    screenshot_path = f'/tmp/leveltravel_{country_code}_{date.replace(".", "_")}.png'
-                    await page.screenshot(path=screenshot_path, full_page=True)
-                    logging.info(f"Скриншот: {screenshot_path}")
-                    
-                    html_content = await page.content()
-                    html_path = f'/tmp/leveltravel_{country_code}_{date.replace(".", "_")}.html'
-                    with open(html_path, 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    logging.info(f"HTML сохранён: {html_path}")
-                except Exception as e:
-                    logging.error(f"Ошибка сохранения отладочных файлов: {e}")
-                
-                # Парсим DOM
+                    # Ищем div, класс которого содержит "DesktopHotelCard_container"
+                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=30000)
+                except Exception:
+                    logging.warning("Карточки не появились за 30 секунд. Возможно, долгая загрузка или нет результатов.")
+
+                # Небольшой скролл для подгрузки lazy-load картинок и цен
+                for i in range(5):
+                    await page.mouse.wheel(0, 1000)
+                    await page.wait_for_timeout(1000)
+
+                # Парсинг DOM с обновленными селекторами
                 logging.info("Парсинг DOM...")
                 tours_data = await page.evaluate("""
                     () => {
                         const results = [];
                         
-                        // Ищем все возможные контейнеры
-                        const selectors = [
-                            '[data-testid*="hotel"]',
-                            '[data-testid*="tour"]',
-                            '[class*="HotelCard"]',
-                            '[class*="TourCard"]',
-                            'article',
-                            '[class*="hotel"]',
-                            '[class*="offer"]'
-                        ];
+                        // Ищем карточки по части имени класса (Next.js модули)
+                        const cards = Array.from(document.querySelectorAll('div[class*="DesktopHotelCard_container"]'));
                         
-                        let cards = [];
-                        for (const sel of selectors) {
-                            cards = Array.from(document.querySelectorAll(sel));
-                            if (cards.length > 0) break;
-                        }
-                        
-                        // Fallback: любые div с ценой
-                        if (cards.length === 0) {
-                            const allDivs = Array.from(document.querySelectorAll('div'));
-                            cards = allDivs.filter(div => {
-                                const text = div.textContent || '';
-                                return /\\d{4,7}\\s*₽/.test(text) && div.querySelectorAll('*').length > 5;
-                            });
-                        }
-                        
-                        console.log('Найдено карточек:', cards.length);
+                        console.log('JS: Найдено карточек:', cards.length);
                         
                         cards.forEach((card) => {
                             try {
-                                const text = card.textContent || '';
-                                
-                                // Фильтр: должна быть цена
-                                if (!/\\d{4,7}\\s*₽/.test(text)) return;
-                                
                                 const tour = {
-                                    hotel_name: '',
+                                    hotel_name: 'Без названия',
                                     price: 0,
                                     rating: 0,
-                                    reviews_count: 0,
                                     stars: 0,
-                                    nights: 0,
                                     location: '',
-                                    meal_type: '',
-                                    url: ''
+                                    link: ''
                                 };
                                 
-                                // Название
-                                const nameEl = card.querySelector('h1, h2, h3, h4, [class*="name"], [class*="Name"], [class*="title"], [class*="Title"]');
-                                if (nameEl) {
-                                    tour.hotel_name = nameEl.textContent.trim();
-                                }
-                                
-                                // Цена
-                                const priceMatch = text.match(/(\\d{4,7})\\s*₽/);
-                                if (priceMatch) {
-                                    tour.price = parseInt(priceMatch[1]);
-                                }
-                                
-                                // Рейтинг
-                                const ratingMatch = text.match(/(\\d\\.?\\d?)\\s*\\/\\s*10/);
-                                if (ratingMatch) {
-                                    tour.rating = parseFloat(ratingMatch[1]);
-                                }
-                                
-                                // Отзывы
-                                const reviewMatch = text.match(/(\\d+)\\s*отзыв/i);
-                                if (reviewMatch) {
-                                    tour.reviews_count = parseInt(reviewMatch[1]);
-                                }
-                                
-                                // Звёзды
-                                const starsMatch = text.match(/(\\d)\\s*(?:звезд|★)/i);
-                                if (starsMatch) {
-                                    tour.stars = parseInt(starsMatch[1]);
-                                }
-                                
-                                // Ночи
-                                const nightsMatch = text.match(/(\\d+)\\s*(?:ночей|ночи)/i);
-                                if (nightsMatch) {
-                                    tour.nights = parseInt(nightsMatch[1]);
-                                }
-                                
-                                // Питание
-                                const mealMatch = text.match(/(AI|UAI|FB|HB|BB|всё включено|завтрак)/i);
-                                if (mealMatch) {
-                                    tour.meal_type = mealMatch[1];
-                                }
-                                
-                                // Локация
-                                const locationMatch = text.match(/([А-ЯЁ][а-яё\\s]+),\\s*([А-ЯЁ][а-яё-]+)/);
-                                if (locationMatch) {
-                                    tour.location = `${locationMatch[1].trim()}, ${locationMatch[2]}`;
-                                }
-                                
-                                // URL
-                                const linkEl = card.querySelector('a[href]');
-                                if (linkEl) {
-                                    tour.url = linkEl.getAttribute('href');
-                                    if (tour.url && !tour.url.startsWith('http')) {
-                                        tour.url = 'https://level.travel' + tour.url;
+                                // 1. Название и Ссылка
+                                // Ищем элемент заголовка внутри карточки
+                                const titleEl = card.querySelector('a[class*="HotelCardTitle_title"]');
+                                if (titleEl) {
+                                    tour.hotel_name = titleEl.textContent.trim();
+                                    tour.link = titleEl.getAttribute('href');
+                                    if (tour.link && !tour.link.startsWith('http')) {
+                                        tour.link = 'https://level.travel' + tour.link;
                                     }
                                 }
                                 
-                                // Добавляем если есть название или цена
-                                if ((tour.hotel_name || tour.location) && tour.price >= 10000) {
+                                // 2. Цена
+                                // Ищем блок с ценой. Обычно содержит "от ... ₽"
+                                const priceEl = card.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
+                                if (priceEl) {
+                                    const priceText = priceEl.textContent.replace(/\s/g, '').replace(/&nbsp;/g, '').replace(/\u00a0/g, '');
+                                    const priceMatch = priceText.match(/(\d+)/);
+                                    if (priceMatch) {
+                                        tour.price = parseInt(priceMatch[0]);
+                                    }
+                                }
+                                
+                                // 3. Локация
+                                const locEl = card.querySelector('p[class*="HotelCardLocation_text"]');
+                                if (locEl) {
+                                    tour.location = locEl.textContent.trim();
+                                }
+                                
+                                // 4. Рейтинг
+                                const ratingEl = card.querySelector('span[class*="HotelRating_rating"]');
+                                if (ratingEl) {
+                                    tour.rating = parseFloat(ratingEl.textContent.trim());
+                                }
+                                
+                                // 5. Звезды
+                                // Звезды обычно SVG, считаем их количество внутри контейнера звезд
+                                const starsContainer = card.querySelector('div[class*="HotelStars_container"]');
+                                if (starsContainer) {
+                                    tour.stars = starsContainer.querySelectorAll('svg').length;
+                                }
+                                
+                                // Фильтрация валидных туров
+                                if (tour.price > 1000) {
                                     results.push(tour);
                                 }
+                                
                             } catch (e) {
-                                console.error('Parse error:', e);
+                                console.error('Ошибка парсинга карточки:', e);
                             }
                         });
                         
-                        console.log('Спарсено туров:', results.length);
                         return results;
                     }
                 """)
                 
                 tours = tours_data
-                logging.info(f"Найдено туров: {len(tours)}")
+                logging.info(f"Успешно спарсено: {len(tours)} туров")
                 
+            except Exception as e:
+                logging.error(f"Ошибка внутри браузера: {e}")
+                # Делаем скриншот при ошибке
+                try:
+                    await page.screenshot(path=f"/tmp/error_{country_code}.png")
+                except:
+                    pass
             finally:
                 await context.close()
                 await browser.close()
                 
     except Exception as e:
-        logging.error(f"Ошибка: {e}")
+        logging.error(f"Глобальная ошибка Playwright: {e}")
     
     return tours
 
@@ -325,13 +274,15 @@ async def search_tours_multi_date(
     adults: int,
     nights: int
 ) -> List[Dict]:
-    """Поиск по нескольким датам"""
+    """Последовательный поиск по списку дат."""
     all_tours = []
     seen_hotels = set()
     
-    # Максимум 2 даты для скорости
-    for date in dates[:2]:
-        logging.info(f"Поиск на дату: {date}")
+    # Берем первые 2 даты для оптимизации времени
+    search_dates = dates[:2] if dates else []
+    
+    for date in search_dates:
+        logging.info(f"Запускаю поиск на дату: {date}")
         
         tours = await get_tours_hybrid(
             country_code=country_code,
@@ -340,134 +291,143 @@ async def search_tours_multi_date(
             nights=nights
         )
         
-        # Дедупликация
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower()
+            # Добавляем, если такого отеля еще не было
             if hotel_key and hotel_key not in seen_hotels:
                 seen_hotels.add(hotel_key)
+                # Добавляем дату в объект тура для информации
+                tour['date'] = date 
                 all_tours.append(tour)
         
-        if len(all_tours) >= 30:
+        # Если набрали достаточно туров, можно прервать
+        if len(all_tours) >= 15:
             break
+            
+    # Сортируем по цене
+    all_tours.sort(key=lambda x: x.get('price', 0))
     
-    logging.info(f"Всего уникальных туров: {len(all_tours)}")
+    logging.info(f"Итого уникальных туров найдено: {len(all_tours)}")
     return all_tours
 
 
 async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]:
-    """Анализ через Groq"""
+    """
+    Отправляет список туров в AI (Groq) для ранжирования и добавления комментариев.
+    Если AI недоступен, возвращает топ по рейтингу.
+    """
     if not tours:
         return []
     
-    filtered = [t for t in tours if t.get("price", 0) >= 10000]
+    # Берем топ-20 самых дешевых для анализа
+    candidates = sorted(tours, key=lambda x: x.get("price", 0))[:20]
     
+    # Данные о направлении
     destination_key = params.get("country_code")
     destination_meta = DESTINATION_INFO.get(destination_key, {})
     
-    month_name = ""
-    if params.get("month"):
-        month_name = [k for k, v in MONTH_MAPPING.items() if v == params["month"] and len(k) > 3][0]
-    
-    season_info = ""
+    season_info = "Неизвестный сезон"
     if params.get("month"):
         best_months = destination_meta.get("best_months", [])
-        season_info = "✅ Отличный сезон" if params["month"] in best_months else "⚠️ Не лучший сезон"
+        season_info = "✅ Отличный сезон" if params["month"] in best_months else "⚠️ Межсезонье/Дожди"
     
-    party_info = "✅ Тусовки" if destination_meta.get("party") else "⚠️ Спокойно"
+    prompt = f"""
+    Ты - эксперт по туризму. Выбери 5-7 лучших предложений из списка JSON ниже для направления {params.get('country_name', 'Курорт')}.
     
-    prompt = f"""Топ-10 туров для {params.get('country_name', '').capitalize()}.
+    Контекст: {destination_meta.get('description', '')}. {season_info}.
+    
+    Критерии выбора:
+    1. Хорошее соотношение цена/качество (рейтинг > 7 приветствуется).
+    2. Если отель дешевый, но рейтинг низкий - предупреди.
+    3. Если отель дорогой и крутой - отметь это.
 
-КОНТЕКСТ:
-{destination_meta.get('description')}
-{season_info}
-{party_info}
+    Входящие данные (JSON):
+    {json.dumps(candidates, ensure_ascii=False)}
 
-КРИТЕРИИ:
-1. Сезонность
-2. Рейтинг (0 = нет данных, это норма)
-3. Цена/качество
-4. Звёзды 4-5
-
-ТУРЫ:
-{json.dumps(filtered[:30], ensure_ascii=False, indent=2)}
-
-JSON:
-[
-  {{"index": 0, "score": 8, "reason": "краткая причина"}},
-  ...
-]"""
+    Верни ТОЛЬКО валидный JSON массив объектов с полями:
+    - index: (индекс из исходного массива)
+    - ai_score: (твоя оценка от 1 до 10)
+    - ai_reason: (короткий комментарий 3-5 слов, почему выбрал, на русском, используй эмодзи)
+    """
 
     try:
-        response = await groq_ai.generate_text(prompt, temperature=0.3)
-        json_match = re.search(r'\[[\s\S]*\]', response)
-        
-        if json_match:
-            analysis = json.loads(json_match.group(0))
-            analysis.sort(key=lambda x: x.get("score", 0), reverse=True)
+        # Вызов Groq (предполагается асинхронный метод generate_text)
+        if groq_ai:
+            response = await groq_ai.generate_text(prompt, temperature=0.3)
             
-            result = []
-            for item in analysis[:10]:
-                idx = item.get("index", 0)
-                if 0 <= idx < len(filtered):
-                    tour = filtered[idx].copy()
-                    tour["ai_score"] = item.get("score", 0)
-                    tour["ai_reason"] = item.get("reason", "")
-                    result.append(tour)
-            
-            return result
+            # Попытка извлечь JSON из ответа
+            json_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if json_match:
+                ai_results = json.loads(json_match.group(0))
+                
+                final_tours = []
+                for item in ai_results:
+                    idx = item.get('index')
+                    if idx is not None and 0 <= idx < len(candidates):
+                        tour = candidates[idx].copy()
+                        tour['ai_score'] = item.get('ai_score')
+                        tour['ai_reason'] = item.get('ai_reason')
+                        final_tours.append(tour)
+                
+                # Сортируем по оценке AI
+                final_tours.sort(key=lambda x: x.get('ai_score', 0), reverse=True)
+                return final_tours
+
     except Exception as e:
-        logging.error(f"AI error: {e}")
+        logging.error(f"Ошибка AI анализа: {e}")
     
-    return sorted(filtered, key=lambda x: (x.get("rating", 0), -x.get("price", 999999)), reverse=True)[:10]
+    # Фолбек: возвращаем просто отсортированные по рейтингу/цене
+    return sorted(candidates, key=lambda x: (x.get("rating", 0), -x.get("price", 0)), reverse=True)[:7]
 
 
 def format_tours_message(tours: List[Dict], params: Dict) -> str:
-    """Форматирование"""
+    """Форматирует список туров в читаемое сообщение Telegram."""
     if not tours:
         return "😢 Туры не найдены"
     
-    country_name = params.get("country_name", "направление")
-    header = f"🏖 <b>Топ-{len(tours)}: {country_name.capitalize()}</b>\n"
-    header += f"👥 {params['adults']} взрослых | ✈️ из Москвы\n"
+    country_name = params.get("country_name", "направление").capitalize()
+    
+    header = f"🏖 <b>Топ подборка: {country_name}</b>\n"
+    header += f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n"
+    header += f"📅 Даты вылета: {tours[0].get('date', 'ближайшие')}\n"
     
     lines = [header]
     
     for i, tour in enumerate(tours, 1):
-        lines.append(f"\n<b>{i}. {tour.get('hotel_name', 'Отель')}</b>")
+        # Название и ссылка
+        link = tour.get('link', '#')
+        name = tour.get('hotel_name', 'Отель')
+        lines.append(f"\n<b>{i}. <a href='{link}'>{name}</a></b>")
         
-        details = []
-        if tour.get("price"):
-            details.append(f"💰 {tour['price']:,} ₽")
-        if tour.get("stars"):
-            details.append(f"⭐️ {'★' * tour['stars']}")
-        if tour.get("rating") and tour["rating"] > 0:
-            details.append(f"📊 {tour['rating']}/10")
-        if tour.get("reviews_count"):
-            details.append(f"💬 {tour['reviews_count']}")
-        if tour.get("location"):
-            details.append(f"📍 {tour['location']}")
-        if tour.get("nights"):
-            details.append(f"🌙 {tour['nights']} ночей")
-        if tour.get("meal_type"):
-            details.append(f"🍽 {tour['meal_type']}")
+        # Звезды и рейтинг
+        stars = "⭐️" * tour.get('stars', 0)
+        rating = tour.get('rating', 0)
+        rating_str = f"📊 {rating}" if rating > 0 else ""
         
-        if details:
-            lines.append(" | ".join(details))
-        
-        if tour.get("ai_score"):
-            lines.append(f"🤖 {tour['ai_score']}/10")
-        if tour.get("ai_reason"):
-            lines.append(f"💡 {tour['ai_reason']}")
-        if tour.get("url"):
-            lines.append(f"🔗 <a href='{tour['url']}'>Подробнее</a>")
+        meta = f"{stars} {rating_str}".strip()
+        if meta:
+            lines.append(meta)
+            
+        # Локация
+        if tour.get('location'):
+            lines.append(f"📍 {tour['location']}")
+            
+        # AI мнение (если есть)
+        if tour.get('ai_reason'):
+            lines.append(f"🤖 <i>{tour['ai_reason']}</i>")
+            
+        # Цена
+        price = tour.get('price', 0)
+        lines.append(f"💰 <b>{price:,} ₽</b>")
     
     return "\n".join(lines)
 
 
 async def process_tours_command(message: types.Message):
-    """Главная функция"""
-    if message.from_user.id != ADMIN_ID:
-        await message.reply("🚫 Только для администратора.")
+    """Обработчик команды из бота."""
+    # Проверка на админа (опционально)
+    if ADMIN_ID and message.from_user.id != int(ADMIN_ID):
+        await message.reply("🚫 Доступ запрещен.")
         return
     
     try:
@@ -475,22 +435,21 @@ async def process_tours_command(message: types.Message):
         
         if not params.get("country_code"):
             await message.reply(
-                "❌ Укажите направление:\n\n"
-                "🇮🇳 Гоа | 🇲🇻 Мальдивы | 🇱🇰 Шри-Ланка\n"
-                "🇻🇳 Вьетнам | 🇹🇷 Турция | 🌴 Бали\n\n"
-                "Пример: <code>туры апрель шри-ланка 2</code>",
+                "❌ Не понял направление. Попробуйте:\n"
+                "<i>туры апрель шри-ланка 2</i>",
                 parse_mode="HTML"
             )
             return
         
+        # Генерируем даты
         dates = generate_date_range(params.get("month"))
         
-        search_msg = await message.reply(
-            f"🔍 Ищу туры: {params.get('country_name', '').title()}\n"
-            f"👥 {params['adults']} взрослых\n"
-            f"⏳ Подождите 30-40 сек..."
+        status_msg = await message.reply(
+            f"🔍 Ищу туры: {params.get('country_name', '').title()}...\n"
+            f"Это займет около 30-60 секунд."
         )
         
+        # 1. Поиск
         tours = await search_tours_multi_date(
             country_code=params["country_code"],
             dates=dates,
@@ -499,23 +458,30 @@ async def process_tours_command(message: types.Message):
         )
         
         if not tours:
-            await search_msg.edit_text(
-                "😕 Туры не найдены.\n\n"
-                "Попробуйте:\n"
-                "• Другой месяц\n"
-                "• Другое направление\n"
-                "• Изменить параметры"
-            )
+            await status_msg.edit_text("😕 Ничего не нашел. Попробуйте другие даты или направление.")
             return
         
-        await search_msg.edit_text(f"✅ {len(tours)} туров!\n🤖 Анализирую...")
+        await status_msg.edit_text(f"✅ Нашел {len(tours)} вариантов. Анализирую цены...")
         
+        # 2. Анализ (AI или сортировка)
         best_tours = await analyze_tours_with_groq(tours, params)
-        result = format_tours_message(best_tours, params)
         
-        await search_msg.delete()
-        await message.reply(result, parse_mode="HTML", disable_web_page_preview=True)
+        # 3. Форматирование и отправка
+        text_response = format_tours_message(best_tours, params)
+        
+        await status_msg.delete()
+        await message.reply(text_response, parse_mode="HTML", disable_web_page_preview=True)
         
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await message.reply(f"❌ Ошибка: {e}")
+        logging.error(f"Error in process_tours_command: {e}", exc_info=True)
+        await message.reply("❌ Произошла ошибка при поиске.")
+
+if __name__ == "__main__":
+    # Для локального теста без бота
+    async def test():
+        tours = await get_tours_hybrid("LK", "01.04.2026", 2, 10)
+        print(f"Найдено: {len(tours)}")
+        for t in tours[:3]:
+            print(t)
+            
+    asyncio.run(test())
