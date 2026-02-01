@@ -371,7 +371,7 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
     try:
         if groq_ai:
             # ИСПРАВЛЕНИЕ ЗДЕСЬ: Убрал аргумент temperature, так как ваша версия либы его не поддерживает
-            response = await groq_ai.generate_text(prompt)
+            response = groq_ai.generate_text(prompt)
             
             # Пытаемся найти JSON в ответе (иногда AI пишет текст до или после JSON)
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
