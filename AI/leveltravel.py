@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+from playwright.async_api import async_playwright
 from aiogram import types
 import json
 import httpx
@@ -14,8 +15,8 @@ from config import groq_ai, ADMIN_ID
 # КОНСТАНТЫ
 # =============================================================================
 
-LEVELTRAVEL_BASE_URL = "https://api.level.travel"
 LEVELTRAVEL_WEB_URL = "https://level.travel"
+LEVELTRAVEL_API_URL = "https://api.level.travel"
 
 # Маппинг месяцев
 MONTH_MAPPING = {
@@ -33,33 +34,20 @@ MONTH_MAPPING = {
     "декабрь": 12, "декабря": 12,
 }
 
-# Place IDs для Level.Travel API
-PLACE_ID_MAPPING = {
-    "IN": 10088,      # Индия (Гоа)
-    "MV": 10095,      # Мальдивы
-    "LK": 10109,      # Шри-Ланка
-    "VN": 10176,      # Вьетнам
-    "TR": 10091,      # Турция
-    "ID": 10085,      # Индонезия (Бали)
-}
-
 # Маппинг направлений
 COUNTRY_MAPPING = {
-    "северный гоа": ("IN", None),
-    "гоа": ("IN", None),
-    "мальдивы": ("MV", None),
-    "шри-ланка": ("LK", None),
-    "шриланка": ("LK", None),
-    "вьетнам": ("VN", None),
-    "фукуок": ("VN", None),
-    "нячанг": ("VN", None),
-    "турция": ("TR", None),
-    "бали": ("ID", None),
-    "индонезия": ("ID", None),
+    "северный гоа": "IN",
+    "гоа": "IN",
+    "мальдивы": "MV",
+    "шри-ланка": "LK",
+    "шриланка": "LK",
+    "вьетнам": "VN",
+    "фукуок": "VN",
+    "нячанг": "VN",
+    "турция": "TR",
+    "бали": "ID",
+    "индонезия": "ID",
 }
-
-# API ключ (извлечён из запросов)
-LEVELTRAVEL_API_KEY = "0fe9fb2ff35679322db5429b18a53aee"
 
 # Эвристики
 DESTINATION_INFO = {
@@ -73,25 +61,23 @@ DESTINATION_INFO = {
 
 
 def generate_date_range(month: Optional[int] = None) -> List[str]:
-    """Генерирует даты для поиска"""
+    """Генерирует даты"""
     dates = []
     today = datetime.now()
     
     if month:
         year = today.year if month >= today.month else today.year + 1
-        # Ключевые даты: 1, 8, 15, 22 числа месяца
-        for day in [1, 8, 15, 22]:
+        for day in [1, 8, 15]:
             try:
                 date = datetime(year, month, day)
                 if date >= today:
-                    dates.append(date.strftime("%Y-%m-%d"))
+                    dates.append(date.strftime("%d.%m.%Y"))
             except ValueError:
                 pass
     else:
-        # Ближайшие 30 дней с шагом 7
         for i in range(0, 30, 7):
             date = today + timedelta(days=i)
-            dates.append(date.strftime("%Y-%m-%d"))
+            dates.append(date.strftime("%d.%m.%Y"))
     
     return dates
 
@@ -106,8 +92,7 @@ def parse_tour_command(text: str) -> Dict:
         "month": None,
         "country_code": None,
         "adults": 2,
-        "nights_from": 7,
-        "nights_to": 14,
+        "nights": 10,
     }
     
     # Месяц
@@ -117,7 +102,7 @@ def parse_tour_command(text: str) -> Dict:
             break
     
     # Направление
-    for dest_name, (code, _) in COUNTRY_MAPPING.items():
+    for dest_name, code in COUNTRY_MAPPING.items():
         if dest_name in text_lower:
             params["country_code"] = code
             params["country_name"] = dest_name
@@ -131,195 +116,191 @@ def parse_tour_command(text: str) -> Dict:
     # Ночи
     nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь)', text_lower)
     if nights_match:
-        nights = int(nights_match.group(1))
-        params["nights_from"] = max(nights - 2, 5)
-        params["nights_to"] = nights + 2
+        params["nights"] = int(nights_match.group(1))
     
     return params
 
 
-async def get_tours_from_leveltravel_api(
-    place_id: int,
+async def get_tours_hybrid(
+    country_code: str,
     date: str,
     adults: int,
-    nights_from: int,
-    nights_to: int,
-    departure_id: int = 213  # Москва
+    nights: int
 ) -> List[Dict]:
     """
-    Получает туры через API Level.Travel
-    
-    Трёхступенчатый процесс:
-    1. Создаём поиск (получаем request_id)
-    2. Ждём готовности (polling status)
-    3. Забираем результаты (get_grouped_hotels)
+    ГИБРИДНЫЙ ПОДХОД:
+    1. Playwright открывает страницу поиска
+    2. Перехватываем request_id из Network
+    3. Парсим DOM после загрузки
     """
     tours = []
     
     try:
-        # КРИТИЧНО: Headers для обхода защиты
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://level.travel/',
-            'Origin': 'https://level.travel',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-site',
-        }
-        
-        async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
-            # Шаг 1: Создаём request_id через search_calendar
-            logging.info(f"Создаём поиск: place_id={place_id}, date={date}, adults={adults}")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = await context.new_page()
             
-            search_params = {
-                "start_date": date,
-                "place_id": place_id,
-                "departure_id": departure_id,
-                "adults": adults,
-                "search_type": "package",
-                "key": LEVELTRAVEL_API_KEY,
-                "api_version": "3.13",
-                "js": "true"
-            }
-            
-            # Генерируем sign (простая версия - может потребоваться MD5)
-            import hashlib
-            params_str = "&".join(f"{k}={v}" for k, v in sorted(search_params.items()))
-            search_params["sign"] = hashlib.md5(params_str.encode()).hexdigest()
-            
-            # Запрос на получение request_id
-            search_url = f"{LEVELTRAVEL_BASE_URL}/references/search_calendar_duration"
-            response = await client.get(search_url, params=search_params)
-            
-            logging.info(f"Search calendar response: {response.status_code}")
-            
-            if response.status_code != 200:
-                logging.error(f"API error: {response.text[:500]}")
-                return tours
-            
-            # Получаем request_id из куки или ответа
-            # Level.Travel часто отдаёт request_id не в JSON, а как часть процесса
-            # Попробуем альтернативный подход - прямой запрос к enqueue
-            
-            # Шаг 1 (альтернатива): Enqueue
-            enqueue_params = {
-                "start_date": date,
-                "to_country": place_id,
-                "from_city": departure_id,
-                "adults": adults,
-                "nights_min": nights_from,
-                "nights_max": nights_to,
-                "key": LEVELTRAVEL_API_KEY,
-                "api_version": "3.13"
-            }
-            
-            enqueue_url = f"{LEVELTRAVEL_BASE_URL}/search/enqueue"
-            enqueue_response = await client.get(enqueue_url, params=enqueue_params)
-            
-            logging.info(f"Enqueue response: {enqueue_response.status_code}")
-            
-            if enqueue_response.status_code == 200:
-                enqueue_data = enqueue_response.json()
-                request_id = enqueue_data.get("request_id")
+            try:
+                # URL Level.Travel
+                search_url = (
+                    f"{LEVELTRAVEL_WEB_URL}/search/"
+                    f"Moscow-RU-to-Any-{country_code}-"
+                    f"departure-{date}-"
+                    f"for-{nights}-nights-"
+                    f"{adults}-adults-0-kids-"
+                    f"1..5-stars-package-type"
+                )
                 
-                if not request_id:
-                    logging.warning("No request_id in enqueue response")
-                    return tours
+                logging.info(f"Открываю: {search_url}")
                 
-                logging.info(f"Got request_id: {request_id}")
+                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
                 
-                # Шаг 2: Polling - ждём готовности
-                max_attempts = 20
-                for attempt in range(max_attempts):
-                    await asyncio.sleep(2)
-                    
-                    status_params = {
-                        "request_id": request_id,
-                        "show_size": "true",
-                        "key": LEVELTRAVEL_API_KEY,
-                        "api_version": "3.13"
-                    }
-                    
-                    params_str = "&".join(f"{k}={v}" for k, v in sorted(status_params.items()))
-                    status_params["sign"] = hashlib.md5(params_str.encode()).hexdigest()
-                    
-                    status_url = f"{LEVELTRAVEL_BASE_URL}/search/status"
-                    status_response = await client.get(status_url, params=status_params)
-                    
-                    if status_response.status_code == 200:
-                        status_data = status_response.json()
-                        status = status_data.get("status")
+                # Ждём загрузки контента
+                logging.info("Ожидаю загрузку туров...")
+                await page.wait_for_timeout(15000)
+                
+                # Скроллим
+                for i in range(10):
+                    await page.evaluate('window.scrollBy(0, 800)')
+                    await page.wait_for_timeout(1000)
+                
+                # Парсим DOM
+                logging.info("Парсинг DOM...")
+                tours_data = await page.evaluate("""
+                    () => {
+                        const results = [];
                         
-                        logging.info(f"Status check {attempt + 1}/{max_attempts}: {status}")
+                        // Ищем все возможные контейнеры
+                        const selectors = [
+                            '[data-testid*="hotel"]',
+                            '[data-testid*="tour"]',
+                            '[class*="HotelCard"]',
+                            '[class*="TourCard"]',
+                            'article',
+                            '[class*="hotel"]',
+                            '[class*="offer"]'
+                        ];
                         
-                        if status == "finished" or status_data.get("size", 0) > 0:
-                            break
-                    
-                    if attempt == max_attempts - 1:
-                        logging.warning("Max polling attempts reached")
-                        return tours
-                
-                # Шаг 3: Получаем отели
-                hotels_params = {
-                    "request_id": request_id,
-                    "sort_by": "relevance",
-                    "page_limit": 100,
-                    "page_number": 0,
-                    "key": LEVELTRAVEL_API_KEY,
-                    "api_version": "3.13"
-                }
-                
-                params_str = "&".join(f"{k}={v}" for k, v in sorted(hotels_params.items()))
-                hotels_params["sign"] = hashlib.md5(params_str.encode()).hexdigest()
-                
-                hotels_url = f"{LEVELTRAVEL_BASE_URL}/search/get_grouped_hotels"
-                hotels_response = await client.get(hotels_url, params=hotels_params)
-                
-                logging.info(f"Hotels response: {hotels_response.status_code}")
-                
-                if hotels_response.status_code == 200:
-                    hotels_data = hotels_response.json()
-                    
-                    # Парсим структуру
-                    hotels_list = hotels_data.get("hotels", [])
-                    
-                    if not hotels_list:
-                        # Пробуем другие ключи
-                        hotels_list = hotels_data.get("offers", [])
-                    
-                    if not hotels_list:
-                        hotels_list = hotels_data.get("results", [])
-                    
-                    logging.info(f"Найдено отелей в API: {len(hotels_list)}")
-                    
-                    for hotel in hotels_list:
-                        try:
-                            tour = {
-                                "hotel_name": hotel.get("hotel_name") or hotel.get("name", ""),
-                                "price": int(hotel.get("price", 0) or hotel.get("min_price", 0)),
-                                "rating": float(hotel.get("rating", 0)),
-                                "reviews_count": int(hotel.get("reviews_count", 0)),
-                                "stars": int(hotel.get("stars", 0)),
-                                "location": hotel.get("location") or hotel.get("resort", ""),
-                                "nights": int(hotel.get("nights", 0)),
-                                "meal_type": hotel.get("meal_type") or hotel.get("meal", ""),
-                                "url": f"{LEVELTRAVEL_WEB_URL}/hotel/{hotel.get('hotel_id', '')}" if hotel.get("hotel_id") else "",
+                        let cards = [];
+                        for (const sel of selectors) {
+                            cards = Array.from(document.querySelectorAll(sel));
+                            if (cards.length > 0) break;
+                        }
+                        
+                        // Fallback: любые div с ценой
+                        if (cards.length === 0) {
+                            const allDivs = Array.from(document.querySelectorAll('div'));
+                            cards = allDivs.filter(div => {
+                                const text = div.textContent || '';
+                                return /\\d{4,7}\\s*₽/.test(text) && div.querySelectorAll('*').length > 5;
+                            });
+                        }
+                        
+                        console.log('Найдено карточек:', cards.length);
+                        
+                        cards.forEach((card) => {
+                            try {
+                                const text = card.textContent || '';
+                                
+                                // Фильтр: должна быть цена
+                                if (!/\\d{4,7}\\s*₽/.test(text)) return;
+                                
+                                const tour = {
+                                    hotel_name: '',
+                                    price: 0,
+                                    rating: 0,
+                                    reviews_count: 0,
+                                    stars: 0,
+                                    nights: 0,
+                                    location: '',
+                                    meal_type: '',
+                                    url: ''
+                                };
+                                
+                                // Название
+                                const nameEl = card.querySelector('h1, h2, h3, h4, [class*="name"], [class*="Name"], [class*="title"], [class*="Title"]');
+                                if (nameEl) {
+                                    tour.hotel_name = nameEl.textContent.trim();
+                                }
+                                
+                                // Цена
+                                const priceMatch = text.match(/(\\d{4,7})\\s*₽/);
+                                if (priceMatch) {
+                                    tour.price = parseInt(priceMatch[1]);
+                                }
+                                
+                                // Рейтинг
+                                const ratingMatch = text.match(/(\\d\\.?\\d?)\\s*\\/\\s*10/);
+                                if (ratingMatch) {
+                                    tour.rating = parseFloat(ratingMatch[1]);
+                                }
+                                
+                                // Отзывы
+                                const reviewMatch = text.match(/(\\d+)\\s*отзыв/i);
+                                if (reviewMatch) {
+                                    tour.reviews_count = parseInt(reviewMatch[1]);
+                                }
+                                
+                                // Звёзды
+                                const starsMatch = text.match(/(\\d)\\s*(?:звезд|★)/i);
+                                if (starsMatch) {
+                                    tour.stars = parseInt(starsMatch[1]);
+                                }
+                                
+                                // Ночи
+                                const nightsMatch = text.match(/(\\d+)\\s*(?:ночей|ночи)/i);
+                                if (nightsMatch) {
+                                    tour.nights = parseInt(nightsMatch[1]);
+                                }
+                                
+                                // Питание
+                                const mealMatch = text.match(/(AI|UAI|FB|HB|BB|всё включено|завтрак)/i);
+                                if (mealMatch) {
+                                    tour.meal_type = mealMatch[1];
+                                }
+                                
+                                // Локация
+                                const locationMatch = text.match(/([А-ЯЁ][а-яё\\s]+),\\s*([А-ЯЁ][а-яё-]+)/);
+                                if (locationMatch) {
+                                    tour.location = `${locationMatch[1].trim()}, ${locationMatch[2]}`;
+                                }
+                                
+                                // URL
+                                const linkEl = card.querySelector('a[href]');
+                                if (linkEl) {
+                                    tour.url = linkEl.getAttribute('href');
+                                    if (tour.url && !tour.url.startsWith('http')) {
+                                        tour.url = 'https://level.travel' + tour.url;
+                                    }
+                                }
+                                
+                                // Добавляем если есть название или цена
+                                if ((tour.hotel_name || tour.location) && tour.price >= 10000) {
+                                    results.push(tour);
+                                }
+                            } catch (e) {
+                                console.error('Parse error:', e);
                             }
-                            
-                            if tour["price"] > 10000:
-                                tours.append(tour)
-                        except Exception as e:
-                            logging.warning(f"Error parsing hotel: {e}")
-                            continue
-                else:
-                    logging.error(f"Hotels API error: {hotels_response.text[:500]}")
-            else:
-                logging.error(f"Enqueue error: {enqueue_response.text[:500]}")
+                        });
+                        
+                        console.log('Спарсено туров:', results.length);
+                        return results;
+                    }
+                """)
+                
+                tours = tours_data
+                logging.info(f"Найдено туров: {len(tours)}")
+                
+            finally:
+                await context.close()
+                await browser.close()
                 
     except Exception as e:
-        logging.error(f"API request failed: {e}")
+        logging.error(f"Ошибка: {e}")
     
     return tours
 
@@ -328,32 +309,24 @@ async def search_tours_multi_date(
     country_code: str,
     dates: List[str],
     adults: int,
-    nights_from: int,
-    nights_to: int
+    nights: int
 ) -> List[Dict]:
-    """Поиск туров по нескольким датам с дедупликацией"""
-    
-    place_id = PLACE_ID_MAPPING.get(country_code)
-    if not place_id:
-        logging.error(f"Unknown country code: {country_code}")
-        return []
-    
+    """Поиск по нескольким датам"""
     all_tours = []
     seen_hotels = set()
     
-    # Берём максимум 3 даты для ускорения
-    for date in dates[:3]:
+    # Максимум 2 даты для скорости
+    for date in dates[:2]:
         logging.info(f"Поиск на дату: {date}")
         
-        tours = await get_tours_from_leveltravel_api(
-            place_id=place_id,
+        tours = await get_tours_hybrid(
+            country_code=country_code,
             date=date,
             adults=adults,
-            nights_from=nights_from,
-            nights_to=nights_to
+            nights=nights
         )
         
-        # Дедупликация по названию отеля
+        # Дедупликация
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower()
             if hotel_key and hotel_key not in seen_hotels:
@@ -372,7 +345,6 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
     if not tours:
         return []
     
-    # Предфильтрация
     filtered = [t for t in tours if t.get("price", 0) >= 10000]
     
     destination_key = params.get("country_code")
@@ -384,13 +356,12 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
     
     season_info = ""
     if params.get("month"):
-        month_num = params["month"]
         best_months = destination_meta.get("best_months", [])
-        season_info = "✅ ОТЛИЧНЫЙ сезон" if month_num in best_months else "⚠️ Не лучший сезон"
+        season_info = "✅ Отличный сезон" if params["month"] in best_months else "⚠️ Не лучший сезон"
     
-    party_info = "✅ Тусовочное" if destination_meta.get("party") else "⚠️ Спокойное"
+    party_info = "✅ Тусовки" if destination_meta.get("party") else "⚠️ Спокойно"
     
-    prompt = f"""Выбери ТОП-10 туров для {params.get('country_name', '').capitalize()}.
+    prompt = f"""Топ-10 туров для {params.get('country_name', '').capitalize()}.
 
 КОНТЕКСТ:
 {destination_meta.get('description')}
@@ -399,16 +370,16 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
 
 КРИТЕРИИ:
 1. Сезонность
-2. Рейтинг (у многих 0 - это норма)
+2. Рейтинг (0 = нет данных, это норма)
 3. Цена/качество
 4. Звёзды 4-5
 
 ТУРЫ:
 {json.dumps(filtered[:30], ensure_ascii=False, indent=2)}
 
-ОТВЕТ (JSON):
+JSON:
 [
-  {{"index": 0, "score": 8, "reason": "1-2 предложения"}},
+  {{"index": 0, "score": 8, "reason": "краткая причина"}},
   ...
 ]"""
 
@@ -431,9 +402,8 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
             
             return result
     except Exception as e:
-        logging.error(f"AI analysis error: {e}")
+        logging.error(f"AI error: {e}")
     
-    # Fallback
     return sorted(filtered, key=lambda x: (x.get("rating", 0), -x.get("price", 999999)), reverse=True)[:10]
 
 
@@ -443,7 +413,6 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
         return "😢 Туры не найдены"
     
     country_name = params.get("country_name", "направление")
-    
     header = f"🏖 <b>Топ-{len(tours)}: {country_name.capitalize()}</b>\n"
     header += f"👥 {params['adults']} взрослых | ✈️ из Москвы\n"
     
@@ -505,28 +474,27 @@ async def process_tours_command(message: types.Message):
         search_msg = await message.reply(
             f"🔍 Ищу туры: {params.get('country_name', '').title()}\n"
             f"👥 {params['adults']} взрослых\n"
-            f"Подождите 20-30 сек ⏳"
+            f"⏳ Подождите 30-40 сек..."
         )
         
         tours = await search_tours_multi_date(
             country_code=params["country_code"],
             dates=dates,
             adults=params["adults"],
-            nights_from=params["nights_from"],
-            nights_to=params["nights_to"]
+            nights=params["nights"]
         )
         
         if not tours:
             await search_msg.edit_text(
-                "😕 Туры не найдены через API.\n\n"
-                "Возможные причины:\n"
-                "• API изменился\n"
-                "• Нет туров на выбранные даты\n"
-                "• Требуется обновление place_id"
+                "😕 Туры не найдены.\n\n"
+                "Попробуйте:\n"
+                "• Другой месяц\n"
+                "• Другое направление\n"
+                "• Изменить параметры"
             )
             return
         
-        await search_msg.edit_text(f"✅ Найдено {len(tours)} туров!\n🤖 Анализирую...")
+        await search_msg.edit_text(f"✅ {len(tours)} туров!\n🤖 Анализирую...")
         
         best_tours = await analyze_tours_with_groq(tours, params)
         result = format_tours_message(best_tours, params)
