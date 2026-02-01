@@ -7,8 +7,8 @@ from playwright.async_api import async_playwright
 from aiogram import types
 import json
 
-# Импортируем Groq wrapper из config (предполагается, что файл config.py существует)
-# Если у вас нет config.py, закомментируйте эту строку и удалите использование groq_ai
+# Импортируем Groq wrapper из config
+# Убедитесь, что в config.py есть переменные groq_ai и ADMIN_ID
 from config import groq_ai, ADMIN_ID
 
 # =============================================================================
@@ -46,27 +46,40 @@ COUNTRY_MAPPING = {
     "турция": "TR",
     "бали": "ID",
     "индонезия": "ID",
+    "таиланд": "TH",
+    "пхукет": "TH",
+    "паттайя": "TH",
+    "оаэ": "AE",
+    "дубай": "AE",
+    "египет": "EG",
+    "хургада": "EG",
+    "шарм": "EG",
 }
 
 # Эвристики для AI анализа
 DESTINATION_INFO = {
-    "IN": {"party": True, "best_months": [11, 12, 1, 2, 3], "description": "тусовки и пляжи"},
-    "MV": {"party": False, "best_months": [11, 12, 1, 2, 3, 4], "description": "романтика"},
-    "LK": {"party": False, "best_months": [12, 1, 2, 3, 4], "description": "пляжи и культура"},
-    "VN": {"party": True, "best_months": [11, 12, 1, 2, 3, 4], "description": "разнообразие"},
-    "TR": {"party": True, "best_months": [5, 6, 7, 8, 9, 10], "description": "all inclusive"},
-    "ID": {"party": True, "best_months": [4, 5, 6, 7, 8, 9, 10], "description": "серфинг"},
+    "IN": {"party": True, "best_months": [11, 12, 1, 2, 3], "description": "тусовки, свобода, пляжи"},
+    "MV": {"party": False, "best_months": [11, 12, 1, 2, 3, 4], "description": "романтика, релакс, океан"},
+    "LK": {"party": False, "best_months": [12, 1, 2, 3, 4], "description": "природа, серфинг, культура"},
+    "VN": {"party": True, "best_months": [11, 12, 1, 2, 3, 4], "description": "еда, экскурсии, море"},
+    "TR": {"party": True, "best_months": [5, 6, 7, 8, 9, 10], "description": "all inclusive, сервис"},
+    "ID": {"party": True, "best_months": [4, 5, 6, 7, 8, 9, 10], "description": "джунгли, серфинг, атмосфера"},
+    "TH": {"party": True, "best_months": [11, 12, 1, 2, 3, 4], "description": "ночная жизнь, острова, фрукты"},
+    "AE": {"party": False, "best_months": [10, 11, 12, 3, 4], "description": "небоскребы, шопинг, пляжи"},
+    "EG": {"party": False, "best_months": [4, 5, 9, 10, 11], "description": "дайвинг, пустыня, история"},
 }
 
 
 def generate_date_range(month: Optional[int] = None) -> List[str]:
-    """Генерирует список дат для поиска (1, 8, 15 числа месяца или ближайшие даты)."""
+    """Генерирует расширенный список дат для поиска."""
     dates = []
     today = datetime.now()
     
     if month:
+        # Если месяц меньше текущего, значит это следующий год
         year = today.year if month >= today.month else today.year + 1
-        for day in [1, 8, 15]:
+        # Проверяем больше дат для лучшего покрытия
+        for day in [1, 5, 10, 15, 20, 25]:
             try:
                 date = datetime(year, month, day)
                 if date >= today:
@@ -74,7 +87,8 @@ def generate_date_range(month: Optional[int] = None) -> List[str]:
             except ValueError:
                 pass
     else:
-        for i in range(0, 30, 7):
+        # Если месяц не указан, смотрим ближайшие 30 дней с шагом в 5 дней
+        for i in range(1, 30, 5):
             date = today + timedelta(days=i)
             dates.append(date.strftime("%d.%m.%Y"))
     
@@ -108,13 +122,15 @@ def parse_tour_command(text: str) -> Dict:
             params["country_name"] = dest_name
             break
     
-    # Поиск количества взрослых (цифра от 1 до 9)
+    # Поиск количества взрослых (цифра от 1 до 9, не путать с ночами)
+    # Ищем одиночную цифру, которая скорее всего кол-во людей
     numbers = re.findall(r'\b([1-9])\b', text_lower)
     if numbers:
+        # Если цифра одна, считаем что это взрослые. Если есть "ночей", то это ночи.
         params["adults"] = int(numbers[0])
     
-    # Поиск количества ночей
-    nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь)', text_lower)
+    # Поиск количества ночей (явно указанных)
+    nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь|н\b)', text_lower)
     if nights_match:
         params["nights"] = int(nights_match.group(1))
     
@@ -128,17 +144,20 @@ async def get_tours_hybrid(
     nights: int
 ) -> List[Dict]:
     """
-    Открывает страницу поиска, ждет загрузки и парсит данные из DOM, используя точные селекторы.
+    Открывает страницу поиска, ждет загрузки и парсит данные из DOM.
+    Использует проверенные селекторы для Next.js структуры.
     """
     tours = []
     
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True) # Можно поставить False для отладки
+            browser = await p.chromium.launch(headless=True)
+            # Добавляем аргументы для скрытия автоматизации и устанавливаем русский язык
             context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                 viewport={'width': 1920, 'height': 1080},
-                locale='ru-RU'
+                locale='ru-RU',
+                timezone_id='Europe/Moscow'
             )
             page = await context.new_page()
             
@@ -159,25 +178,26 @@ async def get_tours_hybrid(
                 await page.goto(search_url, timeout=90000, wait_until='domcontentloaded')
                 
                 # ВАЖНО: Ждем появления контейнера с карточками отелей
+                # Селектор основан на части класса, так как хвосты хэшей меняются
                 logging.info("Ожидаю появления карточек...")
                 try:
-                    # Ищем div, класс которого содержит "DesktopHotelCard_container"
-                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=30000)
+                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=40000)
                 except Exception:
-                    logging.warning("Карточки не появились за 30 секунд. Возможно, долгая загрузка или нет результатов.")
+                    logging.warning("Карточки не появились за 40 секунд. Возможно, долгая загрузка или нет результатов.")
 
-                # Небольшой скролл для подгрузки lazy-load картинок и цен
-                for i in range(5):
-                    await page.mouse.wheel(0, 1000)
-                    await page.wait_for_timeout(1000)
+                # Скролл для подгрузки (Level.Travel использует lazy loading)
+                # Скроллим несколько экранов
+                for _ in range(7):
+                    await page.mouse.wheel(0, 1500)
+                    await page.wait_for_timeout(1500)
 
-                # Парсинг DOM с обновленными селекторами
+                # Парсинг DOM
                 logging.info("Парсинг DOM...")
                 tours_data = await page.evaluate("""
                     () => {
                         const results = [];
                         
-                        // Ищем карточки по части имени класса (Next.js модули)
+                        // Ищем все карточки отелей на странице
                         const cards = Array.from(document.querySelectorAll('div[class*="DesktopHotelCard_container"]'));
                         
                         console.log('JS: Найдено карточек:', cards.length);
@@ -194,7 +214,6 @@ async def get_tours_hybrid(
                                 };
                                 
                                 // 1. Название и Ссылка
-                                // Ищем элемент заголовка внутри карточки
                                 const titleEl = card.querySelector('a[class*="HotelCardTitle_title"]');
                                 if (titleEl) {
                                     tour.hotel_name = titleEl.textContent.trim();
@@ -205,11 +224,11 @@ async def get_tours_hybrid(
                                 }
                                 
                                 // 2. Цена
-                                // Ищем блок с ценой. Обычно содержит "от ... ₽"
                                 const priceEl = card.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
                                 if (priceEl) {
-                                    const priceText = priceEl.textContent.replace(/\s/g, '').replace(/&nbsp;/g, '').replace(/\u00a0/g, '');
-                                    const priceMatch = priceText.match(/(\d+)/);
+                                    // Удаляем пробелы, символы рубля и nbsp
+                                    const priceText = priceEl.textContent.replace(/\\s/g, '').replace(/&nbsp;/g, '').replace(/\\u00a0/g, '');
+                                    const priceMatch = priceText.match(/(\\d+)/);
                                     if (priceMatch) {
                                         tour.price = parseInt(priceMatch[0]);
                                     }
@@ -221,26 +240,25 @@ async def get_tours_hybrid(
                                     tour.location = locEl.textContent.trim();
                                 }
                                 
-                                // 4. Рейтинг
+                                // 4. Рейтинг (может отсутствовать у новых отелей)
                                 const ratingEl = card.querySelector('span[class*="HotelRating_rating"]');
                                 if (ratingEl) {
                                     tour.rating = parseFloat(ratingEl.textContent.trim());
                                 }
                                 
-                                // 5. Звезды
-                                // Звезды обычно SVG, считаем их количество внутри контейнера звезд
+                                // 5. Звезды (считаем количество иконок звезд)
                                 const starsContainer = card.querySelector('div[class*="HotelStars_container"]');
                                 if (starsContainer) {
                                     tour.stars = starsContainer.querySelectorAll('svg').length;
                                 }
                                 
-                                // Фильтрация валидных туров
-                                if (tour.price > 1000) {
+                                // Фильтрация валидных туров (цена > 1000 чтобы отсеять мусор)
+                                if (tour.price > 1000 && tour.hotel_name !== 'Без названия') {
                                     results.push(tour);
                                 }
                                 
                             } catch (e) {
-                                console.error('Ошибка парсинга карточки:', e);
+                                console.error('Ошибка парсинга отдельной карточки:', e);
                             }
                         });
                         
@@ -253,11 +271,8 @@ async def get_tours_hybrid(
                 
             except Exception as e:
                 logging.error(f"Ошибка внутри браузера: {e}")
-                # Делаем скриншот при ошибке
-                try:
-                    await page.screenshot(path=f"/tmp/error_{country_code}.png")
-                except:
-                    pass
+                # Для отладки можно раскомментировать сохранение скриншота при ошибке
+                # await page.screenshot(path=f"/tmp/error_{date}.png")
             finally:
                 await context.close()
                 await browser.close()
@@ -278,9 +293,13 @@ async def search_tours_multi_date(
     all_tours = []
     seen_hotels = set()
     
-    # Берем первые 2 даты для оптимизации времени
-    search_dates = dates[:2] if dates else []
+    # Берем первые 2-3 даты, чтобы не заставлять пользователя ждать вечность
+    search_dates = dates[:3] if dates else []
     
+    if not search_dates:
+        logging.warning("Нет дат для поиска")
+        return []
+
     for date in search_dates:
         logging.info(f"Запускаю поиск на дату: {date}")
         
@@ -293,18 +312,18 @@ async def search_tours_multi_date(
         
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower()
-            # Добавляем, если такого отеля еще не было
+            # Простая дедупликация по названию отеля
             if hotel_key and hotel_key not in seen_hotels:
                 seen_hotels.add(hotel_key)
-                # Добавляем дату в объект тура для информации
-                tour['date'] = date 
+                tour['date'] = date  # Сохраняем дату вылета для информации
                 all_tours.append(tour)
         
-        # Если набрали достаточно туров, можно прервать
-        if len(all_tours) >= 15:
+        # Если уже набрали достаточно туров (например 30), можно прервать поиск
+        if len(all_tours) >= 30:
+            logging.info("Набрано достаточно туров, прерываю поиск по датам.")
             break
             
-    # Сортируем по цене
+    # Сортируем все найденные туры по цене (от дешевых к дорогим)
     all_tours.sort(key=lambda x: x.get('price', 0))
     
     logging.info(f"Итого уникальных туров найдено: {len(all_tours)}")
@@ -314,15 +333,13 @@ async def search_tours_multi_date(
 async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]:
     """
     Отправляет список туров в AI (Groq) для ранжирования и добавления комментариев.
-    Если AI недоступен, возвращает топ по рейтингу.
     """
     if not tours:
         return []
     
-    # Берем топ-20 самых дешевых для анализа
-    candidates = sorted(tours, key=lambda x: x.get("price", 0))[:20]
+    # Берем топ-25 самых дешевых для анализа, чтобы не превысить лимиты токенов
+    candidates = sorted(tours, key=lambda x: x.get("price", 0))[:25]
     
-    # Данные о направлении
     destination_key = params.get("country_code")
     destination_meta = DESTINATION_INFO.get(destination_key, {})
     
@@ -332,30 +349,31 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
         season_info = "✅ Отличный сезон" if params["month"] in best_months else "⚠️ Межсезонье/Дожди"
     
     prompt = f"""
-    Ты - эксперт по туризму. Выбери 5-7 лучших предложений из списка JSON ниже для направления {params.get('country_name', 'Курорт')}.
+    Ты - профессиональный турагент. Выбери ТОП-7 лучших предложений из списка JSON ниже для направления {params.get('country_name', 'Курорт')}.
     
-    Контекст: {destination_meta.get('description', '')}. {season_info}.
+    Контекст направления: {destination_meta.get('description', '')}. 
+    Сезонность: {season_info}.
     
-    Критерии выбора:
-    1. Хорошее соотношение цена/качество (рейтинг > 7 приветствуется).
-    2. Если отель дешевый, но рейтинг низкий - предупреди.
-    3. Если отель дорогой и крутой - отметь это.
+    Критерии выбора (важно!):
+    1. Не выбирай только самые дешевые, если у них ужасный рейтинг (меньше 5).
+    2. Приоритет отелям с хорошим соотношением цена/рейтинг.
+    3. Разнообразь выбор: включи и бюджетный, и комфортный вариант.
 
     Входящие данные (JSON):
     {json.dumps(candidates, ensure_ascii=False)}
 
-    Верни ТОЛЬКО валидный JSON массив объектов с полями:
-    - index: (индекс из исходного массива)
-    - ai_score: (твоя оценка от 1 до 10)
-    - ai_reason: (короткий комментарий 3-5 слов, почему выбрал, на русском, используй эмодзи)
+    Твоя задача вернуть ТОЛЬКО валидный JSON массив объектов с полями:
+    - index: (целое число, индекс из исходного массива candidates)
+    - ai_score: (число от 1 до 10, твоя оценка привлекательности)
+    - ai_reason: (строка, короткий комментарий на русском 3-6 слов, почему выбрал, используй эмодзи)
     """
 
     try:
-        # Вызов Groq (предполагается асинхронный метод generate_text)
         if groq_ai:
-            response = await groq_ai.generate_text(prompt, temperature=0.3)
+            # ИСПРАВЛЕНИЕ ЗДЕСЬ: Убрал аргумент temperature, так как ваша версия либы его не поддерживает
+            response = await groq_ai.generate_text(prompt)
             
-            # Попытка извлечь JSON из ответа
+            # Пытаемся найти JSON в ответе (иногда AI пишет текст до или после JSON)
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             if json_match:
                 ai_results = json.loads(json_match.group(0))
@@ -363,21 +381,28 @@ async def analyze_tours_with_groq(tours: List[Dict], params: Dict) -> List[Dict]
                 final_tours = []
                 for item in ai_results:
                     idx = item.get('index')
-                    if idx is not None and 0 <= idx < len(candidates):
+                    if idx is not None and isinstance(idx, int) and 0 <= idx < len(candidates):
                         tour = candidates[idx].copy()
-                        tour['ai_score'] = item.get('ai_score')
-                        tour['ai_reason'] = item.get('ai_reason')
+                        tour['ai_score'] = item.get('ai_score', 0)
+                        tour['ai_reason'] = item.get('ai_reason', 'Выбор AI')
                         final_tours.append(tour)
                 
-                # Сортируем по оценке AI
+                # Сортируем итоговую подборку по оценке AI
                 final_tours.sort(key=lambda x: x.get('ai_score', 0), reverse=True)
-                return final_tours
+                
+                if final_tours:
+                    return final_tours
 
     except Exception as e:
         logging.error(f"Ошибка AI анализа: {e}")
     
-    # Фолбек: возвращаем просто отсортированные по рейтингу/цене
-    return sorted(candidates, key=lambda x: (x.get("rating", 0), -x.get("price", 0)), reverse=True)[:7]
+    # Фолбек (если AI сломался или вернул пустоту):
+    # Возвращаем просто отсортированные по рейтингу, но не слишком дорогие
+    logging.info("Использую фолбек сортировку (без AI)")
+    filtered_fallback = [t for t in candidates if t.get('rating', 0) > 6]
+    if not filtered_fallback:
+        filtered_fallback = candidates
+    return sorted(filtered_fallback, key=lambda x: x.get("price", 0))[:7]
 
 
 def format_tours_message(tours: List[Dict], params: Dict) -> str:
@@ -389,7 +414,6 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
     
     header = f"🏖 <b>Топ подборка: {country_name}</b>\n"
     header += f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n"
-    header += f"📅 Даты вылета: {tours[0].get('date', 'ближайшие')}\n"
     
     lines = [header]
     
@@ -399,14 +423,15 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
         name = tour.get('hotel_name', 'Отель')
         lines.append(f"\n<b>{i}. <a href='{link}'>{name}</a></b>")
         
-        # Звезды и рейтинг
+        # Инфострока
         stars = "⭐️" * tour.get('stars', 0)
         rating = tour.get('rating', 0)
         rating_str = f"📊 {rating}" if rating > 0 else ""
+        date_str = f"📅 {tour.get('date', '')}"
         
-        meta = f"{stars} {rating_str}".strip()
-        if meta:
-            lines.append(meta)
+        meta_parts = [p for p in [stars, rating_str, date_str] if p]
+        if meta_parts:
+            lines.append(" | ".join(meta_parts))
             
         # Локация
         if tour.get('location'):
@@ -425,9 +450,9 @@ def format_tours_message(tours: List[Dict], params: Dict) -> str:
 
 async def process_tours_command(message: types.Message):
     """Обработчик команды из бота."""
-    # Проверка на админа (опционально)
+    # Проверка на админа (если ADMIN_ID задан)
     if ADMIN_ID and message.from_user.id != int(ADMIN_ID):
-        await message.reply("🚫 Доступ запрещен.")
+        await message.reply("🚫 Доступ к поиску туров только для администратора.")
         return
     
     try:
@@ -435,8 +460,8 @@ async def process_tours_command(message: types.Message):
         
         if not params.get("country_code"):
             await message.reply(
-                "❌ Не понял направление. Попробуйте:\n"
-                "<i>туры апрель шри-ланка 2</i>",
+                "❌ Не понял направление. Укажите страну, месяц и кол-во людей.\n"
+                "Пример: <i>туры апрель шри-ланка 2</i>",
                 parse_mode="HTML"
             )
             return
@@ -446,7 +471,8 @@ async def process_tours_command(message: types.Message):
         
         status_msg = await message.reply(
             f"🔍 Ищу туры: {params.get('country_name', '').title()}...\n"
-            f"Это займет около 30-60 секунд."
+            f"Проверяю даты: {', '.join(dates[:3])}...\n"
+            f"⏳ Это займет около 30-60 секунд."
         )
         
         # 1. Поиск
@@ -458,27 +484,33 @@ async def process_tours_command(message: types.Message):
         )
         
         if not tours:
-            await status_msg.edit_text("😕 Ничего не нашел. Попробуйте другие даты или направление.")
+            await status_msg.edit_text(
+                "😕 Ничего не нашел.\n"
+                "Возможно, слишком далекая дата или проблемы на сайте.\n"
+                "Попробуйте изменить месяц."
+            )
             return
         
-        await status_msg.edit_text(f"✅ Нашел {len(tours)} вариантов. Анализирую цены...")
+        await status_msg.edit_text(f"✅ Нашел {len(tours)} вариантов. Запускаю AI анализ...")
         
-        # 2. Анализ (AI или сортировка)
+        # 2. Анализ (AI)
         best_tours = await analyze_tours_with_groq(tours, params)
         
         # 3. Форматирование и отправка
         text_response = format_tours_message(best_tours, params)
         
+        # Удаляем сообщение о статусе и отправляем результат
         await status_msg.delete()
         await message.reply(text_response, parse_mode="HTML", disable_web_page_preview=True)
         
     except Exception as e:
         logging.error(f"Error in process_tours_command: {e}", exc_info=True)
-        await message.reply("❌ Произошла ошибка при поиске.")
+        await message.reply(f"❌ Произошла ошибка при поиске: {str(e)}")
 
 if __name__ == "__main__":
     # Для локального теста без бота
     async def test():
+        print("Запуск теста...")
         tours = await get_tours_hybrid("LK", "01.04.2026", 2, 10)
         print(f"Найдено: {len(tours)}")
         for t in tours[:3]:
