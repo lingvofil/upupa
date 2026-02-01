@@ -168,6 +168,20 @@ async def get_tours_hybrid(
                     await page.evaluate('window.scrollBy(0, 800)')
                     await page.wait_for_timeout(1000)
                 
+                # ОТЛАДКА: Скриншот и HTML
+                try:
+                    screenshot_path = f'/tmp/leveltravel_{country_code}_{date.replace(".", "_")}.png'
+                    await page.screenshot(path=screenshot_path, full_page=True)
+                    logging.info(f"Скриншот: {screenshot_path}")
+                    
+                    html_content = await page.content()
+                    html_path = f'/tmp/leveltravel_{country_code}_{date.replace(".", "_")}.html'
+                    with open(html_path, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    logging.info(f"HTML сохранён: {html_path}")
+                except Exception as e:
+                    logging.error(f"Ошибка сохранения отладочных файлов: {e}")
+                
                 # Парсим DOM
                 logging.info("Парсинг DOM...")
                 tours_data = await page.evaluate("""
