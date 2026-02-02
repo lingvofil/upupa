@@ -22,6 +22,7 @@ PROBABILITY_LABELS = {
 
 REACTION_TYPES = {
     "ai_prob": "🤖 Ремарки (AI)",
+    "random_word_prob": "🗣️ Я %слово%", # НОВОЕ
     "emoji_prob": "😎 Эмодзи",
     "meme_prob": "🖼 Случайные мемы",
     "voice_prob": "🗣 Голосовые",
@@ -31,6 +32,7 @@ REACTION_TYPES = {
 
 DEFAULT_PROBS = {
     "ai_prob": 0.01,
+    "random_word_prob": 0.005, # НОВОЕ: Default 0.5%
     "emoji_prob": 0.01,
     "meme_prob": 0.01,
     "voice_prob": 0.0001,
@@ -240,7 +242,7 @@ def get_help_keyboard(current_section="main"):
         types.InlineKeyboardButton(text="📊 Стотистика и оналез", callback_data="help:stats")
     )
     builder.row(
-        types.InlineKeyboardButton(text=" Векторины и игры", callback_data="help:creative"),
+        types.InlineKeyboardButton(text="🎮 Векторины и игры", callback_data="help:creative"),
         types.InlineKeyboardButton(text="🎨 Медиа", callback_data="help:media")
     )
     builder.row(
