@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
+from aiogram.types import FSInputFile
 import json
 import os
 
@@ -149,7 +150,7 @@ async def quick_price_scan(
     ФАЗА 1: Быстрое сканирование - только минимальная цена на дату.
     Без скролла, без детального парсинга.
     
-    ИСПРАВЛЕНИЕ #1: Увеличены таймауты и улучшена обработка отсутствия результатов
+    ИСПРАВЛЕНИЕ: Ищем туры ±1 ночь от запрошенного количества
     """
     try:
         async with async_playwright() as p:
@@ -163,49 +164,38 @@ async def quick_price_scan(
             page = await context.new_page()
             
             try:
+                # Ищем с диапазоном ±1 ночь
+                nights_min = max(1, nights - 1)
+                nights_max = nights + 1
+                
                 search_url = (
                     f"{LEVELTRAVEL_WEB_URL}/search/"
                     f"Moscow-RU-to-Any-{country_code}-"
                     f"departure-{date}-"
-                    f"for-{nights}-nights-"
+                    f"for-{nights_min}..{nights_max}-nights-"
                     f"{adults}-adults-0-kids-"
                     f"1..5-stars-package-type"
                 )
                 
-                await page.goto(search_url, timeout=90000, wait_until='domcontentloaded')
+                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
                 
-                # ИСПРАВЛЕНИЕ: Увеличен таймаут до 30 секунд
+                # Возвращаем к старому таймауту 15 секунд
                 try:
-                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=30000)
+                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=15000)
                 except Exception:
-                    # Дополнительная проверка - может быть другой селектор
-                    try:
-                        await page.wait_for_selector('[class*="HotelCard"]', timeout=5000)
-                    except Exception:
-                        logging.warning(f"Нет результатов для {date}")
-                        return None
+                    logging.warning(f"Нет результатов для {date}")
+                    return None
                 
-                # Дополнительная пауза для загрузки цен
-                await page.wait_for_timeout(2000)
+                # Небольшая пауза для загрузки цен
+                await page.wait_for_timeout(1000)
                 
-                # Берем цену первого тура (они отсортированы по цене)
+                # Берем цену первого тура (они отсортированы по рекомендациям, но цена всё равно близка к минимуму)
                 min_price = await page.evaluate("""
                     () => {
-                        // Пробуем разные селекторы
-                        let firstCard = document.querySelector('div[class*="DesktopHotelCard_container"]');
-                        if (!firstCard) {
-                            firstCard = document.querySelector('[class*="HotelCard"]');
-                        }
+                        const firstCard = document.querySelector('div[class*="DesktopHotelCard_container"]');
                         if (!firstCard) return null;
                         
-                        // Пробуем разные селекторы для цены
-                        let priceEl = firstCard.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
-                        if (!priceEl) {
-                            priceEl = firstCard.querySelector('[class*="Price"]');
-                        }
-                        if (!priceEl) {
-                            priceEl = firstCard.querySelector('[class*="price"]');
-                        }
+                        const priceEl = firstCard.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
                         if (!priceEl) return null;
                         
                         const priceText = priceEl.textContent.replace(/\\s/g, '').replace(/&nbsp;/g, '').replace(/\\u00a0/g, '');
@@ -312,7 +302,9 @@ async def deep_parse_date(
     ФАЗА 2: Глубокий парсинг - полная информация по дате.
     Со скроллом, рейтингами, локациями.
     
-    ИСПРАВЛЕНИЕ #1: Улучшена обработка разных селекторов
+    ИСПРАВЛЕНИЯ: 
+    - Ищем туры ±1 ночь от запрошенного
+    - Учитываем что сайт сортирует по рекомендациям, а не по цене
     """
     tours = []
 
@@ -328,16 +320,20 @@ async def deep_parse_date(
             page = await context.new_page()
 
             try:
+                # Ищем с диапазоном ±1 ночь
+                nights_min = max(1, nights - 1)
+                nights_max = nights + 1
+                
                 search_url = (
                     f"{LEVELTRAVEL_WEB_URL}/search/"
                     f"Moscow-RU-to-Any-{country_code}-"
                     f"departure-{date}-"
-                    f"for-{nights}-nights-"
+                    f"for-{nights_min}..{nights_max}-nights-"
                     f"{adults}-adults-0-kids-"
                     f"1..5-stars-package-type"
                 )
 
-                logging.info(f"Глубокий парсинг: {date}")
+                logging.info(f"Глубокий парсинг: {date} ({nights_min}-{nights_max} ночей)")
                 await page.goto(search_url, timeout=90_000, wait_until="domcontentloaded")
 
                 try:
@@ -349,8 +345,8 @@ async def deep_parse_date(
                     logging.warning(f"Карточки не загрузились для {date}")
                     return []
 
-                # Скроллим для подгрузки
-                for _ in range(7):
+                # Скроллим для подгрузки (сайт сортирует по рекомендациям, нужно больше карточек)
+                for _ in range(10):
                     await page.mouse.wheel(0, 1500)
                     await page.wait_for_timeout(1500)
 
@@ -372,7 +368,8 @@ async def deep_parse_date(
                                     rating: 0,
                                     stars: 0,
                                     location: "",
-                                    link: ""
+                                    link: "",
+                                    nights: 0
                                 };
 
                                 const titleEl = card.querySelector(
@@ -417,6 +414,14 @@ async def deep_parse_date(
                                 if (starsEl) {
                                     tour.stars = starsEl.querySelectorAll("svg").length;
                                 }
+                                
+                                // Пытаемся извлечь количество ночей из ссылки
+                                if (tour.link) {
+                                    const nightsMatch = tour.link.match(/for-(\\d+)-nights/);
+                                    if (nightsMatch) {
+                                        tour.nights = parseInt(nightsMatch[1], 10);
+                                    }
+                                }
 
                                 if (tour.price > 1000 && tour.hotel_name !== "Без названия") {
                                     results.push(tour);
@@ -437,6 +442,11 @@ async def deep_parse_date(
         logging.error(f"Ошибка deep_parse_date для {date}: {e}")
 
     return tours
+
+
+def nights_match(tour_nights: int, target: int) -> bool:
+    """Проверяет, подходит ли количество ночей (с погрешностью ±1)."""
+    return target - 1 <= tour_nights <= target + 1
 
 
 async def two_phase_search(
@@ -491,8 +501,15 @@ async def two_phase_search(
             if not hotel_key:
                 continue
             
+            # НОВОЕ: Фильтруем по количеству ночей (±1)
+            tour_nights = tour.get('nights', 0)
+            if tour_nights > 0 and not nights_match(tour_nights, nights):
+                continue
+            
             tour['date'] = date
-            tour['nights'] = nights
+            # Используем реальное количество ночей из тура, если оно есть
+            if tour_nights == 0:
+                tour['nights'] = nights
             
             # ИСПРАВЛЕНИЕ #3: Добавляем тур в общий список
             all_parsed_tours.append(tour)
@@ -837,9 +854,9 @@ async def process_tours_command(message: types.Message):
             f"📍 Направление: {params.get('country_name', '').title()}\n"
             f"📅 Месяц: весь {list(MONTH_MAPPING.keys())[params.get('month', 1) * 2 - 2] if params.get('month') else 'не указан'}\n"
             f"👥 Взрослых: {params['adults']}\n"
-            f"🌙 Ночей: {params['nights']}\n\n"
-            f"⏳ ФАЗА 1: Быстрое сканирование всех дат месяца...\n"
-            f"Это займет 2-3 минуты.",
+            f"🌙 Ночей: {params['nights']} (ищем {params['nights']-1}-{params['nights']+1})\n\n"
+            f"⏳ <b>ФАЗА 1:</b> Быстрое сканирование всех дат месяца...\n"
+            f"Это займет 3-5 минут.",
             parse_mode="HTML"
         )
         
@@ -863,10 +880,14 @@ async def process_tours_command(message: types.Message):
             )
             return
         
+        # Сообщение о начале ФАЗЫ 2
         await status_msg.edit_text(
-            f"✅ ФАЗА 1 завершена!\n"
-            f"Найдено {len(hotels)} уникальных отелей\n\n"
-            f"⏳ ФАЗА 2: Запускаю AI-анализ...",
+            f"✅ <b>ФАЗА 1 завершена!</b>\n"
+            f"Проверено дат: {date_stats.get('searched_dates', 0)}\n"
+            f"Найдено предложений: {date_stats.get('detailed_tours_count', 0)}\n"
+            f"Уникальных отелей: {len(hotels)}\n\n"
+            f"⏳ <b>ФАЗА 2:</b> Запускаю AI-анализ для выбора лучших...\n"
+            f"Это займет 10-15 секунд.",
             parse_mode="HTML"
         )
         
@@ -874,9 +895,10 @@ async def process_tours_command(message: types.Message):
         best_tours = await analyze_tours_with_ai(hotels, date_stats, params)
         
         await status_msg.edit_text(
-            f"✅ Анализ завершен!\n"
+            f"✅ <b>Анализ завершен!</b>\n"
             f"Отобрано {len(best_tours)} лучших предложений\n\n"
-            f"⏳ Создаю скриншоты...",
+            f"⏳ Создаю скриншоты...\n"
+            f"Это займет 30-60 секунд.",
             parse_mode="HTML"
         )
         
@@ -970,12 +992,13 @@ async def process_tours_command(message: types.Message):
                 # Отправляем сообщение со скриншотом или без
                 if screenshot_path and os.path.exists(screenshot_path):
                     try:
-                        with open(screenshot_path, 'rb') as photo:
-                            await message.reply_photo(
-                                photo=photo,
-                                caption=tour_text,
-                                parse_mode="HTML"
-                            )
+                        # Используем FSInputFile для правильной отправки фото
+                        photo = FSInputFile(screenshot_path)
+                        await message.reply_photo(
+                            photo=photo,
+                            caption=tour_text,
+                            parse_mode="HTML"
+                        )
                         # Удаляем временный файл
                         os.remove(screenshot_path)
                     except Exception as e:
@@ -996,3 +1019,21 @@ async def process_tours_command(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка в process_tours_command: {e}", exc_info=True)
         await message.reply(f"❌ Произошла ошибка: {str(e)}")
+
+
+# =============================================================================
+# ТЕСТ
+# =============================================================================
+
+if __name__ == "__main__":
+    async def test():
+        print("Запуск теста двухфазного поиска...")
+        result = await two_phase_search("ID", 5, 2, 7)
+        print(f"\nНайдено отелей: {len(result['hotels'])}")
+        print(f"Статистика дат: {result['date_stats']}")
+        
+        tours = list(result['hotels'].values())[:5]
+        for t in tours:
+            print(f"\n{t['hotel_name']} - {t['price']:,} ₽ ({t['date']})")
+            
+    asyncio.run(test())
