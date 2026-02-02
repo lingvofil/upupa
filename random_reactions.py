@@ -9,7 +9,7 @@ from aiogram import Bot
 
 # Используем тот же экстрактор сообщений, что и в других модулях
 from lexicon_settings import extract_chat_messages
-from config import model # Модель передается как аргумент
+from config import model, groq_ai # Импортируем обе модели
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
@@ -32,14 +32,15 @@ async def set_random_emoji_reaction(message: Message):
         return True
 
     except Exception as e:
-        logging.error(f"Ошибка при проставлении случайной эмодзи-реакции: {e}")
+        logging.error(f"Ошибка при проставлении случайной эмодji-реакции: {e}")
         return False
 
-# --- СТАРЫЙ ФУНКЦИОНАЛ (Остался с AI, так как вызывается редко) ---
+# --- ИСПРАВЛЕНО: Кинематографичные ремарки теперь работают с любой моделью ---
 
 async def generate_situational_reaction(chat_id: int, model_instance):
     """
     Генерирует ироничную кинематографичную ремарку на основе истории чата.
+    ИСПРАВЛЕНО: Теперь работает с Gemini, GigaChat и Groq.
     """
     logging.info(f"Запуск генерации ситуативной реакции для чата {chat_id}.")
     
@@ -81,25 +82,53 @@ async def generate_situational_reaction(chat_id: int, model_instance):
     try:
         def sync_llm_call():
             try:
-                response = model_instance.generate_content(
-                    prompt,
-                    chat_id=chat_id,
-                    generation_config={
-                        'temperature': 1.0,
-                        'max_output_tokens': 60,
-                        'top_p': 1.0,
-                    }
-                )
-                if response and response.candidates and response.candidates[0].content.parts:
-                    return response.text.strip()
-                return ""
+                # ИСПРАВЛЕНИЕ: Проверяем тип модели и используем правильный метод
+                
+                # Если это Groq
+                if hasattr(model_instance, 'groq_client'):
+                    logging.info("Используем Groq для ситуативной реакции")
+                    response = model_instance.generate_text(
+                        prompt,
+                        chat_id=chat_id,
+                        temperature=1.0,
+                        max_tokens=60
+                    )
+                    return response.strip() if response else ""
+                
+                # Если это GigaChat
+                elif hasattr(model_instance, 'gigachat'):
+                    logging.info("Используем GigaChat для ситуативной реакции")
+                    response = model_instance.generate_text(
+                        prompt,
+                        chat_id=chat_id,
+                        temperature=1.0,
+                        max_tokens=60
+                    )
+                    return response.strip() if response else ""
+                
+                # Если это Gemini (стандартный случай)
+                else:
+                    logging.info("Используем Gemini для ситуативной реакции")
+                    response = model_instance.generate_content(
+                        prompt,
+                        chat_id=chat_id,
+                        generation_config={
+                            'temperature': 1.0,
+                            'max_output_tokens': 60,
+                            'top_p': 1.0,
+                        }
+                    )
+                    if response and response.candidates and response.candidates[0].content.parts:
+                        return response.text.strip()
+                    return ""
+                    
             except Exception as e:
-                 logging.warning(f"Ошибка внутри sync_llm_call (situational): {e}")
-                 return ""
+                logging.warning(f"Ошибка внутри sync_llm_call (situational): {e}")
+                return ""
 
         reaction_text = await asyncio.to_thread(sync_llm_call)
         
-        logging.info(f"Ответ от Gemini для ситуативной реакции: '{reaction_text}'")
+        logging.info(f"Ответ от модели для ситуативной реакции: '{reaction_text}'")
 
         if reaction_text and reaction_text.startswith('*') and reaction_text.endswith('*'):
             return reaction_text
@@ -108,6 +137,112 @@ async def generate_situational_reaction(chat_id: int, model_instance):
 
     except Exception as e:
         logging.error(f"Ошибка при генерации ситуативной реакции: {e}", exc_info=True)
+        return None
+
+# --- НОВОЕ: Реакция "я %слово%" ---
+
+async def generate_random_word_reaction(chat_id: int, model_instance):
+    """
+    НОВАЯ ФУНКЦИЯ: Выбирает случайное слово/словосочетание из последних 10 сообщений
+    и генерирует реакцию в формате "я %это слово/словосочетание%".
+    Например: "я реактивный самолет"
+    """
+    logging.info(f"Запуск генерации реакции 'я %слово%' для чата {chat_id}.")
+    
+    all_messages = await extract_chat_messages(chat_id)
+    
+    if not all_messages:
+        logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
+        return None
+
+    last_messages = all_messages[-10:]
+    chat_history = "\n".join(last_messages)
+    
+    if not chat_history.strip():
+        return None
+        
+    logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции 'я %слово%'.")
+
+    prompt = f"""
+    Проанализируй диалог из чата. Выбери из него одно интересное слово или короткое словосочетание (2-3 слова максимум).
+    Затем составь фразу в формате: "я [выбранное слово/словосочетание]"
+    
+    Примеры:
+    - "я реактивный самолет"
+    - "я космический корабль"
+    - "я пидорас"
+    - "я твоя мама"
+    - "я философ"
+    
+    ВАЖНО: Ответь ТОЛЬКО фразой в указанном формате, без объяснений и дополнительного текста.
+    
+    Вот диалог для анализа:
+    ---
+    {chat_history}
+    ---
+
+    Твоя фраза (только "я [слово/словосочетание]"):
+    """
+    
+    try:
+        def sync_llm_call():
+            try:
+                # Проверяем тип модели
+                
+                # Если это Groq
+                if hasattr(model_instance, 'groq_client'):
+                    logging.info("Используем Groq для реакции 'я %слово%'")
+                    response = model_instance.generate_text(
+                        prompt,
+                        chat_id=chat_id,
+                        temperature=0.8,
+                        max_tokens=30
+                    )
+                    return response.strip() if response else ""
+                
+                # Если это GigaChat
+                elif hasattr(model_instance, 'gigachat'):
+                    logging.info("Используем GigaChat для реакции 'я %слово%'")
+                    response = model_instance.generate_text(
+                        prompt,
+                        chat_id=chat_id,
+                        temperature=0.8,
+                        max_tokens=30
+                    )
+                    return response.strip() if response else ""
+                
+                # Если это Gemini
+                else:
+                    logging.info("Используем Gemini для реакции 'я %слово%'")
+                    response = model_instance.generate_content(
+                        prompt,
+                        chat_id=chat_id,
+                        generation_config={
+                            'temperature': 0.8,
+                            'max_output_tokens': 30,
+                            'top_p': 1.0,
+                        }
+                    )
+                    if response and response.candidates and response.candidates[0].content.parts:
+                        return response.text.strip()
+                    return ""
+                    
+            except Exception as e:
+                logging.warning(f"Ошибка внутри sync_llm_call (random word): {e}")
+                return ""
+
+        reaction_text = await asyncio.to_thread(sync_llm_call)
+        
+        logging.info(f"Ответ от модели для реакции 'я %слово%': '{reaction_text}'")
+
+        # Проверяем, что ответ начинается с "я " (регистронезависимо)
+        if reaction_text and reaction_text.lower().startswith('я '):
+            return reaction_text
+        else:
+            return None
+
+    except Exception as e:
+        logging.error(f"Ошибка при генерации реакции 'я %слово%': {e}", exc_info=True)
         return None
 
 # Рифма
@@ -136,25 +271,49 @@ async def generate_rhyme_reaction(message, model_instance):
             
             def sync_rhyme_call():
                 try:
-                    response = model_instance.generate_content(
-                        rhyme_prompt,
-                        chat_id=chat_id,
-                        generation_config={
-                            'temperature': 0.7,
-                            'max_output_tokens': 10,
-                            'top_p': 0.8,
-                        }
-                    )
-                    if hasattr(response, 'text') and response.text:
-                        return response.text.strip()
-                    elif hasattr(response, 'candidates') and response.candidates:
-                        candidate = response.candidates[0]
-                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                            return candidate.content.parts[0].text.strip()
-                    return None
+                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
+                    
+                    # Если это Groq
+                    if hasattr(model_instance, 'groq_client'):
+                        response = model_instance.generate_text(
+                            rhyme_prompt,
+                            chat_id=chat_id,
+                            temperature=0.7,
+                            max_tokens=10
+                        )
+                        return response.strip() if response else None
+                    
+                    # Если это GigaChat
+                    elif hasattr(model_instance, 'gigachat'):
+                        response = model_instance.generate_text(
+                            rhyme_prompt,
+                            chat_id=chat_id,
+                            temperature=0.7,
+                            max_tokens=10
+                        )
+                        return response.strip() if response else None
+                    
+                    # Если это Gemini
+                    else:
+                        response = model_instance.generate_content(
+                            rhyme_prompt,
+                            chat_id=chat_id,
+                            generation_config={
+                                'temperature': 0.7,
+                                'max_output_tokens': 10,
+                                'top_p': 0.8,
+                            }
+                        )
+                        if hasattr(response, 'text') and response.text:
+                            return response.text.strip()
+                        elif hasattr(response, 'candidates') and response.candidates:
+                            candidate = response.candidates[0]
+                            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                                return candidate.content.parts[0].text.strip()
+                        return None
                         
                 except Exception as e:
-                    logging.error(f"Gemini API error in sync_rhyme_call: {e}")
+                    logging.error(f"API error in sync_rhyme_call: {e}")
                     return None
             
             rhyme_word = await asyncio.to_thread(sync_rhyme_call)
@@ -332,14 +491,39 @@ async def generate_insult_for_lis(message, model_instance):
 
             def call_llm():
                 try:
-                    response = model_instance.generate_content(
-                        prompt,
-                        chat_id=chat_id,
-                        generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
-                    )
-                    if response and response.candidates and response.candidates[0].content.parts:
-                        return response.text.strip()
-                    return ""
+                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
+                    
+                    # Если это Groq
+                    if hasattr(model_instance, 'groq_client'):
+                        response = model_instance.generate_text(
+                            prompt,
+                            chat_id=chat_id,
+                            temperature=0.6,
+                            max_tokens=60
+                        )
+                        return response.strip() if response else ""
+                    
+                    # Если это GigaChat
+                    elif hasattr(model_instance, 'gigachat'):
+                        response = model_instance.generate_text(
+                            prompt,
+                            chat_id=chat_id,
+                            temperature=0.6,
+                            max_tokens=60
+                        )
+                        return response.strip() if response else ""
+                    
+                    # Если это Gemini
+                    else:
+                        response = model_instance.generate_content(
+                            prompt,
+                            chat_id=chat_id,
+                            generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
+                        )
+                        if response and response.candidates and response.candidates[0].content.parts:
+                            return response.text.strip()
+                        return ""
+                        
                 except Exception as e:
                     logging.error(f"Ошибка генерации реакции для 1399269377 (LLM call): {e}")
                     return None
@@ -404,14 +588,39 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
 
             def call_llm():
                 try:
-                    response = model_instance.generate_content(
-                        prompt,
-                        chat_id=chat_id,
-                        generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
-                    )
-                    if response and response.candidates and response.candidates[0].content.parts:
-                        return response.text.strip()
-                    return ""
+                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
+                    
+                    # Если это Groq
+                    if hasattr(model_instance, 'groq_client'):
+                        response = model_instance.generate_text(
+                            prompt,
+                            chat_id=chat_id,
+                            temperature=0.6,
+                            max_tokens=60
+                        )
+                        return response.strip() if response else ""
+                    
+                    # Если это GigaChat
+                    elif hasattr(model_instance, 'gigachat'):
+                        response = model_instance.generate_text(
+                            prompt,
+                            chat_id=chat_id,
+                            temperature=0.6,
+                            max_tokens=60
+                        )
+                        return response.strip() if response else ""
+                    
+                    # Если это Gemini
+                    else:
+                        response = model_instance.generate_content(
+                            prompt,
+                            chat_id=chat_id,
+                            generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
+                        )
+                        if response and response.candidates and response.candidates[0].content.parts:
+                            return response.text.strip()
+                        return ""
+                        
                 except Exception as e:
                     logging.error(f"Ошибка генерации реакции для 113086922 (LLM call): {e}")
                     return None
@@ -515,6 +724,19 @@ async def process_random_reactions(
                 message.chat.id,
                 situational,
                 parse_mode="Markdown",
+            )
+            return True
+
+    # ------------------------------------------------------------------
+    # 5.1. НОВОЕ: Реакция "я %слово%" - key: random_word_prob
+    # ------------------------------------------------------------------
+    random_word_prob = chat_cfg.get("random_word_prob", 0.005) # Default 0.5%
+    if random.random() < random_word_prob:
+        random_word_reaction = await generate_random_word_reaction(message.chat.id, model)
+        if random_word_reaction:
+            await message.bot.send_message(
+                message.chat.id,
+                random_word_reaction,
             )
             return True
 
