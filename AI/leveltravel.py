@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InputMediaPhoto
 import json
 import os
 
@@ -218,78 +218,82 @@ async def quick_price_scan(
         return None
 
 
-async def capture_hotel_screenshot(
+async def capture_hotel_screenshots(
     hotel_link: str,
     hotel_name: str,
     nights: int
-) -> Optional[str]:
+) -> List[str]:
     """
-    НОВАЯ ФУНКЦИЯ #2: Создает скриншот страницы отеля с расширенной информацией.
-    Возвращает путь к сохраненному файлу.
+    Создает ДВА скриншота:
+    1. Верхняя часть с календарем.
+    2. Нижняя часть с вариантами номеров.
     """
+    paths = []
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                viewport={'width': 1920, 'height': 1080},
+                viewport={'width': 1920, 'height': 1080}, # Высоту можно увеличить, чтобы влезало больше
                 locale='ru-RU',
                 timezone_id='Europe/Moscow'
             )
             page = await context.new_page()
             
             try:
-                logging.info(f"Создаю скриншот для {hotel_name}")
-                
-                # Переходим на страницу отеля
+                logging.info(f"Создаю скриншоты для {hotel_name}")
                 await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
                 
-                # Ждем загрузки календаря с датами
+                # --- СКРИНШОТ 1: КАЛЕНДАРЬ ---
                 try:
                     await page.wait_for_selector('[class*="Calendar"]', timeout=15000)
                 except Exception:
                     logging.warning(f"Календарь не загрузился для {hotel_name}")
                 
-                # Дополнительная пауза для полной загрузки
                 await page.wait_for_timeout(3000)
                 
-                # Прокручиваем к календарю и вариантам номеров
+                # Скроллим к календарю
                 await page.evaluate("""
                     () => {
                         const calendar = document.querySelector('[class*="Calendar"]');
                         if (calendar) {
-                            calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            calendar.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         }
                     }
                 """)
-                
-                await page.wait_for_timeout(2000)
-                
-                # Создаем директорию для скриншотов если её нет
+                await page.wait_for_timeout(1000)
+
+                # Папка для скриншотов
                 screenshots_dir = "/tmp/tour_screenshots"
                 os.makedirs(screenshots_dir, exist_ok=True)
-                
-                # Генерируем безопасное имя файла
                 safe_name = re.sub(r'[^\w\s-]', '', hotel_name)[:50]
-                screenshot_path = f"{screenshots_dir}/{safe_name}_{nights}n.png"
                 
-                # Делаем скриншот области с календарем и вариантами номеров
-                await page.screenshot(
-                    path=screenshot_path,
-                    full_page=False,
-                    type='png'
-                )
+                # Снимаем первый скриншот
+                path1 = f"{screenshots_dir}/{safe_name}_1_calendar.png"
+                await page.screenshot(path=path1, full_page=False, type='png')
+                paths.append(path1)
+
+                # --- СКРИНШОТ 2: НОМЕРА ---
+                # Скроллим вниз, чтобы увидеть номера. 
+                # Обычно они идут сразу после блока с отелем/календарем.
+                # Делаем прокрутку колесом, чтобы стриггерить ленивую загрузку (lazy load)
+                await page.mouse.wheel(0, 1200) 
+                await page.wait_for_timeout(1500) # Ждем прогрузки картинок номеров
                 
-                logging.info(f"Скриншот сохранен: {screenshot_path}")
-                return screenshot_path
+                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
+                await page.screenshot(path=path2, full_page=False, type='png')
+                paths.append(path2)
+                
+                logging.info(f"Скриншоты сохранены: {len(paths)} шт.")
+                return paths
                 
             finally:
                 await context.close()
                 await browser.close()
                 
     except Exception as e:
-        logging.error(f"Ошибка создания скриншота для {hotel_name}: {e}")
-        return None
+        logging.error(f"Ошибка создания скриншотов для {hotel_name}: {e}")
+        return paths # Вернем то, что успели сделать (или пустой список)
 
 
 async def deep_parse_date(
@@ -830,8 +834,7 @@ def format_tours_message(
 async def process_tours_command(message: types.Message):
     """
     Главный обработчик команды поиска туров.
-    
-    НОВОЕ #2: Теперь отправляет результаты по одному сообщению на тур со скриншотом
+    Отправляет результаты альбомом (MediaGroup) из двух скриншотов.
     """
     # Проверка доступа
     if ADMIN_ID and message.from_user.id != int(ADMIN_ID):
@@ -897,12 +900,12 @@ async def process_tours_command(message: types.Message):
         await status_msg.edit_text(
             f"✅ <b>Анализ завершен!</b>\n"
             f"Отобрано {len(best_tours)} лучших предложений\n\n"
-            f"⏳ Создаю скриншоты...\n"
-            f"Это займет 30-60 секунд.",
+            f"⏳ Создаю скриншоты и формирую отчет...\n"
+            f"Это займет около минуты.",
             parse_mode="HTML"
         )
         
-        # НОВОЕ #2: Отправляем результаты по одному с скриншотами
+        # --- ФОРМИРОВАНИЕ ОТВЕТА ---
         country_name = params.get("country_name", "направление").capitalize()
         
         # Формируем заголовок
@@ -918,10 +921,9 @@ async def process_tours_command(message: types.Message):
                 f"• Минимум: {date_stats.get('min_price', 0):,} ₽\n"
                 f"• Медиана: {int(date_stats.get('median_price', 0)):,} ₽\n"
                 f"• Максимум: {date_stats.get('max_price', 0):,} ₽\n\n"
-                f"📸 Скриншоты показывают:\n"
-                f"• Календарь с ценами на разные даты\n"
-                f"• Варианты номеров с ценами\n"
-                f"• Информацию о завтраках\n"
+                f"📸 В каждом сообщении 2 скриншота:\n"
+                f"1. Календарь цен\n"
+                f"2. Варианты номеров\n"
             )
         
         # Удаляем статусное сообщение
@@ -930,10 +932,10 @@ async def process_tours_command(message: types.Message):
         # Отправляем заголовок
         await message.reply(header, parse_mode="HTML")
         
-        # Отправляем каждый тур отдельным сообщением со скриншотом
+        # Отправляем каждый тур отдельным сообщением с альбомом
         for i, tour in enumerate(best_tours, 1):
             try:
-                # Формируем текст для одного тура
+                # 1. Формируем текст описания
                 link = tour.get("link", "#")
                 name = tour.get("hotel_name", "Отель")
                 
@@ -980,38 +982,60 @@ async def process_tours_command(message: types.Message):
                 
                 tour_text += price_line
                 
-                # Создаем скриншот
-                screenshot_path = None
+                # 2. Создаем скриншоты (вызываем новую функцию capture_hotel_screenshots)
+                screenshot_paths = []
                 if link and link != "#":
-                    screenshot_path = await capture_hotel_screenshot(
+                    # ВНИМАНИЕ: Убедитесь, что у вас определена функция capture_hotel_screenshots,
+                    # которая возвращает список путей List[str]
+                    screenshot_paths = await capture_hotel_screenshots(
                         link, 
                         name, 
                         nights
                     )
                 
-                # Отправляем сообщение со скриншотом или без
-                if screenshot_path and os.path.exists(screenshot_path):
+                # 3. Отправляем альбом или текст
+                if screenshot_paths:
                     try:
-                        # Используем FSInputFile для правильной отправки фото
-                        photo = FSInputFile(screenshot_path)
-                        await message.reply_photo(
-                            photo=photo,
-                            caption=tour_text,
-                            parse_mode="HTML"
-                        )
-                        # Удаляем временный файл
-                        os.remove(screenshot_path)
+                        media_group = []
+                        for idx, path in enumerate(screenshot_paths):
+                            if os.path.exists(path):
+                                # Важно: caption (подпись) можно добавить только к первому элементу альбома
+                                caption = tour_text if idx == 0 else None
+                                media_group.append(
+                                    InputMediaPhoto(
+                                        media=FSInputFile(path),
+                                        caption=caption,
+                                        parse_mode="HTML"
+                                    )
+                                )
+                        
+                        if media_group:
+                            await message.reply_media_group(media=media_group)
+                        else:
+                            # Фолбек: если файлы не создались
+                            await message.reply(tour_text, parse_mode="HTML", disable_web_page_preview=True)
+
+                        # Чистим файлы
+                        for path in screenshot_paths:
+                            if os.path.exists(path):
+                                try:
+                                    os.remove(path)
+                                except Exception:
+                                    pass
+
                     except Exception as e:
-                        logging.error(f"Ошибка отправки скриншота: {e}")
+                        logging.error(f"Ошибка отправки медиагруппы для {name}: {e}")
+                        # Если не ушел альбом, пробуем отправить просто текст
                         await message.reply(tour_text, parse_mode="HTML", disable_web_page_preview=True)
                 else:
+                    # Если скриншотов нет вообще (например, ошибка браузера)
                     await message.reply(tour_text, parse_mode="HTML", disable_web_page_preview=True)
                 
-                # Небольшая пауза между сообщениями
-                await asyncio.sleep(1)
+                # Небольшая пауза между турами, чтобы не спамить
+                await asyncio.sleep(1.5)
                 
             except Exception as e:
-                logging.error(f"Ошибка отправки тура #{i}: {e}")
+                logging.error(f"Критическая ошибка отправки тура #{i}: {e}")
                 continue
         
         logging.info(f"Отправлено {len(best_tours)} туров пользователю {message.from_user.id}")
