@@ -215,18 +215,18 @@ async def deep_parse_date(
     Со скроллом, рейтингами, локациями.
     """
     tours = []
-    
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                viewport={'width': 1920, 'height': 1080},
-                locale='ru-RU',
-                timezone_id='Europe/Moscow'
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="ru-RU",
+                timezone_id="Europe/Moscow",
             )
             page = await context.new_page()
-            
+
             try:
                 search_url = (
                     f"{LEVELTRAVEL_WEB_URL}/search/"
@@ -236,96 +236,108 @@ async def deep_parse_date(
                     f"{adults}-adults-0-kids-"
                     f"1..5-stars-package-type"
                 )
-                
+
                 logging.info(f"Глубокий парсинг: {date}")
-                
-                await page.goto(search_url, timeout=90000, wait_until='domcontentloaded')
-                
+                await page.goto(search_url, timeout=90_000, wait_until="domcontentloaded")
+
                 try:
-                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=40000)
+                    await page.wait_for_selector(
+                        'div[class*="DesktopHotelCard_container"]',
+                        timeout=40_000,
+                    )
                 except Exception:
                     logging.warning(f"Карточки не загрузились для {date}")
                     return []
 
-                # Скроллим для подгрузки большего количества туров
+                # Скроллим для подгрузки
                 for _ in range(7):
                     await page.mouse.wheel(0, 1500)
                     await page.wait_for_timeout(1500)
 
-                # Парсинг всех карточек
-                tours_data = await page.evaluate("""
+                tours = await page.evaluate(
+                    """
                     () => {
                         const results = [];
-                        const cards = Array.from(document.querySelectorAll('div[class*="DesktopHotelCard_container"]'));
-                        
-                        cards.forEach((card) => {
+                        const cards = Array.from(
+                            document.querySelectorAll(
+                                'div[class*="DesktopHotelCard_container"]'
+                            )
+                        );
+
+                        for (const card of cards) {
                             try {
                                 const tour = {
-                                    hotel_name: 'Без названия',
+                                    hotel_name: "Без названия",
                                     price: 0,
                                     rating: 0,
                                     stars: 0,
-                                    location: '',
-                                    link: ''
+                                    location: "",
+                                    link: ""
                                 };
-                                
-                                const titleEl = card.querySelector('a[class*="HotelCardTitle_title"]');
+
+                                const titleEl = card.querySelector(
+                                    'a[class*="HotelCardTitle_title"]'
+                                );
                                 if (titleEl) {
                                     tour.hotel_name = titleEl.textContent.trim();
-                                    tour.link = titleEl.getAttribute('href');
-                                    if (tour.link && !tour.link.startsWith('http')) {
-                                        tour.link = 'https://level.travel' + tour.link;
+                                    tour.link = titleEl.getAttribute("href");
+                                    if (tour.link && !tour.link.startsWith("http")) {
+                                        tour.link = "https://level.travel" + tour.link;
                                     }
                                 }
-                                
-                                const priceEl = card.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
+
+                                const priceEl = card.querySelector(
+                                    'div[class*="HotelCardPriceBlock_styledPrice"]'
+                                );
                                 if (priceEl) {
-                                    const priceText = priceEl.textContent.replace(/\\s/g, '').replace(/&nbsp;/g, '').replace(/\\u00a0/g, '');
-                                    const priceMatch = priceText.match(/(\\d+)/);
-                                    if (priceMatch) {
-                                        tour.price = parseInt(priceMatch[0]);
-                                    }
+                                    const text = priceEl.textContent
+                                        .replace(/\\s/g, "")
+                                        .replace(/\\u00a0/g, "");
+                                    const m = text.match(/(\\d+)/);
+                                    if (m) tour.price = parseInt(m[1], 10);
                                 }
-                                
-                                const locEl = card.querySelector('p[class*="HotelCardLocation_text"]');
-                                if (locEl) {
-                                    tour.location = locEl.textContent.trim();
-                                }
-                                
-                                const ratingEl = card.querySelector('span[class*="HotelRating_rating"]');
+
+                                const locEl = card.querySelector(
+                                    'p[class*="HotelCardLocation_text"]'
+                                );
+                                if (locEl) tour.location = locEl.textContent.trim();
+
+                                const ratingEl = card.querySelector(
+                                    'span[class*="HotelRating_rating"]'
+                                );
                                 if (ratingEl) {
-                                    tour.rating = parseFloat(ratingEl.textContent.trim());
+                                    tour.rating = parseFloat(
+                                        ratingEl.textContent.trim()
+                                    );
                                 }
-                                
-                                const starsContainer = card.querySelector('div[class*="HotelStars_container"]');
-                                if (starsContainer) {
-                                    tour.stars = starsContainer.querySelectorAll('svg').length;
+
+                                const starsEl = card.querySelector(
+                                    'div[class*="HotelStars_container"]'
+                                );
+                                if (starsEl) {
+                                    tour.stars = starsEl.querySelectorAll("svg").length;
                                 }
-                                
-                                if (tour.price > 1000 && tour.hotel_name !== 'Без названия') {
+
+                                if (tour.price > 1000 && tour.hotel_name !== "Без названия") {
                                     results.push(tour);
                                 }
-                                
-                            } catch (e) {
-                                console.error('Ошибка парсинга карточки:', e);
-                            }
-                        });
-                        
+                            } catch (e) {}
+                        }
+
                         return results;
                     }
-                """)
-                
-                tours = tours_data
-                logging.info(f"Спарсено {len(tours)} туров для {date}")
-                
+                    """
+                )
+
             finally:
                 await context.close()
                 await browser.close()
-                
+
     except Exception as e:
         logging.error(f"Ошибка deep_parse_date для {date}: {e}")
-    
+
     return tours
+
 
 
 async def two_phase_search(
@@ -597,69 +609,88 @@ async def analyze_tours_with_ai(
     return good_tours[:7]
 
 
-def format_tours_message(tours: List[Dict], params: Dict, date_stats: Dict) -> str:
+def format_tours_message(
+    tours: List[Dict],
+    params: Dict,
+    date_stats: Dict
+) -> str:
     """Форматирует список туров с расширенной информацией."""
     if not tours:
         return "😢 Туры не найдены"
-    
+
     country_name = params.get("country_name", "направление").capitalize()
-    
-    # Заголовок с общей статистикой
-    header = f"🏖 <b>Топ подборка: {country_name}</b>\n"
-    header += f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n\n"
-    
-    # Статистика по месяцу
+
+    header = (
+        f"🏖 <b>Топ подборка: {country_name}</b>\n"
+        f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n\n"
+    )
+
     if date_stats:
-        header += f"📊 <b>Анализ месяца:</b>\n"
-        header += f"• Проверено дат: {date_stats.get('searched_dates', 0)}\n"
-        header += f"• Минимум: {date_stats.get('min_price', 0):,} ₽\n"
-        header += f"• Медиана: {int(date_stats.get('median_price', 0)):,} ₽\n"
-        header += f"• Максимум: {date_stats.get('max_price', 0):,} ₽\n"
-    
+        header += (
+            f"📊 <b>Анализ месяца:</b>\n"
+            f"• Проверено дат: {date_stats.get('searched_dates', 0)}\n"
+            f"• Минимум: {date_stats.get('min_price', 0):,} ₽\n"
+            f"• Медиана: {int(date_stats.get('median_price', 0)):,} ₽\n"
+            f"• Максимум: {date_stats.get('max_price', 0):,} ₽\n"
+        )
+
     lines = [header]
-    
+
     for i, tour in enumerate(tours, 1):
-        link = tour.get('link', '#')
-        name = tour.get('hotel_name', 'Отель')
+        link = tour.get("link", "#")
+        name = tour.get("hotel_name", "Отель")
+
         lines.append(f"\n<b>{i}. <a href='{link}'>{name}</a></b>")
-        
-        # Сценарий от AI (если есть)
-        if tour.get('scenario'):
+
+        if tour.get("scenario"):
             lines.append(f"🎯 <i>{tour['scenario']}</i>")
-        
-        # Инфострока
-        stars = "⭐️" * tour.get('stars', 0)
-        rating = tour.get('rating', 0)
-        rating_str = f"📊 {rating}" if rating > 0 else ""
-        date_str = f"📅 {tour.get('date', '')}"
-        
-        meta_parts = [p for p in [stars, rating_str, date_str] if p]
-        if meta_parts:
-            lines.append(" | ".join(meta_parts))
-        
-        # Локация
-        if tour.get('location'):
+
+        # ===== ДИАПАЗОН ДАТ =====
+        start_date_str = tour.get("date", "")
+        nights = tour.get("nights", params.get("nights", 0))
+
+        date_range = ""
+        try:
+            start_dt = datetime.strptime(start_date_str, "%d.%m.%Y")
+            end_dt = start_dt + timedelta(days=nights)
+            date_range = (
+                f"📅 {start_dt.strftime('%d.%m.%Y')}-"
+                f"{end_dt.strftime('%d.%m.%Y')}"
+            )
+        except Exception:
+            if start_date_str:
+                date_range = f"📅 {start_date_str}"
+
+        stars = "⭐️" * tour.get("stars", 0)
+        meta = " | ".join(p for p in [stars, date_range] if p)
+        if meta:
+            lines.append(meta)
+
+        # ===== РЕЙТИНГ LEVEL.TRAVEL =====
+        rating = tour.get("rating", 0)
+        if rating > 0:
+            lines.append(f"📊 Рейтинг Level.Travel: {rating}")
+
+        if tour.get("location"):
             lines.append(f"📍 {tour['location']}")
-        
-        # AI анализ
-        if tour.get('ai_reason'):
+
+        if tour.get("ai_reason"):
             lines.append(f"🤖 <i>{tour['ai_reason']}</i>")
-        
-        # Цена с контекстом
-        price = tour.get('price', 0)
-        price_str = f"💰 <b>{price:,} ₽</b>"
-        
-        # Добавляем маркеры выгодности
-        if tour.get('price_vs_median') is not None:
-            diff = tour['price_vs_median']
+
+        price = tour.get("price", 0)
+        price_line = f"💰 <b>{price:,} ₽</b>"
+
+        diff = tour.get("price_vs_median")
+        if diff is not None:
             if diff < -10:
-                price_str += " 🔥 Выгодно!"
+                price_line += " 🔥 Выгодно!"
             elif diff < -5:
-                price_str += " ✅"
-        
-        lines.append(price_str)
-    
+                price_line += " ✅"
+
+        lines.append(price_line)
+
     return "\n".join(lines)
+
 
 
 async def process_tours_command(message: types.Message):
