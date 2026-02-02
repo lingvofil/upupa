@@ -6,7 +6,6 @@ from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
 import json
-import statistics
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
@@ -391,13 +390,18 @@ async def two_phase_search(
         
         await asyncio.sleep(2)
     
-    # Собираем статистику по датам для AI
+    # Собираем статистику по датам для AI (без модуля statistics)
+    prices_list = list(date_prices.values())
+    sorted_prices = sorted(prices_list)
+    n = len(sorted_prices)
+    manual_median = sorted_prices[n // 2] if n > 0 else 0
+
     date_stats = {
         "all_dates_count": len(all_dates),
-        "searched_dates": len(date_prices),
-        "min_price": min(date_prices.values()) if date_prices else 0,
-        "max_price": max(date_prices.values()) if date_prices else 0,
-        "median_price": statistics.median(date_prices.values()) if date_prices else 0,
+        "searched_dates": n,
+        "min_price": min(prices_list) if prices_list else 0,
+        "max_price": max(prices_list) if prices_list else 0,
+        "median_price": manual_median,
         "price_by_date": date_prices
     }
     
@@ -435,16 +439,22 @@ async def analyze_tours_with_ai(
         best_months = destination_meta.get("best_months", [])
         season_info = "✅ Отличный сезон" if params["month"] in best_months else "⚠️ Межсезонье/возможны дожди"
     
-    # Рассчитываем рыночный контекст
+    # Рассчитываем рыночный контекст вручную (без модуля statistics)
     prices = [t['price'] for t in candidates]
     ratings = [t['rating'] for t in candidates if t.get('rating', 0) > 0]
     
+    # Считаем среднее и медиану простыми методами
+    avg_price = int(sum(prices) / len(prices)) if prices else 0
+    avg_rating = round(sum(ratings) / len(ratings), 1) if ratings else 0
+    sorted_prices = sorted(prices)
+    median_price = sorted_prices[len(sorted_prices) // 2] if sorted_prices else 0
+
     market_context = {
         "min_price": min(prices) if prices else 0,
         "max_price": max(prices) if prices else 0,
-        "avg_price": int(statistics.mean(prices)) if prices else 0,
-        "median_price": int(statistics.median(prices)) if prices else 0,
-        "avg_rating": round(statistics.mean(ratings), 1) if ratings else 0,
+        "avg_price": avg_price,
+        "median_price": int(median_price),
+        "avg_rating": avg_rating,
         "month_min_price": date_stats.get("min_price", 0),
         "month_max_price": date_stats.get("max_price", 0),
         "month_median_price": int(date_stats.get("median_price", 0))
