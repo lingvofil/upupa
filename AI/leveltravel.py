@@ -996,21 +996,3 @@ async def process_tours_command(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка в process_tours_command: {e}", exc_info=True)
         await message.reply(f"❌ Произошла ошибка: {str(e)}")
-
-
-# =============================================================================
-# ТЕСТ
-# =============================================================================
-
-if __name__ == "__main__":
-    async def test():
-        print("Запуск теста двухфазного поиска...")
-        result = await two_phase_search("ID", 5, 2, 7)
-        print(f"\nНайдено отелей: {len(result['hotels'])}")
-        print(f"Статистика дат: {result['date_stats']}")
-        
-        tours = list(result['hotels'].values())[:5]
-        for t in tours:
-            print(f"\n{t['hotel_name']} - {t['price']:,} ₽ ({t['date']})")
-            
-    asyncio.run(test())
