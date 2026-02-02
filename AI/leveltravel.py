@@ -6,6 +6,7 @@ from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
 import json
+import os
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
@@ -147,6 +148,8 @@ async def quick_price_scan(
     """
     ФАЗА 1: Быстрое сканирование - только минимальная цена на дату.
     Без скролла, без детального парсинга.
+    
+    ИСПРАВЛЕНИЕ #1: Увеличены таймауты и улучшена обработка отсутствия результатов
     """
     try:
         async with async_playwright() as p:
@@ -169,22 +172,40 @@ async def quick_price_scan(
                     f"1..5-stars-package-type"
                 )
                 
-                await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
+                await page.goto(search_url, timeout=90000, wait_until='domcontentloaded')
                 
-                # Ждем появления первой карточки (без долгого ожидания)
+                # ИСПРАВЛЕНИЕ: Увеличен таймаут до 30 секунд
                 try:
-                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=15000)
+                    await page.wait_for_selector('div[class*="DesktopHotelCard_container"]', timeout=30000)
                 except Exception:
-                    logging.warning(f"Нет результатов для {date}")
-                    return None
+                    # Дополнительная проверка - может быть другой селектор
+                    try:
+                        await page.wait_for_selector('[class*="HotelCard"]', timeout=5000)
+                    except Exception:
+                        logging.warning(f"Нет результатов для {date}")
+                        return None
+                
+                # Дополнительная пауза для загрузки цен
+                await page.wait_for_timeout(2000)
                 
                 # Берем цену первого тура (они отсортированы по цене)
                 min_price = await page.evaluate("""
                     () => {
-                        const firstCard = document.querySelector('div[class*="DesktopHotelCard_container"]');
+                        // Пробуем разные селекторы
+                        let firstCard = document.querySelector('div[class*="DesktopHotelCard_container"]');
+                        if (!firstCard) {
+                            firstCard = document.querySelector('[class*="HotelCard"]');
+                        }
                         if (!firstCard) return null;
                         
-                        const priceEl = firstCard.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
+                        // Пробуем разные селекторы для цены
+                        let priceEl = firstCard.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
+                        if (!priceEl) {
+                            priceEl = firstCard.querySelector('[class*="Price"]');
+                        }
+                        if (!priceEl) {
+                            priceEl = firstCard.querySelector('[class*="price"]');
+                        }
                         if (!priceEl) return null;
                         
                         const priceText = priceEl.textContent.replace(/\\s/g, '').replace(/&nbsp;/g, '').replace(/\\u00a0/g, '');
@@ -192,6 +213,9 @@ async def quick_price_scan(
                         return priceMatch ? parseInt(priceMatch[0]) : null;
                     }
                 """)
+                
+                if min_price:
+                    logging.info(f"Найдена цена для {date}: {min_price} ₽")
                 
                 return min_price
                 
@@ -204,6 +228,80 @@ async def quick_price_scan(
         return None
 
 
+async def capture_hotel_screenshot(
+    hotel_link: str,
+    hotel_name: str,
+    nights: int
+) -> Optional[str]:
+    """
+    НОВАЯ ФУНКЦИЯ #2: Создает скриншот страницы отеля с расширенной информацией.
+    Возвращает путь к сохраненному файлу.
+    """
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                viewport={'width': 1920, 'height': 1080},
+                locale='ru-RU',
+                timezone_id='Europe/Moscow'
+            )
+            page = await context.new_page()
+            
+            try:
+                logging.info(f"Создаю скриншот для {hotel_name}")
+                
+                # Переходим на страницу отеля
+                await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
+                
+                # Ждем загрузки календаря с датами
+                try:
+                    await page.wait_for_selector('[class*="Calendar"]', timeout=15000)
+                except Exception:
+                    logging.warning(f"Календарь не загрузился для {hotel_name}")
+                
+                # Дополнительная пауза для полной загрузки
+                await page.wait_for_timeout(3000)
+                
+                # Прокручиваем к календарю и вариантам номеров
+                await page.evaluate("""
+                    () => {
+                        const calendar = document.querySelector('[class*="Calendar"]');
+                        if (calendar) {
+                            calendar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                    }
+                """)
+                
+                await page.wait_for_timeout(2000)
+                
+                # Создаем директорию для скриншотов если её нет
+                screenshots_dir = "/tmp/tour_screenshots"
+                os.makedirs(screenshots_dir, exist_ok=True)
+                
+                # Генерируем безопасное имя файла
+                safe_name = re.sub(r'[^\w\s-]', '', hotel_name)[:50]
+                screenshot_path = f"{screenshots_dir}/{safe_name}_{nights}n.png"
+                
+                # Делаем скриншот области с календарем и вариантами номеров
+                await page.screenshot(
+                    path=screenshot_path,
+                    full_page=False,
+                    type='png'
+                )
+                
+                logging.info(f"Скриншот сохранен: {screenshot_path}")
+                return screenshot_path
+                
+            finally:
+                await context.close()
+                await browser.close()
+                
+    except Exception as e:
+        logging.error(f"Ошибка создания скриншота для {hotel_name}: {e}")
+        return None
+
+
 async def deep_parse_date(
     country_code: str,
     date: str,
@@ -213,6 +311,8 @@ async def deep_parse_date(
     """
     ФАЗА 2: Глубокий парсинг - полная информация по дате.
     Со скроллом, рейтингами, локациями.
+    
+    ИСПРАВЛЕНИЕ #1: Улучшена обработка разных селекторов
     """
     tours = []
 
@@ -339,7 +439,6 @@ async def deep_parse_date(
     return tours
 
 
-
 async def two_phase_search(
     country_code: str,
     month: Optional[int],
@@ -350,6 +449,8 @@ async def two_phase_search(
     Двухфазный поиск по всему месяцу:
     ФАЗА 1: Быстрое сканирование всех дат → находим самые дешевые
     ФАЗА 2: Глубокий парсинг только перспективных дат
+    
+    ИСПРАВЛЕНИЕ #3: Корректный расчет статистики
     """
     
     # Генерируем все даты месяца
@@ -380,6 +481,7 @@ async def two_phase_search(
     
     # ФАЗА 2: Глубокий парсинг перспективных дат
     hotels = {}  # {hotel_name: best_offer}
+    all_parsed_tours = []  # ИСПРАВЛЕНИЕ #3: Собираем ВСЕ спарсенные туры для корректной статистики
     
     for date in best_dates:
         tours = await deep_parse_date(country_code, date, adults, nights)
@@ -392,6 +494,9 @@ async def two_phase_search(
             tour['date'] = date
             tour['nights'] = nights
             
+            # ИСПРАВЛЕНИЕ #3: Добавляем тур в общий список
+            all_parsed_tours.append(tour)
+            
             # Сохраняем только ЛУЧШЕЕ предложение для каждого отеля
             if hotel_key not in hotels:
                 hotels[hotel_key] = tour
@@ -402,22 +507,36 @@ async def two_phase_search(
         
         await asyncio.sleep(2)
     
-    # Собираем статистику по датам для AI (без модуля statistics)
-    prices_list = list(date_prices.values())
-    sorted_prices = sorted(prices_list)
-    n = len(sorted_prices)
-    manual_median = sorted_prices[n // 2] if n > 0 else 0
+    # ИСПРАВЛЕНИЕ #3: Корректная статистика
+    # Используем цены из ФАЗЫ 1 для общей статистики месяца
+    prices_phase1 = list(date_prices.values())
+    sorted_prices_phase1 = sorted(prices_phase1)
+    n1 = len(sorted_prices_phase1)
+    
+    # А для детального анализа - цены из спарсенных туров ФАЗЫ 2
+    prices_phase2 = [t['price'] for t in all_parsed_tours if t.get('price', 0) > 0]
+    sorted_prices_phase2 = sorted(prices_phase2) if prices_phase2 else []
+    
+    # Медиана для ФАЗЫ 1 (весь месяц)
+    median_phase1 = sorted_prices_phase1[n1 // 2] if n1 > 0 else 0
 
     date_stats = {
         "all_dates_count": len(all_dates),
-        "searched_dates": n,
-        "min_price": min(prices_list) if prices_list else 0,
-        "max_price": max(prices_list) if prices_list else 0,
-        "median_price": manual_median,
-        "price_by_date": date_prices
+        "searched_dates": n1,
+        # Статистика по ФАЗЕ 1 (весь месяц, быстрое сканирование)
+        "min_price": min(prices_phase1) if prices_phase1 else 0,
+        "max_price": max(prices_phase1) if prices_phase1 else 0,
+        "median_price": median_phase1,
+        "price_by_date": date_prices,
+        # Статистика по ФАЗЕ 2 (детально спарсенные туры)
+        "detailed_min_price": min(prices_phase2) if prices_phase2 else 0,
+        "detailed_max_price": max(prices_phase2) if prices_phase2 else 0,
+        "detailed_tours_count": len(all_parsed_tours)
     }
     
     logging.info(f"ФАЗА 2 завершена. Уникальных отелей: {len(hotels)}")
+    logging.info(f"Статистика: min={date_stats['min_price']}, median={date_stats['median_price']}, max={date_stats['max_price']}")
+    logging.info(f"Детальная статистика: min={date_stats['detailed_min_price']}, туров={date_stats['detailed_tours_count']}")
     
     return {
         "hotels": hotels,
@@ -545,8 +664,7 @@ async def analyze_tours_with_ai(
     "index": 0,
     "ai_score": 9,
     "scenario": "Минимальный бюджет",
-    "reason": "Островной бутик-отель на Ченингане 🌴 Рейтинг Level.Travel — 10.0, но по внешним источникам средняя оценка ~4.6/5 (Booking, Google), около 300 отзывов. Хвалят виды и сервис, из минусов — сложный подъезд и приливы. Цена ~151 000 ₽ выглядит оправданной.
-"
+    "reason": "Островной бутик-отель на Ченингане 🌴 Рейтинг Level.Travel — 10.0, но по внешним источникам средняя оценка ~4.6/5 (Booking, Google), около 300 отзывов. Хвалят виды и сервис, из минусов — сложный подъезд и приливы. Цена ~151 000 ₽ выглядит оправданной."
   }},
   ...
 ]
@@ -692,9 +810,12 @@ def format_tours_message(
     return "\n".join(lines)
 
 
-
 async def process_tours_command(message: types.Message):
-    """Главный обработчик команды поиска туров."""
+    """
+    Главный обработчик команды поиска туров.
+    
+    НОВОЕ #2: Теперь отправляет результаты по одному сообщению на тур со скриншотом
+    """
     # Проверка доступа
     if ADMIN_ID and message.from_user.id != int(ADMIN_ID):
         await message.reply("🚫 Доступ к поиску туров только для администратора.")
@@ -752,11 +873,125 @@ async def process_tours_command(message: types.Message):
         # AI анализ
         best_tours = await analyze_tours_with_ai(hotels, date_stats, params)
         
-        # Форматирование и отправка
-        text_response = format_tours_message(best_tours, params, date_stats)
+        await status_msg.edit_text(
+            f"✅ Анализ завершен!\n"
+            f"Отобрано {len(best_tours)} лучших предложений\n\n"
+            f"⏳ Создаю скриншоты...",
+            parse_mode="HTML"
+        )
         
+        # НОВОЕ #2: Отправляем результаты по одному с скриншотами
+        country_name = params.get("country_name", "направление").capitalize()
+        
+        # Формируем заголовок
+        header = (
+            f"🏖 <b>Топ подборка: {country_name}</b>\n"
+            f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n\n"
+        )
+        
+        if date_stats:
+            header += (
+                f"📊 <b>Анализ месяца:</b>\n"
+                f"• Проверено дат: {date_stats.get('searched_dates', 0)}\n"
+                f"• Минимум: {date_stats.get('min_price', 0):,} ₽\n"
+                f"• Медиана: {int(date_stats.get('median_price', 0)):,} ₽\n"
+                f"• Максимум: {date_stats.get('max_price', 0):,} ₽\n\n"
+                f"📸 Скриншоты показывают:\n"
+                f"• Календарь с ценами на разные даты\n"
+                f"• Варианты номеров с ценами\n"
+                f"• Информацию о завтраках\n"
+            )
+        
+        # Удаляем статусное сообщение
         await status_msg.delete()
-        await message.reply(text_response, parse_mode="HTML", disable_web_page_preview=True)
+        
+        # Отправляем заголовок
+        await message.reply(header, parse_mode="HTML")
+        
+        # Отправляем каждый тур отдельным сообщением со скриншотом
+        for i, tour in enumerate(best_tours, 1):
+            try:
+                # Формируем текст для одного тура
+                link = tour.get("link", "#")
+                name = tour.get("hotel_name", "Отель")
+                
+                tour_text = f"<b>{i}. <a href='{link}'>{name}</a></b>\n"
+                
+                if tour.get("scenario"):
+                    tour_text += f"🎯 <i>{tour['scenario']}</i>\n"
+                
+                # Диапазон дат
+                start_date_str = tour.get("date", "")
+                nights = tour.get("nights", params.get("nights", 0))
+                
+                try:
+                    start_dt = datetime.strptime(start_date_str, "%d.%m.%Y")
+                    end_dt = start_dt + timedelta(days=nights)
+                    date_range = f"📅 {start_dt.strftime('%d.%m.%Y')}-{end_dt.strftime('%d.%m.%Y')}"
+                except Exception:
+                    date_range = f"📅 {start_date_str}" if start_date_str else ""
+                
+                stars = "⭐️" * tour.get("stars", 0)
+                meta = " | ".join(p for p in [stars, date_range] if p)
+                if meta:
+                    tour_text += meta + "\n"
+                
+                rating = tour.get("rating", 0)
+                if rating > 0:
+                    tour_text += f"📊 Рейтинг Level.Travel: {rating}\n"
+                
+                if tour.get("location"):
+                    tour_text += f"📍 {tour['location']}\n"
+                
+                if tour.get("ai_reason"):
+                    tour_text += f"🤖 <i>{tour['ai_reason']}</i>\n"
+                
+                price = tour.get("price", 0)
+                price_line = f"💰 <b>{price:,} ₽</b>"
+                
+                diff = tour.get("price_vs_median")
+                if diff is not None:
+                    if diff < -10:
+                        price_line += " 🔥 Выгодно!"
+                    elif diff < -5:
+                        price_line += " ✅"
+                
+                tour_text += price_line
+                
+                # Создаем скриншот
+                screenshot_path = None
+                if link and link != "#":
+                    screenshot_path = await capture_hotel_screenshot(
+                        link, 
+                        name, 
+                        nights
+                    )
+                
+                # Отправляем сообщение со скриншотом или без
+                if screenshot_path and os.path.exists(screenshot_path):
+                    try:
+                        with open(screenshot_path, 'rb') as photo:
+                            await message.reply_photo(
+                                photo=photo,
+                                caption=tour_text,
+                                parse_mode="HTML"
+                            )
+                        # Удаляем временный файл
+                        os.remove(screenshot_path)
+                    except Exception as e:
+                        logging.error(f"Ошибка отправки скриншота: {e}")
+                        await message.reply(tour_text, parse_mode="HTML", disable_web_page_preview=True)
+                else:
+                    await message.reply(tour_text, parse_mode="HTML", disable_web_page_preview=True)
+                
+                # Небольшая пауза между сообщениями
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logging.error(f"Ошибка отправки тура #{i}: {e}")
+                continue
+        
+        logging.info(f"Отправлено {len(best_tours)} туров пользователю {message.from_user.id}")
         
     except Exception as e:
         logging.error(f"Ошибка в process_tours_command: {e}", exc_info=True)
@@ -770,7 +1005,7 @@ async def process_tours_command(message: types.Message):
 if __name__ == "__main__":
     async def test():
         print("Запуск теста двухфазного поиска...")
-        result = await two_phase_search("LK", 4, 2, 10)
+        result = await two_phase_search("ID", 5, 2, 7)
         print(f"\nНайдено отелей: {len(result['hotels'])}")
         print(f"Статистика дат: {result['date_stats']}")
         
