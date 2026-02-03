@@ -149,7 +149,7 @@ async def generate_situational_reaction(chat_id: int):
 
 async def generate_random_word_reaction(chat_id: int):
     """
-    ИСПРАВЛЕНО: Выбирает случайное слово/словосочетание из последних 10 сообщений
+    ИСПРАВЛЕНО: Выбирает случайное слово/словосочетание из последних 20 сообщений
     и генерирует реакцию в формате "я %это слово/словосочетание%".
     Автоматически использует активную модель для чата.
     """
@@ -161,33 +161,37 @@ async def generate_random_word_reaction(chat_id: int):
         logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
         return None
 
-    last_messages = all_messages[-10:]
+    last_messages = all_messages[-20:]
     chat_history = "\n".join(last_messages)
     
     if not chat_history.strip():
         return None
         
     logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции 'я %слово%'.")
+    logging.debug(f"История для анализа: {chat_history[:200]}...")  # Первые 200 символов для отладки
 
     prompt = f"""
-    Проанализируй диалог из чата. Выбери из него одно интересное слово или короткое словосочетание (2-3 слова максимум).
+    ЗАДАЧА: Выбери одно слово или короткое словосочетание (максимум 2-3 слова) СТРОГО из диалога ниже.
     Затем составь фразу в формате: "я [выбранное слово/словосочетание]"
     
-    Примеры:
-    - "я реактивный самолет"
-    - "я космический корабль"
-    - "я пидорас"
-    - "я твоя мама"
-    - "я философ"
+    КРИТИЧЕСКИ ВАЖНО:
+    - Используй ТОЛЬКО слова, которые ЕСТЬ в диалоге ниже
+    - НЕ выдумывай новые слова
+    - НЕ используй слова, которых НЕТ в диалоге
+    - Выбирай интересные, смешные или абсурдные слова/фразы
     
-    ВАЖНО: Ответь ТОЛЬКО фразой в указанном формате, без объяснений и дополнительного текста.
+    Примеры правильного формата:
+    - "я реактивный самолет" (если в диалоге есть "реактивный самолет")
+    - "я пидорас" (если в диалоге есть "пидорас")
+    - "я твоя мама" (если в диалоге есть "твоя мама")
+    - "я философ" (если в диалоге есть "философ")
     
-    Вот диалог для анализа:
+    Диалог для анализа:
     ---
     {chat_history}
     ---
 
-    Твоя фраза (только "я [слово/словосочетание]"):
+    Твоя фраза (ТОЛЬКО "я [слово из диалога выше]"):
     """
     
     try:
@@ -196,12 +200,62 @@ async def generate_random_word_reaction(chat_id: int):
 
         # Проверяем, что ответ начинается с "я " (регистронезависимо)
         if reaction_text and reaction_text.lower().startswith('я '):
-            return reaction_text
+            # НОВОЕ: Проверяем, что слово из ответа действительно есть в диалоге
+            word_part = reaction_text[2:].strip().lower()  # Убираем "я "
+            
+            # Проверка: есть ли это слово в диалоге?
+            if word_part and word_part in chat_history.lower():
+                return reaction_text
+            else:
+                logging.warning(f"Модель выдумала слово '{word_part}', которого нет в диалоге. Используем fallback.")
+                # FALLBACK: Простой Python-выбор случайного слова
+                return await generate_simple_random_word_reaction(chat_history)
         else:
             return None
 
     except Exception as e:
         logging.error(f"Ошибка при генерации реакции 'я %слово%': {e}", exc_info=True)
+        # FALLBACK при ошибке
+        try:
+            return await generate_simple_random_word_reaction(chat_history)
+        except:
+            return None
+
+async def generate_simple_random_word_reaction(chat_history: str):
+    """
+    FALLBACK-функция: Простой выбор случайного слова из диалога без AI.
+    Используется, когда модель выдумывает несуществующие слова.
+    """
+    try:
+        # Разбиваем на слова
+        import re
+        words = re.findall(r'\b[а-яёА-ЯЁa-zA-Z]{3,}\b', chat_history)
+        
+        if not words:
+            return None
+        
+        # Фильтруем стоп-слова
+        stop_words = {'это', 'был', 'была', 'были', 'что', 'как', 'где', 'когда', 'кто', 'чтобы', 'если', 'или', 'для', 'при', 'под', 'над'}
+        filtered_words = [w for w in words if w.lower() not in stop_words and len(w) > 3]
+        
+        if not filtered_words:
+            filtered_words = words
+        
+        # Выбираем случайное слово
+        chosen_word = random.choice(filtered_words)
+        
+        # Иногда выбираем словосочетание (2 слова)
+        if len(filtered_words) > 1 and random.random() < 0.3:
+            idx = filtered_words.index(chosen_word)
+            if idx < len(filtered_words) - 1:
+                chosen_word = f"{chosen_word} {filtered_words[idx + 1]}"
+        
+        result = f"я {chosen_word.lower()}"
+        logging.info(f"FALLBACK: Сгенерирована простая реакция без AI: '{result}'")
+        return result
+        
+    except Exception as e:
+        logging.error(f"Ошибка в fallback-генерации: {e}")
         return None
 
 # --- ИСПРАВЛЕНО: Рифма с выбором активной модели ---
