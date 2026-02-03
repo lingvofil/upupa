@@ -161,7 +161,7 @@ async def generate_random_word_reaction(chat_id: int):
         logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
         return None
 
-    last_messages = all_messages[-20:]
+    last_messages = all_messages[-5:]
     chat_history = "\n".join(last_messages)
     
     if not chat_history.strip():
@@ -171,7 +171,7 @@ async def generate_random_word_reaction(chat_id: int):
     logging.debug(f"История для анализа: {chat_history[:200]}...")  # Первые 200 символов для отладки
 
     prompt = f"""
-    ЗАДАЧА: Выбери одно слово или короткое словосочетание (максимум 2-3 слова) СТРОГО из диалога ниже.
+    ЗАДАЧА: Выбери одно слово или короткое словосочетание (максимум 2 слова) СТРОГО из диалога ниже.
     Затем составь фразу в формате: "я [выбранное слово/словосочетание]"
     
     КРИТИЧЕСКИ ВАЖНО:
