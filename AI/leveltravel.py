@@ -225,7 +225,7 @@ async def capture_hotel_screenshots(
     """
     Создает ДВА скриншота:
     1. Верхняя часть с календарем.
-    2. Нижняя часть с вариантами номеров.
+    2. Нижняя часть с вариантами номеров (с умным скроллом).
     """
     paths = []
     try:
@@ -233,7 +233,7 @@ async def capture_hotel_screenshots(
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                viewport={'width': 1920, 'height': 1080}, # Высоту можно увеличить, чтобы влезало больше
+                viewport={'width': 1920, 'height': 1080},
                 locale='ru-RU',
                 timezone_id='Europe/Moscow'
             )
@@ -243,47 +243,82 @@ async def capture_hotel_screenshots(
                 logging.info(f"Создаю скриншоты для {hotel_name}")
                 await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
                 
+                # --- ПОДГОТОВКА: СКРЫВАЕМ ЛИШНЕЕ ---
+                # Скрываем куки и кнопки чатов, которые часто перекрывают цены
+                await page.evaluate("""
+                    () => {
+                        const selectors = [
+                            '[class*="CookieConsent"]', 
+                            '[class*="WidgetContainer"]', 
+                            '#jivo-iframe-container',
+                            '[class*="StickyButton"]'
+                        ];
+                        selectors.forEach(s => {
+                            const el = document.querySelector(s);
+                            if (el) el.style.display = 'none';
+                        });
+                    }
+                """)
+
                 # --- СКРИНШОТ 1: КАЛЕНДАРЬ ---
                 try:
                     await page.wait_for_selector('[class*="Calendar"]', timeout=15000)
                 except Exception:
                     logging.warning(f"Календарь не загрузился для {hotel_name}")
                 
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2000)
                 
-                # Скроллим к календарю
+                # Центрируем календарь
                 await page.evaluate("""
                     () => {
                         const calendar = document.querySelector('[class*="Calendar"]');
                         if (calendar) {
-                            calendar.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            calendar.scrollIntoView({ behavior: 'auto', block: 'center' });
                         }
                     }
                 """)
                 await page.wait_for_timeout(1000)
 
-                # Папка для скриншотов
                 screenshots_dir = "/tmp/tour_screenshots"
                 os.makedirs(screenshots_dir, exist_ok=True)
                 safe_name = re.sub(r'[^\w\s-]', '', hotel_name)[:50]
                 
-                # Снимаем первый скриншот
                 path1 = f"{screenshots_dir}/{safe_name}_1_calendar.png"
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
 
-                # --- СКРИНШОТ 2: НОМЕРА ---
-                # Скроллим вниз, чтобы увидеть номера. 
-                # Обычно они идут сразу после блока с отелем/календарем.
-                # Делаем прокрутку колесом, чтобы стриггерить ленивую загрузку (lazy load)
-                await page.mouse.wheel(0, 1200) 
-                await page.wait_for_timeout(1500) # Ждем прогрузки картинок номеров
+                # --- СКРИНШОТ 2: ВАРЬЯНТЫ НОМЕРОВ ---
+                # Ищем блок с офферами (номерами) по разным возможным селекторам
+                await page.evaluate("""
+                    () => {
+                        const offersBlock = document.querySelector('[class*="HotelOffers"]') || 
+                                           document.querySelector('#offers') ||
+                                           document.querySelector('[class*="BookingOffers"]');
+                        
+                        if (offersBlock) {
+                            // Скроллим к началу блока номеров
+                            offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
+                        } else {
+                            // Если не нашли, просто скроллим вниз на 900 пикселей
+                            window.scrollBy(0, 900);
+                        }
+                    }
+                """)
+                
+                # Немного возвращаемся назад, чтобы не обрезать заголовок "Выберите номер"
+                await page.mouse.wheel(0, -150)
+                
+                # Ждем прогрузки фотографий номеров и цен
+                await page.wait_for_timeout(2500)
+                
+                # Увеличиваем высоту окна, чтобы влезло больше категорий номеров
+                await page.set_viewport_size({'width': 1920, 'height': 1200})
                 
                 path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
                 await page.screenshot(path=path2, full_page=False, type='png')
                 paths.append(path2)
                 
-                logging.info(f"Скриншоты сохранены: {len(paths)} шт.")
+                logging.info(f"Скриншоты успешно созданы: {len(paths)}")
                 return paths
                 
             finally:
@@ -292,7 +327,7 @@ async def capture_hotel_screenshots(
                 
     except Exception as e:
         logging.error(f"Ошибка создания скриншотов для {hotel_name}: {e}")
-        return paths # Вернем то, что успели сделать (или пустой список)
+        return paths
 
 
 async def deep_parse_date(
