@@ -9,38 +9,91 @@ from aiogram import Bot
 
 # Используем тот же экстрактор сообщений, что и в других модулях
 from lexicon_settings import extract_chat_messages
-from config import model, groq_ai # Импортируем обе модели
+from config import model, groq_ai, gigachat_model, chat_settings # ИСПРАВЛЕНО: добавлен chat_settings
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
     "❤️", "🥰", "😁", "❤️‍🔥", "💔", "🤨", "👀", "🫡"
 ]
 
-# --- ИЗМЕНЕНО: Случайные эмодзи-реакции (БЕЗ AI) ---
+# --- ИСПРАВЛЕНО: Универсальная функция выбора активной модели ---
+
+async def get_active_model_for_chat(chat_id: int):
+    """
+    Возвращает активную модель для чата на основе настроек.
+    ВАЖНО: Эта функция используется вместо прямого обращения к model.
+    """
+    chat_key = str(chat_id)
+    current_settings = chat_settings.get(chat_key, {})
+    active_model_name = current_settings.get("active_model", "gemini")
+    
+    # Режим истории не подходит для реакций
+    if active_model_name == "history":
+        active_model_name = "gemini"
+    
+    logging.info(f"Активная модель для чата {chat_id}: {active_model_name}")
+    
+    if active_model_name == "gigachat":
+        return gigachat_model, "gigachat"
+    elif active_model_name == "groq":
+        return groq_ai, "groq"
+    else:  # gemini
+        return model, "gemini"
+
+async def generate_with_model(prompt: str, chat_id: int, temperature: float = 0.7, max_tokens: int = 60) -> str:
+    """
+    НОВАЯ ФУНКЦИЯ: Универсальная генерация текста с автоматическим выбором модели.
+    Используется во всех AI-реакциях.
+    """
+    model_instance, model_name = await get_active_model_for_chat(chat_id)
+    
+    def sync_generate():
+        try:
+            if model_name == "groq":
+                return groq_ai.generate_text(prompt, max_tokens=max_tokens)
+            elif model_name == "gigachat":
+                response = gigachat_model.generate_content(prompt, chat_id=chat_id)
+                return response.text
+            else:  # gemini
+                response = model.generate_content(
+                    prompt, 
+                    chat_id=chat_id,
+                    generation_config={
+                        'temperature': temperature,
+                        'max_output_tokens': max_tokens,
+                        'top_p': 1.0,
+                    }
+                )
+                if response and response.candidates and response.candidates[0].content.parts:
+                    return response.text.strip()
+                return ""
+        except Exception as e:
+            logging.error(f"Ошибка генерации с моделью {model_name}: {e}")
+            return ""
+    
+    return await asyncio.to_thread(sync_generate)
+
+# --- Случайные эмодзи-реакции (БЕЗ AI) ---
 async def set_random_emoji_reaction(message: Message):
     """
     Ставит случайный эмодзи из списка без анализа контекста.
     Быстро, бесплатно, не грузит API.
     """
     try:
-        # Выбираем случайный эмодзи
         chosen_emoji = random.choice(TELEGRAM_REACTIONS)
-        
-        # Ставим реакцию
         await message.react(reaction=[ReactionTypeEmoji(emoji=chosen_emoji)])
         logging.info(f"Бот поставил случайную реакцию: {chosen_emoji}")
         return True
-
     except Exception as e:
-        logging.error(f"Ошибка при проставлении случайной эмодji-реакции: {e}")
+        logging.error(f"Ошибка при проставлении случайной эмодзи-реакции: {e}")
         return False
 
-# --- ИСПРАВЛЕНО: Кинематографичные ремарки теперь работают с любой моделью ---
+# --- ИСПРАВЛЕНО: Кинематографичные ремарки с выбором активной модели ---
 
-async def generate_situational_reaction(chat_id: int, model_instance):
+async def generate_situational_reaction(chat_id: int):
     """
     Генерирует ироничную кинематографичную ремарку на основе истории чата.
-    ИСПРАВЛЕНО: Теперь работает с Gemini, GigaChat и Groq.
+    ИСПРАВЛЕНО: Автоматически выбирает активную модель для чата.
     """
     logging.info(f"Запуск генерации ситуативной реакции для чата {chat_id}.")
     
@@ -80,54 +133,7 @@ async def generate_situational_reaction(chat_id: int, model_instance):
     """
     
     try:
-        def sync_llm_call():
-            try:
-                # ИСПРАВЛЕНИЕ: Проверяем тип модели и используем правильный метод
-                
-                # Если это Groq
-                if hasattr(model_instance, 'groq_client'):
-                    logging.info("Используем Groq для ситуативной реакции")
-                    response = model_instance.generate_text(
-                        prompt,
-                        chat_id=chat_id,
-                        temperature=1.0,
-                        max_tokens=60
-                    )
-                    return response.strip() if response else ""
-                
-                # Если это GigaChat
-                elif hasattr(model_instance, 'gigachat'):
-                    logging.info("Используем GigaChat для ситуативной реакции")
-                    response = model_instance.generate_text(
-                        prompt,
-                        chat_id=chat_id,
-                        temperature=1.0,
-                        max_tokens=60
-                    )
-                    return response.strip() if response else ""
-                
-                # Если это Gemini (стандартный случай)
-                else:
-                    logging.info("Используем Gemini для ситуативной реакции")
-                    response = model_instance.generate_content(
-                        prompt,
-                        chat_id=chat_id,
-                        generation_config={
-                            'temperature': 1.0,
-                            'max_output_tokens': 60,
-                            'top_p': 1.0,
-                        }
-                    )
-                    if response and response.candidates and response.candidates[0].content.parts:
-                        return response.text.strip()
-                    return ""
-                    
-            except Exception as e:
-                logging.warning(f"Ошибка внутри sync_llm_call (situational): {e}")
-                return ""
-
-        reaction_text = await asyncio.to_thread(sync_llm_call)
-        
+        reaction_text = await generate_with_model(prompt, chat_id, temperature=1.0, max_tokens=60)
         logging.info(f"Ответ от модели для ситуативной реакции: '{reaction_text}'")
 
         if reaction_text and reaction_text.startswith('*') and reaction_text.endswith('*'):
@@ -139,13 +145,13 @@ async def generate_situational_reaction(chat_id: int, model_instance):
         logging.error(f"Ошибка при генерации ситуативной реакции: {e}", exc_info=True)
         return None
 
-# --- НОВОЕ: Реакция "я %слово%" ---
+# --- ИСПРАВЛЕНО: Реакция "я %слово%" с выбором активной модели ---
 
-async def generate_random_word_reaction(chat_id: int, model_instance):
+async def generate_random_word_reaction(chat_id: int):
     """
-    НОВАЯ ФУНКЦИЯ: Выбирает случайное слово/словосочетание из последних 10 сообщений
+    ИСПРАВЛЕНО: Выбирает случайное слово/словосочетание из последних 10 сообщений
     и генерирует реакцию в формате "я %это слово/словосочетание%".
-    Например: "я реактивный самолет"
+    Автоматически использует активную модель для чата.
     """
     logging.info(f"Запуск генерации реакции 'я %слово%' для чата {chat_id}.")
     
@@ -185,54 +191,7 @@ async def generate_random_word_reaction(chat_id: int, model_instance):
     """
     
     try:
-        def sync_llm_call():
-            try:
-                # Проверяем тип модели
-                
-                # Если это Groq
-                if hasattr(model_instance, 'groq_client'):
-                    logging.info("Используем Groq для реакции 'я %слово%'")
-                    response = model_instance.generate_text(
-                        prompt,
-                        chat_id=chat_id,
-                        temperature=0.8,
-                        max_tokens=30
-                    )
-                    return response.strip() if response else ""
-                
-                # Если это GigaChat
-                elif hasattr(model_instance, 'gigachat'):
-                    logging.info("Используем GigaChat для реакции 'я %слово%'")
-                    response = model_instance.generate_text(
-                        prompt,
-                        chat_id=chat_id,
-                        temperature=0.8,
-                        max_tokens=30
-                    )
-                    return response.strip() if response else ""
-                
-                # Если это Gemini
-                else:
-                    logging.info("Используем Gemini для реакции 'я %слово%'")
-                    response = model_instance.generate_content(
-                        prompt,
-                        chat_id=chat_id,
-                        generation_config={
-                            'temperature': 0.8,
-                            'max_output_tokens': 30,
-                            'top_p': 1.0,
-                        }
-                    )
-                    if response and response.candidates and response.candidates[0].content.parts:
-                        return response.text.strip()
-                    return ""
-                    
-            except Exception as e:
-                logging.warning(f"Ошибка внутри sync_llm_call (random word): {e}")
-                return ""
-
-        reaction_text = await asyncio.to_thread(sync_llm_call)
-        
+        reaction_text = await generate_with_model(prompt, chat_id, temperature=0.8, max_tokens=30)
         logging.info(f"Ответ от модели для реакции 'я %слово%': '{reaction_text}'")
 
         # Проверяем, что ответ начинается с "я " (регистронезависимо)
@@ -245,8 +204,9 @@ async def generate_random_word_reaction(chat_id: int, model_instance):
         logging.error(f"Ошибка при генерации реакции 'я %слово%': {e}", exc_info=True)
         return None
 
-# Рифма
-async def generate_rhyme_reaction(message, model_instance):
+# --- ИСПРАВЛЕНО: Рифма с выбором активной модели ---
+
+async def generate_rhyme_reaction(message):
     """Генерирует рифмованную реакцию на последнее слово сообщения"""
     tries = 0
     max_tries = 3
@@ -269,54 +229,7 @@ async def generate_rhyme_reaction(message, model_instance):
             Ответь только одним словом - рифмой, без объяснений и дополнительного текста.
             Рифма должна быть на русском языке и звучать естественно."""
             
-            def sync_rhyme_call():
-                try:
-                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
-                    
-                    # Если это Groq
-                    if hasattr(model_instance, 'groq_client'):
-                        response = model_instance.generate_text(
-                            rhyme_prompt,
-                            chat_id=chat_id,
-                            temperature=0.7,
-                            max_tokens=10
-                        )
-                        return response.strip() if response else None
-                    
-                    # Если это GigaChat
-                    elif hasattr(model_instance, 'gigachat'):
-                        response = model_instance.generate_text(
-                            rhyme_prompt,
-                            chat_id=chat_id,
-                            temperature=0.7,
-                            max_tokens=10
-                        )
-                        return response.strip() if response else None
-                    
-                    # Если это Gemini
-                    else:
-                        response = model_instance.generate_content(
-                            rhyme_prompt,
-                            chat_id=chat_id,
-                            generation_config={
-                                'temperature': 0.7,
-                                'max_output_tokens': 10,
-                                'top_p': 0.8,
-                            }
-                        )
-                        if hasattr(response, 'text') and response.text:
-                            return response.text.strip()
-                        elif hasattr(response, 'candidates') and response.candidates:
-                            candidate = response.candidates[0]
-                            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                                return candidate.content.parts[0].text.strip()
-                        return None
-                        
-                except Exception as e:
-                    logging.error(f"API error in sync_rhyme_call: {e}")
-                    return None
-            
-            rhyme_word = await asyncio.to_thread(sync_rhyme_call)
+            rhyme_word = await generate_with_model(rhyme_prompt, chat_id, temperature=0.7, max_tokens=10)
             
             if not rhyme_word:
                 tries += 1
@@ -472,13 +385,13 @@ INSULT_WORDS_FOR_1399269377 = [
     "Давай побольше эмоджиков навали чтобы точно было видно"
 ]
 
-async def generate_insult_for_lis(message, model_instance):
-    """
-    Генерирует реакцию для пользователя 1399269377.
-    """
+# ИСПРАВЛЕНО: Персональные реакции с выбором активной модели
+
+async def generate_insult_for_lis(message):
+    """Генерирует реакцию для пользователя 1399269377."""
     chat_id = message.chat.id
     try:
-        if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
+        if random.random() < 0.9:
             logging.info("Генерация МИКСА фразы для 1399269377...")
             
             prompt = (
@@ -488,47 +401,8 @@ async def generate_insult_for_lis(message, model_instance):
                 "Примеры для микширования:\n" + "\n".join(INSULT_WORDS_FOR_1399269377) +
                 "\n\nТвой микс (ТОЛЬКО из слов выше):"
             )
-
-            def call_llm():
-                try:
-                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
-                    
-                    # Если это Groq
-                    if hasattr(model_instance, 'groq_client'):
-                        response = model_instance.generate_text(
-                            prompt,
-                            chat_id=chat_id,
-                            temperature=0.6,
-                            max_tokens=60
-                        )
-                        return response.strip() if response else ""
-                    
-                    # Если это GigaChat
-                    elif hasattr(model_instance, 'gigachat'):
-                        response = model_instance.generate_text(
-                            prompt,
-                            chat_id=chat_id,
-                            temperature=0.6,
-                            max_tokens=60
-                        )
-                        return response.strip() if response else ""
-                    
-                    # Если это Gemini
-                    else:
-                        response = model_instance.generate_content(
-                            prompt,
-                            chat_id=chat_id,
-                            generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
-                        )
-                        if response and response.candidates and response.candidates[0].content.parts:
-                            return response.text.strip()
-                        return ""
-                        
-                except Exception as e:
-                    logging.error(f"Ошибка генерации реакции для 1399269377 (LLM call): {e}")
-                    return None
             
-            new_phrase = await asyncio.to_thread(call_llm)
+            new_phrase = await generate_with_model(prompt, chat_id, temperature=0.6, max_tokens=60)
             
             if new_phrase:
                 await message.reply(new_phrase)
@@ -538,8 +412,7 @@ async def generate_insult_for_lis(message, model_instance):
                 selected_phrase = random.choice(INSULT_WORDS_FOR_1399269377)
                 await message.reply(selected_phrase)
                 return True
-        
-        else: # 10% шанс использовать фразу из списка
+        else:
             logging.info("Использование случайной фразы из списка для 1399269377...")
             selected_phrase = random.choice(INSULT_WORDS_FOR_1399269377)
             await message.reply(selected_phrase)
@@ -569,13 +442,11 @@ PHRASES_FOR_113086922 = [
     "залина, я спать пошел"
 ]
 
-async def generate_reaction_for_113086922(message: Message, model_instance):
-    """
-    Генерирует реакцию для пользователя 113086922.
-    """
+async def generate_reaction_for_113086922(message: Message):
+    """Генерирует реакцию для пользователя 113086922."""
     chat_id = message.chat.id
     try:
-        if random.random() < 0.9: # 90% шанс сгенерировать новую фразу (микс)
+        if random.random() < 0.9:
             logging.info("Генерация МИКСА фразы для 113086922...")
             
             prompt = (
@@ -585,47 +456,8 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 "Примеры для микширования:\n" + "\n".join(PHRASES_FOR_113086922) +
                 "\n\nТвой микс (ТОЛЬКО из слов выше):"
             )
-
-            def call_llm():
-                try:
-                    # ИСПРАВЛЕНИЕ: Проверяем тип модели
-                    
-                    # Если это Groq
-                    if hasattr(model_instance, 'groq_client'):
-                        response = model_instance.generate_text(
-                            prompt,
-                            chat_id=chat_id,
-                            temperature=0.6,
-                            max_tokens=60
-                        )
-                        return response.strip() if response else ""
-                    
-                    # Если это GigaChat
-                    elif hasattr(model_instance, 'gigachat'):
-                        response = model_instance.generate_text(
-                            prompt,
-                            chat_id=chat_id,
-                            temperature=0.6,
-                            max_tokens=60
-                        )
-                        return response.strip() if response else ""
-                    
-                    # Если это Gemini
-                    else:
-                        response = model_instance.generate_content(
-                            prompt,
-                            chat_id=chat_id,
-                            generation_config={'temperature': 0.6, 'max_output_tokens': 60, 'top_p': 1.0}
-                        )
-                        if response and response.candidates and response.candidates[0].content.parts:
-                            return response.text.strip()
-                        return ""
-                        
-                except Exception as e:
-                    logging.error(f"Ошибка генерации реакции для 113086922 (LLM call): {e}")
-                    return None
             
-            new_phrase = await asyncio.to_thread(call_llm)
+            new_phrase = await generate_with_model(prompt, chat_id, temperature=0.6, max_tokens=60)
             
             if new_phrase:
                 await message.reply(new_phrase)
@@ -635,8 +467,7 @@ async def generate_reaction_for_113086922(message: Message, model_instance):
                 selected_phrase = random.choice(PHRASES_FOR_113086922)
                 await message.reply(selected_phrase)
                 return True
-        
-        else: # 10% шанс использовать старую фразу
+        else:
             logging.info("Использование случайной фразы из списка для 113086922...")
             selected_phrase = random.choice(PHRASES_FOR_113086922)
             await message.reply(selected_phrase)
@@ -666,7 +497,7 @@ async def generate_regular_reaction(message):
 
 async def process_random_reactions(
     message: Message,
-    model,
+    model_placeholder,  # ИЗМЕНЕНО: теперь не используется напрямую
     save_user_message,
     track_message_statistics,
     add_chat,
@@ -700,7 +531,7 @@ async def process_random_reactions(
     # 3. EMOJI-РЕАКЦИИ (Random, без AI) - key: emoji_prob
     # ------------------------------------------------------------------
     if chat_cfg.get("emoji_enabled", True):
-        emoji_prob = chat_cfg.get("emoji_prob", 0.01) # Default 1%
+        emoji_prob = chat_cfg.get("emoji_prob", 0.01)
         if random.random() < emoji_prob:
             try:
                 await set_random_emoji_reaction(message)
@@ -716,9 +547,9 @@ async def process_random_reactions(
     # ------------------------------------------------------------------
     # 5. Ситуативная текстовая реакция (AI/Remarks) - key: ai_prob
     # ------------------------------------------------------------------
-    ai_prob = chat_cfg.get("ai_prob", 0.01) # Default 1%
+    ai_prob = chat_cfg.get("ai_prob", 0.01)
     if random.random() < ai_prob:
-        situational = await generate_situational_reaction(message.chat.id, model)
+        situational = await generate_situational_reaction(message.chat.id)  # ИСПРАВЛЕНО: убран model_instance
         if situational:
             await message.bot.send_message(
                 message.chat.id,
@@ -730,9 +561,9 @@ async def process_random_reactions(
     # ------------------------------------------------------------------
     # 5.1. НОВОЕ: Реакция "я %слово%" - key: random_word_prob
     # ------------------------------------------------------------------
-    random_word_prob = chat_cfg.get("random_word_prob", 0.005) # Default 0.5%
+    random_word_prob = chat_cfg.get("random_word_prob", 0.005)
     if random.random() < random_word_prob:
-        random_word_reaction = await generate_random_word_reaction(message.chat.id, model)
+        random_word_reaction = await generate_random_word_reaction(message.chat.id)  # ИСПРАВЛЕНО: убран model_instance
         if random_word_reaction:
             await message.bot.send_message(
                 message.chat.id,
@@ -741,32 +572,29 @@ async def process_random_reactions(
             return True
 
     # ------------------------------------------------------------------
-    # 6. Персональные реакции (Easter Eggs) - Хардкод, так как персонально
+    # 6. Персональные реакции (Easter Eggs)
     # ------------------------------------------------------------------
     if message.from_user.id == 1399269377 and message.text and random.random() < 0.3:
-        if await generate_insult_for_lis(message, model):
+        if await generate_insult_for_lis(message):  # ИСПРАВЛЕНО: убран model_instance
             return True
 
     if message.from_user.id == 113086922 and random.random() < 0.005:
-        if await generate_reaction_for_113086922(message, model):
+        if await generate_reaction_for_113086922(message):  # ИСПРАВЛЕНО: убран model_instance
             return True
 
     # ------------------------------------------------------------------
     # 7. Голосовые реакции - key: voice_prob
     # ------------------------------------------------------------------
-    voice_prob = chat_cfg.get("voice_prob", 0.0001) # Default 0.01%
+    voice_prob = chat_cfg.get("voice_prob", 0.0001)
     
-    # 7.1 Реакция на войсы (чуть выше шанс, хардкод 0.1% или зависимый)
     if message.voice and random.random() < 0.001: 
         if await send_random_voice_reaction(message):
             return True
 
-    # 7.2 Случайный вброс войса в текст
     if random.random() < voice_prob:
         if await send_random_common_voice_reaction(message):
             return True
 
-    # 7.3 Специфические триггеры (оставляем фиксированный шанс, это пасхалки)
     if message.text and "пара дня" in message.text.lower() and random.random() < 0.05:
         if await send_para_voice_reaction(message):
             return True
@@ -774,9 +602,9 @@ async def process_random_reactions(
     # ------------------------------------------------------------------
     # 8. Рифма - key: rhyme_prob
     # ------------------------------------------------------------------
-    rhyme_prob = chat_cfg.get("rhyme_prob", 0.008) # Default 0.8%
+    rhyme_prob = chat_cfg.get("rhyme_prob", 0.008)
     if message.text and random.random() < rhyme_prob:
-        rhyme = await generate_rhyme_reaction(message, model)
+        rhyme = await generate_rhyme_reaction(message)  # ИСПРАВЛЕНО: убран model_instance
         if rhyme:
             await message.reply(rhyme)
             return True
@@ -784,7 +612,7 @@ async def process_random_reactions(
     # ------------------------------------------------------------------
     # 9. Обычная текстовая реакция (Штаны) - key: regular_prob
     # ------------------------------------------------------------------
-    regular_prob = chat_cfg.get("regular_prob", 0.008) # Default 0.8%
+    regular_prob = chat_cfg.get("regular_prob", 0.008)
     if message.text and random.random() < regular_prob:
         regular = await generate_regular_reaction(message)
         if regular:
