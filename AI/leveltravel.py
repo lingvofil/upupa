@@ -9,7 +9,6 @@ from aiogram.types import FSInputFile, InputMediaPhoto
 import json
 import os
 
-# Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
 
 # =============================================================================
