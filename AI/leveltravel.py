@@ -9,6 +9,7 @@ from aiogram.types import FSInputFile, InputMediaPhoto
 import json
 import os
 
+# Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
 
 # =============================================================================
@@ -657,17 +658,17 @@ async def two_phase_search(
 
 async def direct_deep_search(
     countries: List[Dict],
-    dates: List[str],
+    start_date: str,
     adults: int,
     nights: int
 ) -> Dict[str, any]:
     """
     НОВАЯ ФУНКЦИЯ: Прямой глубокий поиск для точных дат и направлений.
-    Без ФАЗЫ 1, сразу делает deep_parse_date для всех комбинаций.
+    Ищет на ОДНУ дату вылета по ВСЕМ указанным направлениям.
     
     Args:
         countries: [{"code": "IN", "name": "гоа"}, {"code": "VN", "name": "фукуок"}]
-        dates: ["18.05.2026", "19.05.2026", ...]
+        start_date: "18.05.2026" - дата вылета
         adults: количество взрослых
         nights: количество ночей
     
@@ -676,69 +677,66 @@ async def direct_deep_search(
         "date_stats": {...},
         "search_info": {
             "countries": [...],
-            "dates": [...],
-            "total_combinations": int
+            "start_date": "18.05.2026",
+            "nights": 7
         }
     }
     """
-    logging.info(f"ПРЯМОЙ ПОИСК: {len(countries)} направлений × {len(dates)} дат = {len(countries) * len(dates)} комбинаций")
+    logging.info(f"ПРЯМОЙ ПОИСК: {len(countries)} направлений на дату {start_date} ({nights} ночей)")
     
     hotels = {}
     all_parsed_tours = []
     all_prices = []
     
-    total_combinations = len(countries) * len(dates)
-    current_combination = 0
+    total_countries = len(countries)
     
-    for country in countries:
+    for idx, country in enumerate(countries, 1):
         country_code = country["code"]
         country_name = country["name"]
         
-        for date in dates:
-            current_combination += 1
-            logging.info(f"Парсинг {current_combination}/{total_combinations}: {country_name} на {date}")
+        logging.info(f"Парсинг {idx}/{total_countries}: {country_name} на {start_date}")
+        
+        tours = await deep_parse_date(country_code, start_date, adults, nights)
+        
+        for tour in tours:
+            hotel_key = tour.get("hotel_name", "").lower().strip()
+            if not hotel_key:
+                continue
             
-            tours = await deep_parse_date(country_code, date, adults, nights)
+            tour_nights = tour.get('nights', 0)
+            if tour_nights > 0 and not nights_match(tour_nights, nights):
+                continue
             
-            for tour in tours:
-                hotel_key = tour.get("hotel_name", "").lower().strip()
-                if not hotel_key:
-                    continue
-                
-                tour_nights = tour.get('nights', 0)
-                if tour_nights > 0 and not nights_match(tour_nights, nights):
-                    continue
-                
-                tour['date'] = date
-                tour['country_code'] = country_code
-                tour['country_name'] = country_name
-                
-                if tour_nights == 0:
-                    tour['nights'] = nights
-                
-                all_parsed_tours.append(tour)
-                
-                if tour.get('price', 0) > 0:
-                    all_prices.append(tour['price'])
-                
-                # Группируем по уникальному ключу: отель + страна
-                unique_key = f"{hotel_key}_{country_code}"
-                
-                if unique_key not in hotels:
+            tour['date'] = start_date
+            tour['country_code'] = country_code
+            tour['country_name'] = country_name
+            
+            if tour_nights == 0:
+                tour['nights'] = nights
+            
+            all_parsed_tours.append(tour)
+            
+            if tour.get('price', 0) > 0:
+                all_prices.append(tour['price'])
+            
+            # Группируем по уникальному ключу: отель + страна
+            unique_key = f"{hotel_key}_{country_code}"
+            
+            if unique_key not in hotels:
+                hotels[unique_key] = tour
+            else:
+                if tour['price'] < hotels[unique_key]['price']:
                     hotels[unique_key] = tour
-                else:
-                    if tour['price'] < hotels[unique_key]['price']:
-                        hotels[unique_key] = tour
-            
-            await asyncio.sleep(2)
+        
+        await asyncio.sleep(2)
     
     # Статистика
     sorted_prices = sorted(all_prices) if all_prices else []
     median_price = sorted_prices[len(sorted_prices) // 2] if sorted_prices else 0
     
     date_stats = {
-        "all_dates_count": len(dates),
-        "searched_dates": len(dates),
+        "all_dates_count": 1,
+        "searched_dates": 1,
         "min_price": min(all_prices) if all_prices else 0,
         "max_price": max(all_prices) if all_prices else 0,
         "median_price": median_price,
@@ -747,8 +745,8 @@ async def direct_deep_search(
     
     search_info = {
         "countries": [f"{c['name']} ({c['code']})" for c in countries],
-        "dates": dates,
-        "total_combinations": total_combinations
+        "start_date": start_date,
+        "nights": nights
     }
     
     logging.info(f"ПРЯМОЙ ПОИСК завершен. Уникальных отелей: {len(hotels)}, туров: {len(all_parsed_tours)}")
@@ -953,10 +951,21 @@ def format_tours_message(
     if search_info:
         # Режим множественных направлений
         countries_str = ", ".join(search_info["countries"])
+        start_date = search_info.get("start_date", "")
+        nights = search_info.get("nights", 0)
+        
+        # Вычисляем дату возвращения
+        try:
+            start_dt = datetime.strptime(start_date, "%d.%m.%Y")
+            end_dt = start_dt + timedelta(days=nights)
+            date_display = f"{start_dt.strftime('%d.%m.%Y')} - {end_dt.strftime('%d.%m.%Y')}"
+        except Exception:
+            date_display = start_date
+        
         header = (
             f"🏖 <b>Топ подборка: {countries_str}</b>\n"
-            f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n"
-            f"📅 Даты: {search_info['dates'][0]} - {search_info['dates'][-1]}\n\n"
+            f"👥 {params['adults']} взр. | 🌙 {nights} ночей\n"
+            f"📅 Даты: {date_display}\n\n"
         )
     else:
         # Обычный режим
@@ -1068,25 +1077,23 @@ async def process_tours_command(message: types.Message):
             start_date = params["exact_dates"]["start"]
             end_date = params["exact_dates"]["end"]
             
-            # Генерируем все даты в диапазоне
-            dates = generate_date_range_list(start_date, end_date)
-            
             countries_str = ", ".join([c["name"].title() for c in params["countries"]])
             
             status_msg = await message.reply(
                 f"🔍 <b>Запускаю прямой поиск</b>\n\n"
                 f"📍 Направления: {countries_str}\n"
-                f"📅 Даты: {start_date} - {end_date}\n"
+                f"📅 Дата вылета: {start_date}\n"
+                f"🏖 Дата возвращения: {end_date}\n"
                 f"👥 Взрослых: {params['adults']}\n"
                 f"🌙 Ночей: {params['nights']}\n\n"
-                f"⏳ Делаю глубокий парсинг всех {len(dates)} дат...\n"
-                f"Это займет 5-10 минут.",
+                f"⏳ Делаю глубокий парсинг по всем направлениям...\n"
+                f"Это займет 3-5 минут для каждой страны.",
                 parse_mode="HTML"
             )
             
             result = await direct_deep_search(
                 countries=params["countries"],
-                dates=dates,
+                start_date=start_date,
                 adults=params["adults"],
                 nights=params["nights"]
             )
@@ -1182,10 +1189,21 @@ async def process_tours_command(message: types.Message):
         # Формируем заголовок
         if search_info:
             countries_str = ", ".join(search_info["countries"])
+            start_date = search_info.get("start_date", "")
+            nights = search_info.get("nights", 0)
+            
+            # Вычисляем дату возвращения
+            try:
+                start_dt = datetime.strptime(start_date, "%d.%m.%Y")
+                end_dt = start_dt + timedelta(days=nights)
+                date_display = f"{start_dt.strftime('%d.%m.%Y')} - {end_dt.strftime('%d.%m.%Y')}"
+            except Exception:
+                date_display = start_date
+            
             header = (
                 f"🏖 <b>Топ подборка: {countries_str}</b>\n"
-                f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n"
-                f"📅 Даты: {search_info['dates'][0]} - {search_info['dates'][-1]}\n\n"
+                f"👥 {params['adults']} взр. | 🌙 {nights} ночей\n"
+                f"📅 Даты: {date_display}\n\n"
             )
         else:
             country_name = params.get("country_name", "направление").capitalize()
