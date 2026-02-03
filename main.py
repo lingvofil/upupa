@@ -99,7 +99,7 @@ import memegenerator
 import crocodile
 
 # ================== БЛОК 3.18 СЛУЧАЙНЫЕ РЕАКЦИИ ==================
-from random_reactions import process_random_reactions
+from AI.random_reactions import process_random_reactions
 
 
 # ================== БЛОК 4: НАСТРОЙКИ AI ==================
