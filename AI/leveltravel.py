@@ -99,9 +99,7 @@ def generate_full_month_dates(month: Optional[int] = None) -> List[str]:
     
     return dates
 
-
 def parse_tour_command(text: str) -> Dict:
-    """Парсит текст команды от пользователя."""
     text_lower = text.lower().strip()
     if text_lower.startswith("туры"):
         text_lower = text_lower[4:].strip()
@@ -110,35 +108,36 @@ def parse_tour_command(text: str) -> Dict:
         "month": None,
         "country_code": None,
         "country_name": None,
-        "adults": 2,
-        "nights": 10,
+        "adults": 2, # Значение по умолчанию
+        "nights": 10, # Значение по умолчанию
     }
     
-    # Поиск месяца
+    # 1. Сначала ищем ночи
+    nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь|н\b)', text_lower)
+    if nights_match:
+        params["nights"] = int(nights_match.group(1))
+        # Удаляем найденные "ночи" из строки, чтобы не путать с количеством взрослых
+        text_lower = text_lower.replace(nights_match.group(0), "")
+    
+    # 2. Поиск месяца
     for word in text_lower.split():
         if word in MONTH_MAPPING:
             params["month"] = MONTH_MAPPING[word]
             break
     
-    # Поиск направления
+    # 3. Поиск направления
     for dest_name, code in COUNTRY_MAPPING.items():
         if dest_name in text_lower:
             params["country_code"] = code
             params["country_name"] = dest_name
             break
     
-    # Поиск количества взрослых
+    # 4. Теперь ищем взрослых в очищенной строке
     numbers = re.findall(r'\b([1-9])\b', text_lower)
     if numbers:
         params["adults"] = int(numbers[0])
     
-    # Поиск количества ночей
-    nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь|н\b)', text_lower)
-    if nights_match:
-        params["nights"] = int(nights_match.group(1))
-    
     return params
-
 
 async def quick_price_scan(
     country_code: str,
