@@ -33,7 +33,7 @@ from lexicon_settings import (
     get_frequent_phrases_from_text
 )
 # Импорт для реакций и статистики
-from random_reactions import process_random_reactions
+from AI.random_reactions import process_random_reactions
 from stat_rank_settings import track_message_statistics
 
 # === ИМПОРТ SMART SEARCH И НОВОГО ENGINE ===
