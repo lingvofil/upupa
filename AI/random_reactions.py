@@ -16,6 +16,9 @@ TELEGRAM_REACTIONS = [
     "❤️", "🥰", "😁", "❤️‍🔥", "💔", "🤨", "👀", "🫡"
 ]
 
+# Кэш последних использованных слов для избежания повторов
+_recent_word_reactions = {}
+
 # --- Универсальная функция выбора активной модели ---
 
 async def get_active_model_for_chat(chat_id: int):
@@ -151,23 +154,33 @@ async def generate_random_word_reaction(chat_id: int):
     """
     Алгоритмический выбор слова/фразы из последних сообщений для реакции "я %слово%".
     Использует контекстный анализ для естественного попадания в тему.
+    Берет данные из актуальной истории диалога (conversation_history).
     """
+    from config import conversation_history
+    
     logging.info(f"Запуск генерации реакции 'я %слово%' для чата {chat_id}.")
     
-    all_messages = await extract_chat_messages(chat_id)
+    chat_key = str(chat_id)
     
-    if not all_messages:
-        logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
+    # Берем из актуальной истории диалога (как в talking.py)
+    if chat_key not in conversation_history or not conversation_history[chat_key]:
+        logging.warning(f"Для чата {chat_id} нет актуальной истории диалога. Реакция отменена.")
         return None
-
-    # Берем последние 3-7 сообщений для анализа контекста
-    last_messages = all_messages[-7:]
-    chat_history = "\n".join(last_messages)
+    
+    # Берем последние 5-7 сообщений из conversation_history
+    recent_history = conversation_history[chat_key][-7:]
+    
+    # Формируем текст для анализа из актуальных сообщений
+    chat_history = "\n".join([
+        f"{msg.get('name', 'Пользователь')}: {msg.get('content', '')}"
+        for msg in recent_history
+    ])
     
     if not chat_history.strip():
+        logging.warning(f"История диалога пуста для чата {chat_id}. Реакция отменена.")
         return None
         
-    logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции 'я %слово%'.")
+    logging.info(f"Взято последних {len(recent_history)} сообщений из актуальной истории диалога.")
     
     try:
         # Стоп-слова (самые частые и неинтересные)
@@ -191,8 +204,8 @@ async def generate_random_word_reaction(chat_id: int):
             'техника': r'\b(компьютер|телефон|ноутбук|планшет|консоль|приставк|робот|дрон|гаджет)\w*'
         }
         
-        # --- 1. АНАЛИЗ: Извлекаем все слова ---
-        all_words = re.findall(r'\b[а-яёА-ЯЁ]{3,}\b', chat_history.lower())
+        # --- 1. АНАЛИЗ: Извлекаем все слова (минимум 4 символа) ---
+        all_words = re.findall(r'\b[а-яёА-ЯЁ]{4,}\b', chat_history.lower())  # ИЗМЕНЕНО: 4+ символов вместо 3+
         
         if not all_words:
             return None
@@ -220,34 +233,56 @@ async def generate_random_word_reaction(chat_id: int):
                 priority_words.extend(flat_matches)
                 logging.info(f"Найдены слова категории '{category}': {flat_matches}")
         
-        # --- 4. ВЫБОР СЛОВА ---
+        # --- 4. ВЫБОР СЛОВА С УЛУЧШЕННЫМИ ПРИОРИТЕТАМИ ---
         chosen_word = None
         
-        # Приоритет 1: Интересные слова (70% шанс)
-        if priority_words and random.random() < 0.7:
-            chosen_word = random.choice(priority_words)
-            logging.info(f"Выбрано приоритетное слово: '{chosen_word}'")
-        
-        # Приоритет 2: Слова из последнего сообщения (свежее = актуальнее)
-        elif random.random() < 0.5:
-            last_msg_words = re.findall(r'\b[а-яёА-ЯЁ]{3,}\b', last_messages[-1].lower())
+        # ПРИОРИТЕТ 1: Слова из ПОСЛЕДНЕГО сообщения (60% шанс - самое актуальное!)
+        if recent_history and random.random() < 0.6:
+            last_msg_content = recent_history[-1].get('content', '')
+            last_msg_words = re.findall(r'\b[а-яёА-ЯЁ]{4,}\b', last_msg_content.lower())  # 4+ символов
             last_msg_filtered = [w for w in last_msg_words if w not in stop_words]
+            
             if last_msg_filtered:
                 chosen_word = random.choice(last_msg_filtered)
-                logging.info(f"Выбрано слово из последнего сообщения: '{chosen_word}'")
+                logging.info(f"[ПРИОРИТЕТ 1] Выбрано слово из последнего сообщения: '{chosen_word}'")
         
-        # Приоритет 3: Любое отфильтрованное слово
+        # ПРИОРИТЕТ 2: Интересные слова из всей истории (30% шанс)
+        if not chosen_word and priority_words and random.random() < 0.8:  # 80% шанс при условии что Приоритет 1 не сработал
+            chosen_word = random.choice(priority_words)
+            logging.info(f"[ПРИОРИТЕТ 2] Выбрано приоритетное слово: '{chosen_word}'")
+        
+        # ПРИОРИТЕТ 3: Любое отфильтрованное слово (fallback)
         if not chosen_word and filtered_words:
             chosen_word = random.choice(filtered_words)
-            logging.info(f"Выбрано случайное отфильтрованное слово: '{chosen_word}'")
+            logging.info(f"[ПРИОРИТЕТ 3] Выбрано случайное отфильтрованное слово: '{chosen_word}'")
         
         if not chosen_word:
             return None
         
+        # --- ЗАЩИТА ОТ ПОВТОРОВ ---
+        # Проверяем, не использовали ли мы это слово недавно в этом чате
+        chat_key = str(chat_id)
+        if chat_key not in _recent_word_reactions:
+            _recent_word_reactions[chat_key] = []
+        
+        # Если это слово было в последних 5 реакциях, пробуем выбрать другое
+        recent_words = _recent_word_reactions[chat_key]
+        if chosen_word in recent_words and len(filtered_words) > 5:
+            # Пробуем найти альтернативу
+            alternative_words = [w for w in filtered_words if w not in recent_words]
+            if alternative_words:
+                chosen_word = random.choice(alternative_words)
+                logging.info(f"[ANTI-REPEAT] Заменили повторяющееся слово на: '{chosen_word}'")
+        
+        # Сохраняем использованное слово (храним последние 5)
+        recent_words.append(chosen_word)
+        if len(recent_words) > 5:
+            recent_words.pop(0)
+        
         # --- 5. СЛОВОСОЧЕТАНИЯ: Иногда берем 2 слова подряд ---
         final_phrase = chosen_word
         
-        if random.random() < 0.3:  # 30% шанс на словосочетание
+        if random.random() < 0.15:  # СНИЖЕНО с 30% до 15% - реже делаем словосочетания
             # Ищем это слово в оригинальном тексте (с учетом регистра)
             words_in_context = re.findall(r'\b[а-яёА-ЯЁ]+\b', chat_history)
             
@@ -258,7 +293,10 @@ async def generate_random_word_reaction(chat_id: int):
                 # Пробуем взять следующее слово
                 if idx < len(words_in_context) - 1:
                     next_word = words_in_context[idx + 1].lower()
-                    if next_word not in stop_words and len(next_word) > 2:
+                    # Более строгая проверка для второго слова
+                    if (next_word not in stop_words and 
+                        len(next_word) > 3 and  # УВЕЛИЧЕНО с 2 до 3 символов
+                        next_word.isalpha()):   # Только буквы, без цифр
                         final_phrase = f"{chosen_word} {next_word}"
                         logging.info(f"Создано словосочетание: '{final_phrase}'")
             except (StopIteration, IndexError):
