@@ -456,12 +456,15 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер Tutu (API 2026), исправлено для вложенных цен и сложных ID.
+    Парсит оффер с диагностикой ключей (Debug Version).
     """
+    if not hasattr(parse_offer, "debug_counter"):
+        parse_offer.debug_counter = 0
+
     try:
         if not isinstance(offer, dict):
             return None
-            
+
         result = {
             "price": 0,
             "currency": "RUB",
@@ -477,7 +480,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         # 1. Словари
         dictionary = offer.get("_dictionary", {})
         avia_dict = dictionary.get("avia", {})
-        # Ищем сегменты/рейсы. В новом API это voyages.
         voyages_dict = avia_dict.get("voyages") or avia_dict.get("segments", {})
 
         if not voyages_dict:
@@ -486,44 +488,33 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         # 2. Цена (OfferVariants)
         offer_variants = offer.get("offerVariants")
         current_variant = {}
-        
+
         if offer_variants:
             if isinstance(offer_variants, list) and len(offer_variants) > 0:
                 current_variant = offer_variants[0]
             elif isinstance(offer_variants, dict):
                 current_variant = next(iter(offer_variants.values()))
 
-        # --- ПАРСИНГ ЦЕНЫ (FIXED) ---
         price_obj = current_variant.get("price") or offer.get("price", {})
-
-        # Цена может быть просто числом или словарем
         if isinstance(price_obj, (int, float)):
             result["price"] = int(price_obj)
         elif isinstance(price_obj, dict):
-            # Новая структура: price -> value -> amount
             value_obj = price_obj.get("value")
-
-            # Если value это словарь (как в вашем дампе)
             if isinstance(value_obj, dict):
                 amount = value_obj.get("amount", 0)
                 fraction = value_obj.get("fraction", 1)
-                # Если fraction=100, значит цена в копейках -> делим на 100
                 if fraction == 100:
                     result["price"] = int(amount / 100)
                 else:
                     result["price"] = int(amount)
                 result["currency"] = value_obj.get("currencyCode", "RUB")
-
-            # Старая структура: price -> amount
             elif "amount" in price_obj:
                 result["price"] = int(price_obj["amount"])
-                result["currency"] = price_obj.get("currency", "RUB")
-            
+
         if result["price"] == 0:
             return None
 
-        # --- ПАРСИНГ МАРШРУТОВ (FIXED) ---
-        # routeIds теперь список строк типа "hash1/hash2/hash3"
+        # 3. Маршруты
         route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
         if not route_ids_raw:
             route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
@@ -531,31 +522,46 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         if not route_ids_raw:
             return None
 
-        # Собираем реальные сегменты перелета
+        if parse_offer.debug_counter == 0:
+            logging.error("=== НАЧАЛО ДИАГНОСТИКИ TUTU API ===")
+
+            logging.error(f"[DEBUG] Пример routeIds: {route_ids_raw}")
+
+            if route_ids_raw and isinstance(route_ids_raw[0], str):
+                parts = route_ids_raw[0].split('/')
+                logging.error(f"[DEBUG] Части первого ID: {parts}")
+
+            keys_sample = list(voyages_dict.keys())[:10]
+            logging.error(f"[DEBUG] Ключи в voyages_dict (первые 10): {keys_sample}")
+
+            found_match = False
+            for part in parts:
+                if part in voyages_dict:
+                    found_match = True
+                    logging.error(f"[DEBUG] УРА! Найдено совпадение по ключу: {part}")
+
+            if not found_match:
+                logging.error("[DEBUG] ❌ СОВПАДЕНИЙ НЕТ. Хеши из routeIds не подходят к ключам voyages.")
+
+            logging.error("=== КОНЕЦ ДИАГНОСТИКИ ===")
+            parse_offer.debug_counter += 1
+
         legs = []
 
-        # Функция поиска объекта в словаре voyages
         def find_voyage(key):
             return voyages_dict.get(str(key))
 
-        # Перебираем строки маршрутов
         for route_str in route_ids_raw:
             if not isinstance(route_str, str):
                 continue
-
-            # Разбиваем "id1/id2/id3"
             parts = route_str.split('/')
-
-            # Пытаемся найти, какая из частей является рейсом с датами
             for part in parts:
                 obj = find_voyage(part)
-                # Проверяем, похож ли объект на рейс (есть время вылета)
                 if obj and (obj.get("departureDate") or obj.get("departureTime") or obj.get("datetimeBeg")):
                     legs.append(obj)
-                    break  # Нашли сегмент для этой части маршрута
+                    break
 
         if not legs:
-            # Фолбек: если не нашли по частям, ищем по полным ID (старый API)
             for rid in route_ids_raw:
                 obj = find_voyage(rid)
                 if obj:
@@ -567,8 +573,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         first_leg = legs[0]
         last_leg = legs[-1]
 
-        # 3. Заполняем детали
-        # Tutu использует разные ключи для времени
         result["departure"] = (
             first_leg.get("departureTime")
             or first_leg.get("departureDate")
@@ -580,43 +584,38 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             or last_leg.get("arrivalDate")
             or last_leg.get("datetimeEnd", "")
         )
-        
-        # Длительность
+
         total_duration = sum(leg.get("durationMinutes", 0) for leg in legs)
         hours = total_duration // 60
         minutes = total_duration % 60
         result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
-        
-        # Пересадки
         result["stops"] = len(legs) - 1
-        
-        # Авиакомпания
+
         carrier_id = first_leg.get("carrier")
         if carrier_id:
             carriers = dictionary.get("common", {}).get("carriers", {})
             carrier = carriers.get(str(carrier_id)) or carriers.get(carrier_id, {})
             result["airline"] = carrier.get("name", "Неизвестно")
 
-        # Багаж
         fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
         if fare_id:
             conditions = avia_dict.get("conditions", {})
             fare = conditions.get(str(fare_id)) or conditions.get(fare_id, {})
             baggage = fare.get("baggage", {})
-            
             if isinstance(baggage, dict):
                 result["baggage"] = baggage.get("included", False) or (baggage.get("weight", 0) > 0)
             elif isinstance(baggage, bool):
                 result["baggage"] = baggage
 
-        # Ссылка
         offer_id = offer.get("id", "")
         result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
 
         return result
 
     except Exception as e:
-        logging.error(f"Critical parse error: {e}", exc_info=True)
+        if parse_offer.debug_counter == 0:
+            logging.error(f"Error parsing offer: {e}", exc_info=True)
+            parse_offer.debug_counter += 1
         return None
 
 
