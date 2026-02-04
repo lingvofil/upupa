@@ -456,7 +456,7 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер. Исправлена ошибка с вложенными словарями в цене (TypeError).
+    Парсит оффер Tutu (API 2026), исправлено для вложенных цен и сложных ID.
     """
     try:
         if not isinstance(offer, dict):
@@ -474,15 +474,16 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "deeplink": ""
         }
 
-        # --- 1. Словари ---
+        # 1. Словари
         dictionary = offer.get("_dictionary", {})
         avia_dict = dictionary.get("avia", {})
+        # Ищем сегменты/рейсы. В новом API это voyages.
         voyages_dict = avia_dict.get("voyages") or avia_dict.get("segments", {})
 
         if not voyages_dict:
             return None
 
-        # --- 2. Извлекаем вариант перелета ---
+        # 2. Цена (OfferVariants)
         offer_variants = offer.get("offerVariants")
         current_variant = {}
         
@@ -491,95 +492,103 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
                 current_variant = offer_variants[0]
             elif isinstance(offer_variants, dict):
                 current_variant = next(iter(offer_variants.values()))
-        
-        # --- 3. Парсим ЦЕНУ (с защитой от вложенных словарей) ---
-        price_data = current_variant.get("price") or offer.get("price", {})
-        
-        final_price = 0
-        final_currency = "RUB"
-        
-        if isinstance(price_data, (int, float)):
-            final_price = int(price_data)
-            
-        elif isinstance(price_data, dict):
-            # Сохраняем валюту если есть
-            final_currency = price_data.get("currency", "RUB")
-            
-            # Список ключей, где может лежать цена
-            keys_to_check = ["value", "amount", "total", "rub", "eur", "usd"]
-            
-            for key in keys_to_check:
-                val = price_data.get(key)
-                if val is not None:
-                    # Если нашли число/строку - берем
-                    if isinstance(val, (int, float, str)):
-                        try:
-                            final_price = int(float(val))
-                            break
-                        except ValueError:
-                            continue
-                    # Если нашли словарь - копаем глубже (например price['total']['amount'])
-                    elif isinstance(val, dict):
-                        sub_val = val.get("amount") or val.get("value")
-                        if sub_val is not None:
-                            try:
-                                final_price = int(float(sub_val))
-                                break
-                            except ValueError:
-                                continue
-        
-        result["price"] = final_price
-        result["currency"] = final_currency
+
+        # --- ПАРСИНГ ЦЕНЫ (FIXED) ---
+        price_obj = current_variant.get("price") or offer.get("price", {})
+
+        # Цена может быть просто числом или словарем
+        if isinstance(price_obj, (int, float)):
+            result["price"] = int(price_obj)
+        elif isinstance(price_obj, dict):
+            # Новая структура: price -> value -> amount
+            value_obj = price_obj.get("value")
+
+            # Если value это словарь (как в вашем дампе)
+            if isinstance(value_obj, dict):
+                amount = value_obj.get("amount", 0)
+                fraction = value_obj.get("fraction", 1)
+                # Если fraction=100, значит цена в копейках -> делим на 100
+                if fraction == 100:
+                    result["price"] = int(amount / 100)
+                else:
+                    result["price"] = int(amount)
+                result["currency"] = value_obj.get("currencyCode", "RUB")
+
+            # Старая структура: price -> amount
+            elif "amount" in price_obj:
+                result["price"] = int(price_obj["amount"])
+                result["currency"] = price_obj.get("currency", "RUB")
             
         if result["price"] == 0:
             return None
 
-        # --- 4. Парсим МАРШРУТЫ (routeIds) ---
-        route_ids = offer.get("routeIds") or current_variant.get("routeIds")
-        if not route_ids:
-            route_ids = offer.get("segmentIds") or current_variant.get("segmentIds")
-            
-        if not route_ids:
+        # --- ПАРСИНГ МАРШРУТОВ (FIXED) ---
+        # routeIds теперь список строк типа "hash1/hash2/hash3"
+        route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
+        if not route_ids_raw:
+            route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
+
+        if not route_ids_raw:
             return None
 
-        # Выпрямляем список ID
-        def flatten_ids(ids_list):
-            flat = []
-            for item in ids_list:
-                if isinstance(item, list):
-                    flat.extend(flatten_ids(item))
-                else:
-                    flat.append(item)
-            return flat
+        # Собираем реальные сегменты перелета
+        legs = []
 
-        flat_ids = flatten_ids(route_ids)
+        # Функция поиска объекта в словаре voyages
+        def find_voyage(key):
+            return voyages_dict.get(str(key))
 
-        # --- 5. Собираем рейсы (Voyages) ---
-        voyages = []
-        for vid in flat_ids:
-            # Пробуем string и int ключи
-            voyage = voyages_dict.get(str(vid)) or voyages_dict.get(vid)
-            if voyage:
-                voyages.append(voyage)
-        
-        if not voyages:
+        # Перебираем строки маршрутов
+        for route_str in route_ids_raw:
+            if not isinstance(route_str, str):
+                continue
+
+            # Разбиваем "id1/id2/id3"
+            parts = route_str.split('/')
+
+            # Пытаемся найти, какая из частей является рейсом с датами
+            for part in parts:
+                obj = find_voyage(part)
+                # Проверяем, похож ли объект на рейс (есть время вылета)
+                if obj and (obj.get("departureDate") or obj.get("departureTime") or obj.get("datetimeBeg")):
+                    legs.append(obj)
+                    break  # Нашли сегмент для этой части маршрута
+
+        if not legs:
+            # Фолбек: если не нашли по частям, ищем по полным ID (старый API)
+            for rid in route_ids_raw:
+                obj = find_voyage(rid)
+                if obj:
+                    legs.append(obj)
+
+        if not legs:
             return None
 
-        first_leg = voyages[0]
-        last_leg = voyages[-1]
+        first_leg = legs[0]
+        last_leg = legs[-1]
 
-        # --- 6. Заполняем детали ---
-        result["departure"] = first_leg.get("departureTime") or first_leg.get("departureDate") or first_leg.get("datetimeBeg", "")
-        result["arrival"] = last_leg.get("arrivalTime") or last_leg.get("arrivalDate") or last_leg.get("datetimeEnd", "")
+        # 3. Заполняем детали
+        # Tutu использует разные ключи для времени
+        result["departure"] = (
+            first_leg.get("departureTime")
+            or first_leg.get("departureDate")
+            or first_leg.get("datetimeBeg", "")
+        )
+
+        result["arrival"] = (
+            last_leg.get("arrivalTime")
+            or last_leg.get("arrivalDate")
+            or last_leg.get("datetimeEnd", "")
+        )
         
         # Длительность
-        total_duration = sum(v.get("durationMinutes", 0) for v in voyages)
+        total_duration = sum(leg.get("durationMinutes", 0) for leg in legs)
         hours = total_duration // 60
         minutes = total_duration % 60
         result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
         
         # Пересадки
-        result["stops"] = len(voyages) - 1
+        result["stops"] = len(legs) - 1
         
         # Авиакомпания
         carrier_id = first_leg.get("carrier")
