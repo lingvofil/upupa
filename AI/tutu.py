@@ -347,36 +347,42 @@ async def fetch_offers(
                 
                 data = response.json()
                 
-                # Отладка: выводим структуру ответа
-                logging.info(f"Тип ответа: {type(data)}")
-                if isinstance(data, dict):
-                    logging.info(f"Ключи ответа: {list(data.keys())}")
-                elif isinstance(data, list):
-                    logging.info(f"Ответ - список, длина: {len(data)}")
-                    if data:
-                        logging.info(f"Первый элемент: {type(data[0])}")
+                logging.debug(f"Тип ответа: {type(data)}")
                 
-                # Извлекаем только offers
-                if isinstance(data, list):
-                    # API вернул сразу список офферов
-                    offers = data
-                elif isinstance(data, dict):
-                    # API вернул объект с полем offers
-                    offers = data.get("offers", [])
-                else:
+                # API возвращает список с одним элементом-словарем
+                if isinstance(data, list) and len(data) > 0:
+                    data = data[0]  # Берем первый элемент списка
+                
+                if not isinstance(data, dict):
                     logging.error(f"Неожиданный тип ответа: {type(data)}")
+                    return []
+                
+                # Офферы находятся в offers.actual
+                offers_dict = data.get("offers", {})
+                if isinstance(offers_dict, dict):
+                    offers = offers_dict.get("actual", {})
+                else:
+                    logging.error(f"Неожиданная структура offers: {type(offers_dict)}")
                     return []
                 
                 if not offers:
                     logging.warning("Офферы не найдены в ответе")
                     return []
                 
-                # Отладка: выводим структуру первого оффера
-                if offers:
-                    logging.info(f"Структура первого оффера: {offers[0]}")
+                # offers.actual - это словарь, где ключи - ID офферов
+                # Преобразуем в список
+                offers_list = []
+                if isinstance(offers, dict):
+                    dictionary = data.get("dictionary", {})
+                    for offer_id, offer_data in offers.items():
+                        # Добавляем ID к данным оффера
+                        offer_data["id"] = offer_id
+                        # Добавляем ссылку на dictionary для парсинга
+                        offer_data["_dictionary"] = dictionary
+                        offers_list.append(offer_data)
                 
-                logging.info(f"Получено {len(offers)} офферов")
-                return offers
+                logging.info(f"Получено {len(offers_list)} офферов")
+                return offers_list
                 
             except httpx.TimeoutException:
                 logging.error("Таймаут запроса (10s)")
@@ -394,6 +400,12 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
     """
     Парсит один оффер в упрощенный формат.
     
+    Структура Tutu API:
+    - offer содержит segmentIds, price, fareApplicationId
+    - segments находятся в dictionary.avia.segments
+    - carriers в dictionary.common.carriers
+    - fare conditions в dictionary.avia.conditions
+    
     Returns:
     {
         "price": int,
@@ -408,7 +420,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
     }
     """
     try:
-        # Проверка типа входных данных
         if not isinstance(offer, dict):
             logging.error(f"Оффер не является словарем: {type(offer)}")
             return None
@@ -425,6 +436,9 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "deeplink": ""
         }
         
+        # Dictionary для резолва ID
+        dictionary = offer.get("_dictionary", {})
+        
         # Цена
         price_data = offer.get("price", {})
         if isinstance(price_data, dict):
@@ -433,10 +447,28 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         elif isinstance(price_data, (int, float)):
             result["price"] = int(price_data)
         
-        # Сегменты
-        segments = offer.get("segments", [])
+        # Получаем сегменты по ID
+        segment_ids = offer.get("segmentIds", [])
+        if not segment_ids:
+            logging.debug("Нет segmentIds в оффере")
+            return None
+        
+        avia_dict = dictionary.get("avia", {})
+        segments_dict = avia_dict.get("segments", {})
+        
+        if not segments_dict:
+            logging.debug("Нет segments в dictionary")
+            return None
+        
+        # Собираем сегменты
+        segments = []
+        for seg_id in segment_ids:
+            segment = segments_dict.get(seg_id)
+            if segment:
+                segments.append(segment)
+        
         if not segments:
-            logging.debug("Нет сегментов в оффере")
+            logging.debug("Не удалось найти сегменты")
             return None
         
         first_segment = segments[0]
@@ -452,19 +484,23 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         minutes = total_duration % 60
         result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
         
-        # Пересадки
+        # Пересадки (количество сегментов - 1)
         result["stops"] = len(segments) - 1
         
-        # Авиакомпания (берем из первого сегмента)
-        carrier = first_segment.get("carrier", {})
-        if isinstance(carrier, dict):
+        # Авиакомпания из первого сегмента
+        carrier_id = first_segment.get("carrier")
+        if carrier_id:
+            common_dict = dictionary.get("common", {})
+            carriers_dict = common_dict.get("carriers", {})
+            carrier = carriers_dict.get(carrier_id, {})
             result["airline"] = carrier.get("name", "Неизвестно")
-        elif isinstance(carrier, str):
-            result["airline"] = carrier
         
-        # Багаж (упрощенная проверка)
-        fare = offer.get("fare", {})
-        if isinstance(fare, dict):
+        # Багаж из fare conditions
+        fare_id = offer.get("fareApplicationId")
+        if fare_id:
+            conditions_dict = avia_dict.get("conditions", {})
+            fare = conditions_dict.get(fare_id, {})
+            
             baggage_info = fare.get("baggage", {})
             if isinstance(baggage_info, dict):
                 result["baggage"] = baggage_info.get("included", False)
@@ -478,8 +514,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         return result
         
     except Exception as e:
-        logging.error(f"Ошибка парсинга оффера: {e}")
-        logging.debug(f"Проблемный оффер: {offer}")
+        logging.error(f"Ошибка парсинга оффера: {e}", exc_info=True)
         return None
 
 
