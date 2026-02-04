@@ -347,12 +347,33 @@ async def fetch_offers(
                 
                 data = response.json()
                 
+                # Отладка: выводим структуру ответа
+                logging.info(f"Тип ответа: {type(data)}")
+                if isinstance(data, dict):
+                    logging.info(f"Ключи ответа: {list(data.keys())}")
+                elif isinstance(data, list):
+                    logging.info(f"Ответ - список, длина: {len(data)}")
+                    if data:
+                        logging.info(f"Первый элемент: {type(data[0])}")
+                
                 # Извлекаем только offers
-                offers = data.get("offers", [])
+                if isinstance(data, list):
+                    # API вернул сразу список офферов
+                    offers = data
+                elif isinstance(data, dict):
+                    # API вернул объект с полем offers
+                    offers = data.get("offers", [])
+                else:
+                    logging.error(f"Неожиданный тип ответа: {type(data)}")
+                    return []
                 
                 if not offers:
                     logging.warning("Офферы не найдены в ответе")
                     return []
+                
+                # Отладка: выводим структуру первого оффера
+                if offers:
+                    logging.info(f"Структура первого оффера: {offers[0]}")
                 
                 logging.info(f"Получено {len(offers)} офферов")
                 return offers
@@ -387,6 +408,11 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
     }
     """
     try:
+        # Проверка типа входных данных
+        if not isinstance(offer, dict):
+            logging.error(f"Оффер не является словарем: {type(offer)}")
+            return None
+        
         result = {
             "price": 0,
             "currency": "RUB",
@@ -401,12 +427,16 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         
         # Цена
         price_data = offer.get("price", {})
-        result["price"] = int(price_data.get("amount", 0))
-        result["currency"] = price_data.get("currency", "RUB")
+        if isinstance(price_data, dict):
+            result["price"] = int(price_data.get("amount", 0))
+            result["currency"] = price_data.get("currency", "RUB")
+        elif isinstance(price_data, (int, float)):
+            result["price"] = int(price_data)
         
         # Сегменты
         segments = offer.get("segments", [])
         if not segments:
+            logging.debug("Нет сегментов в оффере")
             return None
         
         first_segment = segments[0]
@@ -427,12 +457,19 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         
         # Авиакомпания (берем из первого сегмента)
         carrier = first_segment.get("carrier", {})
-        result["airline"] = carrier.get("name", "Неизвестно")
+        if isinstance(carrier, dict):
+            result["airline"] = carrier.get("name", "Неизвестно")
+        elif isinstance(carrier, str):
+            result["airline"] = carrier
         
         # Багаж (упрощенная проверка)
         fare = offer.get("fare", {})
-        baggage_info = fare.get("baggage", {})
-        result["baggage"] = baggage_info.get("included", False)
+        if isinstance(fare, dict):
+            baggage_info = fare.get("baggage", {})
+            if isinstance(baggage_info, dict):
+                result["baggage"] = baggage_info.get("included", False)
+            elif isinstance(baggage_info, bool):
+                result["baggage"] = baggage_info
         
         # Ссылка для бронирования
         offer_id = offer.get("id", "")
@@ -442,6 +479,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         
     except Exception as e:
         logging.error(f"Ошибка парсинга оффера: {e}")
+        logging.debug(f"Проблемный оффер: {offer}")
         return None
 
 
