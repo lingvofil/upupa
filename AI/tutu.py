@@ -456,62 +456,174 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер + ВЫВОДИТ СОДЕРЖИМОЕ common.segments и routes (Structure Debug).
+    Парсит оффер Tutu (API 2026).
+    Полностью исправленная логика: routes -> segmentIds -> segments.
     """
-    if not hasattr(parse_offer, "debug_counter"):
-        parse_offer.debug_counter = 0
-
     try:
         if not isinstance(offer, dict):
             return None
 
-        # 1. Достаем словари
+        result = {
+            "price": 0, "currency": "RUB", "airline": "Неизвестно",
+            "departure": "", "arrival": "", "duration": "",
+            "stops": 0, "baggage": False, "deeplink": ""
+        }
+
+        # 1. Словари
         dictionary = offer.get("_dictionary", {})
         common_dict = dictionary.get("common", {})
+        avia_dict = dictionary.get("avia", {})
 
+        # Основные справочники
         segments_dict = common_dict.get("segments", {})
         routes_dict = common_dict.get("routes", {})
 
-        # =========================================================================
-        # 🔬 МИКРОСКОП: Смотрим структуру segments и routes
-        # =========================================================================
-        if parse_offer.debug_counter == 0:
-            logging.error("=== НАЧАЛО АНАЛИЗА СТРУКТУРЫ ===")
+        # Фолбек для старого API
+        voyages_dict = avia_dict.get("voyages", {})
 
-            # 1. Смотрим, что лежит в segments
-            if segments_dict:
-                first_key = next(iter(segments_dict))
-                first_val = segments_dict[first_key]
-                logging.error(f"[DEBUG] common.segments (Пример):")
-                logging.error(f"  Ключ: {first_key}")
-                logging.error(f"  Значение: {first_val}")
+        # 2. Цена
+        offer_variants = offer.get("offerVariants")
+        current_variant = {}
+        if offer_variants:
+            if isinstance(offer_variants, list) and len(offer_variants) > 0:
+                current_variant = offer_variants[0]
+            elif isinstance(offer_variants, dict):
+                current_variant = next(iter(offer_variants.values()))
+
+        price_obj = current_variant.get("price") or offer.get("price", {})
+
+        if isinstance(price_obj, (int, float)):
+            result["price"] = int(price_obj)
+        elif isinstance(price_obj, dict):
+            val = price_obj.get("value")
+            if isinstance(val, dict):
+                amt = val.get("amount", 0)
+                if val.get("fraction") == 100:
+                    amt //= 100
+                result["price"] = int(amt)
+                result["currency"] = val.get("currencyCode", "RUB")
+            elif "amount" in price_obj:
+                result["price"] = int(price_obj["amount"])
+
+        if result["price"] == 0:
+            return None
+
+        # 3. Маршруты (Самая важная часть)
+        route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
+        if not route_ids_raw:
+            route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
+
+        if not route_ids_raw:
+            return None
+
+        legs = []
+
+        for rid in route_ids_raw:
+            if not isinstance(rid, str):
+                continue
+
+            # Сценарий А: ID есть в таблице routes (это сложный маршрут)
+            if rid in routes_dict:
+                route_obj = routes_dict[rid]
+                seg_ids = route_obj.get("segmentIds", [])
+                for seg_id in seg_ids:
+                    seg = segments_dict.get(seg_id)
+                    if seg:
+                        legs.append(seg)
+
+            # Сценарий Б: ID есть в таблице segments (это прямой рейс)
+            elif rid in segments_dict:
+                legs.append(segments_dict[rid])
+
+            # Сценарий В: ID это старый voyage (старое API)
+            elif rid in voyages_dict:
+                legs.append(voyages_dict[rid])
+
+            # Сценарий Г: Это сложный хеш "id1/id2", которого нет в routes (редкость, но бывает)
             else:
-                logging.error("[DEBUG] common.segments ПУСТОЙ!")
+                parts = rid.split('/')
+                for part in parts:
+                    if part in segments_dict:
+                        legs.append(segments_dict[part])
+                    elif part in voyages_dict:
+                        legs.append(voyages_dict[part])
 
-            # 2. Смотрим, что лежит в routes
-            if routes_dict:
-                first_key = next(iter(routes_dict))
-                first_val = routes_dict[first_key]
-                logging.error(f"[DEBUG] common.routes (Пример):")
-                logging.error(f"  Ключ: {first_key}")
-                logging.error(f"  Значение: {first_val}")
-            else:
-                logging.error("[DEBUG] common.routes ПУСТОЙ!")
+        if not legs:
+            return None
 
-            # 3. Пример ID из оффера для сравнения
-            route_ids = offer.get("routeIds")
-            if route_ids:
-                logging.error(f"[DEBUG] Ищем совпадения для ID из оффера: {route_ids[0]}")
+        first_leg = legs[0]
+        last_leg = legs[-1]
 
-            logging.error("=== КОНЕЦ АНАЛИЗА ===")
-            parse_offer.debug_counter += 1
-        # =========================================================================
+        # 4. Заполнение (учитываем новые ключи DateTime)
+        result["departure"] = (
+            first_leg.get("departureDateTime")
+            or first_leg.get("departureTime")
+            or first_leg.get("departureDate")
+            or first_leg.get("datetimeBeg", "")
+        )
 
-        # (Остальной код пока не важен, нам нужны только логи)
-        return None
+        result["arrival"] = (
+            last_leg.get("arrivalDateTime")
+            or last_leg.get("arrivalTime")
+            or last_leg.get("arrivalDate")
+            or last_leg.get("datetimeEnd", "")
+        )
 
-    except Exception as e:
-        logging.error(f"Debug error: {e}")
+        # Длительность
+        total_duration = sum(
+            leg.get("durationMinutes", 0) or leg.get("duration", 0)
+            for leg in legs
+        )
+        hours = total_duration // 60
+        minutes = total_duration % 60
+        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
+
+        # Пересадки
+        result["stops"] = len(legs) - 1
+
+        # Авиакомпания (Новая структура: список carriers)
+        carrier_name = "Неизвестно"
+        carrier_id = first_leg.get("carrier")  # Старый формат
+
+        if not carrier_id:
+            # Новый формат: carriers [{'id': '...', 'type': 'marketing'}]
+            carriers_list = first_leg.get("carriers", [])
+            if carriers_list:
+                carrier_id = carriers_list[0].get("id")
+
+        if carrier_id:
+            carriers_dict = common_dict.get("carriers", {})
+            # ID может быть числом или строкой
+            c_obj = carriers_dict.get(str(carrier_id)) or carriers_dict.get(carrier_id)
+            if c_obj:
+                carrier_name = c_obj.get("name", "Неизвестно")
+
+        result["airline"] = carrier_name
+
+        # Багаж
+        fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
+        if fare_id:
+            conditions = avia_dict.get("conditions", {})
+            # В fareApplications id может быть ключом к списку хешей, но мы ищем само условие
+            # Tutu API здесь очень запутанное, пробуем простой путь
+            fare = conditions.get(str(fare_id))
+            if fare:
+                baggage = fare.get("baggage", {})
+                if isinstance(baggage, dict):
+                    result["baggage"] = baggage.get("included", False) or (
+                        baggage.get("weight", 0) > 0
+                    )
+                elif isinstance(baggage, bool):
+                    result["baggage"] = baggage
+
+        # Ссылка
+        offer_id = offer.get("id", "")
+        result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
+
+        return result
+
+    except Exception:
+        # Тихий фолбек, чтобы не спамить логами на проде
         return None
 
 
