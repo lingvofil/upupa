@@ -456,7 +456,7 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер с диагностикой ключей (Debug Version).
+    Парсит оффер + ИЩЕТ потерянные хеши по всему словарю (Deep Debug).
     """
     if not hasattr(parse_offer, "debug_counter"):
         parse_offer.debug_counter = 0
@@ -465,6 +465,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         if not isinstance(offer, dict):
             return None
 
+        # 1. Готовим результат (цена уже работает)
         result = {
             "price": 0,
             "currency": "RUB",
@@ -477,18 +478,9 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "deeplink": ""
         }
 
-        # 1. Словари
-        dictionary = offer.get("_dictionary", {})
-        avia_dict = dictionary.get("avia", {})
-        voyages_dict = avia_dict.get("voyages") or avia_dict.get("segments", {})
-
-        if not voyages_dict:
-            return None
-
-        # 2. Цена (OfferVariants)
+        # Парсим цену (это уже работает)
         offer_variants = offer.get("offerVariants")
         current_variant = {}
-
         if offer_variants:
             if isinstance(offer_variants, list) and len(offer_variants) > 0:
                 current_variant = offer_variants[0]
@@ -499,123 +491,87 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         if isinstance(price_obj, (int, float)):
             result["price"] = int(price_obj)
         elif isinstance(price_obj, dict):
-            value_obj = price_obj.get("value")
-            if isinstance(value_obj, dict):
-                amount = value_obj.get("amount", 0)
-                fraction = value_obj.get("fraction", 1)
-                if fraction == 100:
-                    result["price"] = int(amount / 100)
-                else:
-                    result["price"] = int(amount)
-                result["currency"] = value_obj.get("currencyCode", "RUB")
+            val = price_obj.get("value")
+            if isinstance(val, dict):
+                amt = val.get("amount", 0)
+                if val.get("fraction") == 100:
+                    amt //= 100
+                result["price"] = int(amt)
+                result["currency"] = val.get("currencyCode", "RUB")
             elif "amount" in price_obj:
                 result["price"] = int(price_obj["amount"])
 
         if result["price"] == 0:
             return None
 
-        # 3. Маршруты
-        route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
-        if not route_ids_raw:
-            route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
-
-        if not route_ids_raw:
+        # 2. Достаем проблемные ID
+        route_ids = offer.get("routeIds") or current_variant.get("routeIds")
+        if not route_ids:
             return None
 
-        if parse_offer.debug_counter == 0:
-            logging.error("=== НАЧАЛО ДИАГНОСТИКИ TUTU API ===")
+        # Разбираем первый ID на части
+        target_hashes = []
+        if isinstance(route_ids, list) and len(route_ids) > 0:
+            target_hashes = str(route_ids[0]).split('/')
 
-            logging.error(f"[DEBUG] Пример routeIds: {route_ids_raw}")
+        # =========================================================================
+        # 🕵️‍♂️ ДЕТЕКТИВ: Ищем, где прячется хеш
+        # =========================================================================
+        if parse_offer.debug_counter == 0 and target_hashes:
+            logging.error("=== ЗАПУСК ПОИСКА ХЕШЕЙ ===")
+            target = target_hashes[0]  # Берем первый хеш (например 6153517...)
+            logging.error(f"Ищу хеш: {target}")
 
-            if route_ids_raw and isinstance(route_ids_raw[0], str):
-                parts = route_ids_raw[0].split('/')
-                logging.error(f"[DEBUG] Части первого ID: {parts}")
+            dictionary = offer.get("_dictionary", {})
 
-            keys_sample = list(voyages_dict.keys())[:10]
-            logging.error(f"[DEBUG] Ключи в voyages_dict (первые 10): {keys_sample}")
+            # 1. Проверяем ключи dictionary.common
+            common = dictionary.get("common", {})
+            logging.error(f"Ключи dictionary.common: {list(common.keys())}")
 
-            found_match = False
-            for part in parts:
-                if part in voyages_dict:
-                    found_match = True
-                    logging.error(f"[DEBUG] УРА! Найдено совпадение по ключу: {part}")
+            # 2. Рекурсивный поиск
+            found_path = None
 
-            if not found_match:
-                logging.error("[DEBUG] ❌ СОВПАДЕНИЙ НЕТ. Хеши из routeIds не подходят к ключам voyages.")
+            def deep_search(data, path="dict"):
+                if isinstance(data, dict):
+                    # Проверяем ключи
+                    if target in data:
+                        return f"{path}[{target}] (FOUND AS KEY!)"
+                    # Проверяем значения (если это строка)
+                    for k, v in data.items():
+                        if isinstance(v, str) and v == target:
+                            return f"{path}.{k} == target"
+                        # Углубляемся
+                        if isinstance(v, (dict, list)):
+                            # Ограничиваем глубину логов, чтобы не зависло
+                            if len(path) < 50:
+                                res = deep_search(v, f"{path}.{k}")
+                                if res:
+                                    return res
+                elif isinstance(data, list):
+                    for i, item in enumerate(data):
+                        if isinstance(item, str) and item == target:
+                            return f"{path}[{i}] == target"
+                        if isinstance(item, (dict, list)):
+                            res = deep_search(item, f"{path}[{i}]")
+                            if res:
+                                return res
+                return None
 
-            logging.error("=== КОНЕЦ ДИАГНОСТИКИ ===")
+            found_path = deep_search(dictionary)
+
+            if found_path:
+                logging.error(f"✅ НАШЕЛ! Хеш лежит здесь: {found_path}")
+            else:
+                logging.error("❌ Хеш не найден нигде в dictionary.")
+
+            logging.error("=== КОНЕЦ ПОИСКА ===")
             parse_offer.debug_counter += 1
+        # =========================================================================
 
-        legs = []
-
-        def find_voyage(key):
-            return voyages_dict.get(str(key))
-
-        for route_str in route_ids_raw:
-            if not isinstance(route_str, str):
-                continue
-            parts = route_str.split('/')
-            for part in parts:
-                obj = find_voyage(part)
-                if obj and (obj.get("departureDate") or obj.get("departureTime") or obj.get("datetimeBeg")):
-                    legs.append(obj)
-                    break
-
-        if not legs:
-            for rid in route_ids_raw:
-                obj = find_voyage(rid)
-                if obj:
-                    legs.append(obj)
-
-        if not legs:
-            return None
-
-        first_leg = legs[0]
-        last_leg = legs[-1]
-
-        result["departure"] = (
-            first_leg.get("departureTime")
-            or first_leg.get("departureDate")
-            or first_leg.get("datetimeBeg", "")
-        )
-
-        result["arrival"] = (
-            last_leg.get("arrivalTime")
-            or last_leg.get("arrivalDate")
-            or last_leg.get("datetimeEnd", "")
-        )
-
-        total_duration = sum(leg.get("durationMinutes", 0) for leg in legs)
-        hours = total_duration // 60
-        minutes = total_duration % 60
-        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
-        result["stops"] = len(legs) - 1
-
-        carrier_id = first_leg.get("carrier")
-        if carrier_id:
-            carriers = dictionary.get("common", {}).get("carriers", {})
-            carrier = carriers.get(str(carrier_id)) or carriers.get(carrier_id, {})
-            result["airline"] = carrier.get("name", "Неизвестно")
-
-        fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
-        if fare_id:
-            conditions = avia_dict.get("conditions", {})
-            fare = conditions.get(str(fare_id)) or conditions.get(fare_id, {})
-            baggage = fare.get("baggage", {})
-            if isinstance(baggage, dict):
-                result["baggage"] = baggage.get("included", False) or (baggage.get("weight", 0) > 0)
-            elif isinstance(baggage, bool):
-                result["baggage"] = baggage
-
-        offer_id = offer.get("id", "")
-        result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
-
-        return result
+        return None  # Пока возвращаем None, чтобы не спамить ошибками
 
     except Exception as e:
-        if parse_offer.debug_counter == 0:
-            logging.error(f"Error parsing offer: {e}", exc_info=True)
-            parse_offer.debug_counter += 1
+        logging.error(f"Debug error: {e}")
         return None
 
 
