@@ -465,7 +465,7 @@ async def capture_hotel_screenshots(
                     try:
                         await page.wait_for_selector(
                             '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]',
-                            timeout=25000
+                            timeout=45000
                         )
                     except Exception:
                         logging.warning("Блок номеров не найден — fallback scroll")
@@ -506,7 +506,7 @@ async def capture_hotel_screenshots(
                 
                 # Небольшая корректировка скролла вверх
                 await page.mouse.wheel(0, -150)
-                await page.wait_for_timeout(2500)
+                await page.wait_for_timeout(4000)
                 
                 # ВАЖНО: Увеличиваем viewport ДО скриншота
                 await page.set_viewport_size({'width': 1920, 'height': 1500})
