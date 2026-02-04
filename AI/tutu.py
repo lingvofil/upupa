@@ -326,6 +326,7 @@ async def fetch_offers(
         }
         
         logging.info(f"Запрос: {CITY_ID_TO_NAME.get(origin_id, origin_id)} → {CITY_ID_TO_NAME.get(destination_id, destination_id)}, {departure_date}")
+        logging.debug(f"Payload: {payload}")
         
         start_time = datetime.now()
         
@@ -351,22 +352,47 @@ async def fetch_offers(
                 
                 # API возвращает список с одним элементом-словарем
                 if isinstance(data, list) and len(data) > 0:
-                    data = data[0]  # Берем первый элемент списка
+                    logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
+                    data = data[0]
                 
                 if not isinstance(data, dict):
                     logging.error(f"Неожиданный тип ответа: {type(data)}")
                     return []
                 
+                logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
+                
                 # Офферы находятся в offers.actual
                 offers_dict = data.get("offers", {})
+                logging.debug(f"Тип offers: {type(offers_dict)}")
+                
                 if isinstance(offers_dict, dict):
-                    offers = offers_dict.get("actual", {})
+                    logging.debug(f"Ключи offers: {list(offers_dict.keys())}")
+                    
+                    actual = offers_dict.get("actual", {})
+                    logging.debug(f"Тип actual: {type(actual)}")
+                    
+                    if isinstance(actual, dict):
+                        logging.info(f"Количество офферов в actual: {len(actual)}")
+                        
+                        if not actual:
+                            # Проверяем, может быть офферы в других полях
+                            future = offers_dict.get("future")
+                            past = offers_dict.get("past")
+                            logging.warning(f"actual пустой. future: {type(future)}, past: {type(past)}")
+                            
+                            # Выводим warnings если есть
+                            warnings = data.get("warnings", [])
+                            if warnings:
+                                logging.warning(f"API warnings: {warnings}")
+                            
+                            return []
+                        
+                        offers = actual
+                    else:
+                        logging.error(f"actual не является словарем: {type(actual)}")
+                        return []
                 else:
                     logging.error(f"Неожиданная структура offers: {type(offers_dict)}")
-                    return []
-                
-                if not offers:
-                    logging.warning("Офферы не найдены в ответе")
                     return []
                 
                 # offers.actual - это словарь, где ключи - ID офферов
