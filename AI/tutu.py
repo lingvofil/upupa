@@ -347,7 +347,7 @@ async def create_session(
         
         async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
             response = await client.post(
-                f"{TUTU_BASE_URL}/session",
+                f"{TUTU_API_BASE}/session",
                 headers=headers,
                 json=payload
             )
