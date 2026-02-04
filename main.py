@@ -178,6 +178,9 @@ from AI.voice import handle_voice_command
 # ================== БЛОК 4.12 LEVEL TRAVEL ==================
 from AI.leveltravel import process_tours_command, process_hotels_command
 
+# ================== БЛОК 4.13 TUTU АВИАБИЛЕТЫ ==================
+from AI.tutu import process_tickets_command as process_tutu_tickets_command
+
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
 router.message.middleware(ContentFilterMiddleware())
@@ -740,8 +743,18 @@ async def handle_tours_command(message: types.Message):
 )
 async def handle_hotels_command(message: types.Message):
     await process_hotels_command(message)
+
+# ================== БЛОК 6.10: TUTU АВИАБИЛЕТЫ  ==================
+
+@router.message(lambda message: 
+    message.text and 
+    message.text.lower().startswith("билеты") and 
+    message.from_user.id not in BLOCKED_USERS
+)
+async def handle_tickets_command(message: types.Message):
+    await process_tutu_tickets_command(message)
        
-# ================== БЛОК 6.10: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
+# ================== БЛОК 6.11: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа не болтай")
 async def disable_dialog(message: types.Message):
@@ -790,7 +803,7 @@ async def handle_poem(message: types.Message):
 async def serious_mode_command(message: types.Message):
     await handle_serious_mode_command(message)
 
-# ================== БЛОК 6.11: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
+# ================== БЛОК 6.12: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
         
 @router.message()
 async def process_message(message: types.Message):
