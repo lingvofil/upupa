@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import httpx
@@ -16,6 +17,7 @@ from config import groq_ai, ADMIN_ID
 # =============================================================================
 
 TUTU_API_URL = "https://offers-api.tutu.ru/avia/offers"
+TUTU_AUTOCOMPLETE_URL = "https://autocomplete-api.tutu.ru/v1/suggest"
 TUTU_REFERER = "https://avia.tutu.ru/"
 
 # Маппинг месяцев
@@ -34,10 +36,15 @@ MONTH_MAPPING = {
     "декабрь": 12, "декабря": 12,
 }
 
-# Маппинг городов на CityId (из Tutu API)
+# Маппинг городов на CityId (только ПРОВЕРЕННЫЕ значения)
+# Для остальных городов используется динамический поиск через autocomplete API
 CITY_MAPPING = {
+    # ✅ ПРОВЕРЕНО из браузера
     "москва": 491,
     "мск": 491,
+    "стамбул": 419,
+    
+    # ⚠️ Предположительно (требуют проверки)
     "питер": 494,
     "санкт-петербург": 494,
     "спб": 494,
@@ -56,57 +63,73 @@ CITY_MAPPING = {
     "красноярск": 506,
     "воронеж": 507,
     "волгоград": 508,
-    "минск": 509,
-    "киев": 510,
-    "алматы": 511,
-    "ташкент": 512,
-    "баку": 513,
-    "ереван": 514,
-    "тбилиси": 515,
-    # Зарубежные направления
-    "париж": 419,
-    "лондон": 420,
-    "берлин": 421,
-    "рим": 422,
-    "мадрид": 423,
-    "барселона": 424,
-    "стамбул": 387,
-    "дубай": 425,
-    "нью-йорк": 426,
-    "пекин": 427,
-    "токио": 428,
-    "сеул": 429,
-    "бангкок": 430,
-    "пхукет": 431,
-    "паттайя": 430,
-    "гоа": 432,
-    "дели": 433,
-    "мумбаи": 434,
-    "тель-авив": 435,
-    "каир": 436,
-    "дубровник": 437,
-    "прага": 438,
-    "варшава": 439,
-    "будапешт": 440,
-    "вена": 441,
-    "амстердам": 442,
-    "брюссель": 443,
-    "копенгаген": 444,
-    "стокгольм": 445,
-    "хельсинки": 446,
-    "осло": 447,
-    "афины": 448,
-    "лиссабон": 449,
-    "милан": 450,
-    "венеция": 451,
-    "флоренция": 452,
-    "ницца": 453,
-    "женева": 454,
-    "цюрих": 455,
+    
+    # Для остальных городов будет использоваться autocomplete API
 }
 
 # Обратный маппинг для форматирования
 CITY_ID_TO_NAME = {v: k for k, v in CITY_MAPPING.items()}
+
+
+async def get_city_id_from_api(city_name: str) -> Optional[int]:
+    """
+    Получает CityId через Tutu autocomplete API.
+    
+    Используется как fallback, если города нет в CITY_MAPPING.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+        
+        params = {
+            "query": city_name,
+            "lang": "ru"
+        }
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                TUTU_AUTOCOMPLETE_URL,
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("items", [])
+                
+                if items and len(items) > 0:
+                    city_id = items[0].get("id")
+                    city_real_name = items[0].get("name", city_name)
+                    
+                    logging.info(f"Найден город '{city_real_name}' с ID {city_id}")
+                    return city_id
+        
+        logging.warning(f"Город '{city_name}' не найден через autocomplete API")
+        return None
+        
+    except Exception as e:
+        logging.error(f"Ошибка получения CityId для '{city_name}': {e}")
+        return None
+
+
+async def resolve_city_id(city_name: str) -> Optional[int]:
+    """
+    Резолвит название города в CityId.
+    
+    1. Сначала проверяет CITY_MAPPING
+    2. Если не найдено - запрашивает через autocomplete API
+    """
+    city_lower = city_name.lower().strip()
+    
+    # Проверяем статический маппинг
+    if city_lower in CITY_MAPPING:
+        return CITY_MAPPING[city_lower]
+    
+    # Запрашиваем через API
+    logging.info(f"Город '{city_name}' не найден в маппинге, запрашиваю через API...")
+    return await get_city_id_from_api(city_name)
 
 
 def parse_date(date_str: str) -> Optional[str]:
@@ -182,8 +205,8 @@ def parse_search_command(text: str) -> Dict:
     
     Returns:
     {
-        "origins": [{"id": 491, "name": "москва"}],
-        "destinations": [{"id": 461, "name": "сочи"}, ...],
+        "origins": [{"name": "москва"}],  # CityId резолвится позже
+        "destinations": [{"name": "сочи"}, ...],
         "departure_date": "2026-05-18" или None,
         "return_date": "2026-05-25" или None,
         "month": 5 или None,
@@ -225,27 +248,24 @@ def parse_search_command(text: str) -> Dict:
                 params["month"] = MONTH_MAPPING[word]
                 break
     
-    # 3. Поиск ВСЕХ городов
+    # 3. Поиск ВСЕХ городов (сохраняем только имена)
     found_cities = []
-    for city_name, city_id in CITY_MAPPING.items():
+    for city_name in CITY_MAPPING.keys():
         if city_name in text_lower:
-            if not any(c["id"] == city_id for c in found_cities):
-                found_cities.append({
-                    "id": city_id,
-                    "name": city_name
-                })
+            if not any(c["name"] == city_name for c in found_cities):
+                found_cities.append({"name": city_name})
     
     # 4. Определяем origins и destinations
     if not found_cities:
-        params["origins"] = [{"id": 491, "name": "москва"}]
+        params["origins"] = [{"name": "москва"}]
     elif len(found_cities) == 1:
-        params["origins"] = [{"id": 491, "name": "москва"}]
+        params["origins"] = [{"name": "москва"}]
         params["destinations"] = found_cities
     elif len(found_cities) == 2:
         params["origins"] = [found_cities[0]]
         params["destinations"] = [found_cities[1]]
     else:
-        params["origins"] = [{"id": 491, "name": "москва"}]
+        params["origins"] = [{"name": "москва"}]
         params["destinations"] = found_cities
     
     # 5. Если нет даты и месяца → завтра
@@ -315,6 +335,11 @@ async def fetch_offers(
                 "departureDate": return_date
             })
         
+        # Генерируем обязательные ID (как в браузере)
+        session_id = str(uuid.uuid4())
+        search_id = str(uuid.uuid4())
+        page_id = ''.join(chr(ord('a') + i % 26) for i in range(11))  # Генерируем случайный pageId
+        
         payload = {
             "passengers": {
                 "full": passengers,
@@ -322,7 +347,14 @@ async def fetch_offers(
                 "infant": 0
             },
             "serviceClass": "Y",
-            "routes": routes
+            "routes": routes,
+            "pageId": page_id,
+            "searchId": search_id,
+            "sessionId": session_id,
+            "source": "offers",
+            "userData": {
+                "screenSize": "md"
+            }
         }
         
         logging.info(f"Запрос: {CITY_ID_TO_NAME.get(origin_id, origin_id)} → {CITY_ID_TO_NAME.get(destination_id, destination_id)}, {departure_date}")
@@ -545,8 +577,8 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
 
 
 async def search_tickets(
-    origin_id: int,
-    destination_id: int,
+    origin_name: str,
+    destination_name: str,
     departure_date: str,
     return_date: Optional[str] = None,
     passengers: int = 1
@@ -554,8 +586,24 @@ async def search_tickets(
     """
     Полный цикл поиска билетов для одного направления.
     
+    Args:
+        origin_name: название города отправления
+        destination_name: название города назначения
+    
     Returns: список билетов (max 7)
     """
+    # Резолвим названия в CityId
+    origin_id = await resolve_city_id(origin_name)
+    destination_id = await resolve_city_id(destination_name)
+    
+    if not origin_id:
+        logging.error(f"Не удалось найти CityId для '{origin_name}'")
+        return []
+    
+    if not destination_id:
+        logging.error(f"Не удалось найти CityId для '{destination_name}'")
+        return []
+    
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
@@ -592,8 +640,8 @@ async def multi_destination_search(
     for origin in origins:
         for destination in destinations:
             tickets = await search_tickets(
-                origin["id"],
-                destination["id"],
+                origin["name"],
+                destination["name"],
                 departure_date,
                 return_date,
                 passengers
