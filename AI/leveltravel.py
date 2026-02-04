@@ -506,7 +506,7 @@ async def capture_hotel_screenshots(
                 
                 # Небольшая корректировка скролла вверх
                 await page.mouse.wheel(0, -150)
-                await page.wait_for_timeout(2500)
+                await page.wait_for_timeout(7000)
                 
                 # ВАЖНО: Увеличиваем viewport ДО скриншота
                 await page.set_viewport_size({'width': 1920, 'height': 1500})
