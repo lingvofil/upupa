@@ -608,77 +608,98 @@ async def search_tickets(
     passengers: int = 1
 ) -> List[Dict]:
     """
-    Полный цикл поиска билетов.
-    Генерирует правильную ссылку используя IATA коды (MOW, IST и т.д.).
+    Полный цикл поиска. Генерирует ссылку с IATA-кодами (MOW, IST).
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
     
     if not origin_id or not destination_id:
         return []
-
+    
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (IATA VERSION) ===
+    # === ГЕНЕРАЦИЯ ПРАВИЛЬНОЙ ССЫЛКИ (IATA) ===
     try:
-        # 1. Пытаемся найти IATA коды (MOW, LED, IST...) в словаре
-        # Если не найдем, оставим ID (хотя они могут не сработать в ссылке)
-        from_code = str(origin_id)
-        to_code = str(destination_id)
+        # 1. Справочник популярных IATA кодов (Фолбек)
+        # ID взяты из вашего CITY_MAPPING
+        STATIC_IATA = {
+            491: "MOW", # Москва
+            419: "IST", # Стамбул
+            494: "LED", # Питер
+            461: "AER", # Сочи
+            497: "SVX", # Екатеринбург
+            496: "KZN", # Казань
+            498: "OVB", # Новосибирск
+            499: "VVO", # Владивосток
+            500: "KGD", # Калининград
+            501: "KRR", # Краснодар
+            502: "KUF", # Самара
+            503: "UFA", # Уфа
+            504: "ROV", # Ростов
+            505: "PEE", # Пермь
+            506: "KJA", # Красноярск
+            507: "VOZ", # Воронеж
+            508: "VOG", # Волгоград
+        }
 
-        try:
-            dct = offers[0].get("_dictionary", {})
-            common = dct.get("common", {})
+        # 2. Пытаемся достать коды из ответа API
+        from_code = STATIC_IATA.get(origin_id)
+        to_code = STATIC_IATA.get(destination_id)
 
-            def get_iata_code(city_id: int) -> Optional[str]:
-                cities = common.get("cities", {})
-                obj = cities.get(str(city_id))
-                if obj and "code" in obj:
-                    return obj["code"]
+        # Если в статике нет, ищем в dictionary
+        if not from_code or not to_code:
+            try:
+                dct = offers[0].get("_dictionary", {})
+                common = dct.get("common", {})
+                
+                def find_iata(city_id):
+                    cid = str(city_id)
+                    # Ищем в городах
+                    if "cities" in common and cid in common["cities"]:
+                        return common["cities"][cid].get("code")
+                    # Ищем в аэропортах (points)
+                    if "points" in common and cid in common["points"]:
+                        return common["points"][cid].get("code")
+                    return None
 
-                points = common.get("points", {})
-                obj = points.get(str(city_id))
-                if obj and "code" in obj:
-                    return obj["code"]
-                return None
+                if not from_code:
+                    from_code = find_iata(origin_id)
+                if not to_code:
+                    to_code = find_iata(destination_id)
+            except Exception:
+                pass
 
-            found_origin = get_iata_code(origin_id)
-            found_dest = get_iata_code(destination_id)
+        # Если совсем ничего не нашли, используем ID (хоть шанс успеха мал)
+        if not from_code:
+            from_code = str(origin_id)
+        if not to_code:
+            to_code = str(destination_id)
 
-            if found_origin:
-                from_code = found_origin
-            if found_dest:
-                to_code = found_dest
-
-            logging.info(f"Коды для ссылки: {from_code} -> {to_code}")
-
-        except Exception as e:
-            logging.warning(f"Не удалось достать IATA коды: {e}")
-
-        # 2. Формат даты: DDMMYYYY
+        # 3. Формат даты: DDMMYYYY
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
         date_str = dep_dt.strftime("%d%m%Y")
-
-        # 3. Собираем ссылку
-        # Пример: route[0]=MOW-IST-05022026
+        
+        # 4. Собираем ссылку (кодируем скобки для Telegram)
+        # https://avia.tutu.ru/offers/?passengers=1&route[0]=MOW-IST-05022026&changes=all
         search_link = (
             f"https://avia.tutu.ru/offers/?"
             f"passengers={passengers}"
-            f"&route[0]={from_code}-{to_code}-{date_str}"
+            f"&route%5B0%5D={from_code}-{to_code}-{date_str}"
             f"&changes=all"
         )
-
-        # Обратный билет
+        
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
             ret_str = ret_dt.strftime("%d%m%Y")
-            search_link += f"&route[1]={to_code}-{from_code}-{ret_str}"
+            search_link += f"&route%5B1%5D={to_code}-{from_code}-{ret_str}"
+            
+        logging.info(f"Сгенерирована ссылка: {search_link}")
 
     except Exception as e:
-        logging.error(f"Ошибка генерации ссылки: {e}")
+        logging.error(f"Ошибка ссылки: {e}")
         search_link = "https://avia.tutu.ru/"
     # ==========================================
 
