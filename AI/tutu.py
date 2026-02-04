@@ -456,9 +456,9 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер с глубокой отладкой для новой структуры Tutu API.
+    Парсит оффер. Исправлено извлечение цены (amount/value/total).
     """
-    # Используем статический счетчик для ограничения логов (чтобы не спамить)
+    # Счетчик для дебага
     if not hasattr(parse_offer, "debug_counter"):
         parse_offer.debug_counter = 0
 
@@ -478,52 +478,51 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "deeplink": ""
         }
         
-        # --- 1. Словари ---
         dictionary = offer.get("_dictionary", {})
         avia_dict = dictionary.get("avia", {})
         voyages_dict = avia_dict.get("voyages") or avia_dict.get("segments", {})
-        
-        if not voyages_dict:
-            if parse_offer.debug_counter < 1:
-                logging.error("[DEBUG] Не найден словарь voyages/segments")
-                parse_offer.debug_counter += 1
-            return None
 
-        # --- 2. Цена (OfferVariants) ---
+        # --- 1. Извлекаем вариант перелета ---
         offer_variants = offer.get("offerVariants")
         current_variant = {}
         
-        # Пытаемся достать вариант
         if offer_variants:
             if isinstance(offer_variants, list) and len(offer_variants) > 0:
                 current_variant = offer_variants[0]
             elif isinstance(offer_variants, dict):
                 current_variant = next(iter(offer_variants.values()))
         
-        # Ищем цену
+        # --- 2. Парсим ЦЕНУ (с перебором ключей) ---
         price_data = current_variant.get("price") or offer.get("price", {})
         
         if isinstance(price_data, dict):
-            result["price"] = int(price_data.get("amount", 0))
+            # Пробуем самые частые варианты ключей в API Tutu
+            raw_price = (
+                price_data.get("value") or 
+                price_data.get("amount") or 
+                price_data.get("total") or
+                price_data.get("rub")
+            )
+            if raw_price:
+                result["price"] = int(raw_price)
             result["currency"] = price_data.get("currency", "RUB")
+            
         elif isinstance(price_data, (int, float)):
             result["price"] = int(price_data)
             
+        # ДЕБАГ ЦЕНЫ: Если цена 0, выводим содержимое price_data
         if result["price"] == 0:
-            if parse_offer.debug_counter < 1:
-                logging.error(f"[DEBUG] Цена не найдена или 0. Структура variant: {current_variant.keys() if current_variant else 'None'}")
+            if parse_offer.debug_counter < 3: # Покажем для первых 3 ошибок
+                logging.error(f"[DEBUG PRICE] Цена 0. Содержимое поля price: {price_data}")
                 parse_offer.debug_counter += 1
             return None
 
-        # --- 3. Маршруты (RouteIds) ---
+        # --- 3. Парсим МАРШРУТЫ (routeIds) ---
         route_ids = offer.get("routeIds") or current_variant.get("routeIds")
         if not route_ids:
             route_ids = offer.get("segmentIds") or current_variant.get("segmentIds")
             
         if not route_ids:
-            if parse_offer.debug_counter < 1:
-                logging.error(f"[DEBUG] routeIds не найдены. Ключи оффера: {list(offer.keys())}")
-                parse_offer.debug_counter += 1
             return None
 
         # Выпрямляем список ID
@@ -538,35 +537,26 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
 
         flat_ids = flatten_ids(route_ids)
 
-        # --- 4. Сборка рейсов ---
+        # --- 4. Собираем рейсы (Voyages) ---
+        if not voyages_dict:
+            return None
+            
         voyages = []
-        missing_ids = []
         for vid in flat_ids:
             # Пробуем string и int ключи
             voyage = voyages_dict.get(str(vid)) or voyages_dict.get(vid)
             if voyage:
                 voyages.append(voyage)
-            else:
-                missing_ids.append(vid)
         
         if not voyages:
-            if parse_offer.debug_counter < 1:
-                logging.error(f"[DEBUG] Рейсы не найдены в dictionary. Искали IDs: {flat_ids}. Пример ключей dictionary: {list(voyages_dict.keys())[:5]}")
-                parse_offer.debug_counter += 1
             return None
 
         first_leg = voyages[0]
         last_leg = voyages[-1]
 
-        # --- 5. Заполнение данных ---
-        # Время
+        # --- 5. Заполняем детали ---
         result["departure"] = first_leg.get("departureTime") or first_leg.get("departureDate") or first_leg.get("datetimeBeg", "")
         result["arrival"] = last_leg.get("arrivalTime") or last_leg.get("arrivalDate") or last_leg.get("datetimeEnd", "")
-        
-        if not result["departure"]:
-            if parse_offer.debug_counter < 1:
-                logging.error(f"[DEBUG] Не найдено время вылета. Ключи сегмента: {list(first_leg.keys())}")
-                parse_offer.debug_counter += 1
         
         # Длительность
         total_duration = sum(v.get("durationMinutes", 0) for v in voyages)
@@ -603,9 +593,8 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         return result
 
     except Exception as e:
-        # Логируем исключение только один раз
-        if parse_offer.debug_counter < 1:
-            logging.error(f"[DEBUG] Critical parse error: {e}", exc_info=True)
+        if parse_offer.debug_counter < 3:
+            logging.error(f"Critical parse error: {e}", exc_info=True)
             parse_offer.debug_counter += 1
         return None
 
