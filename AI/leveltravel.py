@@ -482,48 +482,65 @@ async def capture_hotel_screenshots(
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
 
-                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА ---
-                
-                # 1. Сначала меняем размер окна, чтобы влезло больше номеров
-                await page.set_viewport_size({'width': 1920, 'height': 1500})
-                await page.wait_for_timeout(1000)  # Ждем, чтобы верстка перестроилась
+                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА (ИСПРАВЛЕННЫЙ) ---
 
-                # 2. Ищем первый номер и скроллим к нему с математической точностью
+                # 1. Увеличиваем высоту, чтобы влезло больше номеров
+                await page.set_viewport_size({'width': 1920, 'height': 2000})
+                
+                # 2. Удаляем "липкие" элементы, которые могут перекрывать начало номера
+                # Это критически важно, иначе заголовок номера будет под шапкой сайта
                 await page.evaluate("""
                     () => {
-                        // Ищем первый элемент article, у которого в классе есть "HotelRoomCard_roomCard"
-                        // Это надежнее, чем искать точный класс с __aermd
-                        const firstRoom = document.querySelector('article[class*="HotelRoomCard_roomCard"]');
-                        
-                        if (firstRoom) {
-                            const rect = firstRoom.getBoundingClientRect();
-                            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-                            
-                            // Вычисляем точную позицию:
-                            // Координата элемента + Текущий скролл - 100px (отступ сверху для шапки сайта)
-                            window.scrollTo({
-                                top: rect.top + scrollTop - 100, 
-                                behavior: 'instant'
-                            });
-                        } else {
-                            // Если вдруг новый селектор не сработал, пробуем старый метод как запасной
-                            const fallback = document.querySelector('[class*="HotelRoom"], [class*="RoomCard"]');
-                            if (fallback) fallback.scrollIntoView({ block: 'start' });
-                        }
+                        const stickyElements = document.querySelectorAll(
+                            'header, [class*="Header"], [class*="Sticky"], [class*="Filter"], [class*="Head"]'
+                        );
+                        stickyElements.forEach(el => el.remove()); // Полностью удаляем их из DOM
                     }
                 """)
+                await page.wait_for_timeout(500)
 
-                # 3. Ждем подгрузки картинок (networkidle иногда висит, лучше фиксированная пауза + проверка)
-                await page.wait_for_timeout(1500)
+                # 3. Ищем точный элемент через локатор Playwright (это надежнее JS evaluate)
+                # Используем ваш селектор article
+                room_locator = page.locator('article[class*="HotelRoomCard_roomCard"]').first
                 
-                # Делаем скриншот
-                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
-                await page.screenshot(path=path2, full_page=False, type='png')
-                paths.append(path2)
+                # Если вдруг по article не нашло, пробуем запасной вариант
+                if not await room_locator.count():
+                    room_locator = page.locator('[class*="HotelRoom"]:not([class*="Container"])').first
 
+                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
+                if await room_locator.count():
+                    # Сначала скроллим к нему, чтобы сработала lazy-load подгрузка картинок
+                    await room_locator.scroll_into_view_if_needed()
+                    await page.wait_for_timeout(1500) # Ждем прогрузки картинок
+
+                    # 4. Получаем точные координаты элемента на странице
+                    box = await room_locator.bounding_box()
+                    
+                    if box:
+                        # 5. Делаем скриншот с помощью CLIP
+                        # Мы говорим: начни резать картинку точно с box['y'] (верх элемента)
+                        await page.screenshot(
+                            path=path2,
+                            full_page=False,
+                            clip={
+                                'x': 0,          # От левого края
+                                'y': box['y'],   # ТОЧНО ОТ ВЕРХА ПЕРВОГО НОМЕРА
+                                'width': 1920,   # Ширина
+                                'height': 1500   # Высота скриншота
+                            }
+                        )
+                        paths.append(path2)
+                    else:
+                        # Если координаты не получены, делаем обычный скриншот
+                        await page.screenshot(path=path2, full_page=False)
+                        paths.append(path2)
+                else:
+                    # Если номера не найдены вообще
+                    logging.warning("Не удалось найти локатор карточки номера для скриншота")
+                
                 # Возвращаем размер окна обратно
                 await page.set_viewport_size({'width': 1920, 'height': 1080})
-                
+
                 # --- КОНЕЦ БЛОКА ---
                 
                 logging.info(f"Скриншоты созданы: {len(paths)}")
