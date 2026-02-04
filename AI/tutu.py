@@ -608,7 +608,8 @@ async def search_tickets(
     passengers: int = 1
 ) -> List[Dict]:
     """
-    Полный цикл поиска. Генерирует ссылку с IATA-кодами и квадратными скобками.
+    Полный цикл поиска. 
+    Генерирует ссылку в формате Tutu: ID_ОТКУДА - ДАТА - ID_КУДА.
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
@@ -616,67 +617,32 @@ async def search_tickets(
     if not origin_id or not destination_id:
         return []
     
-    # Запускаем поиск (API работает на ID)
+    # 1. Запрос к API (тут порядок не важен, главное правильные ID)
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ССЫЛКИ (IATA + Literal Brackets) ===
+    # === ГЕНЕРАЦИЯ ССЫЛКИ (TUTU FORMAT) ===
     try:
-        # 1. Хардкод популярных IATA кодов (самый надежный способ)
-        STATIC_IATA = {
-            491: "MOW", # Москва
-            419: "IST", # Стамбул
-            494: "LED", # Питер
-            461: "AER", # Сочи
-            497: "SVX", # Екатеринбург
-            496: "KZN", # Казань
-            498: "OVB", # Новосибирск
-            499: "VVO", # Владивосток
-            500: "KGD", # Калининград
-            501: "KRR", # Краснодар
-            502: "KUF", # Самара
-            503: "UFA", # Уфа
-            504: "ROV", # Ростов
-            505: "PEE", # Пермь
-            506: "KJA", # Красноярск
-            507: "VOZ", # Воронеж
-            508: "VOG", # Волгоград
-            # Зарубежные (частые)
-            411: "DXB", # Дубай
-            556: "HKT", # Пхукет
-            396: "AYT", # Анталья
-            630: "EVN", # Ереван
-            627: "TBS", # Тбилиси
-        }
-
-        from_code = STATIC_IATA.get(origin_id)
-        to_code = STATIC_IATA.get(destination_id)
-
-        # Если кодов нет в справочнике, пробуем ID (риск, но вариантов нет)
-        if not from_code:
-            from_code = str(origin_id)
-        if not to_code:
-            to_code = str(destination_id)
-
-        # 2. Формат даты: DDMMYYYY (слитно)
+        # Формат даты: DDMMYYYY (слитно)
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
         date_str = dep_dt.strftime("%d%m%Y")
         
-        # 3. Собираем ссылку с КВАДРАТНЫМИ скобками (без кодирования!)
-        # https://avia.tutu.ru/offers/?passengers=1&class=Y&route[0]=MOW-IST-05022026&changes=all
+        # Ссылка: route[0] = ОТКУДА - ДАТА - КУДА
+        # Пример: 491-05022026-419
         search_link = (
             f"https://avia.tutu.ru/offers/?"
             f"passengers={passengers}&class=Y"
-            f"&route[0]={from_code}-{to_code}-{date_str}"
+            f"&route[0]={origin_id}-{date_str}-{destination_id}"
             f"&changes=all"
         )
         
+        # Обратный билет: route[1] = КУДА - ДАТА - ОТКУДА
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
             ret_str = ret_dt.strftime("%d%m%Y")
-            search_link += f"&route[1]={to_code}-{from_code}-{ret_str}"
+            search_link += f"&route[1]={destination_id}-{ret_str}-{origin_id}"
 
     except Exception as e:
         logging.error(f"Ошибка ссылки: {e}")
