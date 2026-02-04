@@ -556,6 +556,20 @@ async def capture_hotel_screenshots(
                         )
                     except Exception:
                         logging.warning("Номера не успели полностью прогрузиться")
+
+                    await page.evaluate("""
+                        () => {
+                            const firstRoom =
+                                document.querySelector('[class*="HotelRoom"]') ||
+                                document.querySelector('[class*="RoomCard"]') ||
+                                document.querySelector('[class*="BookingRoom"]');
+                            
+                            if (firstRoom) {
+                                firstRoom.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            }
+                        }
+                    """)
+                    await page.wait_for_timeout(800)
                 
                 # ВАЖНО: Увеличиваем viewport ДО скриншота
                 await page.set_viewport_size({'width': 1920, 'height': 1500})
