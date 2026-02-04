@@ -39,26 +39,26 @@ MONTH_MAPPING = {
 }
 
 # Маппинг направлений
-COUNTRY_MAPPING = {
-    "северный гоа": "IN",
-    "гоа": "IN",
-    "мальдивы": "MV",
-    "шри-ланка": "LK",
-    "шриланка": "LK",
-    "вьетнам": "VN",
-    "фукуок": "VN",
-    "нячанг": "VN",
-    "турция": "TR",
-    "бали": "ID",
-    "индонезия": "ID",
-    "таиланд": "TH",
-    "пхукет": "TH",
-    "паттайя": "TH",
-    "оаэ": "AE",
-    "дубай": "AE",
-    "египет": "EG",
-    "хургада": "EG",
-    "шарм": "EG",
+DESTINATION_MAPPING = {
+    "северный гоа": {"country_code": "IN", "location_slug": None},
+    "гоа": {"country_code": "IN", "location_slug": None},
+    "мальдивы": {"country_code": "MV", "location_slug": None},
+    "шри-ланка": {"country_code": "LK", "location_slug": None},
+    "шриланка": {"country_code": "LK", "location_slug": None},
+    "вьетнам": {"country_code": "VN", "location_slug": None},
+    "фукуок": {"country_code": "VN", "location_slug": "Phu.Quoc-VN"},
+    "нячанг": {"country_code": "VN", "location_slug": "Nha.Trang-VN"},
+    "турция": {"country_code": "TR", "location_slug": None},
+    "бали": {"country_code": "ID", "location_slug": None},
+    "индонезия": {"country_code": "ID", "location_slug": None},
+    "таиланд": {"country_code": "TH", "location_slug": None},
+    "пхукет": {"country_code": "TH", "location_slug": None},
+    "паттайя": {"country_code": "TH", "location_slug": None},
+    "оаэ": {"country_code": "AE", "location_slug": None},
+    "дубай": {"country_code": "AE", "location_slug": None},
+    "египет": {"country_code": "EG", "location_slug": None},
+    "хургада": {"country_code": "EG", "location_slug": None},
+    "шарм": {"country_code": "EG", "location_slug": None},
 }
 
 # Эвристики для AI анализа
@@ -196,13 +196,25 @@ def parse_search_command(text: str, search_type: str = SEARCH_TYPE_TOUR) -> Dict
                 break
     
     # 4. Поиск ВСЕХ направлений в тексте
-    for dest_name, code in COUNTRY_MAPPING.items():
+    for dest_name in sorted(DESTINATION_MAPPING.keys(), key=len, reverse=True):
         if dest_name in text_lower:
-            # Проверяем, не добавили ли уже этот код
-            if not any(c["code"] == code for c in params["countries"]):
+            dest_meta = DESTINATION_MAPPING[dest_name]
+            code = dest_meta["country_code"]
+            location_slug = dest_meta.get("location_slug")
+
+            if location_slug is None and any(
+                c["code"] == code and c.get("location_slug") for c in params["countries"]
+            ):
+                continue
+
+            if not any(
+                c["code"] == code and c.get("location_slug") == location_slug
+                for c in params["countries"]
+            ):
                 params["countries"].append({
                     "code": code,
-                    "name": dest_name
+                    "name": dest_name,
+                    "location_slug": location_slug
                 })
     
     # 5. Поиск взрослых
@@ -218,7 +230,8 @@ def build_search_url(
     date: str,
     adults: int,
     nights: int,
-    search_type: str = SEARCH_TYPE_TOUR
+    search_type: str = SEARCH_TYPE_TOUR,
+    destination_slug: Optional[str] = None
 ) -> str:
     """
     Строит URL для поиска туров или отелей.
@@ -236,6 +249,8 @@ def build_search_url(
     nights_min = max(1, nights - 1)
     nights_max = nights + 1
     
+    destination_part = destination_slug or f"Any-{country_code}"
+
     if search_type == SEARCH_TYPE_HOTEL:
         # URL для поиска отелей (без перелета)
         # Пример: https://level.travel/search/Any-RU-to-Phu.Quoc-VN-departure-from-28.04.2026..02.05.2026-to-06.05.2026..10.05.2026-2-adults-0-kids-1..5-stars-hotel-type-30.04.2026-08.05.2026
@@ -251,7 +266,7 @@ def build_search_url(
             
             return (
                 f"{LEVELTRAVEL_WEB_URL}/search/"
-                f"Any-RU-to-Any-{country_code}-"
+                f"Any-RU-to-{destination_part}-"
                 f"departure-from-{start_min}..{start_max}-"
                 f"to-{end_min}..{end_max}-"
                 f"{adults}-adults-0-kids-"
@@ -266,7 +281,7 @@ def build_search_url(
         # URL для туров (с перелетом) - оригинальная логика
         return (
             f"{LEVELTRAVEL_WEB_URL}/search/"
-            f"Moscow-RU-to-Any-{country_code}-"
+            f"Moscow-RU-to-{destination_part}-"
             f"departure-{date}-"
             f"for-{nights_min}..{nights_max}-nights-"
             f"{adults}-adults-0-kids-"
@@ -324,7 +339,8 @@ async def quick_price_scan(
     date: str,
     adults: int,
     nights: int,
-    search_type: str = SEARCH_TYPE_TOUR
+    search_type: str = SEARCH_TYPE_TOUR,
+    destination_slug: Optional[str] = None
 ) -> Optional[int]:
     """ФАЗА 1: Быстрое сканирование - только минимальная цена на дату."""
     try:
@@ -339,7 +355,14 @@ async def quick_price_scan(
             page = await context.new_page()
             
             try:
-                search_url = build_search_url(country_code, date, adults, nights, search_type)
+                search_url = build_search_url(
+                    country_code,
+                    date,
+                    adults,
+                    nights,
+                    search_type,
+                    destination_slug=destination_slug
+                )
                 
                 await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
                 
@@ -507,6 +530,46 @@ async def capture_hotel_screenshots(
                 # Небольшая корректировка скролла вверх
                 await page.mouse.wheel(0, -150)
                 await page.wait_for_timeout(4000)
+
+                if search_type == SEARCH_TYPE_HOTEL:
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=20000)
+                    except Exception:
+                        logging.warning("Не дождались networkidle для номеров")
+
+                    try:
+                        await page.wait_for_function(
+                            """
+                            () => {
+                                const cards = document.querySelectorAll(
+                                    '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]'
+                                );
+                                if (!cards.length) return false;
+
+                                const skeleton = document.querySelector(
+                                    '[class*="Skeleton"], [class*="Loader"], [class*="Placeholder"]'
+                                );
+                                return !skeleton;
+                            }
+                            """,
+                            timeout=30000
+                        )
+                    except Exception:
+                        logging.warning("Номера не успели полностью прогрузиться")
+
+                    await page.evaluate("""
+                        () => {
+                            const firstRoom =
+                                document.querySelector('[class*="HotelRoom"]') ||
+                                document.querySelector('[class*="RoomCard"]') ||
+                                document.querySelector('[class*="BookingRoom"]');
+                            
+                            if (firstRoom) {
+                                firstRoom.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            }
+                        }
+                    """)
+                    await page.wait_for_timeout(800)
                 
                 # ВАЖНО: Увеличиваем viewport ДО скриншота
                 await page.set_viewport_size({'width': 1920, 'height': 1500})
@@ -536,7 +599,8 @@ async def deep_parse_date(
     date: str,
     adults: int,
     nights: int,
-    search_type: str = SEARCH_TYPE_TOUR
+    search_type: str = SEARCH_TYPE_TOUR,
+    destination_slug: Optional[str] = None
 ) -> List[Dict]:
     """ФАЗА 2: Глубокий парсинг - полная информация по дате."""
     tours = []
@@ -553,7 +617,14 @@ async def deep_parse_date(
             page = await context.new_page()
 
             try:
-                search_url = build_search_url(country_code, date, adults, nights, search_type)
+                search_url = build_search_url(
+                    country_code,
+                    date,
+                    adults,
+                    nights,
+                    search_type,
+                    destination_slug=destination_slug
+                )
 
                 logging.info(f"Глубокий парсинг: {date} ({nights} ночей, тип: {search_type})")
                 await page.goto(search_url, timeout=90_000, wait_until="domcontentloaded")
@@ -808,10 +879,18 @@ async def direct_deep_search(
     for idx, country in enumerate(countries, 1):
         country_code = country["code"]
         country_name = country["name"]
+        destination_slug = country.get("location_slug")
         
         logging.info(f"Парсинг {idx}/{total_countries}: {country_name} на {start_date}")
         
-        tours = await deep_parse_date(country_code, start_date, adults, nights, search_type)
+        tours = await deep_parse_date(
+            country_code,
+            start_date,
+            adults,
+            nights,
+            search_type,
+            destination_slug=destination_slug
+        )
         
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower().strip()
