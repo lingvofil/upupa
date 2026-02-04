@@ -608,7 +608,7 @@ async def search_tickets(
     passengers: int = 1
 ) -> List[Dict]:
     """
-    Полный цикл поиска. Генерирует ссылку с IATA-кодами (MOW, IST).
+    Полный цикл поиска. Генерирует ссылку с IATA-кодами и квадратными скобками.
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
@@ -616,15 +616,15 @@ async def search_tickets(
     if not origin_id or not destination_id:
         return []
     
+    # Запускаем поиск (API работает на ID)
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ПРАВИЛЬНОЙ ССЫЛКИ (IATA) ===
+    # === ГЕНЕРАЦИЯ ССЫЛКИ (IATA + Literal Brackets) ===
     try:
-        # 1. Справочник популярных IATA кодов (Фолбек)
-        # ID взяты из вашего CITY_MAPPING
+        # 1. Хардкод популярных IATA кодов (самый надежный способ)
         STATIC_IATA = {
             491: "MOW", # Москва
             419: "IST", # Стамбул
@@ -643,60 +643,40 @@ async def search_tickets(
             506: "KJA", # Красноярск
             507: "VOZ", # Воронеж
             508: "VOG", # Волгоград
+            # Зарубежные (частые)
+            411: "DXB", # Дубай
+            556: "HKT", # Пхукет
+            396: "AYT", # Анталья
+            630: "EVN", # Ереван
+            627: "TBS", # Тбилиси
         }
 
-        # 2. Пытаемся достать коды из ответа API
         from_code = STATIC_IATA.get(origin_id)
         to_code = STATIC_IATA.get(destination_id)
 
-        # Если в статике нет, ищем в dictionary
-        if not from_code or not to_code:
-            try:
-                dct = offers[0].get("_dictionary", {})
-                common = dct.get("common", {})
-                
-                def find_iata(city_id):
-                    cid = str(city_id)
-                    # Ищем в городах
-                    if "cities" in common and cid in common["cities"]:
-                        return common["cities"][cid].get("code")
-                    # Ищем в аэропортах (points)
-                    if "points" in common and cid in common["points"]:
-                        return common["points"][cid].get("code")
-                    return None
-
-                if not from_code:
-                    from_code = find_iata(origin_id)
-                if not to_code:
-                    to_code = find_iata(destination_id)
-            except Exception:
-                pass
-
-        # Если совсем ничего не нашли, используем ID (хоть шанс успеха мал)
+        # Если кодов нет в справочнике, пробуем ID (риск, но вариантов нет)
         if not from_code:
             from_code = str(origin_id)
         if not to_code:
             to_code = str(destination_id)
 
-        # 3. Формат даты: DDMMYYYY
+        # 2. Формат даты: DDMMYYYY (слитно)
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
         date_str = dep_dt.strftime("%d%m%Y")
         
-        # 4. Собираем ссылку (кодируем скобки для Telegram)
-        # https://avia.tutu.ru/offers/?passengers=1&route[0]=MOW-IST-05022026&changes=all
+        # 3. Собираем ссылку с КВАДРАТНЫМИ скобками (без кодирования!)
+        # https://avia.tutu.ru/offers/?passengers=1&class=Y&route[0]=MOW-IST-05022026&changes=all
         search_link = (
             f"https://avia.tutu.ru/offers/?"
-            f"passengers={passengers}"
-            f"&route%5B0%5D={from_code}-{to_code}-{date_str}"
+            f"passengers={passengers}&class=Y"
+            f"&route[0]={from_code}-{to_code}-{date_str}"
             f"&changes=all"
         )
         
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
             ret_str = ret_dt.strftime("%d%m%Y")
-            search_link += f"&route%5B1%5D={to_code}-{from_code}-{ret_str}"
-            
-        logging.info(f"Сгенерирована ссылка: {search_link}")
+            search_link += f"&route[1]={to_code}-{from_code}-{ret_str}"
 
     except Exception as e:
         logging.error(f"Ошибка ссылки: {e}")
