@@ -408,39 +408,49 @@ async def capture_hotel_screenshots(
                 logging.info(f"Создаю скриншоты для {hotel_name} (тип: {search_type})")
                 await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
                 
-                # --- ЧИСТКА МУСОРА ---
+                # Скрываем все лишнее
                 await page.evaluate("""
                     () => {
-                        const style = document.createElement('style');
-                        style.innerHTML = `
-                            [class*="CookieConsent"], [class*="WidgetContainer"], #jivo-iframe-container,
-                            [class*="StickyButton"], [class*="HeaderWrapper"], [class*="StickyFilter"],
-                            [class*="StickyPrice"], [class*="Floating"], header, nav { display: none !important; }
-                        `;
-                        document.head.appendChild(style);
+                        const selectors = [
+                            '[class*="CookieConsent"]', 
+                            '[class*="WidgetContainer"]', 
+                            '#jivo-iframe-container',
+                            '[class*="StickyButton"]',
+                            '[class*="HeaderWrapper"]',
+                            '[class*="StickyFilter"]',
+                            '[class*="StickyPrice"]',
+                            '[class*="Floating"]'
+                        ];
+                        selectors.forEach(s => {
+                            const el = document.querySelector(s);
+                            if (el) el.style.display = 'none';
+                        });
                     }
                 """)
 
-                # Ждем появления основного контейнера
                 try:
                     await page.wait_for_selector(
-                        '[class*="Calendar"], [class*="PriceGrid"], [class*="HotelHeader"]', 
+                        '[class*="Calendar"], [class*="PriceGrid"], [class*="HotelHeader"], .hotel-content', 
                         timeout=20000
                     )
                 except Exception:
-                    logging.warning(f"Контент не найден сразу")
+                    logging.warning(f"Контент для {hotel_name} не найден по селекторам")
                 
-                # --- СКРИНШОТ 1: Календарь ---
+                await page.wait_for_timeout(2000)
+                
+                # СКРИНШОТ 1: Календарь / общий вид
                 await page.evaluate("""
                     () => {
                         const target = document.querySelector('[class*="Calendar"]') || 
                                        document.querySelector('[class*="PriceGrid"]') ||
                                        document.querySelector('[class*="HotelHeader"]');
-                        if (target) target.scrollIntoView({ behavior: 'instant', block: 'center' });
+                        if (target) {
+                            target.scrollIntoView({ behavior: 'auto', block: 'center' });
+                        }
                     }
                 """)
-                await page.wait_for_timeout(1500)
-                
+                await page.wait_for_timeout(1000)
+
                 screenshots_dir = "/tmp/tour_screenshots"
                 os.makedirs(screenshots_dir, exist_ok=True)
                 safe_name = re.sub(r'[^\w\s-]', '', hotel_name)[:50]
@@ -449,65 +459,67 @@ async def capture_hotel_screenshots(
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
 
-                # --- СКРИНШОТ 2: Номера (Hardcore loading) ---
+                # СКРИНШОТ 2: Варианты номеров
+                # Для отелей - ждем появления блока с номерами
+                if search_type == SEARCH_TYPE_HOTEL:
+                    try:
+                        await page.wait_for_selector(
+                            '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]',
+                            timeout=25000
+                        )
+                    except Exception:
+                        logging.warning("Блок номеров не найден — fallback scroll")
                 
-                logging.info("Начинаю загрузку номеров...")
-
-                # 1. Скроллим вниз сильно, чтобы точно зацепить триггер загрузки
-                await page.evaluate("window.scrollBy(0, 800)")
-                await page.wait_for_timeout(500)
-
-                # 2. Ищем контейнер с номерами и скроллим к нему
-                target_selector = '[class*="HotelRooms"], [data-testid="rooms"]' if search_type == SEARCH_TYPE_HOTEL else '[class*="HotelOffers"], #offers'
+                # Скроллим к блоку с номерами (разные селекторы для туров и отелей)
+                if search_type == SEARCH_TYPE_HOTEL:
+                    await page.evaluate("""
+                        () => {
+                            const offersBlock =
+                                document.querySelector('[class*="HotelRooms"]') ||
+                                document.querySelector('[class*="RoomList"]') ||
+                                document.querySelector('[class*="HotelRoom"]') ||
+                                document.querySelector('[data-testid="rooms"]');
+                            
+                            if (offersBlock) {
+                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            } else {
+                                window.scrollBy(0, 1200);
+                            }
+                        }
+                    """)
+                else:
+                    # Для туров - старая логика
+                    await page.evaluate("""
+                        () => {
+                            const offersBlock = document.querySelector('[class*="HotelOffers"]') || 
+                                               document.querySelector('#offers') ||
+                                               document.querySelector('[class*="BookingOffers"]') ||
+                                               document.querySelector('[class*="RoomsTable"]');
+                            
+                            if (offersBlock) {
+                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            } else {
+                                window.scrollBy(0, 900);
+                            }
+                        }
+                    """)
                 
-                found_selector = await page.evaluate(f"""
-                    () => {{
-                        const el = document.querySelector('{target_selector}');
-                        if (el) {{
-                            el.scrollIntoView({{ behavior: 'instant', block: 'start' }});
-                            return true;
-                        }}
-                        return false;
-                    }}
-                """)
+                # Небольшая корректировка скролла вверх
+                await page.mouse.wheel(0, -150)
+                await page.wait_for_timeout(2500)
                 
-                if not found_selector:
-                    # Фолбек: просто скроллим еще ниже
-                    await page.evaluate("window.scrollBy(0, 500)")
-
-                # 3. Network Idle Strategy: Самый надежный способ
-                # Ждем, пока прекратится сетевая активность (загрузка JSON с ценами)
-                try:
-                    logging.info("Жду Network Idle (окончание запросов)...")
-                    await page.wait_for_load_state("networkidle", timeout=12000)
-                except Exception:
-                    logging.warning("Network idle timeout (сайт долго грузит картинки)")
-
-                # 4. Positive Assertion: Ждем появления ценника
-                # Это гарантия того, что данные отрендерились
-                try:
-                    logging.info("Жду появления цен (рендеринг)...")
-                    # Ищем символ рубля или класс цены
-                    await page.wait_for_selector(
-                        '[class*="PriceBlock"], [class*="Price"], span:has-text("₽")', 
-                        timeout=8000
-                    )
-                except Exception:
-                    logging.warning("Цены не появились за 8 секунд")
-
-                # 5. Финальная пауза для отрисовки картинок
-                await page.wait_for_timeout(2000)
-
-                # 6. Корректировка вьюпорта
-                await page.set_viewport_size({'width': 1920, 'height': 1600})
-                await page.evaluate("window.scrollBy(0, -100)") # Чуть вверх, чтобы заголовок был виден
-                await page.wait_for_timeout(1000)
+                # ВАЖНО: Увеличиваем viewport ДО скриншота
+                await page.set_viewport_size({'width': 1920, 'height': 1500})
+                await page.wait_for_timeout(1200)
                 
                 path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
                 await page.screenshot(path=path2, full_page=False, type='png')
                 paths.append(path2)
                 
+                # Возвращаем viewport обратно
                 await page.set_viewport_size({'width': 1920, 'height': 1080})
+                
+                logging.info(f"Скриншоты созданы: {len(paths)}")
                 return paths
                 
             finally:
