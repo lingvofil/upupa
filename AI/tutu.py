@@ -456,12 +456,8 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер. Исправлено извлечение цены (amount/value/total).
+    Парсит оффер. Исправлена ошибка с вложенными словарями в цене (TypeError).
     """
-    # Счетчик для дебага
-    if not hasattr(parse_offer, "debug_counter"):
-        parse_offer.debug_counter = 0
-
     try:
         if not isinstance(offer, dict):
             return None
@@ -477,12 +473,16 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "baggage": False,
             "deeplink": ""
         }
-        
+
+        # --- 1. Словари ---
         dictionary = offer.get("_dictionary", {})
         avia_dict = dictionary.get("avia", {})
         voyages_dict = avia_dict.get("voyages") or avia_dict.get("segments", {})
 
-        # --- 1. Извлекаем вариант перелета ---
+        if not voyages_dict:
+            return None
+
+        # --- 2. Извлекаем вариант перелета ---
         offer_variants = offer.get("offerVariants")
         current_variant = {}
         
@@ -492,32 +492,49 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             elif isinstance(offer_variants, dict):
                 current_variant = next(iter(offer_variants.values()))
         
-        # --- 2. Парсим ЦЕНУ (с перебором ключей) ---
+        # --- 3. Парсим ЦЕНУ (с защитой от вложенных словарей) ---
         price_data = current_variant.get("price") or offer.get("price", {})
         
-        if isinstance(price_data, dict):
-            # Пробуем самые частые варианты ключей в API Tutu
-            raw_price = (
-                price_data.get("value") or 
-                price_data.get("amount") or 
-                price_data.get("total") or
-                price_data.get("rub")
-            )
-            if raw_price:
-                result["price"] = int(raw_price)
-            result["currency"] = price_data.get("currency", "RUB")
+        final_price = 0
+        final_currency = "RUB"
+        
+        if isinstance(price_data, (int, float)):
+            final_price = int(price_data)
             
-        elif isinstance(price_data, (int, float)):
-            result["price"] = int(price_data)
+        elif isinstance(price_data, dict):
+            # Сохраняем валюту если есть
+            final_currency = price_data.get("currency", "RUB")
             
-        # ДЕБАГ ЦЕНЫ: Если цена 0, выводим содержимое price_data
+            # Список ключей, где может лежать цена
+            keys_to_check = ["value", "amount", "total", "rub", "eur", "usd"]
+            
+            for key in keys_to_check:
+                val = price_data.get(key)
+                if val is not None:
+                    # Если нашли число/строку - берем
+                    if isinstance(val, (int, float, str)):
+                        try:
+                            final_price = int(float(val))
+                            break
+                        except ValueError:
+                            continue
+                    # Если нашли словарь - копаем глубже (например price['total']['amount'])
+                    elif isinstance(val, dict):
+                        sub_val = val.get("amount") or val.get("value")
+                        if sub_val is not None:
+                            try:
+                                final_price = int(float(sub_val))
+                                break
+                            except ValueError:
+                                continue
+        
+        result["price"] = final_price
+        result["currency"] = final_currency
+            
         if result["price"] == 0:
-            if parse_offer.debug_counter < 3: # Покажем для первых 3 ошибок
-                logging.error(f"[DEBUG PRICE] Цена 0. Содержимое поля price: {price_data}")
-                parse_offer.debug_counter += 1
             return None
 
-        # --- 3. Парсим МАРШРУТЫ (routeIds) ---
+        # --- 4. Парсим МАРШРУТЫ (routeIds) ---
         route_ids = offer.get("routeIds") or current_variant.get("routeIds")
         if not route_ids:
             route_ids = offer.get("segmentIds") or current_variant.get("segmentIds")
@@ -537,10 +554,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
 
         flat_ids = flatten_ids(route_ids)
 
-        # --- 4. Собираем рейсы (Voyages) ---
-        if not voyages_dict:
-            return None
-            
+        # --- 5. Собираем рейсы (Voyages) ---
         voyages = []
         for vid in flat_ids:
             # Пробуем string и int ключи
@@ -554,7 +568,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         first_leg = voyages[0]
         last_leg = voyages[-1]
 
-        # --- 5. Заполняем детали ---
+        # --- 6. Заполняем детали ---
         result["departure"] = first_leg.get("departureTime") or first_leg.get("departureDate") or first_leg.get("datetimeBeg", "")
         result["arrival"] = last_leg.get("arrivalTime") or last_leg.get("arrivalDate") or last_leg.get("datetimeEnd", "")
         
@@ -593,9 +607,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         return result
 
     except Exception as e:
-        if parse_offer.debug_counter < 3:
-            logging.error(f"Critical parse error: {e}", exc_info=True)
-            parse_offer.debug_counter += 1
+        logging.error(f"Critical parse error: {e}", exc_info=True)
         return None
 
 
