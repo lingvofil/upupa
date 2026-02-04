@@ -609,15 +609,12 @@ async def search_tickets(
 ) -> List[Dict]:
     """
     Полный цикл поиска билетов.
-    Генерирует надежную ссылку на страницу поиска Tutu.ru.
+    Генерирует ссылку формата DDMMYYYY (без точек).
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
     
     if not origin_id or not destination_id:
-        logging.error(
-            f"Не удалось определить ID городов: {origin_name}, {destination_name}"
-        )
         return []
 
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
@@ -625,25 +622,28 @@ async def search_tickets(
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (FIXED) ===
+    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (v3.0) ===
     try:
-        # Формат даты: DD.MM.YYYY (с точками!)
+        # 1. Формат даты: DDMMYYYY (БЕЗ ТОЧЕК! Это критично)
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
-        date_str = dep_dt.strftime("%d.%m.%Y")
+        date_str = dep_dt.strftime("%d%m%Y")
 
+        # 2. Собираем ссылку
+        # Обязательно добавляем changes=all, чтобы поиск не завис
         search_link = (
             f"https://avia.tutu.ru/offers/?"
-            f"passengers={passengers}&class=Y"
+            f"passengers={passengers}"
             f"&route[0]={origin_id}-{destination_id}-{date_str}"
+            f"&changes=all"
         )
 
+        # Обратный билет
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
-            ret_str = ret_dt.strftime("%d.%m.%Y")
+            ret_str = ret_dt.strftime("%d%m%Y")
             search_link += f"&route[1]={destination_id}-{origin_id}-{ret_str}"
 
-    except Exception as e:
-        logging.error(f"Ошибка генерации ссылки: {e}")
+    except Exception:
         search_link = "https://avia.tutu.ru/"
     # ==========================================
 
