@@ -457,7 +457,7 @@ async def fetch_offers(
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
     Парсит оффер Tutu (API 2026).
-    v5.0: Только парсинг данных, ссылкой занимается search_tickets.
+    v6.0: Исправлены маршруты и цена. Ссылка генерируется в search_tickets.
     """
     try:
         if not isinstance(offer, dict):
@@ -542,7 +542,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         first_leg = legs[0]
         last_leg = legs[-1]
 
-        # 4. Детали перелета
+        # 4. Детали
         result["departure"] = (
             first_leg.get("departureDateTime")
             or first_leg.get("departureTime")
@@ -608,13 +608,16 @@ async def search_tickets(
     passengers: int = 1
 ) -> List[Dict]:
     """
-    Полный цикл поиска билетов для одного направления.
-    Генерирует ссылку на страницу результатов поиска.
+    Полный цикл поиска билетов.
+    Генерирует надежную ссылку на страницу поиска Tutu.ru.
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
     
     if not origin_id or not destination_id:
+        logging.error(
+            f"Не удалось определить ID городов: {origin_name}, {destination_name}"
+        )
         return []
 
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
@@ -622,10 +625,11 @@ async def search_tickets(
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК ===
+    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (FIXED) ===
     try:
+        # Формат даты: DD.MM.YYYY (с точками!)
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
-        date_str = dep_dt.strftime("%d%m%Y")
+        date_str = dep_dt.strftime("%d.%m.%Y")
 
         search_link = (
             f"https://avia.tutu.ru/offers/?"
@@ -635,12 +639,13 @@ async def search_tickets(
 
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
-            ret_str = ret_dt.strftime("%d%m%Y")
+            ret_str = ret_dt.strftime("%d.%m.%Y")
             search_link += f"&route[1]={destination_id}-{origin_id}-{ret_str}"
 
-    except Exception:
+    except Exception as e:
+        logging.error(f"Ошибка генерации ссылки: {e}")
         search_link = "https://avia.tutu.ru/"
-    # ================================
+    # ==========================================
 
     logging.info(f"Начинаю парсинг {len(offers)} офферов...")
 
