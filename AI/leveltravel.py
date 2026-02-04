@@ -482,105 +482,49 @@ async def capture_hotel_screenshots(
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
 
-                # СКРИНШОТ 2: Варианты номеров
-                # Для отелей - ждем появления блока с номерами
-                if search_type == SEARCH_TYPE_HOTEL:
-                    try:
-                        await page.wait_for_selector(
-                            '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]',
-                            timeout=45000
-                        )
-                    except Exception:
-                        logging.warning("Блок номеров не найден — fallback scroll")
+                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА ---
                 
-                # Скроллим к блоку с номерами (разные селекторы для туров и отелей)
-                if search_type == SEARCH_TYPE_HOTEL:
-                    await page.evaluate("""
-                        () => {
-                            const offersBlock =
-                                document.querySelector('[class*="HotelRooms"]') ||
-                                document.querySelector('[class*="RoomList"]') ||
-                                document.querySelector('[class*="HotelRoom"]') ||
-                                document.querySelector('[data-testid="rooms"]');
-                            
-                            if (offersBlock) {
-                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
-                            } else {
-                                window.scrollBy(0, 1200);
-                            }
-                        }
-                    """)
-                else:
-                    # Для туров - старая логика
-                    await page.evaluate("""
-                        () => {
-                            const offersBlock = document.querySelector('[class*="HotelOffers"]') || 
-                                               document.querySelector('#offers') ||
-                                               document.querySelector('[class*="BookingOffers"]') ||
-                                               document.querySelector('[class*="RoomsTable"]');
-                            
-                            if (offersBlock) {
-                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
-                            } else {
-                                window.scrollBy(0, 900);
-                            }
-                        }
-                    """)
-                
-                # Небольшая корректировка скролла вверх
-                await page.mouse.wheel(0, -150)
-                await page.wait_for_timeout(4000)
-
-                if search_type == SEARCH_TYPE_HOTEL:
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=20000)
-                    except Exception:
-                        logging.warning("Не дождались networkidle для номеров")
-
-                    try:
-                        await page.wait_for_function(
-                            """
-                            () => {
-                                const cards = document.querySelectorAll(
-                                    '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]'
-                                );
-                                if (!cards.length) return false;
-
-                                const skeleton = document.querySelector(
-                                    '[class*="Skeleton"], [class*="Loader"], [class*="Placeholder"]'
-                                );
-                                return !skeleton;
-                            }
-                            """,
-                            timeout=30000
-                        )
-                    except Exception:
-                        logging.warning("Номера не успели полностью прогрузиться")
-
-                    await page.evaluate("""
-                        () => {
-                            const firstRoom =
-                                document.querySelector('[class*="HotelRoom"]') ||
-                                document.querySelector('[class*="RoomCard"]') ||
-                                document.querySelector('[class*="BookingRoom"]');
-                            
-                            if (firstRoom) {
-                                firstRoom.scrollIntoView({ behavior: 'auto', block: 'start' });
-                            }
-                        }
-                    """)
-                    await page.wait_for_timeout(800)
-                
-                # ВАЖНО: Увеличиваем viewport ДО скриншота
+                # 1. Сначала меняем размер окна, чтобы влезло больше номеров
                 await page.set_viewport_size({'width': 1920, 'height': 1500})
-                await page.wait_for_timeout(1200)
+                await page.wait_for_timeout(1000)  # Ждем, чтобы верстка перестроилась
+
+                # 2. Ищем первый номер и скроллим к нему с математической точностью
+                await page.evaluate("""
+                    () => {
+                        // Ищем первый элемент article, у которого в классе есть "HotelRoomCard_roomCard"
+                        // Это надежнее, чем искать точный класс с __aermd
+                        const firstRoom = document.querySelector('article[class*="HotelRoomCard_roomCard"]');
+                        
+                        if (firstRoom) {
+                            const rect = firstRoom.getBoundingClientRect();
+                            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                            
+                            // Вычисляем точную позицию:
+                            // Координата элемента + Текущий скролл - 100px (отступ сверху для шапки сайта)
+                            window.scrollTo({
+                                top: rect.top + scrollTop - 100, 
+                                behavior: 'instant'
+                            });
+                        } else {
+                            // Если вдруг новый селектор не сработал, пробуем старый метод как запасной
+                            const fallback = document.querySelector('[class*="HotelRoom"], [class*="RoomCard"]');
+                            if (fallback) fallback.scrollIntoView({ block: 'start' });
+                        }
+                    }
+                """)
+
+                # 3. Ждем подгрузки картинок (networkidle иногда висит, лучше фиксированная пауза + проверка)
+                await page.wait_for_timeout(1500)
                 
+                # Делаем скриншот
                 path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
                 await page.screenshot(path=path2, full_page=False, type='png')
                 paths.append(path2)
-                
-                # Возвращаем viewport обратно
+
+                # Возвращаем размер окна обратно
                 await page.set_viewport_size({'width': 1920, 'height': 1080})
+                
+                # --- КОНЕЦ БЛОКА ---
                 
                 logging.info(f"Скриншоты созданы: {len(paths)}")
                 return paths
