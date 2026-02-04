@@ -18,6 +18,10 @@ from config import groq_ai, ADMIN_ID
 
 LEVELTRAVEL_WEB_URL = "https://level.travel"
 
+# Типы поиска
+SEARCH_TYPE_TOUR = "tour"  # Тур с перелетом
+SEARCH_TYPE_HOTEL = "hotel"  # Только отель (без перелета)
+
 # Маппинг месяцев
 MONTH_MAPPING = {
     "январь": 1, "января": 1,
@@ -131,13 +135,18 @@ def calculate_nights(start_date: str, end_date: str) -> int:
         return 7  # Дефолт
 
 
-def parse_tour_command(text: str) -> Dict:
+def parse_search_command(text: str, search_type: str = SEARCH_TYPE_TOUR) -> Dict:
     """
-    Парсит команду поиска туров.
+    Парсит команду поиска ("туры" или "отели").
     
     НОВОЕ: 
     - Поддержка точных дат (18.05.26-25.05.26)
     - Поддержка множественных направлений (фукуок гоа мальдивы)
+    - Разделение логики для туров и отелей
+    
+    Args:
+        text: текст команды
+        search_type: "tour" или "hotel"
     
     Возвращает:
     {
@@ -145,19 +154,25 @@ def parse_tour_command(text: str) -> Dict:
         "countries": [{"code": "IN", "name": "гоа"}, ...],
         "adults": int,
         "nights": int,
-        "exact_dates": {"start": "18.05.2026", "end": "25.05.2026"} или None
+        "exact_dates": {"start": "18.05.2026", "end": "25.05.2026"} или None,
+        "search_type": "tour" или "hotel"
     }
     """
     text_lower = text.lower().strip()
+    
+    # Убираем префикс команды
     if text_lower.startswith("туры"):
         text_lower = text_lower[4:].strip()
+    elif text_lower.startswith("отели"):
+        text_lower = text_lower[5:].strip()
     
     params = {
         "month": None,
         "countries": [],
         "adults": 2,
         "nights": 10,
-        "exact_dates": None
+        "exact_dates": None,
+        "search_type": search_type
     }
     
     # 1. Проверяем наличие точных дат
@@ -196,6 +211,67 @@ def parse_tour_command(text: str) -> Dict:
         params["adults"] = int(numbers[0])
     
     return params
+
+
+def build_search_url(
+    country_code: str,
+    date: str,
+    adults: int,
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
+) -> str:
+    """
+    Строит URL для поиска туров или отелей.
+    
+    Args:
+        country_code: код страны (например, "VN")
+        date: дата вылета/заезда в формате DD.MM.YYYY
+        adults: количество взрослых
+        nights: количество ночей
+        search_type: "tour" (с перелетом) или "hotel" (только отель)
+    
+    Returns:
+        Полный URL для поиска
+    """
+    nights_min = max(1, nights - 1)
+    nights_max = nights + 1
+    
+    if search_type == SEARCH_TYPE_HOTEL:
+        # URL для поиска отелей (без перелета)
+        # Пример: https://level.travel/search/Any-RU-to-Phu.Quoc-VN-departure-from-28.04.2026..02.05.2026-to-06.05.2026..10.05.2026-2-adults-0-kids-1..5-stars-hotel-type-30.04.2026-08.05.2026
+        try:
+            start_date = datetime.strptime(date, "%d.%m.%Y")
+            end_date = start_date + timedelta(days=nights)
+            
+            # Диапазоны дат (flex ±2 дня)
+            start_min = (start_date - timedelta(days=2)).strftime("%d.%m.%Y")
+            start_max = (start_date + timedelta(days=2)).strftime("%d.%m.%Y")
+            end_min = (end_date - timedelta(days=2)).strftime("%d.%m.%Y")
+            end_max = (end_date + timedelta(days=2)).strftime("%d.%m.%Y")
+            
+            return (
+                f"{LEVELTRAVEL_WEB_URL}/search/"
+                f"Any-RU-to-Any-{country_code}-"
+                f"departure-from-{start_min}..{start_max}-"
+                f"to-{end_min}..{end_max}-"
+                f"{adults}-adults-0-kids-"
+                f"1..5-stars-hotel-type-"
+                f"{date}-{end_date.strftime('%d.%m.%Y')}"
+            )
+        except Exception as e:
+            logging.error(f"Ошибка построения URL для отеля: {e}")
+            # Фолбек на обычный URL туров
+            return build_search_url(country_code, date, adults, nights, SEARCH_TYPE_TOUR)
+    else:
+        # URL для туров (с перелетом) - оригинальная логика
+        return (
+            f"{LEVELTRAVEL_WEB_URL}/search/"
+            f"Moscow-RU-to-Any-{country_code}-"
+            f"departure-{date}-"
+            f"for-{nights_min}..{nights_max}-nights-"
+            f"{adults}-adults-0-kids-"
+            f"1..5-stars-package-type"
+        )
 
 
 def generate_full_month_dates(month: Optional[int] = None) -> List[str]:
@@ -247,7 +323,8 @@ async def quick_price_scan(
     country_code: str,
     date: str,
     adults: int,
-    nights: int
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
 ) -> Optional[int]:
     """ФАЗА 1: Быстрое сканирование - только минимальная цена на дату."""
     try:
@@ -262,17 +339,7 @@ async def quick_price_scan(
             page = await context.new_page()
             
             try:
-                nights_min = max(1, nights - 1)
-                nights_max = nights + 1
-                
-                search_url = (
-                    f"{LEVELTRAVEL_WEB_URL}/search/"
-                    f"Moscow-RU-to-Any-{country_code}-"
-                    f"departure-{date}-"
-                    f"for-{nights_min}..{nights_max}-nights-"
-                    f"{adults}-adults-0-kids-"
-                    f"1..5-stars-package-type"
-                )
+                search_url = build_search_url(country_code, date, adults, nights, search_type)
                 
                 await page.goto(search_url, timeout=60000, wait_until='domcontentloaded')
                 
@@ -284,18 +351,24 @@ async def quick_price_scan(
                 
                 await page.wait_for_timeout(1000)
                 
-                min_price = await page.evaluate("""
-                    () => {
+                # ВАЖНО: Разные селекторы для туров и отелей
+                if search_type == SEARCH_TYPE_HOTEL:
+                    price_selector = 'div[class*="HotelCardPriceBlock_styledHotelCardPrice"]'
+                else:
+                    price_selector = 'div[class*="HotelCardPriceBlock_styledPrice"]'
+                
+                min_price = await page.evaluate(f"""
+                    () => {{
                         const firstCard = document.querySelector('div[class*="DesktopHotelCard_container"]');
                         if (!firstCard) return null;
                         
-                        const priceEl = firstCard.querySelector('div[class*="HotelCardPriceBlock_styledPrice"]');
+                        const priceEl = firstCard.querySelector('{price_selector}');
                         if (!priceEl) return null;
                         
                         const priceText = priceEl.textContent.replace(/\\s/g, '').replace(/&nbsp;/g, '').replace(/\\u00a0/g, '');
                         const priceMatch = priceText.match(/(\\d+)/);
                         return priceMatch ? parseInt(priceMatch[0]) : null;
-                    }
+                    }}
                 """)
                 
                 if min_price:
@@ -421,7 +494,8 @@ async def deep_parse_date(
     country_code: str,
     date: str,
     adults: int,
-    nights: int
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
 ) -> List[Dict]:
     """ФАЗА 2: Глубокий парсинг - полная информация по дате."""
     tours = []
@@ -438,19 +512,9 @@ async def deep_parse_date(
             page = await context.new_page()
 
             try:
-                nights_min = max(1, nights - 1)
-                nights_max = nights + 1
-                
-                search_url = (
-                    f"{LEVELTRAVEL_WEB_URL}/search/"
-                    f"Moscow-RU-to-Any-{country_code}-"
-                    f"departure-{date}-"
-                    f"for-{nights_min}..{nights_max}-nights-"
-                    f"{adults}-adults-0-kids-"
-                    f"1..5-stars-package-type"
-                )
+                search_url = build_search_url(country_code, date, adults, nights, search_type)
 
-                logging.info(f"Глубокий парсинг: {date} ({nights_min}-{nights_max} ночей)")
+                logging.info(f"Глубокий парсинг: {date} ({nights} ночей, тип: {search_type})")
                 await page.goto(search_url, timeout=90_000, wait_until="domcontentloaded")
 
                 try:
@@ -466,9 +530,16 @@ async def deep_parse_date(
                     await page.mouse.wheel(0, 1500)
                     await page.wait_for_timeout(1500)
 
+                # ВАЖНО: Разные селекторы цены для туров и отелей
+                price_selector = (
+                    'div[class*="HotelCardPriceBlock_styledHotelCardPrice"]'
+                    if search_type == SEARCH_TYPE_HOTEL
+                    else 'div[class*="HotelCardPriceBlock_styledPrice"]'
+                )
+
                 tours = await page.evaluate(
-                    """
-                    () => {
+                    f"""
+                    () => {{
                         const results = [];
                         const cards = Array.from(
                             document.querySelectorAll(
@@ -476,9 +547,9 @@ async def deep_parse_date(
                             )
                         );
 
-                        for (const card of cards) {
-                            try {
-                                const tour = {
+                        for (const card of cards) {{
+                            try {{
+                                const tour = {{
                                     hotel_name: "Без названия",
                                     price: 0,
                                     rating: 0,
@@ -486,29 +557,29 @@ async def deep_parse_date(
                                     location: "",
                                     link: "",
                                     nights: 0
-                                };
+                                }};
 
                                 const titleEl = card.querySelector(
                                     'a[class*="HotelCardTitle_title"]'
                                 );
-                                if (titleEl) {
+                                if (titleEl) {{
                                     tour.hotel_name = titleEl.textContent.trim();
                                     tour.link = titleEl.getAttribute("href");
-                                    if (tour.link && !tour.link.startsWith("http")) {
+                                    if (tour.link && !tour.link.startsWith("http")) {{
                                         tour.link = "https://level.travel" + tour.link;
-                                    }
-                                }
+                                    }}
+                                }}
 
                                 const priceEl = card.querySelector(
-                                    'div[class*="HotelCardPriceBlock_styledPrice"]'
+                                    '{price_selector}'
                                 );
-                                if (priceEl) {
+                                if (priceEl) {{
                                     const text = priceEl.textContent
                                         .replace(/\\s/g, "")
                                         .replace(/\\u00a0/g, "");
                                     const m = text.match(/(\\d+)/);
                                     if (m) tour.price = parseInt(m[1], 10);
-                                }
+                                }}
 
                                 const locEl = card.querySelector(
                                     'p[class*="HotelCardLocation_text"]'
@@ -518,34 +589,34 @@ async def deep_parse_date(
                                 const ratingEl = card.querySelector(
                                     'span[class*="HotelRating_rating"]'
                                 );
-                                if (ratingEl) {
+                                if (ratingEl) {{
                                     tour.rating = parseFloat(
                                         ratingEl.textContent.trim()
                                     );
-                                }
+                                }}
 
                                 const starsEl = card.querySelector(
                                     'div[class*="HotelStars_container"]'
                                 );
-                                if (starsEl) {
+                                if (starsEl) {{
                                     tour.stars = starsEl.querySelectorAll("svg").length;
-                                }
+                                }}
                                 
-                                if (tour.link) {
+                                if (tour.link) {{
                                     const nightsMatch = tour.link.match(/for-(\\d+)-nights/);
-                                    if (nightsMatch) {
+                                    if (nightsMatch) {{
                                         tour.nights = parseInt(nightsMatch[1], 10);
-                                    }
-                                }
+                                    }}
+                                }}
 
-                                if (tour.price > 1000 && tour.hotel_name !== "Без названия") {
+                                if (tour.price > 1000 && tour.hotel_name !== "Без названия") {{
                                     results.push(tour);
-                                }
-                            } catch (e) {}
-                        }
+                                }}
+                            }} catch (e) {{}}
+                        }}
 
                         return results;
-                    }
+                    }}
                     """
                 )
 
@@ -568,7 +639,8 @@ async def two_phase_search(
     country_code: str,
     month: Optional[int],
     adults: int,
-    nights: int
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
 ) -> Dict[str, any]:
     """
     Двухфазный поиск по всему месяцу:
@@ -583,7 +655,7 @@ async def two_phase_search(
     date_prices = {}
     for i, date in enumerate(all_dates, 1):
         logging.info(f"Сканирую {i}/{len(all_dates)}: {date}")
-        price = await quick_price_scan(country_code, date, adults, nights)
+        price = await quick_price_scan(country_code, date, adults, nights, search_type)
         if price:
             date_prices[date] = price
         await asyncio.sleep(1)
@@ -602,7 +674,7 @@ async def two_phase_search(
     all_parsed_tours = []
     
     for date in best_dates:
-        tours = await deep_parse_date(country_code, date, adults, nights)
+        tours = await deep_parse_date(country_code, date, adults, nights, search_type)
         
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower().strip()
@@ -660,7 +732,8 @@ async def direct_deep_search(
     countries: List[Dict],
     start_date: str,
     adults: int,
-    nights: int
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
 ) -> Dict[str, any]:
     """
     НОВАЯ ФУНКЦИЯ: Прямой глубокий поиск для точных дат и направлений.
@@ -671,6 +744,7 @@ async def direct_deep_search(
         start_date: "18.05.2026" - дата вылета
         adults: количество взрослых
         nights: количество ночей
+        search_type: "tour" или "hotel"
     
     Returns: {
         "hotels": {hotel_key: best_offer},
@@ -696,7 +770,7 @@ async def direct_deep_search(
         
         logging.info(f"Парсинг {idx}/{total_countries}: {country_name} на {start_date}")
         
-        tours = await deep_parse_date(country_code, start_date, adults, nights)
+        tours = await deep_parse_date(country_code, start_date, adults, nights, search_type)
         
         for tour in tours:
             hotel_key = tour.get("hotel_name", "").lower().strip()
@@ -814,14 +888,19 @@ async def analyze_tours_with_ai(
     else:
         countries_str = params.get('country_name', 'направление').title()
     
+    # Определяем тип поиска для промпта
+    search_type_str = "отели" if params.get("search_type") == SEARCH_TYPE_HOTEL else "туры"
+    
     prompt = f"""
-Ты - профессиональный турагент-аналитик. Проведи глубокий анализ рынка туров в {countries_str} и выбери ТОП-7 предложений.
+Ты - профессиональный турагент-аналитик. Проведи глубокий анализ рынка и выбери ТОП-7 предложений ({search_type_str}).
 
 КОНТЕКСТ НАПРАВЛЕНИЯ:
+• Направления: {countries_str}
 • Описание: {destination_meta.get('description', '')}
 • Сезонность: {season_info}
 • Взрослых: {params['adults']}
 • Ночей: {params['nights']}
+• Тип поиска: {search_type_str}
 
 РЫНОЧНАЯ СТАТИСТИКА:
 • Минимальная цена: {market_context['month_min_price']:,} ₽
@@ -948,6 +1027,9 @@ def format_tours_message(
         return "😢 Туры не найдены"
 
     # Заголовок
+    search_type_emoji = "🏨" if params.get("search_type") == SEARCH_TYPE_HOTEL else "🏖"
+    search_type_label = "Отели" if params.get("search_type") == SEARCH_TYPE_HOTEL else "Туры"
+    
     if search_info:
         # Режим множественных направлений
         countries_str = ", ".join(search_info["countries"])
@@ -963,7 +1045,8 @@ def format_tours_message(
             date_display = start_date
         
         header = (
-            f"🏖 <b>Топ подборка: {countries_str}</b>\n"
+            f"{search_type_emoji} <b>Топ подборка: {countries_str}</b>\n"
+            f"📍 Тип: {search_type_label}\n"
             f"👥 {params['adults']} взр. | 🌙 {nights} ночей\n"
             f"📅 Даты: {date_display}\n\n"
         )
@@ -971,7 +1054,8 @@ def format_tours_message(
         # Обычный режим
         country_name = params.get("country_name", "направление").capitalize()
         header = (
-            f"🏖 <b>Топ подборка: {country_name}</b>\n"
+            f"{search_type_emoji} <b>Топ подборка: {country_name}</b>\n"
+            f"📍 Тип: {search_type_label}\n"
             f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n\n"
         )
 
@@ -1045,11 +1129,16 @@ def format_tours_message(
     return "\n".join(lines)
 
 
-async def process_tours_command(message: types.Message):
+async def process_search_command(message: types.Message, command_type: str = "туры"):
     """
-    Главный обработчик команды поиска туров.
+    Главный обработчик команды поиска туров/отелей.
+    
+    Args:
+        message: сообщение от пользователя
+        command_type: "туры" или "отели"
     
     НОВОЕ:
+    - Поддержка команды "отели" (без перелета)
     - Поддержка точных дат: "туры май фукуок 18.05.26-25.05.26"
     - Поддержка множественных направлений: "туры гоа мальдивы шри-ланка"
     - Автоматический выбор режима: месяц (двухфазный) или точные даты (прямой)
@@ -1059,7 +1148,10 @@ async def process_tours_command(message: types.Message):
         return
     
     try:
-        params = parse_tour_command(message.text)
+        # Определяем тип поиска
+        search_type = SEARCH_TYPE_HOTEL if command_type.lower() == "отели" else SEARCH_TYPE_TOUR
+        
+        params = parse_search_command(message.text, search_type)
         
         if not params.get("countries"):
             await message.reply(
@@ -1067,7 +1159,9 @@ async def process_tours_command(message: types.Message):
                 "<b>Примеры:</b>\n"
                 "• <i>туры апрель шри-ланка 2</i>\n"
                 "• <i>туры фукуок 18.05.26-25.05.26</i>\n"
-                "• <i>туры гоа мальдивы май 2</i>",
+                "• <i>туры гоа мальдивы май 2</i>\n"
+                "• <i>отели май гоа</i>\n"
+                "• <i>отели фукуок 18.05.26-25.05.26</i>",
                 parse_mode="HTML"
             )
             return
@@ -1078,12 +1172,13 @@ async def process_tours_command(message: types.Message):
             end_date = params["exact_dates"]["end"]
             
             countries_str = ", ".join([c["name"].title() for c in params["countries"]])
+            search_type_label = "отелей" if search_type == SEARCH_TYPE_HOTEL else "туров"
             
             status_msg = await message.reply(
-                f"🔍 <b>Запускаю прямой поиск</b>\n\n"
+                f"🔍 <b>Запускаю прямой поиск {search_type_label}</b>\n\n"
                 f"📍 Направления: {countries_str}\n"
-                f"📅 Дата вылета: {start_date}\n"
-                f"🏖 Дата возвращения: {end_date}\n"
+                f"📅 Дата заезда: {start_date}\n"
+                f"🏖 Дата выезда: {end_date}\n"
                 f"👥 Взрослых: {params['adults']}\n"
                 f"🌙 Ночей: {params['nights']}\n\n"
                 f"⏳ Делаю глубокий парсинг по всем направлениям...\n"
@@ -1095,7 +1190,8 @@ async def process_tours_command(message: types.Message):
                 countries=params["countries"],
                 start_date=start_date,
                 adults=params["adults"],
-                nights=params["nights"]
+                nights=params["nights"],
+                search_type=search_type
             )
             
             hotels = result["hotels"]
@@ -1111,7 +1207,7 @@ async def process_tours_command(message: types.Message):
             
             await status_msg.edit_text(
                 f"✅ <b>Поиск завершен!</b>\n"
-                f"Найдено туров: {date_stats.get('detailed_tours_count', 0)}\n"
+                f"Найдено предложений: {date_stats.get('detailed_tours_count', 0)}\n"
                 f"Уникальных отелей: {len(hotels)}\n\n"
                 f"⏳ Запускаю AI-анализ...",
                 parse_mode="HTML"
@@ -1137,9 +1233,10 @@ async def process_tours_command(message: types.Message):
             params["country_name"] = country["name"]
             
             month_name = list(MONTH_MAPPING.keys())[params.get('month', 1) * 2 - 2] if params.get('month') else 'не указан'
+            search_type_label = "отелей" if search_type == SEARCH_TYPE_HOTEL else "туров"
             
             status_msg = await message.reply(
-                f"🔍 <b>Запускаю поиск туров</b>\n\n"
+                f"🔍 <b>Запускаю поиск {search_type_label}</b>\n\n"
                 f"📍 Направление: {country['name'].title()}\n"
                 f"📅 Месяц: весь {month_name}\n"
                 f"👥 Взрослых: {params['adults']}\n"
@@ -1153,7 +1250,8 @@ async def process_tours_command(message: types.Message):
                 country_code=country["code"],
                 month=params.get("month"),
                 adults=params["adults"],
-                nights=params["nights"]
+                nights=params["nights"],
+                search_type=search_type
             )
             
             hotels = result["hotels"]
@@ -1187,6 +1285,9 @@ async def process_tours_command(message: types.Message):
         )
         
         # Формируем заголовок
+        search_type_emoji = "🏨" if search_type == SEARCH_TYPE_HOTEL else "🏖"
+        search_type_label = "Отели" if search_type == SEARCH_TYPE_HOTEL else "Туры"
+        
         if search_info:
             countries_str = ", ".join(search_info["countries"])
             start_date = search_info.get("start_date", "")
@@ -1201,14 +1302,16 @@ async def process_tours_command(message: types.Message):
                 date_display = start_date
             
             header = (
-                f"🏖 <b>Топ подборка: {countries_str}</b>\n"
+                f"{search_type_emoji} <b>Топ подборка: {countries_str}</b>\n"
+                f"📍 Тип: {search_type_label}\n"
                 f"👥 {params['adults']} взр. | 🌙 {nights} ночей\n"
                 f"📅 Даты: {date_display}\n\n"
             )
         else:
             country_name = params.get("country_name", "направление").capitalize()
             header = (
-                f"🏖 <b>Топ подборка: {country_name}</b>\n"
+                f"{search_type_emoji} <b>Топ подборка: {country_name}</b>\n"
+                f"📍 Тип: {search_type_label}\n"
                 f"👥 {params['adults']} взр. | 🌙 {params['nights']} ночей\n\n"
             )
         
@@ -1323,8 +1426,19 @@ async def process_tours_command(message: types.Message):
                 logging.error(f"Критическая ошибка отправки тура #{i}: {e}")
                 continue
         
-        logging.info(f"Отправлено {len(best_tours)} туров пользователю {message.from_user.id}")
+        logging.info(f"Отправлено {len(best_tours)} туров/отелей пользователю {message.from_user.id}")
         
     except Exception as e:
-        logging.error(f"Ошибка в process_tours_command: {e}", exc_info=True)
+        logging.error(f"Ошибка в process_search_command: {e}", exc_info=True)
         await message.reply(f"❌ Произошла ошибка: {str(e)}")
+
+
+# Алиасы для обратной совместимости
+async def process_tours_command(message: types.Message):
+    """Обработчик команды 'туры' (с перелетом)"""
+    await process_search_command(message, command_type="туры")
+
+
+async def process_hotels_command(message: types.Message):
+    """Обработчик команды 'отели' (без перелета)"""
+    await process_search_command(message, command_type="отели")
