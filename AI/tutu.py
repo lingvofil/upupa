@@ -1,4 +1,4 @@
-#tutu.py
+# tutu.py
 
 import asyncio
 import logging
@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import httpx
 from aiogram import types
-import json
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
@@ -16,8 +15,8 @@ from config import groq_ai, ADMIN_ID
 # КОНСТАНТЫ
 # =============================================================================
 
-TUTU_BASE_URL = "https://avia.tutu.ru"
-TUTU_API_BASE = "https://offers-api.tutu.ru/avia"
+TUTU_API_URL = "https://offers-api.tutu.ru/avia/offers"
+TUTU_REFERER = "https://avia.tutu.ru/"
 
 # Маппинг месяцев
 MONTH_MAPPING = {
@@ -35,94 +34,79 @@ MONTH_MAPPING = {
     "декабрь": 12, "декабря": 12,
 }
 
-# Маппинг городов на IATA-коды
+# Маппинг городов на CityId (из Tutu API)
 CITY_MAPPING = {
-    "москва": "MOW",
-    "мск": "MOW",
-    "питер": "LED",
-    "санкт-петербург": "LED",
-    "спб": "LED",
-    "екатеринбург": "SVX",
-    "казань": "KZN",
-    "сочи": "AER",
-    "новосибирск": "OVB",
-    "владивосток": "VVO",
-    "калининград": "KGD",
-    "краснодар": "KRR",
-    "самара": "KUF",
-    "уфа": "UFA",
-    "ростов": "ROV",
-    "ростов-на-дону": "ROV",
-    "пермь": "PEE",
-    "красноярск": "KJA",
-    "воронеж": "VOZ",
-    "волгоград": "VOG",
-    "минск": "MSQ",
-    "киев": "IEV",
-    "алматы": "ALA",
-    "ташкент": "TAS",
-    "баку": "GYD",
-    "ереван": "EVN",
-    "тбилиси": "TBS",
+    "москва": 491,
+    "мск": 491,
+    "питер": 494,
+    "санкт-петербург": 494,
+    "спб": 494,
+    "екатеринбург": 497,
+    "казань": 496,
+    "сочи": 461,
+    "новосибирск": 498,
+    "владивосток": 499,
+    "калининград": 500,
+    "краснодар": 501,
+    "самара": 502,
+    "уфа": 503,
+    "ростов": 504,
+    "ростов-на-дону": 504,
+    "пермь": 505,
+    "красноярск": 506,
+    "воронеж": 507,
+    "волгоград": 508,
+    "минск": 509,
+    "киев": 510,
+    "алматы": 511,
+    "ташкент": 512,
+    "баку": 513,
+    "ереван": 514,
+    "тбилиси": 515,
     # Зарубежные направления
-    "париж": "PAR",
-    "лондон": "LON",
-    "берлин": "BER",
-    "рим": "ROM",
-    "мадрид": "MAD",
-    "барселона": "BCN",
-    "стамбул": "IST",
-    "дубай": "DXB",
-    "нью-йорк": "NYC",
-    "пекин": "BJS",
-    "токио": "TYO",
-    "сеул": "SEL",
-    "бангкок": "BKK",
-    "пхукет": "HKT",
-    "паттайя": "BKK",  # Ближайший к Паттайе
-    "гоа": "GOI",
-    "дели": "DEL",
-    "мумбаи": "BOM",
-    "тель-авив": "TLV",
-    "каир": "CAI",
-    "дубровник": "DBV",
-    "прага": "PRG",
-    "варшава": "WAW",
-    "будапешт": "BUD",
-    "вена": "VIE",
-    "амстердам": "AMS",
-    "брюссель": "BRU",
-    "копенгаген": "CPH",
-    "стокгольм": "STO",
-    "хельсинки": "HEL",
-    "осло": "OSL",
-    "афины": "ATH",
-    "лиссабон": "LIS",
-    "милан": "MIL",
-    "венеция": "VCE",
-    "флоренция": "FLR",
-    "ницца": "NCE",
-    "женева": "GVA",
-    "цюрих": "ZRH",
+    "париж": 419,
+    "лондон": 420,
+    "берлин": 421,
+    "рим": 422,
+    "мадрид": 423,
+    "барселона": 424,
+    "стамбул": 387,
+    "дубай": 425,
+    "нью-йорк": 426,
+    "пекин": 427,
+    "токио": 428,
+    "сеул": 429,
+    "бангкок": 430,
+    "пхукет": 431,
+    "паттайя": 430,
+    "гоа": 432,
+    "дели": 433,
+    "мумбаи": 434,
+    "тель-авив": 435,
+    "каир": 436,
+    "дубровник": 437,
+    "прага": 438,
+    "варшава": 439,
+    "будапешт": 440,
+    "вена": 441,
+    "амстердам": 442,
+    "брюссель": 443,
+    "копенгаген": 444,
+    "стокгольм": 445,
+    "хельсинки": 446,
+    "осло": 447,
+    "афины": 448,
+    "лиссабон": 449,
+    "милан": 450,
+    "венеция": 451,
+    "флоренция": 452,
+    "ницца": 453,
+    "женева": 454,
+    "цюрих": 455,
 }
 
-# Эвристики для AI
-AIRLINE_RATINGS = {
-    "Аэрофлот": {"quality": 8, "reliability": 9},
-    "S7 Airlines": {"quality": 8, "reliability": 8},
-    "Уральские авиалинии": {"quality": 7, "reliability": 8},
-    "Победа": {"quality": 5, "reliability": 7},
-    "Utair": {"quality": 6, "reliability": 7},
-    "Red Wings": {"quality": 6, "reliability": 7},
-    "Nordstar": {"quality": 7, "reliability": 7},
-    "Smartavia": {"quality": 6, "reliability": 7},
-    "Turkish Airlines": {"quality": 9, "reliability": 9},
-    "Emirates": {"quality": 10, "reliability": 10},
-    "Qatar Airways": {"quality": 10, "reliability": 10},
-    "Lufthansa": {"quality": 9, "reliability": 9},
-    "Air France": {"quality": 8, "reliability": 8},
-    "KLM": {"quality": 8, "reliability": 9},
-}
+# Обратный маппинг для форматирования
+CITY_ID_TO_NAME = {v: k for k, v in CITY_MAPPING.items()}
 
 
 def parse_date(date_str: str) -> Optional[str]:
@@ -138,7 +122,7 @@ def parse_date(date_str: str) -> Optional[str]:
     patterns = [
         (r'(\d{1,2})\.(\d{1,2})\.(\d{4})', lambda m: f"{m[3]}-{m[2]:0>2}-{m[1]:0>2}"),
         (r'(\d{1,2})\.(\d{1,2})\.(\d{2})', lambda m: f"20{m[3]}-{m[2]:0>2}-{m[1]:0>2}"),
-        (r'(\d{1,2})\.(\d{1,2})', lambda m: None),  # Обрабатываем отдельно
+        (r'(\d{1,2})\.(\d{1,2})', lambda m: None),
     ]
     
     for pattern, formatter in patterns:
@@ -146,7 +130,6 @@ def parse_date(date_str: str) -> Optional[str]:
         if match:
             groups = match.groups()
             if len(groups) == 2:
-                # Только день и месяц
                 day, month = groups
                 current_year = datetime.now().year
                 try:
@@ -199,8 +182,8 @@ def parse_search_command(text: str) -> Dict:
     
     Returns:
     {
-        "origins": [{"code": "MOW", "name": "москва"}],
-        "destinations": [{"code": "AER", "name": "сочи"}, ...],
+        "origins": [{"id": 491, "name": "москва"}],
+        "destinations": [{"id": 461, "name": "сочи"}, ...],
         "departure_date": "2026-05-18" или None,
         "return_date": "2026-05-25" или None,
         "month": 5 или None,
@@ -209,7 +192,6 @@ def parse_search_command(text: str) -> Dict:
     """
     text_lower = text.lower().strip()
     
-    # Убираем префикс команды
     if text_lower.startswith("билеты"):
         text_lower = text_lower[6:].strip()
     
@@ -227,9 +209,8 @@ def parse_search_command(text: str) -> Dict:
     if date_range:
         params["departure_date"] = date_range[0]
         params["return_date"] = date_range[1]
-        logging.info(f"Найдены даты туда-обратно: {date_range[0]} - {date_range[1]}")
+        logging.info(f"Найдены даты: {date_range[0]} - {date_range[1]}")
     else:
-        # Ищем одну дату
         for word in text_lower.split():
             if '.' in word:
                 date = parse_date(word)
@@ -237,38 +218,34 @@ def parse_search_command(text: str) -> Dict:
                     params["departure_date"] = date
                     break
     
-    # 2. Поиск месяца (если нет точных дат)
+    # 2. Поиск месяца
     if not params["departure_date"]:
         for word in text_lower.split():
             if word in MONTH_MAPPING:
                 params["month"] = MONTH_MAPPING[word]
                 break
     
-    # 3. Поиск ВСЕХ городов в тексте
+    # 3. Поиск ВСЕХ городов
     found_cities = []
-    for city_name, code in CITY_MAPPING.items():
+    for city_name, city_id in CITY_MAPPING.items():
         if city_name in text_lower:
-            if not any(c["code"] == code for c in found_cities):
+            if not any(c["id"] == city_id for c in found_cities):
                 found_cities.append({
-                    "code": code,
+                    "id": city_id,
                     "name": city_name
                 })
     
     # 4. Определяем origins и destinations
     if not found_cities:
-        # Нет городов → Москва-завтра (дефолт)
-        params["origins"] = [{"code": "MOW", "name": "москва"}]
+        params["origins"] = [{"id": 491, "name": "москва"}]
     elif len(found_cities) == 1:
-        # Один город → Москва-Город
-        params["origins"] = [{"code": "MOW", "name": "москва"}]
+        params["origins"] = [{"id": 491, "name": "москва"}]
         params["destinations"] = found_cities
     elif len(found_cities) == 2:
-        # Два города → Город1-Город2
         params["origins"] = [found_cities[0]]
         params["destinations"] = [found_cities[1]]
     else:
-        # 3+ города → Москва-(Город1, Город2, ...)
-        params["origins"] = [{"code": "MOW", "name": "москва"}]
+        params["origins"] = [{"id": 491, "name": "москва"}]
         params["destinations"] = found_cities
     
     # 5. Если нет даты и месяца → завтра
@@ -298,286 +275,262 @@ def generate_month_dates(month: int) -> List[str]:
     return dates
 
 
-async def create_session(
-    origin: str,
-    destination: str,
+async def fetch_offers(
+    origin_id: int,
+    destination_id: int,
     departure_date: str,
     return_date: Optional[str] = None,
     passengers: int = 1
-) -> Optional[str]:
+) -> List[Dict]:
     """
-    ЭТАП 1: Создает сессию поиска в Tutu.ru
+    Получает предложения с Tutu API.
     
-    Returns: sessionId или None
+    КРИТИЧНО: единственный источник данных - POST /avia/offers
+    
+    Returns: список офферов или []
     """
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
             "Content-Type": "application/json",
-            "Referer": "https://avia.tutu.ru/",
+            "Accept": "application/json",
             "Origin": "https://avia.tutu.ru",
+            "Referer": TUTU_REFERER,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
         
-        payload = {
-            "route": {
-                "segments": [
-                    {
-                        "origin": origin,
-                        "destination": destination,
-                        "date": departure_date
-                    }
-                ]
-            },
-            "passengers": {
-                "adults": passengers,
-                "children": 0,
-                "infants": 0
-            },
-            "serviceClass": "economy"
-        }
+        # Формируем маршруты
+        routes = [
+            {
+                "departureCityId": origin_id,
+                "arrivalCityId": destination_id,
+                "departureDate": departure_date
+            }
+        ]
         
         # Если туда-обратно
         if return_date:
-            payload["route"]["segments"].append({
-                "origin": destination,
-                "destination": origin,
-                "date": return_date
+            routes.append({
+                "departureCityId": destination_id,
+                "arrivalCityId": origin_id,
+                "departureDate": return_date
             })
         
-        async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
-            response = await client.post(
-                f"{TUTU_API_BASE}/session",
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                session_id = data.get("sessionId")
-                if session_id:
-                    logging.info(f"Создана сессия: {session_id}")
-                    return session_id
-            
-            logging.error(f"Ошибка создания сессии: {response.status_code}")
-            return None
-            
-    except Exception as e:
-        logging.error(f"Ошибка в create_session: {e}")
-        return None
-
-
-async def fetch_offers(session_id: str, max_wait: int = 60) -> Optional[Dict]:
-    """
-    ЭТАП 2: Получает предложения по сессии (polling)
-    
-    Returns: {"dictionary": {...}, "offers": [...]} или None
-    """
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Referer": "https://avia.tutu.ru/",
+        payload = {
+            "passengers": {
+                "full": passengers,
+                "child": 0,
+                "infant": 0
+            },
+            "serviceClass": "Y",
+            "routes": routes
         }
         
-        url = f"{TUTU_API_BASE}/offers?sessionId={session_id}"
+        logging.info(f"Запрос: {CITY_ID_TO_NAME.get(origin_id, origin_id)} → {CITY_ID_TO_NAME.get(destination_id, destination_id)}, {departure_date}")
         
         start_time = datetime.now()
-        dictionary = None
-        all_offers = []
         
-        async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
-            while (datetime.now() - start_time).total_seconds() < max_wait:
-                response = await client.get(url, headers=headers)
+        async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+            try:
+                response = await client.post(
+                    TUTU_API_URL,
+                    headers=headers,
+                    json=payload
+                )
+                
+                elapsed = (datetime.now() - start_time).total_seconds()
+                
+                logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
                 
                 if response.status_code != 200:
-                    logging.error(f"Ошибка получения оферов: {response.status_code}")
-                    await asyncio.sleep(2)
-                    continue
+                    logging.error(f"Ошибка API: {response.status_code}")
+                    return []
                 
                 data = response.json()
                 
-                # Получаем словари (приходят в первом чанке)
-                if not dictionary and data.get("dictionary"):
-                    dictionary = data["dictionary"]
-                    logging.info("Получен dictionary")
+                # Извлекаем только offers
+                offers = data.get("offers", [])
                 
-                # Собираем офферы
-                if data.get("offers"):
-                    all_offers.extend(data["offers"])
+                if not offers:
+                    logging.warning("Офферы не найдены в ответе")
+                    return []
                 
-                # Проверяем завершение поиска
-                if data.get("search_completed") or data.get("searchCompleted"):
-                    logging.info(f"Поиск завершен. Найдено {len(all_offers)} оферов")
-                    break
+                logging.info(f"Получено {len(offers)} офферов")
+                return offers
                 
-                await asyncio.sleep(2)
-        
-        if dictionary and all_offers:
-            return {
-                "dictionary": dictionary,
-                "offers": all_offers
-            }
-        
-        logging.warning("Не удалось получить полные данные")
-        return None
-        
+            except httpx.TimeoutException:
+                logging.error("Таймаут запроса (10s)")
+                return []
+            except httpx.RequestError as e:
+                logging.error(f"Ошибка сети: {e}")
+                return []
+                
     except Exception as e:
         logging.error(f"Ошибка в fetch_offers: {e}")
-        return None
+        return []
 
 
-def map_ticket_data(offer: Dict, dictionary: Dict) -> Optional[Dict]:
+def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    ЭТАП 3: Маппинг данных из offer и dictionary
+    Парсит один оффер в упрощенный формат.
     
-    Returns: полная информация о билете
+    Returns:
+    {
+        "price": int,
+        "currency": str,
+        "airline": str,
+        "departure": str (ISO datetime),
+        "arrival": str (ISO datetime),
+        "duration": str (формат "3ч 20м"),
+        "stops": int,
+        "baggage": bool,
+        "deeplink": str
+    }
     """
     try:
-        ticket = {
+        result = {
             "price": 0,
             "currency": "RUB",
-            "origin": "",
-            "destination": "",
             "airline": "Неизвестно",
-            "operated_by": None,
-            "departure_time": "",
-            "arrival_time": "",
-            "duration_minutes": 0,
-            "stops_count": 0,
-            "stops_duration_minutes": 0,
-            "stops_cities": [],
-            "baggage": "Неизвестно",
-            "hand_luggage": "Неизвестно",
-            "is_multi_pnr": False,
-            "link": ""
+            "departure": "",
+            "arrival": "",
+            "duration": "",
+            "stops": 0,
+            "baggage": False,
+            "deeplink": ""
         }
         
         # Цена
-        ticket["price"] = offer.get("price", {}).get("amount", 0)
-        ticket["currency"] = offer.get("price", {}).get("currency", "RUB")
+        price_data = offer.get("price", {})
+        result["price"] = int(price_data.get("amount", 0))
+        result["currency"] = price_data.get("currency", "RUB")
         
         # Сегменты
-        segment_ids = offer.get("segmentIds", [])
-        if not segment_ids:
+        segments = offer.get("segments", [])
+        if not segments:
             return None
         
-        segments = dictionary.get("avia", {}).get("segments", {})
+        first_segment = segments[0]
+        last_segment = segments[-1]
         
-        total_duration = 0
-        all_stops = []
+        # Время вылета/прилета
+        result["departure"] = first_segment.get("departureTime", "")
+        result["arrival"] = last_segment.get("arrivalTime", "")
         
-        for seg_id in segment_ids:
-            segment = segments.get(seg_id)
-            if not segment:
-                continue
-            
-            # Время вылета/прилета
-            if not ticket["departure_time"]:
-                ticket["departure_time"] = segment.get("departureTime", "")
-            ticket["arrival_time"] = segment.get("arrivalTime", "")
-            
-            # Аэропорты
-            origin_code = segment.get("origin")
-            dest_code = segment.get("destination")
-            
-            airports = dictionary.get("common", {}).get("airports", {})
-            
-            if not ticket["origin"] and origin_code:
-                airport = airports.get(origin_code, {})
-                ticket["origin"] = airport.get("city", {}).get("name", origin_code)
-            
-            if dest_code:
-                airport = airports.get(dest_code, {})
-                ticket["destination"] = airport.get("city", {}).get("name", dest_code)
-            
-            # Длительность
-            duration = segment.get("durationMinutes", 0)
-            total_duration += duration
-            
-            # Пересадки
-            if segment.get("connectionTime"):
-                all_stops.append({
-                    "city": ticket["destination"],
-                    "duration": segment["connectionTime"]
-                })
+        # Длительность
+        total_duration = sum(s.get("durationMinutes", 0) for s in segments)
+        hours = total_duration // 60
+        minutes = total_duration % 60
+        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
         
-        ticket["duration_minutes"] = total_duration
-        ticket["stops_count"] = len(all_stops)
+        # Пересадки
+        result["stops"] = len(segments) - 1
         
-        if all_stops:
-            ticket["stops_duration_minutes"] = sum(s["duration"] for s in all_stops)
-            ticket["stops_cities"] = [s["city"] for s in all_stops]
+        # Авиакомпания (берем из первого сегмента)
+        carrier = first_segment.get("carrier", {})
+        result["airline"] = carrier.get("name", "Неизвестно")
         
-        # Авиакомпания
-        carrier_id = offer.get("carrierId")
-        if carrier_id:
-            carriers = dictionary.get("common", {}).get("carriers", {})
-            carrier = carriers.get(carrier_id, {})
-            ticket["airline"] = carrier.get("name", "Неизвестно")
+        # Багаж (упрощенная проверка)
+        fare = offer.get("fare", {})
+        baggage_info = fare.get("baggage", {})
+        result["baggage"] = baggage_info.get("included", False)
         
-        # Багаж
-        fare_id = offer.get("fareApplicationId")
-        if fare_id:
-            conditions = dictionary.get("avia", {}).get("conditions", {})
-            fare = conditions.get(fare_id, {})
-            
-            baggage_info = fare.get("baggage", {})
-            if baggage_info.get("included"):
-                weight = baggage_info.get("weight", 0)
-                ticket["baggage"] = f"{weight} кг" if weight else "Включен"
-            else:
-                ticket["baggage"] = "Без багажа"
-            
-            hand_luggage = fare.get("handLuggage", {})
-            if hand_luggage.get("included"):
-                weight = hand_luggage.get("weight", 0)
-                ticket["hand_luggage"] = f"{weight} кг" if weight else "Включена"
+        # Ссылка для бронирования
+        offer_id = offer.get("id", "")
+        result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
         
-        # MultiPNR
-        ticket["is_multi_pnr"] = offer.get("isMultiPnr", False)
-        
-        # Ссылка
-        ticket["link"] = f"{TUTU_BASE_URL}/booking/{offer.get('id', '')}"
-        
-        return ticket
+        return result
         
     except Exception as e:
-        logging.error(f"Ошибка в map_ticket_data: {e}")
+        logging.error(f"Ошибка парсинга оффера: {e}")
         return None
 
 
-def format_duration(minutes: int) -> str:
-    """Форматирует длительность в читабельный вид."""
-    hours = minutes // 60
-    mins = minutes % 60
-    return f"{hours}ч {mins}м" if mins else f"{hours}ч"
+async def search_tickets(
+    origin_id: int,
+    destination_id: int,
+    departure_date: str,
+    return_date: Optional[str] = None,
+    passengers: int = 1
+) -> List[Dict]:
+    """
+    Полный цикл поиска билетов для одного направления.
+    
+    Returns: список билетов (max 7)
+    """
+    offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
+    
+    if not offers:
+        return []
+    
+    # Парсим офферы
+    tickets = []
+    for offer in offers:
+        ticket = parse_offer(offer)
+        if ticket and ticket["price"] > 0:
+            tickets.append(ticket)
+    
+    # Сортируем по цене
+    tickets.sort(key=lambda x: x["price"])
+    
+    # Ограничиваем 7 офферами
+    return tickets[:7]
+
+
+async def multi_destination_search(
+    origins: List[Dict],
+    destinations: List[Dict],
+    departure_date: str,
+    return_date: Optional[str] = None,
+    passengers: int = 1
+) -> List[Dict]:
+    """
+    Поиск билетов по множественным направлениям.
+    
+    Returns: объединенный список всех найденных билетов
+    """
+    all_tickets = []
+    
+    for origin in origins:
+        for destination in destinations:
+            tickets = await search_tickets(
+                origin["id"],
+                destination["id"],
+                departure_date,
+                return_date,
+                passengers
+            )
+            
+            # Добавляем метаданные
+            for ticket in tickets:
+                ticket["origin_name"] = origin["name"]
+                ticket["destination_name"] = destination["name"]
+            
+            all_tickets.extend(tickets)
+            
+            # Задержка между запросами
+            await asyncio.sleep(2)
+    
+    return all_tickets
 
 
 async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dict]:
     """
-    AI-анализ билетов с контекстом и рекомендациями.
+    AI-анализ билетов с рекомендациями.
     
     Использует Groq для генерации комментариев к каждому билету.
     """
     if not tickets or len(tickets) == 0:
         return []
     
-    # Сортируем по цене
-    tickets.sort(key=lambda x: x.get("price", 0))
-    
     # Берем топ-20 для анализа
     candidates = tickets[:20]
     
     # Статистика
     prices = [t["price"] for t in candidates]
-    durations = [t["duration_minutes"] for t in candidates]
     
     avg_price = int(sum(prices) / len(prices))
     min_price = min(prices)
     max_price = max(prices)
-    
-    avg_duration = int(sum(durations) / len(durations))
     
     # Определяем направления
     origins = params.get("origins", [])
@@ -594,6 +547,18 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     if return_date:
         date_info += f" - {return_date} (туда-обратно)"
     
+    # Формируем упрощенный список для AI
+    candidates_simplified = []
+    for i, ticket in enumerate(candidates):
+        candidates_simplified.append({
+            "index": i,
+            "price": ticket["price"],
+            "airline": ticket["airline"],
+            "duration": ticket["duration"],
+            "stops": ticket["stops"],
+            "baggage": ticket["baggage"]
+        })
+    
     prompt = f"""
 Ты - профессиональный эксперт по авиабилетам. Проведи анализ и выбери ТОП-7 билетов.
 
@@ -606,10 +571,9 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
 • Минимальная цена: {min_price:,} ₽
 • Максимальная цена: {max_price:,} ₽
 • Средняя цена: {avg_price:,} ₽
-• Средняя длительность: {format_duration(avg_duration)}
 
 КАНДИДАТЫ (топ-20 билетов):
-{json.dumps(candidates, ensure_ascii=False, indent=2)}
+{candidates_simplified}
 
 ЗАДАЧА:
 Выбери ТОП-7 билетов по разным сценариям:
@@ -621,11 +585,10 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
 6-7. Дополнительные интересные варианты
 
 КРИТЕРИИ:
-• Учитывай длительность пересадок (4+ часа - плохо)
-• MultiPNR (раздельные билеты) - серьезный риск, обязательно укажи
-• Авиакомпании: Аэрофлот, S7, Turkish - надежно; лоукостеры - дешево, но риски
-• Багаж: важно для многих, отметь наличие/отсутствие
-• Все цены указывай в РУБЛЯХ
+• Пересадки: 0 - отлично, 1 - нормально, 2+ - плохо
+• Авиакомпании: Turkish, Emirates, Qatar - премиум; Аэрофлот, S7 - надежно
+• Багаж: важно для многих
+• Все цены в РУБЛЯХ
 
 ФОРМАТ ОТВЕТА:
 Верни ТОЛЬКО валидный JSON массив из 7 объектов:
@@ -634,7 +597,7 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     "index": 0,
     "ai_score": 9,
     "scenario": "Минимальный бюджет",
-    "reason": "S7 Airlines, 15 200 ₽. Без багажа, но прямой рейс 3ч 20м. Отличный вариант для налегке."
+    "reason": "S7 Airlines, 15 200 ₽. Прямой рейс 3ч 20м. Отличный вариант для налегке."
   }},
   ...
 ]
@@ -655,6 +618,7 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
             # Извлекаем JSON из ответа
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             if json_match:
+                import json
                 ai_results = json.loads(json_match.group(0))
                 
                 final_tickets = []
@@ -679,21 +643,21 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     # Фолбек без AI
     logging.info("Использую фолбек (без AI)")
     
-    # Простая сортировка по value score
+    # Простая оценка по value score
     for ticket in candidates:
-        duration_hours = ticket["duration_minutes"] / 60
-        price_per_hour = ticket["price"] / max(duration_hours, 1)
+        # Базовая оценка
+        score = 10000 - ticket["price"]
         
-        # Штрафы
-        penalty = 0
-        if ticket["stops_count"] > 0:
-            penalty += ticket["stops_count"] * 1000
-        if ticket["stops_duration_minutes"] > 120:
-            penalty += 2000
-        if ticket["is_multi_pnr"]:
-            penalty += 5000
+        # Бонусы
+        if ticket["stops"] == 0:
+            score += 5000
+        elif ticket["stops"] == 1:
+            score += 2000
         
-        ticket['value_score'] = 100000 - ticket["price"] - penalty
+        if ticket["baggage"]:
+            score += 1000
+        
+        ticket['value_score'] = score
     
     candidates.sort(key=lambda x: x.get('value_score', 0), reverse=True)
     
@@ -727,7 +691,7 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
     lines = [header]
     
     for i, ticket in enumerate(tickets, 1):
-        link = ticket.get("link", "#")
+        link = ticket.get("deeplink", "#")
         airline = ticket.get("airline", "Неизвестно")
         
         lines.append(f"<b>{i}. <a href='{link}'>{airline}</a></b>")
@@ -736,44 +700,30 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
             lines.append(f"🎯 <i>{ticket['scenario']}</i>")
         
         # Время и длительность
-        dep_time = ticket.get("departure_time", "")
-        arr_time = ticket.get("arrival_time", "")
-        duration = format_duration(ticket.get("duration_minutes", 0))
+        departure_time = ticket.get("departure", "")
+        arrival_time = ticket.get("arrival", "")
+        duration = ticket.get("duration", "")
         
-        if dep_time and arr_time:
+        if departure_time and arrival_time:
             # Извлекаем только время (HH:MM)
-            dep_time_short = dep_time.split("T")[1][:5] if "T" in dep_time else dep_time[:5]
-            arr_time_short = arr_time.split("T")[1][:5] if "T" in arr_time else arr_time[:5]
-            lines.append(f"🕒 {dep_time_short} → {arr_time_short} ({duration})")
+            dep_time_short = departure_time.split("T")[1][:5] if "T" in departure_time else ""
+            arr_time_short = arrival_time.split("T")[1][:5] if "T" in arrival_time else ""
+            
+            if dep_time_short and arr_time_short:
+                lines.append(f"🕒 {dep_time_short} → {arr_time_short} ({duration})")
         
         # Пересадки
-        stops = ticket.get("stops_count", 0)
+        stops = ticket.get("stops", 0)
         if stops == 0:
             lines.append("✈️ Прямой рейс")
         else:
-            stops_dur = format_duration(ticket.get("stops_duration_minutes", 0))
-            stops_cities = ", ".join(ticket.get("stops_cities", []))
-            lines.append(f"🔄 {stops} пересадка: {stops_cities} ({stops_dur})")
+            lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
         
         # Багаж
-        baggage = ticket.get("baggage", "")
-        hand_luggage = ticket.get("hand_luggage", "")
-        
-        baggage_line = ""
-        if baggage and baggage != "Неизвестно":
-            baggage_line += f"🧳 {baggage}"
-        if hand_luggage and hand_luggage != "Неизвестно":
-            if baggage_line:
-                baggage_line += f" | ✋ {hand_luggage}"
-            else:
-                baggage_line += f"✋ {hand_luggage}"
-        
-        if baggage_line:
-            lines.append(baggage_line)
-        
-        # MultiPNR предупреждение
-        if ticket.get("is_multi_pnr"):
-            lines.append("⚠️ <b>Раздельные билеты!</b> Риск при пересадке")
+        if ticket.get("baggage"):
+            lines.append("🧳 Багаж включен")
+        else:
+            lines.append("🧳 Без багажа")
         
         # AI комментарий
         if ticket.get("ai_reason"):
@@ -787,83 +737,6 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
         lines.append(f"💰 <b>{price:,} {symbol}</b>\n")
     
     return "\n".join(lines)
-
-
-async def search_tickets(
-    origin: str,
-    destination: str,
-    departure_date: str,
-    return_date: Optional[str] = None,
-    passengers: int = 1
-) -> List[Dict]:
-    """
-    Полный цикл поиска билетов для одного направления.
-    
-    Returns: список билетов
-    """
-    logging.info(f"Поиск билетов: {origin} → {destination}, {departure_date}")
-    
-    # Этап 1: Создаем сессию
-    session_id = await create_session(origin, destination, departure_date, return_date, passengers)
-    if not session_id:
-        logging.error("Не удалось создать сессию")
-        return []
-    
-    # Этап 2: Получаем оферы
-    data = await fetch_offers(session_id)
-    if not data:
-        logging.error("Не удалось получить оферы")
-        return []
-    
-    dictionary = data["dictionary"]
-    offers = data["offers"]
-    
-    # Этап 3: Маппинг данных
-    tickets = []
-    for offer in offers:
-        ticket = map_ticket_data(offer, dictionary)
-        if ticket and ticket["price"] > 0:
-            tickets.append(ticket)
-    
-    logging.info(f"Найдено {len(tickets)} билетов")
-    return tickets
-
-
-async def multi_destination_search(
-    origins: List[Dict],
-    destinations: List[Dict],
-    departure_date: str,
-    return_date: Optional[str] = None,
-    passengers: int = 1
-) -> List[Dict]:
-    """
-    Поиск билетов по множественным направлениям.
-    
-    Returns: объединенный список всех найденных билетов
-    """
-    all_tickets = []
-    
-    for origin in origins:
-        for destination in destinations:
-            tickets = await search_tickets(
-                origin["code"],
-                destination["code"],
-                departure_date,
-                return_date,
-                passengers
-            )
-            
-            # Добавляем метаданные
-            for ticket in tickets:
-                ticket["search_origin"] = origin["name"]
-                ticket["search_destination"] = destination["name"]
-            
-            all_tickets.extend(tickets)
-            
-            # Задержка между запросами
-            await asyncio.sleep(2)
-    
-    return all_tickets
 
 
 async def process_tickets_command(message: types.Message):
@@ -925,11 +798,11 @@ async def process_tickets_command(message: types.Message):
                 parse_mode="HTML"
             )
             
-            # Генерируем даты месяца
-            dates = generate_month_dates(month)
+            # Генерируем даты месяца (ограничиваем 10 датами)
+            dates = generate_month_dates(month)[:10]
             
             all_tickets = []
-            for date in dates[:10]:  # Ограничиваем 10 датами для скорости
+            for date in dates:
                 tickets = await multi_destination_search(
                     origins, destinations, date, None, params["passengers"]
                 )
