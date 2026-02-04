@@ -457,7 +457,7 @@ async def fetch_offers(
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
     Парсит оффер Tutu (API 2026).
-    v6.0: Исправлены маршруты и цена. Ссылка генерируется в search_tickets.
+    v7.0: Чистый парсинг данных. Ссылка формируется в search_tickets.
     """
     try:
         if not isinstance(offer, dict):
@@ -609,7 +609,7 @@ async def search_tickets(
 ) -> List[Dict]:
     """
     Полный цикл поиска билетов.
-    Генерирует ссылку формата DDMMYYYY (без точек).
+    Генерирует правильную ссылку используя IATA коды (MOW, IST и т.д.).
     """
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
@@ -622,18 +622,52 @@ async def search_tickets(
     if not offers:
         return []
 
-    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (v3.0) ===
+    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК (IATA VERSION) ===
     try:
-        # 1. Формат даты: DDMMYYYY (БЕЗ ТОЧЕК! Это критично)
+        # 1. Пытаемся найти IATA коды (MOW, LED, IST...) в словаре
+        # Если не найдем, оставим ID (хотя они могут не сработать в ссылке)
+        from_code = str(origin_id)
+        to_code = str(destination_id)
+
+        try:
+            dct = offers[0].get("_dictionary", {})
+            common = dct.get("common", {})
+
+            def get_iata_code(city_id: int) -> Optional[str]:
+                cities = common.get("cities", {})
+                obj = cities.get(str(city_id))
+                if obj and "code" in obj:
+                    return obj["code"]
+
+                points = common.get("points", {})
+                obj = points.get(str(city_id))
+                if obj and "code" in obj:
+                    return obj["code"]
+                return None
+
+            found_origin = get_iata_code(origin_id)
+            found_dest = get_iata_code(destination_id)
+
+            if found_origin:
+                from_code = found_origin
+            if found_dest:
+                to_code = found_dest
+
+            logging.info(f"Коды для ссылки: {from_code} -> {to_code}")
+
+        except Exception as e:
+            logging.warning(f"Не удалось достать IATA коды: {e}")
+
+        # 2. Формат даты: DDMMYYYY
         dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
         date_str = dep_dt.strftime("%d%m%Y")
 
-        # 2. Собираем ссылку
-        # Обязательно добавляем changes=all, чтобы поиск не завис
+        # 3. Собираем ссылку
+        # Пример: route[0]=MOW-IST-05022026
         search_link = (
             f"https://avia.tutu.ru/offers/?"
             f"passengers={passengers}"
-            f"&route[0]={origin_id}-{destination_id}-{date_str}"
+            f"&route[0]={from_code}-{to_code}-{date_str}"
             f"&changes=all"
         )
 
@@ -641,9 +675,10 @@ async def search_tickets(
         if return_date:
             ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
             ret_str = ret_dt.strftime("%d%m%Y")
-            search_link += f"&route[1]={destination_id}-{origin_id}-{ret_str}"
+            search_link += f"&route[1]={to_code}-{from_code}-{ret_str}"
 
-    except Exception:
+    except Exception as e:
+        logging.error(f"Ошибка генерации ссылки: {e}")
         search_link = "https://avia.tutu.ru/"
     # ==========================================
 
