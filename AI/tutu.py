@@ -456,29 +456,36 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер + ИЩЕТ потерянные хеши по всему словарю (Deep Debug).
+    Парсит оффер Tutu (API 2026).
+    Исправлено: поиск рейсов в dictionary.common.segments (по хешам).
     """
-    if not hasattr(parse_offer, "debug_counter"):
-        parse_offer.debug_counter = 0
-
     try:
         if not isinstance(offer, dict):
             return None
 
-        # 1. Готовим результат (цена уже работает)
         result = {
-            "price": 0,
-            "currency": "RUB",
-            "airline": "Неизвестно",
-            "departure": "",
-            "arrival": "",
-            "duration": "",
-            "stops": 0,
-            "baggage": False,
-            "deeplink": ""
+            "price": 0, "currency": "RUB", "airline": "Неизвестно",
+            "departure": "", "arrival": "", "duration": "",
+            "stops": 0, "baggage": False, "deeplink": ""
         }
 
-        # Парсим цену (это уже работает)
+        # 1. Сбор источников данных (avia + common)
+        dictionary = offer.get("_dictionary", {})
+        avia_dict = dictionary.get("avia", {})
+        common_dict = dictionary.get("common", {})
+
+        # Собираем все возможные словари с рейсами в один список
+        # Tutu может хранить их в разных местах
+        sources = [
+            avia_dict.get("voyages", {}),
+            avia_dict.get("segments", {}),
+            common_dict.get("segments", {}),
+            common_dict.get("routes", {}),
+            # Иногда бывает, что ключи лежат в корне common (редко)
+            common_dict
+        ]
+
+        # 2. Цена (OfferVariants) - уже отлажено
         offer_variants = offer.get("offerVariants")
         current_variant = {}
         if offer_variants:
@@ -488,9 +495,11 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
                 current_variant = next(iter(offer_variants.values()))
 
         price_obj = current_variant.get("price") or offer.get("price", {})
+
         if isinstance(price_obj, (int, float)):
             result["price"] = int(price_obj)
         elif isinstance(price_obj, dict):
+            # value -> amount (API 2026)
             val = price_obj.get("value")
             if isinstance(val, dict):
                 amt = val.get("amount", 0)
@@ -498,80 +507,116 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
                     amt //= 100
                 result["price"] = int(amt)
                 result["currency"] = val.get("currencyCode", "RUB")
+            # amount (Old API)
             elif "amount" in price_obj:
                 result["price"] = int(price_obj["amount"])
 
         if result["price"] == 0:
             return None
 
-        # 2. Достаем проблемные ID
-        route_ids = offer.get("routeIds") or current_variant.get("routeIds")
-        if not route_ids:
+        # 3. Маршруты (RouteIds)
+        route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
+        if not route_ids_raw:
+            route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
+
+        if not route_ids_raw:
             return None
 
-        # Разбираем первый ID на части
-        target_hashes = []
-        if isinstance(route_ids, list) and len(route_ids) > 0:
-            target_hashes = str(route_ids[0]).split('/')
+        # Собираем сегменты перелета
+        legs = []
 
-        # =========================================================================
-        # 🕵️‍♂️ ДЕТЕКТИВ: Ищем, где прячется хеш
-        # =========================================================================
-        if parse_offer.debug_counter == 0 and target_hashes:
-            logging.error("=== ЗАПУСК ПОИСКА ХЕШЕЙ ===")
-            target = target_hashes[0]  # Берем первый хеш (например 6153517...)
-            logging.error(f"Ищу хеш: {target}")
+        # Функция поиска по всем источникам
+        def find_segment_data(key):
+            s_key = str(key)
+            for source in sources:
+                if source and s_key in source:
+                    return source[s_key]
+            return None
 
-            dictionary = offer.get("_dictionary", {})
+        # Перебираем "hash1/hash2/hash3"
+        for route_str in route_ids_raw:
+            if not isinstance(route_str, str):
+                continue
 
-            # 1. Проверяем ключи dictionary.common
-            common = dictionary.get("common", {})
-            logging.error(f"Ключи dictionary.common: {list(common.keys())}")
+            parts = route_str.split('/')
+            for part in parts:
+                obj = find_segment_data(part)
 
-            # 2. Рекурсивный поиск
-            found_path = None
+                # Проверяем, что это действительно рейс (есть время)
+                if obj:
+                    # Tutu использует разные ключи для времени
+                    dep = (
+                        obj.get("departureDate")
+                        or obj.get("departureTime")
+                        or obj.get("datetimeBeg")
+                    )
 
-            def deep_search(data, path="dict"):
-                if isinstance(data, dict):
-                    # Проверяем ключи
-                    if target in data:
-                        return f"{path}[{target}] (FOUND AS KEY!)"
-                    # Проверяем значения (если это строка)
-                    for k, v in data.items():
-                        if isinstance(v, str) and v == target:
-                            return f"{path}.{k} == target"
-                        # Углубляемся
-                        if isinstance(v, (dict, list)):
-                            # Ограничиваем глубину логов, чтобы не зависло
-                            if len(path) < 50:
-                                res = deep_search(v, f"{path}.{k}")
-                                if res:
-                                    return res
-                elif isinstance(data, list):
-                    for i, item in enumerate(data):
-                        if isinstance(item, str) and item == target:
-                            return f"{path}[{i}] == target"
-                        if isinstance(item, (dict, list)):
-                            res = deep_search(item, f"{path}[{i}]")
-                            if res:
-                                return res
-                return None
+                    # Фильтруем технические стыковки, берем только рейсы с датами
+                    if dep:
+                        legs.append(obj)
+                        # Обычно один хэш = один сегмент, но в сплите может быть мусор.
+                        # Если нашли, идем к следующей части сплита или к следующему route_str?
+                        # В структуре hash1/hash2/hash3 обычно каждый hash - это сегмент или стыковка.
+                        # Нам нужны все, у которых есть дата.
 
-            found_path = deep_search(dictionary)
+        if not legs:
+            return None
 
-            if found_path:
-                logging.error(f"✅ НАШЕЛ! Хеш лежит здесь: {found_path}")
-            else:
-                logging.error("❌ Хеш не найден нигде в dictionary.")
+        first_leg = legs[0]
+        last_leg = legs[-1]
 
-            logging.error("=== КОНЕЦ ПОИСКА ===")
-            parse_offer.debug_counter += 1
-        # =========================================================================
+        # 4. Заполнение данных
+        result["departure"] = (
+            first_leg.get("departureTime")
+            or first_leg.get("departureDate")
+            or first_leg.get("datetimeBeg", "")
+        )
 
-        return None  # Пока возвращаем None, чтобы не спамить ошибками
+        result["arrival"] = (
+            last_leg.get("arrivalTime")
+            or last_leg.get("arrivalDate")
+            or last_leg.get("datetimeEnd", "")
+        )
+
+        # Длительность
+        total_duration = sum(leg.get("durationMinutes", 0) for leg in legs)
+        hours = total_duration // 60
+        minutes = total_duration % 60
+        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
+
+        # Пересадки
+        result["stops"] = len(legs) - 1
+
+        # Авиакомпания
+        carrier_id = first_leg.get("carrier")
+        if carrier_id:
+            carriers = common_dict.get("carriers", {})
+            carrier = carriers.get(str(carrier_id)) or carriers.get(carrier_id, {})
+            result["airline"] = carrier.get("name", "Неизвестно")
+
+        # Багаж
+        fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
+        if fare_id:
+            conditions = avia_dict.get("conditions", {})
+            fare = conditions.get(str(fare_id)) or conditions.get(fare_id, {})
+            baggage = fare.get("baggage", {})
+
+            if isinstance(baggage, dict):
+                result["baggage"] = (
+                    baggage.get("included", False) or (baggage.get("weight", 0) > 0)
+                )
+            elif isinstance(baggage, bool):
+                result["baggage"] = baggage
+
+        # Ссылка
+        offer_id = offer.get("id", "")
+        result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
+
+        return result
 
     except Exception as e:
-        logging.error(f"Debug error: {e}")
+        # Логируем ошибку, но не прерываем работу (чтобы один плохой оффер не убил всё)
+        logging.debug(f"Error parsing offer: {e}")
         return None
 
 
