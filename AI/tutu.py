@@ -497,6 +497,10 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         # Dictionary для резолва ID
         dictionary = offer.get("_dictionary", {})
         
+        if not dictionary:
+            logging.debug("Нет _dictionary в оффере")
+            return None
+        
         # Цена
         price_data = offer.get("price", {})
         if isinstance(price_data, dict):
@@ -504,6 +508,10 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             result["currency"] = price_data.get("currency", "RUB")
         elif isinstance(price_data, (int, float)):
             result["price"] = int(price_data)
+        
+        if result["price"] == 0:
+            logging.debug("Цена = 0, пропускаем оффер")
+            return None
         
         # Получаем сегменты по ID
         segment_ids = offer.get("segmentIds", [])
@@ -515,7 +523,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         segments_dict = avia_dict.get("segments", {})
         
         if not segments_dict:
-            logging.debug("Нет segments в dictionary")
+            logging.debug("Нет segments в dictionary.avia")
             return None
         
         # Собираем сегменты
@@ -524,9 +532,11 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             segment = segments_dict.get(seg_id)
             if segment:
                 segments.append(segment)
+            else:
+                logging.debug(f"Сегмент {seg_id} не найден в dictionary")
         
         if not segments:
-            logging.debug("Не удалось найти сегменты")
+            logging.debug("Не удалось найти ни одного сегмента")
             return None
         
         first_segment = segments[0]
@@ -609,12 +619,57 @@ async def search_tickets(
     if not offers:
         return []
     
+    logging.info(f"Начинаю парсинг {len(offers)} офферов...")
+    
     # Парсим офферы
     tickets = []
-    for offer in offers:
+    parsed_count = 0
+    failed_count = 0
+    
+    for i, offer in enumerate(offers):
         ticket = parse_offer(offer)
         if ticket and ticket["price"] > 0:
             tickets.append(ticket)
+            parsed_count += 1
+        else:
+            failed_count += 1
+            if i < 3:  # Логируем первые 3 неудачных
+                logging.debug(f"Не удалось распарсить оффер #{i}")
+    
+    logging.info(f"Успешно распарсено: {parsed_count}, ошибок: {failed_count}")
+    
+    if not tickets:
+        logging.error("Все офферы не прошли парсинг!")
+        # Выводим структуру первого оффера для отладки
+        if offers:
+            first_offer = offers[0]
+            logging.error(f"Ключи первого оффера: {list(first_offer.keys())}")
+            
+            # Проверяем наличие _dictionary
+            if "_dictionary" in first_offer:
+                dictionary = first_offer["_dictionary"]
+                logging.error(f"Ключи dictionary: {list(dictionary.keys())}")
+                
+                if "avia" in dictionary:
+                    avia = dictionary["avia"]
+                    logging.error(f"Ключи avia: {list(avia.keys())}")
+                    
+                    if "segments" in avia:
+                        segments = avia["segments"]
+                        logging.error(f"Количество сегментов в dictionary: {len(segments)}")
+                        
+                        # Первый сегмент
+                        if segments:
+                            first_seg_id = list(segments.keys())[0]
+                            logging.error(f"Пример ID сегмента: {first_seg_id}")
+            else:
+                logging.error("_dictionary отсутствует в оффере!")
+            
+            # Проверяем segmentIds
+            segment_ids = first_offer.get("segmentIds")
+            logging.error(f"segmentIds в оффере: {segment_ids}")
+        
+        return []
     
     # Сортируем по цене
     tickets.sort(key=lambda x: x["price"])
