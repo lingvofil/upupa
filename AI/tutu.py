@@ -456,167 +456,62 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит оффер Tutu (API 2026).
-    Исправлено: поиск рейсов в dictionary.common.segments (по хешам).
+    Парсит оффер + ВЫВОДИТ СОДЕРЖИМОЕ common.segments и routes (Structure Debug).
     """
+    if not hasattr(parse_offer, "debug_counter"):
+        parse_offer.debug_counter = 0
+
     try:
         if not isinstance(offer, dict):
             return None
 
-        result = {
-            "price": 0, "currency": "RUB", "airline": "Неизвестно",
-            "departure": "", "arrival": "", "duration": "",
-            "stops": 0, "baggage": False, "deeplink": ""
-        }
-
-        # 1. Сбор источников данных (avia + common)
+        # 1. Достаем словари
         dictionary = offer.get("_dictionary", {})
-        avia_dict = dictionary.get("avia", {})
         common_dict = dictionary.get("common", {})
 
-        # Собираем все возможные словари с рейсами в один список
-        # Tutu может хранить их в разных местах
-        sources = [
-            avia_dict.get("voyages", {}),
-            avia_dict.get("segments", {}),
-            common_dict.get("segments", {}),
-            common_dict.get("routes", {}),
-            # Иногда бывает, что ключи лежат в корне common (редко)
-            common_dict
-        ]
+        segments_dict = common_dict.get("segments", {})
+        routes_dict = common_dict.get("routes", {})
 
-        # 2. Цена (OfferVariants) - уже отлажено
-        offer_variants = offer.get("offerVariants")
-        current_variant = {}
-        if offer_variants:
-            if isinstance(offer_variants, list) and len(offer_variants) > 0:
-                current_variant = offer_variants[0]
-            elif isinstance(offer_variants, dict):
-                current_variant = next(iter(offer_variants.values()))
+        # =========================================================================
+        # 🔬 МИКРОСКОП: Смотрим структуру segments и routes
+        # =========================================================================
+        if parse_offer.debug_counter == 0:
+            logging.error("=== НАЧАЛО АНАЛИЗА СТРУКТУРЫ ===")
 
-        price_obj = current_variant.get("price") or offer.get("price", {})
+            # 1. Смотрим, что лежит в segments
+            if segments_dict:
+                first_key = next(iter(segments_dict))
+                first_val = segments_dict[first_key]
+                logging.error(f"[DEBUG] common.segments (Пример):")
+                logging.error(f"  Ключ: {first_key}")
+                logging.error(f"  Значение: {first_val}")
+            else:
+                logging.error("[DEBUG] common.segments ПУСТОЙ!")
 
-        if isinstance(price_obj, (int, float)):
-            result["price"] = int(price_obj)
-        elif isinstance(price_obj, dict):
-            # value -> amount (API 2026)
-            val = price_obj.get("value")
-            if isinstance(val, dict):
-                amt = val.get("amount", 0)
-                if val.get("fraction") == 100:
-                    amt //= 100
-                result["price"] = int(amt)
-                result["currency"] = val.get("currencyCode", "RUB")
-            # amount (Old API)
-            elif "amount" in price_obj:
-                result["price"] = int(price_obj["amount"])
+            # 2. Смотрим, что лежит в routes
+            if routes_dict:
+                first_key = next(iter(routes_dict))
+                first_val = routes_dict[first_key]
+                logging.error(f"[DEBUG] common.routes (Пример):")
+                logging.error(f"  Ключ: {first_key}")
+                logging.error(f"  Значение: {first_val}")
+            else:
+                logging.error("[DEBUG] common.routes ПУСТОЙ!")
 
-        if result["price"] == 0:
-            return None
+            # 3. Пример ID из оффера для сравнения
+            route_ids = offer.get("routeIds")
+            if route_ids:
+                logging.error(f"[DEBUG] Ищем совпадения для ID из оффера: {route_ids[0]}")
 
-        # 3. Маршруты (RouteIds)
-        route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
-        if not route_ids_raw:
-            route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
+            logging.error("=== КОНЕЦ АНАЛИЗА ===")
+            parse_offer.debug_counter += 1
+        # =========================================================================
 
-        if not route_ids_raw:
-            return None
-
-        # Собираем сегменты перелета
-        legs = []
-
-        # Функция поиска по всем источникам
-        def find_segment_data(key):
-            s_key = str(key)
-            for source in sources:
-                if source and s_key in source:
-                    return source[s_key]
-            return None
-
-        # Перебираем "hash1/hash2/hash3"
-        for route_str in route_ids_raw:
-            if not isinstance(route_str, str):
-                continue
-
-            parts = route_str.split('/')
-            for part in parts:
-                obj = find_segment_data(part)
-
-                # Проверяем, что это действительно рейс (есть время)
-                if obj:
-                    # Tutu использует разные ключи для времени
-                    dep = (
-                        obj.get("departureDate")
-                        or obj.get("departureTime")
-                        or obj.get("datetimeBeg")
-                    )
-
-                    # Фильтруем технические стыковки, берем только рейсы с датами
-                    if dep:
-                        legs.append(obj)
-                        # Обычно один хэш = один сегмент, но в сплите может быть мусор.
-                        # Если нашли, идем к следующей части сплита или к следующему route_str?
-                        # В структуре hash1/hash2/hash3 обычно каждый hash - это сегмент или стыковка.
-                        # Нам нужны все, у которых есть дата.
-
-        if not legs:
-            return None
-
-        first_leg = legs[0]
-        last_leg = legs[-1]
-
-        # 4. Заполнение данных
-        result["departure"] = (
-            first_leg.get("departureTime")
-            or first_leg.get("departureDate")
-            or first_leg.get("datetimeBeg", "")
-        )
-
-        result["arrival"] = (
-            last_leg.get("arrivalTime")
-            or last_leg.get("arrivalDate")
-            or last_leg.get("datetimeEnd", "")
-        )
-
-        # Длительность
-        total_duration = sum(leg.get("durationMinutes", 0) for leg in legs)
-        hours = total_duration // 60
-        minutes = total_duration % 60
-        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
-
-        # Пересадки
-        result["stops"] = len(legs) - 1
-
-        # Авиакомпания
-        carrier_id = first_leg.get("carrier")
-        if carrier_id:
-            carriers = common_dict.get("carriers", {})
-            carrier = carriers.get(str(carrier_id)) or carriers.get(carrier_id, {})
-            result["airline"] = carrier.get("name", "Неизвестно")
-
-        # Багаж
-        fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
-        if fare_id:
-            conditions = avia_dict.get("conditions", {})
-            fare = conditions.get(str(fare_id)) or conditions.get(fare_id, {})
-            baggage = fare.get("baggage", {})
-
-            if isinstance(baggage, dict):
-                result["baggage"] = (
-                    baggage.get("included", False) or (baggage.get("weight", 0) > 0)
-                )
-            elif isinstance(baggage, bool):
-                result["baggage"] = baggage
-
-        # Ссылка
-        offer_id = offer.get("id", "")
-        result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
-
-        return result
+        # (Остальной код пока не важен, нам нужны только логи)
+        return None
 
     except Exception as e:
-        # Логируем ошибку, но не прерываем работу (чтобы один плохой оффер не убил всё)
-        logging.debug(f"Error parsing offer: {e}")
+        logging.error(f"Debug error: {e}")
         return None
 
 
