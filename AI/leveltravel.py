@@ -388,7 +388,8 @@ async def quick_price_scan(
 async def capture_hotel_screenshots(
     hotel_link: str,
     hotel_name: str,
-    nights: int
+    nights: int,
+    search_type: str = SEARCH_TYPE_TOUR
 ) -> List[str]:
     """Создает ДВА скриншота: календарь и варианты номеров."""
     paths = []
@@ -404,9 +405,10 @@ async def capture_hotel_screenshots(
             page = await context.new_page()
             
             try:
-                logging.info(f"Создаю скриншоты для {hotel_name}")
+                logging.info(f"Создаю скриншоты для {hotel_name} (тип: {search_type})")
                 await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
                 
+                # Скрываем все лишнее
                 await page.evaluate("""
                     () => {
                         const selectors = [
@@ -414,7 +416,10 @@ async def capture_hotel_screenshots(
                             '[class*="WidgetContainer"]', 
                             '#jivo-iframe-container',
                             '[class*="StickyButton"]',
-                            '[class*="HeaderWrapper"]'
+                            '[class*="HeaderWrapper"]',
+                            '[class*="StickyFilter"]',
+                            '[class*="StickyPrice"]',
+                            '[class*="Floating"]'
                         ];
                         selectors.forEach(s => {
                             const el = document.querySelector(s);
@@ -433,6 +438,7 @@ async def capture_hotel_screenshots(
                 
                 await page.wait_for_timeout(2000)
                 
+                # СКРИНШОТ 1: Календарь / общий вид
                 await page.evaluate("""
                     () => {
                         const target = document.querySelector('[class*="Calendar"]') || 
@@ -453,29 +459,64 @@ async def capture_hotel_screenshots(
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
 
-                await page.evaluate("""
-                    () => {
-                        const offersBlock = document.querySelector('[class*="HotelOffers"]') || 
-                                           document.querySelector('#offers') ||
-                                           document.querySelector('[class*="BookingOffers"]') ||
-                                           document.querySelector('[class*="RoomsTable"]');
-                        
-                        if (offersBlock) {
-                            offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
-                        } else {
-                            window.scrollBy(0, 900);
-                        }
-                    }
-                """)
+                # СКРИНШОТ 2: Варианты номеров
+                # Для отелей - ждем появления блока с номерами
+                if search_type == SEARCH_TYPE_HOTEL:
+                    try:
+                        await page.wait_for_selector(
+                            '[class*="HotelRoom"], [class*="RoomCard"], [class*="BookingRoom"]',
+                            timeout=25000
+                        )
+                    except Exception:
+                        logging.warning("Блок номеров не найден — fallback scroll")
                 
+                # Скроллим к блоку с номерами (разные селекторы для туров и отелей)
+                if search_type == SEARCH_TYPE_HOTEL:
+                    await page.evaluate("""
+                        () => {
+                            const offersBlock =
+                                document.querySelector('[class*="HotelRooms"]') ||
+                                document.querySelector('[class*="RoomList"]') ||
+                                document.querySelector('[class*="HotelRoom"]') ||
+                                document.querySelector('[data-testid="rooms"]');
+                            
+                            if (offersBlock) {
+                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            } else {
+                                window.scrollBy(0, 1200);
+                            }
+                        }
+                    """)
+                else:
+                    # Для туров - старая логика
+                    await page.evaluate("""
+                        () => {
+                            const offersBlock = document.querySelector('[class*="HotelOffers"]') || 
+                                               document.querySelector('#offers') ||
+                                               document.querySelector('[class*="BookingOffers"]') ||
+                                               document.querySelector('[class*="RoomsTable"]');
+                            
+                            if (offersBlock) {
+                                offersBlock.scrollIntoView({ behavior: 'auto', block: 'start' });
+                            } else {
+                                window.scrollBy(0, 900);
+                            }
+                        }
+                    """)
+                
+                # Небольшая корректировка скролла вверх
                 await page.mouse.wheel(0, -150)
                 await page.wait_for_timeout(2500)
-                await page.set_viewport_size({'width': 1920, 'height': 1250})
+                
+                # ВАЖНО: Увеличиваем viewport ДО скриншота
+                await page.set_viewport_size({'width': 1920, 'height': 1500})
+                await page.wait_for_timeout(1200)
                 
                 path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
                 await page.screenshot(path=path2, full_page=False, type='png')
                 paths.append(path2)
                 
+                # Возвращаем viewport обратно
                 await page.set_viewport_size({'width': 1920, 'height': 1080})
                 
                 logging.info(f"Скриншоты созданы: {len(paths)}")
@@ -1385,7 +1426,7 @@ async def process_search_command(message: types.Message, command_type: str = "т
                 # Создаем скриншоты
                 screenshot_paths = []
                 if link and link != "#":
-                    screenshot_paths = await capture_hotel_screenshots(link, name, nights)
+                    screenshot_paths = await capture_hotel_screenshots(link, name, nights, search_type)
                 
                 # Отправляем
                 if screenshot_paths:
