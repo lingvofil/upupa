@@ -178,6 +178,9 @@ from AI.voice import handle_voice_command
 # ================== БЛОК 4.12 LEVEL TRAVEL ==================
 from AI.leveltravel import process_tours_command, process_hotels_command
 
+# ================== БЛОК 4.13 TUTU.AVIA ==================
+from AI.tutu import process_tutu_command
+
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
 router.message.middleware(ContentFilterMiddleware())
@@ -211,6 +214,10 @@ async def help_callback_handler(query: types.CallbackQuery):
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа настройки")
 async def settings_command_handler(message: types.Message):
     await send_settings_menu(message)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("билеты"))
+async def handle_tutu_tickets(message: types.Message):
+    await process_tutu_command(message)
 
 @router.callback_query(F.data.startswith("settings:"))
 async def settings_callback_handler(query: types.CallbackQuery):
