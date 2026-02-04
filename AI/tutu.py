@@ -457,7 +457,7 @@ async def fetch_offers(
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
     Парсит оффер Tutu (API 2026).
-    v4.0: Исправлены маршруты, цена и ссылка на оплату (checkout).
+    v5.0: Только парсинг данных, ссылкой занимается search_tickets.
     """
     try:
         if not isinstance(offer, dict):
@@ -469,17 +469,16 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "stops": 0, "baggage": False, "deeplink": ""
         }
 
-        # 1. Словари данных
+        # 1. Словари
         dictionary = offer.get("_dictionary", {})
         common_dict = dictionary.get("common", {})
         avia_dict = dictionary.get("avia", {})
 
-        # Источники сегментов
         segments_dict = common_dict.get("segments", {})
         routes_dict = common_dict.get("routes", {})
-        voyages_dict = avia_dict.get("voyages", {})  # Fallback
+        voyages_dict = avia_dict.get("voyages", {})
 
-        # 2. Вариант перелета (Цена + UUID)
+        # 2. Цена
         offer_variants = offer.get("offerVariants")
         current_variant = {}
         if offer_variants:
@@ -488,7 +487,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             elif isinstance(offer_variants, dict):
                 current_variant = next(iter(offer_variants.values()))
 
-        # --- ЦЕНА ---
         price_obj = current_variant.get("price") or offer.get("price", {})
         if isinstance(price_obj, (int, float)):
             result["price"] = int(price_obj)
@@ -506,16 +504,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         if result["price"] == 0:
             return None
 
-        # --- ССЫЛКА (UUID) ---
-        # Берем UUID из варианта для формирования прямой ссылки на корзину
-        offer_uuid = current_variant.get("uuid")
-        if offer_uuid:
-            result["deeplink"] = f"https://checkout.tutu.ru/cart/{offer_uuid}"
-        else:
-            # Фолбек, если UUID нет (маловероятно)
-            result["deeplink"] = "https://avia.tutu.ru/"
-
-        # 3. Маршруты (Segments)
+        # 3. Маршруты
         route_ids_raw = offer.get("routeIds") or current_variant.get("routeIds")
         if not route_ids_raw:
             route_ids_raw = offer.get("segmentIds") or current_variant.get("segmentIds")
@@ -528,7 +517,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             if not isinstance(rid, str):
                 continue
 
-            # Логика поиска сегмента: Routes -> Segments -> Voyages -> Parts
             if rid in routes_dict:
                 route_obj = routes_dict[rid]
                 seg_ids = route_obj.get("segmentIds", [])
@@ -569,7 +557,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             or last_leg.get("datetimeEnd", "")
         )
 
-        # Длительность
         total_duration = sum(
             leg.get("durationMinutes", 0) or leg.get("duration", 0) for leg in legs
         )
@@ -579,7 +566,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
 
         result["stops"] = len(legs) - 1
 
-        # Авиакомпания
         carrier_name = "Неизвестно"
         carrier_id = first_leg.get("carrier")
         if not carrier_id:
@@ -595,7 +581,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
 
         result["airline"] = carrier_name
 
-        # Багаж
         fare_id = current_variant.get("fareApplicationId") or offer.get("fareApplicationId")
         if fare_id:
             conditions = avia_dict.get("conditions", {})
@@ -624,86 +609,50 @@ async def search_tickets(
 ) -> List[Dict]:
     """
     Полный цикл поиска билетов для одного направления.
-    
-    Args:
-        origin_name: название города отправления
-        destination_name: название города назначения
-    
-    Returns: список билетов (max 7)
+    Генерирует ссылку на страницу результатов поиска.
     """
-    # Резолвим названия в CityId
     origin_id = await resolve_city_id(origin_name)
     destination_id = await resolve_city_id(destination_name)
     
-    if not origin_id:
-        logging.error(f"Не удалось найти CityId для '{origin_name}'")
+    if not origin_id or not destination_id:
         return []
-    
-    if not destination_id:
-        logging.error(f"Не удалось найти CityId для '{destination_name}'")
-        return []
-    
+
     offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
         return []
-    
+
+    # === ГЕНЕРАЦИЯ ССЫЛКИ НА ПОИСК ===
+    try:
+        dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
+        date_str = dep_dt.strftime("%d%m%Y")
+
+        search_link = (
+            f"https://avia.tutu.ru/offers/?"
+            f"passengers={passengers}&class=Y"
+            f"&route[0]={origin_id}-{destination_id}-{date_str}"
+        )
+
+        if return_date:
+            ret_dt = datetime.strptime(return_date, "%Y-%m-%d")
+            ret_str = ret_dt.strftime("%d%m%Y")
+            search_link += f"&route[1]={destination_id}-{origin_id}-{ret_str}"
+
+    except Exception:
+        search_link = "https://avia.tutu.ru/"
+    # ================================
+
     logging.info(f"Начинаю парсинг {len(offers)} офферов...")
-    
-    # Парсим офферы
+
     tickets = []
-    parsed_count = 0
-    failed_count = 0
-    
-    for i, offer in enumerate(offers):
+
+    for offer in offers:
         ticket = parse_offer(offer)
         if ticket and ticket["price"] > 0:
+            ticket["deeplink"] = search_link
             tickets.append(ticket)
-            parsed_count += 1
-        else:
-            failed_count += 1
-            if i < 3:  # Логируем первые 3 неудачных
-                logging.debug(f"Не удалось распарсить оффер #{i}")
-    
-    logging.info(f"Успешно распарсено: {parsed_count}, ошибок: {failed_count}")
-    
-    if not tickets:
-        logging.error("Все офферы не прошли парсинг!")
-        # Выводим структуру первого оффера для отладки
-        if offers:
-            first_offer = offers[0]
-            logging.error(f"Ключи первого оффера: {list(first_offer.keys())}")
-            
-            # Проверяем наличие _dictionary
-            if "_dictionary" in first_offer:
-                dictionary = first_offer["_dictionary"]
-                logging.error(f"Ключи dictionary: {list(dictionary.keys())}")
-                
-                if "avia" in dictionary:
-                    avia = dictionary["avia"]
-                    logging.error(f"Ключи avia: {list(avia.keys())}")
-                    
-                    if "segments" in avia:
-                        segments = avia["segments"]
-                        logging.error(f"Количество сегментов в dictionary: {len(segments)}")
-                        
-                        # Первый сегмент
-                        if segments:
-                            first_seg_id = list(segments.keys())[0]
-                            logging.error(f"Пример ID сегмента: {first_seg_id}")
-            else:
-                logging.error("_dictionary отсутствует в оффере!")
-            
-            # Проверяем segmentIds
-            segment_ids = first_offer.get("segmentIds")
-            logging.error(f"segmentIds в оффере: {segment_ids}")
-        
-        return []
-    
-    # Сортируем по цене
+
     tickets.sort(key=lambda x: x["price"])
-    
-    # Ограничиваем 7 офферами
     return tickets[:7]
 
 
