@@ -179,7 +179,7 @@ from AI.voice import handle_voice_command
 from AI.leveltravel import process_tours_command, process_hotels_command
 
 # ================== БЛОК 4.13 TUTU АВИАБИЛЕТЫ ==================
-from AI.tutu import process_tickets_command as process_tutu_tickets_command
+from AI.tutu import process_tickets_command
 
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
@@ -746,13 +746,9 @@ async def handle_hotels_command(message: types.Message):
 
 # ================== БЛОК 6.10: TUTU АВИАБИЛЕТЫ  ==================
 
-@router.message(lambda message: 
-    message.text and 
-    message.text.lower().startswith("билеты") and 
-    message.from_user.id not in BLOCKED_USERS
-)
-async def handle_tickets_command(message: types.Message):
-    await process_tutu_tickets_command(message)
+@router.message(lambda message: message.text and message.text.lower().startswith("билеты") and message.from_user.id not in BLOCKED_USERS)
+async def handle_tickets_search(message: types.Message):
+    await process_tickets_command(message)
        
 # ================== БЛОК 6.11: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
 
