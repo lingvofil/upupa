@@ -456,32 +456,12 @@ async def fetch_offers(
 
 def parse_offer(offer: Dict) -> Optional[Dict]:
     """
-    Парсит один оффер в упрощенный формат.
-    
-    Структура Tutu API:
-    - offer содержит segmentIds, price, fareApplicationId
-    - segments находятся в dictionary.avia.segments
-    - carriers в dictionary.common.carriers
-    - fare conditions в dictionary.avia.conditions
-    
-    Returns:
-    {
-        "price": int,
-        "currency": str,
-        "airline": str,
-        "departure": str (ISO datetime),
-        "arrival": str (ISO datetime),
-        "duration": str (формат "3ч 20м"),
-        "stops": int,
-        "baggage": bool,
-        "deeplink": str
-    }
+    Парсит один оффер, поддерживая новую структуру API Tutu (2026).
     """
     try:
         if not isinstance(offer, dict):
-            logging.error(f"Оффер не является словарем: {type(offer)}")
             return None
-        
+
         result = {
             "price": 0,
             "currency": "RUB",
@@ -493,94 +473,130 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             "baggage": False,
             "deeplink": ""
         }
-        
+
         # Dictionary для резолва ID
         dictionary = offer.get("_dictionary", {})
-        
+
         if not dictionary:
-            logging.debug("Нет _dictionary в оффере")
             return None
-        
-        # Цена
-        price_data = offer.get("price", {})
+
+        # -----------------------------------------------------------
+        # 1. Ищем ЦЕНУ и ТАРИФ (Логика для offerVariants)
+        # -----------------------------------------------------------
+        price_data = {}
+        fare_id = None
+        current_variant = {}
+
+        # Пробуем достать из offerVariants (новая структура)
+        variants = offer.get("offerVariants")
+        if variants:
+            if isinstance(variants, list) and len(variants) > 0:
+                current_variant = variants[0]
+            elif isinstance(variants, dict) and variants:
+                current_variant = next(iter(variants.values()))
+
+            price_data = current_variant.get("price", {})
+            fare_id = current_variant.get("fareApplicationId")
+        else:
+            # Фолбек на старую структуру (в корне)
+            price_data = offer.get("price", {})
+            fare_id = offer.get("fareApplicationId")
+
+        # Парсим цену
         if isinstance(price_data, dict):
             result["price"] = int(price_data.get("amount", 0))
             result["currency"] = price_data.get("currency", "RUB")
         elif isinstance(price_data, (int, float)):
             result["price"] = int(price_data)
-        
+
         if result["price"] == 0:
-            logging.debug("Цена = 0, пропускаем оффер")
             return None
-        
-        # Получаем сегменты по ID
-        segment_ids = offer.get("segmentIds", [])
+
+        # -----------------------------------------------------------
+        # 2. Ищем СЕГМЕНТЫ / РЕЙСЫ (routeIds -> voyages)
+        # -----------------------------------------------------------
+        segment_ids = offer.get("routeIds") or current_variant.get("routeIds")
         if not segment_ids:
-            logging.debug("Нет segmentIds в оффере")
+            segment_ids = offer.get("segmentIds") or current_variant.get("segmentIds")
+
+        if not segment_ids:
+            logging.debug("Не найдены routeIds/segmentIds")
             return None
-        
+
         avia_dict = dictionary.get("avia", {})
-        segments_dict = avia_dict.get("segments", {})
-        
-        if not segments_dict:
-            logging.debug("Нет segments в dictionary.avia")
+        source_segments = avia_dict.get("voyages", {})
+        if not source_segments:
+            source_segments = avia_dict.get("segments", {})
+
+        if not source_segments:
             return None
-        
-        # Собираем сегменты
+
+        # Собираем объекты рейсов
         segments = []
-        for seg_id in segment_ids:
-            segment = segments_dict.get(seg_id)
+
+        def extract_ids(ids_list):
+            extracted = []
+            for item in ids_list:
+                if isinstance(item, list):
+                    extracted.extend(extract_ids(item))
+                else:
+                    extracted.append(item)
+            return extracted
+
+        flat_ids = extract_ids(segment_ids)
+
+        for i, seg_id in enumerate(flat_ids):
+            segment = source_segments.get(str(seg_id))
             if segment:
+                if i == 0:
+                    logging.info(f"Пример сегмента/voyage: {segment.keys()}")
                 segments.append(segment)
-            else:
-                logging.debug(f"Сегмент {seg_id} не найден в dictionary")
-        
+
         if not segments:
-            logging.debug("Не удалось найти ни одного сегмента")
+            logging.debug(f"Не удалось найти рейсы для IDs: {flat_ids}")
             return None
-        
+
         first_segment = segments[0]
         last_segment = segments[-1]
-        
-        # Время вылета/прилета
-        result["departure"] = first_segment.get("departureTime", "")
-        result["arrival"] = last_segment.get("arrivalTime", "")
-        
-        # Длительность
+
+        # -----------------------------------------------------------
+        # 3. Заполняем ДАННЫЕ ПЕРЕЛЕТА
+        # -----------------------------------------------------------
+        result["departure"] = first_segment.get("departureTime") or first_segment.get("departureDate", "")
+        result["arrival"] = last_segment.get("arrivalTime") or last_segment.get("arrivalDate", "")
+
         total_duration = sum(s.get("durationMinutes", 0) for s in segments)
         hours = total_duration // 60
         minutes = total_duration % 60
         result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
-        
-        # Пересадки (количество сегментов - 1)
+
         result["stops"] = len(segments) - 1
-        
-        # Авиакомпания из первого сегмента
+
         carrier_id = first_segment.get("carrier")
         if carrier_id:
             common_dict = dictionary.get("common", {})
             carriers_dict = common_dict.get("carriers", {})
-            carrier = carriers_dict.get(carrier_id, {})
+            carrier = carriers_dict.get(str(carrier_id), {})
             result["airline"] = carrier.get("name", "Неизвестно")
-        
-        # Багаж из fare conditions
-        fare_id = offer.get("fareApplicationId")
+
+        # -----------------------------------------------------------
+        # 4. БАГАЖ (fare conditions)
+        # -----------------------------------------------------------
         if fare_id:
             conditions_dict = avia_dict.get("conditions", {})
-            fare = conditions_dict.get(fare_id, {})
-            
+            fare = conditions_dict.get(str(fare_id), {})
+
             baggage_info = fare.get("baggage", {})
             if isinstance(baggage_info, dict):
-                result["baggage"] = baggage_info.get("included", False)
+                result["baggage"] = baggage_info.get("included", False) or (baggage_info.get("weight", 0) > 0)
             elif isinstance(baggage_info, bool):
                 result["baggage"] = baggage_info
-        
-        # Ссылка для бронирования
+
         offer_id = offer.get("id", "")
         result["deeplink"] = f"https://avia.tutu.ru/booking/{offer_id}" if offer_id else ""
-        
+
         return result
-        
+
     except Exception as e:
         logging.error(f"Ошибка парсинга оффера: {e}", exc_info=True)
         return None
