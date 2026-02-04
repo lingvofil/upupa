@@ -481,64 +481,82 @@ async def capture_hotel_screenshots(
                 path1 = f"{screenshots_dir}/{safe_name}_1_calendar.png"
                 await page.screenshot(path=path1, full_page=False, type='png')
                 paths.append(path1)
+                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
 
-                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА (ИСПРАВЛЕННЫЙ) ---
+                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА (FIXED) ---
 
-                # 1. Увеличиваем высоту, чтобы влезло больше номеров
+                # 1. Увеличиваем высоту
                 await page.set_viewport_size({'width': 1920, 'height': 2000})
-                
-                # 2. Удаляем "липкие" элементы, которые могут перекрывать начало номера
-                # Это критически важно, иначе заголовок номера будет под шапкой сайта
-                await page.evaluate("""
-                    () => {
-                        const stickyElements = document.querySelectorAll(
-                            'header, [class*="Header"], [class*="Sticky"], [class*="Filter"], [class*="Head"]'
-                        );
-                        stickyElements.forEach(el => el.remove()); // Полностью удаляем их из DOM
+
+                # 2. Ждем исчезновения скелетонов/загрузчиков (КРИТИЧЕСКИ ВАЖНО)
+                # Это предотвращает ошибку "Element is not attached"
+                try:
+                    await page.wait_for_selector(
+                        '[class*="Skeleton"], [class*="Loader"], [class*="Placeholder"]', 
+                        state='detached', 
+                        timeout=5000
+                    )
+                except Exception:
+                    pass # Если скелетонов нет, идем дальше
+
+                # 3. Определяем селектор и ждем его появления
+                target_selector = 'article[class*="HotelRoomCard_roomCard"]'
+                try:
+                    # Ждем именно появления элемента в DOM
+                    await page.wait_for_selector(target_selector, state='attached', timeout=20000)
+                except Exception:
+                    # Фолбек, если селектор сменился
+                    target_selector = 'div[class*="HotelRoom"]:not([class*="Container"])'
+
+                # 4. Скрываем шапку через CSS (безопаснее, чем remove())
+                # display: none !important гарантирует, что шапка исчезнет визуально, но не сломает скрипты сайта
+                await page.add_style_tag(content="""
+                    header, [class*="Header"], [class*="Sticky"], [class*="Filter"], [class*="Head"], #header {
+                        display: none !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
                     }
                 """)
+                
+                # Даем браузеру время применить стили
                 await page.wait_for_timeout(500)
 
-                # 3. Ищем точный элемент через локатор Playwright (это надежнее JS evaluate)
-                # Используем ваш селектор article
-                room_locator = page.locator('article[class*="HotelRoomCard_roomCard"]').first
+                # 5. Получаем свежий хендл элемента
+                element = await page.query_selector(target_selector)
                 
-                # Если вдруг по article не нашло, пробуем запасной вариант
-                if not await room_locator.count():
-                    room_locator = page.locator('[class*="HotelRoom"]:not([class*="Container"])').first
+                if element:
+                    # Используем JS Scroll вместо Playwright scroll (он надежнее при динамике)
+                    await page.evaluate("el => el.scrollIntoView({block: 'center'})", element)
+                    
+                    # Ждем подгрузки картинок
+                    await page.wait_for_timeout(1500)
 
-                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
-                if await room_locator.count():
-                    # Сначала скроллим к нему, чтобы сработала lazy-load подгрузка картинок
-                    await room_locator.scroll_into_view_if_needed()
-                    await page.wait_for_timeout(1500) # Ждем прогрузки картинок
-
-                    # 4. Получаем точные координаты элемента на странице
-                    box = await room_locator.bounding_box()
+                    # Получаем координаты СВЕЖЕГО элемента
+                    box = await element.bounding_box()
                     
                     if box:
-                        # 5. Делаем скриншот с помощью CLIP
-                        # Мы говорим: начни резать картинку точно с box['y'] (верх элемента)
+                        # Делаем скриншот с обрезкой (Clip)
+                        # box['y'] - это точная координата верха карточки
                         await page.screenshot(
                             path=path2,
                             full_page=False,
                             clip={
-                                'x': 0,          # От левого края
-                                'y': box['y'],   # ТОЧНО ОТ ВЕРХА ПЕРВОГО НОМЕРА
-                                'width': 1920,   # Ширина
-                                'height': 1500   # Высота скриншота
+                                'x': 0,
+                                'y': box['y'],    # Режем строго по верху карточки
+                                'width': 1920,
+                                'height': 1500
                             }
                         )
                         paths.append(path2)
                     else:
-                        # Если координаты не получены, делаем обычный скриншот
+                        logging.warning("Не удалось получить координаты bounding_box")
+                        # Аварийный вариант
                         await page.screenshot(path=path2, full_page=False)
                         paths.append(path2)
                 else:
-                    # Если номера не найдены вообще
-                    logging.warning("Не удалось найти локатор карточки номера для скриншота")
-                
-                # Возвращаем размер окна обратно
+                    logging.warning(f"Элемент {target_selector} не найден после ожидания")
+
+                # Возвращаем viewport
                 await page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 # --- КОНЕЦ БЛОКА ---
