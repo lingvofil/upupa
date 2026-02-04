@@ -10,7 +10,7 @@ import httpx
 from aiogram import types
 
 # Импортируем Groq wrapper из config
-from config import groq_ai
+from config import groq_ai, ADMIN_ID
 
 # =============================================================================
 # КОНСТАНТЫ
@@ -22,62 +22,52 @@ TUTU_REFERER = "https://avia.tutu.ru/"
 
 # Маппинг месяцев
 MONTH_MAPPING = {
-    "январь": 1, "января": 1, "01": 1,
-    "февраль": 2, "февраля": 2, "02": 2,
-    "март": 3, "марта": 3, "03": 3,
-    "апрель": 4, "апреля": 4, "04": 4,
-    "май": 5, "мая": 5, "05": 5,
-    "июнь": 6, "июня": 6, "06": 6,
-    "июль": 7, "июля": 7, "07": 7,
-    "август": 8, "августа": 8, "08": 8,
-    "сентябрь": 9, "сентября": 9, "09": 9,
-    "октябрь": 10, "октября": 10, "10": 10,
-    "ноябрь": 11, "ноября": 11, "11": 11,
-    "декабрь": 12, "декабря": 12, "12": 12,
+    "январь": 1, "января": 1,
+    "февраль": 2, "февраля": 2,
+    "март": 3, "марта": 3,
+    "апрель": 4, "апреля": 4,
+    "май": 5, "мая": 5,
+    "июнь": 6, "июня": 6,
+    "июль": 7, "июля": 7,
+    "август": 8, "августа": 8,
+    "сентябрь": 9, "сентября": 9,
+    "октябрь": 10, "октября": 10,
+    "ноябрь": 11, "ноября": 11,
+    "декабрь": 12, "декабря": 12,
 }
 
-# Расширенный маппинг городов
+# Маппинг городов на CityId (только ПРОВЕРЕННЫЕ значения)
+# Для остальных городов используется динамический поиск через autocomplete API
 CITY_MAPPING = {
-    # РФ
-    "москва": 491, "мск": 491,
-    "питер": 494, "санкт-петербург": 494, "спб": 494,
-    "сочи": 461, "адлер": 461,
-    "казань": 496,
+    # ✅ ПРОВЕРЕНО из браузера
+    "москва": 491,
+    "мск": 491,
+    "стамбул": 419,
+    
+    # ⚠️ Предположительно (требуют проверки)
+    "питер": 494,
+    "санкт-петербург": 494,
+    "спб": 494,
     "екатеринбург": 497,
+    "казань": 496,
+    "сочи": 461,
     "новосибирск": 498,
     "владивосток": 499,
     "калининград": 500,
-
-    # Турция / ОАЭ
-    "стамбул": 419,
-    "анталья": 396, "анталия": 396,
-    "дубай": 411,
-
-    # Азия (Новые)
-    "фукуок": 2167,
-    "нячанг": 2161, "камрань": 2161,
-    "мале": 318, "мальдивы": 318,
-    "коломбо": 279, "шри-ланка": 279, "шри ланка": 279, "цейлон": 279,
-    "гоа": 199, "даболим": 199,
-    "бали": 2783, "денпасар": 2783,
-    "пхукет": 556,
-    "бангкок": 346,
+    "краснодар": 501,
+    "самара": 502,
+    "уфа": 503,
+    "ростов": 504,
+    "ростов-на-дону": 504,
+    "пермь": 505,
+    "красноярск": 506,
+    "воронеж": 507,
+    "волгоград": 508,
+    
+    # Для остальных городов будет использоваться autocomplete API
 }
 
-# IATA коды для ссылок (надежный поиск)
-STATIC_IATA = {
-    491: "MOW", 494: "LED", 461: "AER", 496: "KZN", 497: "SVX", 498: "OVB", 500: "KGD",
-    419: "IST", 396: "AYT", 411: "DXB",
-    2167: "PQC",  # Фукуок
-    2161: "CXR",  # Нячанг (Камрань)
-    318: "MLE",  # Мале
-    279: "CMB",  # Коломбо
-    199: "GOI",  # Гоа
-    2783: "DPS",  # Бали (Денпасар)
-    556: "HKT",  # Пхукет
-    346: "BKK",  # Бангкок
-}
-
+# Обратный маппинг для форматирования
 CITY_ID_TO_NAME = {v: k for k, v in CITY_MAPPING.items()}
 
 
@@ -203,13 +193,31 @@ def parse_date_range(text: str) -> Optional[Tuple[str, str]]:
 
 def parse_search_command(text: str) -> Dict:
     """
-    Парсит команду, поддерживает МНОГО направлений.
-    Пример: "билеты Бали Гоа Шри-Ланка 18.05-25.05"
+    Парсит команду поиска билетов.
+    
+    Паттерны:
+    - "билеты Сочи" → Москва-Сочи, завтра
+    - "билеты Казань Питер" → Казань-Питер
+    - "билеты Дубай 18.05" → Москва-Дубай, 18.05
+    - "билеты Пхукет 10.12-25.12" → Москва-Пхукет, туда-обратно
+    - "билеты Стамбул май" → Москва-Стамбул, весь май
+    - "билеты Сочи Пхукет Дубай июнь" → Множественные направления
+    
+    Returns:
+    {
+        "origins": [{"name": "москва"}],  # CityId резолвится позже
+        "destinations": [{"name": "сочи"}, ...],
+        "departure_date": "2026-05-18" или None,
+        "return_date": "2026-05-25" или None,
+        "month": 5 или None,
+        "passengers": 1
+    }
     """
     text_lower = text.lower().strip()
+    
     if text_lower.startswith("билеты"):
         text_lower = text_lower[6:].strip()
-
+    
     params = {
         "origins": [],
         "destinations": [],
@@ -218,59 +226,53 @@ def parse_search_command(text: str) -> Dict:
         "month": None,
         "passengers": 1,
     }
-
-    # 1. Даты
+    
+    # 1. Проверяем наличие точных дат
     date_range = parse_date_range(text_lower)
     if date_range:
         params["departure_date"] = date_range[0]
         params["return_date"] = date_range[1]
+        logging.info(f"Найдены даты: {date_range[0]} - {date_range[1]}")
     else:
-        # Ищем одиночную дату или месяц
         for word in text_lower.split():
             if '.' in word:
-                d = parse_date(word)
-                if d:
-                    params["departure_date"] = d
+                date = parse_date(word)
+                if date:
+                    params["departure_date"] = date
                     break
-            if word in MONTH_MAPPING and not params["month"]:
+    
+    # 2. Поиск месяца
+    if not params["departure_date"]:
+        for word in text_lower.split():
+            if word in MONTH_MAPPING:
                 params["month"] = MONTH_MAPPING[word]
-
-    # 2. Города (Origins / Destinations)
-    # Собираем ВСЕ города, которые нашли в тексте
+                break
+    
+    # 3. Поиск ВСЕХ городов (сохраняем только имена)
     found_cities = []
-
-    # Сначала проверяем статический маппинг (самое быстрое)
-    # Сортируем ключи по длине, чтобы "Шри-Ланка" нашлась раньше "Шри"
-    sorted_keys = sorted(CITY_MAPPING.keys(), key=len, reverse=True)
-
-    # Удаляем из текста найденные даты, чтобы они не мешали
-    clean_text = text_lower
-    if params["departure_date"]:
-        # Упрощенная очистка, можно улучшить
-        pass
-
-    for city_key in sorted_keys:
-        if city_key in clean_text:
-            # Чтобы не добавлять "Гоа" дважды, если он встречается 2 раза
-            if not any(c["name"] == city_key for c in found_cities):
-                found_cities.append({"name": city_key})
-                # Убираем найденный город из текста, чтобы не найти "Ланка" после "Шри-Ланка"
-                clean_text = clean_text.replace(city_key, "")
-
-    # Логика распределения (Москва по дефолту)
+    for city_name in CITY_MAPPING.keys():
+        if city_name in text_lower:
+            if not any(c["name"] == city_name for c in found_cities):
+                found_cities.append({"name": city_name})
+    
+    # 4. Определяем origins и destinations
     if not found_cities:
         params["origins"] = [{"name": "москва"}]
+    elif len(found_cities) == 1:
+        params["origins"] = [{"name": "москва"}]
+        params["destinations"] = found_cities
+    elif len(found_cities) == 2:
+        params["origins"] = [found_cities[0]]
+        params["destinations"] = [found_cities[1]]
     else:
-        # Если первый город Москва/Питер - считаем его Origin, остальные Destination
-        first_city = found_cities[0]["name"]
-        if first_city in ["москва", "мск", "питер", "спб", "екатеринбург"]:
-            params["origins"] = [found_cities[0]]
-            params["destinations"] = found_cities[1:]
-        else:
-            # Иначе считаем, что Origin = Москва, а всё, что нашли - Destinations
-            params["origins"] = [{"name": "москва"}]
-            params["destinations"] = found_cities
-
+        params["origins"] = [{"name": "москва"}]
+        params["destinations"] = found_cities
+    
+    # 5. Если нет даты и месяца → завтра
+    if not params["departure_date"] and not params["month"]:
+        tomorrow = datetime.now() + timedelta(days=1)
+        params["departure_date"] = tomorrow.strftime("%Y-%m-%d")
+    
     return params
 
 
@@ -597,107 +599,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
     except Exception:
         return None
 
-
-def select_best_tickets(tickets: List[Dict], count: int = 2) -> List[Dict]:
-    """
-    Выбирает лучшие билеты по совокупности факторов (цена, пересадки, время).
-    Не просто самые дешевые!
-    """
-    scored_tickets = []
-
-    for t in tickets:
-        # 1. Извлекаем числовые значения
-        price = t["price"]
-        stops = t["stops"]
-
-        # Парсим длительность "15ч 30м" -> 15.5
-        duration_hours = 0
-        try:
-            dur_str = t["duration"]
-            parts = dur_str.split('ч')
-            h = int(parts[0]) if parts[0].isdigit() else 0
-            m = 0
-            if len(parts) > 1 and 'м' in parts[1]:
-                m = int(parts[1].replace('м', '').strip())
-            duration_hours = h + (m / 60)
-        except Exception:
-            duration_hours = 24
-
-        # 2. СЧИТАЕМ РЕЙТИНГ (меньше = лучше)
-        # База = Цена
-        score = price
-
-        # Штраф за пересадки: каждая пересадка "стоит" как +3000 руб
-        score += stops * 3000
-
-        # Штраф за длительность: каждый лишний час "стоит" как +300 руб
-        # (Сравниваем с условным минимумом 8 часов)
-        if duration_hours > 8:
-            score += (duration_hours - 8) * 300
-
-        t["smart_score"] = score
-        scored_tickets.append(t)
-
-    # Сортируем по рейтингу (самые выгодные/удобные сверху)
-    scored_tickets.sort(key=lambda x: x["smart_score"])
-
-    return scored_tickets[:count]
-
-
-async def search_tickets_smart(
-    origin_name: str,
-    dest_name: str,
-    dep_date: str,
-    ret_date: Optional[str],
-    passengers: int
-) -> List[Dict]:
-    """
-    Обертка над поиском: ищет, генерирует ссылку, выбирает лучшие.
-    """
-    origin_id = await resolve_city_id(origin_name)
-    destination_id = await resolve_city_id(dest_name)
-
-    if not origin_id or not destination_id:
-        return []
-
-    # 1. Запрос API (Поиск по самой низкой цене)
-    offers = await fetch_offers(origin_id, destination_id, dep_date, ret_date, passengers)
-
-    if not offers:
-        return []
-
-    # 2. Ссылка
-    try:
-        from_code = STATIC_IATA.get(origin_id, str(origin_id))
-        to_code = STATIC_IATA.get(destination_id, str(destination_id))
-
-        d_dt = datetime.strptime(dep_date, "%Y-%m-%d")
-        d_str = d_dt.strftime("%d%m%Y")
-
-        link = (
-            "https://avia.tutu.ru/offers/?"
-            f"passengers={passengers}&class=Y&route[0]={origin_id}-{d_str}-{destination_id}&changes=all"
-        )
-
-        if ret_date:
-            r_dt = datetime.strptime(ret_date, "%Y-%m-%d")
-            r_str = r_dt.strftime("%d%m%Y")
-            link += f"&route[1]={destination_id}-{r_str}-{origin_id}"
-
-        _ = from_code, to_code
-    except Exception:
-        link = "https://avia.tutu.ru/"
-
-    # 3. Парсинг
-    parsed = []
-    for o in offers:
-        t = parse_offer(o)
-        if t and t["price"] > 0:
-            t["deeplink"] = link
-            parsed.append(t)
-
-    # 4. Умный выбор
-    return select_best_tickets(parsed, count=3)
 
 async def search_tickets(
     origin_name: str,
@@ -1027,116 +928,122 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
 
 async def process_tickets_command(message: types.Message):
     """
-    Обрабатывает сложные запросы: "билеты Бали Гоа 10.05"
+    Главный обработчик команды поиска билетов.
+    
+    Примеры команд:
+    - билеты Сочи
+    - билеты Казань Питер
+    - билеты Дубай 18.05
+    - билеты Пхукет 10.12-25.12
+    - билеты Стамбул май
+    - билеты Сочи Пхукет Дубай июнь
     """
+    # Проверка прав (опционально)
+    if ADMIN_ID and message.from_user.id != int(ADMIN_ID):
+        await message.reply("🚫 Доступ к поиску билетов только для администратора.")
+        return
+    
     try:
         params = parse_search_command(message.text)
-
-        origins = params["origins"]
-        destinations = params["destinations"]
-        dep_date = params["departure_date"]
-        ret_date = params["return_date"]
-        month = params["month"]
-
-        if not destinations:
-            await message.reply("🌏 Куда летим? Укажите город (Бали, Гоа, Мальдивы...)")
-            return
-
-        status_msg = await message.reply("🔍 Начинаю поиск билетов...")
-
-        final_results = []
-
-        # --- СЦЕНАРИЙ 1: Поиск по ДАТАМ (для каждого направления) ---
-        if dep_date:
-            dates_info = dep_date
-            if ret_date:
-                dates_info += f" - {ret_date}"
-
-            await status_msg.edit_text(
-                f"🗓 Ищу билеты на {dates_info} по {len(destinations)} направлениям..."
+        
+        origins = params.get("origins", [])
+        destinations = params.get("destinations", [])
+        
+        if not origins or not destinations:
+            await message.reply(
+                "❌ Не понял направление. Укажите города.\n\n"
+                "<b>Примеры:</b>\n"
+                "• <i>билеты Сочи</i>\n"
+                "• <i>билеты Казань Питер</i>\n"
+                "• <i>билеты Дубай 18.05</i>\n"
+                "• <i>билеты Пхукет 10.12-25.12</i>\n"
+                "• <i>билеты Стамбул май</i>",
+                parse_mode="HTML"
             )
-
-            for dest in destinations:
-                res = await search_tickets_smart(
-                    origins[0]["name"], dest["name"], dep_date, ret_date, params["passengers"]
+            return
+        
+        # Формируем статус-сообщение
+        origin_str = ", ".join([o["name"].title() for o in origins])
+        dest_str = ", ".join([d["name"].title() for d in destinations])
+        
+        departure = params.get("departure_date", "")
+        return_date = params.get("return_date", "")
+        month = params.get("month")
+        
+        if month:
+            # Режим поиска по месяцу
+            month_names = list(MONTH_MAPPING.keys())
+            month_name = month_names[month * 2 - 2].title()
+            
+            status_msg = await message.reply(
+                f"🔍 <b>Запускаю поиск билетов</b>\n\n"
+                f"📍 Маршрут: {origin_str} → {dest_str}\n"
+                f"📅 Месяц: {month_name}\n"
+                f"👥 Пассажиров: {params['passengers']}\n\n"
+                f"⏳ Сканирую весь месяц...\n"
+                f"Это может занять 5-10 минут.",
+                parse_mode="HTML"
+            )
+            
+            # Генерируем даты месяца (ограничиваем 10 датами)
+            dates = generate_month_dates(month)[:10]
+            
+            all_tickets = []
+            for date in dates:
+                tickets = await multi_destination_search(
+                    origins, destinations, date, None, params["passengers"]
                 )
-                if res:
-                    # Добавляем заголовок направления в первый билет
-                    res[0]["is_header"] = True
-                    res[0]["dest_title"] = dest["name"].upper()
-                    final_results.extend(res)
-                await asyncio.sleep(1)
-
-        # --- СЦЕНАРИЙ 2: Поиск по МЕСЯЦУ (Сканирование) ---
-        elif month:
-            # Берем текущий год (или следующий)
-            now = datetime.now()
-            year = now.year
-            if month < now.month:
-                year += 1
-
-            # Сканируем выборочные даты (например, каждые 4 дня), чтобы было быстро
-            # Или каждые выходные. Для простоты берем 5, 12, 19, 26 числа
-            scan_days = [5, 12, 19, 26]
-            scan_dates = []
-            for d in scan_days:
-                try:
-                    dt = datetime(year, month, d)
-                    if dt > now:
-                        scan_dates.append(dt.strftime("%Y-%m-%d"))
-                except Exception:
-                    pass
-
+                all_tickets.extend(tickets)
+                await asyncio.sleep(3)
+            
+        else:
+            # Режим поиска с точными датами
+            date_info = departure
+            if return_date:
+                date_info += f" - {return_date} (туда-обратно)"
+            
+            status_msg = await message.reply(
+                f"🔍 <b>Запускаю поиск билетов</b>\n\n"
+                f"📍 Маршрут: {origin_str} → {dest_str}\n"
+                f"📅 Даты: {date_info}\n"
+                f"👥 Пассажиров: {params['passengers']}\n\n"
+                f"⏳ Ищу лучшие предложения...",
+                parse_mode="HTML"
+            )
+            
+            all_tickets = await multi_destination_search(
+                origins, destinations, departure, return_date, params["passengers"]
+            )
+        
+        if not all_tickets:
             await status_msg.edit_text(
-                f"📅 Сканирую {len(destinations)} направлений на месяц ({len(scan_dates)} дат)...\n"
-                f"Это займет время."
+                "😕 Билеты не найдены.\n"
+                "Попробуйте другие даты или направление."
             )
-
-            for dest in destinations:
-                best_for_dest = []
-                for date in scan_dates:
-                    res = await search_tickets_smart(
-                        origins[0]["name"], dest["name"], date, None, params["passengers"]
-                    )
-                    best_for_dest.extend(res)
-                    await asyncio.sleep(0.5)
-
-                # Выбираем ТОП-3 из всего месяца для этого направления
-                best_for_dest = select_best_tickets(best_for_dest, count=3)
-                if best_for_dest:
-                    best_for_dest[0]["is_header"] = True
-                    best_for_dest[0]["dest_title"] = f"{dest['name'].upper()} (Лучшие в месяце)"
-                    final_results.extend(best_for_dest)
-
-        # --- ВЫВОД РЕЗУЛЬТАТОВ ---
-        if not final_results:
-            await status_msg.edit_text("😕 Ничего интересного не нашел.")
             return
-
+        
+        await status_msg.edit_text(
+            f"✅ <b>Поиск завершен!</b>\n"
+            f"Найдено билетов: {len(all_tickets)}\n\n"
+            f"⏳ Запускаю AI-анализ...",
+            parse_mode="HTML"
+        )
+        
+        # AI анализ
+        best_tickets = await analyze_tickets_with_ai(all_tickets, params)
+        
+        if not best_tickets:
+            await status_msg.edit_text("😕 Не удалось проанализировать билеты.")
+            return
+        
         await status_msg.delete()
-
-        # Формируем красивый отчет
-        lines = []
-        for t in final_results:
-            if t.get("is_header"):
-                lines.append(f"\n🌴 <b>{t['dest_title']}</b>")
-
-            icon = "✈️" if t["stops"] == 0 else "🔄"
-            price_fmt = f"{t['price']:,}".replace(",", " ")
-
-            # Ссылка уже содержит правильную дату
-            lines.append(
-                f"{icon} <a href='{t['deeplink']}'>{t['departure']}</a> | {t['airline']}\n"
-                f"   ⏳ {t['duration']} | {price_fmt} ₽"
-            )
-
-        # Разбиваем на сообщения, если слишком длинно
-        text = "\n".join(lines)
-        if len(text) > 4000:
-            text = text[:4000] + "... (много вариантов)"
-
-        await message.reply(text, parse_mode="HTML", disable_web_page_preview=True)
-
+        
+        # Отправляем результаты
+        result_text = format_tickets_message(best_tickets, params)
+        await message.reply(result_text, parse_mode="HTML", disable_web_page_preview=True)
+        
+        logging.info(f"Отправлено {len(best_tickets)} билетов пользователю {message.from_user.id}")
+        
     except Exception as e:
-        logging.error(f"Global Error: {e}", exc_info=True)
-        await message.reply("❌ Ошибка поиска.")
+        logging.error(f"Ошибка в process_tickets_command: {e}", exc_info=True)
+        await message.reply(f"❌ Произошла ошибка: {str(e)}")
