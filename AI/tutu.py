@@ -1,7 +1,6 @@
 # tutu.py
 
 import asyncio
-import json
 import logging
 import re
 import uuid
@@ -12,17 +11,6 @@ from aiogram import types
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
-
-
-def get_date_range_neighbors(date_str: Optional[str]) -> List[Optional[str]]:
-    if not date_str:
-        return [None]
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    return [
-        (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
-        date_str,
-        (dt + timedelta(days=1)).strftime("%Y-%m-%d")
-    ]
 
 # =============================================================================
 # КОНСТАНТЫ
@@ -323,8 +311,7 @@ async def fetch_offers(
     destination_id: int,
     departure_date: str,
     return_date: Optional[str] = None,
-    passengers: int = 1,
-    client: Optional[httpx.AsyncClient] = None
+    passengers: int = 1
 ) -> List[Dict]:
     """
     Получает предложения с Tutu API.
@@ -386,98 +373,92 @@ async def fetch_offers(
         
         start_time = datetime.now()
         
-        owned_client = None
-        if client is None:
-            owned_client = httpx.AsyncClient(timeout=30.0, http2=True)
-            client = owned_client
-        try:
-            response = await client.post(
-                TUTU_API_URL,
-                headers=headers,
-                json=payload
-            )
-            
-            elapsed = (datetime.now() - start_time).total_seconds()
-            
-            logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
-            
-            if response.status_code != 200:
-                logging.error(f"Ошибка API: {response.status_code}")
-                return []
-            
-            data = response.json()
-            
-            logging.debug(f"Тип ответа: {type(data)}")
-            
-            # API возвращает список с одним элементом-словарем
-            if isinstance(data, list) and len(data) > 0:
-                logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
-                data = data[0]
-            
-            if not isinstance(data, dict):
-                logging.error(f"Неожиданный тип ответа: {type(data)}")
-                return []
-            
-            logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
-            
-            # Офферы находятся в offers.actual
-            offers_dict = data.get("offers", {})
-            logging.debug(f"Тип offers: {type(offers_dict)}")
-            
-            if isinstance(offers_dict, dict):
-                logging.debug(f"Ключи offers: {list(offers_dict.keys())}")
+        async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+            try:
+                response = await client.post(
+                    TUTU_API_URL,
+                    headers=headers,
+                    json=payload
+                )
                 
-                actual = offers_dict.get("actual", {})
-                logging.debug(f"Тип actual: {type(actual)}")
+                elapsed = (datetime.now() - start_time).total_seconds()
                 
-                if isinstance(actual, dict):
-                    logging.info(f"Количество офферов в actual: {len(actual)}")
-                    
-                    if not actual:
-                        # Проверяем, может быть офферы в других полях
-                        future = offers_dict.get("future")
-                        past = offers_dict.get("past")
-                        logging.warning(f"actual пустой. future: {type(future)}, past: {type(past)}")
-                        
-                        # Выводим warnings если есть
-                        warnings = data.get("warnings", [])
-                        if warnings:
-                            logging.warning(f"API warnings: {warnings}")
-                        
-                        return []
-                    
-                    offers = actual
-                else:
-                    logging.error(f"actual не является словарем: {type(actual)}")
+                logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
+                
+                if response.status_code != 200:
+                    logging.error(f"Ошибка API: {response.status_code}")
                     return []
-            else:
-                logging.error(f"Неожиданная структура offers: {type(offers_dict)}")
+                
+                data = response.json()
+                
+                logging.debug(f"Тип ответа: {type(data)}")
+                
+                # API возвращает список с одним элементом-словарем
+                if isinstance(data, list) and len(data) > 0:
+                    logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
+                    data = data[0]
+                
+                if not isinstance(data, dict):
+                    logging.error(f"Неожиданный тип ответа: {type(data)}")
+                    return []
+                
+                logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
+                
+                # Офферы находятся в offers.actual
+                offers_dict = data.get("offers", {})
+                logging.debug(f"Тип offers: {type(offers_dict)}")
+                
+                if isinstance(offers_dict, dict):
+                    logging.debug(f"Ключи offers: {list(offers_dict.keys())}")
+                    
+                    actual = offers_dict.get("actual", {})
+                    logging.debug(f"Тип actual: {type(actual)}")
+                    
+                    if isinstance(actual, dict):
+                        logging.info(f"Количество офферов в actual: {len(actual)}")
+                        
+                        if not actual:
+                            # Проверяем, может быть офферы в других полях
+                            future = offers_dict.get("future")
+                            past = offers_dict.get("past")
+                            logging.warning(f"actual пустой. future: {type(future)}, past: {type(past)}")
+                            
+                            # Выводим warnings если есть
+                            warnings = data.get("warnings", [])
+                            if warnings:
+                                logging.warning(f"API warnings: {warnings}")
+                            
+                            return []
+                        
+                        offers = actual
+                    else:
+                        logging.error(f"actual не является словарем: {type(actual)}")
+                        return []
+                else:
+                    logging.error(f"Неожиданная структура offers: {type(offers_dict)}")
+                    return []
+                
+                # offers.actual - это словарь, где ключи - ID офферов
+                # Преобразуем в список
+                offers_list = []
+                if isinstance(offers, dict):
+                    dictionary = data.get("dictionary", {})
+                    for offer_id, offer_data in offers.items():
+                        # Добавляем ID к данным оффера
+                        offer_data["id"] = offer_id
+                        # Добавляем ссылку на dictionary для парсинга
+                        offer_data["_dictionary"] = dictionary
+                        offers_list.append(offer_data)
+                
+                logging.info(f"Получено {len(offers_list)} офферов")
+                return offers_list
+                
+            except httpx.TimeoutException:
+                logging.error("Таймаут запроса (10s)")
                 return []
-            
-            # offers.actual - это словарь, где ключи - ID офферов
-            # Преобразуем в список
-            offers_list = []
-            if isinstance(offers, dict):
-                dictionary = data.get("dictionary", {})
-                for offer_id, offer_data in offers.items():
-                    # Добавляем ID к данным оффера
-                    offer_data["id"] = offer_id
-                    # Добавляем ссылку на dictionary для парсинга
-                    offer_data["_dictionary"] = dictionary
-                    offers_list.append(offer_data)
-            
-            logging.info(f"Получено {len(offers_list)} офферов")
-            return offers_list
-            
-        except httpx.TimeoutException:
-            logging.error("Таймаут запроса (30s)")
-            return []
-        except httpx.RequestError as e:
-            logging.error(f"Ошибка сети: {e}")
-            return []
-        finally:
-            if owned_client:
-                await owned_client.aclose()
+            except httpx.RequestError as e:
+                logging.error(f"Ошибка сети: {e}")
+                return []
                 
     except Exception as e:
         logging.error(f"Ошибка в fetch_offers: {e}")
@@ -499,7 +480,6 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             return None
 
         result = {
-            "id": offer.get("id"),
             "price": 0, "currency": "RUB", "airline": "Неизвестно",
             "departure": "", "arrival": "", "duration": "",
             "stops": 0, "baggage": False, "deeplink": "", "trips": []
@@ -672,8 +652,7 @@ async def search_tickets(
     destination_name: str,
     departure_date: str,
     return_date: Optional[str] = None,
-    passengers: int = 1,
-    client: Optional[httpx.AsyncClient] = None
+    passengers: int = 1
 ) -> List[Dict]:
     """
     Полный цикл поиска. 
@@ -686,14 +665,7 @@ async def search_tickets(
         return []
     
     # 1. Запрос к API (тут порядок не важен, главное правильные ID)
-    offers = await fetch_offers(
-        origin_id,
-        destination_id,
-        departure_date,
-        return_date,
-        passengers,
-        client=client
-    )
+    offers = await fetch_offers(origin_id, destination_id, departure_date, return_date, passengers)
     
     if not offers:
         return []
@@ -752,27 +724,25 @@ async def multi_destination_search(
     """
     all_tickets = []
     
-    async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
-        for origin in origins:
-            for destination in destinations:
-                tickets = await search_tickets(
-                    origin["name"],
-                    destination["name"],
-                    departure_date,
-                    return_date,
-                    passengers,
-                    client=client
-                )
-                
-                # Добавляем метаданные
-                for ticket in tickets:
-                    ticket["origin_name"] = origin["name"]
-                    ticket["destination_name"] = destination["name"]
-                
-                all_tickets.extend(tickets)
-                
-                # Задержка между запросами
-                await asyncio.sleep(2)
+    for origin in origins:
+        for destination in destinations:
+            tickets = await search_tickets(
+                origin["name"],
+                destination["name"],
+                departure_date,
+                return_date,
+                passengers
+            )
+            
+            # Добавляем метаданные
+            for ticket in tickets:
+                ticket["origin_name"] = origin["name"]
+                ticket["destination_name"] = destination["name"]
+            
+            all_tickets.extend(tickets)
+            
+            # Задержка между запросами
+            await asyncio.sleep(2)
     
     return all_tickets
 
@@ -783,120 +753,243 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     
     Использует Groq для генерации комментариев к каждому билету.
     """
-    if not tickets:
+    if not tickets or len(tickets) == 0:
         return []
-
-    # Сортируем и берем топ-10 основных и топ-10 альтернатив для анализа
-    mains = sorted([t for t in tickets if not t.get("is_alternative")], key=lambda x: x["price"])[:10]
-    alts = sorted([t for t in tickets if t.get("is_alternative")], key=lambda x: x["price"])[:10]
-    subset = mains + alts
-
-    # Упрощаем данные для AI, чтобы JSON был компактным и валидным
-    simplify = []
-    for t in subset:
-        # Генерируем временный ID, если реального нет
-        ticket_id = t.get("id") or str(uuid.uuid4())
-        # Сохраняем ID в билет, если его не было, чтобы потом найти его при разборе ответа AI
-        if "id" not in t:
-            t["id"] = ticket_id
-
-        simplify.append({
-            "id": ticket_id,
-            "price": t.get("price", 0),
-            "is_alt": t.get("is_alternative", False),
-            "date": f"{t.get('search_departure', '')} - {t.get('search_return', '')}",
-            "airline": t.get("airline", "Unknown")
+    
+    # Берем топ-20 для анализа
+    candidates = tickets[:20]
+    
+    # Статистика
+    prices = [t["price"] for t in candidates]
+    
+    avg_price = int(sum(prices) / len(prices))
+    min_price = min(prices)
+    max_price = max(prices)
+    
+    # Определяем направления
+    origins = params.get("origins", [])
+    destinations = params.get("destinations", [])
+    
+    origin_str = origins[0]["name"].title() if origins else "неизвестно"
+    dest_str = ", ".join([d["name"].title() for d in destinations]) if destinations else "неизвестно"
+    
+    # Даты
+    departure = params.get("departure_date", "")
+    return_date = params.get("return_date", "")
+    
+    date_info = f"{departure}"
+    if return_date:
+        date_info += f" - {return_date} (туда-обратно)"
+    
+    # Формируем упрощенный список для AI
+    candidates_simplified = []
+    for i, ticket in enumerate(candidates):
+        candidates_simplified.append({
+            "index": i,
+            "price": ticket["price"],
+            "airline": ticket["airline"],
+            "duration": ticket["duration"],
+            "stops": ticket["stops"],
+            "baggage": ticket["baggage"]
         })
-
+    
     prompt = f"""
-    Ты эксперт по авиабилетам. Выбери из списка 5-7 лучших предложений.
-    ОБЯЗАТЕЛЬНО:
-    1. Включи 2-3 лучших билета на ОСНОВНЫЕ даты (is_alt: false).
-    2. Включи лучшие АЛЬТЕРНАТИВЫ (is_alt: true), если они дешевле или удобнее.
-    3. Для каждого выбранного билета напиши 'scenario' (почему это выгодно).
-    
-    Ответ дай ТОЛЬКО в формате JSON массива:
-    [ {{"id": \"...\", \"scenario\": \"...\"}}, ... ]
-    
-    Данные: {json.dumps(simplify, ensure_ascii=False)}
-    """
+Ты - профессиональный эксперт по авиабилетам. Проведи анализ и выбери ТОП-7 билетов.
+
+КОНТЕКСТ ПОИСКА:
+• Маршрут: {origin_str} → {dest_str}
+• Даты: {date_info}
+• Пассажиров: {params.get('passengers', 1)}
+
+РЫНОЧНАЯ СТАТИСТИКА:
+• Минимальная цена: {min_price:,} ₽
+• Максимальная цена: {max_price:,} ₽
+• Средняя цена: {avg_price:,} ₽
+
+КАНДИДАТЫ (топ-20 билетов):
+{candidates_simplified}
+
+ЗАДАЧА:
+Выбери ТОП-7 билетов по разным сценариям:
+1. Минимальный бюджет (но адекватные условия)
+2. Лучший баланс цена/время
+3. Прямой рейс (если есть)
+4. С багажом
+5. Премиум авиакомпания
+6-7. Дополнительные интересные варианты
+
+КРИТЕРИИ:
+• Пересадки: 0 - отлично, 1 - нормально, 2+ - плохо
+• Авиакомпании: Turkish, Emirates, Qatar - премиум; Аэрофлот, S7 - надежно
+• Багаж: важно для многих
+• Все цены в РУБЛЯХ
+
+ФОРМАТ ОТВЕТА:
+Верни ТОЛЬКО валидный JSON массив из 7 объектов:
+[
+  {{
+    "index": 0,
+    "ai_score": 9,
+    "scenario": "Минимальный бюджет",
+    "reason": "S7 Airlines, 15 200 ₽. Прямой рейс 3ч 20м. Отличный вариант для налегке."
+  }},
+  ...
+]
+
+Поля:
+• index - номер в массиве candidates (0-19)
+• ai_score - оценка 1-10
+• scenario - сценарий использования (2-4 слова)
+• reason - комментарий (15-40 слов), конкретные факты, эмодзи приветствуются
+
+ВАЖНО: reason должен быть информативным с цифрами и фактами!
+"""
 
     try:
-        response = await groq_ai.generate_text(prompt)
-        # Улучшенный парсинг: ищем первый '[' и последний ']'
-        match = re.search(r'\[.*\]', response, re.DOTALL)
-        if match:
-            suggestions = json.loads(match.group(0))
-            # Сопоставляем id из AI с полными данными билетов
-            result = []
-            for sug in suggestions:
-                orig = next((t for t in subset if t["id"] == sug["id"]), None)
-                if orig:
-                    orig["scenario"] = sug.get("scenario", "")
-                    result.append(orig)
-            return result
+        if groq_ai:
+            response = groq_ai.generate_text(prompt)
+            
+            # Извлекаем JSON из ответа
+            json_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if json_match:
+                import json
+                ai_results = json.loads(json_match.group(0))
+                
+                final_tickets = []
+                for item in ai_results:
+                    idx = item.get('index')
+                    if idx is not None and isinstance(idx, int) and 0 <= idx < len(candidates):
+                        ticket = candidates[idx].copy()
+                        ticket['ai_score'] = item.get('ai_score', 0)
+                        ticket['scenario'] = item.get('scenario', 'Выбор AI')
+                        ticket['ai_reason'] = item.get('reason', 'Рекомендация AI')
+                        final_tickets.append(ticket)
+                
+                final_tickets.sort(key=lambda x: x.get('ai_score', 0), reverse=True)
+                
+                if final_tickets:
+                    logging.info(f"AI вернул {len(final_tickets)} рекомендаций")
+                    return final_tickets
+
     except Exception as e:
-        logging.error(f"AI parsing error: {e}")
-    return []
+        logging.error(f"Ошибка AI анализа: {e}")
+    
+    # Фолбек без AI
+    logging.info("Использую фолбек (без AI)")
+    
+    # Простая оценка по value score
+    for ticket in candidates:
+        # Базовая оценка
+        score = 10000 - ticket["price"]
+        
+        # Бонусы
+        if ticket["stops"] == 0:
+            score += 5000
+        elif ticket["stops"] == 1:
+            score += 2000
+        
+        if ticket["baggage"]:
+            score += 1000
+        
+        ticket['value_score'] = score
+    
+    candidates.sort(key=lambda x: x.get('value_score', 0), reverse=True)
+    
+    return candidates[:7]
 
 
 def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
+    """Форматирует список билетов в HTML для Telegram."""
     if not tickets:
         return "😢 Билеты не найдены"
-
-    main_tickets = [t for t in tickets if not t.get("is_alternative")]
-
-    # Находим самый дешевый основной билет для сравнения
-    min_main_price = min([t["price"] for t in main_tickets]) if main_tickets else float("inf")
-
-    # Берем альтернативы, которые дешевле основного хотя бы на 500р
-    alt_tickets = [
-        t for t in tickets
-        if t.get("is_alternative") and t["price"] < (min_main_price - 500)
-    ]
-
-    # Если AI упал и мы в фолбеке, отсортируем всё по цене
-    if not any(t.get("scenario") for t in tickets):
-        main_tickets.sort(key=lambda x: x["price"])
-        alt_tickets.sort(key=lambda x: x["price"])
-
-    def render_t(t: Dict, idx: int) -> str:
-        price = f"{t['price']:,}".replace(",", " ")
-        link = t.get("deeplink", "#")
-        scen = f"<i>💡 {t['scenario']}</i>\n" if t.get("scenario") else ""
-
-        date_str = ""
-        if t.get("is_alternative"):
-            d = t.get("search_departure", "")[8:10] + "." + t.get("search_departure", "")[5:7]
-            r = t.get("search_return", "")
-            r_str = f" - {r[8:10]}.{r[5:7]}" if r else ""
-            date_str = f"📅 <b>{d}{r_str}</b>\n"
-
-        return (f"<b>{idx}. <a href='{link}'>{t.get('airline', 'Рейс')}</a></b>\n"
-                f"{date_str}{scen}💰 <b>{price} ₽</b>\n")
-
-    res = [f"✈️ <b>{params['origins'][0]['name'].title()} → {params['destinations'][0]['name'].title()}</b>\n"]
-
-    if main_tickets:
-        res.append("📍 <b>Ваши даты:</b>")
-        for i, t in enumerate(main_tickets[:3], 1):
-            res.append(render_t(t, i))
+    
+    # Заголовок
+    origins = params.get("origins", [])
+    destinations = params.get("destinations", [])
+    
+    origin_str = origins[0]["name"].title() if origins else "—"
+    dest_str = ", ".join([d["name"].title() for d in destinations]) if destinations else "—"
+    
+    departure = params.get("departure_date", "")
+    return_date = params.get("return_date", "")
+    
+    header = f"✈️ <b>Авиабилеты: {origin_str} → {dest_str}</b>\n"
+    
+    if return_date:
+        header += f"📅 {departure} - {return_date} (туда-обратно)\n"
     else:
-        res.append("❌ <b>На ваши даты прямых билетов не найдено</b>\n")
+        header += f"📅 {departure}\n"
+    
+    header += f"👥 {params.get('passengers', 1)} пасс.\n\n"
+    
+    lines = [header]
+    
+    for i, ticket in enumerate(tickets, 1):
+        link = ticket.get("deeplink", "#")
+        airline = ticket.get("airline", "Неизвестно")
+        
+        lines.append(f"<b>{i}. <a href='{link}'>{airline}</a></b>")
+        
+        if ticket.get("scenario"):
+            lines.append(f"🎯 <i>{ticket['scenario']}</i>")
+        
+        def format_time_block(block: Dict) -> List[str]:
+            block_lines = []
+            departure_time = block.get("departure", "")
+            arrival_time = block.get("arrival", "")
+            duration = block.get("duration", "")
 
-    if alt_tickets:
-        res.append("\n🔥 <b>Выгодные альтернативы:</b>")
-        # Группируем альтернативы по датам, чтобы не спамить одинаковыми
-        seen_dates = set()
-        count = 1
-        for t in alt_tickets:
-            d_key = f"{t.get('search_departure')}_{t.get('search_return')}"
-            if d_key not in seen_dates and count <= 3:
-                res.append(render_t(t, count))
-                seen_dates.add(d_key)
-                count += 1
+            if departure_time and arrival_time:
+                def format_datetime(dt_str: str) -> str:
+                    if "T" in dt_str:
+                        date_part, time_part = dt_str.split("T", 1)
+                        date_short = date_part[5:10].replace("-", ".") if len(date_part) >= 10 else date_part
+                        time_short = time_part[:5]
+                        return f"{date_short} {time_short}"
+                    return dt_str
 
-    return "\n".join(res)
+                dep_short = format_datetime(departure_time)
+                arr_short = format_datetime(arrival_time)
+                if dep_short and arr_short:
+                    block_lines.append(f"🕒 {dep_short} → {arr_short} ({duration})")
+
+            stops = block.get("stops", 0)
+            if stops == 0:
+                block_lines.append("✈️ Прямой рейс")
+            else:
+                block_lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
+
+            if block.get("baggage"):
+                block_lines.append("🧳 Багаж включен")
+            else:
+                block_lines.append("🧳 Без багажа")
+
+            return block_lines
+
+        trips = ticket.get("trips") or []
+        if len(trips) >= 2:
+            labels = ["➡️ Туда", "↩️ Обратно"]
+            for idx, trip in enumerate(trips):
+                label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
+                lines.append(f"<b>{label}</b>")
+                lines.extend(format_time_block(trip))
+                if idx < len(trips) - 1:
+                    lines.append("")
+        else:
+            lines.extend(format_time_block(ticket))
+        
+        # AI комментарий
+        if ticket.get("ai_reason"):
+            lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
+        
+        # Цена
+        price = ticket.get("price", 0)
+        currency = ticket.get("currency", "RUB")
+        symbol = "₽" if currency == "RUB" else currency
+        
+        lines.append(f"💰 <b>{price:,} {symbol}</b>\n")
+    
+    return "\n".join(lines)
 
 
 async def process_tickets_command(message: types.Message):
@@ -970,55 +1063,23 @@ async def process_tickets_command(message: types.Message):
                 await asyncio.sleep(3)
             
         else:
-            # Подготовка списка комбинаций
-            dep_variants = get_date_range_neighbors(departure)
-            ret_variants = get_date_range_neighbors(return_date)
-            
-            combinations = []
-            for d in dep_variants:
-                for r in ret_variants:
-                    combinations.append((d, r))
-            
-            total_steps = len(combinations)
-            all_tickets = []
+            # Режим поиска с точными датами
+            date_info = departure
+            if return_date:
+                date_info += f" - {return_date} (туда-обратно)"
             
             status_msg = await message.reply(
-                f"🔍 <b>Запускаю глубокий поиск</b>\n"
-                f"📍 {origin_str} → {dest_str}\n"
-                f"📅 Дата: {departure} {'- ' + return_date if return_date else ''}\n\n"
-                f"⌛ Подбираю варианты: [░░░░░░░░░░] 0/{total_steps}",
+                f"🔍 <b>Запускаю поиск билетов</b>\n\n"
+                f"📍 Маршрут: {origin_str} → {dest_str}\n"
+                f"📅 Даты: {date_info}\n"
+                f"👥 Пассажиров: {params['passengers']}\n\n"
+                f"⏳ Ищу лучшие предложения...",
                 parse_mode="HTML"
             )
-
-            for i, (dep_v, ret_v) in enumerate(combinations, 1):
-                # Обновляем прогресс-бар
-                progress = int((i / total_steps) * 10)
-                bar = "▓" * progress + "░" * (10 - progress)
-                await status_msg.edit_text(
-                    f"🔍 <b>Глубокий поиск</b> (±1 день)\n"
-                    f"📍 {origin_str} → {dest_str}\n"
-                    f"📅 Проверка: {dep_v} {f' - {ret_v}' if ret_v else ''}\n\n"
-                    f"⌛ [{bar}] {i}/{total_steps}",
-                    parse_mode="HTML"
-                )
-
-                is_target = (dep_v == departure and (ret_v == return_date or ret_v is None))
-                
-                tickets = await multi_destination_search(
-                    origins, destinations, dep_v, ret_v, params["passengers"]
-                )
-                
-                for t in tickets:
-                    t["is_alternative"] = not is_target
-                    t["search_departure"] = dep_v
-                    t["search_return"] = ret_v
-                
-                all_tickets.extend(tickets)
-                if i < total_steps:
-                    await asyncio.sleep(0.5) # Небольшая пауза
-
-            # После сбора всех all_tickets
-            all_tickets.sort(key=lambda x: x["price"])
+            
+            all_tickets = await multi_destination_search(
+                origins, destinations, departure, return_date, params["passengers"]
+            )
         
         if not all_tickets:
             await status_msg.edit_text(
@@ -1036,24 +1097,6 @@ async def process_tickets_command(message: types.Message):
         
         # AI анализ
         best_tickets = await analyze_tickets_with_ai(all_tickets, params)
-
-        # Если AI ничего не вернул (ошибка), делаем ручной фолбек
-        if not best_tickets and not month:
-            logging.info("Использую ручной фолбек")
-            # Берем 3 лучших основных и 3 лучших альтернативных
-            mains = [t for t in all_tickets if not t.get("is_alternative")][:3]
-            alts = [t for t in all_tickets if t.get("is_alternative")][:10]
-            best_tickets = mains + alts
-        
-        # Страховка: если AI почему-то не оставил билеты на основные даты,
-        # добавим один самый дешевый из "основных" вручную
-        has_main = any(not t.get("is_alternative") for t in best_tickets)
-        if not has_main:
-            main_only = [t for t in all_tickets if not t.get("is_alternative")]
-            if main_only:
-                cheapest_main = min(main_only, key=lambda x: x["price"])
-                cheapest_main["scenario"] = "Оптимальный вариант на ваши даты"
-                best_tickets.insert(0, cheapest_main)
         
         if not best_tickets:
             await status_msg.edit_text("😕 Не удалось проанализировать билеты.")
