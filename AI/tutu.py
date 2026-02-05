@@ -670,8 +670,37 @@ async def search_tickets(
             ticket["deeplink"] = search_link
             tickets.append(ticket)
 
-    tickets.sort(key=lambda x: x["price"])
-    return tickets[:7]
+    sorted_tickets = strict_priority_sort(tickets)
+    return sorted_tickets[:7]
+
+
+def parse_duration_minutes(duration_str: str) -> int:
+    """Переводит строку длительности (напр. '12ч 30м') в минуты для сортировки."""
+    try:
+        parts = duration_str.split()
+        total_minutes = 0
+        for part in parts:
+            if 'ч' in part:
+                total_minutes += int(part.replace('ч', '')) * 60
+            elif 'м' in part:
+                total_minutes += int(part.replace('м', ''))
+        return total_minutes
+    except Exception:
+        return 999999
+
+
+def strict_priority_sort(tickets: List[Dict]) -> List[Dict]:
+    """
+    Сортирует билеты строго по приоритетам:
+    1. Самая низкая цена (по возрастанию)
+    2. Минимальное кол-во пересадок (по возрастанию)
+    3. Минимальное время в пути (по возрастанию)
+    """
+    return sorted(tickets, key=lambda x: (
+        x["price"],
+        x["stops"],
+        parse_duration_minutes(x["duration"])
+    ))
 
 
 async def multi_destination_search(
@@ -1058,3 +1087,59 @@ async def process_tickets_command(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка в process_tickets_command: {e}", exc_info=True)
         await message.reply(f"❌ Произошла ошибка: {str(e)}")
+
+
+async def main():
+    print("🚀 Запуск поиска билетов...\n")
+
+    # --- ЗАПРОС 1: Фукуок 16.05.26 (в одну сторону) ---
+    query1 = "билеты фукуок 16.05.26"
+    print(f"1️⃣ Выполняю запрос: {query1}")
+    
+    # Парсим команду
+    params1 = parse_search_command(query1)
+    
+    # Ищем билеты
+    tickets1 = await multi_destination_search(
+        params1["origins"], 
+        params1["destinations"], 
+        params1["departure_date"], 
+        params1["return_date"], 
+        params1["passengers"]
+    )
+    
+    # Применяем строгую сортировку
+    sorted_tickets1 = strict_priority_sort(tickets1)
+    
+    print(f"   Найдено {len(sorted_tickets1)} билетов.")
+    if sorted_tickets1:
+        best = sorted_tickets1[0]
+        print(f"   🏆 Лучший билет: {best['airline']}, {best['price']}₽, {best['stops']} перес., {best['duration']}")
+    print("-" * 50)
+
+    # --- ЗАПРОС 2: Фукуок 16.05.26-24.05.26 (туда-обратно) ---
+    query2 = "билеты фукуок 16.05.26-24.05.26"
+    print(f"2️⃣ Выполняю запрос: {query2}")
+    
+    params2 = parse_search_command(query2)
+    
+    tickets2 = await multi_destination_search(
+        params2["origins"], 
+        params2["destinations"], 
+        params2["departure_date"], 
+        params2["return_date"], 
+        params2["passengers"]
+    )
+    
+    sorted_tickets2 = strict_priority_sort(tickets2)
+    
+    print(f"   Найдено {len(sorted_tickets2)} билетов.")
+    if sorted_tickets2:
+        best = sorted_tickets2[0]
+        print(f"   🏆 Лучший билет: {best['airline']}, {best['price']}₽, {best['stops']} перес., {best['duration']}")
+    print("=" * 50)
+
+
+if __name__ == "__main__":
+    # Запускаем асинхронный цикл
+    asyncio.run(main())
