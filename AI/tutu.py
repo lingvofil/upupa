@@ -782,98 +782,55 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     
     Использует Groq для генерации комментариев к каждому билету.
     """
-    if not tickets or len(tickets) == 0:
+    if not tickets:
         return []
 
-    # Берем топ-20 для фолбека
-    candidates = tickets[:20]
-    
-    # Группируем для контекста
-    main_count = len([t for t in tickets if not t.get("is_alternative")])
-    alt_count = len([t for t in tickets if t.get("is_alternative")])
-    
-    # Добавляем в описание каждого билета пометку для AI
-    tickets_context = []
-    for t in tickets:
-        type_str = "ОСНОВНАЯ ДАТА (ПРИОРИТЕТ)" if not t.get("is_alternative") else "АЛЬТЕРНАТИВА"
-        tickets_context.append({
-            "type": type_str,
+    # Сортируем и берем топ-10 основных и топ-10 альтернатив для анализа
+    mains = sorted([t for t in tickets if not t.get("is_alternative")], key=lambda x: x["price"])[:10]
+    alts = sorted([t for t in tickets if t.get("is_alternative")], key=lambda x: x["price"])[:10]
+    subset = mains + alts
+
+    # Упрощаем данные для AI, чтобы JSON был компактным и валидным
+    simplify = []
+    for t in subset:
+        simplify.append({
+            "id": t["id"],
+            "price": t["price"],
+            "is_alt": t.get("is_alternative"),
             "date": f"{t.get('search_departure')} - {t.get('search_return')}",
-            "airline": t.get("airline"),
-            "price": t.get("price"),
-            "duration": t.get("trips", [{}])[0].get("duration"),
-            "id": t.get("id")
+            "airline": t.get("airline")
         })
 
     prompt = f"""
-    Ты — эксперт по путешествиям. Я нашел {len(tickets)} билетов по маршруту {params['origins'][0]['name']} -> {params['destinations'][0]['name']}.
-    Основные даты: {main_count}, альтернативы: {alt_count}.
+    Ты эксперт по авиабилетам. Выбери из списка 5-7 лучших предложений.
+    ОБЯЗАТЕЛЬНО:
+    1. Включи 2-3 лучших билета на ОСНОВНЫЕ даты (is_alt: false).
+    2. Включи лучшие АЛЬТЕРНАТИВЫ (is_alt: true), если они дешевле или удобнее.
+    3. Для каждого выбранного билета напиши 'scenario' (почему это выгодно).
     
-    ВАЖНОЕ ПРАВИЛО:
-    1. Ты ОБЯЗАН включить в результат как минимум 2-3 лучших билета с типом "ОСНОВНАЯ ДАТА", даже если они дороже альтернатив.
-    2. Добавь 2-3 самых выгодных билета с типом "АЛЬТЕРНАТИВА", если они существенно дешевле.
-    3. Для каждого билета напиши короткий "scenario" (почему это хороший выбор).
+    Ответ дай ТОЛЬКО в формате JSON массива:
+    [ {{"id": \"...\", \"scenario\": \"...\"}}, ... ]
     
-    Верни JSON список ID выбранных билетов:
-    [ {{"id": "...", "scenario": "..."}}, ... ]
-    
-    Данные билетов:
-    {json.dumps(tickets_context, ensure_ascii=False)}
+    Данные: {json.dumps(simplify, ensure_ascii=False)}
     """
 
     try:
-        if groq_ai:
-            response = groq_ai.generate_text(prompt)
-            
-            if response:
-                # Очистка от markdown блоков кода и поиск JSON массива
-                clean_response = re.sub(r'```json\s*|```', '', response).strip()
-                json_match = re.search(r'(\[.*\])', clean_response, re.DOTALL)
-                
-                if json_match:
-                    ai_results = json.loads(json_match.group(1))
-                
-                    ticket_map = {str(t.get("id")): t for t in tickets if t.get("id") is not None}
-                    final_tickets = []
-                    for item in ai_results:
-                        item_id = item.get("id")
-                        if item_id is None:
-                            continue
-                        ticket = ticket_map.get(str(item_id))
-                        if ticket:
-                            ticket_copy = ticket.copy()
-                            ticket_copy["scenario"] = item.get("scenario", "Рекомендация AI")
-                            final_tickets.append(ticket_copy)
-                    
-                    if final_tickets:
-                        logging.info(f"AI вернул {len(final_tickets)} рекомендаций")
-                        return final_tickets
-
+        response = await groq_ai.generate_text(prompt)
+        # Улучшенный парсинг: ищем первый '[' и последний ']'
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            suggestions = json.loads(match.group(0))
+            # Сопоставляем id из AI с полными данными билетов
+            result = []
+            for sug in suggestions:
+                orig = next((t for t in subset if t["id"] == sug["id"]), None)
+                if orig:
+                    orig["scenario"] = sug.get("scenario", "")
+                    result.append(orig)
+            return result
     except Exception as e:
-        logging.error(f"Ошибка AI анализа: {e}")
-    
-    # Фолбек без AI
-    logging.info("Использую фолбек (без AI)")
-    
-    # Простая оценка по value score
-    for ticket in candidates:
-        # Базовая оценка
-        score = 10000 - ticket["price"]
-        
-        # Бонусы
-        if ticket["stops"] == 0:
-            score += 5000
-        elif ticket["stops"] == 1:
-            score += 2000
-        
-        if ticket["baggage"]:
-            score += 1000
-        
-        ticket['value_score'] = score
-    
-    candidates.sort(key=lambda x: x.get('value_score', 0), reverse=True)
-    
-    return candidates[:7]
+        logging.error(f"AI parsing error: {e}")
+    return []
 
 
 def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
@@ -881,52 +838,56 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
         return "😢 Билеты не найдены"
 
     main_tickets = [t for t in tickets if not t.get("is_alternative")]
-    
-    # Ищем альтернативы, которые дешевле самого дешевого основного варианта
-    cheapest_main = min([t["price"] for t in main_tickets]) if main_tickets else float('inf')
-    alt_candidates = [t for t in tickets if t.get("is_alternative") and t["price"] < cheapest_main]
-    
-    # Сортируем альтернативы по цене и берем 3 уникальных по датам
-    alt_candidates.sort(key=lambda x: x["price"])
-    unique_alts = []
-    seen_dates = set()
-    for alt in alt_candidates:
-        d_key = f"{alt.get('search_departure')}_{alt.get('search_return')}"
-        if d_key not in seen_dates and len(unique_alts) < 3:
-            unique_alts.append(alt)
-            seen_dates.add(d_key)
 
-    def render_block(t: Dict, idx: int) -> str:
+    # Находим самый дешевый основной билет для сравнения
+    min_main_price = min([t["price"] for t in main_tickets]) if main_tickets else float("inf")
+
+    # Берем альтернативы, которые дешевле основного хотя бы на 500р
+    alt_tickets = [
+        t for t in tickets
+        if t.get("is_alternative") and t["price"] < (min_main_price - 500)
+    ]
+
+    # Если AI упал и мы в фолбеке, отсортируем всё по цене
+    if not any(t.get("scenario") for t in tickets):
+        main_tickets.sort(key=lambda x: x["price"])
+        alt_tickets.sort(key=lambda x: x["price"])
+
+    def render_t(t: Dict, idx: int) -> str:
+        price = f"{t['price']:,}".replace(",", " ")
         link = t.get("deeplink", "#")
-        price = f"{t['price']:,}".replace(',', ' ')
-        
-        # Красивая метка даты для альтернатив
-        date_info = ""
-        if t.get("is_alternative"):
-            d = t.get('search_departure', '')[8:10] + "." + t.get('search_departure', '')[5:7]
-            r = t.get('search_return', '')
-            r_str = f" - {r[8:10]}.{r[5:7]}" if r else ""
-            date_info = f"📅 <b>{d}{r_str}</b>\n"
+        scen = f"<i>💡 {t['scenario']}</i>\n" if t.get("scenario") else ""
 
+        date_str = ""
+        if t.get("is_alternative"):
+            d = t.get("search_departure", "")[8:10] + "." + t.get("search_departure", "")[5:7]
+            r = t.get("search_return", "")
+            r_str = f" - {r[8:10]}.{r[5:7]}" if r else ""
+            date_str = f"📅 <b>{d}{r_str}</b>\n"
 
         return (f"<b>{idx}. <a href='{link}'>{t.get('airline', 'Рейс')}</a></b>\n"
-                f"{date_info}"
-                f"🕒 {t.get('trips', [{}])[0].get('duration', '—')} | 💰 <b>{price} ₽</b>\n")
+                f"{date_str}{scen}💰 <b>{price} ₽</b>\n")
 
     res = [f"✈️ <b>{params['origins'][0]['name'].title()} → {params['destinations'][0]['name'].title()}</b>\n"]
-    
+
     if main_tickets:
         res.append("📍 <b>Ваши даты:</b>")
         for i, t in enumerate(main_tickets[:3], 1):
-            res.append(render_block(t, i))
+            res.append(render_t(t, i))
     else:
-        res.append("❌ <i>На точные даты билетов нет</i>\n")
+        res.append("❌ <b>На ваши даты прямых билетов не найдено</b>\n")
 
-    if unique_alts:
-        res.append("---")
-        res.append("🔥 <b>Альтернативы (дешевле):</b>")
-        for i, t in enumerate(unique_alts, 1):
-            res.append(render_block(t, i))
+    if alt_tickets:
+        res.append("\n🔥 <b>Выгодные альтернативы:</b>")
+        # Группируем альтернативы по датам, чтобы не спамить одинаковыми
+        seen_dates = set()
+        count = 1
+        for t in alt_tickets:
+            d_key = f"{t.get('search_departure')}_{t.get('search_return')}"
+            if d_key not in seen_dates and count <= 3:
+                res.append(render_t(t, count))
+                seen_dates.add(d_key)
+                count += 1
 
     return "\n".join(res)
 
@@ -1048,6 +1009,9 @@ async def process_tickets_command(message: types.Message):
                 all_tickets.extend(tickets)
                 if i < total_steps:
                     await asyncio.sleep(0.5) # Небольшая пауза
+
+            # После сбора всех all_tickets
+            all_tickets.sort(key=lambda x: x["price"])
         
         if not all_tickets:
             await status_msg.edit_text(
@@ -1065,6 +1029,14 @@ async def process_tickets_command(message: types.Message):
         
         # AI анализ
         best_tickets = await analyze_tickets_with_ai(all_tickets, params)
+
+        # Если AI ничего не вернул (ошибка), делаем ручной фолбек
+        if not best_tickets and not month:
+            logging.info("Использую ручной фолбек")
+            # Берем 3 лучших основных и 3 лучших альтернативных
+            mains = [t for t in all_tickets if not t.get("is_alternative")][:3]
+            alts = [t for t in all_tickets if t.get("is_alternative")][:10]
+            best_tickets = mains + alts
         
         # Страховка: если AI почему-то не оставил билеты на основные даты,
         # добавим один самый дешевый из "основных" вручную
