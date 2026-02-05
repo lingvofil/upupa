@@ -471,13 +471,18 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
     v7.0: Чистый парсинг данных. Ссылка формируется в search_tickets.
     """
     try:
+        def format_duration(minutes: int) -> str:
+            hours = minutes // 60
+            mins = minutes % 60
+            return f"{hours}ч {mins}м" if mins else f"{hours}ч"
+
         if not isinstance(offer, dict):
             return None
 
         result = {
             "price": 0, "currency": "RUB", "airline": "Неизвестно",
             "departure": "", "arrival": "", "duration": "",
-            "stops": 0, "baggage": False, "deeplink": ""
+            "stops": 0, "baggage": False, "deeplink": "", "trips": []
         }
 
         # 1. Словари
@@ -523,35 +528,41 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         if not route_ids_raw:
             return None
 
-        legs = []
-        for rid in route_ids_raw:
-            if not isinstance(rid, str):
-                continue
-
-            if rid in routes_dict:
-                route_obj = routes_dict[rid]
+        def collect_legs_for_route(route_id: str) -> List[Dict]:
+            collected = []
+            if route_id in routes_dict:
+                route_obj = routes_dict[route_id]
                 seg_ids = route_obj.get("segmentIds", [])
                 for seg_id in seg_ids:
                     seg = segments_dict.get(seg_id)
                     if seg:
-                        legs.append(seg)
-            elif rid in segments_dict:
-                legs.append(segments_dict[rid])
-            elif rid in voyages_dict:
-                legs.append(voyages_dict[rid])
+                        collected.append(seg)
+            elif route_id in segments_dict:
+                collected.append(segments_dict[route_id])
+            elif route_id in voyages_dict:
+                collected.append(voyages_dict[route_id])
             else:
-                parts = rid.split('/')
+                parts = route_id.split('/')
                 for part in parts:
                     if part in segments_dict:
-                        legs.append(segments_dict[part])
+                        collected.append(segments_dict[part])
                     elif part in voyages_dict:
-                        legs.append(voyages_dict[part])
+                        collected.append(voyages_dict[part])
+            return collected
 
-        if not legs:
+        trips = []
+        for rid in route_ids_raw:
+            if not isinstance(rid, str):
+                continue
+            legs = collect_legs_for_route(rid)
+            if legs:
+                trips.append(legs)
+
+        if not trips:
             return None
 
-        first_leg = legs[0]
-        last_leg = legs[-1]
+        first_leg = trips[0][0]
+        last_leg = trips[-1][-1]
 
         # 4. Детали
         result["departure"] = (
@@ -568,14 +579,36 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             or last_leg.get("datetimeEnd", "")
         )
 
-        total_duration = sum(
-            leg.get("durationMinutes", 0) or leg.get("duration", 0) for leg in legs
-        )
-        hours = total_duration // 60
-        minutes = total_duration % 60
-        result["duration"] = f"{hours}ч {minutes}м" if minutes else f"{hours}ч"
+        total_duration = 0
+        total_stops = 0
+        for trip_legs in trips:
+            trip_duration = sum(
+                leg.get("durationMinutes", 0) or leg.get("duration", 0) for leg in trip_legs
+            )
+            total_duration += trip_duration
+            total_stops += max(len(trip_legs) - 1, 0)
+            trip_first_leg = trip_legs[0]
+            trip_last_leg = trip_legs[-1]
+            trips_info = {
+                "departure": (
+                    trip_first_leg.get("departureDateTime")
+                    or trip_first_leg.get("departureTime")
+                    or trip_first_leg.get("departureDate")
+                    or trip_first_leg.get("datetimeBeg", "")
+                ),
+                "arrival": (
+                    trip_last_leg.get("arrivalDateTime")
+                    or trip_last_leg.get("arrivalTime")
+                    or trip_last_leg.get("arrivalDate")
+                    or trip_last_leg.get("datetimeEnd", "")
+                ),
+                "duration": format_duration(trip_duration),
+                "stops": max(len(trip_legs) - 1, 0),
+            }
+            result["trips"].append(trips_info)
 
-        result["stops"] = len(legs) - 1
+        result["duration"] = format_duration(total_duration)
+        result["stops"] = total_stops
 
         carrier_name = "Неизвестно"
         carrier_id = first_leg.get("carrier")
@@ -604,6 +637,9 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
                     )
                 elif isinstance(baggage, bool):
                     result["baggage"] = baggage
+        if result["trips"]:
+            for trip in result["trips"]:
+                trip["baggage"] = result["baggage"]
 
         return result
 
@@ -897,34 +933,47 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
         if ticket.get("scenario"):
             lines.append(f"🎯 <i>{ticket['scenario']}</i>")
         
-        # Время и длительность
-        departure_time = ticket.get("departure", "")
-        arrival_time = ticket.get("arrival", "")
-        duration = ticket.get("duration", "")
-        
-        if departure_time and arrival_time:
-            # Извлекаем только время (HH:MM)
-            dep_time_short = departure_time.split("T")[1][:5] if "T" in departure_time else ""
-            arr_time_short = arrival_time.split("T")[1][:5] if "T" in arrival_time else ""
-            
-            if dep_time_short and arr_time_short:
-                lines.append(f"🕒 {dep_time_short} → {arr_time_short} ({duration})")
-        
-        # Пересадки
-        stops = ticket.get("stops", 0)
-        if stops == 0:
-            lines.append("✈️ Прямой рейс")
+        def format_time_block(block: Dict) -> List[str]:
+            block_lines = []
+            departure_time = block.get("departure", "")
+            arrival_time = block.get("arrival", "")
+            duration = block.get("duration", "")
+
+            if departure_time and arrival_time:
+                dep_time_short = departure_time.split("T")[1][:5] if "T" in departure_time else ""
+                arr_time_short = arrival_time.split("T")[1][:5] if "T" in arrival_time else ""
+                if dep_time_short and arr_time_short:
+                    block_lines.append(f"🕒 {dep_time_short} → {arr_time_short} ({duration})")
+
+            stops = block.get("stops", 0)
+            if stops == 0:
+                block_lines.append("✈️ Прямой рейс")
+            else:
+                block_lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
+
+            if block.get("baggage"):
+                block_lines.append("🧳 Багаж включен")
+            else:
+                block_lines.append("🧳 Без багажа")
+
+            return block_lines
+
+        trips = ticket.get("trips") or []
+        if len(trips) >= 2:
+            lines.append("")
+            labels = ["➡️ Туда", "↩️ Обратно"]
+            for idx, trip in enumerate(trips):
+                label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
+                lines.append(label)
+                lines.extend(format_time_block(trip))
+                if idx < len(trips) - 1:
+                    lines.append("")
         else:
-            lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
-        
-        # Багаж
-        if ticket.get("baggage"):
-            lines.append("🧳 Багаж включен")
-        else:
-            lines.append("🧳 Без багажа")
+            lines.extend(format_time_block(ticket))
         
         # AI комментарий
         if ticket.get("ai_reason"):
+            lines.append("")
             lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
         
         # Цена
