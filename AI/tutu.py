@@ -375,34 +375,45 @@ async def fetch_offers(
         
         async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
             try:
-                response = await client.post(
-                    TUTU_API_URL,
-                    headers=headers,
-                    json=payload
-                )
-                
-                elapsed = (datetime.now() - start_time).total_seconds()
-                
-                logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
-                
-                if response.status_code != 200:
-                    logging.error(f"Ошибка API: {response.status_code}")
+                data = None
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    response = await client.post(
+                        TUTU_API_URL,
+                        headers=headers,
+                        json=payload
+                    )
+
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
+
+                    if response.status_code != 200:
+                        logging.error(f"Ошибка API: {response.status_code}")
+                        return []
+
+                    data = response.json()
+                    logging.debug(f"Тип ответа: {type(data)}")
+
+                    # API возвращает список с одним элементом-словарем
+                    if isinstance(data, list) and len(data) > 0:
+                        logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
+                        data = data[0]
+
+                    if not isinstance(data, dict):
+                        logging.error(f"Неожиданный тип ответа: {type(data)}")
+                        return []
+
+                    logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
+
+                    if data.get("searchState") == "COMPLETE" or data.get("isComplete"):
+                        break
+
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(3)
+
+                if data is None:
+                    logging.error("Пустой ответ API")
                     return []
-                
-                data = response.json()
-                
-                logging.debug(f"Тип ответа: {type(data)}")
-                
-                # API возвращает список с одним элементом-словарем
-                if isinstance(data, list) and len(data) > 0:
-                    logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
-                    data = data[0]
-                
-                if not isinstance(data, dict):
-                    logging.error(f"Неожиданный тип ответа: {type(data)}")
-                    return []
-                
-                logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
                 
                 # Офферы находятся в offers.actual
                 offers_dict = data.get("offers", {})
@@ -499,9 +510,15 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
         current_variant = {}
         if offer_variants:
             if isinstance(offer_variants, list) and len(offer_variants) > 0:
-                current_variant = offer_variants[0]
+                current_variant = min(
+                    offer_variants,
+                    key=lambda x: x.get("price", {}).get("value", {}).get("amount", float("inf")),
+                )
             elif isinstance(offer_variants, dict):
-                current_variant = next(iter(offer_variants.values()))
+                current_variant = min(
+                    offer_variants.values(),
+                    key=lambda x: x.get("price", {}).get("value", {}).get("amount", float("inf")),
+                )
 
         price_obj = current_variant.get("price") or offer.get("price", {})
         if isinstance(price_obj, (int, float)):
