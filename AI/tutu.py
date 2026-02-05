@@ -940,10 +940,18 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
             duration = block.get("duration", "")
 
             if departure_time and arrival_time:
-                dep_time_short = departure_time.split("T")[1][:5] if "T" in departure_time else ""
-                arr_time_short = arrival_time.split("T")[1][:5] if "T" in arrival_time else ""
-                if dep_time_short and arr_time_short:
-                    block_lines.append(f"🕒 {dep_time_short} → {arr_time_short} ({duration})")
+                def format_datetime(dt_str: str) -> str:
+                    if "T" in dt_str:
+                        date_part, time_part = dt_str.split("T", 1)
+                        date_short = date_part[5:10].replace("-", ".") if len(date_part) >= 10 else date_part
+                        time_short = time_part[:5]
+                        return f"{date_short} {time_short}"
+                    return dt_str
+
+                dep_short = format_datetime(departure_time)
+                arr_short = format_datetime(arrival_time)
+                if dep_short and arr_short:
+                    block_lines.append(f"🕒 {dep_short} → {arr_short} ({duration})")
 
             stops = block.get("stops", 0)
             if stops == 0:
@@ -963,8 +971,10 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
             labels = ["➡️ Туда", "↩️ Обратно"]
             for idx, trip in enumerate(trips):
                 label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
-                lines.append(label)
+                lines.append(f"<b>{label}</b>")
                 lines.extend(format_time_block(trip))
+                if idx < len(trips) - 1:
+                    lines.append("")
         else:
             lines.extend(format_time_block(ticket))
         
