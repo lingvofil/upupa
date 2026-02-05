@@ -306,27 +306,6 @@ def generate_month_dates(month: int) -> List[str]:
     return dates
 
 
-def get_adjacent_dates(date_str: str) -> List[str]:
-    """Возвращает список соседних дат: день-1, день, день+1 (YYYY-MM-DD)."""
-    try:
-        base_date = datetime.strptime(date_str, "%Y-%m-%d")
-    except (TypeError, ValueError):
-        return []
-
-    return [
-        (base_date - timedelta(days=1)).strftime("%Y-%m-%d"),
-        base_date.strftime("%Y-%m-%d"),
-        (base_date + timedelta(days=1)).strftime("%Y-%m-%d"),
-    ]
-
-
-def select_best_ticket(tickets: List[Dict]) -> Optional[Dict]:
-    """Выбирает самый дешевый билет из списка."""
-    if not tickets:
-        return None
-    return min(tickets, key=lambda x: x.get("price", float("inf")))
-
-
 async def fetch_offers(
     origin_id: int,
     destination_id: int,
@@ -768,25 +747,6 @@ async def multi_destination_search(
     return all_tickets
 
 
-async def find_best_ticket_for_dates(
-    origins: List[Dict],
-    destinations: List[Dict],
-    departure_date: str,
-    return_date: Optional[str],
-    passengers: int
-) -> Optional[Dict]:
-    """Ищет самый дешевый билет для заданных дат."""
-    tickets = await multi_destination_search(
-        origins, destinations, departure_date, return_date, passengers
-    )
-    best_ticket = select_best_ticket(tickets)
-    if not best_ticket:
-        return None
-    best_ticket["alt_departure_date"] = departure_date
-    best_ticket["alt_return_date"] = return_date
-    return best_ticket
-
-
 async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dict]:
     """
     AI-анализ билетов с рекомендациями.
@@ -1023,47 +983,6 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
     return "\n".join(lines)
 
 
-def format_alternative_dates_message(alternatives: Dict[str, List[Dict]]) -> str:
-    """Форматирует блок альтернативных дат."""
-    if not alternatives or not (alternatives.get("departure") or alternatives.get("return")):
-        return ""
-
-    def format_date_short(date_str: str) -> str:
-        try:
-            return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%y")
-        except (TypeError, ValueError):
-            return date_str
-
-    def format_alt_line(ticket: Dict, label: str, date_str: str) -> str:
-        link = ticket.get("deeplink", "#")
-        price = ticket.get("price", 0)
-        currency = ticket.get("currency", "RUB")
-        symbol = "₽" if currency == "RUB" else currency
-        origin = ticket.get("origin_name", "").title()
-        destination = ticket.get("destination_name", "").title()
-        route = f"{origin} → {destination}" if origin and destination else "Маршрут"
-        return (
-            f"• <b>{label} {format_date_short(date_str)}</b> — "
-            f"<a href='{link}'>{route}</a>: <b>{price:,} {symbol}</b>"
-        )
-
-    lines = ["", "💡 <b>Альтернативные варианты</b>"]
-
-    if alternatives.get("departure"):
-        lines.append("<b>➡️ Туда (соседние даты):</b>")
-        for ticket in alternatives["departure"]:
-            date_str = ticket.get("alt_departure_date", "")
-            lines.append(format_alt_line(ticket, "Вылет", date_str))
-
-    if alternatives.get("return"):
-        lines.append("<b>↩️ Обратно (соседние даты):</b>")
-        for ticket in alternatives["return"]:
-            date_str = ticket.get("alt_return_date", "")
-            lines.append(format_alt_line(ticket, "Возврат", date_str))
-
-    return "\n".join(lines)
-
-
 async def process_tickets_command(message: types.Message):
     """
     Главный обработчик команды поиска билетов.
@@ -1159,61 +1078,14 @@ async def process_tickets_command(message: types.Message):
                 "Попробуйте другие даты или направление."
             )
             return
-
-        alternatives = {"departure": [], "return": []}
-        if not month and departure:
-            await status_msg.edit_text(
-                f"✅ <b>Поиск завершен!</b>\n"
-                f"Найдено билетов: {len(all_tickets)}\n\n"
-                f"⏳ Проверяю соседние даты...",
-                parse_mode="HTML"
-            )
-
-            main_best_ticket = select_best_ticket(all_tickets)
-            main_best_price = main_best_ticket["price"] if main_best_ticket else None
-
-            if main_best_price:
-                if return_date:
-                    departure_candidates = [
-                        date for date in get_adjacent_dates(departure) if date != departure
-                    ]
-                    for date in departure_candidates:
-                        best_ticket = await find_best_ticket_for_dates(
-                            origins, destinations, date, return_date, params["passengers"]
-                        )
-                        if best_ticket and best_ticket["price"] < main_best_price:
-                            alternatives["departure"].append(best_ticket)
-
-                    return_candidates = [
-                        date for date in get_adjacent_dates(return_date) if date != return_date
-                    ]
-                    for date in return_candidates:
-                        best_ticket = await find_best_ticket_for_dates(
-                            origins, destinations, departure, date, params["passengers"]
-                        )
-                        if best_ticket and best_ticket["price"] < main_best_price:
-                            alternatives["return"].append(best_ticket)
-                else:
-                    departure_candidates = [
-                        date for date in get_adjacent_dates(departure) if date != departure
-                    ]
-                    for date in departure_candidates:
-                        best_ticket = await find_best_ticket_for_dates(
-                            origins, destinations, date, None, params["passengers"]
-                        )
-                        if best_ticket and best_ticket["price"] < main_best_price:
-                            alternatives["departure"].append(best_ticket)
-
-            alternatives["departure"].sort(key=lambda x: x.get("price", 0))
-            alternatives["return"].sort(key=lambda x: x.get("price", 0))
-
+        
         await status_msg.edit_text(
             f"✅ <b>Поиск завершен!</b>\n"
             f"Найдено билетов: {len(all_tickets)}\n\n"
             f"⏳ Запускаю AI-анализ...",
             parse_mode="HTML"
         )
-
+        
         # AI анализ
         best_tickets = await analyze_tickets_with_ai(all_tickets, params)
         
@@ -1225,9 +1097,6 @@ async def process_tickets_command(message: types.Message):
         
         # Отправляем результаты
         result_text = format_tickets_message(best_tickets, params)
-        alternative_text = format_alternative_dates_message(alternatives)
-        if alternative_text:
-            result_text = f"{result_text}\n{alternative_text}"
         await message.reply(result_text, parse_mode="HTML", disable_web_page_preview=True)
         
         logging.info(f"Отправлено {len(best_tickets)} билетов пользователю {message.from_user.id}")
