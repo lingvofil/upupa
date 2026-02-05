@@ -1018,6 +1018,24 @@ def format_tickets_message(
     no_exact_message: Optional[str] = None
 ) -> str:
     """Форматирует список билетов в HTML для Telegram."""
+    if isinstance(params, dict):
+        requested_departure = params.get("departure_date")
+        requested_return = params.get("return_date")
+    else:
+        requested_departure = getattr(params, "departure_date", None)
+        requested_return = getattr(params, "return_date", None)
+
+    display_departure = (
+        requested_departure.strftime("%d.%m.%Y")
+        if isinstance(requested_departure, (date, datetime))
+        else format_full_date(requested_departure) if requested_departure else ""
+    )
+    display_return = (
+        requested_return.strftime("%d.%m.%Y")
+        if isinstance(requested_return, (date, datetime))
+        else format_full_date(requested_return) if requested_return else ""
+    )
+
     if not exact_tickets and not alternative_tickets:
         return "😢 Билеты не найдены"
     
@@ -1028,12 +1046,9 @@ def format_tickets_message(
     origin_str = origins[0]["name"].title() if origins else "—"
     dest_str = ", ".join([d["name"].title() for d in destinations]) if destinations else "—"
     
-    departure = params.get("departure_date", "")
-    return_date = params.get("return_date", "")
-    
     header = f"✈️ <b>Авиабилеты: {origin_str} → {dest_str}</b>\n"
     
-    if return_date:
+    if requested_return:
         header += f"📅 {display_departure} - {display_return} (туда-обратно)\n"
     else:
         header += f"📅 {display_departure}\n"
