@@ -306,6 +306,34 @@ def generate_month_dates(month: int) -> List[str]:
     return dates
 
 
+def generate_date_variants(
+    departure: str,
+    return_date: Optional[str]
+) -> List[Tuple[str, Optional[str]]]:
+    dep = datetime.strptime(departure, "%Y-%m-%d")
+    ret = datetime.strptime(return_date, "%Y-%m-%d") if return_date else None
+
+    variants = set()
+
+    for d_shift in (-1, 0, 1):
+        for r_shift in (-1, 0, 1):
+            if d_shift == 0 and r_shift == 0:
+                continue
+
+            new_dep = dep + timedelta(days=d_shift)
+            new_ret = ret + timedelta(days=r_shift) if ret else None
+
+            if new_ret and new_ret <= new_dep:
+                continue
+
+            variants.add((
+                new_dep.strftime("%Y-%m-%d"),
+                new_ret.strftime("%Y-%m-%d") if new_ret else None
+            ))
+
+    return sorted(variants)
+
+
 async def fetch_offers(
     origin_id: int,
     destination_id: int,
@@ -994,6 +1022,14 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
                     lines.append("")
         else:
             lines.extend(format_time_block(ticket))
+
+        alt_departure = ticket.get("_alt_departure")
+        alt_return = ticket.get("_alt_return")
+        if alt_departure:
+            if alt_return:
+                lines.append(f"🗓️ Альтернативные даты: {alt_departure} - {alt_return}")
+            else:
+                lines.append(f"🗓️ Альтернативная дата: {alt_departure}")
         
         # AI комментарий
         if ticket.get("ai_reason"):
@@ -1094,9 +1130,40 @@ async def process_tickets_command(message: types.Message):
                 parse_mode="HTML"
             )
             
-            all_tickets = await multi_destination_search(
+            base_tickets = await multi_destination_search(
                 origins, destinations, departure, return_date, params["passengers"]
             )
+
+            alternative_tickets = []
+
+            date_variants = generate_date_variants(departure, return_date)
+
+            for dep_alt, ret_alt in date_variants:
+                tickets = await multi_destination_search(
+                    origins,
+                    destinations,
+                    dep_alt,
+                    ret_alt,
+                    params["passengers"]
+                )
+
+                for ticket in tickets:
+                    ticket["_alt_departure"] = dep_alt
+                    ticket["_alt_return"] = ret_alt
+
+                alternative_tickets.extend(tickets)
+
+                await asyncio.sleep(2)
+
+            better_alternatives = []
+            if base_tickets:
+                best_base_price = min(t["price"] for t in base_tickets)
+                better_alternatives = [
+                    t for t in alternative_tickets
+                    if t["price"] < best_base_price
+                ]
+
+            all_tickets = base_tickets + better_alternatives
         
         if not all_tickets:
             await status_msg.edit_text(
