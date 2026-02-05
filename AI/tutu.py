@@ -306,6 +306,16 @@ def generate_month_dates(month: int) -> List[str]:
     return dates
 
 
+def get_date_range_neighbors(date_str: str) -> List[str]:
+    """Возвращает список из 3 дат: [день до, текущий день, день после]."""
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    return [
+        (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+        date_str,
+        (dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+    ]
+
+
 async def fetch_offers(
     origin_id: int,
     destination_id: int,
@@ -890,97 +900,71 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
 
 
 def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
-    """Форматирует список билетов в HTML для Telegram."""
+    """Форматирует билеты с разделением на основные и альтернативные (выгодные)."""
     if not tickets:
         return "😢 Билеты не найдены"
-    
-    # Заголовок
-    origins = params.get("origins", [])
-    destinations = params.get("destinations", [])
-    
-    origin_str = origins[0]["name"].title() if origins else "—"
-    dest_str = ", ".join([d["name"].title() for d in destinations]) if destinations else "—"
-    
-    departure = params.get("departure_date", "")
-    return_date = params.get("return_date", "")
-    
-    header = f"✈️ <b>Авиабилеты: {origin_str} → {dest_str}</b>\n"
-    
-    if return_date:
-        header += f"📅 {departure} - {return_date} (туда-обратно)\n"
-    else:
-        header += f"📅 {departure}\n"
-    
-    header += f"👥 {params.get('passengers', 1)} пасс.\n\n"
-    
-    lines = [header]
-    
-    for i, ticket in enumerate(tickets, 1):
-        link = ticket.get("deeplink", "#")
-        airline = ticket.get("airline", "Неизвестно")
-        
-        lines.append(f"<b>{i}. <a href='{link}'>{airline}</a></b>")
-        
-        if ticket.get("scenario"):
-            lines.append(f"🎯 <i>{ticket['scenario']}</i>")
-        
-        def format_time_block(block: Dict) -> List[str]:
-            block_lines = []
-            departure_time = block.get("departure", "")
-            arrival_time = block.get("arrival", "")
-            duration = block.get("duration", "")
 
-            if departure_time and arrival_time:
-                def format_datetime(dt_str: str) -> str:
-                    if "T" in dt_str:
-                        date_part, time_part = dt_str.split("T", 1)
-                        date_short = date_part[5:10].replace("-", ".") if len(date_part) >= 10 else date_part
-                        time_short = time_part[:5]
-                        return f"{date_short} {time_short}"
-                    return dt_str
+    # Разделяем на основные и альтернативные
+    main_tickets = [t for t in tickets if not t.get("is_alternative")]
 
-                dep_short = format_datetime(departure_time)
-                arr_short = format_datetime(arrival_time)
-                if dep_short and arr_short:
-                    block_lines.append(f"🕒 {dep_short} → {arr_short} ({duration})")
+    # Альтернативные берем только если они реально ДЕШЕВЛЕ самого дешевого основного
+    cheapest_main = min([t["price"] for t in main_tickets]) if main_tickets else float('inf')
+    alt_tickets = [t for t in tickets if t.get("is_alternative") and t["price"] < cheapest_main]
 
-            stops = block.get("stops", 0)
-            if stops == 0:
-                block_lines.append("✈️ Прямой рейс")
-            else:
-                block_lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
+    # Удаляем дубликаты цен/дат в альтах (оставляем топ-3 самых выгодных)
+    alt_tickets.sort(key=lambda x: x["price"])
+    seen_dates = set()
+    unique_alts = []
+    for alt in alt_tickets:
+        date_key = f"{alt.get('search_departure')}-{alt.get('search_return')}"
+        if date_key not in seen_dates and len(unique_alts) < 3:
+            unique_alts.append(alt)
+            seen_dates.add(date_key)
 
-            if block.get("baggage"):
-                block_lines.append("🧳 Багаж включен")
-            else:
-                block_lines.append("🧳 Без багажа")
+    def render_ticket_block(t: Dict, idx: int) -> str:
+        link = t.get("deeplink", "#")
+        airline = t.get("airline", "Неизвестно")
+        price = t.get("price", 0)
 
-            return block_lines
+        # Красивая дата для альтернатив
+        date_str = ""
+        if t.get("is_alternative"):
+            dep = t.get('search_departure', '')[5:].replace('-', '.')
+            ret = t.get('search_return')
+            date_str = f"📅 <b>{dep}</b>" + (f" - <b>{ret[5:].replace('-', '.')}</b>" if ret else "") + "\n"
 
-        trips = ticket.get("trips") or []
-        if len(trips) >= 2:
-            labels = ["➡️ Туда", "↩️ Обратно"]
-            for idx, trip in enumerate(trips):
-                label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
-                lines.append(f"<b>{label}</b>")
-                lines.extend(format_time_block(trip))
-                if idx < len(trips) - 1:
-                    lines.append("")
-        else:
-            lines.extend(format_time_block(ticket))
-        
-        # AI комментарий
-        if ticket.get("ai_reason"):
-            lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
-        
-        # Цена
-        price = ticket.get("price", 0)
-        currency = ticket.get("currency", "RUB")
-        symbol = "₽" if currency == "RUB" else currency
-        
-        lines.append(f"💰 <b>{price:,} {symbol}</b>\n")
-    
-    return "\n".join(lines)
+        res = f"<b>{idx}. <a href='{link}'>{airline}</a></b>\n"
+        res += date_str
+        if t.get("scenario"):
+            res += f"🎯 <i>{t['scenario']}</i>\n"
+
+        # Краткая инфо о перелетах
+        for trip in (t.get("trips") or []):
+            stops = trip.get("stops", 0)
+            stops_str = "Прямой" if stops == 0 else f"{stops} пер."
+            res += f"🕒 {trip.get('duration')} | {stops_str} | {'🧳' if trip.get('baggage') else '🎒'}\n"
+
+        res += f"💰 <b>{price:,} ₽</b>\n"
+        return res
+
+    # Сборка сообщения
+    origin_str = params["origins"][0]["name"].title()
+    dest_str = params["destinations"][0]["name"].title()
+
+    message = [f"✈️ <b>{origin_str} → {dest_str}</b>\n"]
+
+    if main_tickets:
+        message.append("📍 <b>Результаты на ваши даты:</b>")
+        for i, t in enumerate(main_tickets[:5], 1):
+            message.append(render_ticket_block(t, i))
+
+    if unique_alts:
+        message.append("---")
+        message.append("🔥 <b>Более выгодные даты:</b>")
+        for i, t in enumerate(unique_alts, 1):
+            message.append(render_ticket_block(t, i))
+
+    return "\n".join(message)
 
 
 async def process_tickets_command(message: types.Message):
@@ -1054,23 +1038,45 @@ async def process_tickets_command(message: types.Message):
                 await asyncio.sleep(3)
             
         else:
-            # Режим поиска с точными датами
-            date_info = departure
+            # Режим поиска с точными датами + соседние даты
+            date_info = f"{departure}"
             if return_date:
-                date_info += f" - {return_date} (туда-обратно)"
-            
+                date_info += f" - {return_date}"
+
             status_msg = await message.reply(
-                f"🔍 <b>Запускаю поиск билетов</b>\n\n"
-                f"📍 Маршрут: {origin_str} → {dest_str}\n"
-                f"📅 Даты: {date_info}\n"
-                f"👥 Пассажиров: {params['passengers']}\n\n"
-                f"⏳ Ищу лучшие предложения...",
+                f"🔍 <b>Запускаю расширенный поиск</b>\n\n"
+                f"📍 {origin_str} → {dest_str}\n"
+                f"📅 Дата: {date_info}\n"
+                f"⏳ Проверяю также соседние даты (±1 день)...",
                 parse_mode="HTML"
             )
-            
-            all_tickets = await multi_destination_search(
-                origins, destinations, departure, return_date, params["passengers"]
-            )
+
+            # Формируем список пар дат для проверки
+            departure_variants = get_date_range_neighbors(departure)
+            return_variants = get_date_range_neighbors(return_date) if return_date else [None]
+
+            all_tickets = []
+
+            # Обходим комбинации
+            for dep_v in departure_variants:
+                for ret_v in return_variants:
+                    # Помечаем, является ли эта пара дат основной (запрошенной)
+                    is_target = (dep_v == departure and (ret_v == return_date or ret_v is None))
+
+                    logging.info(f"Проверка даты: {dep_v} - {ret_v} (Target: {is_target})")
+
+                    tickets = await multi_destination_search(
+                        origins, destinations, dep_v, ret_v, params["passengers"]
+                    )
+
+                    for t in tickets:
+                        t["is_alternative"] = not is_target
+                        t["search_departure"] = dep_v
+                        t["search_return"] = ret_v
+
+                    all_tickets.extend(tickets)
+                    # Небольшая пауза, чтобы не забанили (API Tutu чувствителен)
+                    await asyncio.sleep(1.5)
         
         if not all_tickets:
             await status_msg.edit_text(
