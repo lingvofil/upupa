@@ -960,20 +960,16 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
 
         trips = ticket.get("trips") or []
         if len(trips) >= 2:
-            lines.append("")
             labels = ["➡️ Туда", "↩️ Обратно"]
             for idx, trip in enumerate(trips):
                 label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
                 lines.append(label)
                 lines.extend(format_time_block(trip))
-                if idx < len(trips) - 1:
-                    lines.append("")
         else:
             lines.extend(format_time_block(ticket))
         
         # AI комментарий
         if ticket.get("ai_reason"):
-            lines.append("")
             lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
         
         # Цена
