@@ -11,6 +11,7 @@ from aiogram import types
 
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # КОНСТАНТЫ
@@ -19,6 +20,14 @@ from config import groq_ai, ADMIN_ID
 TUTU_API_URL = "https://offers-api.tutu.ru/avia/offers"
 TUTU_AUTOCOMPLETE_URL = "https://autocomplete-api.tutu.ru/v1/suggest"
 TUTU_REFERER = "https://avia.tutu.ru/"
+READ_TIMEOUT = 40.0
+TUTU_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=READ_TIMEOUT,
+    write=10.0,
+    pool=10.0,
+)
+MAX_DATE_VARIANTS = 3
 
 # Маппинг месяцев
 MONTH_MAPPING = {
@@ -202,6 +211,17 @@ def parse_date_range(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def format_short_date(date_str: str) -> str:
+    """
+    Форматирует дату YYYY-MM-DD в DD.MM.
+    Если формат не распознан, возвращает исходную строку.
+    """
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m")
+    except ValueError:
+        return date_str
+
+
 def parse_search_command(text: str) -> Dict:
     """
     Парсит команду поиска билетов.
@@ -313,25 +333,18 @@ def generate_date_variants(
     dep = datetime.strptime(departure, "%Y-%m-%d")
     ret = datetime.strptime(return_date, "%Y-%m-%d") if return_date else None
 
-    variants = set()
+    variants = []
+    for shift in (-1, 0, 1):
+        new_dep = dep + timedelta(days=shift)
+        new_ret = ret + timedelta(days=shift) if ret else None
+        if new_ret and new_ret <= new_dep:
+            continue
+        variants.append((
+            new_dep.strftime("%Y-%m-%d"),
+            new_ret.strftime("%Y-%m-%d") if new_ret else None
+        ))
 
-    for d_shift in (-1, 0, 1):
-        for r_shift in (-1, 0, 1):
-            if d_shift == 0 and r_shift == 0:
-                continue
-
-            new_dep = dep + timedelta(days=d_shift)
-            new_ret = ret + timedelta(days=r_shift) if ret else None
-
-            if new_ret and new_ret <= new_dep:
-                continue
-
-            variants.add((
-                new_dep.strftime("%Y-%m-%d"),
-                new_ret.strftime("%Y-%m-%d") if new_ret else None
-            ))
-
-    return sorted(variants)
+    return variants[:MAX_DATE_VARIANTS]
 
 
 async def fetch_offers(
@@ -396,85 +409,72 @@ async def fetch_offers(
             }
         }
         
-        logging.info(f"Запрос: {CITY_ID_TO_NAME.get(origin_id, origin_id)} → {CITY_ID_TO_NAME.get(destination_id, destination_id)}, {departure_date}")
-        logging.debug(f"Payload: {payload}")
+        logger.info(f"Запрос: {CITY_ID_TO_NAME.get(origin_id, origin_id)} → {CITY_ID_TO_NAME.get(destination_id, destination_id)}, {departure_date}")
+        logger.debug(f"Payload: {payload}")
         
         start_time = datetime.now()
         
-        async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+        async with httpx.AsyncClient(timeout=TUTU_TIMEOUT, http2=True) as client:
             try:
-                data = None
-                max_attempts = 5
-                for attempt in range(max_attempts):
-                    response = await client.post(
-                        TUTU_API_URL,
-                        headers=headers,
-                        json=payload
-                    )
+                response = await client.post(
+                    TUTU_API_URL,
+                    headers=headers,
+                    json=payload
+                )
 
-                    elapsed = (datetime.now() - start_time).total_seconds()
-                    logging.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.info(f"HTTP {response.status_code}, время: {elapsed:.2f}s")
 
-                    if response.status_code != 200:
-                        logging.error(f"Ошибка API: {response.status_code}")
-                        return []
-
-                    data = response.json()
-                    logging.debug(f"Тип ответа: {type(data)}")
-
-                    # API возвращает список с одним элементом-словарем
-                    if isinstance(data, list) and len(data) > 0:
-                        logging.debug(f"Ответ - список из {len(data)} элементов, берем первый")
-                        data = data[0]
-
-                    if not isinstance(data, dict):
-                        logging.error(f"Неожиданный тип ответа: {type(data)}")
-                        return []
-
-                    logging.debug(f"Ключи верхнего уровня: {list(data.keys())}")
-
-                    if data.get("searchState") == "COMPLETE" or data.get("isComplete"):
-                        break
-
-                    if attempt < max_attempts - 1:
-                        await asyncio.sleep(3)
-
-                if data is None:
-                    logging.error("Пустой ответ API")
+                if response.status_code != 200:
+                    logger.error(f"Ошибка API: {response.status_code}")
                     return []
+
+                data = response.json()
+                logger.debug(f"Тип ответа: {type(data)}")
+
+                # API возвращает список с одним элементом-словарем
+                if isinstance(data, list) and len(data) > 0:
+                    logger.debug(f"Ответ - список из {len(data)} элементов, берем первый")
+                    data = data[0]
+
+                if not isinstance(data, dict):
+                    logger.error(f"Неожиданный тип ответа: {type(data)}")
+                    return []
+
+                logger.debug(f"Ключи верхнего уровня: {list(data.keys())}")
                 
                 # Офферы находятся в offers.actual
                 offers_dict = data.get("offers", {})
-                logging.debug(f"Тип offers: {type(offers_dict)}")
+                logger.debug(f"Тип offers: {type(offers_dict)}")
                 
                 if isinstance(offers_dict, dict):
-                    logging.debug(f"Ключи offers: {list(offers_dict.keys())}")
+                    logger.debug(f"Ключи offers: {list(offers_dict.keys())}")
                     
                     actual = offers_dict.get("actual", {})
-                    logging.debug(f"Тип actual: {type(actual)}")
+                    logger.debug(f"Тип actual: {type(actual)}")
                     
                     if isinstance(actual, dict):
-                        logging.info(f"Количество офферов в actual: {len(actual)}")
+                        logger.info(f"Количество офферов в actual: {len(actual)}")
                         
                         if not actual:
                             # Проверяем, может быть офферы в других полях
                             future = offers_dict.get("future")
                             past = offers_dict.get("past")
-                            logging.warning(f"actual пустой. future: {type(future)}, past: {type(past)}")
+                            logger.warning(f"actual пустой. future: {type(future)}, past: {type(past)}")
                             
                             # Выводим warnings если есть
                             warnings = data.get("warnings", [])
                             if warnings:
-                                logging.warning(f"API warnings: {warnings}")
+                                logger.warning(f"API warnings: {warnings}")
                             
                             return []
                         
                         offers = actual
                     else:
-                        logging.error(f"actual не является словарем: {type(actual)}")
+                        logger.error(f"actual не является словарем: {type(actual)}")
                         return []
                 else:
-                    logging.error(f"Неожиданная структура offers: {type(offers_dict)}")
+                    logger.error(f"Неожиданная структура offers: {type(offers_dict)}")
                     return []
                 
                 # offers.actual - это словарь, где ключи - ID офферов
@@ -489,18 +489,20 @@ async def fetch_offers(
                         offer_data["_dictionary"] = dictionary
                         offers_list.append(offer_data)
                 
-                logging.info(f"Получено {len(offers_list)} офферов")
+                logger.info(f"Получено {len(offers_list)} офферов")
                 return offers_list
                 
-            except httpx.TimeoutException:
-                logging.error("Таймаут запроса (10s)")
+            except httpx.ReadTimeout:
+                logger.warning(
+                    f"Tutu API долго отвечает (> {READ_TIMEOUT}s), запрос пропущен"
+                )
                 return []
             except httpx.RequestError as e:
-                logging.error(f"Ошибка сети: {e}")
+                logger.error(f"Ошибка сети: {e}")
                 return []
                 
     except Exception as e:
-        logging.error(f"Ошибка в fetch_offers: {e}")
+        logger.error(f"Ошибка в fetch_offers: {e}")
         return []
 
 
@@ -988,7 +990,7 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
                 def format_datetime(dt_str: str) -> str:
                     if "T" in dt_str:
                         date_part, time_part = dt_str.split("T", 1)
-                        date_short = date_part[5:10].replace("-", ".") if len(date_part) >= 10 else date_part
+                        date_short = format_short_date(date_part)
                         time_short = time_part[:5]
                         return f"{date_short} {time_short}"
                     return dt_str
@@ -1027,9 +1029,14 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
         alt_return = ticket.get("_alt_return")
         if alt_departure:
             if alt_return:
-                lines.append(f"🗓️ Альтернативные даты: {alt_departure} - {alt_return}")
+                lines.append(
+                    "🗓️ Альтернативные даты: "
+                    f"{format_short_date(alt_departure)} - {format_short_date(alt_return)}"
+                )
             else:
-                lines.append(f"🗓️ Альтернативная дата: {alt_departure}")
+                lines.append(
+                    f"🗓️ Альтернативная дата: {format_short_date(alt_departure)}"
+                )
         
         # AI комментарий
         if ticket.get("ai_reason"):
@@ -1136,7 +1143,10 @@ async def process_tickets_command(message: types.Message):
 
             alternative_tickets = []
 
-            date_variants = generate_date_variants(departure, return_date)
+            date_variants = [
+                variant for variant in generate_date_variants(departure, return_date)
+                if variant != (departure, return_date)
+            ]
 
             for dep_alt, ret_alt in date_variants:
                 tickets = await multi_destination_search(
