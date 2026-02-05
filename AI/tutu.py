@@ -12,6 +12,17 @@ from aiogram import types
 # Импортируем Groq wrapper из config
 from config import groq_ai, ADMIN_ID
 
+
+def get_date_range_neighbors(date_str: Optional[str]) -> List[Optional[str]]:
+    if not date_str:
+        return [None]
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    return [
+        (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+        date_str,
+        (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    ]
+
 # =============================================================================
 # КОНСТАНТЫ
 # =============================================================================
@@ -306,16 +317,6 @@ def generate_month_dates(month: int) -> List[str]:
     return dates
 
 
-def get_date_range_neighbors(date_str: str) -> List[str]:
-    """Возвращает список из 3 дат: [день до, текущий день, день после]."""
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    return [
-        (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
-        date_str,
-        (dt + timedelta(days=1)).strftime("%Y-%m-%d"),
-    ]
-
-
 async def fetch_offers(
     origin_id: int,
     destination_id: int,
@@ -383,7 +384,7 @@ async def fetch_offers(
         
         start_time = datetime.now()
         
-        async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+        async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
             try:
                 response = await client.post(
                     TUTU_API_URL,
@@ -850,27 +851,30 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
         if groq_ai:
             response = groq_ai.generate_text(prompt)
             
-            # Извлекаем JSON из ответа
-            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-            if json_match:
-                import json
-                ai_results = json.loads(json_match.group(0))
+            if response:
+                # Очистка от markdown блоков кода и поиск JSON массива
+                clean_response = re.sub(r'```json\s*|```', '', response).strip()
+                json_match = re.search(r'(\[.*\])', clean_response, re.DOTALL)
                 
-                final_tickets = []
-                for item in ai_results:
-                    idx = item.get('index')
-                    if idx is not None and isinstance(idx, int) and 0 <= idx < len(candidates):
-                        ticket = candidates[idx].copy()
-                        ticket['ai_score'] = item.get('ai_score', 0)
-                        ticket['scenario'] = item.get('scenario', 'Выбор AI')
-                        ticket['ai_reason'] = item.get('reason', 'Рекомендация AI')
-                        final_tickets.append(ticket)
+                if json_match:
+                    import json
+                    ai_results = json.loads(json_match.group(1))
                 
-                final_tickets.sort(key=lambda x: x.get('ai_score', 0), reverse=True)
-                
-                if final_tickets:
-                    logging.info(f"AI вернул {len(final_tickets)} рекомендаций")
-                    return final_tickets
+                    final_tickets = []
+                    for item in ai_results:
+                        idx = item.get('index')
+                        if idx is not None and isinstance(idx, int) and 0 <= idx < len(candidates):
+                            ticket = candidates[idx].copy()
+                            ticket['ai_score'] = item.get('ai_score', 0)
+                            ticket['scenario'] = item.get('scenario', 'Выбор AI')
+                            ticket['ai_reason'] = item.get('reason', 'Рекомендация AI')
+                            final_tickets.append(ticket)
+                    
+                    final_tickets.sort(key=lambda x: x.get('ai_score', 0), reverse=True)
+                    
+                    if final_tickets:
+                        logging.info(f"AI вернул {len(final_tickets)} рекомендаций")
+                        return final_tickets
 
     except Exception as e:
         logging.error(f"Ошибка AI анализа: {e}")
@@ -900,71 +904,58 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
 
 
 def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
-    """Форматирует билеты с разделением на основные и альтернативные (выгодные)."""
     if not tickets:
         return "😢 Билеты не найдены"
 
-    # Разделяем на основные и альтернативные
     main_tickets = [t for t in tickets if not t.get("is_alternative")]
-
-    # Альтернативные берем только если они реально ДЕШЕВЛЕ самого дешевого основного
+    
+    # Ищем альтернативы, которые дешевле самого дешевого основного варианта
     cheapest_main = min([t["price"] for t in main_tickets]) if main_tickets else float('inf')
-    alt_tickets = [t for t in tickets if t.get("is_alternative") and t["price"] < cheapest_main]
-
-    # Удаляем дубликаты цен/дат в альтах (оставляем топ-3 самых выгодных)
-    alt_tickets.sort(key=lambda x: x["price"])
-    seen_dates = set()
+    alt_candidates = [t for t in tickets if t.get("is_alternative") and t["price"] < cheapest_main]
+    
+    # Сортируем альтернативы по цене и берем 3 уникальных по датам
+    alt_candidates.sort(key=lambda x: x["price"])
     unique_alts = []
-    for alt in alt_tickets:
-        date_key = f"{alt.get('search_departure')}-{alt.get('search_return')}"
-        if date_key not in seen_dates and len(unique_alts) < 3:
+    seen_dates = set()
+    for alt in alt_candidates:
+        d_key = f"{alt.get('search_departure')}_{alt.get('search_return')}"
+        if d_key not in seen_dates and len(unique_alts) < 3:
             unique_alts.append(alt)
-            seen_dates.add(date_key)
+            seen_dates.add(d_key)
 
-    def render_ticket_block(t: Dict, idx: int) -> str:
+    def render_block(t: Dict, idx: int) -> str:
         link = t.get("deeplink", "#")
-        airline = t.get("airline", "Неизвестно")
-        price = t.get("price", 0)
-
-        # Красивая дата для альтернатив
-        date_str = ""
+        price = f"{t['price']:,}".replace(',', ' ')
+        
+        # Красивая метка даты для альтернатив
+        date_info = ""
         if t.get("is_alternative"):
-            dep = t.get('search_departure', '')[5:].replace('-', '.')
-            ret = t.get('search_return')
-            date_str = f"📅 <b>{dep}</b>" + (f" - <b>{ret[5:].replace('-', '.')}</b>" if ret else "") + "\n"
+            d = t.get('search_departure', '')[8:10] + "." + t.get('search_departure', '')[5:7]
+            r = t.get('search_return', '')
+            r_str = f" - {r[8:10]}.{r[5:7]}" if r else ""
+            date_info = f"📅 <b>{d}{r_str}</b>\n"
 
-        res = f"<b>{idx}. <a href='{link}'>{airline}</a></b>\n"
-        res += date_str
-        if t.get("scenario"):
-            res += f"🎯 <i>{t['scenario']}</i>\n"
 
-        # Краткая инфо о перелетах
-        for trip in (t.get("trips") or []):
-            stops = trip.get("stops", 0)
-            stops_str = "Прямой" if stops == 0 else f"{stops} пер."
-            res += f"🕒 {trip.get('duration')} | {stops_str} | {'🧳' if trip.get('baggage') else '🎒'}\n"
+        return (f"<b>{idx}. <a href='{link}'>{t.get('airline', 'Рейс')}</a></b>\n"
+                f"{date_info}"
+                f"🕒 {t.get('trips', [{}])[0].get('duration', '—')} | 💰 <b>{price} ₽</b>\n")
 
-        res += f"💰 <b>{price:,} ₽</b>\n"
-        return res
-
-    # Сборка сообщения
-    origin_str = params["origins"][0]["name"].title()
-    dest_str = params["destinations"][0]["name"].title()
-
-    message = [f"✈️ <b>{origin_str} → {dest_str}</b>\n"]
-
+    res = [f"✈️ <b>{params['origins'][0]['name'].title()} → {params['destinations'][0]['name'].title()}</b>\n"]
+    
     if main_tickets:
-        message.append("📍 <b>Результаты на ваши даты:</b>")
-        for i, t in enumerate(main_tickets[:5], 1):
-            message.append(render_ticket_block(t, i))
+        res.append("📍 <b>Ваши даты:</b>")
+        for i, t in enumerate(main_tickets[:3], 1):
+            res.append(render_block(t, i))
+    else:
+        res.append("❌ <i>На точные даты билетов нет</i>\n")
 
     if unique_alts:
-        message.append("---")
-        message.append("🔥 <b>Более выгодные даты:</b>")
+        res.append("---")
+        res.append("🔥 <b>Альтернативы (дешевле):</b>")
         for i, t in enumerate(unique_alts, 1):
-            message.append(render_ticket_block(t, i))
+            res.append(render_block(t, i))
 
-    return "\n".join(message)
+    return "\n".join(res)
 
 
 async def process_tickets_command(message: types.Message):
@@ -1038,45 +1029,52 @@ async def process_tickets_command(message: types.Message):
                 await asyncio.sleep(3)
             
         else:
-            # Режим поиска с точными датами + соседние даты
-            date_info = f"{departure}"
-            if return_date:
-                date_info += f" - {return_date}"
-
+            # Подготовка списка комбинаций
+            dep_variants = get_date_range_neighbors(departure)
+            ret_variants = get_date_range_neighbors(return_date)
+            
+            combinations = []
+            for d in dep_variants:
+                for r in ret_variants:
+                    combinations.append((d, r))
+            
+            total_steps = len(combinations)
+            all_tickets = []
+            
             status_msg = await message.reply(
-                f"🔍 <b>Запускаю расширенный поиск</b>\n\n"
+                f"🔍 <b>Запускаю глубокий поиск</b>\n"
                 f"📍 {origin_str} → {dest_str}\n"
-                f"📅 Дата: {date_info}\n"
-                f"⏳ Проверяю также соседние даты (±1 день)...",
+                f"📅 Дата: {departure} {'- ' + return_date if return_date else ''}\n\n"
+                f"⌛ Подбираю варианты: [░░░░░░░░░░] 0/{total_steps}",
                 parse_mode="HTML"
             )
 
-            # Формируем список пар дат для проверки
-            departure_variants = get_date_range_neighbors(departure)
-            return_variants = get_date_range_neighbors(return_date) if return_date else [None]
+            for i, (dep_v, ret_v) in enumerate(combinations, 1):
+                # Обновляем прогресс-бар
+                progress = int((i / total_steps) * 10)
+                bar = "▓" * progress + "░" * (10 - progress)
+                await status_msg.edit_text(
+                    f"🔍 <b>Глубокий поиск</b> (±1 день)\n"
+                    f"📍 {origin_str} → {dest_str}\n"
+                    f"📅 Проверка: {dep_v} {f' - {ret_v}' if ret_v else ''}\n\n"
+                    f"⌛ [{bar}] {i}/{total_steps}",
+                    parse_mode="HTML"
+                )
 
-            all_tickets = []
-
-            # Обходим комбинации
-            for dep_v in departure_variants:
-                for ret_v in return_variants:
-                    # Помечаем, является ли эта пара дат основной (запрошенной)
-                    is_target = (dep_v == departure and (ret_v == return_date or ret_v is None))
-
-                    logging.info(f"Проверка даты: {dep_v} - {ret_v} (Target: {is_target})")
-
-                    tickets = await multi_destination_search(
-                        origins, destinations, dep_v, ret_v, params["passengers"]
-                    )
-
-                    for t in tickets:
-                        t["is_alternative"] = not is_target
-                        t["search_departure"] = dep_v
-                        t["search_return"] = ret_v
-
-                    all_tickets.extend(tickets)
-                    # Небольшая пауза, чтобы не забанили (API Tutu чувствителен)
-                    await asyncio.sleep(1.5)
+                is_target = (dep_v == departure and (ret_v == return_date or ret_v is None))
+                
+                tickets = await multi_destination_search(
+                    origins, destinations, dep_v, ret_v, params["passengers"]
+                )
+                
+                for t in tickets:
+                    t["is_alternative"] = not is_target
+                    t["search_departure"] = dep_v
+                    t["search_return"] = ret_v
+                
+                all_tickets.extend(tickets)
+                if i < total_steps:
+                    await asyncio.sleep(0.5) # Небольшая пауза
         
         if not all_tickets:
             await status_msg.edit_text(
