@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import httpx
 from aiogram import types
@@ -222,6 +222,14 @@ def format_short_date(date_str: str) -> str:
         return date_str
 
 
+def format_full_date(date_str: str) -> str:
+    """Форматирует дату YYYY-MM-DD в DD.MM.YYYY."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return date_str
+
+
 def parse_search_command(text: str) -> Dict:
     """
     Парсит команду поиска билетов.
@@ -345,6 +353,50 @@ def generate_date_variants(
         ))
 
     return variants[:MAX_DATE_VARIANTS]
+
+
+def build_offer_meta(
+    out_date: str,
+    return_date: Optional[str],
+    requested_out: Optional[str],
+    requested_return: Optional[str]
+) -> Dict:
+    """Формирует метаданные дат для оффера."""
+    out_dt = datetime.strptime(out_date, "%Y-%m-%d").date()
+    ret_dt = (
+        datetime.strptime(return_date, "%Y-%m-%d").date()
+        if return_date
+        else None
+    )
+
+    requested_out = requested_out or out_date
+    requested_return = requested_return if requested_return is not None else return_date
+
+    requested_out_dt = datetime.strptime(requested_out, "%Y-%m-%d").date()
+    requested_ret_dt = (
+        datetime.strptime(requested_return, "%Y-%m-%d").date()
+        if requested_return
+        else None
+    )
+
+    date_type = (
+        "exact"
+        if out_date == requested_out and return_date == requested_return
+        else "alternative"
+    )
+
+    date_shift = (out_dt - requested_out_dt).days
+    if date_shift < -1:
+        date_shift = -1
+    elif date_shift > 1:
+        date_shift = 1
+
+    return {
+        "out_date": out_dt,
+        "return_date": ret_dt,
+        "date_type": date_type,
+        "date_shift": date_shift,
+    }
 
 
 async def fetch_offers(
@@ -699,7 +751,9 @@ async def search_tickets(
     destination_name: str,
     departure_date: str,
     return_date: Optional[str] = None,
-    passengers: int = 1
+    passengers: int = 1,
+    requested_departure: Optional[str] = None,
+    requested_return: Optional[str] = None
 ) -> List[Dict]:
     """
     Полный цикл поиска. 
@@ -751,6 +805,12 @@ async def search_tickets(
         ticket = parse_offer(offer)
         if ticket and ticket["price"] > 0:
             ticket["deeplink"] = search_link
+            ticket["meta"] = build_offer_meta(
+                departure_date,
+                return_date,
+                requested_departure,
+                requested_return
+            )
             tickets.append(ticket)
 
     tickets.sort(key=lambda x: x["price"])
@@ -762,7 +822,9 @@ async def multi_destination_search(
     destinations: List[Dict],
     departure_date: str,
     return_date: Optional[str] = None,
-    passengers: int = 1
+    passengers: int = 1,
+    requested_departure: Optional[str] = None,
+    requested_return: Optional[str] = None
 ) -> List[Dict]:
     """
     Поиск билетов по множественным направлениям.
@@ -778,7 +840,9 @@ async def multi_destination_search(
                 destination["name"],
                 departure_date,
                 return_date,
-                passengers
+                passengers,
+                requested_departure,
+                requested_return
             )
             
             # Добавляем метаданные
@@ -823,6 +887,8 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     # Даты
     departure = params.get("departure_date", "")
     return_date = params.get("return_date", "")
+    display_departure = format_full_date(departure) if departure else departure
+    display_return = format_full_date(return_date) if return_date else return_date
     
     date_info = f"{departure}"
     if return_date:
@@ -945,9 +1011,14 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     return candidates[:7]
 
 
-def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
+def format_tickets_message(
+    exact_tickets: List[Dict],
+    alternative_tickets: List[Dict],
+    params: Dict,
+    no_exact_message: Optional[str] = None
+) -> str:
     """Форматирует список билетов в HTML для Telegram."""
-    if not tickets:
+    if not exact_tickets and not alternative_tickets:
         return "😢 Билеты не найдены"
     
     # Заголовок
@@ -963,92 +1034,123 @@ def format_tickets_message(tickets: List[Dict], params: Dict) -> str:
     header = f"✈️ <b>Авиабилеты: {origin_str} → {dest_str}</b>\n"
     
     if return_date:
-        header += f"📅 {departure} - {return_date} (туда-обратно)\n"
+        header += f"📅 {display_departure} - {display_return} (туда-обратно)\n"
     else:
-        header += f"📅 {departure}\n"
+        header += f"📅 {display_departure}\n"
     
     header += f"👥 {params.get('passengers', 1)} пасс.\n\n"
     
     lines = [header]
-    
-    for i, ticket in enumerate(tickets, 1):
-        link = ticket.get("deeplink", "#")
-        airline = ticket.get("airline", "Неизвестно")
-        
-        lines.append(f"<b>{i}. <a href='{link}'>{airline}</a></b>")
-        
-        if ticket.get("scenario"):
-            lines.append(f"🎯 <i>{ticket['scenario']}</i>")
-        
-        def format_time_block(block: Dict) -> List[str]:
-            block_lines = []
-            departure_time = block.get("departure", "")
-            arrival_time = block.get("arrival", "")
-            duration = block.get("duration", "")
 
-            if departure_time and arrival_time:
-                def format_datetime(dt_str: str) -> str:
-                    if "T" in dt_str:
-                        date_part, time_part = dt_str.split("T", 1)
-                        date_short = format_short_date(date_part)
-                        time_short = time_part[:5]
-                        return f"{date_short} {time_short}"
-                    return dt_str
+    if no_exact_message:
+        lines.append(f"❗️{no_exact_message}\n")
 
-                dep_short = format_datetime(departure_time)
-                arr_short = format_datetime(arrival_time)
-                if dep_short and arr_short:
-                    block_lines.append(f"🕒 {dep_short} → {arr_short} ({duration})")
+    def format_time_block(block: Dict) -> List[str]:
+        block_lines = []
+        departure_time = block.get("departure", "")
+        arrival_time = block.get("arrival", "")
+        duration = block.get("duration", "")
 
-            stops = block.get("stops", 0)
-            if stops == 0:
-                block_lines.append("✈️ Прямой рейс")
-            else:
-                block_lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
+        if departure_time and arrival_time:
+            def format_datetime(dt_str: str) -> str:
+                if "T" in dt_str:
+                    date_part, time_part = dt_str.split("T", 1)
+                    date_short = format_short_date(date_part)
+                    time_short = time_part[:5]
+                    return f"{date_short} {time_short}"
+                return dt_str
 
-            if block.get("baggage"):
-                block_lines.append("🧳 Багаж включен")
-            else:
-                block_lines.append("🧳 Без багажа")
+            dep_short = format_datetime(departure_time)
+            arr_short = format_datetime(arrival_time)
+            if dep_short and arr_short:
+                block_lines.append(f"🕒 {dep_short} → {arr_short} ({duration})")
 
-            return block_lines
-
-        trips = ticket.get("trips") or []
-        if len(trips) >= 2:
-            labels = ["➡️ Туда", "↩️ Обратно"]
-            for idx, trip in enumerate(trips):
-                label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
-                lines.append(f"<b>{label}</b>")
-                lines.extend(format_time_block(trip))
-                if idx < len(trips) - 1:
-                    lines.append("")
+        stops = block.get("stops", 0)
+        if stops == 0:
+            block_lines.append("✈️ Прямой рейс")
         else:
-            lines.extend(format_time_block(ticket))
+            block_lines.append(f"🔄 {stops} пересадка" if stops == 1 else f"🔄 {stops} пересадки")
 
-        alt_departure = ticket.get("_alt_departure")
-        alt_return = ticket.get("_alt_return")
-        if alt_departure:
-            if alt_return:
-                lines.append(
-                    "🗓️ Альтернативные даты: "
-                    f"{format_short_date(alt_departure)} - {format_short_date(alt_return)}"
-                )
+        if block.get("baggage"):
+            block_lines.append("🧳 Багаж включен")
+        else:
+            block_lines.append("🧳 Без багажа")
+
+        return block_lines
+
+    def describe_alt_dates(tickets: List[Dict]) -> Optional[str]:
+        if not tickets:
+            return None
+        unique_dates = {
+            (
+                t.get("meta", {}).get("out_date"),
+                t.get("meta", {}).get("return_date")
+            )
+            for t in tickets
+        }
+        unique_dates = {
+            (d_out, d_ret)
+            for d_out, d_ret in unique_dates
+            if isinstance(d_out, date)
+        }
+        if len(unique_dates) == 1:
+            out_dt, ret_dt = next(iter(unique_dates))
+            if ret_dt:
+                return f"📅 {out_dt.strftime('%d.%m')} – {ret_dt.strftime('%d.%m')}"
+            return f"📅 {out_dt.strftime('%d.%m')}"
+        return None
+
+    def render_ticket_block(tickets: List[Dict], start_index: int = 1) -> List[str]:
+        block_lines = []
+        for i, ticket in enumerate(tickets, start_index):
+            link = ticket.get("deeplink", "#")
+            airline = ticket.get("airline", "Неизвестно")
+
+            block_lines.append(f"<b>{i}. <a href='{link}'>{airline}</a></b>")
+
+            if ticket.get("scenario"):
+                block_lines.append(f"🎯 <i>{ticket['scenario']}</i>")
+
+            trips = ticket.get("trips") or []
+            if len(trips) >= 2:
+                labels = ["➡️ Туда", "↩️ Обратно"]
+                for idx, trip in enumerate(trips):
+                    label = labels[idx] if idx < len(labels) else f"🧭 Сегмент {idx + 1}"
+                    block_lines.append(f"<b>{label}</b>")
+                    block_lines.extend(format_time_block(trip))
+                    if idx < len(trips) - 1:
+                        block_lines.append("")
             else:
-                lines.append(
-                    f"🗓️ Альтернативная дата: {format_short_date(alt_departure)}"
-                )
-        
-        # AI комментарий
-        if ticket.get("ai_reason"):
-            lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
-        
-        # Цена
-        price = ticket.get("price", 0)
-        currency = ticket.get("currency", "RUB")
-        symbol = "₽" if currency == "RUB" else currency
-        
-        lines.append(f"💰 <b>{price:,} {symbol}</b>\n")
-    
+                block_lines.extend(format_time_block(ticket))
+
+            if ticket.get("ai_reason"):
+                block_lines.append(f"🤖 <i>{ticket['ai_reason']}</i>")
+
+            price = ticket.get("price", 0)
+            currency = ticket.get("currency", "RUB")
+            symbol = "₽" if currency == "RUB" else currency
+
+            block_lines.append(f"💰 <b>{price:,} {symbol}</b>\n")
+        return block_lines
+
+    if exact_tickets:
+        lines.append("🟢 <b>По выбранным датам</b>")
+        lines.extend(render_ticket_block(exact_tickets))
+
+    if alternative_tickets:
+        if exact_tickets:
+            lines.append("────────────────────\n")
+            lines.append("🟡 <b>Альтернативные даты</b>")
+        else:
+            lines.append("🟡 <b>Ближайшие альтернативы</b>")
+
+        alt_date_label = describe_alt_dates(alternative_tickets)
+        if alt_date_label:
+            lines.append(alt_date_label)
+            lines.append("")
+
+        lines.extend(render_ticket_block(alternative_tickets))
+
     return "\n".join(lines)
 
 
@@ -1117,7 +1219,13 @@ async def process_tickets_command(message: types.Message):
             all_tickets = []
             for date in dates:
                 tickets = await multi_destination_search(
-                    origins, destinations, date, None, params["passengers"]
+                    origins,
+                    destinations,
+                    date,
+                    None,
+                    params["passengers"],
+                    date,
+                    None
                 )
                 all_tickets.extend(tickets)
                 await asyncio.sleep(3)
@@ -1138,7 +1246,13 @@ async def process_tickets_command(message: types.Message):
             )
             
             base_tickets = await multi_destination_search(
-                origins, destinations, departure, return_date, params["passengers"]
+                origins,
+                destinations,
+                departure,
+                return_date,
+                params["passengers"],
+                departure,
+                return_date
             )
 
             alternative_tickets = []
@@ -1154,26 +1268,15 @@ async def process_tickets_command(message: types.Message):
                     destinations,
                     dep_alt,
                     ret_alt,
-                    params["passengers"]
+                    params["passengers"],
+                    departure,
+                    return_date
                 )
-
-                for ticket in tickets:
-                    ticket["_alt_departure"] = dep_alt
-                    ticket["_alt_return"] = ret_alt
 
                 alternative_tickets.extend(tickets)
 
                 await asyncio.sleep(2)
-
-            better_alternatives = []
-            if base_tickets:
-                best_base_price = min(t["price"] for t in base_tickets)
-                better_alternatives = [
-                    t for t in alternative_tickets
-                    if t["price"] < best_base_price
-                ]
-
-            all_tickets = base_tickets + better_alternatives
+            all_tickets = base_tickets + alternative_tickets
         
         if not all_tickets:
             await status_msg.edit_text(
@@ -1189,20 +1292,44 @@ async def process_tickets_command(message: types.Message):
             parse_mode="HTML"
         )
         
-        # AI анализ
-        best_tickets = await analyze_tickets_with_ai(all_tickets, params)
-        
-        if not best_tickets:
+        exact_offers = [o for o in all_tickets if o.get("meta", {}).get("date_type") == "exact"]
+        alt_offers = [o for o in all_tickets if o.get("meta", {}).get("date_type") == "alternative"]
+
+        best_exact = []
+        best_alt = []
+        if exact_offers:
+            best_exact = await analyze_tickets_with_ai(exact_offers, params)
+            best_exact = best_exact[:5]
+
+            if alt_offers:
+                best_alt = await analyze_tickets_with_ai(alt_offers, params)
+                best_alt = best_alt[:3]
+        elif alt_offers:
+            best_alt = await analyze_tickets_with_ai(alt_offers, params)
+            best_alt = best_alt[:7]
+
+        if not best_exact and not best_alt:
             await status_msg.edit_text("😕 Не удалось проанализировать билеты.")
             return
         
         await status_msg.delete()
         
+        no_exact_message = None
+        if not best_exact and return_date:
+            no_exact_message = (
+                f"На даты {format_short_date(departure)} – "
+                f"{format_short_date(return_date)} билеты не найдены"
+            )
+        elif not best_exact:
+            no_exact_message = f"На дату {format_short_date(departure)} билеты не найдены"
+
         # Отправляем результаты
-        result_text = format_tickets_message(best_tickets, params)
+        result_text = format_tickets_message(best_exact, best_alt, params, no_exact_message)
         await message.reply(result_text, parse_mode="HTML", disable_web_page_preview=True)
-        
-        logging.info(f"Отправлено {len(best_tickets)} билетов пользователю {message.from_user.id}")
+
+        logging.info(
+            f"Отправлено {len(best_exact) + len(best_alt)} билетов пользователю {message.from_user.id}"
+        )
         
     except Exception as e:
         logging.error(f"Ошибка в process_tickets_command: {e}", exc_info=True)
