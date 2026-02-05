@@ -499,6 +499,7 @@ def parse_offer(offer: Dict) -> Optional[Dict]:
             return None
 
         result = {
+            "id": offer.get("id"),
             "price": 0, "currency": "RUB", "airline": "Неизвестно",
             "departure": "", "arrival": "", "duration": "",
             "stops": 0, "baggage": False, "deeplink": "", "trips": []
@@ -793,12 +794,18 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
     # Упрощаем данные для AI, чтобы JSON был компактным и валидным
     simplify = []
     for t in subset:
+        # Генерируем временный ID, если реального нет
+        ticket_id = t.get("id") or str(uuid.uuid4())
+        # Сохраняем ID в билет, если его не было, чтобы потом найти его при разборе ответа AI
+        if "id" not in t:
+            t["id"] = ticket_id
+
         simplify.append({
-            "id": t["id"],
-            "price": t["price"],
-            "is_alt": t.get("is_alternative"),
-            "date": f"{t.get('search_departure')} - {t.get('search_return')}",
-            "airline": t.get("airline")
+            "id": ticket_id,
+            "price": t.get("price", 0),
+            "is_alt": t.get("is_alternative", False),
+            "date": f"{t.get('search_departure', '')} - {t.get('search_return', '')}",
+            "airline": t.get("airline", "Unknown")
         })
 
     prompt = f"""
