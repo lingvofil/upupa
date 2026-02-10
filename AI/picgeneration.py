@@ -108,14 +108,7 @@ PIPELINE_ID = None
 # =============================================================================
 
 async def translate_to_en(text: str) -> str:
-    if not text: return ""
-    try:
-        res = await asyncio.to_thread(lambda: model.generate_content(
-            f"Expand and translate this prompt for high-quality image generation in English. Output only translation: {text}"
-        ).text)
-        return res.strip()
-    except Exception:
-        return text
+    return text
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
