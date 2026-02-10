@@ -184,7 +184,7 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
 
     try:
         r = await asyncio.to_thread(
-            lambda: requests.get(url, headers=headers, timeout=40)
+            lambda: requests.get(url, headers=headers, timeout=90)
         )
         if r.status_code == 200 and r.content:
             return r.content
