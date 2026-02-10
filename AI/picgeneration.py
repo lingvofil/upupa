@@ -10,6 +10,7 @@ import textwrap
 import time
 from io import BytesIO
 from typing import Optional, Tuple, Union
+from urllib.parse import quote
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -167,24 +168,30 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # =============================================================================
 
 async def pollinations_generate(prompt: str) -> Optional[bytes]:
-    model_choice = random.choice(['flux', 'flux-pro'])
-    
-    # Базовый URL
-    url = f"https://image.pollinations.ai/prompt/{prompt}?width=1024&height=1024&nologo=true&model={model_choice}&seed={random.randint(1, 99999)}"
-    
-    # Подготовка заголовков
-    headers = {}
-    if POLLINATIONS_API_KEY:
-        headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
-        # Для платных аккаунтов иногда рекомендуется использовать gen.pollinations.ai, 
-        # но image.pollinations.ai обычно проксирует auth.
-        # Если возникнут проблемы, можно попробовать заменить домен:
-        # url = url.replace("image.pollinations.ai", "gen.pollinations.ai").replace("/prompt/", "/image/")
+    model_choice = random.choice(["flux", "flux-pro"])
+    prompt_q = quote(prompt)
+
+    url = (
+        f"https://gen.pollinations.ai/image/{prompt_q}"
+        f"?width=1024&height=1024"
+        f"&model={model_choice}"
+        f"&seed={random.randint(1, 99999)}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {POLLINATIONS_API_KEY}"
+    }
 
     try:
-        r = await asyncio.to_thread(lambda: requests.get(url, headers=headers, timeout=35))
-        return r.content if r.status_code == 200 else None
-    except: return None
+        r = await asyncio.to_thread(
+            lambda: requests.get(url, headers=headers, timeout=40)
+        )
+        if r.status_code == 200 and r.content:
+            return r.content
+        return None
+    except Exception as e:
+        logging.error(f"Pollinations error: {e}")
+        return None
 
 async def hf_generate(prompt: str, model_id: str) -> Optional[bytes]:
     if not HF_TOKEN: return None
