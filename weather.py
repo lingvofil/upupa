@@ -21,7 +21,7 @@ OPENWEATHER_API_KEY = "7cf485d99b222b17e90f6d57df6c2d7d"
 CITIES = [
     "Moscow", "Odintsovo", "Saint Petersburg", "Vladikavkaz", "Kazan", 
     "Omsk", "Irkutsk", "Slyudyanka", "Baykalsk", "Kyakhta",
-    "Angarsk", "Minsk", "Sochi", "Samara"
+    "Angarsk", "Minsk", "Sochi", "Samara", "Almaty"
 ]
 
 # =============================================================================
@@ -97,7 +97,7 @@ async def get_all_cities_weather() -> List[Tuple[str, int, str]]:
         "Vladikavkaz": "Владикавказ", "Kazan": "Казань", "Omsk": "Омск",
         "Irkutsk": "Иркутск", "Slyudyanka": "Слюдянка", "Baykalsk": "Байкальск",
         "Kyakhta": "Кяхта", "Angarsk": "Ангарск", "Minsk": "Минск",
-        "Sochi": "Сочи", "Samara": "Самара"
+        "Sochi": "Сочи", "Samara": "Самара", "Almaty": "Алматы"
     }
     for city_en in CITIES:
         temp, desc = await get_weather(city_en)
