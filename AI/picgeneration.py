@@ -177,14 +177,15 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # =============================================================================
 
 async def pollinations_generate(prompt: str) -> Optional[bytes]:
-    model_choice = random.choice(["flux", "flux-pro"])
-    prompt_q = quote(prompt)
+    # flux-pro платный и нестабильный, используем только flux
+    prompt_q = quote(prompt[:500])  # обрезаем на случай слишком длинного промпта
 
     url = (
-        f"https://gen.pollinations.ai/image/{prompt_q}"
+        f"https://image.pollinations.ai/prompt/{prompt_q}"
         f"?width=1024&height=1024"
-        f"&model={model_choice}"
+        f"&model=flux"
         f"&seed={random.randint(1, 99999)}"
+        f"&nologo=true"
     )
 
     headers = {
@@ -192,11 +193,14 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
     }
 
     try:
+        logging.info(f"Pollinations запрос: {url[:120]}...")
         r = await asyncio.to_thread(
-            lambda: requests.get(url, headers=headers, timeout=90)
+            lambda: requests.get(url, headers=headers, timeout=120)
         )
-        if r.status_code == 200 and r.content:
+        logging.info(f"Pollinations статус: {r.status_code}, размер: {len(r.content)} байт")
+        if r.status_code == 200 and len(r.content) > 1000:  # защита от пустого ответа
             return r.content
+        logging.warning(f"Pollinations вернул плохой ответ: status={r.status_code}, size={len(r.content)}")
         return None
     except Exception as e:
         logging.error(f"Pollinations error: {e}")
