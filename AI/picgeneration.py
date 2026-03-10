@@ -177,46 +177,41 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # =============================================================================
 
 async def pollinations_generate(prompt: str) -> Optional[bytes]:
-    # Обрезаем промпт — слишком длинный URL даёт 500
+    """
+    Пробует модели по очереди: flux → turbo.
+    fetch failed = бэкенд Pollinations не ответил, переключаемся на следующую модель.
+    """
     prompt_q = quote(prompt[:200])
+    seed = random.randint(1, 99999)
 
-    url = (
-        f"https://image.pollinations.ai/prompt/{prompt_q}"
-        f"?width=1024&height=1024"
-        f"&model=flux"
-        f"&seed={random.randint(1, 99999)}"
-        f"&nologo=true"
-        f"&enhance=false"  # мы уже обогащаем через Groq, двойное обогащение ломает промпт
-    )
+    models_to_try = ["flux", "turbo"]
 
-    headers = {
-        "Authorization": f"Bearer {POLLINATIONS_API_KEY}"
-    }
+    for model_name in models_to_try:
+        url = (
+            f"https://image.pollinations.ai/prompt/{prompt_q}"
+            f"?width=1024&height=1024"
+            f"&model={model_name}"
+            f"&seed={seed}"
+            f"&nologo=true"
+        )
+        headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
 
-    for attempt in range(2):  # один retry при 500
         try:
-            logging.info(f"Pollinations попытка {attempt+1}, промпт: {prompt[:80]}...")
+            logging.info(f"Pollinations [{model_name}]: {prompt[:80]}...")
             r = await asyncio.to_thread(
                 lambda: requests.get(url, headers=headers, timeout=120)
             )
-            logging.info(f"Pollinations статус: {r.status_code}, размер: {len(r.content)} байт")
+            logging.info(f"Pollinations [{model_name}] статус: {r.status_code}, размер: {len(r.content)} байт")
             if r.status_code == 200 and len(r.content) > 1000:
                 return r.content
-            # Логируем тело ответа для диагностики
             try:
-                logging.warning(f"Pollinations ответ: {r.content[:300].decode('utf-8', errors='replace')}")
+                err_body = r.content[:200].decode('utf-8', errors='replace')
+                logging.warning(f"Pollinations [{model_name}] ответ: {err_body}")
             except Exception:
                 pass
-            if r.status_code == 500 and attempt == 0:
-                logging.warning(f"Pollinations 500, повторяю через 3 сек...")
-                await asyncio.sleep(3)
-                continue
-            logging.warning(f"Pollinations плохой ответ: status={r.status_code}, size={len(r.content)}")
-            return None
         except Exception as e:
-            logging.error(f"Pollinations error (попытка {attempt+1}): {e}")
-            if attempt == 0:
-                await asyncio.sleep(3)
+            logging.error(f"Pollinations [{model_name}] exception: {e}")
+
     return None
 
 async def hf_generate(prompt: str, model_id: str) -> Optional[bytes]:
