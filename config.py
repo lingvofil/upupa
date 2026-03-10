@@ -115,7 +115,7 @@ GIGACHAT_MODEL_QUEUE_SPECIAL = ["GigaChat-2-Max"]
 
 # --- GROQ MODELS ---
 # для чотам (картинки: считывание), скаламбурь, добавь, нарисуй, опиши
-GROQ_VISION_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
 # пародия, кто я, что за чат, кем стать, викторина
