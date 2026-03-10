@@ -79,6 +79,7 @@ from egra import start_egra, handle_egra_answer, handle_final_button_press
 # ================== БЛОК 3.11: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
 import statistics as bot_statistics
 from statistics import PrivateRateLimitMiddleware
+from middlewares import IncomingMessageLogMiddleware
 
 # ================== БЛОК 3.12: НАСТРОЙКИ ДИСТОРШН ==================
 from distortion import is_distortion_command, handle_distortion_request
@@ -183,6 +184,7 @@ from AI.tutu import process_tickets_command
 
 # ================== БЛОК 5: ХЭНДЛЕРЫ БЕЗ AI ==================
 
+router.message.middleware(IncomingMessageLogMiddleware())
 router.message.middleware(ContentFilterMiddleware())
 router.message.middleware(PrivateRateLimitMiddleware())
 
