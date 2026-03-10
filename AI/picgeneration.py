@@ -184,9 +184,13 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
     prompt_q = quote(prompt[:200])
     seed = random.randint(1, 99999)
 
-    models_to_try = ["flux", "turbo"]
+    # flux качественнее, turbo быстрее — пробуем по очереди
+    models_to_try = [
+        ("flux",  60),   # 60 сек — если не успел, не ждём
+        ("turbo", 45),   # turbo быстрее
+    ]
 
-    for model_name in models_to_try:
+    for i, (model_name, timeout) in enumerate(models_to_try):
         url = (
             f"https://image.pollinations.ai/prompt/{prompt_q}"
             f"?width=1024&height=1024"
@@ -196,10 +200,14 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
         )
         headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
 
+        # Пауза между попытками — даём время освободить очередь IP
+        if i > 0:
+            await asyncio.sleep(5)
+
         try:
             logging.info(f"Pollinations [{model_name}]: {prompt[:80]}...")
             r = await asyncio.to_thread(
-                lambda: requests.get(url, headers=headers, timeout=120)
+                lambda: requests.get(url, headers=headers, timeout=timeout)
             )
             logging.info(f"Pollinations [{model_name}] статус: {r.status_code}, размер: {len(r.content)} байт")
             if r.status_code == 200 and len(r.content) > 1000:
