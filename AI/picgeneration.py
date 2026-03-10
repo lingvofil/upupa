@@ -184,41 +184,59 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
     prompt_q = quote(prompt[:200])
     seed = random.randint(1, 99999)
 
-    # flux качественнее, turbo быстрее — пробуем по очереди
-    models_to_try = [
-        ("flux",  60),   # 60 сек — если не успел, не ждём
-        ("turbo", 45),   # turbo быстрее
-    ]
+    headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
 
-    for i, (model_name, timeout) in enumerate(models_to_try):
-        url = (
-            f"https://image.pollinations.ai/prompt/{prompt_q}"
+    def make_url(model_name):
+        # Правильный базовый домен по документации: gen.pollinations.ai
+        return (
+            f"https://gen.pollinations.ai/image/{prompt_q}"
             f"?width=1024&height=1024"
             f"&model={model_name}"
             f"&seed={seed}"
-            f"&nologo=true"
         )
-        headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
 
-        # Пауза между попытками — даём время освободить очередь IP
-        if i > 0:
-            await asyncio.sleep(5)
-
+    # 1. Пробуем flux
+    try:
+        logging.info(f"Pollinations [flux]: {prompt[:80]}...")
+        r = await asyncio.to_thread(
+            lambda: requests.get(make_url("flux"), headers=headers, timeout=60)
+        )
+        logging.info(f"Pollinations [flux] статус: {r.status_code}, размер: {len(r.content)} байт")
+        if r.status_code == 200 and len(r.content) > 1000:
+            return r.content
         try:
-            logging.info(f"Pollinations [{model_name}]: {prompt[:80]}...")
-            r = await asyncio.to_thread(
-                lambda: requests.get(url, headers=headers, timeout=timeout)
-            )
-            logging.info(f"Pollinations [{model_name}] статус: {r.status_code}, размер: {len(r.content)} байт")
-            if r.status_code == 200 and len(r.content) > 1000:
-                return r.content
-            try:
-                err_body = r.content[:200].decode('utf-8', errors='replace')
-                logging.warning(f"Pollinations [{model_name}] ответ: {err_body}")
-            except Exception:
-                pass
-        except Exception as e:
-            logging.error(f"Pollinations [{model_name}] exception: {e}")
+            logging.warning(f"Pollinations [flux] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
+        except Exception:
+            pass
+        # flux быстро вернул ошибку — очередь свободна, пробуем zimage
+        flux_timed_out = False
+    except requests.exceptions.Timeout:
+        # flux завис — его запрос ещё висит в очереди IP, следующий получит 429
+        logging.warning("Pollinations [flux] timeout — очередь занята, пропускаем следующую модель")
+        flux_timed_out = True
+    except Exception as e:
+        logging.error(f"Pollinations [flux] exception: {e}")
+        flux_timed_out = False
+
+    if flux_timed_out:
+        return None  # идём на Kandinsky, не теряем время на 429
+
+    # 2. flux вернул быстрый не-200 — пробуем zimage (дефолтная и стабильная модель)
+    await asyncio.sleep(2)
+    try:
+        logging.info(f"Pollinations [zimage]: {prompt[:80]}...")
+        r = await asyncio.to_thread(
+            lambda: requests.get(make_url("zimage"), headers=headers, timeout=60)
+        )
+        logging.info(f"Pollinations [zimage] статус: {r.status_code}, размер: {len(r.content)} байт")
+        if r.status_code == 200 and len(r.content) > 1000:
+            return r.content
+        try:
+            logging.warning(f"Pollinations [zimage] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
+        except Exception:
+            pass
+    except Exception as e:
+        logging.error(f"Pollinations [zimage] exception: {e}")
 
     return None
 
