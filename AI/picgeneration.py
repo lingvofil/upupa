@@ -108,6 +108,7 @@ async def translate_to_en(text: str) -> str:
     """
     Переводит промпт на английский и обогащает его для лучшей генерации.
     Без этого Flux рисует абстрактную муть по русскому тексту.
+    Используем Groq — быстро и надёжно.
     """
     try:
         translate_prompt = (
@@ -117,10 +118,7 @@ async def translate_to_en(text: str) -> str:
             f"Rules: keep the subject clear, add style/quality words like 'photorealistic, detailed, high quality, 8k'. "
             f"Max 100 words."
         )
-        result = await asyncio.to_thread(
-            lambda: model.generate_content(translate_prompt).text.strip()
-        )
-        # Убираем кавычки и лишние символы если модель их добавила
+        result = await asyncio.to_thread(lambda: groq_ai.generate_text(translate_prompt))
         result = result.strip('"\'').strip()
         logging.info(f"Translated prompt: '{text}' -> '{result}'")
         return result if result else text
@@ -268,18 +266,18 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
 async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: str, chat_id: str) -> str:
     """
     Анализирует изображение через выбранную модель.
-    Если Groq недоступен — автоматически падает на Gemini.
+    Если основная недоступна — автоматически падает на Gemini Flash.
     """
     if active_model == "groq":
         try:
+            # vision_model уже задан в GroqWrapper при инициализации в config.py
             logging.info(f"Анализируем изображение через Groq ({GROQ_VISION_MODEL})")
             result = await asyncio.to_thread(
-                lambda: groq_ai.analyze_image(img_bytes, prompt, model=GROQ_VISION_MODEL)
+                lambda: groq_ai.analyze_image(img_bytes, prompt)
             )
             return result
         except Exception as e:
-            logging.warning(f"Groq vision недоступен: {e}, падаем на Gemini")
-            # Fallthrough to Gemini
+            logging.warning(f"Groq vision недоступен: {e}, падаем на Gemini Flash")
 
     if active_model == "gigachat":
         try:
@@ -290,14 +288,14 @@ async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: 
             ))
             return response.text.strip()
         except Exception as e:
-            logging.warning(f"GigaChat vision недоступен: {e}, падаем на Gemini")
-            # Fallthrough to Gemini
+            logging.warning(f"GigaChat vision недоступен: {e}, падаем на Gemini Flash")
 
-    # Gemini — основной и резервный вариант
-    logging.info("Анализируем изображение через Gemini")
-    response = await asyncio.to_thread(lambda: model.generate_content(
-        [prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
-        chat_id=int(chat_id)
+    # Gemini Flash — лёгкая модель, не тратим квоту gemini-2.5-pro
+    import google.generativeai as genai
+    logging.info("Анализируем изображение через Gemini Flash")
+    flash_model = genai.GenerativeModel("gemini-2.0-flash")
+    response = await asyncio.to_thread(lambda: flash_model.generate_content(
+        [prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
     ))
     return response.text.strip()
 
