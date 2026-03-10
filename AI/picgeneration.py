@@ -202,6 +202,11 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
             logging.info(f"Pollinations статус: {r.status_code}, размер: {len(r.content)} байт")
             if r.status_code == 200 and len(r.content) > 1000:
                 return r.content
+            # Логируем тело ответа для диагностики
+            try:
+                logging.warning(f"Pollinations ответ: {r.content[:300].decode('utf-8', errors='replace')}")
+            except Exception:
+                pass
             if r.status_code == 500 and attempt == 0:
                 logging.warning(f"Pollinations 500, повторяю через 3 сек...")
                 await asyncio.sleep(3)
