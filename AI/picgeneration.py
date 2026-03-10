@@ -18,7 +18,7 @@ from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 
 import config
-from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY
+from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY, GROQ_VISION_MODEL
 from prompts import actions
 from AI.adddescribe import download_telegram_image
 
@@ -34,11 +34,8 @@ def get_active_model(chat_id: str) -> str:
     """Возвращает активную модель для чата"""
     settings = chat_settings.get(str(chat_id), {})
     active_model = settings.get("active_model", "gemini")
-    
-    # Режим истории не подходит для генерации
     if active_model == "history":
         active_model = "gemini"
-    
     return active_model
 
 # =============================================================================
@@ -108,7 +105,28 @@ PIPELINE_ID = None
 # =============================================================================
 
 async def translate_to_en(text: str) -> str:
-    return text
+    """
+    Переводит промпт на английский и обогащает его для лучшей генерации.
+    Без этого Flux рисует абстрактную муть по русскому тексту.
+    """
+    try:
+        translate_prompt = (
+            f"Translate this image generation prompt to English and enhance it with quality descriptors. "
+            f"Return ONLY the enhanced English prompt, nothing else, no explanations, no quotes.\n"
+            f"Original: {text}\n"
+            f"Rules: keep the subject clear, add style/quality words like 'photorealistic, detailed, high quality, 8k'. "
+            f"Max 100 words."
+        )
+        result = await asyncio.to_thread(
+            lambda: model.generate_content(translate_prompt).text.strip()
+        )
+        # Убираем кавычки и лишние символы если модель их добавила
+        result = result.strip('"\'').strip()
+        logging.info(f"Translated prompt: '{text}' -> '{result}'")
+        return result if result else text
+    except Exception as e:
+        logging.warning(f"translate_to_en error: {e}, using original text")
+        return text
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
@@ -211,9 +229,11 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
 async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message):
     global PIPELINE_ID
     
-    # 1. Flux (Pollinations)
+    # Переводим и обогащаем промпт один раз для всей цепочки
     await processing_msg.edit_text("Использую ебучий Flux...")
     prompt_en = await translate_to_en(prompt_ru)
+
+    # 1. Flux (Pollinations)
     img = await pollinations_generate(prompt_en)
     if img:
         await processing_msg.delete()
@@ -240,6 +260,46 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
         await send_generated_photo(message, img, "ai_image.png")
     else:
         await processing_msg.edit_text("Иди нахуй, я спать")
+
+# =============================================================================
+# АНАЛИЗ ИЗОБРАЖЕНИЯ ЧЕРЕЗ ДОСТУПНЫЕ МОДЕЛИ
+# =============================================================================
+
+async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: str, chat_id: str) -> str:
+    """
+    Анализирует изображение через выбранную модель.
+    Если Groq недоступен — автоматически падает на Gemini.
+    """
+    if active_model == "groq":
+        try:
+            logging.info(f"Анализируем изображение через Groq ({GROQ_VISION_MODEL})")
+            result = await asyncio.to_thread(
+                lambda: groq_ai.analyze_image(img_bytes, prompt, model=GROQ_VISION_MODEL)
+            )
+            return result
+        except Exception as e:
+            logging.warning(f"Groq vision недоступен: {e}, падаем на Gemini")
+            # Fallthrough to Gemini
+
+    if active_model == "gigachat":
+        try:
+            logging.info("Анализируем изображение через GigaChat")
+            response = await asyncio.to_thread(lambda: gigachat_model.generate_content(
+                [prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
+                chat_id=int(chat_id)
+            ))
+            return response.text.strip()
+        except Exception as e:
+            logging.warning(f"GigaChat vision недоступен: {e}, падаем на Gemini")
+            # Fallthrough to Gemini
+
+    # Gemini — основной и резервный вариант
+    logging.info("Анализируем изображение через Gemini")
+    response = await asyncio.to_thread(lambda: model.generate_content(
+        [prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
+        chat_id=int(chat_id)
+    ))
+    return response.text.strip()
 
 # =============================================================================
 # ПУБЛИЧНЫЕ ХЭНДЛЕРЫ
@@ -272,7 +332,6 @@ async def handle_pun_image_command(message: types.Message):
             "Больше ничего не пиши, никаких описаний и пояснений."
         )
         
-        # Генерируем каламбур через выбранную модель
         if active_model == "gigachat":
             pun_res = await asyncio.to_thread(
                 lambda: gigachat_model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip()
@@ -295,7 +354,6 @@ async def handle_pun_image_command(message: types.Message):
         
         prompt_en = await translate_to_en(f"A creative surreal hybrid of {source_raw}, visual pun, digital art, high resolution")
         
-        # Генерируем картинку
         img_data = await pollinations_generate(prompt_en)
         if not img_data:
             global PIPELINE_ID
@@ -317,8 +375,11 @@ async def handle_pun_image_command(message: types.Message):
         await msg.edit_text("Ашипка блядь")
 
 async def handle_redraw_command(message: types.Message):
-    """Перерисовка: Саркастичная инфографика с поддержкой разных моделей"""
-    photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
+    """Перерисовка: картинка перерисовывается в стиле детского рисунка"""
+    photo = message.photo[-1] if message.photo else (
+        message.reply_to_message.photo[-1]
+        if message.reply_to_message and message.reply_to_message.photo else None
+    )
     if not photo: return await message.reply("Нужно фото.")
     
     chat_id = str(message.chat.id)
@@ -330,30 +391,19 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
         
         analysis_prompt = (
-            "A very bad children's drawing, ugly doodle, mess, crayon style, "
-            "scribble, naive art, stick figures, white background, masterpiece by 4 year old child "
+            "Describe this image in detail for use as an image generation prompt. "
+            "Focus on the main subject, style, colors, and composition. "
+            "Return only the description, no commentary."
         )
         
-        # Анализируем изображение через выбранную модель
-        if active_model == "groq":
-            logging.info("Используем Groq Maverick для анализа изображения")
-            final_prompt = await asyncio.to_thread(
-                lambda: groq_ai.analyze_image(img_bytes, analysis_prompt)
-            )
-        elif active_model == "gigachat":
-            logging.info("Используем GigaChat для анализа изображения")
-            response = await asyncio.to_thread(lambda: gigachat_model.generate_content(
-                [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
-                chat_id=int(chat_id)
-            ))
-            final_prompt = response.text.strip()
-        else:  # gemini
-            logging.info("Используем Gemini для анализа изображения")
-            response = await asyncio.to_thread(lambda: model.generate_content(
-                [analysis_prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
-                chat_id=int(chat_id)
-            ))
-            final_prompt = response.text.strip()
+        description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
+        
+        # Добавляем стиль перерисовки поверх описания
+        final_prompt = (
+            f"{description}, "
+            "A very bad children's drawing, ugly doodle, mess, crayon style, "
+            "scribble, naive art, stick figures, white background, masterpiece by 4 year old child"
+        )
         
         await robust_image_generation(message, final_prompt, msg)
 
@@ -362,7 +412,10 @@ async def handle_redraw_command(message: types.Message):
         await msg.edit_text("Ошибка анализа или генерации.")
 
 async def handle_edit_command(message: types.Message):
-    photo = message.photo[-1] if message.photo else (message.reply_to_message.photo[-1] if message.reply_to_message and message.reply_to_message.photo else None)
+    photo = message.photo[-1] if message.photo else (
+        message.reply_to_message.photo[-1]
+        if message.reply_to_message and message.reply_to_message.photo else None
+    )
     if not photo: return await message.reply("Нужно фото.")
     prompt = (message.caption or message.text or "").lower().replace("отредактируй", "").strip()
     msg = await message.reply("🛠 Редактирую...")
