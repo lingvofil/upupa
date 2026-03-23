@@ -53,7 +53,22 @@ try:
 except ImportError:
     API_TOKEN = os.getenv("API_TOKEN")
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
+    GENERIC_API_KEY2 = os.getenv("GENERIC_API_KEY2")
+    GENERIC_API_KEY3 = os.getenv("GENERIC_API_KEY3")
+    GENERIC_API_KEY4 = os.getenv("GENERIC_API_KEY4")
+    GENERIC_API_KEY5 = os.getenv("GENERIC_API_KEY5")
+    GENERIC_API_KEY6 = os.getenv("GENERIC_API_KEY6")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    GOOGLE_API_KEY2 = os.getenv("GOOGLE_API_KEY2")
+    giphy_api_key = os.getenv("GIPHY_API_KEY")
+    KANDINSKY_API_KEY = os.getenv("KANDINSKY_API_KEY")
+    KANDINSKY_SECRET_KEY = os.getenv("KANDINSKY_SECRET_KEY")
+    GIGACHAT_API_KEY = os.getenv("GIGACHAT_API_KEY")
+    GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
+    CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
+    HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
@@ -62,12 +77,14 @@ except ImportError:
 # =========================
 GEMINI_KEYS_POOL = [
     key for key in [
-        #GENERIC_API_KEY,
+        GENERIC_API_KEY,
         GENERIC_API_KEY2,
-        #GENERIC_API_KEY3,
-        #GENERIC_API_KEY4,
-        #GENERIC_API_KEY5,
-        #GENERIC_API_KEY6,
+        GENERIC_API_KEY3,
+        GENERIC_API_KEY4,
+        GENERIC_API_KEY5,
+        GENERIC_API_KEY6,
+        GOOGLE_API_KEY,
+        GOOGLE_API_KEY2,
     ]
     if key
 ]
