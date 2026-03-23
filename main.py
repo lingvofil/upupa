@@ -134,8 +134,7 @@ from AI.picgeneration import (
     handle_image_generation_command,
     handle_redraw_command,
     handle_edit_command,
-    handle_kandinsky_generation_command,
-    handle_nvidia_command
+    handle_kandinsky_generation_command
 )
 
 # ================== БЛОК 4.6: ГОВОРИЛКА ==================
@@ -678,19 +677,6 @@ async def generate_image_kandinsky(message: types.Message):
 )
 async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
-
-@router.message(
-    lambda message: (
-        (
-            (message.photo and message.caption and "нвидиа" in message.caption.lower()) or
-            (message.document and message.caption and "нвидиа" in message.caption.lower()) or
-            (message.text and "нвидиа" in message.text.lower() and message.reply_to_message and 
-            (message.reply_to_message.photo or message.reply_to_message.document))
-        ) and message.from_user.id not in BLOCKED_USERS
-    )
-)
-async def nvidia_image(message: types.Message):
-    await handle_nvidia_command(message)
 
 @router.message(
     lambda message: message.text and 
