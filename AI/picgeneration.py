@@ -11,6 +11,7 @@ import time
 from io import BytesIO
 from typing import Optional, Tuple, Union
 
+from gradio_client import Client, handle_file
 from urllib.parse import quote
 
 import requests
@@ -296,8 +297,6 @@ def extract_image_from_message(message: types.Message):
 
 def generate_nvidia_image_sync(image_path: str, prompt: str) -> bytes:
     """Синхронный вызов Gradio Space для img2img генерации."""
-    from gradio_client import Client, handle_file
-
     client = Client(NVIDIA_SPACE_ID, hf_token=HF_TOKEN) if HF_TOKEN else Client(NVIDIA_SPACE_ID)
     result = client.predict(
         image=handle_file(image_path),
@@ -557,11 +556,7 @@ async def handle_nvidia_command(message: types.Message):
         await send_generated_photo(message, generated_bytes, "nvidia.png")
     except Exception as e:
         logging.error(f"NVIDIA generation error: {e}", exc_info=True)
-        error_text = str(e)
-        if "gradio_client" in error_text:
-            await msg.edit_text("Для команды нвидиа не установлен gradio_client.")
-        else:
-            await msg.edit_text("Нвидия обосралась и картинку не вернула.")
+        await msg.edit_text("Нвидия обосралась и картинку не вернула.")
     finally:
         if temp_input_path and os.path.exists(temp_input_path):
             try:
