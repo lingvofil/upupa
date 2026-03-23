@@ -30,3 +30,4 @@ transliterate
 # Необязательные / возможно полезные (проверьте, нужны ли в проекте):
 # python-dotenv
 # python-multipart
+gradio_client

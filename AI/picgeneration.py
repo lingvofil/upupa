@@ -13,6 +13,7 @@ from typing import Optional, Tuple, Union
 from urllib.parse import quote
 
 import requests
+from gradio_client import Client, handle_file
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
@@ -410,42 +411,135 @@ async def handle_pun_image_command(message: types.Message):
         logging.error(f"Pun error: {e}")
         await msg.edit_text("Ашипка блядь")
 
+def get_image_attachment_from_message(message: types.Message):
+    if message.photo:
+        return message.photo[-1]
+    if message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        return message.document
+    if message.reply_to_message:
+        if message.reply_to_message.photo:
+            return message.reply_to_message.photo[-1]
+        if (
+            message.reply_to_message.document
+            and message.reply_to_message.document.mime_type
+            and message.reply_to_message.document.mime_type.startswith("image/")
+        ):
+            return message.reply_to_message.document
+    return None
+
+
+def extract_command_prompt(message: types.Message, command: str) -> str:
+    source_text = message.caption or message.text or ""
+    lowered = source_text.lower()
+    command_index = lowered.find(command)
+    if command_index == -1:
+        return (message.reply_to_message.text or message.reply_to_message.caption).strip() if message.reply_to_message and (message.reply_to_message.text or message.reply_to_message.caption) else ""
+    prompt = source_text[command_index + len(command):].strip()
+    return prompt
+
+
+async def extract_image_and_prompt(message: types.Message, command: str) -> Tuple[Optional[object], str]:
+    image = get_image_attachment_from_message(message)
+    prompt = extract_command_prompt(message, command)
+    return image, prompt
+
+
+async def generate_gradio_img2img(image_bytes: bytes, prompt: str) -> Optional[bytes]:
+    def _call_gradio() -> Optional[bytes]:
+        client = Client("victor/dlss-5-anything")
+        with open("nvidia_source_image.png", "wb") as source_file:
+            source_file.write(image_bytes)
+        try:
+            result = client.predict(
+                image=handle_file("nvidia_source_image.png"),
+                prompt=prompt,
+                seed=0,
+                randomize_seed=True,
+                num_inference_steps=4,
+                api_name="/on_generate",
+            )
+        finally:
+            try:
+                os.remove("nvidia_source_image.png")
+            except OSError:
+                pass
+
+        candidates = result if isinstance(result, (list, tuple)) else [result]
+        for candidate in candidates:
+            if isinstance(candidate, str):
+                if candidate.startswith("http://") or candidate.startswith("https://"):
+                    response = requests.get(candidate, timeout=120)
+                    if response.status_code == 200:
+                        return response.content
+                elif os.path.exists(candidate):
+                    with open(candidate, "rb") as generated_file:
+                        return generated_file.read()
+            elif isinstance(candidate, dict):
+                path = candidate.get("path") or candidate.get("url")
+                if path and os.path.exists(path):
+                    with open(path, "rb") as generated_file:
+                        return generated_file.read()
+                if candidate.get("url"):
+                    response = requests.get(candidate["url"], timeout=120)
+                    if response.status_code == 200:
+                        return response.content
+        return None
+
+    return await asyncio.to_thread(_call_gradio)
+
+
 async def handle_redraw_command(message: types.Message):
     """Перерисовка: картинка перерисовывается в стиле детского рисунка"""
-    photo = message.photo[-1] if message.photo else (
-        message.reply_to_message.photo[-1]
-        if message.reply_to_message and message.reply_to_message.photo else None
-    )
-    if not photo: return await message.reply("Нужно фото.")
-    
+    photo, _ = await extract_image_and_prompt(message, "перерисуй")
+    if not photo:
+        return await message.reply("Нужно фото.")
+
     chat_id = str(message.chat.id)
     active_model = get_active_model(chat_id)
-    
+
     msg = await message.reply("Анал лизирую тваю мазню")
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
-        
+
         analysis_prompt = (
             "Describe this image in detail for use as an image generation prompt. "
             "Focus on the main subject, style, colors, and composition. "
             "Return only the description, no commentary."
         )
-        
+
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
-        
-        # Добавляем стиль перерисовки поверх описания
+
         final_prompt = (
             f"{description}, "
             "A very bad children's drawing, ugly doodle, mess, crayon style, "
             "scribble, naive art, stick figures, white background, masterpiece by 4 year old child"
         )
-        
+
         await robust_image_generation(message, final_prompt, msg)
 
     except Exception as e:
         logging.error(f"Redraw error: {e}")
         await msg.edit_text("Ошибка анализа или генерации.")
+
+
+async def handle_nvidia_command(message: types.Message):
+    photo, prompt = await extract_image_and_prompt(message, "нвидиа")
+    if not photo:
+        return await message.reply("Нужно фото.")
+
+    msg = await message.reply("DLSSю твою картинку...")
+
+    try:
+        img_bytes = await download_telegram_image(bot, photo)
+        generated_bytes = await generate_gradio_img2img(img_bytes, prompt)
+        if not generated_bytes:
+            return await msg.edit_text("Не удалось сгенерировать картинку через Nvidia.")
+        await msg.delete()
+        await send_generated_photo(message, generated_bytes, "nvidia.png")
+    except Exception as e:
+        logging.error(f"Nvidia img2img error: {e}")
+        await msg.edit_text("Ошибка Nvidia-генерации.")
 
 async def handle_edit_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (
