@@ -10,6 +10,8 @@ import textwrap
 import time
 from io import BytesIO
 from typing import Optional, Tuple, Union
+
+from gradio_client import Client, handle_file
 from urllib.parse import quote
 
 import requests
@@ -21,6 +23,8 @@ import config
 from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY, GROQ_VISION_MODEL
 from prompts import actions
 from AI.adddescribe import download_telegram_image
+
+NVIDIA_SPACE_ID = "victor/dlss-5-anything"
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -258,6 +262,62 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
         return r.content if r.status_code == 200 else None
     except: return None
 
+
+def extract_command_payload(message: types.Message, command: str) -> str:
+    """Извлекает текст после команды из caption/text без изменения регистра."""
+    source_text = message.caption or message.text or ""
+    if not source_text:
+        return ""
+
+    lowered = source_text.lower()
+    command_lower = command.lower()
+    idx = lowered.find(command_lower)
+    if idx == -1:
+        return source_text.strip()
+    return source_text[idx + len(command):].strip()
+
+
+def extract_image_from_message(message: types.Message):
+    """Возвращает photo/document с картинкой из сообщения или реплая."""
+    if message.photo:
+        return message.photo[-1]
+    if message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
+        return message.document
+    if message.reply_to_message:
+        if message.reply_to_message.photo:
+            return message.reply_to_message.photo[-1]
+        if (
+            message.reply_to_message.document
+            and message.reply_to_message.document.mime_type
+            and message.reply_to_message.document.mime_type.startswith('image/')
+        ):
+            return message.reply_to_message.document
+    return None
+
+
+def generate_nvidia_image_sync(image_path: str, prompt: str) -> bytes:
+    """Синхронный вызов Gradio Space для img2img генерации."""
+    client = Client(NVIDIA_SPACE_ID, hf_token=HF_TOKEN) if HF_TOKEN else Client(NVIDIA_SPACE_ID)
+    result = client.predict(
+        image=handle_file(image_path),
+        prompt=prompt or "make it more realistic",
+        seed=0,
+        randomize_seed=True,
+        num_inference_steps=4,
+        api_name="/on_generate"
+    )
+
+    if not result or not isinstance(result, (list, tuple)) or not result[0]:
+        raise RuntimeError("Space вернул пустой ответ")
+
+    image_result = result[0]
+    output_path = image_result.get("path") if isinstance(image_result, dict) else None
+    if not output_path or not os.path.exists(output_path):
+        raise RuntimeError("Не удалось получить путь к сгенерированной картинке")
+
+    with open(output_path, "rb") as f:
+        return f.read()
+
 # =============================================================================
 # ГЛАВНЫЙ ОРКЕСТРАТОР (WATERFALL)
 # =============================================================================
@@ -412,10 +472,7 @@ async def handle_pun_image_command(message: types.Message):
 
 async def handle_redraw_command(message: types.Message):
     """Перерисовка: картинка перерисовывается в стиле детского рисунка"""
-    photo = message.photo[-1] if message.photo else (
-        message.reply_to_message.photo[-1]
-        if message.reply_to_message and message.reply_to_message.photo else None
-    )
+    photo = extract_image_from_message(message)
     if not photo: return await message.reply("Нужно фото.")
     
     chat_id = str(message.chat.id)
@@ -471,3 +528,38 @@ async def handle_edit_command(message: types.Message):
             await send_generated_photo(message, r.content, "edited.png")
         else: await msg.edit_text("Ошибка сервиса.")
     except: await msg.edit_text("Не удалось отредактировать.")
+
+
+async def handle_nvidia_command(message: types.Message):
+    """Команда 'нвидиа': img2img через Gradio Space victor/dlss-5-anything."""
+    photo = extract_image_from_message(message)
+    if not photo:
+        return await message.reply("Нужно фото.")
+
+    prompt = extract_command_payload(message, "нвидиа")
+    if not prompt and message.reply_to_message:
+        prompt = (message.reply_to_message.caption or message.reply_to_message.text or "").strip()
+    if not prompt:
+        prompt = "make it more realistic"
+
+    msg = await message.reply("Нвидию свою расчехляю...")
+    temp_input_path = None
+
+    try:
+        img_bytes = await download_telegram_image(bot, photo)
+        temp_input_path = f"nvidia_input_{random.randint(1000, 999999)}.png"
+        with open(temp_input_path, "wb") as f:
+            f.write(img_bytes)
+
+        generated_bytes = await asyncio.to_thread(generate_nvidia_image_sync, temp_input_path, prompt)
+        await msg.delete()
+        await send_generated_photo(message, generated_bytes, "nvidia.png")
+    except Exception as e:
+        logging.error(f"NVIDIA generation error: {e}", exc_info=True)
+        await msg.edit_text("Нвидия обосралась и картинку не вернула.")
+    finally:
+        if temp_input_path and os.path.exists(temp_input_path):
+            try:
+                os.remove(temp_input_path)
+            except OSError:
+                logging.warning(f"Не удалось удалить временный файл {temp_input_path}")
