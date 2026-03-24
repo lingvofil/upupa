@@ -533,6 +533,9 @@ async def handle_nvidia_command(message: types.Message):
     if not photo:
         return await message.reply("Нужно фото.")
 
+    if not prompt:
+        prompt = "make it more realistic"
+
     msg = await message.reply("DLSSю твою картинку...")
 
     try:
