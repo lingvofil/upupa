@@ -536,7 +536,7 @@ async def handle_nvidia_command(message: types.Message):
     if not prompt:
         prompt = "make it more realistic"
 
-    msg = await message.reply("DLSSю твою картинку...")
+    msg = await message.reply("Ща будет заебись")
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
@@ -559,7 +559,7 @@ async def handle_edit_command(message: types.Message):
         message.reply_to_message.photo[-1]
         if message.reply_to_message and message.reply_to_message.photo else None
     )
-    if not photo: return await message.reply("Нужно фото.")
+    if not photo: return await message.reply("Хде фото")
     prompt = (message.caption or message.text or "").lower().replace("отредактируй", "").strip()
     msg = await message.reply("🛠 Редактирую...")
     try:
