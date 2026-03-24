@@ -11,8 +11,8 @@ import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
 
 
-TARGET_DURATION = 15
-MAX_FILE_SIZE_MB = 30
+TARGET_DURATION = 10
+MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
@@ -29,7 +29,7 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
         duration = clip.duration
 
         if duration < 3:
-            raise ValueError("Видео слишком короткое (нужно хотя бы 3 секунды).")
+            raise ValueError("Видео слишком короткое (как и твой хуй).")
 
         current_time = 0.0
         while current_time < TARGET_DURATION:
@@ -114,7 +114,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         video_source = message
 
     if not video_source:
-        await message.reply("Реплайни на видео командой «пуп» или отправь видео с подписью «пуп».")
+        await message.reply("Реплайни блядь на видео или отправь видео с подписью «пуп».")
         return
 
     file_obj = video_source.video or video_source.document
@@ -141,7 +141,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await message.reply("Уже шинкую одно видео, подожди немного.")
         return
 
-    processing_msg = await message.reply("⚙️ Пупизирую... (~30–60 сек, подожди)")
+    processing_msg = await message.reply("⚙️ Пупизирую. пу пу пу...")
     input_path = None
     output_path = None
 
@@ -165,7 +165,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
             await message.reply_video(
                 FSInputFile(output_path, filename="pup.mp4"),
-                caption="🎬 ПУП ГОТОВ",
+                caption="🎬 ВАШ ПУП",
             )
 
         await processing_msg.delete()
