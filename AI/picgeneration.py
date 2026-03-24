@@ -455,7 +455,7 @@ async def generate_gradio_img2img(image_bytes: bytes, prompt: str) -> Optional[b
                 prompt=prompt,
                 seed=0,
                 randomize_seed=True,
-                num_inference_steps=4,
+                num_inference_steps=20,
                 api_name="/on_generate",
             )
         finally:
@@ -464,25 +464,30 @@ async def generate_gradio_img2img(image_bytes: bytes, prompt: str) -> Optional[b
             except OSError:
                 pass
 
-        candidates = result if isinstance(result, (list, tuple)) else [result]
-        for candidate in candidates:
-            if isinstance(candidate, str):
-                if candidate.startswith("http://") or candidate.startswith("https://"):
-                    response = requests.get(candidate, timeout=120)
-                    if response.status_code == 200:
-                        return response.content
-                elif os.path.exists(candidate):
-                    with open(candidate, "rb") as generated_file:
-                        return generated_file.read()
-            elif isinstance(candidate, dict):
-                path = candidate.get("path") or candidate.get("url")
-                if path and os.path.exists(path):
-                    with open(path, "rb") as generated_file:
-                        return generated_file.read()
-                if candidate.get("url"):
-                    response = requests.get(candidate["url"], timeout=120)
-                    if response.status_code == 200:
-                        return response.content
+        image_result = result[0] if isinstance(result, (list, tuple)) else result
+
+        if isinstance(image_result, dict):
+            path = image_result.get("path")
+            if path and os.path.exists(path):
+                with open(path, "rb") as generated_file:
+                    return generated_file.read()
+
+            url = image_result.get("url")
+            if url:
+                response = requests.get(url, timeout=120)
+                if response.status_code == 200:
+                    return response.content
+
+        if isinstance(image_result, str):
+            if os.path.exists(image_result):
+                with open(image_result, "rb") as generated_file:
+                    return generated_file.read()
+
+            if image_result.startswith("http://") or image_result.startswith("https://"):
+                response = requests.get(image_result, timeout=120)
+                if response.status_code == 200:
+                    return response.content
+
         return None
 
     return await asyncio.to_thread(_call_gradio)
