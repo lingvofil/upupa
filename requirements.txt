@@ -17,6 +17,7 @@ groq
 httpx
 nltk
 numpy
+moviepy
 Pillow
 playwright
 pydub

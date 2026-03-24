@@ -102,6 +102,9 @@ import crocodile
 # ================== БЛОК 3.18 СЛУЧАЙНЫЕ РЕАКЦИИ ==================
 from AI.random_reactions import process_random_reactions
 
+# ================== БЛОК 3.19: ПУП (YTP) ==================
+from ytp import handle_ytp_command
+
 
 # ================== БЛОК 4: НАСТРОЙКИ AI ==================
 
@@ -479,6 +482,25 @@ async def croc_callback(callback: types.CallbackQuery):
 async def stop_croc_text(message: types.Message):
     await crocodile.handle_text_stop(message)
 
+
+@router.message(
+    lambda message: (
+        (
+            message.text and
+            message.text.lower().strip() == "пуп" and
+            message.reply_to_message and
+            (message.reply_to_message.video or message.reply_to_message.document)
+        )
+        or
+        (
+            (message.video or message.document) and
+            message.caption and
+            message.caption.lower().strip() == "пуп"
+        )
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_pup_command(message: types.Message):
+    await handle_ytp_command(message, bot)
 
 # ================== БЛОК 6: ХЭНДЛЕРЫ С AI ==================
 
