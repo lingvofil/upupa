@@ -534,12 +534,17 @@ async def handle_nvidia_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
         generated_bytes = await generate_gradio_img2img(img_bytes, prompt)
         if not generated_bytes:
-            return await msg.edit_text("Не удалось сгенерировать картинку через Nvidia.")
+            await msg.edit_text("Nvidia недоступна, генерирую через Flux...")
+            await robust_image_generation(message, prompt or "enhance, upscale, detailed", msg)
+            return
         await msg.delete()
         await send_generated_photo(message, generated_bytes, "nvidia.png")
     except Exception as e:
         logging.error(f"Nvidia img2img error: {e}")
-        await msg.edit_text("Ошибка Nvidia-генерации.")
+        if "GPU quota" in str(e):
+            await msg.edit_text("⚠️ HuggingFace GPU квота исчерпана. Попробуй позже или используй «нарисуй».")
+        else:
+            await msg.edit_text("Ошибка Nvidia-генерации.")
 
 async def handle_edit_command(message: types.Message):
     photo = message.photo[-1] if message.photo else (
