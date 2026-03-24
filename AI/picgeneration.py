@@ -446,7 +446,7 @@ async def extract_image_and_prompt(message: types.Message, command: str) -> Tupl
 
 async def generate_gradio_img2img(image_bytes: bytes, prompt: str) -> Optional[bytes]:
     def _call_gradio() -> Optional[bytes]:
-        client = Client("victor/dlss-5-anything")
+        client = Client("victor/dlss-5-anything", hf_token=HF_TOKEN)
         with open("nvidia_source_image.png", "wb") as source_file:
             source_file.write(image_bytes)
         try:
