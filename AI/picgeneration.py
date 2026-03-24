@@ -8,6 +8,7 @@ import os
 import random
 import textwrap
 import time
+from collections import defaultdict
 from io import BytesIO
 from typing import Optional, Tuple, Union
 from urllib.parse import quote
@@ -30,6 +31,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 CF_ACCOUNT_ID = getattr(config, 'CLOUDFLARE_ACCOUNT_ID', None)
 CF_API_TOKEN = getattr(config, 'CLOUDFLARE_API_TOKEN', None)
 HF_TOKEN = getattr(config, 'HUGGINGFACE_TOKEN', None)
+
+# =============================================================================
+# RATE LIMITER ДЛЯ NVIDIA (HF GPU QUOTA)
+# =============================================================================
+
+_nvidia_last_used: dict[int, float] = defaultdict(float)  # user_id -> timestamp
+NVIDIA_COOLDOWN_SECONDS = 60 * 10  # 10 минут между запросами одного пользователя
+NVIDIA_GLOBAL_LIMIT = 6            # не больше 6 запросов суммарно за период
+NVIDIA_GLOBAL_WINDOW = 60 * 60 * 10  # окно 10 часов
+
+_nvidia_global_calls: list[float] = []  # timestamps всех вызовов
 
 def get_active_model(chat_id: str) -> str:
     """Возвращает активную модель для чата"""
@@ -533,6 +545,27 @@ async def handle_nvidia_command(message: types.Message):
     if not photo:
         return await message.reply("Нужно фото.")
 
+    user_id = message.from_user.id
+    now = time.time()
+
+    # Проверка персонального кулдауна
+    since_last = now - _nvidia_last_used[user_id]
+    if since_last < NVIDIA_COOLDOWN_SECONDS:
+        remaining = int(NVIDIA_COOLDOWN_SECONDS - since_last)
+        return await message.reply(f"⏳ Подожди ещё {remaining // 60}м {remaining % 60}с.")
+
+    # Проверка глобального лимита
+    cutoff = now - NVIDIA_GLOBAL_WINDOW
+    _nvidia_global_calls[:] = [t for t in _nvidia_global_calls if t > cutoff]
+    if len(_nvidia_global_calls) >= NVIDIA_GLOBAL_LIMIT:
+        oldest = _nvidia_global_calls[0]
+        reset_in = int(oldest + NVIDIA_GLOBAL_WINDOW - now)
+        return await message.reply(f"⛔ Лимит GPU исчерпан. Сброс через {reset_in // 3600}ч {(reset_in % 3600) // 60}м.")
+
+    # Записываем вызов
+    _nvidia_last_used[user_id] = now
+    _nvidia_global_calls.append(now)
+
     if not prompt:
         prompt = "make it more realistic"
 
@@ -550,7 +583,7 @@ async def handle_nvidia_command(message: types.Message):
     except Exception as e:
         logging.error(f"Nvidia img2img error: {e}")
         if "GPU quota" in str(e):
-            await msg.edit_text("⚠️ HuggingFace GPU квота исчерпана. Попробуй позже или используй «нарисуй».")
+            await msg.edit_text("⚠️ HuggingFace GPU квота исчерпана. Попробуй позже.")
         else:
             await msg.edit_text("Ошибка Nvidia-генерации.")
 
