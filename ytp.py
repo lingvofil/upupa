@@ -32,8 +32,15 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
             raise ValueError("Видео слишком короткое (как и твой хуй).")
 
         current_time = 0.0
+
+        # Список эффектов и их "веса" (шанс выпадения).
+        # Можно менять цифры, чтобы сделать видео более или менее безумным.
+        effects_pool = ["stutter", "ping_pong", "reverse", "invert", "earrape", "speedup", "slowmo", "mirror", "normal"]
+        effects_weights = [15, 10, 10, 10, 10, 10, 5, 10, 20]
+
         while current_time < TARGET_DURATION:
-            chunk_len = random.uniform(0.5, 2.0)
+            # В YTP нарезки обычно более рваные и короткие, поэтому уменьшаем длину куска
+            chunk_len = random.uniform(0.3, 1.5)
             max_start = max(0.0, duration - chunk_len)
             start = random.uniform(0.0, max_start)
             end = min(duration, start + chunk_len)
@@ -42,18 +49,49 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
                 continue
 
             snippet = clip.subclip(start, end)
-            effect = random.choice(["stutter", "speedup", "mirror", "loud", "normal"])
+
+            # Выбираем эффект с учетом весов
+            effect = random.choices(effects_pool, weights=effects_weights, k=1)[0]
 
             try:
                 if effect == "stutter":
-                    piece = snippet.subclip(0, min(0.2, snippet.duration))
-                    snippet = concatenate_videoclips([piece, piece, piece, piece, snippet])
+                    # Классическое "пулеметное" YTP заикание из второго скрипта
+                    stutter_duration = random.uniform(0.05, 0.15)
+                    piece = snippet.subclip(0, min(stutter_duration, snippet.duration))
+                    repeats = int(snippet.duration / piece.duration)
+                    if repeats > 0:
+                        snippet = concatenate_videoclips([piece] * repeats)
+
+                elif effect == "ping_pong":
+                    # Эффект "Sus" (Вперед -> Назад -> Вперед)
+                    rev = snippet.fx(vfx.time_mirror)
+                    snippet = concatenate_videoclips([snippet, rev, snippet])
+
+                elif effect == "reverse":
+                    # Просто проигрывание задом наперед
+                    snippet = snippet.fx(vfx.time_mirror)
+
+                elif effect == "invert":
+                    # Инверсия цветов (негатив)
+                    snippet = snippet.fx(vfx.invert_colors)
+
+                elif effect == "earrape":
+                    # Жесткий перегруз по звуку + легкий визуальный глитч (усиление цвета)
+                    snippet = snippet.fx(afx.volumex, 10.0).fx(vfx.colorx, 2.0)
+
                 elif effect == "speedup":
-                    snippet = snippet.fx(vfx.speedx, 2.0)
+                    # Ускорение от 2 до 4 раз
+                    snippet = snippet.fx(vfx.speedx, random.uniform(2.0, 4.0))
+
+                elif effect == "slowmo":
+                    # Замедление с понижением тона голоса (MoviePy сам тянет звук)
+                    snippet = snippet.fx(vfx.speedx, 0.5)
+
                 elif effect == "mirror":
+                    # Отзеркаливание по горизонтали
                     snippet = snippet.fx(vfx.mirror_x)
-                elif effect == "loud":
-                    snippet = snippet.fx(afx.volumex, 5.0)
+
+                # Если effect == "normal", ничего не делаем, кусок остается обычным
             except Exception as exc:
                 logging.warning(f"[ytp] Эффект '{effect}' не сработал: {exc}")
 
