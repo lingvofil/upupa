@@ -1,172 +1,96 @@
-import asyncio
-import gc
-import json
-import logging
 import os
 import random
-import subprocess
+import asyncio
 import tempfile
-from dataclasses import dataclass
-
-from aiogram import Bot, types
+import logging
+from aiogram import types, Bot
 from aiogram.types import FSInputFile
+
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+import moviepy.video.fx.all as vfx
+import moviepy.audio.fx.all as afx
+
 
 TARGET_DURATION = 10
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
-SEGMENT_CHUNK_SEC = 10
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 _ytp_semaphore = asyncio.Semaphore(1)
 
 
-@dataclass
-class MediaInfo:
-    duration: float
+def _make_ytp_sync(input_path: str, output_path: str) -> None:
+    clip = None
+    final_clip = None
+    clips = []
 
+    try:
+        clip = VideoFileClip(input_path)
+        duration = clip.duration
 
-class YTPGenerator:
-    def __init__(self, input_path: str, ram_limit_mb: int = 2048) -> None:
-        self.input_path = input_path
-        self.ram_limit_mb = ram_limit_mb
-
-    def stutter_vf_fragment(self) -> str:
-        return "fps=30,loop=3:size=5:start=0"
-
-    def mirror_vf_fragment(self, input_label: str, output_label: str, tag: str) -> str:
-        return (
-            f"[{input_label}]split=2[{tag}l][{tag}r];"
-            f"[{tag}l]crop=iw/2:ih:0:0[{tag}left];"
-            f"[{tag}left]hflip[{tag}right];"
-            f"[{tag}left][{tag}right]hstack[{output_label}]"
-        )
-
-    def screen_shake_vf_fragment(self) -> str:
-        return (
-            "crop=iw-40:ih-40:20+20*sin(2*PI*t*10):20+20*cos(2*PI*t*10),"
-            "scale=iw+40:ih+40"
-        )
-
-    def gmajor_af_fragment(self) -> str:
-        return "asetrate=44100*0.5,atempo=2.0"
-
-    def _probe(self) -> MediaInfo:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            self.input_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        payload = json.loads(result.stdout)
-        duration = float(payload["format"]["duration"])
-        return MediaInfo(duration=duration)
-
-    def render(self, output_path: str) -> None:
-        info = self._probe()
-        if info.duration < 3:
+        if duration < 3:
             raise ValueError("Видео слишком короткое (как и твой хуй).")
 
-        chunk_points = [0.0]
-        if info.duration > SEGMENT_CHUNK_SEC:
-            chunk_points = [
-                float(i) for i in range(0, int(info.duration), SEGMENT_CHUNK_SEC)
-            ]
-
-        filter_parts: list[str] = []
-        concat_inputs: list[str] = []
         current_time = 0.0
-        idx = 0
-
         while current_time < TARGET_DURATION:
-            chunk_start = random.choice(chunk_points)
-            chunk_end = min(info.duration, chunk_start + SEGMENT_CHUNK_SEC)
-
             chunk_len = random.uniform(0.5, 2.0)
-            max_start = max(chunk_start, chunk_end - chunk_len)
-            start = random.uniform(chunk_start, max_start)
-            end = min(info.duration, start + chunk_len)
+            max_start = max(0.0, duration - chunk_len)
+            start = random.uniform(0.0, max_start)
+            end = min(duration, start + chunk_len)
+
             if end - start < 0.1:
                 continue
 
-            effect = random.choice(["stutter", "mirror", "gmajor", "shake", "normal"])
-            v_in = f"v{idx}in"
-            a_in = f"a{idx}in"
-            v_out = f"v{idx}out"
-            a_out = f"a{idx}out"
+            snippet = clip.subclip(start, end)
+            effect = random.choice(["stutter", "speedup", "mirror", "loud", "normal"])
 
-            filter_parts.append(
-                f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[{v_in}]"
-            )
-            filter_parts.append(
-                f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[{a_in}]"
-            )
+            try:
+                if effect == "stutter":
+                    piece = snippet.subclip(0, min(0.2, snippet.duration))
+                    snippet = concatenate_videoclips([piece, piece, piece, piece, snippet])
+                elif effect == "speedup":
+                    snippet = snippet.fx(vfx.speedx, 2.0)
+                elif effect == "mirror":
+                    snippet = snippet.fx(vfx.mirror_x)
+                elif effect == "loud":
+                    snippet = snippet.fx(afx.volumex, 5.0)
+            except Exception as exc:
+                logging.warning(f"[ytp] Эффект '{effect}' не сработал: {exc}")
 
-            if effect == "stutter":
-                filter_parts.append(f"[{v_in}]{self.stutter_vf_fragment()}[{v_out}]")
-                filter_parts.append(f"[{a_in}]anull[{a_out}]")
-            elif effect == "mirror":
-                filter_parts.append(self.mirror_vf_fragment(v_in, v_out, f"m{idx}"))
-                filter_parts.append(f"[{a_in}]anull[{a_out}]")
-            elif effect == "gmajor":
-                filter_parts.append(f"[{v_in}]null[{v_out}]")
-                filter_parts.append(f"[{a_in}]{self.gmajor_af_fragment()}[{a_out}]")
-            elif effect == "shake":
-                shake = self.screen_shake_vf_fragment()
-                filter_parts.append(f"[{v_in}]{shake}[{v_out}]")
-                filter_parts.append(f"[{a_in}]anull[{a_out}]")
-            else:
-                filter_parts.append(f"[{v_in}]null[{v_out}]")
-                filter_parts.append(f"[{a_in}]anull[{a_out}]")
+            clips.append(snippet)
+            current_time += snippet.duration
 
-            concat_inputs.append(f"[{v_out}][{a_out}]")
-            current_time += end - start
-            idx += 1
-
-            del chunk_start, chunk_end, chunk_len, max_start, start, end, effect
-            gc.collect()
-
-        if not concat_inputs:
+        if not clips:
             raise RuntimeError("Не удалось нарезать ни одного клипа.")
 
-        filter_parts.append(
-            "".join(concat_inputs) + f"concat=n={len(concat_inputs)}:v=1:a=1[vout][aout]"
-        )
-        filter_complex = ";".join(filter_parts)
-
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-threads",
-            "1",
-            "-filter_threads",
-            "1",
-            "-filter_complex_threads",
-            "1",
-            "-i",
-            self.input_path,
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "[vout]",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-preset",
-            "ultrafast",
-            "-threads",
-            "1",
+        final_clip = concatenate_videoclips(clips)
+        final_clip.write_videofile(
             output_path,
-        ]
+            codec="libx264",
+            audio_codec="aac",
+            fps=30,
+            preset="ultrafast",
+            threads=2,
+            logger=None,
+        )
+    finally:
+        for snippet in clips:
+            try:
+                snippet.close()
+            except Exception:
+                pass
 
-        subprocess.run(ffmpeg_cmd, check=True)
+        if final_clip is not None:
+            try:
+                final_clip.close()
+            except Exception:
+                pass
+
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
 
 
 def _is_video_document(document: types.Document) -> bool:
@@ -237,10 +161,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             await bot.download_file(file_info.file_path, input_path)
 
             loop = asyncio.get_running_loop()
-            generator = YTPGenerator(input_path=input_path, ram_limit_mb=2048)
-            await loop.run_in_executor(None, generator.render, output_path)
-            del generator
-            gc.collect()
+            await loop.run_in_executor(None, _make_ytp_sync, input_path, output_path)
 
             await message.reply_video(
                 FSInputFile(output_path, filename="pup.mp4"),
@@ -252,10 +173,6 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     except ValueError as exc:
         await processing_msg.delete()
         await message.reply(f"❌ {exc}")
-    except subprocess.CalledProcessError as exc:
-        logging.error(f"[ytp] FFmpeg ошибка: {exc}", exc_info=True)
-        await processing_msg.delete()
-        await message.reply("❌ FFmpeg не смог обработать это видео.")
     except Exception as exc:
         logging.error(f"[ytp] Ошибка обработки: {exc}", exc_info=True)
         await processing_msg.delete()
