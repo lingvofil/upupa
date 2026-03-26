@@ -3,7 +3,6 @@ import random
 import asyncio
 import tempfile
 import logging
-import numpy as np
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 
@@ -18,88 +17,6 @@ MAX_INPUT_DURATION_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 _ytp_semaphore = asyncio.Semaphore(1)
-
-
-def _posterize_frame(frame: np.ndarray, levels: int) -> np.ndarray:
-    frame_float = frame.astype(np.float32)
-    step = 256 / max(1, levels)
-    return (np.floor(frame_float / step) * step).astype(np.uint8)
-
-
-def _chromatic_aberration(clip):
-    return clip.fl_image(
-        lambda frame: np.stack(
-            [
-                np.roll(frame[:, :, 0], 2, axis=1),
-                np.roll(frame[:, :, 1], -2, axis=0),
-                np.roll(frame[:, :, 2], 3, axis=1),
-            ],
-            axis=2,
-        )
-    )
-
-
-def _glitch_frames(clip):
-    def _fx(get_frame, t):
-        if random.random() < 0.08:
-            return get_frame(max(0, min(clip.duration - 1e-3, t + random.uniform(-0.15, 0.15))))
-        return get_frame(t)
-
-    return clip.fl(_fx, apply_to=["mask"])
-
-
-def _random_freeze(clip, freq: float = 0.1, length: float = 0.3):
-    def _fx(get_frame, t):
-        if random.random() < freq:
-            return get_frame(max(0, t - length))
-        return get_frame(t)
-
-    return clip.fl(_fx, apply_to=["mask"])
-
-
-def _audio_stutter(audio, freq: float = 0.06):
-    def _fx(get_frame, t):
-        if random.random() < freq:
-            return get_frame(max(0, t - random.uniform(0.02, 0.15)))
-        return get_frame(t)
-
-    return audio.fl(_fx)
-
-
-def _heavy_distortion(audio):
-    gain = random.uniform(1.5, 3.0)
-    return audio.fl(lambda gf, t: np.clip(gf(t) * gain, -1.0, 1.0))
-
-
-def _ytp_effects(clip):
-    clip = clip.fx(_glitch_frames)
-    clip = clip.fx(_chromatic_aberration)
-    clip = clip.fx(_random_freeze)
-    clip = clip.fl_image(lambda frame: _posterize_frame(frame, levels=random.choice([2, 4, 8])))
-
-    if random.random() < 0.35:
-        clip = clip.fx(vfx.invert_colors)
-
-    if random.random() < 0.55:
-        clip = clip.fx(vfx.speedx, random.choice([0.4, 0.6, 1.5, 2.0]))
-
-    if random.random() < 0.3:
-        clip = clip.fx(vfx.mirror_x)
-
-    if clip.audio:
-        audio = clip.audio
-        audio = _audio_stutter(audio)
-        if random.random() < 0.7:
-            audio = audio.fx(afx.audio_fadein, 0.03).fx(afx.audio_fadeout, 0.03)
-        if random.random() < 0.6:
-            audio = audio.fx(afx.audio_normalize)
-        if random.random() < 0.6:
-            audio = audio.set_duration(max(0.1, audio.duration * random.uniform(0.7, 1.3)))
-        audio = _heavy_distortion(audio)
-        audio = audio.fx(afx.volumex, random.uniform(0.5, 1.8))
-        clip = clip.set_audio(audio)
-
-    return clip
 
 
 def _make_ytp_sync(input_path: str, output_path: str) -> None:
@@ -125,7 +42,7 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
                 continue
 
             snippet = clip.subclip(start, end)
-            effect = random.choice(["stutter", "speedup", "mirror", "loud", "normal", "ytp_fx"])
+            effect = random.choice(["stutter", "speedup", "mirror", "loud", "normal"])
 
             try:
                 if effect == "stutter":
@@ -137,8 +54,6 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
                     snippet = snippet.fx(vfx.mirror_x)
                 elif effect == "loud":
                     snippet = snippet.fx(afx.volumex, 5.0)
-                elif effect == "ytp_fx":
-                    snippet = _ytp_effects(snippet)
             except Exception as exc:
                 logging.warning(f"[ytp] Эффект '{effect}' не сработал: {exc}")
 
