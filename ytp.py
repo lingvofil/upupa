@@ -12,7 +12,7 @@ import moviepy.audio.fx.all as afx
 
 
 TARGET_DURATION = 10
-MAX_FILE_SIZE_MB = 100
+MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
@@ -158,7 +158,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     file_obj = video_source.video or video_source.document
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-        await message.reply(f"Файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
+        await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
         return
 
     if video_source.video and video_source.video.duration:
