@@ -14,7 +14,7 @@ import moviepy.audio.fx.all as afx
 TARGET_DURATION = 10
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
-SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 
 _ytp_semaphore = asyncio.Semaphore(1)
 
@@ -76,8 +76,12 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
                     snippet = snippet.fx(vfx.invert_colors)
 
                 elif effect == "earrape":
-                    # Жесткий перегруз по звуку + легкий визуальный глитч (усиление цвета)
-                    snippet = snippet.fx(afx.volumex, 10.0).fx(vfx.colorx, 2.0)
+                    # Если есть аудио — перегружаем звук и выкручиваем цвета
+                    if snippet.audio is not None:
+                        snippet = snippet.fx(afx.volumex, 10.0).fx(vfx.colorx, 2.0)
+                    else:
+                        # Если звука нет (например, это GIF), делаем только визуальный глитч
+                        snippet = snippet.fx(vfx.colorx, 2.0)
 
                 elif effect == "speedup":
                     # Ускорение от 2 до 4 раз
@@ -143,19 +147,22 @@ def _is_video_document(document: types.Document) -> bool:
 async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     video_source = None
 
+    # Проверяем реплай
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or (source.document and _is_video_document(source.document)):
+        if source.video or source.animation or (source.document and _is_video_document(source.document)):
             video_source = source
 
-    if video_source is None and (message.video or (message.document and _is_video_document(message.document))):
+    # Проверяем само сообщение
+    if video_source is None and (message.video or message.animation or (message.document and _is_video_document(message.document))):
         video_source = message
 
     if not video_source:
-        await message.reply("Реплайни блядь на видео или отправь видео с подписью «пуп».")
+        await message.reply("Реплайни блядь на видео/гифку или отправь их с подписью «пуп».")
         return
 
-    file_obj = video_source.video or video_source.document
+    # Достаем объект файла (видео, гифка или документ)
+    file_obj = video_source.video or video_source.animation or video_source.document
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
