@@ -12,7 +12,7 @@ import moviepy.audio.fx.all as afx
 
 
 TARGET_DURATION = 10
-MAX_FILE_SIZE_MB = 50
+MAX_FILE_SIZE_MB = 100
 MAX_INPUT_DURATION_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
