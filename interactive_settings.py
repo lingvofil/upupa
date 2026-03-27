@@ -40,24 +40,18 @@ DEFAULT_PROBS = {
     "rhyme_prob": 0.008
 }
 
-YTP_EFFECTS = {
-    "stutter": "🔫 Заикание",
-    "ping_pong": "🏓 Пинг-понг",
-    "reverse": "⏪ Реверс",
-    "invert": "🎨 Негатив",
-    "earrape": "📢 Earrape",
-    "speedup": "⚡ Ускорение",
-    "slowmo": "🐌 Замедление",
-    "mirror": "↔️ Зеркало X",
-    "zoom_punch": "🔍 Зум",
-    "rotate": "🌀 Поворот",
-    "freeze_frame": "⏸ Стоп-кадр",
-    "strobe": "💡 Строб",
-    "triple_repeat": "🔁 Тройной повтор",
-    "mirror_y": "↕️ Зеркало Y",
-    "brightness_flash": "💥 Вспышка",
-    "silence": "🔇 Тишина",
-    "normal": "😐 Без эффекта",
+YTP_PRESETS = {
+    "soft":   "🟢 Мягко",
+    "normal": "🟡 Нормально",
+    "chaos":  "🔴 Угар",
+    "hell":   "💀 Пиздец",
+}
+
+YTP_PRESET_DESC = {
+    "soft":   "зеркало, зум, стоп-кадр, замедление",
+    "normal": "всё понемногу",
+    "chaos":  "заикание, earrape, строб, вспышки",
+    "hell":   "всё сразу на максималках",
 }
 
 YTP_DURATION_OPTIONS = [5, 7, 10, 15, 20, 30]
@@ -155,24 +149,22 @@ async def get_prompts_markup():
 
 async def get_ytp_menu_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
-    disabled = set(settings.get("ytp_disabled_effects", []))
     duration = settings.get("ytp_duration", 10)
+    preset = settings.get("ytp_preset", "normal")
 
     text = "🎬 *Настройки YTP*\n\n"
-    text += f"⏱ Длина видео: `{duration} сек`\n\n"
-    text += "Включённые эффекты (нажми чтобы выкл):\n"
+    text += f"⏱ Длина: `{duration} сек`\n"
+    text += f"🎚 Интенсивность: *{YTP_PRESETS[preset]}*\n"
+    text += f"_{YTP_PRESET_DESC[preset]}_\n\n"
+    text += "Выбери интенсивность:"
 
     builder = InlineKeyboardBuilder()
+    for key, label in YTP_PRESETS.items():
+        marker = "▶️ " if key == preset else ""
+        builder.button(text=f"{marker}{label}", callback_data=f"settings:ytp:set_preset:{key}")
     builder.button(text=f"⏱ Длина: {duration} сек", callback_data="settings:ytp:duration_menu")
-    builder.adjust(1)
-
-    for key, label in YTP_EFFECTS.items():
-        is_on = key not in disabled
-        btn_text = f"{'✅' if is_on else '❌'} {label}"
-        builder.button(text=btn_text, callback_data=f"settings:ytp:toggle_effect:{key}")
-
     builder.button(text="⬅️ Назад", callback_data="settings:view:main")
-    builder.adjust(1, 2)
+    builder.adjust(2, 1, 1)
     return text, builder.as_markup()
 
 async def get_ytp_duration_markup(chat_id: str):
@@ -280,20 +272,15 @@ async def handle_settings_callback(query: types.CallbackQuery):
             text, markup = await get_ytp_duration_markup(chat_id)
             await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
 
-        elif sub == "toggle_effect":
-            effect_key = parts[3]
-            chat_settings.setdefault(chat_id, {})
-            disabled = set(chat_settings[chat_id].get("ytp_disabled_effects", []))
-            if effect_key in disabled:
-                disabled.remove(effect_key)
-                await query.answer("✅ Эффект включён")
-            else:
-                disabled.add(effect_key)
-                await query.answer("❌ Эффект выключен")
-            chat_settings[chat_id]["ytp_disabled_effects"] = list(disabled)
-            save_chat_settings()
-            text, markup = await get_ytp_menu_markup(chat_id)
-            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+        elif sub == "set_preset":
+            preset_key = parts[3]
+            if preset_key in YTP_PRESETS:
+                chat_settings.setdefault(chat_id, {})
+                chat_settings[chat_id]["ytp_preset"] = preset_key
+                save_chat_settings()
+                await query.answer(f"Установлено: {YTP_PRESETS[preset_key]}")
+                text, markup = await get_ytp_menu_markup(chat_id)
+                await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
 
     elif action == "toggle":
         value = parts[2]

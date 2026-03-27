@@ -20,11 +20,37 @@ SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 _ytp_semaphore = asyncio.Semaphore(1)
 
 
+YTP_PRESET_POOLS = {
+    "soft": {
+        "effects": ["mirror", "mirror_y", "zoom_punch", "freeze_frame", "slowmo", "reverse", "normal"],
+        "weights": [15,       15,         20,           20,            10,       10,       10],
+    },
+    "normal": {
+        "effects": ["stutter", "ping_pong", "reverse", "invert", "earrape", "speedup", "slowmo",
+                    "mirror", "zoom_punch", "rotate", "freeze_frame", "strobe", "triple_repeat",
+                    "mirror_y", "brightness_flash", "silence", "normal"],
+        "weights": [10, 8, 8, 8, 8, 7, 5, 8, 16, 7, 16, 4, 14, 7, 7, 6, 9],
+    },
+    "chaos": {
+        "effects": ["stutter", "ping_pong", "earrape", "speedup", "strobe",
+                    "triple_repeat", "brightness_flash", "invert", "zoom_punch", "reverse"],
+        "weights": [20,        15,          20,         15,       10,
+                    20,             15,                15,       15,          10],
+    },
+    "hell": {
+        "effects": ["stutter", "ping_pong", "earrape", "speedup", "strobe",
+                    "triple_repeat", "brightness_flash", "invert", "zoom_punch",
+                    "freeze_frame", "mirror", "mirror_y", "rotate"],
+        "weights": [25, 20, 25, 20, 15, 25, 20, 15, 20, 15, 10, 10, 10],
+    },
+}
+
+
 def _make_ytp_sync(
     input_path: str,
     output_path: str,
     target_duration: int = 10,
-    disabled_effects: set = None,
+    preset: str = "normal",
 ) -> None:
     clip = None
     final_clip = None
@@ -39,42 +65,16 @@ def _make_ytp_sync(
 
         current_time = 0.0
 
-        # Список эффектов и их "веса" (шанс выпадения).
-        # Можно менять цифры, чтобы сделать видео более или менее безумным.
-        effects_pool = [
-            "stutter",
-            "ping_pong",
-            "reverse",
-            "invert",
-            "earrape",
-            "speedup",
-            "slowmo",
-            "mirror",
-            "zoom_punch",
-            "rotate",
-            "freeze_frame",
-            "strobe",
-            "triple_repeat",
-            "mirror_y",
-            "brightness_flash",
-            "silence",
-            "normal",
-        ]
-        effects_weights = [10, 8, 8, 8, 8, 7, 5, 8, 16, 7, 16, 4, 14, 7, 7, 6, 9]
+        pool_cfg = YTP_PRESET_POOLS.get(preset, YTP_PRESET_POOLS["normal"])
+        effects_pool = pool_cfg["effects"]
+        effects_weights = pool_cfg["weights"]
 
-        if disabled_effects:
-            filtered = [
-                (effect, weight)
-                for effect, weight in zip(effects_pool, effects_weights)
-                if effect not in disabled_effects
-            ]
-            if filtered:
-                effects_pool, effects_weights = zip(*filtered)
-                effects_pool, effects_weights = list(effects_pool), list(effects_weights)
+        # Для "hell" — куски покороче
+        chunk_min = 0.1 if preset == "hell" else 0.3
+        chunk_max = 0.8 if preset == "hell" else 1.5
 
         while current_time < target_duration:
-            # В YTP нарезки обычно более рваные и короткие, поэтому уменьшаем длину куска
-            chunk_len = random.uniform(0.3, 1.5)
+            chunk_len = random.uniform(chunk_min, chunk_max)
             max_start = max(0.0, duration - chunk_len)
             start = random.uniform(0.0, max_start)
             end = min(duration, start + chunk_len)
@@ -290,10 +290,10 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             chat_id_str = str(message.chat.id)
             chat_cfg = chat_settings.get(chat_id_str, {})
             target_dur = chat_cfg.get("ytp_duration", TARGET_DURATION)
-            disabled_fx = set(chat_cfg.get("ytp_disabled_effects", []))
+            preset = chat_cfg.get("ytp_preset", "normal")
 
             await loop.run_in_executor(
-                None, _make_ytp_sync, input_path, output_path, target_dur, disabled_fx
+                None, _make_ytp_sync, input_path, output_path, target_dur, preset
             )
 
             await message.reply_video(
