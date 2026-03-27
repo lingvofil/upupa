@@ -9,6 +9,7 @@ from aiogram.types import FSInputFile
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
+from config import chat_settings
 
 
 TARGET_DURATION = 10
@@ -19,7 +20,12 @@ SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 _ytp_semaphore = asyncio.Semaphore(1)
 
 
-def _make_ytp_sync(input_path: str, output_path: str) -> None:
+def _make_ytp_sync(
+    input_path: str,
+    output_path: str,
+    target_duration: int = 10,
+    disabled_effects: set = None,
+) -> None:
     clip = None
     final_clip = None
     clips = []
@@ -56,7 +62,17 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
         ]
         effects_weights = [10, 8, 8, 8, 8, 7, 5, 8, 16, 7, 16, 4, 14, 7, 7, 6, 9]
 
-        while current_time < TARGET_DURATION:
+        if disabled_effects:
+            filtered = [
+                (effect, weight)
+                for effect, weight in zip(effects_pool, effects_weights)
+                if effect not in disabled_effects
+            ]
+            if filtered:
+                effects_pool, effects_weights = zip(*filtered)
+                effects_pool, effects_weights = list(effects_pool), list(effects_weights)
+
+        while current_time < target_duration:
             # В YTP нарезки обычно более рваные и короткие, поэтому уменьшаем длину куска
             chunk_len = random.uniform(0.3, 1.5)
             max_start = max(0.0, duration - chunk_len)
@@ -271,7 +287,14 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             await bot.download_file(file_info.file_path, input_path)
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, _make_ytp_sync, input_path, output_path)
+            chat_id_str = str(message.chat.id)
+            chat_cfg = chat_settings.get(chat_id_str, {})
+            target_dur = chat_cfg.get("ytp_duration", TARGET_DURATION)
+            disabled_fx = set(chat_cfg.get("ytp_disabled_effects", []))
+
+            await loop.run_in_executor(
+                None, _make_ytp_sync, input_path, output_path, target_dur, disabled_fx
+            )
 
             await message.reply_video(
                 FSInputFile(output_path, filename="pup.mp4"),

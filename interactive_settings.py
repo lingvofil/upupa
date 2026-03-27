@@ -40,6 +40,28 @@ DEFAULT_PROBS = {
     "rhyme_prob": 0.008
 }
 
+YTP_EFFECTS = {
+    "stutter": "🔫 Заикание",
+    "ping_pong": "🏓 Пинг-понг",
+    "reverse": "⏪ Реверс",
+    "invert": "🎨 Негатив",
+    "earrape": "📢 Earrape",
+    "speedup": "⚡ Ускорение",
+    "slowmo": "🐌 Замедление",
+    "mirror": "↔️ Зеркало X",
+    "zoom_punch": "🔍 Зум",
+    "rotate": "🌀 Поворот",
+    "freeze_frame": "⏸ Стоп-кадр",
+    "strobe": "💡 Строб",
+    "triple_repeat": "🔁 Тройной повтор",
+    "mirror_y": "↕️ Зеркало Y",
+    "brightness_flash": "💥 Вспышка",
+    "silence": "🔇 Тишина",
+    "normal": "😐 Без эффекта",
+}
+
+YTP_DURATION_OPTIONS = [5, 7, 10, 15, 20, 30]
+
 async def has_settings_permission(chat_id: int, user_id: int) -> bool:
     """Проверка прав: только админы или создатель могут менять настройки."""
     if user_id == ADMIN_ID:
@@ -88,6 +110,7 @@ async def get_main_settings_markup(chat_id: str):
     
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
+    builder.button(text="🎬 Настройки YTP", callback_data="settings:view:ytp_menu")
     
     builder.adjust(2) 
     return text, builder.as_markup()
@@ -130,6 +153,43 @@ async def get_prompts_markup():
     builder.adjust(2)
     return text, builder.as_markup()
 
+async def get_ytp_menu_markup(chat_id: str):
+    settings = chat_settings.get(chat_id, {})
+    disabled = set(settings.get("ytp_disabled_effects", []))
+    duration = settings.get("ytp_duration", 10)
+
+    text = "🎬 *Настройки YTP*\n\n"
+    text += f"⏱ Длина видео: `{duration} сек`\n\n"
+    text += "Включённые эффекты (нажми чтобы выкл):\n"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"⏱ Длина: {duration} сек", callback_data="settings:ytp:duration_menu")
+    builder.adjust(1)
+
+    for key, label in YTP_EFFECTS.items():
+        is_on = key not in disabled
+        btn_text = f"{'✅' if is_on else '❌'} {label}"
+        builder.button(text=btn_text, callback_data=f"settings:ytp:toggle_effect:{key}")
+
+    builder.button(text="⬅️ Назад", callback_data="settings:view:main")
+    builder.adjust(1, 2)
+    return text, builder.as_markup()
+
+async def get_ytp_duration_markup(chat_id: str):
+    settings = chat_settings.get(chat_id, {})
+    current = settings.get("ytp_duration", 10)
+
+    text = "⏱ *Длина YTP-видео (секунды)*\nВыберите целевую длину:"
+    builder = InlineKeyboardBuilder()
+
+    for val in YTP_DURATION_OPTIONS:
+        marker = "▶️ " if val == current else ""
+        builder.button(text=f"{marker}{val} сек", callback_data=f"settings:ytp:set_duration:{val}")
+
+    builder.button(text="⬅️ Назад", callback_data="settings:ytp:menu")
+    builder.adjust(3)
+    return text, builder.as_markup()
+
 async def send_settings_menu(message: types.Message):
     if not await has_settings_permission(message.chat.id, message.from_user.id):
         await message.reply("Настройки могут менять только админы.")
@@ -157,6 +217,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             text, markup = await get_prompts_markup()
         elif target == "probs_menu":
             text, markup = await get_probs_menu_markup(chat_id)
+        elif target == "ytp_menu":
+            text, markup = await get_ytp_menu_markup(chat_id)
         else: # main
             text, markup = await get_main_settings_markup(chat_id)
         
@@ -195,6 +257,43 @@ async def handle_settings_callback(query: types.CallbackQuery):
             await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         else:
             await query.answer("Ошибка: промпт не найден.")
+
+    elif action == "ytp":
+        sub = parts[2]
+
+        if sub == "menu":
+            text, markup = await get_ytp_menu_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+            await query.answer()
+
+        elif sub == "duration_menu":
+            text, markup = await get_ytp_duration_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+            await query.answer()
+
+        elif sub == "set_duration":
+            val = int(parts[3])
+            chat_settings.setdefault(chat_id, {})
+            chat_settings[chat_id]["ytp_duration"] = val
+            save_chat_settings()
+            await query.answer(f"Длина установлена: {val} сек")
+            text, markup = await get_ytp_duration_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+
+        elif sub == "toggle_effect":
+            effect_key = parts[3]
+            chat_settings.setdefault(chat_id, {})
+            disabled = set(chat_settings[chat_id].get("ytp_disabled_effects", []))
+            if effect_key in disabled:
+                disabled.remove(effect_key)
+                await query.answer("✅ Эффект включён")
+            else:
+                disabled.add(effect_key)
+                await query.answer("❌ Эффект выключен")
+            chat_settings[chat_id]["ytp_disabled_effects"] = list(disabled)
+            save_chat_settings()
+            text, markup = await get_ytp_menu_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
 
     elif action == "toggle":
         value = parts[2]
