@@ -35,8 +35,26 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
 
         # Список эффектов и их "веса" (шанс выпадения).
         # Можно менять цифры, чтобы сделать видео более или менее безумным.
-        effects_pool = ["stutter", "ping_pong", "reverse", "invert", "earrape", "speedup", "slowmo", "mirror", "normal"]
-        effects_weights = [15, 10, 10, 10, 10, 10, 5, 10, 20]
+        effects_pool = [
+            "stutter",
+            "ping_pong",
+            "reverse",
+            "invert",
+            "earrape",
+            "speedup",
+            "slowmo",
+            "mirror",
+            "zoom_punch",
+            "rotate",
+            "freeze_frame",
+            "strobe",
+            "triple_repeat",
+            "mirror_y",
+            "brightness_flash",
+            "silence",
+            "normal",
+        ]
+        effects_weights = [10, 8, 8, 8, 8, 7, 5, 8, 16, 7, 16, 4, 14, 7, 7, 6, 9]
 
         while current_time < TARGET_DURATION:
             # В YTP нарезки обычно более рваные и короткие, поэтому уменьшаем длину куска
@@ -94,6 +112,53 @@ def _make_ytp_sync(input_path: str, output_path: str) -> None:
                 elif effect == "mirror":
                     # Отзеркаливание по горизонтали
                     snippet = snippet.fx(vfx.mirror_x)
+
+                elif effect == "zoom_punch":
+                    # Резкий зум в случайную область кадра
+                    w, h = snippet.size
+                    x_center = random.uniform(0.25, 0.75)
+                    y_center = random.uniform(0.25, 0.75)
+                    zoom = random.uniform(1.5, 3.0)
+                    new_w, new_h = int(w / zoom), int(h / zoom)
+                    x1 = int((w - new_w) * x_center)
+                    y1 = int((h - new_h) * y_center)
+                    snippet = (
+                        snippet.fx(vfx.crop, x1=x1, y1=y1, width=new_w, height=new_h).resize((w, h))
+                    )
+
+                elif effect == "rotate":
+                    angle = random.choice([7, 15, 90, 180, 173, -23, -90])
+                    snippet = snippet.fx(vfx.rotate, angle)
+
+                elif effect == "freeze_frame":
+                    # Делает короткую "заморозку" случайного кадра
+                    t = random.uniform(0, max(0.01, snippet.duration * 0.9))
+                    snippet = snippet.to_ImageClip(t=t).set_duration(random.uniform(0.2, 0.6))
+
+                elif effect == "strobe":
+                    # Психоделическое мерцание (редко)
+                    import numpy as np
+
+                    def strobe_effect(frame):
+                        if int(frame.mean()) % 2 == 0:
+                            return np.zeros_like(frame)
+                        return frame
+
+                    snippet = snippet.fl_image(strobe_effect)
+
+                elif effect == "triple_repeat":
+                    repeats = random.randint(3, 6)
+                    snippet = concatenate_videoclips([snippet] * repeats)
+
+                elif effect == "mirror_y":
+                    snippet = snippet.fx(vfx.mirror_y)
+
+                elif effect == "brightness_flash":
+                    factor = random.choice([0.1, 4.0, 5.0])
+                    snippet = snippet.fx(vfx.colorx, factor)
+
+                elif effect == "silence":
+                    snippet = snippet.without_audio()
 
                 # Если effect == "normal", ничего не делаем, кусок остается обычным
             except Exception as exc:
