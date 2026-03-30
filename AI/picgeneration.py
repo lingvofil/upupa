@@ -530,9 +530,9 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "Describe this image in detail for use as an image generation prompt. "
-            "Focus on the main subject, style, colors, and composition. "
-            "Return only the description, no commentary."
+            "What is the main subject of this image?"
+            "Answer in 5-10 words maximum, just the subject, no details, no colors, no style."
+            "Example: 'a frog sitting on a lily pad'"
         )
 
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
