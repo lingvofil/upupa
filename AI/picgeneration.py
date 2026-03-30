@@ -538,9 +538,9 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"{description}, "
-            "A very bad children's drawing, ugly doodle, mess, crayon style, "
-            "scribble, naive art, stick figures, white background, masterpiece by 4 year old child"
+            "children's crayon drawing, ugly doodle, scribble, naive art, "
+            "stick figures, messy lines, white background, drawing by 4 year old child, "
+            f"{description}"
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
