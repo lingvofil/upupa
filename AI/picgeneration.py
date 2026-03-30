@@ -275,12 +275,12 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
 # ГЛАВНЫЙ ОРКЕСТРАТОР (WATERFALL)
 # =============================================================================
 
-async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message):
+async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message, skip_translate: bool = False):
     global PIPELINE_ID
     
     # Переводим и обогащаем промпт один раз для всей цепочки
     await processing_msg.edit_text("Использую ебучий Flux...")
-    prompt_en = await translate_to_en(prompt_ru)
+    prompt_en = prompt_ru if skip_translate else await translate_to_en(prompt_ru)
 
     # 1. Flux (Pollinations)
     img = await pollinations_generate(prompt_en)
@@ -543,7 +543,7 @@ async def handle_redraw_command(message: types.Message):
             "scribble, naive art, stick figures, white background, masterpiece by 4 year old child"
         )
 
-        await robust_image_generation(message, final_prompt, msg)
+        await robust_image_generation(message, final_prompt, msg, skip_translate=True)
 
     except Exception as e:
         logging.error(f"Redraw error: {e}")
