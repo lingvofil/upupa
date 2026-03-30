@@ -538,11 +538,9 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            "absurdly funny children's drawing, intentional anatomy fail, crude doodle, "
-            "stick figures with mismatched cross-eyed googly eyes stuck on paper, "
-            "noodle arms, limbs growing from wrong places, wobbly shaky lines, "
-            "heavy wax texture, wrong color logic, drawn on textured white paper, "
-            "a chaotic 4 year old's masterpiece, "
+            "drawn in extremely bad children's crayon style,"
+            "wobbly lines, wrong proportions, messy coloring outside the lines,"
+            "crude doodle on white paper, drawn by a 4 year old,"
             f"{description}"
         )
 
