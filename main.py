@@ -707,7 +707,13 @@ async def redraw_image(message: types.Message):
             (message.photo and message.caption and "нвидиа" in message.caption.lower()) or
             (message.document and message.caption and "нвидиа" in message.caption.lower()) or
             (message.text and "нвидиа" in message.text.lower() and message.reply_to_message and 
-            (message.reply_to_message.photo or message.reply_to_message.document))
+            (
+                message.reply_to_message.photo or 
+                message.reply_to_message.document or
+                (message.reply_to_message.sticker and 
+                 not message.reply_to_message.sticker.is_animated and 
+                 not message.reply_to_message.sticker.is_video)
+            ))
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
