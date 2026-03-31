@@ -438,6 +438,8 @@ def get_image_attachment_from_message(message: types.Message):
         return message.photo[-1]
     if message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
         return message.document
+    if message.sticker and not message.sticker.is_animated and not message.sticker.is_video:
+        return message.sticker
     if message.reply_to_message:
         if message.reply_to_message.photo:
             return message.reply_to_message.photo[-1]
@@ -447,6 +449,12 @@ def get_image_attachment_from_message(message: types.Message):
             and message.reply_to_message.document.mime_type.startswith("image/")
         ):
             return message.reply_to_message.document
+        if (
+            message.reply_to_message.sticker
+            and not message.reply_to_message.sticker.is_animated
+            and not message.reply_to_message.sticker.is_video
+        ):
+            return message.reply_to_message.sticker
     return None
 
 
@@ -583,6 +591,13 @@ async def handle_nvidia_command(message: types.Message):
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
+        try:
+            pil_img = Image.open(BytesIO(img_bytes)).convert("RGB")
+            buf = BytesIO()
+            pil_img.save(buf, format="JPEG", quality=95)
+            img_bytes = buf.getvalue()
+        except Exception:
+            pass
         generated_bytes = await generate_gradio_img2img(img_bytes, prompt)
         if not generated_bytes:
             await msg.edit_text("Nvidia недоступна, генерирую через Flux...")
