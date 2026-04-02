@@ -63,6 +63,7 @@ from search import (
     process_gif_search,
     save_and_send_gif   
 )
+from sherlock import is_sherlock_command, process_sherlock_command
 
 # ================== БЛОК 3.8: НАСТРОЙКА ПОГОДЫ ==================
 from weather import (
@@ -394,6 +395,10 @@ async def handle_image_search(message: Message):
         await save_and_send_searched_image(message, image_data)
     elif response_message:
         await message.reply(response_message)
+
+@router.message(lambda message: is_sherlock_command(message.text) and message.from_user.id not in BLOCKED_USERS)
+async def handle_sherlock_search(message: Message):
+    await process_sherlock_command(message)
 
 @router.message(lambda message: message.text and message.text.lower() in queries and message.from_user.id not in BLOCKED_USERS)
 async def universal_handler(message: types.Message):
