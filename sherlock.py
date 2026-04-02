@@ -11,7 +11,7 @@ from upupa_utils import normalize_upupa_command
 class SherlockSearch:
     """Асинхронный запуск Sherlock и парсинг найденных профилей."""
 
-    TIMEOUT_SECONDS = 120
+    TIMEOUT_SECONDS = 320
     COMMAND_PREFIX = "упупа ищи"
 
     async def search(self, username: str) -> dict[str, Any]:
@@ -94,7 +94,7 @@ async def process_sherlock_command(message: Message) -> None:
         await message.reply("Укажи username после команды: упупа ищи <username>")
         return
 
-    await message.reply(f"🔎 Ищу аккаунты для этого пидораса: {username}")
+    await message.reply(f"🔎 Ищу аккаунты этого пидораса: {username}")
 
     sherlock_search = SherlockSearch()
     result = await sherlock_search.search(username)
