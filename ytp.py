@@ -298,7 +298,6 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
             await message.reply_video(
                 FSInputFile(output_path, filename="pup.mp4"),
-                caption="🎬 ВАШ ПУП",
             )
 
         await processing_msg.delete()
