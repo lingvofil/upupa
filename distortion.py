@@ -219,10 +219,18 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             output_path = f"{input_path}_out.mp3"
             success = await apply_ffmpeg_audio_distortion(input_path, output_path, intensity)
             final_media_type = media_type
-        elif media_type in ['video', 'sticker_video']:
+
+        elif media_type == 'video':
             output_path = f"{input_path}_out.webm"
             success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
             final_media_type = 'video'
+
+        elif media_type in ['animation', 'sticker_video']:
+            # GIF и видео-стикеры — отправляем как анимацию (отображается в чате)
+            output_path = f"{input_path}_out.webm"
+            success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
+            final_media_type = 'animation'
+
         elif media_type == 'sticker_tgs':
             converted_path = f"{input_path}_converted.webm"
             converted = await convert_tgs_to_webm(input_path, converted_path)
@@ -231,14 +239,15 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                 return
             output_path = f"{input_path}_out.webm"
             success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
-            final_media_type = 'video'
+            final_media_type = 'animation'
 
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo': await bot_instance.send_photo(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'audio': await bot_instance.send_audio(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'voice': await bot_instance.send_voice(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
-            elif final_media_type == 'video': await bot_instance.send_document(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
+            elif final_media_type == 'animation': await bot_instance.send_animation(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
+            elif final_media_type == 'video': await bot_instance.send_video(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
         else:
             if 'duration' not in locals() or duration <= MAX_AUDIO_DURATION:
                  await bot_instance.send_message(chat_id, "Что-то пошло не так во время искажения.")
@@ -315,7 +324,7 @@ async def handle_distortion_request(message: types.Message):
             media_info = {'media_type': 'video', 'ext': '.mp4'}
             file_to_download = target_message.video
         elif target_message.animation:
-            media_info = {'media_type': 'video', 'ext': '.webm'}
+            media_info = {'media_type': 'animation', 'ext': '.webm'}
             file_to_download = target_message.animation
         elif target_message.document and is_video_document(target_message.document):
             media_info = {'media_type': 'video', 'ext': '.mp4'}

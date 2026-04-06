@@ -340,7 +340,8 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                 None, _make_ytp_sync, real_input_path, output_path, target_dur, preset
             )
 
-            await message.reply_document(
+            # Отправляем как анимацию — отображается прямо в чате, не как файл
+            await message.reply_animation(
                 FSInputFile(output_path, filename="pup.webm"),
             )
 
