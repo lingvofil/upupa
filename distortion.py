@@ -123,6 +123,80 @@ def distort_text(text: str, intensity: int) -> str:
         else: chars.insert(idx, random.choice("!@#$%^&*()_+-=[]{}|;:,.<>?"))
     return "".join(chars)
 
+def apply_aggressive_distortion(input_file: str, output_file: str, output_format: str = "mp4") -> None:
+    """
+    Applies aggressive image-like distortion to a video file.
+
+    Args:
+        input_file: Input video path (MP4/WebM and other FFmpeg-supported formats).
+        output_file: Output file path.
+        output_format: "mp4" or "gif".
+    """
+    normalized_output_format = output_format.lower().strip()
+    if normalized_output_format not in {"mp4", "gif"}:
+        raise ValueError("Unsupported output format. Use 'mp4' or 'gif'.")
+
+    # Агрессивная цепочка фильтров:
+    # - шум/зерно
+    # - высокий контраст/насыщенность
+    # - сдвиг оттенка
+    # - волнообразный warp/curvature через displace
+    # - хаотичная тряска через crop+pad
+    vf_chain = (
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+        "noise=alls=85:allf=t+u,"
+        "eq=contrast=1.9:saturation=2.7:brightness=0.03,"
+        "hue=h=45*sin(0.75*t):s=1.35,"
+        "split=3[base][dx][dy];"
+        "[dx]format=gray,geq=lum='128+127*sin((Y/5)+2*T)'[xmap];"
+        "[dy]format=gray,geq=lum='128+127*cos((X/6)+2.4*T)'[ymap];"
+        "[base][xmap][ymap]displace=edge=wrap,"
+        "crop=iw-14:ih-14:"
+        "x='7+3*sin(37*t)+2*cos(53*t)':"
+        "y='7+3*cos(41*t)+2*sin(29*t)',"
+        "pad=iw+14:ih+14:7:7:black,"
+        "unsharp=7:7:1.6:7:7:0.0"
+    )
+
+    if normalized_output_format == "mp4":
+        command = [
+            "ffmpeg", "-y", "-i", input_file,
+            "-vf", vf_chain,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "19",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            output_file,
+        ]
+        subprocess.run(command, check=True)
+        return
+
+    # GIF: двухпроходный palettegen/paletteuse для лучшего качества.
+    palette_file = f"{output_file}.palette.png"
+    palettegen_cmd = [
+        "ffmpeg", "-y", "-i", input_file,
+        "-vf", f"{vf_chain},fps=15,scale=640:-1:flags=lanczos,palettegen=stats_mode=full",
+        palette_file,
+    ]
+    paletteuse_cmd = [
+        "ffmpeg", "-y", "-i", input_file, "-i", palette_file,
+        "-lavfi", (
+            f"{vf_chain},fps=15,scale=640:-1:flags=lanczos[x];"
+            "[x][1:v]paletteuse=dither=bayer:bayer_scale=2:diff_mode=rectangle"
+        ),
+        "-gifflags", "+transdiff",
+        output_file,
+    ]
+
+    try:
+        subprocess.run(palettegen_cmd, check=True)
+        subprocess.run(paletteuse_cmd, check=True)
+    finally:
+        if os.path.exists(palette_file):
+            os.remove(palette_file)
+
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
     """
     Искажает аудио, используя vibrato как основной эффект.
