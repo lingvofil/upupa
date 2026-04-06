@@ -488,17 +488,35 @@ async def stop_croc_text(message: types.Message):
     await crocodile.handle_text_stop(message)
 
 
+def is_video_document(msg: types.Message) -> bool:
+    if not msg or not msg.document:
+        return False
+    if msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+        return True
+    return False
+
+
 @router.message(
     lambda message: (
         (
             message.text and
             message.text.lower().strip() == "пуп" and
             message.reply_to_message and
-            (message.reply_to_message.video or message.reply_to_message.document)
+            (
+                message.reply_to_message.video
+                or message.reply_to_message.animation
+                or (message.reply_to_message.sticker and message.reply_to_message.sticker.is_video)
+                or is_video_document(message.reply_to_message)
+            )
         )
         or
         (
-            (message.video or message.document) and
+            (
+                message.video
+                or message.animation
+                or (message.sticker and message.sticker.is_video)
+                or is_video_document(message)
+            ) and
             message.caption and
             message.caption.lower().strip() == "пуп"
         )
