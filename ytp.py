@@ -226,19 +226,29 @@ def _is_video_document(document: types.Document) -> bool:
     return False
 
 async def run_command(command: list[str]) -> tuple[bool, str]:
-    logging.info(f"[ytp] Запуск команды: {' '.join(command)}")
-    process = await asyncio.create_subprocess_exec(
-        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    _, stderr = await process.communicate()
-    if process.returncode != 0:
-        error_message = stderr.decode(errors="ignore").strip()
-        logging.error(f"[ytp] Ошибка команды: {error_message}")
-        return False, error_message
-    return True, "Success"
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        return False, stderr.decode(errors="ignore")
+    return True, stdout.decode(errors="ignore")
+
 
 async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
-    success, _ = await run_command(["lottie_convert.py", input_tgs, output_webm])
+    cmd = [
+        "/root/upupa/venv/bin/lottie_convert.py",
+        input_tgs,
+        output_webm,
+        "-of",
+        "video",
+        "--video-format",
+        "webm",
+        "--fps",
+        "30",
+        "--sanitize",
+    ]
+    success, _ = await run_command(cmd)
     return success
 
 
@@ -259,8 +269,8 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await message.reply("Реплайни блядь на видео/гифку или отправь их с подписью «пуп».")
         return
 
-    # Достаем объект файла (видео, гифка или документ)
-    file_obj = video_source.video or video_source.animation or video_source.sticker or video_source.document
+    # Достаем объект файла (видео, гифка, документ или стикер)
+    file_obj = video_source.video or video_source.animation or video_source.document or video_source.sticker
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
@@ -286,25 +296,19 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
     processing_msg = await message.reply("⚙️ Пупизирую. пу пу пу...")
     input_path = None
-    moviepy_input_path = None
     converted_input_path = None
     output_path = None
 
     try:
         async with _ytp_semaphore:
-            if video_source.document:
-                suffix = os.path.splitext(video_source.document.file_name or "")[1].lower() or ".mp4"
-            elif video_source.sticker:
-                if video_source.sticker.is_animated:
-                    suffix = ".tgs"
-                elif video_source.sticker.is_video:
-                    suffix = ".webm"
-                else:
-                    await processing_msg.delete()
-                    await message.reply("Реплайни блядь на видео/гифку или отправь их с подписью «пуп».")
-                    return
+            if video_source.sticker and video_source.sticker.is_animated:
+                suffix = ".tgs"
+            elif video_source.sticker and video_source.sticker.is_video:
+                suffix = ".webm"
             elif video_source.animation:
                 suffix = ".webm"
+            elif video_source.document:
+                suffix = os.path.splitext(video_source.document.file_name or "")[1].lower() or ".mp4"
             else:
                 suffix = ".mp4"
 
@@ -315,19 +319,16 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
-            moviepy_input_path = input_path
 
-            if video_source.sticker and video_source.sticker.is_animated:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".webm", prefix="ytp_conv_") as conv_file:
-                    converted_input_path = conv_file.name
+            real_input_path = input_path
+            if suffix == ".tgs":
+                converted_input_path = input_path + "_converted.webm"
                 converted = await convert_tgs_to_webm(input_path, converted_input_path)
                 if not converted:
                     await processing_msg.delete()
-                    await message.reply(
-                        "❌ Не удалось конвертировать TGS стикер. Установи lottie_convert.py / пакет lottie."
-                    )
+                    await message.reply("❌ Не удалось конвертировать TGS в видео.")
                     return
-                moviepy_input_path = converted_input_path
+                real_input_path = converted_input_path
 
             loop = asyncio.get_running_loop()
             chat_id_str = str(message.chat.id)
@@ -336,7 +337,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             preset = chat_cfg.get("ytp_preset", "normal")
 
             await loop.run_in_executor(
-                None, _make_ytp_sync, moviepy_input_path, output_path, target_dur, preset
+                None, _make_ytp_sync, real_input_path, output_path, target_dur, preset
             )
 
             await message.reply_document(

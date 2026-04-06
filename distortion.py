@@ -55,19 +55,29 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
     return True, "Success"
 
 async def run_command(command: list[str]) -> tuple[bool, str]:
-    logging.info(f"Запуск команды: {' '.join(command)}")
     process = await asyncio.create_subprocess_exec(
-        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    _, stderr = await process.communicate()
+    stdout, stderr = await process.communicate()
     if process.returncode != 0:
-        error_message = stderr.decode(errors='ignore').strip()
-        logging.error(f"Ошибка команды: {error_message}")
-        return False, error_message
-    return True, "Success"
+        return False, stderr.decode(errors="ignore")
+    return True, stdout.decode(errors="ignore")
 
-async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
-    success, _ = await run_command(["lottie_convert.py", input_tgs, output_webm])
+
+async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
+    cmd = [
+        "/root/upupa/venv/bin/lottie_convert.py",
+        input_path,
+        output_path,
+        "-of",
+        "video",
+        "--video-format",
+        "webm",
+        "--fps",
+        "30",
+        "--sanitize",
+    ]
+    success, _ = await run_command(cmd)
     return success
 
 async def get_media_info(file_path: str) -> dict | None:
@@ -217,10 +227,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             converted_path = f"{input_path}_converted.webm"
             converted = await convert_tgs_to_webm(input_path, converted_path)
             if not converted:
-                await bot_instance.send_message(
-                    chat_id,
-                    "❌ Не удалось конвертировать TGS стикер. Установи lottie_convert.py / пакет lottie."
-                )
+                await bot_instance.send_message(chat_id, "❌ Не удалось конвертировать TGS в видео.")
                 return
             output_path = f"{input_path}_out.webm"
             success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
