@@ -6,6 +6,7 @@ import logging
 import re
 import subprocess
 import shutil
+import time
 import numpy as np
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
@@ -43,15 +44,18 @@ def parse_intensity_from_text(text: str | None) -> int:
     return 45
 
 async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
+    start_time = time.perf_counter()
     logging.info(f"Запуск FFmpeg: {' '.join(command)}")
     process = await asyncio.create_subprocess_exec(
         *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     _, stderr = await process.communicate()
+    duration = time.perf_counter() - start_time
     if process.returncode != 0:
         error_message = stderr.decode(errors='ignore').strip()
-        logging.error(f"FFmpeg ошибка: {error_message}")
+        logging.error(f"FFmpeg завершился с ошибкой за {duration:.2f}с: {error_message}")
         return False, error_message
+    logging.info(f"FFmpeg успешно завершен за {duration:.2f}с")
     return True, "Success"
 
 async def run_command(command: list[str]) -> tuple[bool, str]:
@@ -74,10 +78,17 @@ async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
         "--video-format",
         "webm",
         "--fps",
-        "30",
+        "15",
         "--sanitize",
     ]
+    start_time = time.perf_counter()
+    logging.info(f"Запуск lottie_convert: {' '.join(cmd)}")
     success, _ = await run_command(cmd)
+    duration = time.perf_counter() - start_time
+    if success:
+        logging.info(f"lottie_convert успешно завершен за {duration:.2f}с")
+    else:
+        logging.error(f"lottie_convert завершился с ошибкой за {duration:.2f}с")
     return success
 
 async def get_media_info(file_path: str) -> dict | None:
@@ -138,26 +149,29 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
     return success
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    noise_level = int(map_intensity(intensity, 10, 70))
-    contrast = map_intensity(intensity, 1.0, 2.0)
+    noise_level = int(map_intensity(intensity, 20, 90))
+    contrast = map_intensity(intensity, 1.0, 2.2)
     saturation = map_intensity(intensity, 1.0, 3.0)
     hue_shift = map_intensity(intensity, -90.0, 90.0)
     filter_chain = (
         f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+        f"fps=15,"
         f"noise=alls={noise_level}:allf=t+u,"
         f"eq=contrast={contrast:.2f}:saturation={saturation:.2f},"
-        f"hue=h={hue_shift:.2f}"
+        f"hue=h={hue_shift:.2f},"
+        f"rotate=0.08*sin(2*PI*t):c=black@0"
     )
 
     cmd = [
         'ffmpeg', '-i', input_path,
         '-vf', filter_chain,
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '23',
+        '-preset', 'ultrafast',
+        '-crf', '30',
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
-        '-c:a', 'aac', '-b:a', '128k',
+        '-c:a', 'aac', '-b:a', '96k',
+        '-threads', '1',
         '-y', output_path
     ]
     success, _ = await run_ffmpeg_command(cmd)
