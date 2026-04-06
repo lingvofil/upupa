@@ -7,9 +7,7 @@ import json
 from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
 from aiogram import Bot
 
-# Используем тот же экстрактор сообщений, что и в других модулях
-from lexicon_settings import extract_chat_messages
-from config import model, groq_ai, gigachat_model, chat_settings
+from config import model, groq_ai, gigachat_model, chat_settings, conversation_history
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
@@ -93,57 +91,106 @@ async def set_random_emoji_reaction(message: Message):
 
 # --- Кинематографичные ремарки с выбором активной модели ---
 
-async def generate_situational_reaction(chat_id: int):
+async def generate_situational_reaction(chat_id: int) -> str | None:
     """
-    Генерирует сдержанную кинематографичную ремарку на основе истории чата.
-    Автоматически выбирает активную модель для чата.
+    Генерирует одну короткую циничную ремарку строго по теме последних реплик.
+    Источник данных: актуальная conversation_history.
     """
-    logging.info(f"Запуск генерации ситуативной реакции для чата {chat_id}.")
-    
-    all_messages = await extract_chat_messages(chat_id)
-    
-    if not all_messages:
-        logging.warning(f"Для чата {chat_id} не найдено сообщений в логе. Реакция отменена.")
+    logging.info(f"[situational] Запуск генерации ситуативной реакции для чата {chat_id}.")
+
+    chat_key = str(chat_id)
+    history = conversation_history.get(chat_key, [])
+    if not history:
+        logging.warning(f"[situational] Для чата {chat_id} нет актуальной истории диалога.")
         return None
 
-    last_messages = all_messages[-15:]
-    chat_history = "\n".join(last_messages)
-    
-    if not chat_history.strip():
+    usable_messages = [msg for msg in history if msg.get("content", "").strip()]
+    if len(usable_messages) < 3:
+        logging.info(
+            f"[situational] Недостаточно контекста для чата {chat_id}: "
+            f"{len(usable_messages)} валидных сообщений."
+        )
         return None
-        
-    logging.info(f"Взято последних {len(last_messages)} сообщений для генерации реакции.")
+
+    focus_count = min(5, len(usable_messages))
+    focus_messages = usable_messages[-focus_count:]
+    older_messages = usable_messages[:-focus_count]
+
+    meme_phrases = {
+        "паприкаш", "гойда", "база", "кринж", "имба", "разъеб", "sigma", "сигма"
+    }
+
+    older_meme_hits = []
+    for msg in older_messages[-10:]:
+        content = msg.get("content", "").lower()
+        hit = [phrase for phrase in meme_phrases if phrase in content]
+        if hit:
+            older_meme_hits.extend(hit)
+    older_meme_hits = sorted(set(older_meme_hits))
+
+    formatted_focus = []
+    for idx, msg in enumerate(focus_messages, start=1):
+        author = msg.get("name") or ("Бот" if msg.get("role") == "assistant" else "Пользователь")
+        role = msg.get("role", "user")
+        text = msg.get("content", "").strip()
+
+        reply_to = msg.get("reply_to_name") or msg.get("reply_to")
+        reply_hint = f" -> ответ на: {reply_to}" if reply_to else ""
+
+        formatted_focus.append(f"{idx}. [{author} | {role}]{reply_hint}: {text}")
+
+    focus_block = "\n".join(formatted_focus)
+    logging.info(
+        f"[situational] Подготовлено {len(focus_messages)} последних сообщений "
+        f"для чата {chat_id}."
+    )
+    logging.debug(f"[situational] Фокус-контекст:\n{focus_block}")
+    if older_meme_hits:
+        logging.info(
+            f"[situational] В старом контексте найдены мемные слова "
+            f"(будут проигнорированы): {', '.join(older_meme_hits)}"
+        )
 
     prompt = f"""
-    Ты — циничный закадровый голос грязного артхауса. Анализируешь диалог и выдаёшь ОДНУ короткую ремарку — как авторская пометка в сценарии.
+Ты — циничный закадровый голос грязного артхауса.
+Твоя задача: дать ровно одну короткую ремарку по теме последних сообщений.
 
-    Правила:
-    - Ремарка ПРЯМО по теме последних реплик, цепляйся за конкретные слова или ситуацию
-    - Похабно, с подтекстом или открытым двусмысленным смыслом — но не пошло в лоб
-    - Маты органичны, не для украшения, а по делу
-    - Интонация: усталый оператор, который видел всё
-    - ТОЛЬКО одна фраза в звёздочках (*ремарка*)
-    - Никаких вопросов, объяснений, вариантов
+Жёсткие правила:
+- Учитывай авторов, последовательность и возможные ответы друг другу (reply-chain).
+- Работай СТРОГО по последним {len(focus_messages)} сообщениям ниже.
+- Игнорируй старые мемы/шаблоны и случайные слова, если их нет в последних репликах.
+- Тон: цинично, с двусмысленностью, органично в контексте.
+- Никаких объяснений, вариантов, вопросов.
+- Формат: только одна фраза в звёздочках (*...*).
 
-    Диалог:
-    ---
-    {chat_history}
-    ---
+Последние сообщения:
+---
+{focus_block}
+---
 
-    Твоя ремарка:
-    """
-    
+Ремарка:
+""".strip()
+
     try:
-        reaction_text = await generate_with_model(prompt, chat_id, temperature=0.72, max_tokens=45)
-        logging.info(f"Ответ от модели для ситуативной реакции: '{reaction_text}'")
+        reaction_text = await generate_with_model(
+            prompt,
+            chat_id,
+            temperature=0.72,
+            max_tokens=45
+        )
+        logging.info(f"[situational] Ответ модели для чата {chat_id}: '{reaction_text}'")
 
         if reaction_text and reaction_text.startswith('*') and reaction_text.endswith('*'):
+            logging.info(f"[situational] Валидная ремарка сгенерирована для чата {chat_id}.")
             return reaction_text
-        else:
-            return None
 
+        logging.warning(
+            f"[situational] Невалидный формат ответа для чата {chat_id}. "
+            "Ожидался формат *...*; возвращаем None."
+        )
+        return None
     except Exception as e:
-        logging.error(f"Ошибка при генерации ситуативной реакции: {e}", exc_info=True)
+        logging.error(f"[situational] Ошибка генерации реакции для чата {chat_id}: {e}", exc_info=True)
         return None
 
 # --- НОВОЕ: Алгоритмическая реакция "я %слово%" БЕЗ AI ---
