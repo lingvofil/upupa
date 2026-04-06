@@ -80,6 +80,36 @@ async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
     success, _ = await run_command(cmd)
     return success
 
+async def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> bool:
+    logging.info(f"Начинаю конвертацию webm->mp4: {input_webm} -> {output_mp4}")
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_webm,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "28",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-y",
+        output_mp4,
+    ]
+    success, error = await run_ffmpeg_command(cmd)
+    if success:
+        logging.info(f"Конвертация webm->mp4 завершена: {output_mp4}")
+    else:
+        logging.error(f"Конвертация webm->mp4 не удалась: {error}")
+    return success
+
 async def get_media_info(file_path: str) -> dict | None:
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', '-i', file_path]
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -190,6 +220,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     input_path = media_info.get('local_path')
     output_path = None
     converted_path = None
+    mp4_path = None
     
     try:
         if media_type in ['audio', 'voice']:
@@ -242,12 +273,22 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             final_media_type = 'animation'
 
         if success and output_path and os.path.exists(output_path):
+            if final_media_type in {'video', 'animation'} and output_path.endswith(".webm"):
+                mp4_path = output_path.replace(".webm", ".mp4")
+                converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
+                if converted_to_mp4 and os.path.exists(mp4_path):
+                    output_path = mp4_path
+                    final_media_type = 'video'
+                else:
+                    mp4_path = None
+
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo': await bot_instance.send_photo(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'audio': await bot_instance.send_audio(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'voice': await bot_instance.send_voice(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'animation': await bot_instance.send_animation(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'video': await bot_instance.send_video(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
+            else: await bot_instance.send_document(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
         else:
             if 'duration' not in locals() or duration <= MAX_AUDIO_DURATION:
                  await bot_instance.send_message(chat_id, "Что-то пошло не так во время искажения.")
@@ -258,6 +299,11 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             try: await bot_instance.send_message(chat_id, "Произошла внутренняя ошибка при обработке.")
             except Exception as send_e: logging.error(f"Не удалось отправить сообщение об ошибке: {send_e}")
     finally:
+        if mp4_path and os.path.exists(mp4_path):
+            try:
+                os.remove(mp4_path)
+            except Exception:
+                pass
         if converted_path and os.path.exists(converted_path):
             try:
                 os.remove(converted_path)
