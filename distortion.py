@@ -29,6 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- ОГРАНИЧЕНИЯ РЕСУРСОВ ---
 MAX_AUDIO_DURATION = 180 # 3 минуты
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 
 # --- Вспомогательные функции ---
 
@@ -60,6 +61,16 @@ async def get_media_info(file_path: str) -> dict | None:
     if process.returncode != 0: return None
     try: return json.loads(stdout.decode(errors='ignore'))
     except json.JSONDecodeError: return None
+
+def is_video_document(document: types.Document | None) -> bool:
+    if not document:
+        return False
+    if document.mime_type and document.mime_type.startswith("video/"):
+        return True
+    if document.file_name:
+        ext = os.path.splitext(document.file_name)[1].lower()
+        return ext in SUPPORTED_VIDEO_EXTENSIONS
+    return False
 
 # --- Функции искажения ---
 
@@ -97,6 +108,28 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
         filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
 
     cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
+    success, _ = await run_ffmpeg_command(cmd)
+    return success
+
+async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    noise_level = int(map_intensity(intensity, 2, 20))
+    contrast = map_intensity(intensity, 1.0, 1.6)
+    saturation = map_intensity(intensity, 1.0, 2.2)
+    hue_shift = map_intensity(intensity, -45.0, 45.0)
+    filter_chain = (
+        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+        f"noise=alls={noise_level}:allf=t+u,"
+        f"eq=contrast={contrast:.2f}:saturation={saturation:.2f},"
+        f"hue=h={hue_shift:.2f}"
+    )
+
+    cmd = [
+        'ffmpeg', '-i', input_path,
+        '-vf', filter_chain,
+        '-c:v', 'libvpx-vp9', '-crf', '35', '-b:v', '0',
+        '-c:a', 'libopus', '-b:a', '96k',
+        '-y', output_path
+    ]
     success, _ = await run_ffmpeg_command(cmd)
     return success
 
@@ -159,12 +192,17 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             output_path = f"{input_path}_out.mp3"
             success = await apply_ffmpeg_audio_distortion(input_path, output_path, intensity)
             final_media_type = media_type
+        elif media_type in ['video', 'sticker_video']:
+            output_path = f"{input_path}_out.webm"
+            success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
+            final_media_type = 'video'
 
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo': await bot_instance.send_photo(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'audio': await bot_instance.send_audio(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'voice': await bot_instance.send_voice(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
+            elif final_media_type == 'video': await bot_instance.send_document(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
         else:
             if 'duration' not in locals() or duration <= MAX_AUDIO_DURATION:
                  await bot_instance.send_message(chat_id, "Что-то пошло не так во время искажения.")
@@ -193,7 +231,17 @@ def is_distortion_command(message: types.Message) -> bool:
         text_to_check = message.caption or message.text
         if text_to_check and "дисторшн" in text_to_check.lower():
             target = message.reply_to_message or message
-            return bool(target.photo or target.sticker or target.audio or target.voice or target.text)
+            is_video_doc = is_video_document(target.document)
+            return bool(
+                target.photo
+                or target.sticker
+                or target.audio
+                or target.voice
+                or target.text
+                or target.video
+                or target.animation
+                or is_video_doc
+            )
         return False
     except Exception: return False
 
@@ -213,12 +261,24 @@ async def handle_distortion_request(message: types.Message):
             media_info = {'media_type': 'photo', 'ext': '.jpg'}
             file_to_download = target_message.photo[-1]
         elif target_message.sticker:
-            if target_message.sticker.is_animated or target_message.sticker.is_video:
-                await message.answer("Извини, анимированные стикеры и видео-стикеры я больше не искажаю.")
+            if target_message.sticker.is_animated:
+                await message.answer("Извини, анимированные стикеры (TGS) я не поддерживаю.")
                 return
+            if target_message.sticker.is_video:
+                media_info = {'media_type': 'sticker_video', 'ext': '.webm'}
+                file_to_download = target_message.sticker
             else: 
                 media_info = {'media_type': 'sticker_static', 'ext': '.webp'}
                 file_to_download = target_message.sticker
+        elif target_message.video:
+            media_info = {'media_type': 'video', 'ext': '.mp4'}
+            file_to_download = target_message.video
+        elif target_message.animation:
+            media_info = {'media_type': 'video', 'ext': '.webm'}
+            file_to_download = target_message.animation
+        elif target_message.document and is_video_document(target_message.document):
+            media_info = {'media_type': 'video', 'ext': '.mp4'}
+            file_to_download = target_message.document
         elif target_message.audio: 
             media_info = {'media_type': 'audio', 'ext': '.mp3'}
             file_to_download = target_message.audio
@@ -227,9 +287,6 @@ async def handle_distortion_request(message: types.Message):
             file_to_download = target_message.voice
         elif target_message.text: 
             media_info = {'media_type': 'text', 'text': target_message.text}
-        elif target_message.video or target_message.animation:
-            await message.answer("Извини, видео и гифки я больше не искажаю.")
-            return
 
         if not media_info:
             await message.answer("Не нашел, что искажать.")

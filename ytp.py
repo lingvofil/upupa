@@ -189,8 +189,8 @@ def _make_ytp_sync(
         final_clip = concatenate_videoclips(clips)
         final_clip.write_videofile(
             output_path,
-            codec="libx264",
-            audio_codec="aac",
+            codec="libvpx-vp9",
+            audio_codec="libopus",
             fps=30,
             preset="ultrafast",
             threads=2,
@@ -231,11 +231,11 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     # Проверяем реплай
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or source.animation or (source.document and _is_video_document(source.document)):
+        if source.video or source.animation or (source.sticker and source.sticker.is_video) or (source.document and _is_video_document(source.document)):
             video_source = source
 
     # Проверяем само сообщение
-    if video_source is None and (message.video or message.animation or (message.document and _is_video_document(message.document))):
+    if video_source is None and (message.video or message.animation or (message.sticker and message.sticker.is_video) or (message.document and _is_video_document(message.document))):
         video_source = message
 
     if not video_source:
@@ -243,7 +243,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         return
 
     # Достаем объект файла (видео, гифка или документ)
-    file_obj = video_source.video or video_source.animation or video_source.document
+    file_obj = video_source.video or video_source.animation or video_source.document or video_source.sticker
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
@@ -275,12 +275,14 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         async with _ytp_semaphore:
             if video_source.document:
                 suffix = os.path.splitext(video_source.document.file_name or "")[1].lower() or ".mp4"
+            elif video_source.animation or (video_source.sticker and video_source.sticker.is_video):
+                suffix = ".webm"
             else:
                 suffix = ".mp4"
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ytp_in_") as in_file:
                 input_path = in_file.name
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", prefix="ytp_out_") as out_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm", prefix="ytp_out_") as out_file:
                 output_path = out_file.name
 
             file_info = await bot.get_file(file_obj.file_id)
@@ -296,8 +298,8 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                 None, _make_ytp_sync, input_path, output_path, target_dur, preset
             )
 
-            await message.reply_video(
-                FSInputFile(output_path, filename="pup.mp4"),
+            await message.reply_document(
+                FSInputFile(output_path, filename="pup.webm"),
             )
 
         await processing_msg.delete()
