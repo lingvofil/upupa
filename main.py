@@ -106,6 +106,7 @@ from AI.random_reactions import process_random_reactions
 # ================== БЛОК 3.19: ПУП (YTP) ==================
 from ytp import handle_ytp_command
 
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 
 # ================== БЛОК 4: НАСТРОЙКИ AI ==================
 
@@ -493,6 +494,9 @@ def is_video_document(msg: types.Message) -> bool:
         return False
     if msg.document.mime_type and msg.document.mime_type.startswith("video/"):
         return True
+    if msg.document.file_name:
+        ext = os.path.splitext(msg.document.file_name)[1].lower()
+        return ext in SUPPORTED_EXTENSIONS
     return False
 
 
@@ -505,7 +509,7 @@ def is_video_document(msg: types.Message) -> bool:
             (
                 message.reply_to_message.video
                 or message.reply_to_message.animation
-                or (message.reply_to_message.sticker and message.reply_to_message.sticker.is_video)
+                or message.reply_to_message.sticker
                 or is_video_document(message.reply_to_message)
             )
         )
@@ -514,7 +518,7 @@ def is_video_document(msg: types.Message) -> bool:
             (
                 message.video
                 or message.animation
-                or (message.sticker and message.sticker.is_video)
+                or message.sticker
                 or is_video_document(message)
             ) and
             message.caption and
