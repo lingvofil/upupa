@@ -94,6 +94,33 @@ def add_chat(chat_id, chat_title, chat_username=None):
 
     # Перемещаем "особый" чат наверх
     chat_list.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
+
+# Функция удаления чата из списка и настроек
+def remove_chat(chat_id):
+    global chat_list, chat_settings
+
+    removed = False
+    before_count = len(chat_list)
+    chat_list[:] = [chat for chat in chat_list if chat.get("id") != chat_id]
+    if len(chat_list) != before_count:
+        removed = True
+        save_chats()
+
+    chat_id_str = str(chat_id)
+    settings_removed = False
+    if chat_id in chat_settings:
+        del chat_settings[chat_id]
+        settings_removed = True
+    if chat_id_str in chat_settings:
+        del chat_settings[chat_id_str]
+        settings_removed = True
+    if settings_removed:
+        save_chat_settings()
+
+    if removed or settings_removed:
+        logging.info(f"Удален чат {chat_id} из списков/настроек.")
+
+    return removed or settings_removed
         
 # Загружаем список чатов при старте бота
 load_chats()

@@ -2,6 +2,7 @@ import base64
 import logging
 from aiogram import types
 from config import chat_list, bot
+from chat_settings import remove_chat
 
 # Функция для обрезки истории разговора
 def trim_history(history, max_length=4096):
@@ -24,7 +25,7 @@ async def process_leave_chat(message: types.Message, chat_identifier: str):
     else:
         # Если введено название чата
         chat_id = None
-        for chat in chat_list:
+        for chat in list(chat_list):
             # Проверяем название и username (если есть)
             if (chat["title"] and chat["title"].lower() == chat_identifier.lower()) or \
                (chat.get("username") and chat["username"].lower() == chat_identifier.lower().strip('@')):
@@ -37,6 +38,7 @@ async def process_leave_chat(message: types.Message, chat_identifier: str):
     
     try:
         await bot.leave_chat(chat_id)
+        remove_chat(chat_id)
         await message.reply(f"Ладно, нахуй {chat_identifier}")
         logging.info(f"Упупа покинул чат: {chat_identifier} ({chat_id})")
     except Exception as e:
@@ -52,7 +54,7 @@ async def process_leave_empty_chats(message: types.Message):
     left_chats = []
     failed_chats = []
     
-    for chat in chat_list:
+    for chat in list(chat_list):
         chat_id = chat["id"]
         
         # Пропускаем личные чаты (они всегда 1 на 1)
@@ -68,6 +70,7 @@ async def process_leave_empty_chats(message: types.Message):
             # Если в чате только 2 участника (бот + 1 человек)
             if member_count == 2:
                 await bot.leave_chat(chat_id)
+                remove_chat(chat_id)
                 chat_title = chat.get("title", f"ID: {chat_id}")
                 left_chats.append(chat_title)
                 logging.info(f"Упупа покинул чат с одним пользователем: {chat_title} ({chat_id})")

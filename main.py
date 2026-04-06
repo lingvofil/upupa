@@ -35,7 +35,7 @@ from common_settings import process_leave_chat, process_leave_empty_chats
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
 from chat_settings import (
-    process_update_all_chats, get_chats_list, add_chat, save_chat_settings
+    process_update_all_chats, get_chats_list, add_chat, save_chat_settings, remove_chat
 )
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
@@ -257,6 +257,18 @@ async def update_all_chats(message: types.Message):
 async def handle_where_sits(message: types.Message):
     response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
     await message.reply(response)
+
+@router.my_chat_member()
+async def handle_my_chat_member_update(update: types.ChatMemberUpdated):
+    chat = update.chat
+    new_status = update.new_chat_member.status
+
+    if new_status in ["left", "kicked"]:
+        removed = remove_chat(chat.id)
+        if removed:
+            logging.info(f"Bot removed from chat {chat.title or chat.id} ({chat.id}); chat was pruned from ???????.")
+    elif new_status in ["member", "administrator", "creator"]:
+        add_chat(chat.id, chat.title, chat.username)
 
 # ================== БЛОК 5.4: СМС И ММС ==================
 
