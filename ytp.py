@@ -3,6 +3,7 @@ import random
 import asyncio
 import tempfile
 import logging
+import subprocess
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 
@@ -224,6 +225,22 @@ def _is_video_document(document: types.Document) -> bool:
         return ext in SUPPORTED_EXTENSIONS
     return False
 
+async def run_command(command: list[str]) -> tuple[bool, str]:
+    logging.info(f"[ytp] Запуск команды: {' '.join(command)}")
+    process = await asyncio.create_subprocess_exec(
+        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        error_message = stderr.decode(errors="ignore").strip()
+        logging.error(f"[ytp] Ошибка команды: {error_message}")
+        return False, error_message
+    return True, "Success"
+
+async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
+    success, _ = await run_command(["lottie_convert.py", input_tgs, output_webm])
+    return success
+
 
 async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     video_source = None
@@ -231,11 +248,11 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     # Проверяем реплай
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or source.animation or (source.sticker and source.sticker.is_video) or (source.document and _is_video_document(source.document)):
+        if source.video or source.animation or source.sticker is not None or (source.document and _is_video_document(source.document)):
             video_source = source
 
     # Проверяем само сообщение
-    if video_source is None and (message.video or message.animation or (message.sticker and message.sticker.is_video) or (message.document and _is_video_document(message.document))):
+    if video_source is None and (message.video or message.animation or message.sticker is not None or (message.document and _is_video_document(message.document))):
         video_source = message
 
     if not video_source:
@@ -243,7 +260,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         return
 
     # Достаем объект файла (видео, гифка или документ)
-    file_obj = video_source.video or video_source.animation or video_source.document or video_source.sticker
+    file_obj = video_source.video or video_source.animation or video_source.sticker or video_source.document
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
@@ -269,13 +286,24 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
     processing_msg = await message.reply("⚙️ Пупизирую. пу пу пу...")
     input_path = None
+    moviepy_input_path = None
+    converted_input_path = None
     output_path = None
 
     try:
         async with _ytp_semaphore:
             if video_source.document:
                 suffix = os.path.splitext(video_source.document.file_name or "")[1].lower() or ".mp4"
-            elif video_source.animation or (video_source.sticker and video_source.sticker.is_video):
+            elif video_source.sticker:
+                if video_source.sticker.is_animated:
+                    suffix = ".tgs"
+                elif video_source.sticker.is_video:
+                    suffix = ".webm"
+                else:
+                    await processing_msg.delete()
+                    await message.reply("Реплайни блядь на видео/гифку или отправь их с подписью «пуп».")
+                    return
+            elif video_source.animation:
                 suffix = ".webm"
             else:
                 suffix = ".mp4"
@@ -287,6 +315,19 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
+            moviepy_input_path = input_path
+
+            if video_source.sticker and video_source.sticker.is_animated:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".webm", prefix="ytp_conv_") as conv_file:
+                    converted_input_path = conv_file.name
+                converted = await convert_tgs_to_webm(input_path, converted_input_path)
+                if not converted:
+                    await processing_msg.delete()
+                    await message.reply(
+                        "❌ Не удалось конвертировать TGS стикер. Установи lottie_convert.py / пакет lottie."
+                    )
+                    return
+                moviepy_input_path = converted_input_path
 
             loop = asyncio.get_running_loop()
             chat_id_str = str(message.chat.id)
@@ -295,7 +336,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             preset = chat_cfg.get("ytp_preset", "normal")
 
             await loop.run_in_executor(
-                None, _make_ytp_sync, input_path, output_path, target_dur, preset
+                None, _make_ytp_sync, moviepy_input_path, output_path, target_dur, preset
             )
 
             await message.reply_document(
@@ -312,7 +353,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await processing_msg.delete()
         await message.reply("❌ Что-то пошло не так при пупизации.")
     finally:
-        for path in (input_path, output_path):
+        for path in (input_path, converted_input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)

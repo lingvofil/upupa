@@ -54,6 +54,22 @@ async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
         return False, error_message
     return True, "Success"
 
+async def run_command(command: list[str]) -> tuple[bool, str]:
+    logging.info(f"Запуск команды: {' '.join(command)}")
+    process = await asyncio.create_subprocess_exec(
+        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        error_message = stderr.decode(errors='ignore').strip()
+        logging.error(f"Ошибка команды: {error_message}")
+        return False, error_message
+    return True, "Success"
+
+async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
+    success, _ = await run_command(["lottie_convert.py", input_tgs, output_webm])
+    return success
+
 async def get_media_info(file_path: str) -> dict | None:
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', '-i', file_path]
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -163,6 +179,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     media_type = media_info['media_type']
     input_path = media_info.get('local_path')
     output_path = None
+    converted_path = None
     
     try:
         if media_type in ['audio', 'voice']:
@@ -196,6 +213,18 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             output_path = f"{input_path}_out.webm"
             success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
             final_media_type = 'video'
+        elif media_type == 'sticker_tgs':
+            converted_path = f"{input_path}_converted.webm"
+            converted = await convert_tgs_to_webm(input_path, converted_path)
+            if not converted:
+                await bot_instance.send_message(
+                    chat_id,
+                    "❌ Не удалось конвертировать TGS стикер. Установи lottie_convert.py / пакет lottie."
+                )
+                return
+            output_path = f"{input_path}_out.webm"
+            success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
+            final_media_type = 'video'
 
         if success and output_path and os.path.exists(output_path):
             file_to_send = FSInputFile(output_path)
@@ -213,6 +242,11 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             try: await bot_instance.send_message(chat_id, "Произошла внутренняя ошибка при обработке.")
             except Exception as send_e: logging.error(f"Не удалось отправить сообщение об ошибке: {send_e}")
     finally:
+        if converted_path and os.path.exists(converted_path):
+            try:
+                os.remove(converted_path)
+            except Exception:
+                pass
         if input_path and os.path.dirname(input_path).startswith("temp_worker_"):
             shutil.rmtree(os.path.dirname(input_path), ignore_errors=True)
         await bot_instance.session.close()
@@ -262,9 +296,9 @@ async def handle_distortion_request(message: types.Message):
             file_to_download = target_message.photo[-1]
         elif target_message.sticker:
             if target_message.sticker.is_animated:
-                await message.answer("Извини, анимированные стикеры (TGS) я не поддерживаю.")
-                return
-            if target_message.sticker.is_video:
+                media_info = {'media_type': 'sticker_tgs', 'ext': '.tgs'}
+                file_to_download = target_message.sticker
+            elif target_message.sticker.is_video:
                 media_info = {'media_type': 'sticker_video', 'ext': '.webm'}
                 file_to_download = target_message.sticker
             else: 
