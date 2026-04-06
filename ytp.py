@@ -191,7 +191,7 @@ def _make_ytp_sync(
         final_clip.write_videofile(
             output_path,
             codec="libvpx-vp9",
-            audio_codec="libopus",
+            audio_codec="libvorbis",
             fps=30,
             preset="ultrafast",
             threads=2,
