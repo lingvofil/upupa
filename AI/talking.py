@@ -509,6 +509,8 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     
     # Подготовка ввода пользователя
     user_input = message.text
+    if not user_input or not isinstance(user_input, str):
+        user_input = ""
     
     # Нормализуем для команд с "упупа"
     if user_input.lower().startswith('упупа'):

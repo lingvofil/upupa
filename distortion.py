@@ -80,36 +80,6 @@ async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
     success, _ = await run_command(cmd)
     return success
 
-async def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> bool:
-    logging.info(f"Начинаю конвертацию webm->mp4: {input_webm} -> {output_mp4}")
-    cmd = [
-        "ffmpeg",
-        "-i",
-        input_webm,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "28",
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-y",
-        output_mp4,
-    ]
-    success, error = await run_ffmpeg_command(cmd)
-    if success:
-        logging.info(f"Конвертация webm->mp4 завершена: {output_mp4}")
-    else:
-        logging.error(f"Конвертация webm->mp4 не удалась: {error}")
-    return success
-
 async def get_media_info(file_path: str) -> dict | None:
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', '-i', file_path]
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -168,10 +138,10 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
     return success
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    noise_level = int(map_intensity(intensity, 2, 20))
-    contrast = map_intensity(intensity, 1.0, 1.6)
-    saturation = map_intensity(intensity, 1.0, 2.2)
-    hue_shift = map_intensity(intensity, -45.0, 45.0)
+    noise_level = int(map_intensity(intensity, 10, 70))
+    contrast = map_intensity(intensity, 1.0, 2.0)
+    saturation = map_intensity(intensity, 1.0, 3.0)
+    hue_shift = map_intensity(intensity, -90.0, 90.0)
     filter_chain = (
         f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
         f"noise=alls={noise_level}:allf=t+u,"
@@ -182,8 +152,12 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, inten
     cmd = [
         'ffmpeg', '-i', input_path,
         '-vf', filter_chain,
-        '-c:v', 'libvpx-vp9', '-crf', '35', '-b:v', '0',
-        '-c:a', 'libopus', '-b:a', '96k',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-c:a', 'aac', '-b:a', '128k',
         '-y', output_path
     ]
     success, _ = await run_ffmpeg_command(cmd)
@@ -220,7 +194,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
     input_path = media_info.get('local_path')
     output_path = None
     converted_path = None
-    mp4_path = None
     
     try:
         if media_type in ['audio', 'voice']:
@@ -252,15 +225,15 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             final_media_type = media_type
 
         elif media_type == 'video':
-            output_path = f"{input_path}_out.webm"
+            output_path = f"{input_path}_out.mp4"
             success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
             final_media_type = 'video'
 
         elif media_type in ['animation', 'sticker_video']:
             # GIF и видео-стикеры — отправляем как анимацию (отображается в чате)
-            output_path = f"{input_path}_out.webm"
+            output_path = f"{input_path}_out.mp4"
             success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
-            final_media_type = 'animation'
+            final_media_type = 'video'
 
         elif media_type == 'sticker_tgs':
             converted_path = f"{input_path}_converted.webm"
@@ -268,20 +241,11 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             if not converted:
                 await bot_instance.send_message(chat_id, "❌ Не удалось конвертировать TGS в видео.")
                 return
-            output_path = f"{input_path}_out.webm"
+            output_path = f"{input_path}_out.mp4"
             success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
-            final_media_type = 'animation'
+            final_media_type = 'video'
 
         if success and output_path and os.path.exists(output_path):
-            if final_media_type in {'video', 'animation'} and output_path.endswith(".webm"):
-                mp4_path = output_path.replace(".webm", ".mp4")
-                converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
-                if converted_to_mp4 and os.path.exists(mp4_path):
-                    output_path = mp4_path
-                    final_media_type = 'video'
-                else:
-                    mp4_path = None
-
             file_to_send = FSInputFile(output_path)
             if final_media_type == 'photo': await bot_instance.send_photo(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
             elif final_media_type == 'audio': await bot_instance.send_audio(chat_id, file_to_send, caption="🌀 твоя хуйня готова")
@@ -299,11 +263,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             try: await bot_instance.send_message(chat_id, "Произошла внутренняя ошибка при обработке.")
             except Exception as send_e: logging.error(f"Не удалось отправить сообщение об ошибке: {send_e}")
     finally:
-        if mp4_path and os.path.exists(mp4_path):
-            try:
-                os.remove(mp4_path)
-            except Exception:
-                pass
         if converted_path and os.path.exists(converted_path):
             try:
                 os.remove(converted_path)
