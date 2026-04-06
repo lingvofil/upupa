@@ -509,8 +509,8 @@ def is_video_document(msg: types.Message) -> bool:
             (
                 message.reply_to_message.video
                 or message.reply_to_message.animation
-                or message.reply_to_message.sticker
                 or is_video_document(message.reply_to_message)
+                or message.reply_to_message.sticker
             )
         )
         or
@@ -518,8 +518,8 @@ def is_video_document(msg: types.Message) -> bool:
             (
                 message.video
                 or message.animation
-                or message.sticker
                 or is_video_document(message)
+                or message.sticker
             ) and
             message.caption and
             message.caption.lower().strip() == "пуп"
