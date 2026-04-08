@@ -161,13 +161,42 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
         updated_chats = []
         successful_updates = 0
         removed_chats = []
-        
+
+        bot_me = await bot.get_me()
+        bot_id = bot_me.id
+
         for chat in chat_list:
             try:
-                # Получаем актуальную информацию о чате через API
+                # ???????????????? ???????????????????? ???????????????????? ?? ???????? ?????????? API
                 chat_info = await bot.get_chat(chat["id"])
-                
-                # Обновляем информацию
+
+                # For public chats get_chat can succeed even if the bot is not a member.
+                # Verify membership for groups/supergroups/channels.
+                chat_type = getattr(chat_info, "type", None)
+                if chat_type in ["group", "supergroup", "channel"]:
+                    try:
+                        member = await bot.get_chat_member(chat["id"], bot_id)
+                        if member.status in ["left", "kicked"]:
+                            removed_chats.append({
+                                "id": chat["id"],
+                                "title": chat.get("title", "Unknown chat"),
+                                "reason": f"bot status: {member.status}"
+                            })
+                            logging.info(f"Removed chat {chat.get('title', chat['id'])}: bot status {member.status}")
+                            continue
+                    except Exception as e:
+                        error_str = str(e)
+                        if "bot was kicked" in error_str or "bot was blocked" in error_str or "chat not found" in error_str or "member not found" in error_str:
+                            removed_chats.append({
+                                "id": chat["id"],
+                                "title": chat.get("title", "Unknown chat"),
+                                "reason": error_str
+                            })
+                            logging.info(f"Removed chat {chat.get('title', chat['id'])}: {error_str}")
+                            continue
+                        logging.warning(f"Failed to verify membership for chat {chat['id']}: {e}")
+
+                # ?????????????????? ????????????????????
                 updated_chat = {
                     "id": chat["id"],
                     "title": chat_info.title,
@@ -177,20 +206,19 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
                 successful_updates += 1
             except Exception as e:
                 error_str = str(e)
-                # Проверяем, если ошибка связана с исключением бота из чата
+                # ????????????????, ???????? ???????????? ?????????????? ?? ?????????????????????? ???????? ???? ???????? / ?????? ??????????????
                 if "bot was kicked" in error_str or "bot was blocked" in error_str or "chat not found" in error_str:
                     removed_chats.append({
                         "id": chat["id"],
-                        "title": chat.get("title", "Неизвестный чат"),
+                        "title": chat.get("title", "?????????????????????? ??????"),
                         "reason": error_str
                     })
-                    logging.info(f"Удален чат {chat.get('title', chat['id'])}: бот был исключен или забанен")
+                    logging.info(f"???????????? ?????? {chat.get('title', chat['id'])}: ?????? ?????? ???????????????? ?????? ??????????????")
                 else:
-                    # Другие ошибки - сохраняем старую информацию о чате
-                    logging.warning(f"Не удалось обновить информацию о чате {chat['id']}: {e}")
+                    # ???????????? ???????????? - ?????????????????? ???????????? ???????????????????? ?? ????????
+                    logging.warning(f"???? ?????????????? ???????????????? ???????????????????? ?? ???????? {chat['id']}: {e}")
                     updated_chats.append(chat)
-        
-        # Добавляем текущий чат, если его нет в списке
+
         current_chat_id = message.chat.id
         if not any(chat["id"] == current_chat_id for chat in updated_chats):
             updated_chats.append({
@@ -210,6 +238,21 @@ async def process_update_all_chats(message: types.Message, bot: Bot):
         # ИЗМЕНЕНО: Обновляем глобальный список на месте
         chat_list.clear()
         chat_list.extend(unique_chats)
+
+        if removed_chats:
+            removed_ids = {c["id"] for c in removed_chats}
+            settings_removed = False
+            for rid in removed_ids:
+                rid_str = str(rid)
+                if rid in chat_settings:
+                    del chat_settings[rid]
+                    settings_removed = True
+                if rid_str in chat_settings:
+                    del chat_settings[rid_str]
+                    settings_removed = True
+            if settings_removed:
+                save_chat_settings()
+
         
         # Сортируем чаты (специальный чат всегда первый)
         chat_list.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
