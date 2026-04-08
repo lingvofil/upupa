@@ -2,7 +2,15 @@ import os
 import json
 import logging
 from aiogram import types, Bot
-from config import CHAT_SETTINGS_FILE, CHAT_LIST_FILE, SPECIAL_CHAT_ID, chat_settings, chat_list, ADMIN_ID
+from config import (
+    CHAT_SETTINGS_FILE,
+    CHAT_LIST_FILE,
+    SPECIAL_CHAT_ID,
+    chat_settings,
+    chat_list,
+    ADMIN_ID,
+    sms_disabled_chats,
+)
 
 # Функция загрузки настроек чатов при старте
 def load_chat_settings():
@@ -141,10 +149,11 @@ def get_chats_list(chat_id, chat_title, chat_username):
     # Создаем новый список с правильной нумерацией
     numbered_chats = []
     for i, chat in enumerate(filtered_chats):
+        sms_disabled_badge = " (хуесосы-бирюки)" if str(chat["id"]) in sms_disabled_chats else ""
         if chat.get("username"):
-            numbered_chats.append(f"{i+1}. {chat['title']} (@{chat['username']})")
+            numbered_chats.append(f"{i+1}. {chat['title']} (@{chat['username']}){sms_disabled_badge}")
         else:
-            numbered_chats.append(f"{i+1}. {chat['title']}")
+            numbered_chats.append(f"{i+1}. {chat['title']}{sms_disabled_badge}")
     
     response = "Тут:\n" + "\n".join(numbered_chats)
     return response
