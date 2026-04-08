@@ -16,7 +16,7 @@ from config import chat_settings
 TARGET_DURATION = 10
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
-SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
 _ytp_semaphore = asyncio.Semaphore(1)
 
@@ -226,6 +226,15 @@ def _is_video_document(document: types.Document) -> bool:
         return ext in SUPPORTED_EXTENSIONS
     return False
 
+def _is_audio_document(document: types.Document) -> bool:
+    if document.mime_type == "audio/ogg":
+        return True
+    if document.file_name:
+        ext = os.path.splitext(document.file_name)[1].lower()
+        return ext == ".ogg"
+    return False
+
+
 async def run_command(command: list[str]) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -278,25 +287,50 @@ async def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> bool:
     return success
 
 
+
+
+async def convert_audio_to_mp4(input_audio: str, output_mp4: str) -> bool:
+    cmd = [
+        "ffmpeg",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=720x1280:r=30",
+        "-i",
+        input_audio,
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-y",
+        output_mp4,
+    ]
+    success, _ = await run_command(cmd)
+    return success
 async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     video_source = None
 
     # Проверяем реплай
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or source.animation or source.sticker is not None or (source.document and _is_video_document(source.document)):
+        if source.video or source.animation or source.audio or source.voice or source.sticker is not None or (source.document and (_is_video_document(source.document) or _is_audio_document(source.document))):
             video_source = source
 
     # Проверяем само сообщение
-    if video_source is None and (message.video or message.animation or message.sticker is not None or (message.document and _is_video_document(message.document))):
+    if video_source is None and (message.video or message.animation or message.audio or message.voice or message.sticker is not None or (message.document and (_is_video_document(message.document) or _is_audio_document(message.document)))):
         video_source = message
 
     if not video_source:
-        await message.reply("Реплайни блядь на видео/гифку или отправь их с подписью «пуп».")
+        await message.reply("Реплайни блядь на видео/гифку/.ogg или отправь их с подписью «пуп».")
         return
 
     # Достаем объект файла (видео, гифка, документ или стикер)
-    file_obj = video_source.video or video_source.animation or video_source.document or video_source.sticker
+    file_obj = video_source.video or video_source.animation or video_source.audio or video_source.voice or video_source.document or video_source.sticker
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
@@ -305,6 +339,16 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     if video_source.video and video_source.video.duration:
         if video_source.video.duration > MAX_INPUT_DURATION_SEC:
             await message.reply(f"Видео слишком длинное. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
+            return
+
+    if video_source.audio and video_source.audio.duration:
+        if video_source.audio.duration > MAX_INPUT_DURATION_SEC:
+            await message.reply(f"Аудио слишком длинное. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
+            return
+
+    if video_source.voice and video_source.voice.duration:
+        if video_source.voice.duration > MAX_INPUT_DURATION_SEC:
+            await message.reply(f"Голосовое слишком длинное. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
             return
 
     if video_source.document:
@@ -336,6 +380,8 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                 suffix = ".webm"
             elif video_source.document:
                 suffix = os.path.splitext(video_source.document.file_name or "")[1].lower() or ".mp4"
+            elif video_source.audio or video_source.voice:
+                suffix = ".ogg"
             else:
                 suffix = ".mp4"
 
@@ -354,6 +400,14 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                 if not converted:
                     await processing_msg.delete()
                     await message.reply("❌ Не удалось конвертировать TGS в видео.")
+                    return
+                real_input_path = converted_input_path
+            elif suffix == ".ogg":
+                converted_input_path = input_path + "_converted.mp4"
+                converted = await convert_audio_to_mp4(input_path, converted_input_path)
+                if not converted:
+                    await processing_msg.delete()
+                    await message.reply("❌ Не удалось конвертировать .ogg в видео.")
                     return
                 real_input_path = converted_input_path
 
