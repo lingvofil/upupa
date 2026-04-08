@@ -21,6 +21,7 @@ STOP_WORDS = [
     "hurry up",
     "hurry up claim free PUMP",
     "mlM",
+    "mobcash",
     "nft",
     "unlimited key",
     "usd в день",
