@@ -134,7 +134,7 @@ async def process_send_sms(message: types.Message, chat_list: list, bot: Bot):
         target_chat_id = str(filtered_chats[chat_index]["id"])
         # Проверяем, отключены ли СМС в целевом чате
         if target_chat_id in sms_disabled_chats:
-            await message.reply("Этот чат не принимает СМС.")
+            await message.reply("Это хуесосы-бирюки, не принимают СМС, блядь")
             return
             
         source_chat_title = message.chat.title or "Неизвестный чат"
@@ -184,7 +184,7 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
 
         # Проверяем, отключены ли ММС в целевом чате
         if target_chat_id in sms_disabled_chats:
-            await message.reply("Этот чат не принимает ММС.")
+            await message.reply("Это хуесосы-бирюки, не принимают ММС, блядь")
             return
 
         source_chat_title = message.chat.title or "Неизвестный чат"
