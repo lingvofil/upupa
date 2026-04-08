@@ -106,7 +106,7 @@ from AI.random_reactions import process_random_reactions
 # ================== БЛОК 3.19: ПУП (YTP) ==================
 from ytp import handle_ytp_command
 
-SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
 # ================== БЛОК 4: НАСТРОЙКИ AI ==================
 
@@ -512,6 +512,17 @@ def is_video_document(msg: types.Message) -> bool:
     return False
 
 
+def is_ogg_document(msg: types.Message) -> bool:
+    if not msg or not msg.document:
+        return False
+    if msg.document.mime_type == "audio/ogg":
+        return True
+    if msg.document.file_name:
+        ext = os.path.splitext(msg.document.file_name)[1].lower()
+        return ext == ".ogg"
+    return False
+
+
 @router.message(
     lambda message: (
         (
@@ -522,6 +533,9 @@ def is_video_document(msg: types.Message) -> bool:
                 message.reply_to_message.video
                 or message.reply_to_message.animation
                 or is_video_document(message.reply_to_message)
+                or message.reply_to_message.audio
+                or message.reply_to_message.voice
+                or is_ogg_document(message.reply_to_message)
                 or message.reply_to_message.sticker
             )
         )
@@ -531,6 +545,9 @@ def is_video_document(msg: types.Message) -> bool:
                 message.video
                 or message.animation
                 or is_video_document(message)
+                or message.audio
+                or message.voice
+                or is_ogg_document(message)
                 or message.sticker
             ) and
             message.caption and
