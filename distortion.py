@@ -11,7 +11,6 @@ import numpy as np
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 from PIL import Image
-import multiprocessing
 
 # Попробуем импортировать seam_carving
 try:
@@ -31,6 +30,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- ОГРАНИЧЕНИЯ РЕСУРСОВ ---
 MAX_AUDIO_DURATION = 180 # 3 минуты
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
+processing_semaphore = asyncio.Semaphore(1)
 
 # --- Вспомогательные функции ---
 
@@ -148,39 +148,35 @@ async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, inten
     return success
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    noise_val = int(map_intensity(intensity, 30, 100))
-    warp_amp = map_intensity(intensity, 5, 40)
-    contrast = map_intensity(intensity, 1.2, 2.5)
-    sat = map_intensity(intensity, 1.5, 4.0)
-    hue_shift = map_intensity(intensity, -30.0, 80.0)
-    bright = map_intensity(intensity, 0.01, 0.08)
-    unsharp_luma = map_intensity(intensity, 1.0, 2.0)
+    safe_intensity = min(intensity, 80)
     vf_chain = (
-        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-        f"noise=alls={noise_val}:allf=t+u,"
-        f"eq=contrast={contrast:.2f}:saturation={sat:.2f}:brightness={bright:.3f},"
-        f"hue=h={hue_shift:.2f}*sin(0.9*t):s=1.1,"
+        f"scale='min(360,iw)':-2,"
+        f"fps=12,"
+        f"noise=alls={int(map_intensity(safe_intensity, 20, 70))}:allf=t+u,"
         f"split=3[base][dx][dy];"
-        f"[dx]format=gray,geq=lum='128+{warp_amp:.1f}*sin((Y/10)+4*T)'[xmap];"
-        f"[dy]format=gray,geq=lum='128+{warp_amp:.1f}*cos((X/10)+4.5*T)'[ymap];"
+        f"[dx]format=gray,geq=lum='128+15*sin(Y/15+5*T)'[xmap];"
+        f"[dy]format=gray,geq=lum='128+15*cos(X/15+5*T)'[ymap];"
         f"[base][xmap][ymap]displace=edge=wrap,"
-        f"unsharp=5:5:{unsharp_luma:.2f}:5:5:0.0"
+        f"eq=contrast=1.5:saturation=2"
     )
     af_chain = get_audio_distortion_filter(intensity)
 
     cmd = [
-        'ffmpeg', '-i', input_path,
+        'ffmpeg', '-y', '-i', input_path,
         '-vf', vf_chain,
         '-af', af_chain,
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
-        '-crf', '28',
+        '-crf', '35',
         '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-y', output_path
+        '-threads', '1',
+        output_path
     ]
-    success, _ = await run_ffmpeg_command(cmd)
-    return success
+    async with processing_semaphore:
+        success, err_msg = await run_ffmpeg_command(cmd)
+        if not success:
+            logging.error(f"FFmpeg Error: {err_msg}")
+        return success
 
 def _seam_carving_blocking_task(src_np, original_w, original_h, new_w, new_h, out_path):
     dst = seam_carving.resize(src_np, (new_w, new_h), energy_mode='backward', order='width-first')
@@ -291,11 +287,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
             shutil.rmtree(os.path.dirname(input_path), ignore_errors=True)
         await bot_instance.session.close()
 
-def distortion_worker_proc(bot_token: str, chat_id: int, media_info: dict, intensity: int):
-    """Точка входа для нового процесса. Запускает асинхронный воркер."""
-    logging.info(f"Запущен новый процесс для искажения (PID: {os.getpid()})")
-    asyncio.run(distortion_worker_async(bot_token, chat_id, media_info, intensity))
-
 # --- Фильтр и основной обработчик ---
 
 def is_distortion_command(message: types.Message) -> bool:
@@ -321,7 +312,7 @@ def is_distortion_command(message: types.Message) -> bool:
 
 async def handle_distortion_request(message: types.Message):
     """
-    Основной обработчик. Скачивает файл и запускает искажение в отдельном процессе.
+    Основной обработчик. Скачивает файл и запускает искажение в основном async-потоке.
     """
     try:
         target_message = message.reply_to_message or message
@@ -378,14 +369,7 @@ async def handle_distortion_request(message: types.Message):
             media_info['local_path'] = local_path
 
         await message.answer("🌀 ща, сука...")
-        
-        try:
-            multiprocessing.set_start_method("spawn", force=True)
-        except RuntimeError:
-            pass
-            
-        proc = multiprocessing.Process(target=distortion_worker_proc, args=(main_bot_instance.token, message.chat.id, media_info, intensity))
-        proc.start()
+        await distortion_worker_async(main_bot_instance.token, message.chat.id, media_info, intensity)
 
     except Exception as e:
         logging.error(f"Ошибка в handle_distortion_request: {e}", exc_info=True)
