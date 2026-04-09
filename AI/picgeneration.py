@@ -538,17 +538,18 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "analyze the picture, "
-            "mark the unimportant details as very significant, use hyperbolization"
+            "What is the main subject of this image?"
+            "Answer in 5-10 words maximum, just the subject, no details, no colors, no style."
+            "Example: 'a frog sitting on a lily pad."
         )
 
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
             f"{description}, "
-            "form it in the style of a children's drawing, "
-            "the author does not know how to draw at all, all the details are clumsy and all-out,"
-            "It looks more like a caricature"
+            "children's crayon drawing, ugly doodle, scribble, naive art, "
+            "messy lines, white background, drawing by 4 year old child."
+            "bad scan, paper texture, random stains, uneven coloring outside lines"
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
