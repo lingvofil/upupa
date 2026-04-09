@@ -139,6 +139,45 @@ async def translate_to_en(text: str) -> str:
         logging.warning(f"translate_to_en error: {e}, using original text")
         return text
 
+async def translate_to_en_plain(text: str) -> str:
+    """
+    Переводит текст на английский БЕЗ усилителей качества и стилистических украшений.
+    Возвращает только перевод.
+    """
+    try:
+        translate_prompt = (
+            "Translate to English.\n"
+            "Return ONLY translation.\n"
+            "No enhancements.\n"
+            "No extra adjectives.\n"
+            f"Text: {text}"
+        )
+        result = await asyncio.to_thread(lambda: groq_ai.generate_text(translate_prompt))
+        result = result.strip('"\'').strip()
+        logging.info(f"Plain translated prompt: '{text}' -> '{result}'")
+        return result if result else text
+    except Exception as e:
+        logging.warning(f"translate_to_en_plain error: {e}, using original text")
+        return text
+
+def _remove_quality_boosters(text: str) -> str:
+    """
+    Удаляет маркеры, которые обычно провоцируют слишком «красивую» генерацию.
+    """
+    banned_terms = (
+        "photorealistic",
+        "ultra detailed",
+        "high quality",
+        "8k",
+        "masterpiece",
+    )
+    cleaned = text
+    for term in banned_terms:
+        cleaned = cleaned.replace(term, "")
+        cleaned = cleaned.replace(term.title(), "")
+        cleaned = cleaned.replace(term.upper(), "")
+    return " ".join(cleaned.split()).strip(" ,.")
+
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -538,18 +577,27 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "analyze the picture, "
-            "mark the unimportant details as very significant, use hyperbolization"
+            "Describe the image in 1-2 simple sentences. "
+            "Mention only the main objects and their basic shapes. "
+            "Do not mention realism, lighting, quality, details, or artistic style."
         )
 
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
+        description_en = await translate_to_en_plain(description)
+        description_en = _remove_quality_boosters(description_en)
 
         final_prompt = (
-            f"{description}, "
-            "form it in the style of a children's drawing, "
-            "the author does not know how to draw at all, all the details are clumsy and all-out,"
-            "It looks more like a caricature"
+            f"{description_en}. "
+            "Draw it like a very bad child's drawing made by a 4 year old. "
+            "extremely clumsy, messy, naive, ugly, crooked lines, shaky hand, "
+            "wrong proportions, distorted anatomy, random extra details, "
+            "simple shapes, stick figure style, uneven coloring, scribbles, "
+            "crayon drawing, colored pencil, marker doodle, kindergarten art, "
+            "paper texture, childish, primitive, flat colors, no shading, "
+            "looks like it was drawn in MS Paint. "
+            "IMPORTANT: avoid realism, avoid high detail, avoid clean lines, avoid professional art."
         )
+        final_prompt = _remove_quality_boosters(final_prompt)
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
 
