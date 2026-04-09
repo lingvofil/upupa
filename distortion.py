@@ -123,129 +123,60 @@ def distort_text(text: str, intensity: int) -> str:
         else: chars.insert(idx, random.choice("!@#$%^&*()_+-=[]{}|;:,.<>?"))
     return "".join(chars)
 
-def apply_aggressive_distortion(input_file: str, output_file: str, output_format: str = "mp4") -> None:
-    """
-    Applies aggressive image-like distortion to a video file.
+def get_audio_distortion_filter(intensity: int) -> str:
+    """Генерирует строку фильтров для искажения звука на основе интенсивности."""
+    vibrato_freq = map_intensity(intensity, 4.0, 15.0)
+    vibrato_depth = map_intensity(intensity, 0.2, 1.0)
 
-    Args:
-        input_file: Input video path (MP4/WebM and other FFmpeg-supported formats).
-        output_file: Output file path.
-        output_format: "mp4" or "gif".
-    """
-    normalized_output_format = output_format.lower().strip()
-    if normalized_output_format not in {"mp4", "gif"}:
-        raise ValueError("Unsupported output format. Use 'mp4' or 'gif'.")
-
-    # Агрессивная цепочка фильтров:
-    # - шум/зерно
-    # - высокий контраст/насыщенность
-    # - сдвиг оттенка
-    # - волнообразный warp/curvature через displace
-    # - хаотичная тряска через crop+pad
-    vf_chain = (
-        "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-        "noise=alls=85:allf=t+u,"
-        "eq=contrast=1.9:saturation=2.7:brightness=0.03,"
-        "hue=h=45*sin(0.75*t):s=1.35,"
-        "split=3[base][dx][dy];"
-        "[dx]format=gray,geq=lum='128+127*sin((Y/5)+2*T)'[xmap];"
-        "[dy]format=gray,geq=lum='128+127*cos((X/6)+2.4*T)'[ymap];"
-        "[base][xmap][ymap]displace=edge=wrap,"
-        "crop=iw-14:ih-14:"
-        "x='7+3*sin(37*t)+2*cos(53*t)':"
-        "y='7+3*cos(41*t)+2*sin(29*t)',"
-        "pad=iw+14:ih+14:7:7:black,"
-        "unsharp=7:7:1.6:7:7:0.0"
-    )
-
-    if normalized_output_format == "mp4":
-        command = [
-            "ffmpeg", "-y", "-i", input_file,
-            "-vf", vf_chain,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "19",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            output_file,
-        ]
-        subprocess.run(command, check=True)
-        return
-
-    # GIF: двухпроходный palettegen/paletteuse для лучшего качества.
-    palette_file = f"{output_file}.palette.png"
-    palettegen_cmd = [
-        "ffmpeg", "-y", "-i", input_file,
-        "-vf", f"{vf_chain},fps=15,scale=640:-1:flags=lanczos,palettegen=stats_mode=full",
-        palette_file,
-    ]
-    paletteuse_cmd = [
-        "ffmpeg", "-y", "-i", input_file, "-i", palette_file,
-        "-lavfi", (
-            f"{vf_chain},fps=15,scale=640:-1:flags=lanczos[x];"
-            "[x][1:v]paletteuse=dither=bayer:bayer_scale=2:diff_mode=rectangle"
-        ),
-        "-gifflags", "+transdiff",
-        output_file,
-    ]
-
-    try:
-        subprocess.run(palettegen_cmd, check=True)
-        subprocess.run(paletteuse_cmd, check=True)
-    finally:
-        if os.path.exists(palette_file):
-            os.remove(palette_file)
-
-async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    """
-    Искажает аудио, используя vibrato как основной эффект.
-    """
-    # Частота вибрато (дрожания) от 4 до 12 Гц
-    vibrato_freq = map_intensity(intensity, 4.0, 12.0)
-    # Глубина вибрато (сила эффекта) от 0.1 до 1.0 (максимум)
-    vibrato_depth = map_intensity(intensity, 0.1, 1.0)
-    
     filters = [f"vibrato=f={vibrato_freq:.2f}:d={vibrato_depth:.2f}"]
-    
-    # Добавляем другие эффекты на высоких значениях интенсивности
-    if intensity > 50:
-        crush = map_intensity(intensity, 0.1, 0.5)
+
+    if intensity > 40:
+        crush = map_intensity(intensity, 0.1, 0.6)
         filters.append(f"acrusher=bits=8:mode=log:mix={crush}")
-        
-    if intensity > 75:
-        decay = map_intensity(intensity, 0.1, 0.4)
-        delay = map_intensity(intensity, 20, 100)
+
+    if intensity > 70:
+        decay = map_intensity(intensity, 0.2, 0.5)
+        delay = map_intensity(intensity, 30, 150)
         filters.append(f"aecho=0.8:0.9:{delay}:{decay}")
 
-    cmd = ['ffmpeg', '-i', input_path, '-af', ",".join(filters), '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
+    return ",".join(filters)
+
+async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    af_string = get_audio_distortion_filter(intensity)
+    cmd = ['ffmpeg', '-i', input_path, '-af', af_string, '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
     success, _ = await run_ffmpeg_command(cmd)
     return success
 
 async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    noise_level = int(map_intensity(intensity, 20, 90))
-    contrast = map_intensity(intensity, 1.0, 2.2)
-    saturation = map_intensity(intensity, 1.0, 3.0)
-    hue_shift = map_intensity(intensity, -90.0, 90.0)
-    filter_chain = (
+    noise_val = int(map_intensity(intensity, 30, 100))
+    warp_amp = map_intensity(intensity, 5, 40)
+    contrast = map_intensity(intensity, 1.2, 2.5)
+    sat = map_intensity(intensity, 1.5, 4.0)
+    hue_shift = map_intensity(intensity, -30.0, 80.0)
+    bright = map_intensity(intensity, 0.01, 0.08)
+    unsharp_luma = map_intensity(intensity, 1.0, 2.0)
+    vf_chain = (
         f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-        f"fps=15,"
-        f"noise=alls={noise_level}:allf=t+u,"
-        f"eq=contrast={contrast:.2f}:saturation={saturation:.2f},"
-        f"hue=h={hue_shift:.2f},"
-        f"rotate=0.08*sin(2*PI*t):c=black@0"
+        f"noise=alls={noise_val}:allf=t+u,"
+        f"eq=contrast={contrast:.2f}:saturation={sat:.2f}:brightness={bright:.3f},"
+        f"hue=h={hue_shift:.2f}*sin(0.9*t):s=1.1,"
+        f"split=3[base][dx][dy];"
+        f"[dx]format=gray,geq=lum='128+{warp_amp:.1f}*sin((Y/10)+4*T)'[xmap];"
+        f"[dy]format=gray,geq=lum='128+{warp_amp:.1f}*cos((X/10)+4.5*T)'[ymap];"
+        f"[base][xmap][ymap]displace=edge=wrap,"
+        f"unsharp=5:5:{unsharp_luma:.2f}:5:5:0.0"
     )
+    af_chain = get_audio_distortion_filter(intensity)
 
     cmd = [
         'ffmpeg', '-i', input_path,
-        '-vf', filter_chain,
+        '-vf', vf_chain,
+        '-af', af_chain,
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
-        '-crf', '30',
+        '-crf', '28',
         '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-c:a', 'aac', '-b:a', '96k',
-        '-threads', '1',
+        '-c:a', 'aac', '-b:a', '128k',
         '-y', output_path
     ]
     success, _ = await run_ffmpeg_command(cmd)
