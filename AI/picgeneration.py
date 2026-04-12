@@ -159,32 +159,22 @@ def _transliterate_nickname_if_needed(nickname: str) -> str:
 
 
 def _resolve_chat_title(message: types.Message) -> str:
-    """
-    Получает нормальное название чата.
-    Сначала смотрит сохранённый chat_list (как в chat_settings/sms_settings),
-    затем fallback на данные текущего message.chat.
-    """
-    if message.chat:
+    """Улучшенное получение названия чата/группы."""
+    if not message or not message.chat:
+        return "PRIVATE"
+
+    # 1. Пробуем получить текущий заголовок
+    title = message.chat.title or message.chat.full_name
+
+    # 2. Если заголовка нет в объекте (редкий случай), ищем в сохраненном списке
+    if not title:
         chat_id = str(message.chat.id)
-        saved_title = next(
-            (
-                chat.get("title")
-                for chat in chat_list
-                if str(chat.get("id")) == chat_id and chat.get("title")
-            ),
-            None,
+        title = next(
+            (chat.get("title") for chat in chat_list if str(chat.get("id")) == chat_id),
+            None
         )
-        if saved_title:
-            return saved_title
 
-        if message.chat.title:
-            return message.chat.title
-        if message.chat.full_name:
-            return message.chat.full_name
-        if message.chat.username:
-            return f"@{message.chat.username}"
-
-    return "PRIVATE"
+    return title or "UNKNOWN CHAT"
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
@@ -639,11 +629,15 @@ async def handle_mugshot_command(message: types.Message):
         else:
             nickname = "Unknown user"
         nickname = _transliterate_nickname_if_needed(nickname).strip() or "Unknown user"
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        chat_name = _resolve_chat_title(message)
-        if len(chat_name) > 30:
-            chat_name = chat_name[:30]
-        placard_text = f"{nickname} | {date_str} | CHAT: {chat_name}"
+
+        # ПОЛУЧЕНИЕ И ТРАНСЛИТЕРАЦИЯ НАЗВАНИЯ ЧАТА
+        raw_chat_name = _resolve_chat_title(message)
+        chat_name = _transliterate_nickname_if_needed(raw_chat_name).replace("\n", " ").strip()
+        if len(chat_name) > 25:
+            chat_name = chat_name[:25] + "..."
+
+        # ФОРМИРОВАНИЕ ТЕКСТА (БЕЗ ДАТЫ)
+        placard_text = f"{nickname} | CHAT: {chat_name}"
 
         final_prompt = (
             f"police mugshot photo of {subject}, "
