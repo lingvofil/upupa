@@ -139,6 +139,7 @@ from AI.picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
     handle_redraw_command,
+    handle_mugshot_command,
     handle_edit_command,
     handle_kandinsky_generation_command,
     handle_nvidia_command
@@ -777,6 +778,30 @@ async def generate_image_kandinsky(message: types.Message):
 )
 async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
+
+@router.message(
+    lambda message: (
+        (
+            (message.photo and message.caption and "магшот" in message.caption.lower()) or
+            (message.document and message.caption and "магшот" in message.caption.lower()) or
+            (message.sticker and message.caption and "магшот" in message.caption.lower()) or
+            (
+                message.text and "магшот" in message.text.lower() and message.reply_to_message and
+                (
+                    message.reply_to_message.photo or
+                    (message.reply_to_message.document and message.reply_to_message.document.mime_type and message.reply_to_message.document.mime_type.startswith("image/")) or
+                    (
+                        message.reply_to_message.sticker and
+                        not message.reply_to_message.sticker.is_animated and
+                        not message.reply_to_message.sticker.is_video
+                    )
+                )
+            )
+        ) and message.from_user.id not in BLOCKED_USERS
+    )
+)
+async def mugshot_image(message: types.Message):
+    await handle_mugshot_command(message)
 
 @router.message(
     lambda message: (
