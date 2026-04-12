@@ -584,16 +584,19 @@ async def handle_mugshot_command(message: types.Message):
         if not subject or len(subject) > 180:
             subject = "a person"
 
-        username = (
-            f"@{message.from_user.username}"
-            if message.from_user and message.from_user.username
-            else (message.from_user.full_name if message.from_user else "Unknown user")
-        )
+        if message.from_user:
+            first_name = message.from_user.first_name or ""
+            last_name = message.from_user.last_name or ""
+            nickname = f"{first_name} {last_name}".strip() if last_name else first_name
+            if not nickname.strip():
+                nickname = message.from_user.full_name or "Unknown user"
+        else:
+            nickname = "Unknown user"
         date_str = datetime.now().strftime("%Y-%m-%d")
         chat_name = message.chat.title if message.chat and message.chat.title else "PRIVATE"
         if len(chat_name) > 30:
             chat_name = chat_name[:30]
-        placard_text = f"{username} | {date_str} | CHAT: {chat_name}"
+        placard_text = f"{nickname} | {date_str} | CHAT: {chat_name}"
 
         final_prompt = (
             f"police mugshot photo of {subject}, "
