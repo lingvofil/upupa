@@ -559,6 +559,47 @@ async def handle_redraw_command(message: types.Message):
         await msg.edit_text("Ошибка анализа или генерации.")
 
 
+async def handle_mugshot_command(message: types.Message):
+    photo, _ = await extract_image_and_prompt(message, "магшот")
+    if not photo:
+        return await message.reply("Нужна картинка. Реплайни на фото или отправь фото с подписью «магшот».")
+
+    chat_id = str(message.chat.id)
+    active_model = get_active_model(chat_id)
+    msg = await message.reply("📸 Делаю магшот...")
+
+    try:
+        img_bytes = await download_telegram_image(bot, photo)
+
+        analysis_prompt = (
+            "Identify the main character/person/creature in this image. "
+            "Return ONLY a short description (5-12 words). "
+            "If there are multiple characters, pick the most prominent one. "
+            "No background details."
+        )
+
+        subject = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
+        subject = (subject or "").strip()
+        if not subject or len(subject) > 180:
+            subject = "a person"
+
+        final_prompt = (
+            f"police mugshot photo of {subject}, "
+            "front view, centered, "
+            "height measurement chart background, "
+            "holding arrest placard with random ID number, "
+            "neutral expression, "
+            "harsh flash lighting, "
+            "realistic photography, sharp focus, high detail, 8k"
+        )
+
+        await robust_image_generation(message, final_prompt, msg, skip_translate=True)
+
+    except Exception as e:
+        logging.error(f"Mugshot error: {e}")
+        await msg.edit_text("Ошибка анализа или генерации.")
+
+
 async def handle_nvidia_command(message: types.Message):
     photo, prompt = await extract_image_and_prompt(message, "нвидиа")
     if not photo:
