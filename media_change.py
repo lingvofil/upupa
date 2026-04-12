@@ -145,6 +145,23 @@ async def _change_speed_ffmpeg(input_path: str, output_path: str, speed: float, 
     return await _run_command(cmd)
 
 
+async def _change_speed_voice_ffmpeg(input_path: str, output_path: str, speed: float) -> tuple[bool, str]:
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-af",
+        f"atempo={speed}",
+        "-c:a",
+        "libopus",
+        "-vn",
+        "-y",
+        output_path,
+    ]
+
+    return await _run_command(cmd)
+
+
 async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -> None:
     media_source = _extract_media_source(message)
 
@@ -207,7 +224,8 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
             with tempfile.NamedTemporaryFile(delete=False, suffix=input_suffix, prefix="spd_in_") as in_file:
                 input_path = in_file.name
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", prefix="spd_out_") as out_file:
+            output_suffix = ".ogg" if is_voice_input else ".mp4"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix, prefix="spd_out_") as out_file:
                 output_path = out_file.name
 
             file_info = await bot.get_file(file_obj.file_id)
@@ -229,16 +247,21 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
                     return
                 real_input_path = converted_input_path
 
-            success, ffmpeg_output = await _change_speed_ffmpeg(real_input_path, output_path, speed, with_audio=True)
-            if not success:
-                success, ffmpeg_output = await _change_speed_ffmpeg(real_input_path, output_path, speed, with_audio=False)
+            if is_voice_input:
+                success, ffmpeg_output = await _change_speed_voice_ffmpeg(real_input_path, output_path, speed)
+            else:
+                success, ffmpeg_output = await _change_speed_ffmpeg(real_input_path, output_path, speed, with_audio=True)
+                if not success:
+                    success, ffmpeg_output = await _change_speed_ffmpeg(real_input_path, output_path, speed, with_audio=False)
 
             if not success:
                 logging.error("[media_change] ffmpeg error: %s", ffmpeg_output)
                 await message.reply("❌ Не удалось поменять скорость.")
                 return
 
-            if is_voice_input or is_audio_input:
+            if is_voice_input:
+                await message.reply_voice(FSInputFile(output_path, filename="voice.ogg"))
+            elif is_audio_input:
                 await message.reply_audio(FSInputFile(output_path, filename="changed_speed.mp4"))
             else:
                 await message.reply_video(FSInputFile(output_path, filename="changed_speed.mp4"))
