@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import re
 import textwrap
 import time
 from collections import defaultdict
@@ -19,9 +20,10 @@ from gradio_client import Client, handle_file
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
+from transliterate import translit
 
 import config
-from config import bot, model, gigachat_model, groq_ai, chat_settings, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY, GROQ_VISION_MODEL
+from config import bot, model, gigachat_model, groq_ai, chat_settings, chat_list, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY, GROQ_VISION_MODEL
 from prompts import actions
 from AI.adddescribe import download_telegram_image
 
@@ -139,6 +141,50 @@ async def translate_to_en(text: str) -> str:
     except Exception as e:
         logging.warning(f"translate_to_en error: {e}, using original text")
         return text
+
+
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+
+
+def _transliterate_nickname_if_needed(nickname: str) -> str:
+    """Транслитерует никнейм на латиницу, если содержит кириллицу."""
+    if not nickname or not _CYRILLIC_RE.search(nickname):
+        return nickname
+
+    try:
+        return translit(nickname, "ru", reversed=True)
+    except Exception as e:
+        logging.warning(f"Nickname transliteration error: {e}")
+        return nickname
+
+
+def _resolve_chat_title(message: types.Message) -> str:
+    """
+    Получает нормальное название чата.
+    Сначала смотрит сохранённый chat_list (как в chat_settings/sms_settings),
+    затем fallback на данные текущего message.chat.
+    """
+    if message.chat:
+        chat_id = str(message.chat.id)
+        saved_title = next(
+            (
+                chat.get("title")
+                for chat in chat_list
+                if str(chat.get("id")) == chat_id and chat.get("title")
+            ),
+            None,
+        )
+        if saved_title:
+            return saved_title
+
+        if message.chat.title:
+            return message.chat.title
+        if message.chat.full_name:
+            return message.chat.full_name
+        if message.chat.username:
+            return f"@{message.chat.username}"
+
+    return "PRIVATE"
 
 def _overlay_text_on_image(image_bytes: bytes, text: str) -> str:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
@@ -592,8 +638,9 @@ async def handle_mugshot_command(message: types.Message):
                 nickname = message.from_user.full_name or "Unknown user"
         else:
             nickname = "Unknown user"
+        nickname = _transliterate_nickname_if_needed(nickname).strip() or "Unknown user"
         date_str = datetime.now().strftime("%Y-%m-%d")
-        chat_name = message.chat.title if message.chat and message.chat.title else "PRIVATE"
+        chat_name = _resolve_chat_title(message)
         if len(chat_name) > 30:
             chat_name = chat_name[:30]
         placard_text = f"{nickname} | {date_str} | CHAT: {chat_name}"
