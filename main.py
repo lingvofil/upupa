@@ -105,6 +105,7 @@ from AI.random_reactions import process_random_reactions
 
 # ================== БЛОК 3.19: ПУП (YTP) ==================
 from ytp import handle_ytp_command
+from media_change import handle_fast_command, handle_slow_command
 
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
@@ -557,6 +558,26 @@ def is_ogg_document(msg: types.Message) -> bool:
 )
 async def handle_pup_command(message: types.Message):
     await handle_ytp_command(message, bot)
+
+
+@router.message(
+    lambda message: (
+        (message.text and "быстрее" in message.text.lower())
+        or (message.caption and "быстрее" in message.caption.lower())
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_faster_media_command(message: types.Message):
+    await handle_fast_command(message, bot)
+
+
+@router.message(
+    lambda message: (
+        (message.text and "медленнее" in message.text.lower())
+        or (message.caption and "медленнее" in message.caption.lower())
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_slower_media_command(message: types.Message):
+    await handle_slow_command(message, bot)
 
 # ================== БЛОК 6: ХЭНДЛЕРЫ С AI ==================
 
