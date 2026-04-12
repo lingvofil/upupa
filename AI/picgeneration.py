@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from datetime import datetime
 import json
 import logging
 import os
@@ -583,11 +584,23 @@ async def handle_mugshot_command(message: types.Message):
         if not subject or len(subject) > 180:
             subject = "a person"
 
+        username = (
+            f"@{message.from_user.username}"
+            if message.from_user and message.from_user.username
+            else (message.from_user.full_name if message.from_user else "Unknown user")
+        )
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        chat_name = message.chat.title if message.chat and message.chat.title else "PRIVATE"
+        if len(chat_name) > 30:
+            chat_name = chat_name[:30]
+        placard_text = f"{username} | {date_str} | CHAT: {chat_name}"
+
         final_prompt = (
             f"police mugshot photo of {subject}, "
             "front view, centered, "
             "height measurement chart background, "
-            "holding arrest placard with random ID number, "
+            "holding arrest placard with readable text: "
+            f"\"{placard_text}\", "
             "neutral expression, "
             "harsh flash lighting, "
             "realistic photography, sharp focus, high detail, 8k"
