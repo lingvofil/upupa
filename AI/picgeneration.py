@@ -586,6 +586,8 @@ async def handle_redraw_command(message: types.Message):
             f"{description}, "
             "children's crayon drawing, ugly doodle, scribble, naive art, "
             "messy lines, white background, drawing by 4 year old child."
+            "but still recognizable subject with some details, "
+            "simple composition, "
             "bad scan, paper texture, random stains, uneven coloring outside lines"
         )
 
