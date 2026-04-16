@@ -93,12 +93,13 @@ SPECIAL_CHAT_ID = -1001707530786
 
 # --- GEMINI MODEL QUEUES ---
 MODEL_QUEUE_DEFAULT = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    #"gemini-2.0-flash",
+    #"gemini-2.0-flash-lite",
 ]
 
 MODEL_QUEUE_SPECIAL = [
-    "gemini-2.5-pro",
+    #"gemini-2.5-pro",
 ] + MODEL_QUEUE_DEFAULT
 
 # --- GEMINI PUBLIC MODEL CONSTANTS ---
