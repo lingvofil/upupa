@@ -120,7 +120,7 @@ GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
 # пародия, кто я, что за чат, кем стать, викторина
-GROQ_TEXT_MODEL = "moonshotai/kimi-k2-instruct-0905"
+GROQ_TEXT_MODEL = "openai/gpt-oss-120b"
 
 # для чотам (аудио)
 GROQ_AUDIO_MODEL = "whisper-large-v3"
