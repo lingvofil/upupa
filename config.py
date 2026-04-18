@@ -183,12 +183,12 @@ gigachat = GigaChat(
 openrouter_ai = OpenAICompatibleWrapper(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
-    model_name="meta-llama/llama-3.3-70b-instruct:free",
+    model_name="google/gemma-4-31b-it:free",
 )
 
 siliconflow_ai = OpenAICompatibleWrapper(
     api_key=SILICONFLOW_API_KEY,
-    base_url="https://api.siliconflow.cn/v1",
+    base_url="https://api.siliconflow.com/v1",
     model_name="deepseek-ai/DeepSeek-V3.2",
 )
 
