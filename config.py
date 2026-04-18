@@ -21,7 +21,8 @@ from AI.wrapper import (
     GroqWrapper,
     ModelFallbackWrapper,
     GigaChatWrapper,
-    FallbackChatSession
+    FallbackChatSession,
+    OpenAICompatibleWrapper
 )
 
 # =========================
@@ -37,6 +38,7 @@ try:
         GENERIC_API_KEY5,
         GENERIC_API_KEY6,
         OPENROUTER_API_KEY,
+        SILICONFLOW_API_KEY,
         GOOGLE_API_KEY,
         GOOGLE_API_KEY2,
         giphy_api_key,
@@ -55,6 +57,8 @@ except ImportError:
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
     POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
 # =========================
@@ -173,6 +177,19 @@ gigachat = GigaChat(
     credentials=GIGACHAT_API_KEY,
     model="GigaChat-2",
     verify_ssl_certs=False
+)
+
+# === OPENAI-COMPATIBLE PROVIDERS ===
+openrouter_ai = OpenAICompatibleWrapper(
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+    model_name="meta-llama/llama-3.3-70b-instruct:free",
+)
+
+siliconflow_ai = OpenAICompatibleWrapper(
+    api_key=SILICONFLOW_API_KEY,
+    base_url="https://api.siliconflow.cn/v1",
+    model_name="deepseek-ai/DeepSeek-V3.2",
 )
 
 # =========================
