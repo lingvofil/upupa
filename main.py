@@ -160,7 +160,9 @@ from AI.talking import (
     handle_which_model,
     handle_switch_to_history,
     handle_serious_mode_command,
-     handle_serious_mode_reply
+    handle_serious_mode_reply,
+    handle_switch_to_openrouter,
+    handle_switch_to_siliconflow
 )
 
 # ================== БЛОК 4.7: ЧОБЫЛО И ИТОГИ ГОДА ==================
@@ -599,6 +601,14 @@ async def switch_to_groq(message: types.Message):
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа нушо")
 async def cmd_switch_history(message: Message):
     await handle_switch_to_history(message)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа опен")
+async def switch_to_openrouter(message: types.Message):
+    await handle_switch_to_openrouter(message)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) == "упупа силикон")
+async def switch_to_siliconflow(message: types.Message):
+    await handle_switch_to_siliconflow(message)
 
 @router.message(F.text.lower() == "какая модель")
 async def which_model(message: types.Message):
