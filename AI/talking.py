@@ -99,7 +99,7 @@ async def handle_switch_to_openrouter(message: types.Message):
     for chat_id in chat_settings.keys():
         chat_settings[chat_id]["active_model"] = "openrouter"
     save_chat_settings()
-    await message.reply("🚀 Переключил на OpenRouter (Llama 3.3 70B Free). Мощно и бесплатно!")
+    await message.reply("🚀 Переключил на OpenRouter (Llama 3.3 70B Free). Иди ты нахуй")
 
 async def handle_switch_to_siliconflow(message: types.Message):
     """Переключение на SiliconFlow для ВСЕХ чатов (только админ)"""
@@ -109,7 +109,7 @@ async def handle_switch_to_siliconflow(message: types.Message):
     for chat_id in chat_settings.keys():
         chat_settings[chat_id]["active_model"] = "siliconflow"
     save_chat_settings()
-    await message.reply("🇨🇳 Переключил на SiliconFlow (DeepSeek V3.2). Погнали!")
+    await message.reply("🇨🇳 Переключил на SiliconFlow (DeepSeek V3.2). Силиконовая долина (лариса)")
 
 async def handle_which_model(message: types.Message):
     """Показывает текущую активную модель в этом чате"""
