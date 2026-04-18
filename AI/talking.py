@@ -99,7 +99,7 @@ async def handle_switch_to_openrouter(message: types.Message):
     for chat_id in chat_settings.keys():
         chat_settings[chat_id]["active_model"] = "openrouter"
     save_chat_settings()
-    await message.reply("🚀 Переключил на OpenRouter (Llama 3.3 70B Free). Иди ты нахуй")
+    await message.reply("🚀 Переключил на OpenRouter {openrouter_ai.model_name}. Иди ты нахуй")
 
 async def handle_switch_to_siliconflow(message: types.Message):
     """Переключение на SiliconFlow для ВСЕХ чатов (только админ)"""
