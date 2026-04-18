@@ -13,7 +13,8 @@ from upupa_utils import normalize_upupa_command
 from config import (
     MAX_HISTORY_LENGTH, CHAT_SETTINGS_FILE, chat_settings,
     conversation_history, model, gigachat_model, bot, groq_ai, ADMIN_ID, 
-    serious_mode_messages, cleanup_old_serious_messages
+    serious_mode_messages, cleanup_old_serious_messages, 
+    openrouter_ai, siliconflow_ai
 )
 # Функции для работы с файлами и промптами
 from chat_settings import save_chat_settings, add_chat
@@ -79,7 +80,6 @@ async def handle_switch_to_groq(message: types.Message):
     save_chat_settings()
     await message.reply("⚡ Все чаты переключены на Groq")
 
-
 async def handle_switch_to_history(message: types.Message):
     """Переключение на режим истории (По памяти) для ВСЕХ чатов (только админ)"""
     if message.from_user.id != ADMIN_ID:
@@ -91,6 +91,25 @@ async def handle_switch_to_history(message: types.Message):
     save_chat_settings()
     await message.reply("📜 Все чаты переключены на режим 'По памяти'")
 
+async def handle_switch_to_openrouter(message: types.Message):
+    """Переключение на OpenRouter для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "openrouter"
+    save_chat_settings()
+    await message.reply("🚀 Переключил на OpenRouter (Llama 3.3 70B Free). Мощно и бесплатно!")
+
+async def handle_switch_to_siliconflow(message: types.Message):
+    """Переключение на SiliconFlow для ВСЕХ чатов (только админ)"""
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Эта команда доступна только администратору.")
+        return
+    for chat_id in chat_settings.keys():
+        chat_settings[chat_id]["active_model"] = "siliconflow"
+    save_chat_settings()
+    await message.reply("🇨🇳 Переключил на SiliconFlow (DeepSeek V3.2). Погнали!")
 
 async def handle_which_model(message: types.Message):
     """Показывает текущую активную модель в этом чате"""
@@ -105,7 +124,9 @@ async def handle_which_model(message: types.Message):
         "gigachat": lambda: f"🤖 Сейчас использую GigaChat: {gigachat_model.last_used_model_name or 'GigaChat-2'}",
         "history": lambda: "📜 Сейчас я в режиме 'По памяти' (использую историю логов)",
         "groq": lambda: f"⚡ Сейчас использую Groq: {groq_ai.text_model}",
-        "gemini": lambda: f"✨ Сейчас использую Gemini: {model.last_used_model_name or 'gemini-2.0-flash'}"
+        "gemini": lambda: f"✨ Сейчас использую Gemini: {model.last_used_model_name or 'gemini-2.0-flash'}",
+        "openrouter": lambda: f"🚀 Сейчас использую OpenRouter: {openrouter_ai.model_name}",
+        "siliconflow": lambda: f"🇨🇳 Сейчас использую SiliconFlow: {siliconflow_ai.model_name}"
     }
     
     response = model_messages.get(active_model, model_messages["gemini"])()
@@ -136,6 +157,14 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
             elif active_model == "groq":
                 result = groq_ai.generate_text(prompt)
                 logging.info(f"Groq вернул: '{result}'")
+                return result
+            elif active_model == "openrouter":
+                result = openrouter_ai.generate_text(prompt)
+                logging.info(f"OpenRouter вернул: '{result[:100] if result else ''}'")
+                return result
+            elif active_model == "siliconflow":
+                result = siliconflow_ai.generate_text(prompt)
+                logging.info(f"SiliconFlow вернул: '{result[:100] if result else ''}'")
                 return result
             else:  # gemini
                 response = model.generate_content(prompt, chat_id=int(chat_id))
@@ -483,6 +512,14 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                 return response.text
             elif active_model == "groq":
                 return groq_ai.generate_text(prompt)
+            elif active_model == "openrouter":
+                result = openrouter_ai.generate_text(prompt)
+                logging.info(f"OpenRouter вернул: '{result[:100] if result else ''}'")
+                return result
+            elif active_model == "siliconflow":
+                result = siliconflow_ai.generate_text(prompt)
+                logging.info(f"SiliconFlow вернул: '{result[:100] if result else ''}'")
+                return result
             else:  # gemini
                 response = model.generate_content(prompt, chat_id=int(chat_id))
                 return response.text
