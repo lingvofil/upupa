@@ -17,7 +17,7 @@ from gigachat import GigaChat
 # === RATE LIMIT CONTROL ===
 # =========================
 GLOBAL_MIN_DELAY = 2.5
-GEMINI_ACCOUNT_COOLDOWN = 300
+GEMINI_ACCOUNT_COOLDOWN = 30
 
 _last_call_ts = 0.0
 _gemini_blocked_until = 0.0
