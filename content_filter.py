@@ -205,10 +205,53 @@ def save_antispam_settings():
 # Загружаем настройки при старте
 load_antispam_settings()
 
-NORMALIZATION_TABLE = str.maketrans("aAeEoOpPcCxX", "аАеЕоОрРсСхХ")
+# Приводим похожие кириллические/греческие символы к латинице.
+# Это позволяет ловить смешанное написание вроде "mоbсаsh" (кирилл. о/с/а)
+# тем же стоп-словом "mobcash".
+HOMOGLYPH_TRANSLATION = str.maketrans({
+    # Cyrillic -> Latin
+    "а": "a", "А": "a",
+    "в": "b", "В": "b",
+    "с": "c", "С": "c",
+    "е": "e", "Е": "e",
+    "н": "h", "Н": "h",
+    "і": "i", "І": "i",
+    "ј": "j", "Ј": "j",
+    "к": "k", "К": "k",
+    "м": "m", "М": "m",
+    "о": "o", "О": "o",
+    "р": "p", "Р": "p",
+    "ѕ": "s", "Ѕ": "s",
+    "т": "t", "Т": "t",
+    "у": "y", "У": "y",
+    "х": "x", "Х": "x",
+    # Greek -> Latin
+    "α": "a", "Α": "a",
+    "β": "b", "Β": "b",
+    "ε": "e", "Ε": "e",
+    "η": "h", "Η": "h",
+    "ι": "i", "Ι": "i",
+    "κ": "k", "Κ": "k",
+    "μ": "m", "Μ": "m",
+    "ν": "v", "Ν": "v",
+    "ο": "o", "Ο": "o",
+    "ρ": "p", "Ρ": "p",
+    "τ": "t", "Τ": "t",
+    "υ": "y", "Υ": "y",
+    "χ": "x", "Χ": "x",
+})
+
+# Zero-width и bidi-символы, которые часто используют для обхода фильтров.
+INVISIBLE_CHARS_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
 
 def normalize_text(text: str) -> str:
-    return text.lower().translate(NORMALIZATION_TABLE)
+    lowered = text.lower()
+    without_invisible = INVISIBLE_CHARS_RE.sub("", lowered)
+    unified_script = without_invisible.translate(HOMOGLYPH_TRANSLATION)
+    return re.sub(r"\s+", " ", unified_script).strip()
+
+# Нормализуем стоп-слова один раз, чтобы не делать это на каждое сообщение.
+NORMALIZED_STOP_WORDS = [normalize_text(word) for word in STOP_WORDS]
 
 def contains_allowed_bot(text: str) -> bool:
     text_lower = text.lower()
@@ -245,10 +288,34 @@ class ContentFilterMiddleware(BaseMiddleware):
         reason = ""
 
         # Проверка по стоп-словам
-        for stop_word in STOP_WORDS:
+        for stop_word in NORMALIZED_STOP_WORDS:
             if stop_word in normalized_text:
                 reason = "обнаружение спама в сообщении"
                 break
+
+        # Дополнительная проверка URL из entities (url, text_link).
+        # Это покрывает кейсы, когда ссылка частично визуально маскируется.
+        if not reason:
+            for entities, entity_source_text in (
+                (event.entities or [], event.text or ""),
+                (event.caption_entities or [], event.caption or ""),
+            ):
+                for entity in entities:
+                    entity_url = ""
+                    if entity.type == "url":
+                        entity_url = entity_source_text[entity.offset:entity.offset + entity.length]
+                    elif entity.type == "text_link" and entity.url:
+                        entity_url = entity.url
+
+                    if not entity_url:
+                        continue
+
+                    normalized_url = normalize_text(entity_url)
+                    if any(stop_word in normalized_url for stop_word in NORMALIZED_STOP_WORDS):
+                        reason = "обнаружение спама в ссылке"
+                        break
+                if reason:
+                    break
 
         # Проверка по регулярным выражениям
         if not reason:
@@ -274,3 +341,21 @@ class ContentFilterMiddleware(BaseMiddleware):
             return
 
         return await handler(event, data)
+
+
+def _normalization_smoke_test() -> None:
+    """
+    Мини-демо, показывающее исправление:
+    1) "mobcash" и "mоbcash" (кирилл. о) нормализуются одинаково.
+    2) Ссылка t.me ловится даже если в "https" подменены буквы.
+    """
+    variant_plain = "mobcash"
+    variant_mixed = "mоbcash"  # вторая буква "о" — кириллица
+    print("mobcash normalization equal:", normalize_text(variant_plain) == normalize_text(variant_mixed))
+
+    masked_url = "httрs://t.me/+clzD5AOeO3g1MGJk"  # 'р' — кириллица
+    normalized_url = normalize_text(masked_url)
+    print(
+        "masked url detected:",
+        any(stop_word in normalized_url for stop_word in NORMALIZED_STOP_WORDS),
+    )
