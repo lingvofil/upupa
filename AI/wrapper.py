@@ -3,13 +3,13 @@
 import os
 import time
 import logging
-from typing import Optional, List, Any
+import threading
+from typing import Optional, List, Any, Callable, Tuple
 from groq import Groq
 from PIL import Image
 import base64
 import io
 import google.generativeai as genai
-from google.api_core import exceptions
 from gigachat import GigaChat
 import requests
 
@@ -17,10 +17,9 @@ import requests
 # === RATE LIMIT CONTROL ===
 # =========================
 GLOBAL_MIN_DELAY = 2.5
-GEMINI_ACCOUNT_COOLDOWN = 30
 
 _last_call_ts = 0.0
-_gemini_blocked_until = 0.0
+_genai_lock = threading.RLock()
 
 
 def _global_throttle():
@@ -32,14 +31,21 @@ def _global_throttle():
     _last_call_ts = time.time()
 
 
-def _gemini_available() -> bool:
-    return time.time() >= _gemini_blocked_until
+def _extract_error_details(error: Exception) -> Tuple[Optional[int], str]:
+    status_code = getattr(error, "code", None) or getattr(error, "status_code", None)
+    if status_code is None and hasattr(error, "response") and getattr(error, "response", None) is not None:
+        status_code = getattr(error.response, "status_code", None)
+    return status_code, error.__class__.__name__
 
 
-def _block_gemini():
-    global _gemini_blocked_until
-    _gemini_blocked_until = time.time() + GEMINI_ACCOUNT_COOLDOWN
-    logging.warning("⛔ Gemini account cooldown activated")
+def _is_retryable(error: Exception) -> bool:
+    status_code, error_type = _extract_error_details(error)
+    text = str(error).lower()
+    if status_code in (429, 503):
+        return True
+    if error_type in ("ResourceExhausted", "QuotaExceeded"):
+        return True
+    return any(marker in text for marker in ("429", "503", "resourceexhausted", "quotaexceeded"))
 
 
 # =========================
@@ -60,37 +66,34 @@ class FallbackChatSession:
         self.chat_id = chat_id
         self.user_id = user_id
 
-    def send_message(self, content):
-        if not _gemini_available():
-            raise RuntimeError("Gemini temporarily unavailable")
+    def send_message(self, content, chat_id=None, **kwargs):
+        chat_chat_id = chat_id if chat_id is not None else self.chat_id
+        response = self.wrapper._run_with_fallback(
+            action_name="start_chat.send_message",
+            chat_id=chat_chat_id,
+            request_fn=lambda model_obj: self._send_with_model(model_obj, content, **kwargs)
+        )
+        return response
 
-        for model_name in self.model_queue:
-            try:
-                _global_throttle()
-                model = genai.GenerativeModel(model_name)
-                chat = model.start_chat(history=self.history)
-                response = chat.send_message(content)
-                self.history = chat.history
-                self.wrapper.last_used_model_name = model_name
-                return response
-
-            except exceptions.ResourceExhausted:
-                _block_gemini()
-                raise
-
-            except Exception as e:
-                logging.error(f"Chat error [{model_name}]: {e}")
-
-        raise RuntimeError("All Gemini chat models failed")
+    def _send_with_model(self, model_obj, content, **kwargs):
+        chat = model_obj.start_chat(history=self.history)
+        response = chat.send_message(content, **kwargs)
+        self.history = chat.history
+        return response
 
 
 # =========================
 # === MODEL FALLBACK WRAPPER ===
 # =========================
 class ModelFallbackWrapper:
-    def __init__(self, default_queue: List[str], special_queue: List[str]):
+    GEMINI_LIMIT_EXHAUSTED_MESSAGE = "⚠️ Все лимиты Gemini временно исчерпаны. Попробуй позже."
+
+    def __init__(self, default_queue: List[str], special_queue: List[str], keys_pool: Optional[List[str]] = None):
         self.default_queue = default_queue
         self.special_queue = special_queue
+        self.keys_pool = [key for key in (keys_pool or []) if key]
+        self._key_rr_cursor = 0
+        self._max_retries_per_pair = 3
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
@@ -100,38 +103,20 @@ class ModelFallbackWrapper:
         return self.default_queue
 
     def generate_content(self, prompt, *, chat_id=None, **kwargs):
-        if not _gemini_available():
-            raise RuntimeError("Gemini temporarily unavailable")
-
-        for model_name in self._get_queue(chat_id):
-            try:
-                _global_throttle()
-                model = genai.GenerativeModel(model_name)
-                result = model.generate_content(prompt, **kwargs)
-                self.last_used_model_name = model_name
-                return result
-
-            except exceptions.ResourceExhausted:
-                _block_gemini()
-                raise
-
-            except Exception as e:
-                logging.error(f"Generate error [{model_name}]: {e}")
-
-        raise RuntimeError("All Gemini models failed")
+        return self._run_with_fallback(
+            action_name="generate_content",
+            chat_id=chat_id,
+            request_fn=lambda model_obj: model_obj.generate_content(prompt, **kwargs)
+        )
 
     def generate_custom(self, model_name: str, *args, **kwargs):
-        if not _gemini_available():
-            raise RuntimeError("Gemini temporarily unavailable")
-
-        try:
-            _global_throttle()
-            model = genai.GenerativeModel(model_name)
-            return model.generate_content(*args, **kwargs)
-
-        except exceptions.ResourceExhausted:
-            _block_gemini()
-            raise
+        model_name = self._normalize_model_name(model_name)
+        temp_wrapper = ModelFallbackWrapper([model_name], [model_name], keys_pool=self.keys_pool)
+        return temp_wrapper._run_with_fallback(
+            action_name="generate_custom",
+            chat_id=kwargs.pop("chat_id", None),
+            request_fn=lambda model_obj: model_obj.generate_content(*args, **kwargs)
+        )
 
     def start_chat(self, history=None, chat_id=None, user_id=None):
         queue = self._get_queue(chat_id)
@@ -146,6 +131,71 @@ class ModelFallbackWrapper:
     @property
     def model_names(self):
         return self.default_queue
+
+    def _normalize_model_name(self, model_name: str) -> str:
+        if not model_name.startswith("models/"):
+            return f"models/{model_name}"
+        return model_name
+
+    def _iter_key_indices(self):
+        if not self.keys_pool:
+            return []
+        count = len(self.keys_pool)
+        start = self._key_rr_cursor % count
+        order = [(start + i) % count for i in range(count)]
+        self._key_rr_cursor = (start + 1) % count
+        return order
+
+    def _build_model(self, api_key: str, model_name: str):
+        with _genai_lock:
+            genai.configure(api_key=api_key)
+            return genai.GenerativeModel(model_name)
+
+    def _run_with_fallback(self, action_name: str, chat_id: Optional[int], request_fn: Callable):
+        model_queue = [self._normalize_model_name(name) for name in self._get_queue(chat_id)]
+        key_indices = self._iter_key_indices()
+        if not key_indices:
+            raise RuntimeError("Gemini API keys pool is empty")
+
+        hard_failures: List[Exception] = []
+        temporary_failure_only = True
+        attempts = 0
+
+        for model_name in model_queue:
+            for key_idx in key_indices:
+                api_key = self.keys_pool[key_idx]
+                for attempt in range(1, self._max_retries_per_pair + 1):
+                    attempts += 1
+                    try:
+                        _global_throttle()
+                        model_obj = self._build_model(api_key, model_name)
+                        result = request_fn(model_obj)
+                        self.last_used_model_name = model_name
+                        logging.info(
+                            "Gemini success action=%s key_idx=%s model=%s attempts=%s",
+                            action_name, key_idx, model_name, attempt
+                        )
+                        return result
+                    except Exception as error:
+                        status_code, error_type = _extract_error_details(error)
+                        retryable = _is_retryable(error)
+                        logging.warning(
+                            "Gemini fail action=%s key_idx=%s model=%s attempt=%s code=%s type=%s retryable=%s",
+                            action_name, key_idx, model_name, attempt, status_code, error_type, retryable
+                        )
+                        if retryable and attempt < self._max_retries_per_pair:
+                            time.sleep(2 ** (attempt - 1))
+                            continue
+                        if not retryable:
+                            temporary_failure_only = False
+                            hard_failures.append(error)
+                        break
+
+        if temporary_failure_only:
+            raise RuntimeError(self.GEMINI_LIMIT_EXHAUSTED_MESSAGE)
+        if hard_failures:
+            raise RuntimeError(f"All Gemini models failed. Last error: {hard_failures[-1]}")
+        raise RuntimeError("All Gemini models failed")
 
 
 # =========================
