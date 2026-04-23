@@ -133,6 +133,13 @@ TTS_MODELS_QUEUE = [
     "gemini-2.5-flash-preview-tts"
 ]
 
+GEMINI_IMAGE_MODEL_QUEUE = [
+    "models/gemini-2.5-flash-image",
+    "models/gemini-3.1-flash-image-preview",
+    "models/gemini-3-pro-image-preview",
+    "models/nano-banana-pro-preview",
+]
+
 # --- GIGACHAT MODEL QUEUES ---
 GIGACHAT_MODEL_QUEUE_DEFAULT = ["GigaChat-2"]
 GIGACHAT_MODEL_QUEUE_SPECIAL = ["GigaChat-2-Max"]
