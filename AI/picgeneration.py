@@ -312,47 +312,18 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
 # ГЛАВНЫЙ ОРКЕСТРАТОР (WATERFALL)
 # =============================================================================
 
-async def robust_image_generation_bytes(
-    message: types.Message,
-    prompt_ru: str,
-    processing_msg: types.Message,
-    skip_translate: bool = False,
-) -> Optional[bytes]:
+async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message, skip_translate: bool = False):
     global PIPELINE_ID
     
     # Переводим и обогащаем промпт один раз для всей цепочки
     await processing_msg.edit_text("Использую ебучий Flux...")
     prompt_en = prompt_ru if skip_translate else await translate_to_en(prompt_ru)
-    active_model = get_active_model(str(message.chat.id))
-
-    # 0. Gemini image queue (только если пользователь выбрал gemini)
-    if active_model == "gemini":
-        try:
-            gemini_prompt = prompt_en or prompt_ru
-            gemini_img, gemini_meta = await asyncio.to_thread(
-                lambda: model.generate_image(gemini_prompt, chat_id=message.chat.id)
-            )
-            if gemini_img:
-                logging.info(
-                    "Picgeneration Gemini image generated successfully: model=%s key_idx=%s",
-                    gemini_meta.get("model"),
-                    gemini_meta.get("key_idx"),
-                )
-                return gemini_img
-
-            logging.warning(
-                "Picgeneration Gemini image unavailable: model=%s key_idx=%s error=%s",
-                gemini_meta.get("model"),
-                gemini_meta.get("key_idx"),
-                gemini_meta.get("error"),
-            )
-        except Exception as e:
-            logging.warning(f"Picgeneration Gemini image stage failed, fallback to Pollinations: {e}")
 
     # 1. Flux (Pollinations)
     img = await pollinations_generate(prompt_en)
     if img:
-        return img
+        await processing_msg.delete()
+        return await send_generated_photo(message, img, "flux.png")
 
     # 2. Kandinsky
     await processing_msg.edit_text("Использую ебучий Kandinsky...")
@@ -362,26 +333,19 @@ async def robust_image_generation_bytes(
         if uuid:
             img, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
             if img:
-                return img
+                await processing_msg.delete()
+                return await send_generated_photo(message, img, "kandinsky.png")
 
     # 3. Резервы
     await processing_msg.edit_text("Использую резервный анал...")
     img = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
     if not img: img = await cf_generate_t2i(prompt_en)
-    return img
-
-
-async def robust_image_generation(message: types.Message, prompt_ru: str, processing_msg: types.Message, skip_translate: bool = False):
-    img = await robust_image_generation_bytes(
-        message=message,
-        prompt_ru=prompt_ru,
-        processing_msg=processing_msg,
-        skip_translate=skip_translate,
-    )
+    
     if img:
         await processing_msg.delete()
-        return await send_generated_photo(message, img, "ai_image.png")
-    await processing_msg.edit_text("Иди нахуй, я спать")
+        await send_generated_photo(message, img, "ai_image.png")
+    else:
+        await processing_msg.edit_text("Иди нахуй, я спать")
 
 # =============================================================================
 # АНАЛИЗ ИЗОБРАЖЕНИЯ ЧЕРЕЗ ДОСТУПНЫЕ МОДЕЛИ
@@ -483,17 +447,16 @@ async def handle_pun_image_command(message: types.Message):
         final_word = parts[1].strip()
         
         await msg.edit_text("Ща скаламбурю нахуй")
-
-        pun_image_prompt = (
-            f"Гибрид {source_raw}, визуальный каламбур, абсурд, "
-            "высокая детализация, яркая композиция, digital art"
-        )
-        img_data = await robust_image_generation_bytes(
-            message=message,
-            prompt_ru=pun_image_prompt,
-            processing_msg=msg,
-            skip_translate=False,
-        )
+        
+        prompt_en = await translate_to_en(f"A creative surreal hybrid of {source_raw}, visual pun, digital art, high resolution")
+        
+        img_data = await pollinations_generate(prompt_en)
+        if not img_data:
+            global PIPELINE_ID
+            if not PIPELINE_ID: PIPELINE_ID = await asyncio.to_thread(kandinsky_api.get_pipeline)
+            if PIPELINE_ID:
+                uuid, _ = await asyncio.to_thread(kandinsky_api.generate, f"Гибрид {source_raw}, каламбур", PIPELINE_ID)
+                if uuid: img_data, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
         
         if img_data:
             path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)

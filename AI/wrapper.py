@@ -4,7 +4,7 @@ import os
 import time
 import logging
 import threading
-from typing import Optional, List, Any, Callable, Tuple, Dict
+from typing import Optional, List, Any, Callable, Tuple
 from groq import Groq
 from PIL import Image
 import base64
@@ -117,103 +117,6 @@ class ModelFallbackWrapper:
             chat_id=kwargs.pop("chat_id", None),
             request_fn=lambda model_obj: model_obj.generate_content(*args, **kwargs)
         )
-
-    def _extract_image_bytes(self, response: Any) -> Optional[bytes]:
-        candidates = getattr(response, "candidates", None) or []
-        for candidate in candidates:
-            content = getattr(candidate, "content", None)
-            parts = getattr(content, "parts", None) or []
-            for part in parts:
-                inline_data = getattr(part, "inline_data", None)
-                if not inline_data:
-                    continue
-
-                mime_type = (getattr(inline_data, "mime_type", "") or "").lower()
-                if not mime_type.startswith("image/"):
-                    continue
-
-                data = getattr(inline_data, "data", None)
-                if not data:
-                    continue
-
-                if isinstance(data, bytes):
-                    return data
-
-                if isinstance(data, str):
-                    try:
-                        return base64.b64decode(data)
-                    except Exception:
-                        continue
-
-        return None
-
-    def generate_image(self, prompt: str, chat_id: int | None = None) -> tuple[bytes | None, Dict[str, Any]]:
-        from config import GEMINI_IMAGE_MODEL_QUEUE
-
-        model_queue = [self._normalize_model_name(name) for name in GEMINI_IMAGE_MODEL_QUEUE]
-        key_indices = self._iter_key_indices()
-
-        metadata: Dict[str, Any] = {
-            "model": None,
-            "key_idx": None,
-            "attempts": 0,
-            "error": None,
-        }
-
-        if not key_indices:
-            metadata["error"] = "Gemini API keys pool is empty"
-            return None, metadata
-
-        last_error: Optional[str] = None
-
-        for key_idx in key_indices:
-            api_key = self.keys_pool[key_idx]
-            for model_name in model_queue:
-                metadata["attempts"] += 1
-                metadata["model"] = model_name
-                metadata["key_idx"] = key_idx
-
-                logging.info("Gemini IMG try key_idx=%s model=%s", key_idx, model_name)
-
-                try:
-                    _global_throttle()
-                    model_obj = self._build_model(api_key, model_name)
-                    response = model_obj.generate_content(prompt)
-                    image_bytes = self._extract_image_bytes(response)
-
-                    if image_bytes:
-                        logging.info(
-                            "Gemini IMG success key_idx=%s model=%s size=%s",
-                            key_idx,
-                            model_name,
-                            len(image_bytes),
-                        )
-                        return image_bytes, metadata
-
-                    last_error = "response format is not image"
-                    logging.warning(
-                        "Gemini IMG fail key_idx=%s model=%s error=%s",
-                        key_idx,
-                        model_name,
-                        last_error,
-                    )
-                except Exception as error:
-                    status_code, error_type = _extract_error_details(error)
-                    last_error = str(error)
-                    logging.warning(
-                        "Gemini IMG fail key_idx=%s model=%s error=%s",
-                        key_idx,
-                        model_name,
-                        error,
-                    )
-
-                    if status_code == 429 or "429" in str(error) or error_type in ("ResourceExhausted", "QuotaExceeded"):
-                        continue
-
-                    continue
-
-        metadata["error"] = last_error or "All Gemini image models failed"
-        return None, metadata
 
     def start_chat(self, history=None, chat_id=None, user_id=None):
         queue = self._get_queue(chat_id)
