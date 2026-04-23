@@ -45,6 +45,12 @@ from history_engine import load_and_find_answer
 # ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ (ГЛОБАЛЬНО ДЛЯ ВСЕХ ЧАТОВ)
 # =============================================================================
 
+def get_error_reply_text() -> str:
+    """Возвращает текст ошибки с 50% вероятностью для фразы 'ошибка блят'."""
+    if random.random() < 0.5:
+        return "ошибка блят"
+    return "Произошла ошибка при обработке."
+
 async def handle_switch_to_gigachat(message: types.Message):
     """Переключение на модель GigaChat для ВСЕХ чатов (только админ)"""
     if message.from_user.id != ADMIN_ID:
@@ -183,7 +189,7 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
         
     except Exception as e:
         logging.error(f"Model API Error in generate_simple_response: {e}", exc_info=True)
-        return "Ошибка блят"
+        return get_error_reply_text()
 
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -534,7 +540,7 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
         
     except Exception as e:
         logging.error(f"Model API Error: {e}")
-        error_message = "Ошибка блят"
+        error_message = get_error_reply_text()
         update_conversation_history(chat_id, bot_name, error_message, role="assistant")
         return error_message
 
