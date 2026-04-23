@@ -37,6 +37,9 @@ try:
         GENERIC_API_KEY4,
         GENERIC_API_KEY5,
         GENERIC_API_KEY6,
+        GENERIC_API_KEY8,
+        GENERIC_API_KEY9,
+        GENERIC_API_KEY10,
         OPENROUTER_API_KEY,
         SILICONFLOW_API_KEY,
         GOOGLE_API_KEY,
@@ -55,6 +58,14 @@ try:
 except ImportError:
     API_TOKEN = os.getenv("API_TOKEN")
     GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
+    GENERIC_API_KEY2 = os.getenv("GENERIC_API_KEY2")
+    GENERIC_API_KEY3 = os.getenv("GENERIC_API_KEY3")
+    GENERIC_API_KEY4 = os.getenv("GENERIC_API_KEY4")
+    GENERIC_API_KEY5 = os.getenv("GENERIC_API_KEY5")
+    GENERIC_API_KEY6 = os.getenv("GENERIC_API_KEY6")
+    GENERIC_API_KEY8 = os.getenv("GENERIC_API_KEY8")
+    GENERIC_API_KEY9 = os.getenv("GENERIC_API_KEY9")
+    GENERIC_API_KEY10 = os.getenv("GENERIC_API_KEY10")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -66,12 +77,15 @@ except ImportError:
 # =========================
 GEMINI_KEYS_POOL = [
     key for key in [
-        #GENERIC_API_KEY,
+        GENERIC_API_KEY,
         GENERIC_API_KEY2,
-        #GENERIC_API_KEY3,
-        #GENERIC_API_KEY4,
-        #GENERIC_API_KEY5,
-        #GENERIC_API_KEY6,
+        GENERIC_API_KEY3,
+        GENERIC_API_KEY4,
+        GENERIC_API_KEY5,
+        GENERIC_API_KEY6,
+        GENERIC_API_KEY8,
+        GENERIC_API_KEY9,
+        GENERIC_API_KEY10,
     ]
     if key
 ]
@@ -97,9 +111,14 @@ SPECIAL_CHAT_ID = -1001707530786
 
 # --- GEMINI MODEL QUEUES ---
 MODEL_QUEUE_DEFAULT = [
-    #"gemini-2.5-flash",
-    #"gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "models/gemini-2.5-flash-lite",
+    "models/gemini-2.5-flash",
+    "models/gemini-2.0-flash-lite",
+    "models/gemini-2.0-flash",
+    "models/gemini-2.0-flash-001",
+    "models/gemini-2.0-flash-lite-001",
+    "models/gemma-3-12b-it",
+    "models/gemma-3-4b-it",
 ]
 
 MODEL_QUEUE_SPECIAL = [
@@ -161,7 +180,8 @@ edit_model = genai.GenerativeModel(
 # =========================
 model = ModelFallbackWrapper(
     MODEL_QUEUE_DEFAULT,
-    MODEL_QUEUE_SPECIAL
+    MODEL_QUEUE_SPECIAL,
+    keys_pool=GEMINI_KEYS_POOL
 )
 
 gigachat_model = GigaChatWrapper(
