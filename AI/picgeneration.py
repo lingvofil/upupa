@@ -354,7 +354,7 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
 async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: str, chat_id: str) -> str:
     """
     Анализирует изображение через выбранную модель.
-    Если основная недоступна — автоматически падает на Gemini Flash.
+    Если основная недоступна — автоматически падает на Gemini wrapper model.
     """
     if active_model == "groq":
         try:
@@ -365,7 +365,7 @@ async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: 
             )
             return result
         except Exception as e:
-            logging.warning(f"Groq vision недоступен: {e}, падаем на Gemini Flash")
+            logging.warning(f"Groq vision недоступен: {e}, падаем на Gemini wrapper model")
 
     if active_model == "gigachat":
         try:
@@ -376,15 +376,19 @@ async def analyze_image_for_redraw(img_bytes: bytes, prompt: str, active_model: 
             ))
             return response.text.strip()
         except Exception as e:
-            logging.warning(f"GigaChat vision недоступен: {e}, падаем на Gemini Flash")
+            logging.warning(f"GigaChat vision недоступен: {e}, падаем на Gemini wrapper model")
 
-    # Gemini Flash — лёгкая модель, не тратим квоту gemini-2.5-pro
-    import google.generativeai as genai
-    logging.info("Анализируем изображение через Gemini Flash")
-    flash_model = genai.GenerativeModel("gemini-2.0-flash")
-    response = await asyncio.to_thread(lambda: flash_model.generate_content(
-        [prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
+    logging.info("Анализируем изображение через Gemini wrapper model (fallback queue)")
+    response = await asyncio.to_thread(lambda: model.generate_content(
+        [prompt, {"mime_type": "image/jpeg", "data": img_bytes}],
+        chat_id=int(chat_id)
     ))
+
+    used_model = getattr(model, "last_used_model_name", None)
+    used_key_idx = getattr(model, "last_used_key_idx", None)
+    if used_model is not None or used_key_idx is not None:
+        logging.info(f"Gemini vision success model={used_model} key_idx={used_key_idx}")
+
     return response.text.strip()
 
 # =============================================================================
