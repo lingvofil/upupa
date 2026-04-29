@@ -226,8 +226,11 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 def make_image_super_ugly(image_bytes: bytes) -> bytes:
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
 
-    # 1) Портим качество (пикселизация)
     w, h = img.size
+    if w < 2 or h < 2:
+        return image_bytes
+
+    # 1) Портим качество (пикселизация)
     down_w = max(128, w // 5)
     down_h = max(128, h // 5)
 
@@ -282,8 +285,13 @@ def make_image_super_ugly(image_bytes: bytes) -> bytes:
 
     # 7) "Рваные края бумаги"
     for _ in range(300):
-        x = random.randint(0, w)
-        y = random.choice([random.randint(0, 15), random.randint(h - 15, h)])
+        x = random.randint(0, w - 1)
+
+        if random.random() < 0.5:
+            y = random.randint(0, min(15, h - 1))
+        else:
+            y = random.randint(max(0, h - 16), h - 1)
+
         img.putpixel((x, y), (0, 0, 0))
 
     # 8) Сильные JPEG артефакты (как пересланное 10 раз)
