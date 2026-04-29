@@ -579,24 +579,24 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "Analyze this image with maximum detail. "
-            "Describe every important element: main characters/objects, poses, facial expressions, clothing, textures, colors, lighting, background, perspective, mood, composition, small visual details, and any text/signs. "
-            "Return one dense descriptive paragraph in English (80-140 words), without bullet points and without adding things not present in the image."
+            "Describe the image in a simple literal way, like a child explaining what they see. "
+            "Mention: main subject, 2-4 important objects around, what is happening, background. "
+            "Keep it short and concrete (30-60 words). "
+            "No artistic words, no lighting, no camera, no mood."
+            "No lighting, no camera angles, no mood words."
         )
-
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Based on this source image: {description}. "
-            "Redraw it as a deliberately awful, childish hand-drawn sketch with maximum imperfection. "
-            "Crayon scribbles, thick uneven marker lines, shaky outlines, smudges, ink blots, random stains, "
-            "dirty paper texture, messy coloring outside the lines, warped proportions, broken perspective, "
-            "crooked anatomy, clumsy shapes, accidental distortions, naive beginner drawing, "
-            "messy composition, low-quality scanned doodle, visibly hand-made and rough. "
-            "Make it look intentionally ugly, chaotic, and badly drawn by hand. "
-            "Do NOT make it clean, polished, realistic, elegant, cute, or high-detail. "
-            "Keep the original scene barely recognizable, but heavily mangled and caricatured."
-            "Add random blotches, crossed-out parts, uneven fill, and absurd hand-drawn mistakes."
+            f"Draw this scene: {description}. "
+            "Style: messy children's crayon drawing on paper. "
+            "Shaky uneven lines, ugly doodle, naive art. "
+            "Wrong proportions, funny distorted shapes, chaotic perspective. "
+            "Messy coloring outside the lines, random stains, smudges, ink blots. "
+            "Add small silly details and random scribbles. "
+            "Bad scan quality, paper texture. "
+            "Still recognizable scene, but drawn badly and incorrectly. "
+            "Avoid clean digital art, avoid realistic shading, avoid aesthetic illustration."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
