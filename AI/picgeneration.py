@@ -587,12 +587,16 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Use this detailed scene as source material: {description}. "
-            "Now redraw it as a deliberately hilarious distorted parody: "
-            "twisted proportions, wrong anatomy, goofy faces, absurd object substitutions, chaotic perspective, exaggerated mistakes, nonsense details, awkward composition, and intentionally misinterpreted relationships between objects. "
-            "Make it look confidently incorrect and comically cursed, as if an overenthusiastic beginner misunderstood everything. "
-            "Keep the original scene vaguely recognizable, but heavily warped for humor. "
-            "Style: ugly doodle, crayon + marker scribbles, messy uneven lines, bad coloring outside lines, random stains, low-quality scan, naive art."
+            f"Based on this source image: {description}. "
+            "Redraw it as a deliberately awful, childish hand-drawn sketch with maximum imperfection. "
+            "Crayon scribbles, thick uneven marker lines, shaky outlines, smudges, ink blots, random stains, "
+            "dirty paper texture, messy coloring outside the lines, warped proportions, broken perspective, "
+            "crooked anatomy, clumsy shapes, accidental distortions, naive beginner drawing, "
+            "messy composition, low-quality scanned doodle, visibly hand-made and rough. "
+            "Make it look intentionally ugly, chaotic, and badly drawn by hand. "
+            "Do NOT make it clean, polished, realistic, elegant, cute, or high-detail. "
+            "Keep the original scene barely recognizable, but heavily mangled and caricatured."
+            "Add random blotches, crossed-out parts, uneven fill, and absurd hand-drawn mistakes."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
