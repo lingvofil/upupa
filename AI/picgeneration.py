@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 from gradio_client import Client, handle_file
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from transliterate import translit
@@ -222,6 +222,75 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
         logging.error(f"Ошибка отправки фото: {e}")
         await message.reply("Не удалось отправить картинку.")
 
+
+def make_image_super_ugly(image_bytes: bytes) -> bytes:
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+
+    # 1) Портим качество (пикселизация)
+    w, h = img.size
+    down_w = max(128, w // 5)
+    down_h = max(128, h // 5)
+
+    img_small = img.resize((down_w, down_h), Image.NEAREST)
+    img = img_small.resize((w, h), Image.NEAREST)
+
+    # 2) Легкое размазывание (как плохой скан)
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.2))
+
+    # 3) Контраст/цвета делаем грязными
+    img = ImageEnhance.Contrast(img).enhance(1.4)
+    img = ImageEnhance.Color(img).enhance(0.65)
+    img = ImageEnhance.Brightness(img).enhance(1.05)
+
+    draw = ImageDraw.Draw(img)
+
+    # 4) Кривые "ручкой" линии
+    for _ in range(120):
+        x1 = random.randint(0, w)
+        y1 = random.randint(0, h)
+        x2 = x1 + random.randint(-200, 200)
+        y2 = y1 + random.randint(-200, 200)
+        thickness = random.randint(1, 5)
+
+        # слегка рандомный цвет "ручки"
+        c = random.randint(0, 60)
+        draw.line((x1, y1, x2, y2), fill=(c, c, c), width=thickness)
+
+    # 5) Кляксы (пятна)
+    for _ in range(40):
+        x = random.randint(0, w)
+        y = random.randint(0, h)
+        r = random.randint(15, 90)
+
+        c = random.randint(0, 80)
+        draw.ellipse((x - r, y - r, x + r, y + r), outline=(c, c, c), width=random.randint(2, 5))
+
+    # 6) Случайные закраски как "фломастер"
+    for _ in range(25):
+        x = random.randint(0, w)
+        y = random.randint(0, h)
+        rw = random.randint(40, 220)
+        rh = random.randint(40, 220)
+        c = random.randint(0, 120)
+        alpha_like = random.randint(40, 120)
+
+        overlay = Image.new("RGBA", (rw, rh), (c, c, c, alpha_like))
+        img_rgba = img.convert("RGBA")
+        img_rgba.paste(overlay, (max(0, x - rw // 2), max(0, y - rh // 2)), overlay)
+        img = img_rgba.convert("RGB")
+        draw = ImageDraw.Draw(img)
+
+    # 7) "Рваные края бумаги"
+    for _ in range(300):
+        x = random.randint(0, w)
+        y = random.choice([random.randint(0, 15), random.randint(h - 15, h)])
+        img.putpixel((x, y), (0, 0, 0))
+
+    # 8) Сильные JPEG артефакты (как пересланное 10 раз)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=20)
+    return buf.getvalue()
+
 # =============================================================================
 # ГЕНЕРАТОРЫ
 # =============================================================================
@@ -346,6 +415,35 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
         await send_generated_photo(message, img, "ai_image.png")
     else:
         await processing_msg.edit_text("Иди нахуй, я спать")
+
+
+async def robust_image_generation_bytes(prompt_ru: str, skip_translate: bool = False) -> Optional[bytes]:
+    global PIPELINE_ID
+
+    prompt_en = prompt_ru if skip_translate else await translate_to_en(prompt_ru)
+
+    # 1. Flux (Pollinations)
+    img = await pollinations_generate(prompt_en)
+    if img:
+        return img
+
+    # 2. Kandinsky
+    if not PIPELINE_ID:
+        PIPELINE_ID = await asyncio.to_thread(kandinsky_api.get_pipeline)
+
+    if PIPELINE_ID:
+        uuid, _ = await asyncio.to_thread(kandinsky_api.generate, prompt_ru, PIPELINE_ID)
+        if uuid:
+            img, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
+            if img:
+                return img
+
+    # 3. Резервы
+    img = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
+    if not img:
+        img = await cf_generate_t2i(prompt_en)
+
+    return img
 
 # =============================================================================
 # АНАЛИЗ ИЗОБРАЖЕНИЯ ЧЕРЕЗ ДОСТУПНЫЕ МОДЕЛИ
@@ -565,7 +663,7 @@ async def generate_gradio_img2img(image_bytes: bytes, prompt: str) -> Optional[b
 
 
 async def handle_redraw_command(message: types.Message):
-    """Перерисовка: картинка перерисовывается в стиле детского рисунка"""
+    """Перерисовка: картинка перерисовывается максимально коряво и уродливо"""
     photo, _ = await extract_image_and_prompt(message, "перерисуй")
     if not photo:
         return await message.reply("Нужно фото.")
@@ -573,7 +671,7 @@ async def handle_redraw_command(message: types.Message):
     chat_id = str(message.chat.id)
     active_model = get_active_model(chat_id)
 
-    msg = await message.reply("Анал лизирую тваю мазню")
+    msg = await message.reply("Анал лизирую тваю мазню...")
 
     try:
         img_bytes = await download_telegram_image(bot, photo)
@@ -587,19 +685,25 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Based on this source image: {description}. "
-            "Redraw it as a deliberately awful, childish hand-drawn sketch with maximum imperfection. "
-            "Crayon scribbles, thick uneven marker lines, shaky outlines, smudges, ink blots, random stains, "
-            "dirty paper texture, messy coloring outside the lines, warped proportions, broken perspective, "
-            "crooked anatomy, clumsy shapes, accidental distortions, naive beginner drawing, "
-            "messy composition, low-quality scanned doodle, visibly hand-made and rough. "
-            "Make it look intentionally ugly, chaotic, and badly drawn by hand. "
-            "Do NOT make it clean, polished, realistic, elegant, cute, or high-detail. "
-            "Keep the original scene barely recognizable, but heavily mangled and caricatured."
-            "Add random blotches, crossed-out parts, uneven fill, and absurd hand-drawn mistakes."
+            f"Redraw this exact scene: {description}. "
+            "Style: extremely ugly childish hand drawing. "
+            "Very bad anatomy, wrong proportions, crooked faces, messy scribbles, "
+            "random ink stains, blotches, chaotic lines, shaky pencil strokes, "
+            "bad coloring outside lines, dirty paper texture, low-quality scan, "
+            "distorted perspective, broken composition, naive doodle, cursed drawing. "
+            "Do not make it beautiful, do not make it clean, do not make it artistic."
         )
 
-        await robust_image_generation(message, final_prompt, msg, skip_translate=True)
+        await msg.edit_text("Ща сделаю корявую хуйню...")
+
+        generated = await robust_image_generation_bytes(final_prompt, skip_translate=True)
+        if not generated:
+            return await msg.edit_text("Не получилось сгенерировать.")
+
+        ugly_bytes = await asyncio.to_thread(make_image_super_ugly, generated)
+
+        await msg.delete()
+        await send_generated_photo(message, ugly_bytes, "ugly_redraw.jpg")
 
     except Exception as e:
         logging.error(f"Redraw error: {e}")
