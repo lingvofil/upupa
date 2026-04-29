@@ -579,20 +579,20 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "What is the main subject of this image?"
-            "Answer in 5-10 words maximum, just the subject, no details, no colors, no style."
-            "Example: 'a frog sitting on a lily pad."
+            "Analyze this image with maximum detail. "
+            "Describe every important element: main characters/objects, poses, facial expressions, clothing, textures, colors, lighting, background, perspective, mood, composition, small visual details, and any text/signs. "
+            "Return one dense descriptive paragraph in English (80-140 words), without bullet points and without adding things not present in the image."
         )
 
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"{description}, "
-            "children's crayon drawing, ugly doodle, scribble, naive art, "
-            "messy lines, white background, drawing by 4 year old child."
-            "but still recognizable subject with some details, "
-            "simple composition, "
-            "bad scan, paper texture, random stains, uneven coloring outside lines"
+            f"Use this detailed scene as source material: {description}. "
+            "Now redraw it as a deliberately hilarious distorted parody: "
+            "twisted proportions, wrong anatomy, goofy faces, absurd object substitutions, chaotic perspective, exaggerated mistakes, nonsense details, awkward composition, and intentionally misinterpreted relationships between objects. "
+            "Make it look confidently incorrect and comically cursed, as if an overenthusiastic beginner misunderstood everything. "
+            "Keep the original scene vaguely recognizable, but heavily warped for humor. "
+            "Style: ugly doodle, crayon + marker scribbles, messy uneven lines, bad coloring outside lines, random stains, low-quality scan, naive art."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
