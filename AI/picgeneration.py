@@ -588,21 +588,15 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Draw this scene: {description}. "
-            "Style: messy children's crayon drawing on paper. "
-            "Shaky uneven lines, ugly doodle, naive art. "
-            "Wrong proportions, funny distorted shapes, chaotic perspective. "
-            "Messy coloring outside the lines, random stains, smudges, ink blots. "
-            "Add small silly details and random scribbles. "
-            "Bad scan quality, paper texture. "
-            "Still recognizable scene, but drawn badly and incorrectly. "
-            "Avoid clean digital art, avoid realistic shading, avoid aesthetic illustration."
-            #"Please create the entire image as a single painting in a crayon art style. "
-            #"Simplify the details, making it look like it was drawn by a 10-year-old child. "
-            #"Do not use the colors from the original image. "
-            #"Give it the feel of being drawn on a sheet of white paper, with a very cute vibe, "
-            #"and you can add some adorable elements like flowers, candies, stars, clouds, etc., "
-            #"to make it look innocent and childlike"
+            f"A very bad digital drawing of {description} made in MS Paint by someone who can't use a mouse. "
+            "Style: low-quality 1990s digital art, Windows Paint aesthetic. "
+            "Jagged aliased lines, shaky mouse-drawn strokes, pixelated edges, no anti-aliasing. "
+            "Ugly primary colors from a default 16-color palette. "
+            "Technical errors: accidental spray can dots, bucket fill leaks, white eraser streaks cutting through shapes. "
+            "Wrong proportions, distorted perspectives, zero artistic skill, looks like a mess. "
+            "Plain white background, no shading, no gradients, no textures. "
+            "Completely amateur, intentional low-effort digital garbage. "
+            "Avoid: paper texture, crayons, realistic lighting, smooth lines, professional digital art."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
