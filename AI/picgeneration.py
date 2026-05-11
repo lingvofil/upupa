@@ -590,16 +590,16 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"A comically awful, incredibly low-quality digital drawing of {description}, strictly made in MS Paint by a zero-skill beginner using an ancient mouse. "
-            "The result must look like a messy, failed, clumsy attempt, not a clean digital illustration. "
-            "Use only a rudimentary, basic 16-color primary digital palette (like default Paint colors). Avoid all smooth shading, gradients, and realistic textures. "
-            "Color outlines specifically: use orange for architecture/furniture and blue for figures and text (like image_0.png). Most shapes should have NO internal color fill, relying on these shaky outlines. "
-            "If any color fill is used, it must be sloppy and leak out. "
-            "Apply mandatory technical errors: jagged aliased lines, visible pixels on all edges (no anti-aliasing), completely wrong proportions, distorted anatomy (blob hands, broken faces). "
-            "Add messy white eraser streaks cutting through shapes and accidental single-pixel spray can dots. "
-            "If speech is mentioned, a wobbly blue outline speech bubble must be included with text in a crude, blocky, system font. "
-            "Plain white background with zero texture or lighting. "
-            "Absolutely avoid smooth lines, photorealism, artistic textures (like paper), professional digital art, or aesthetic rendering."
+            f"A very crude, ugly, and primitive MS Paint scribble of {description}. "
+            "Background: solid plain white. "
+            "Style: extremely bad digital drawing made with a thick, shaky, uneven brush tool. "
+            "Use only two colors: ORANGE for all objects and buildings, and BLUE for all people and text. "
+            "Drawing: simple stick figures, distorted shapes, messy outlines, zero detail. "
+            "Everything must look like it was drawn by someone who has never used a computer and cannot draw. "
+            "No filling, no shading, no 3D, no gradients, no artistic skill. "
+            "Chaotic perspective, wrong proportions, shaky mouse lines. "
+            "If there is text, it must be handwritten and very messy. "
+            "Absolutely avoid: aesthetic art, clean lines, professional illustration, realistic colors, digital art."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
