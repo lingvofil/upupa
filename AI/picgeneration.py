@@ -579,27 +579,24 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "Describe the scene in a simple, literal way, like a child explaining what is happening. "
-            "Mention: The expression (e.g., screaming frantic, calm and stoic), the pose (e.g., aggressively pointing with a blob hand, just sitting), "
-            "the specific clothes (e.g., a messy straw hat and red polo, an ugly floral shirt and big glasses), "
-            "and the overall feeling of the original scene (e.g., a frantic, chaotic interaction). "
-            "Describe the objects on the table in simple terms. Specify the type of background scene. "
+            "Describe the image in a simple literal way, like a child explaining what they see. "
+            "Mention: main subject, 2-4 important objects around, what is happening, background. "
             "Keep it short and concrete (30-60 words). "
-            "Focus on the 'who' is doing 'what' and 'how' they are doing it. No artistic words, no lighting, no camera angles."
+            "No artistic words, no lighting, no camera, no mood."
+            "No lighting, no camera angles, no mood words."
         )
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Draw this scene: {description}. "
-            "Style: Extremely bad, comically awful digital drawing, strictly in MS Paint by an absolute beginner with zero skill. "
-            "Features extremely shaky, jagged aliased lines and unrefined mouse-drawn strokes. "
-            "Use only an ugly, rudimentary 16-color digital palette (bright orange, blue, green). "
-            "The drawing must be a crude doodle with wrong proportions and distorted, blob-like shapes. "
-            "Coloring must be messy, with leaking bucket fills, visible white eraser streaks cutting through forms, and accidental spray can pixel dots. "
-            "Include small, silly details and random scribbles, perhaps with visible pixel artifacts. "
-            "Still recognizable but drawn badly and incorrectly, with zero shading or lighting. "
-            "Plain, solid white background with no texture or paper. "
-            "Avoid: clean digital art, smooth lines, photorealism, artistic textures (like paper), gradients, professional rendering, aesthetic illustration."
+            f"Draw this scene: {description}. "
+            "Style: messy and ugly digital MS Paint drawing. "
+            "Shaky uneven mouse lines, jagged aliased strokes, pixelated edges, naive art. "
+            "Wrong proportions, funny distorted shapes, chaotic perspective, blob-like figures. "
+            "Messy bucket fill leaking outside the lines, random spray can dots, white eraser streaks. "
+            "Add small silly details and random digital scribbles. "
+            "Plain solid white background, no shading, no gradients. "
+            "Still recognizable scene, but drawn badly and incorrectly by a person who cannot use a computer. "
+            "Avoid clean digital art, avoid realistic shading, avoid aesthetic illustration, avoid paper texture."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
