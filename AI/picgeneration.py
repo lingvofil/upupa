@@ -590,20 +590,16 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"Generate a new, unique image based strictly on the description: {description}. "
-            "The style must be a comically awful, incredibly low-quality digital drawing created with an ancient computer mouse, "
-            "directly imitating the true 'MS Paint' aesthetic and user example (image_0.png). "
-            "The result must look like a messy, failed, unskilled attempt at drawing, not a clean digital illustration. "
-            "Use only a rudimentary, basic 16-color digital palette (like default Paint colors). Avoid all smooth shading, gradients, and realistic textures. "
-            "Focus primarily on outlines. Most shapes should be defined by extremely shaky, unrefined, broken outlines. Use orange for architecture/wicker and blue for figures and text (as in image_0.png), or a chaotic mix. "
-            "Mandatory stylistic elements: jagged aliased lines, pixelated edges with no anti-aliasing, completely wrong proportions, and distorted anatomy (blob hands, broken faces). "
-            "Include mandatory technical errors: single-pixel accidental spray can dots, bucket fill leaks into white areas, messy white eraser streaks cutting through shapes. "
-            "The scene must be recognizable, but incredibly crude. For example: the screaming person must have a primitive, distorted mouth-blob. "
-            "The wicker table must be drawn as a chaotic, messy scribble-grid. The background must be primitive blobs and lines. "
-            "Maintain the dynamic feeling. The screaming, pointing figure must feel wild and frantic, but rendered in this awful style. "
-            "If speech is mentioned, add a very bad, floppy, uneven speech bubble containing the text in a crude, basic system font. "
+            f"A comically awful, incredibly low-quality digital drawing of {description}, strictly made in MS Paint by a zero-skill beginner using an ancient mouse. "
+            "The result must look like a messy, failed, clumsy attempt, not a clean digital illustration. "
+            "Use only a rudimentary, basic 16-color primary digital palette (like default Paint colors). Avoid all smooth shading, gradients, and realistic textures. "
+            "Color outlines specifically: use orange for architecture/furniture and blue for figures and text (like image_0.png). Most shapes should have NO internal color fill, relying on these shaky outlines. "
+            "If any color fill is used, it must be sloppy and leak out. "
+            "Apply mandatory technical errors: jagged aliased lines, visible pixels on all edges (no anti-aliasing), completely wrong proportions, distorted anatomy (blob hands, broken faces). "
+            "Add messy white eraser streaks cutting through shapes and accidental single-pixel spray can dots. "
+            "If speech is mentioned, a wobbly blue outline speech bubble must be included with text in a crude, blocky, system font. "
             "Plain white background with zero texture or lighting. "
-            "Absolutely avoid smooth lines, photorealism, artistic textures, or professional digital rendering."
+            "Absolutely avoid smooth lines, photorealism, artistic textures (like paper), professional digital art, or aesthetic rendering."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
