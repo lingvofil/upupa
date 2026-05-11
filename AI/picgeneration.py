@@ -588,15 +588,17 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"A very bad digital drawing of {description} made in MS Paint by someone who can't use a mouse. "
-            "Style: low-quality 1990s digital art, Windows Paint aesthetic. "
-            "Jagged aliased lines, shaky mouse-drawn strokes, pixelated edges, no anti-aliasing. "
-            "Ugly primary colors from a default 16-color palette. "
-            "Technical errors: accidental spray can dots, bucket fill leaks, white eraser streaks cutting through shapes. "
-            "Wrong proportions, distorted perspectives, zero artistic skill, looks like a mess. "
-            "Plain white background, no shading, no gradients, no textures. "
-            "Completely amateur, intentional low-effort digital garbage. "
-            "Avoid: paper texture, crayons, realistic lighting, smooth lines, professional digital art."
+            f"A very bad digital drawing of {description} made in MS Paint by someone who can't use a mouse, directly in the style of the user's example image. "
+            "The style must be extremely low-quality 1990s digital art, the true Windows Paint aesthetic. "
+            "It must feature incredibly shaky, mouse-drawn strokes, jagged aliased lines, and pixelated edges with absolutely no anti-aliasing. "
+            "Colors must be limited to basic, default, ugly primary colors (from a 16-color palette), focusing almost entirely on outlines. "
+            "Apply specific outline colors: outlines of buildings or architecture in orange, outlines of people and text in blue. Most shapes should have NO internal color fill. "
+            "Technical errors are mandatory and visible: single-pixel accidental spray can dots, bucket fill leaks if any fill is attempted, white eraser streaks cutting through shapes, and intentional, sloppy bad proportions. "
+            "The scene must be recognizable but comically bad, like a zero-skill attempt. "
+            "If {description} mentions speech, implied speech, or text, a speech bubble must be included. "
+            "The speech bubble itself must be drawn as badly as everything else (like a floppy blue blob), containing the relevant text (e.g., if describing image_0.png, the text 'Ого! вот это Москва'). The text must be a basic, blocky, system font. "
+            "Plain white background with no texture or lighting. "
+            "Avoid: smooth lines, photorealism, artistic textures (like paper), gradients, professional digital art, shading."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
