@@ -579,26 +579,31 @@ async def handle_redraw_command(message: types.Message):
         img_bytes = await download_telegram_image(bot, photo)
 
         analysis_prompt = (
-            "Describe the image in a simple literal way, like a child explaining what they see. "
-            "Mention: main subject, 2-4 important objects around, what is happening, background. "
+            "Describe the scene in a simple, literal way, like a child explaining what is happening. "
+            "Mention: The expression (e.g., screaming frantic, calm and stoic), the pose (e.g., aggressively pointing with a blob hand, just sitting), "
+            "the specific clothes (e.g., a messy straw hat and red polo, an ugly floral shirt and big glasses), "
+            "and the overall feeling of the original scene (e.g., a frantic, chaotic interaction). "
+            "Describe the objects on the table in simple terms. Specify the type of background scene. "
             "Keep it short and concrete (30-60 words). "
-            "No artistic words, no lighting, no camera, no mood."
-            "No lighting, no camera angles, no mood words."
+            "Focus on the 'who' is doing 'what' and 'how' they are doing it. No artistic words, no lighting, no camera angles."
         )
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"A very bad digital drawing of {description} made in MS Paint by someone who can't use a mouse, directly in the style of the user's example image. "
-            "The style must be extremely low-quality 1990s digital art, the true Windows Paint aesthetic. "
-            "It must feature incredibly shaky, mouse-drawn strokes, jagged aliased lines, and pixelated edges with absolutely no anti-aliasing. "
-            "Colors must be limited to basic, default, ugly primary colors (from a 16-color palette), focusing almost entirely on outlines. "
-            "Apply specific outline colors: outlines of buildings or architecture in orange, outlines of people and text in blue. Most shapes should have NO internal color fill. "
-            "Technical errors are mandatory and visible: single-pixel accidental spray can dots, bucket fill leaks if any fill is attempted, white eraser streaks cutting through shapes, and intentional, sloppy bad proportions. "
-            "The scene must be recognizable but comically bad, like a zero-skill attempt. "
-            "If {description} mentions speech, implied speech, or text, a speech bubble must be included. "
-            "The speech bubble itself must be drawn as badly as everything else (like a floppy blue blob), containing the relevant text (e.g., if describing image_0.png, the text 'Ого! вот это Москва'). The text must be a basic, blocky, system font. "
-            "Plain white background with no texture or lighting. "
-            "Avoid: smooth lines, photorealism, artistic textures (like paper), gradients, professional digital art, shading."
+            f"Generate a new, unique image based strictly on the description: {description}. "
+            "The style must be a comically awful, incredibly low-quality digital drawing created with an ancient computer mouse, "
+            "directly imitating the true 'MS Paint' aesthetic and user example (image_0.png). "
+            "The result must look like a messy, failed, unskilled attempt at drawing, not a clean digital illustration. "
+            "Use only a rudimentary, basic 16-color digital palette (like default Paint colors). Avoid all smooth shading, gradients, and realistic textures. "
+            "Focus primarily on outlines. Most shapes should be defined by extremely shaky, unrefined, broken outlines. Use orange for architecture/wicker and blue for figures and text (as in image_0.png), or a chaotic mix. "
+            "Mandatory stylistic elements: jagged aliased lines, pixelated edges with no anti-aliasing, completely wrong proportions, and distorted anatomy (blob hands, broken faces). "
+            "Include mandatory technical errors: single-pixel accidental spray can dots, bucket fill leaks into white areas, messy white eraser streaks cutting through shapes. "
+            "The scene must be recognizable, but incredibly crude. For example: the screaming person must have a primitive, distorted mouth-blob. "
+            "The wicker table must be drawn as a chaotic, messy scribble-grid. The background must be primitive blobs and lines. "
+            "Maintain the dynamic feeling. The screaming, pointing figure must feel wild and frantic, but rendered in this awful style. "
+            "If speech is mentioned, add a very bad, floppy, uneven speech bubble containing the text in a crude, basic system font. "
+            "Plain white background with zero texture or lighting. "
+            "Absolutely avoid smooth lines, photorealism, artistic textures, or professional digital rendering."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
