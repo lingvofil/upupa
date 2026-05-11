@@ -590,16 +590,16 @@ async def handle_redraw_command(message: types.Message):
         description = await analyze_image_for_redraw(img_bytes, analysis_prompt, active_model, chat_id)
 
         final_prompt = (
-            f"A very crude, ugly, and primitive MS Paint scribble of {description}. "
-            "Background: solid plain white. "
-            "Style: extremely bad digital drawing made with a thick, shaky, uneven brush tool. "
-            "Use only two colors: ORANGE for all objects and buildings, and BLUE for all people and text. "
-            "Drawing: simple stick figures, distorted shapes, messy outlines, zero detail. "
-            "Everything must look like it was drawn by someone who has never used a computer and cannot draw. "
-            "No filling, no shading, no 3D, no gradients, no artistic skill. "
-            "Chaotic perspective, wrong proportions, shaky mouse lines. "
-            "If there is text, it must be handwritten and very messy. "
-            "Absolutely avoid: aesthetic art, clean lines, professional illustration, realistic colors, digital art."
+            f"Draw this scene: {description}. "
+            "Style: Extremely bad, comically awful digital drawing, strictly in MS Paint by an absolute beginner with zero skill. "
+            "Features extremely shaky, jagged aliased lines and unrefined mouse-drawn strokes. "
+            "Use only an ugly, rudimentary 16-color digital palette (bright orange, blue, green). "
+            "The drawing must be a crude doodle with wrong proportions and distorted, blob-like shapes. "
+            "Coloring must be messy, with leaking bucket fills, visible white eraser streaks cutting through forms, and accidental spray can pixel dots. "
+            "Include small, silly details and random scribbles, perhaps with visible pixel artifacts. "
+            "Still recognizable but drawn badly and incorrectly, with zero shading or lighting. "
+            "Plain, solid white background with no texture or paper. "
+            "Avoid: clean digital art, smooth lines, photorealism, artistic textures (like paper), gradients, professional rendering, aesthetic illustration."
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
