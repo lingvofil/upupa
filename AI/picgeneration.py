@@ -589,14 +589,20 @@ async def handle_redraw_command(message: types.Message):
 
         final_prompt = (
             f"Draw this scene: {description}. "
-            "Style: messy and ugly digital MS Paint drawing. "
-            "Shaky uneven mouse lines, jagged aliased strokes, pixelated edges, naive art. "
-            "Wrong proportions, funny distorted shapes, chaotic perspective, blob-like figures. "
-            "Messy bucket fill leaking outside the lines, random spray can dots, white eraser streaks. "
-            "Add small silly details and random digital scribbles. "
-            "Plain solid white background, no shading, no gradients. "
-            "Still recognizable scene, but drawn badly and incorrectly by a person who cannot use a computer. "
-            "Avoid clean digital art, avoid realistic shading, avoid aesthetic illustration, avoid paper texture."
+            "Style: messy children's crayon drawing on paper. "
+            "Shaky uneven lines, ugly doodle, naive art. "
+            "Wrong proportions, funny distorted shapes, chaotic perspective. "
+            "Messy coloring outside the lines, random stains, smudges, ink blots. "
+            "Add small silly details and random scribbles. "
+            "Bad scan quality, paper texture. "
+            "Still recognizable scene, but drawn badly and incorrectly. "
+            "Avoid clean digital art, avoid realistic shading, avoid aesthetic illustration."
+            #"Please create the entire image as a single painting in a crayon art style. "
+            #"Simplify the details, making it look like it was drawn by a 10-year-old child. "
+            #"Do not use the colors from the original image. "
+            #"Give it the feel of being drawn on a sheet of white paper, with a very cute vibe, "
+            #"and you can add some adorable elements like flowers, candies, stars, clouds, etc., "
+            #"to make it look innocent and childlike"
         )
 
         await robust_image_generation(message, final_prompt, msg, skip_translate=True)
