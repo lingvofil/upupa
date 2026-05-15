@@ -31,7 +31,9 @@ from lexicon_settings import (
     extract_messages_by_username,
     extract_messages_by_full_name,
     extract_user_messages,
-    get_frequent_phrases_from_text
+    get_frequent_phrases_from_text,
+    build_hybrid_style_sample,
+    is_style_sample_message
 )
 # Импорт для реакций и статистики
 from AI.random_reactions import process_random_reactions
@@ -269,6 +271,10 @@ async def handle_set_prompt_command(message: types.Message):
         await message.reply("Нужно указать название готового промпта или написать свой текст.")
         return
 
+    if command_part.lower() == "участник":
+        await message.reply("Укажи участника: промпт участник [имя/@username]")
+        return
+
     predefined_prompt_text = get_prompt_by_name(command_part.lower())
 
     update_chat_settings(chat_id)
@@ -318,7 +324,13 @@ async def handle_set_participant_prompt_command(message: types.Message):
         await message.reply(f"Не могу найти сообщения от пользователя '{display_name}', чтобы ему подражать.")
         return
 
-    # Создаем базовый промпт стиля (на основе частотных фраз)
+    if not any(is_style_sample_message(msg) for msg in messages):
+        await message.reply(
+            f"Нашёл сообщения от '{display_name}', но после очистки там нет достаточно длинных живых фраз для имитации."
+        )
+        return
+
+    # Создаем базовый промпт стиля (на основе очищенной гибридной выборки)
     user_prompt = await _create_user_style_prompt(messages, display_name)
     
     update_chat_settings(chat_id)
@@ -511,23 +523,40 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
             else:
                 return "Отъебись"
 
+        prompt_type = current_settings.get("prompt_type", "standard")
+        generation_kwargs = {}
+        if prompt_type == "user_style":
+            generation_kwargs = {
+                "temperature": 0.9,
+                "presence_penalty": 0.6,
+            }
+
         # --- ГЕНЕРАЦИЯ ЧЕРЕЗ НЕЙРОСЕТИ ---
         def sync_model_call():
             if active_model == "gigachat":
-                response = gigachat_model.generate_content(prompt, chat_id=int(chat_id))
+                response = gigachat_model.generate_content(
+                    prompt,
+                    chat_id=int(chat_id),
+                    temperature=generation_kwargs.get("temperature", 0.7),
+                )
                 return response.text
             elif active_model == "groq":
-                return groq_ai.generate_text(prompt)
+                return groq_ai.generate_text(prompt, **generation_kwargs)
             elif active_model == "openrouter":
-                result = openrouter_ai.generate_text(prompt)
+                result = openrouter_ai.generate_text(prompt, **generation_kwargs)
                 logging.info(f"OpenRouter вернул: '{result[:100] if result else ''}'")
                 return result
             elif active_model == "siliconflow":
-                result = siliconflow_ai.generate_text(prompt)
+                result = siliconflow_ai.generate_text(prompt, **generation_kwargs)
                 logging.info(f"SiliconFlow вернул: '{result[:100] if result else ''}'")
                 return result
             else:  # gemini
-                response = model.generate_content(prompt, chat_id=int(chat_id))
+                gemini_kwargs = {}
+                if generation_kwargs:
+                    gemini_kwargs["generation_config"] = {
+                        "temperature": generation_kwargs["temperature"],
+                    }
+                response = model.generate_content(prompt, chat_id=int(chat_id), **gemini_kwargs)
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
@@ -676,35 +705,41 @@ async def _create_user_style_prompt(messages: list, display_name: str) -> str:
     """
     (Внутренняя функция) Создает промпт для имитации стиля пользователя.
     """
-    sample_messages = random.sample(messages, min(200, len(messages)))
+    sample_messages = build_hybrid_style_sample(messages)
     all_text = " ".join(sample_messages)
     frequent_words = get_frequent_phrases_from_text(all_text, n=1, top_n=50)
     phrases_2 = get_frequent_phrases_from_text(all_text, n=2, top_n=10)
     phrases_3 = get_frequent_phrases_from_text(all_text, n=3, top_n=10)
     frequent_phrases = phrases_2 + phrases_3
-    
-    prompt_parts = [
-        f"Ты должен имитировать стиль общения пользователя {display_name}.",
-        "Анализируй следующие примеры его сообщений и копируй:",
-        "- Манеру речи и словарный запас",
-        "- Характерные выражения и обороты",
-        "- Стиль юмора и тон общения",
-        "\nПримеры сообщений (общий стиль):",
+
+    style_examples = [
+        "Последние сообщения (актуальный стиль):",
+        *[f"{i}. {msg}" for i, msg in enumerate(sample_messages[:20], 1)],
     ]
-    for i, msg in enumerate(sample_messages[:15], 1):
-        prompt_parts.append(f"{i}. {msg}")
+
+    random_examples = sample_messages[20:]
+    if random_examples:
+        style_examples.extend([
+            "",
+            "Случайные сообщения из истории (широта лексикона):",
+            *[f"{i}. {msg}" for i, msg in enumerate(random_examples, 1)],
+        ])
+
     if frequent_words:
-        prompt_parts.extend(["\nЧасто используемые слова:", ", ".join([word for word, _ in frequent_words])])
+        style_examples.extend([
+            "",
+            "Часто используемые слова (для анализа, не копировать механически):",
+            ", ".join([word for word, _ in frequent_words]),
+        ])
     if frequent_phrases:
-        prompt_parts.append("\nХарактерные фразы:")
+        style_examples.append("\nХарактерные фразы и обороты (не повторять дословно):")
         for phrase, _ in frequent_phrases:
-            prompt_parts.append(f"- {phrase}")
-    prompt_parts.extend([
-        "\nОтвечай ТОЧНО в том же стиле, используя похожие выражения и манеру речи.",
-        "Будь естественным, как будто это действительно пишет этот человек.",
-        "Ответ должен быть не более 50 слов."
-    ])
-    return "\n".join(prompt_parts)
+            style_examples.append(f"- {phrase}")
+
+    return PROMPTS_DICT["участник"].format(
+        display_name=display_name,
+        style_examples="\n".join(style_examples),
+    )
 
 
 def update_chat_settings(chat_id: str) -> None:
