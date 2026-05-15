@@ -2,12 +2,44 @@ from datetime import datetime
 import re
 import aiofiles
 import logging
+import random
 import collections
 from collections import defaultdict
 from nltk.util import ngrams
 from aiogram import types
 from config import LOG_FILE
 from prompts import STOPWORDS
+
+
+STYLE_SAMPLE_MIN_CHARS = 8
+RECENT_STYLE_SAMPLE_SIZE = 20
+RANDOM_STYLE_SAMPLE_SIZE = 20
+
+def is_style_sample_message(text: str, min_chars: int = STYLE_SAMPLE_MIN_CHARS) -> bool:
+    """Возвращает True, если сообщение годится как пример живого пользовательского стиля."""
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return len(stripped) >= min_chars
+
+def build_hybrid_style_sample(messages: list, recent_count: int = RECENT_STYLE_SAMPLE_SIZE, random_count: int = RANDOM_STYLE_SAMPLE_SIZE) -> list:
+    """Берет последние сообщения для актуальности и случайные из истории для широты лексикона."""
+    filtered_messages = [msg.strip() for msg in messages if is_style_sample_message(msg)]
+    if not filtered_messages:
+        return []
+
+    recent_start = max(len(filtered_messages) - recent_count, 0)
+    recent_messages = filtered_messages[recent_start:]
+    older_pool = filtered_messages[:recent_start]
+
+    if len(older_pool) <= random_count:
+        random_messages = older_pool
+    else:
+        random_messages = random.sample(older_pool, random_count)
+
+    return recent_messages + random_messages
 
 # Запись сообщений всех пользователей в файл
 async def save_user_message(message: types.Message):

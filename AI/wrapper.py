@@ -214,7 +214,7 @@ class GigaChatWrapper:
             return self.special_queue
         return self.default_queue
 
-    def generate_content(self, prompt: str, *, chat_id=None):
+    def generate_content(self, prompt: str, *, chat_id=None, temperature: float = 0.7, **kwargs):
         """Генерация ответа с помощью GigaChat"""
         queue = self._get_queue(chat_id)
         
@@ -223,8 +223,8 @@ class GigaChatWrapper:
                 with GigaChat(
                     credentials=self.api_key,
                     verify_ssl_certs=False,
-                    temperature=0.7,
-                    max_tokens=500,
+                    temperature=temperature,
+                    max_tokens=kwargs.get("max_tokens", 500),
                     model=model_name
                 ) as giga:
                     response = giga.chat(prompt)
@@ -319,14 +319,15 @@ class GroqWrapper:
             logging.error(f"Groq Vision Error: {e}")
             raise
     
-    def generate_text(self, prompt: str, max_tokens: int = 1024) -> str:
+    def generate_text(self, prompt: str, max_tokens: int = 1024, temperature: float = 0.7, presence_penalty: float = 0.0) -> str:
         """Генерация текста (LLM) через Groq"""
         if not self.client: return "Ключ Groq не настроен"
         try:
             completion = self.client.chat.completions.create(
                 model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
+                temperature=temperature,
+                presence_penalty=presence_penalty,
                 max_tokens=max_tokens
             )
             result = completion.choices[0].message.content
@@ -363,7 +364,7 @@ class OpenAICompatibleWrapper:
         self.base_url = base_url.rstrip('/')
         self.model_name = model_name
 
-    def generate_text(self, prompt: str, max_tokens: int = 1024) -> str:
+    def generate_text(self, prompt: str, max_tokens: int = 1024, temperature: float = 0.7, presence_penalty: float = 0.0) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -374,7 +375,8 @@ class OpenAICompatibleWrapper:
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
+            "temperature": temperature,
+            "presence_penalty": presence_penalty,
             "max_tokens": max_tokens,
         }
         try:
