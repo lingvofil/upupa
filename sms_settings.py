@@ -156,10 +156,13 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
                 if not text:
                     continue
 
-                recent_messages.append(
+                formatted_message = (
                     f"{_format_log_time(parsed['timestamp'])} "
                     f"{_format_log_author(parsed['username'], parsed['full_name'])}: {text}"
                 )
+                if recent_messages and recent_messages[-1] == formatted_message:
+                    continue
+                recent_messages.append(formatted_message)
     except Exception as e:
         logging.error(f"Ошибка при чтении последних сообщений чата {target_chat_id}: {e}")
         await message.reply("Не удалось прочитать сообщения. Возможно, я хуисос")
