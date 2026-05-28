@@ -49,7 +49,7 @@ from lexicon_settings import (
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
 from sms_settings import (
     process_disable_sms, process_enable_sms,
-    process_send_sms, process_send_mms
+    process_send_sms, process_send_mms, process_what_they_say
 )
 
 # ================== БЛОК 3.6: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
@@ -306,6 +306,10 @@ async def handle_send_mms(message: types.Message):
         await message.reply("СМС и ММС отключены в этом чате.")
         return
     await process_send_mms(message, chat_list, bot)
+
+@router.message(lambda message: message.text and message.text.lower().split(maxsplit=1)[0] == "чоговорят")
+async def handle_what_they_say(message: types.Message):
+    await process_what_they_say(message, chat_list)
 
 # ================== БЛОК 5.5: СТАТИСТИКА И ЛЕКСИКОН ==================
 

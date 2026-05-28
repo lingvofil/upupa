@@ -1,9 +1,105 @@
 import os
 import json
 import logging
+import re
+from collections import deque
+from datetime import datetime
 from aiogram import Bot, types
 # ИСПРАВЛЕНИЕ: Добавляем импорт `sms_disabled_chats` из config.py
-from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, sms_disabled_chats
+from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, LOG_FILE, sms_disabled_chats
+
+
+USER_LOG_LINE_RE = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+    r" - Chat (?P<chat_id>-?\d+) \(.*?\)"
+    r" - User \d+ \((?P<username>.*?)\) \[(?P<full_name>.*?)\]: (?P<text>.*)$"
+)
+
+
+def _get_numbered_chats(chat_list: list) -> list:
+    """Возвращает список чатов с той же фильтрацией и сортировкой, что и команда "где сидишь"."""
+    filtered_chats = [chat for chat in chat_list if chat.get("title")]
+    filtered_chats.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
+    return filtered_chats
+
+
+def _parse_user_log_line(line: str):
+    """Парсит строку user_messages.log и возвращает данные сообщения или None."""
+    match = USER_LOG_LINE_RE.match(line.rstrip("\n"))
+    if not match:
+        return None
+
+    return match.groupdict()
+
+
+def _format_log_time(timestamp: str) -> str:
+    try:
+        return datetime.fromisoformat(timestamp).strftime("%H:%M")
+    except ValueError:
+        return timestamp
+
+
+def _format_log_author(username: str, full_name: str) -> str:
+    if username and username != "NoUsername":
+        return f"@{username}"
+    if full_name and full_name != "NoName":
+        return full_name
+    return "Аноним"
+
+
+async def process_what_they_say(message: types.Message, chat_list: list):
+    """Отправляет последние 7 сохранённых сообщений из чата по номеру из команды "чоговорят"."""
+    command_text = message.text or ""
+    parts = command_text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await message.reply("Укажи номер чата: чоговорят <номер чата>")
+        return
+
+    try:
+        chat_index = int(parts[1].strip()) - 1
+    except ValueError:
+        await message.reply("Неверный формат, дурачок. Используй: чоговорят <номер чата>")
+        return
+
+    filtered_chats = _get_numbered_chats(chat_list)
+    if chat_index < 0 or chat_index >= len(filtered_chats):
+        await message.reply("Чат с таким номером не найден, иди нахуй")
+        return
+
+    target_chat = filtered_chats[chat_index]
+    target_chat_id = str(target_chat["id"])
+    recent_messages = deque(maxlen=7)
+
+    if not os.path.exists(LOG_FILE):
+        await message.reply("Пока нечего рассказать: лог сообщений пуст.")
+        return
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as file:
+            for line in file:
+                parsed = _parse_user_log_line(line)
+                if not parsed or parsed["chat_id"] != target_chat_id:
+                    continue
+
+                text = parsed["text"].strip()
+                if not text:
+                    continue
+
+                recent_messages.append(
+                    f"{_format_log_time(parsed['timestamp'])} "
+                    f"{_format_log_author(parsed['username'], parsed['full_name'])}: {text}"
+                )
+    except Exception as e:
+        logging.error(f"Ошибка при чтении последних сообщений чата {target_chat_id}: {e}")
+        await message.reply("Не удалось прочитать сообщения. Возможно, я хуисос")
+        return
+
+    if not recent_messages:
+        await message.reply(f"В чате {target_chat.get('title', target_chat_id)} пока нет сохранённых сообщений.")
+        return
+
+    await message.reply("\n".join(recent_messages))
 
 # ✅ Функция загрузки списка чатов с отключёнными смс
 def load_sms_disabled_chats():
@@ -122,10 +218,7 @@ async def process_send_sms(message: types.Message, chat_list: list, bot: Bot):
             
         chat_index = int(parts[1]) - 1
         
-        # Фильтруем чаты без названия (где title == None)
-        filtered_chats = [chat for chat in chat_list if chat.get("title")]
-        # Сортируем чаты для правильного определения индекса
-        filtered_chats.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
+        filtered_chats = _get_numbered_chats(chat_list)
         
         if chat_index < 0 or chat_index >= len(filtered_chats):
             await message.reply("Чат с таким номером не найден, иди нахуй")
@@ -171,10 +264,7 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
     try:
         chat_index = int(parts[1]) - 1
         
-        # Фильтруем чаты без названия (где title == None)
-        filtered_chats = [chat for chat in chat_list if chat.get("title")]
-        # Сортируем чаты для правильного определения индекса
-        filtered_chats.sort(key=lambda chat: 0 if chat["id"] == SPECIAL_CHAT_ID else 1)
+        filtered_chats = _get_numbered_chats(chat_list)
         
         if chat_index < 0 or chat_index >= len(filtered_chats):
             await message.reply("Чат с таким номером не найден, иди нахуй")
