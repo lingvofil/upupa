@@ -9,10 +9,18 @@ from aiogram import Bot, types
 from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, LOG_FILE, sms_disabled_chats
 
 
+LOG_START_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+TELEGRAM_MESSAGE_LIMIT = 4096
+TELEGRAM_REPLY_SAFE_LIMIT = TELEGRAM_MESSAGE_LIMIT - 96
+
 USER_LOG_LINE_RE = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
-    r" - Chat (?P<chat_id>-?\d+) \(.*?\)"
-    r" - User \d+ \((?P<username>.*?)\) \[(?P<full_name>.*?)\]: (?P<text>.*)$",
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[T ][^\n]*?)"
+    r"\s+-\s+Chat\s+(?P<chat_id>-?\d+)\b"
+    r"(?:\s+\(.*?\))?"
+    r"\s+-\s+User(?:\s+\S+)?"
+    r"(?:\s+\((?P<username>.*?)\))?"
+    r"(?:\s+\[(?P<full_name>.*?)\])?"
+    r":\s*(?P<text>.*)\Z",
     re.DOTALL,
 )
 
@@ -38,7 +46,7 @@ def _iter_user_log_records(file):
     current_record = None
 
     for line in file:
-        if USER_LOG_LINE_RE.match(line):
+        if LOG_START_RE.match(line):
             if current_record is not None:
                 yield current_record
             current_record = line
@@ -47,6 +55,29 @@ def _iter_user_log_records(file):
 
     if current_record is not None:
         yield current_record
+
+
+def _fit_recent_messages_to_telegram_limit(messages, max_length: int = TELEGRAM_REPLY_SAFE_LIMIT) -> list[str]:
+    """Обрезает вывод под лимит Telegram, сохраняя самые последние сообщения."""
+    fitted_messages = deque()
+    current_length = 0
+
+    for message in reversed(messages):
+        separator_length = 1 if fitted_messages else 0
+        available_length = max_length - current_length - separator_length
+        if available_length <= 0:
+            break
+
+        if len(message) <= available_length:
+            fitted_messages.appendleft(message)
+            current_length += len(message) + separator_length
+            continue
+
+        if available_length > 1:
+            fitted_messages.appendleft("…" + message[-(available_length - 1):])
+        break
+
+    return list(fitted_messages)
 
 
 def _format_log_time(timestamp: str) -> str:
@@ -115,7 +146,10 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
         with open(LOG_FILE, "r", encoding="utf-8") as file:
             for record in _iter_user_log_records(file):
                 parsed = _parse_user_log_line(record)
-                if not parsed or parsed["chat_id"] != target_chat_id:
+                if not parsed:
+                    logging.warning(f"Не удалось распарсить запись лога:\n{record}")
+                    continue
+                if parsed["chat_id"] != target_chat_id:
                     continue
 
                 text = parsed["text"].strip().replace("\n", " / ")
@@ -136,7 +170,8 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
         return
 
     await _notify_peeked_chat(message, target_chat_id, message.chat.title or "Неизвестный чат", bot)
-    await message.reply("\n".join(recent_messages))
+    fitted_messages = _fit_recent_messages_to_telegram_limit(recent_messages)
+    await message.reply("\n".join(fitted_messages))
 
 # ✅ Функция загрузки списка чатов с отключёнными смс
 def load_sms_disabled_chats():
