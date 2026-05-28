@@ -119,6 +119,10 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
     command_text = message.text or ""
     parts = command_text.split(maxsplit=1)
 
+    if str(message.chat.id) in sms_disabled_chats:
+        await message.reply("СМС/ММС отключены в этом чате, чоговорят тоже нельзя.")
+        return
+
     if len(parts) < 2:
         await message.reply("Укажи номер чата: чоговорят <номер чата>")
         return
@@ -136,6 +140,11 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
 
     target_chat = filtered_chats[chat_index]
     target_chat_id = str(target_chat["id"])
+
+    if target_chat_id in sms_disabled_chats:
+        await message.reply("В этом чате СМС/ММС отключены, подсматривать туда тоже нельзя.")
+        return
+
     recent_messages = deque(maxlen=10)
 
     if not os.path.exists(LOG_FILE):
