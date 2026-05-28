@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, types
 # ИСПРАВЛЕНИЕ: Добавляем импорт `sms_disabled_chats` из config.py
 from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, LOG_FILE, sms_disabled_chats
@@ -12,7 +12,8 @@ from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, LOG_FILE, sms_disab
 USER_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
     r" - Chat (?P<chat_id>-?\d+) \(.*?\)"
-    r" - User \d+ \((?P<username>.*?)\) \[(?P<full_name>.*?)\]: (?P<text>.*)$"
+    r" - User \d+ \((?P<username>.*?)\) \[(?P<full_name>.*?)\]: (?P<text>.*)$",
+    re.DOTALL,
 )
 
 
@@ -32,23 +33,58 @@ def _parse_user_log_line(line: str):
     return match.groupdict()
 
 
+def _iter_user_log_records(file):
+    """Возвращает логические записи лога, склеивая многострочные сообщения."""
+    current_record = None
+
+    for line in file:
+        if USER_LOG_LINE_RE.match(line):
+            if current_record is not None:
+                yield current_record
+            current_record = line
+        elif current_record is not None:
+            current_record += line
+
+    if current_record is not None:
+        yield current_record
+
+
 def _format_log_time(timestamp: str) -> str:
     try:
-        return datetime.fromisoformat(timestamp).strftime("%H:%M")
+        return (datetime.fromisoformat(timestamp) + timedelta(hours=1)).strftime("%H:%M")
     except ValueError:
         return timestamp
 
 
 def _format_log_author(username: str, full_name: str) -> str:
-    if username and username != "NoUsername":
-        return f"@{username}"
     if full_name and full_name != "NoName":
         return full_name
+    if username and username != "NoUsername":
+        return username
     return "Аноним"
 
 
-async def process_what_they_say(message: types.Message, chat_list: list):
-    """Отправляет последние 7 сохранённых сообщений из чата по номеру из команды "чоговорят"."""
+def _parse_chat_index(raw_index: str) -> int:
+    return int(raw_index.strip().lstrip("#")) - 1
+
+
+async def _notify_peeked_chat(message: types.Message, target_chat_id: str, source_chat_title: str, bot: Bot | None):
+    if bot is None or str(message.chat.id) == target_chat_id:
+        return
+
+    notification = (
+        f"за вами подсматривают крысы из {source_chat_title}, "
+        "вы тоже можете подсмотреть с помощью команды «чоговорят #чата»"
+    )
+
+    try:
+        await bot.send_message(target_chat_id, notification)
+    except Exception as e:
+        logging.error(f"Ошибка при отправке уведомления о подсматривании в чат {target_chat_id}: {e}")
+
+
+async def process_what_they_say(message: types.Message, chat_list: list, bot: Bot | None = None):
+    """Отправляет последние 10 сохранённых сообщений из чата по номеру из команды "чоговорят"."""
     command_text = message.text or ""
     parts = command_text.split(maxsplit=1)
 
@@ -57,7 +93,7 @@ async def process_what_they_say(message: types.Message, chat_list: list):
         return
 
     try:
-        chat_index = int(parts[1].strip()) - 1
+        chat_index = _parse_chat_index(parts[1])
     except ValueError:
         await message.reply("Неверный формат, дурачок. Используй: чоговорят <номер чата>")
         return
@@ -69,7 +105,7 @@ async def process_what_they_say(message: types.Message, chat_list: list):
 
     target_chat = filtered_chats[chat_index]
     target_chat_id = str(target_chat["id"])
-    recent_messages = deque(maxlen=7)
+    recent_messages = deque(maxlen=10)
 
     if not os.path.exists(LOG_FILE):
         await message.reply("Пока нечего рассказать: лог сообщений пуст.")
@@ -77,12 +113,12 @@ async def process_what_they_say(message: types.Message, chat_list: list):
 
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as file:
-            for line in file:
-                parsed = _parse_user_log_line(line)
+            for record in _iter_user_log_records(file):
+                parsed = _parse_user_log_line(record)
                 if not parsed or parsed["chat_id"] != target_chat_id:
                     continue
 
-                text = parsed["text"].strip()
+                text = parsed["text"].strip().replace("\n", " / ")
                 if not text:
                     continue
 
@@ -99,6 +135,7 @@ async def process_what_they_say(message: types.Message, chat_list: list):
         await message.reply(f"В чате {target_chat.get('title', target_chat_id)} пока нет сохранённых сообщений.")
         return
 
+    await _notify_peeked_chat(message, target_chat_id, message.chat.title or "Неизвестный чат", bot)
     await message.reply("\n".join(recent_messages))
 
 # ✅ Функция загрузки списка чатов с отключёнными смс
