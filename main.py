@@ -307,9 +307,9 @@ async def handle_send_mms(message: types.Message):
         return
     await process_send_mms(message, chat_list, bot)
 
-@router.message(lambda message: message.text and message.text.lower().split(maxsplit=1)[0] == "чоговорят")
-async def handle_what_they_say(message: types.Message):
-    await process_what_they_say(message, chat_list, bot)
+#@router.message(lambda message: message.text and message.text.lower().split(maxsplit=1)[0] == "чоговорят")
+#async def handle_what_they_say(message: types.Message):
+    #await process_what_they_say(message, chat_list, bot)
 
 # ================== БЛОК 5.5: СТАТИСТИКА И ЛЕКСИКОН ==================
 
