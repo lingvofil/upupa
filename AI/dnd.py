@@ -65,8 +65,8 @@ class GameSession:
                     {"role": "model", "parts": ["Погнали."]}
                 ]
             )
-            # Инъекция системного промпта для Gemini
-            self.chat_session.history[0].parts[0].text = DND_SYSTEM_PROMPT + "\n\n" + self.chat_session.history[0].parts[0].text
+            old_text = self.chat_session.history[0]['parts'][0]
+            self.chat_session.history[0]['parts'][0] = DND_SYSTEM_PROMPT + "\n\n" + old_text
         elif self.active_model == "gigachat":
             # GigaChat не поддерживает start_chat, используем историю вручную
             self.manual_history = [
