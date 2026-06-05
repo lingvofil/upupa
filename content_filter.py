@@ -19,6 +19,7 @@ STOP_WORDS = [
     "binance",
     "bybit",
     "crypto",
+    "discount",
     "hurry up",
     "hurry up claim free PUMP",
     "mlM",
