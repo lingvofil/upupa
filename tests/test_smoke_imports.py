@@ -51,6 +51,13 @@ SERVICE_MODULES = [
     "services.memegenerator",
 ]
 GAME_MODULES = ["games.crocodile", "games.egra"]
+HANDLER_MODULES = [
+    "handlers", "handlers.basic", "handlers.sms", "handlers.stats_lexicon",
+    "handlers.media_search", "handlers.games", "handlers.media_tools",
+    "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
+    "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
+    "handlers.ai_prompts", "handlers.dialog",
+]
 AI_MODULES = [
     "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
@@ -58,7 +65,7 @@ AI_MODULES = [
     "AI.voice", "AI.whatisthere", "AI.whoparody",
 ]
 
-@pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + AI_MODULES)
+@pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
 def test_module_imports(module_name):
     importlib.import_module(module_name)
 
