@@ -36,13 +36,21 @@ for lib in HEAVY_LIBS:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT_MODULES = [
-    "config", "upupa_utils", "prompts", "broadcast", "channels_settings",
-    "chat_settings", "common_settings", "content_filter", "crocodile",
-    "distortion", "egra", "history_engine", "interactive_settings",
-    "lexicon_settings", "media_change", "memegenerator", "middlewares",
-    "nameinfo", "search", "sherlock", "smart_search", "sms_settings",
-    "stat_rank_settings", "statistics", "weather", "ytp",
+    "config", "prompts",
 ]
+CORE_MODULES = ["core.middlewares", "core.upupa_utils", "core.history_engine"]
+FEATURE_MODULES = [
+    "features.broadcast", "features.channels_settings", "features.chat_settings",
+    "features.common_settings", "features.content_filter", "features.interactive_settings",
+    "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
+    "features.statistics",
+]
+SERVICE_MODULES = [
+    "services.search", "services.smart_search", "services.weather", "services.nameinfo",
+    "services.sherlock", "services.ytp", "services.media_change", "services.distortion",
+    "services.memegenerator",
+]
+GAME_MODULES = ["games.crocodile", "games.egra"]
 AI_MODULES = [
     "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
@@ -50,7 +58,7 @@ AI_MODULES = [
     "AI.voice", "AI.whatisthere", "AI.whoparody",
 ]
 
-@pytest.mark.parametrize("module_name", ROOT_MODULES + AI_MODULES)
+@pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + AI_MODULES)
 def test_module_imports(module_name):
     importlib.import_module(module_name)
 

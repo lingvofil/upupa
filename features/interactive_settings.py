@@ -5,12 +5,12 @@ from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import chat_settings, sms_disabled_chats, bot, ADMIN_ID
-from chat_settings import save_chat_settings
-from sms_settings import save_sms_disabled_chats
+from features.chat_settings import save_chat_settings
+from features.sms_settings import save_sms_disabled_chats
 # Добавляем HELP_DICT в импорт
 from prompts import PROMPTS_DICT, HELP_DICT
-from content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
-from stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
+from features.content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
+from features.stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
 
 # --- КОНСТАНТЫ ДЛЯ МЕНЮ ВЕРОЯТНОСТЕЙ ---
 PROBABILITY_OPTIONS = [0, 0.001, 0.005, 0.008, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]

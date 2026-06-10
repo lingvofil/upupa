@@ -1,0 +1,20 @@
+# Зависимости для прогона тестов в CI (лёгкое подмножество requirements.txt;
+# тяжёлые библиотеки — moviepy, playwright и т.п. — мокаются в тестах)
+aiogram
+aiohttp
+aiofiles
+beautifulsoup4
+gigachat
+google-api-core
+google-generativeai
+groq
+httpx
+numpy
+Pillow
+pydub
+pytz
+requests
+thefuzz
+transliterate
+nltk
+pytest

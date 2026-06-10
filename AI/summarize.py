@@ -12,7 +12,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from config import LOG_FILE, model, gigachat_model, groq_ai, chat_settings
 from prompts import actions
-from chat_settings import save_chat_settings
+from features.chat_settings import save_chat_settings
 
 def _get_chat_messages(log_file_path: str, chat_id: str, start_time: datetime):
     """

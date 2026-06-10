@@ -6,7 +6,7 @@ from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import Message
 
-from statistics import log_message # Импортируем вашу функцию логирования
+from features.statistics import log_message # Импортируем вашу функцию логирования
 
 class StatisticsMiddleware(BaseMiddleware):
     async def __call__(

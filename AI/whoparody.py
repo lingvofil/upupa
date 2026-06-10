@@ -4,7 +4,7 @@ import random
 import logging
 import asyncio
 from aiogram import types
-from lexicon_settings import (
+from features.lexicon_settings import (
     extract_user_messages,
     extract_messages_by_username,
     extract_messages_by_full_name,

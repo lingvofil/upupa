@@ -5,7 +5,7 @@ from typing import Any
 
 from aiogram.types import Message
 
-from upupa_utils import normalize_upupa_command
+from core.upupa_utils import normalize_upupa_command
 
 
 class SherlockSearch:

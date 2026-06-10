@@ -23,7 +23,7 @@ from config import (
 )
 
 # Импорт функции нормализации команд с "упупа"
-from upupa_utils import normalize_upupa_command
+from core.upupa_utils import normalize_upupa_command
 
 # ================== БЛОК 2: СПРАВКА, ПРОМПТЫ, РАНГИ, СТОП-СЛОВА, КАНАЛЫ, ЖИВОТНЫЕ ==================
 from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
@@ -31,81 +31,81 @@ from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
 # ================== БЛОК 3: НАСТРОЙКИ БЕЗ AI ==================
 
 # ================== БЛОК 3.1: ОБЩИЕ НАСТРОЙКИ ==================
-from common_settings import process_leave_chat, process_leave_empty_chats
+from features.common_settings import process_leave_chat, process_leave_empty_chats
         
 # ================== БЛОК 3.2: НАСТРОЙКА ЧАТОВ ==================
-from chat_settings import (
+from features.chat_settings import (
     process_update_all_chats, get_chats_list, add_chat, save_chat_settings, remove_chat
 )
 
 # ================== БЛОК 3.3: НАСТРОЙКА СТАТИСТИКИ, РАНГОВ ==================
-from stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
+from features.stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
 
 # ================== БЛОК 3.4: НАСТРОЙКА ЛЕКСИКОНА ==================
-from lexicon_settings import (
+from features.lexicon_settings import (
     process_my_lexicon, process_chat_lexicon, process_user_lexicon, save_user_message
 )
 
 # ================== БЛОК 3.5: НАСТРОЙКА СМС, ММС ==================
-from sms_settings import (
+from features.sms_settings import (
     process_disable_sms, process_enable_sms,
     process_send_sms, process_send_mms, process_what_they_say
 )
 
 # ================== БЛОК 3.6: НАСТРОЙКА ПЕРЕСЫЛКИ МЕДИА ==================
-from channels_settings import process_channel_command
+from features.channels_settings import process_channel_command
 
 # ================== БЛОК 3.7: НАСТРОЙКА ПОИСКА ==================
-from search import (
+from services.search import (
     handle_message,
     process_image_search,
     save_and_send_searched_image,
     process_gif_search,
     save_and_send_gif   
 )
-from sherlock import is_sherlock_command, process_sherlock_command
+from services.sherlock import is_sherlock_command, process_sherlock_command
 
 # ================== БЛОК 3.8: НАСТРОЙКА ПОГОДЫ ==================
-from weather import (
+from services.weather import (
     handle_current_weather_command, 
     handle_weekly_forecast_command
 )
 
 # ================== БЛОК 3.9: НАСТРОЙКА ИМЕНИ ==================
-from nameinfo import process_name_info
+from services.nameinfo import process_name_info
 
 # ================== БЛОК 3.10 ПРЕКОЛЬНАЯ ЕГРА ==================
-from egra import start_egra, handle_egra_answer, handle_final_button_press
+from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 
 # ================== БЛОК 3.11: НАСТРОЙКА РАСЧЕТА НАГРУЗКИ БОТА ==================
-import statistics as bot_statistics
-from statistics import PrivateRateLimitMiddleware
-from middlewares import IncomingMessageLogMiddleware
+import features.statistics as bot_statistics
+from features.statistics import PrivateRateLimitMiddleware
+from core.middlewares import IncomingMessageLogMiddleware
 
 # ================== БЛОК 3.12: НАСТРОЙКИ ДИСТОРШН ==================
-from distortion import is_distortion_command, handle_distortion_request
+from services.distortion import is_distortion_command, handle_distortion_request
 
 # ================== БЛОК 3.13 РАССЫЛКИ ==================
-from broadcast import handle_broadcast_command, is_broadcast_command
+from features.broadcast import handle_broadcast_command, is_broadcast_command
 
 # ================== БЛОК 3.14: ИНТЕРАКТИВНЫЕ НАСТРОЙКИ ==================
-from interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
+from features.interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
 
 # ================== БЛОК 3.15 КОНТЕНТ-ФИЛЬТРА ==================
-from content_filter import ContentFilterMiddleware
+from features.content_filter import ContentFilterMiddleware
 
 # ================== БЛОК 3.16 МЕМЫ ==================
-import memegenerator
+from services import memegenerator
 
 # ================== БЛОК 3.17 КРОКОДИЛ ==================
-import crocodile
+from games import crocodile
 
 # ================== БЛОК 3.18 СЛУЧАЙНЫЕ РЕАКЦИИ ==================
 from AI.random_reactions import process_random_reactions
 
 # ================== БЛОК 3.19: ПУП (YTP) ==================
-from ytp import handle_ytp_command
-from media_change import handle_fast_command, handle_slow_command
+from services.ytp import handle_ytp_command
+from services.media_change import handle_fast_command, handle_slow_command
 
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
@@ -998,7 +998,7 @@ async def process_message(message: types.Message):
 # ================== БЛОК 7: ЗАПУСК БОТА ==================
 async def main():
     # --- антиспам ---
-    from content_filter import load_antispam_settings
+    from features.content_filter import load_antispam_settings
     load_antispam_settings()
 
     # --- статистика ---
