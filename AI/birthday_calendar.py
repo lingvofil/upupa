@@ -11,7 +11,7 @@ from aiogram.types import Message
 import logging
 import traceback
 from config import model, LOG_FILE, ADMIN_ID, gigachat_model, groq_ai, chat_settings
-from chat_settings import save_chat_settings
+from features.chat_settings import save_chat_settings
 
 # Файл для хранения дней рождения
 BIRTHDAY_FILE = "birthdays.json"

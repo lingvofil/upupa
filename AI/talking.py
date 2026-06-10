@@ -7,7 +7,7 @@ import json
 from aiogram import types
 
 # Импорт функции нормализации команд с "упупа"
-from upupa_utils import normalize_upupa_command
+from core.upupa_utils import normalize_upupa_command
 
 # Обновленные импорты
 from config import (
@@ -17,7 +17,7 @@ from config import (
     openrouter_ai, siliconflow_ai
 )
 # Функции для работы с файлами и промптами
-from chat_settings import save_chat_settings, add_chat
+from features.chat_settings import save_chat_settings, add_chat
 from prompts import (
     PROMPTS_TEXT, PROMPTS_DICT, get_available_prompts,
     get_prompts_list_text, actions, get_prompt_by_name,
@@ -26,7 +26,7 @@ from prompts import (
     DIALOG_TRIGGER_KEYWORDS
 )
 # Функции для извлечения сообщений
-from lexicon_settings import (
+from features.lexicon_settings import (
     save_user_message,
     extract_messages_by_username,
     extract_messages_by_full_name,
@@ -37,11 +37,11 @@ from lexicon_settings import (
 )
 # Импорт для реакций и статистики
 from AI.random_reactions import process_random_reactions
-from stat_rank_settings import track_message_statistics
+from features.stat_rank_settings import track_message_statistics
 
 # === ИМПОРТ SMART SEARCH И НОВОГО ENGINE ===
-from smart_search import find_relevant_context
-from history_engine import load_and_find_answer
+from services.smart_search import find_relevant_context
+from core.history_engine import load_and_find_answer
 
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ (ГЛОБАЛЬНО ДЛЯ ВСЕХ ЧАТОВ)
