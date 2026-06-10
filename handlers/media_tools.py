@@ -5,6 +5,8 @@
 """
 from aiogram import Router
 
+import os
+
 from aiogram import Bot, Dispatcher, F, types
 from config import (
     bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
@@ -12,6 +14,30 @@ from config import (
 )
 from services.ytp import handle_ytp_command
 from services.media_change import handle_fast_command, handle_slow_command
+
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
+
+
+def is_video_document(msg: types.Message) -> bool:
+    if not msg or not msg.document:
+        return False
+    if msg.document.mime_type and msg.document.mime_type.startswith("video/"):
+        return True
+    if msg.document.file_name:
+        ext = os.path.splitext(msg.document.file_name)[1].lower()
+        return ext in SUPPORTED_EXTENSIONS
+    return False
+
+
+def is_ogg_document(msg: types.Message) -> bool:
+    if not msg or not msg.document:
+        return False
+    if msg.document.mime_type == "audio/ogg":
+        return True
+    if msg.document.file_name:
+        ext = os.path.splitext(msg.document.file_name)[1].lower()
+        return ext == ".ogg"
+    return False
 
 router = Router(name="media_tools")
 

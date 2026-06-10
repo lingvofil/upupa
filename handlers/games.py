@@ -17,7 +17,6 @@ from services import memegenerator
 from games import crocodile
 from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
 
-SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
 router = Router(name="games")
 
@@ -62,25 +61,3 @@ async def croc_callback(callback: types.CallbackQuery):
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
     await crocodile.handle_text_stop(message)
-
-
-def is_video_document(msg: types.Message) -> bool:
-    if not msg or not msg.document:
-        return False
-    if msg.document.mime_type and msg.document.mime_type.startswith("video/"):
-        return True
-    if msg.document.file_name:
-        ext = os.path.splitext(msg.document.file_name)[1].lower()
-        return ext in SUPPORTED_EXTENSIONS
-    return False
-
-
-def is_ogg_document(msg: types.Message) -> bool:
-    if not msg or not msg.document:
-        return False
-    if msg.document.mime_type == "audio/ogg":
-        return True
-    if msg.document.file_name:
-        ext = os.path.splitext(msg.document.file_name)[1].lower()
-        return ext == ".ogg"
-    return False
