@@ -97,7 +97,7 @@ class ModelFallbackWrapper:
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
-        from config import SPECIAL_CHAT_ID
+        from core.settings import SPECIAL_CHAT_ID
         if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
@@ -209,7 +209,7 @@ class GigaChatWrapper:
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
-        from config import SPECIAL_CHAT_ID
+        from core.settings import SPECIAL_CHAT_ID
         if chat_id and str(chat_id) == str(SPECIAL_CHAT_ID):
             return self.special_queue
         return self.default_queue
