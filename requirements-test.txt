@@ -18,3 +18,4 @@ thefuzz
 transliterate
 nltk
 pytest
+pyflakes
