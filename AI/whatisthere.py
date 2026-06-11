@@ -10,7 +10,8 @@ from aiogram import types
 from config import bot, API_TOKEN, model, ROBOTICS_MODEL, groq_ai, gigachat_model, chat_settings
 from prompts import PROMPTS_MEDIA
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from AI.wrapper import GeminiModel
+from core.ai_clients import gemini_client
 
 def get_active_model(chat_id: str) -> str:
     """Возвращает активную модель для чата"""
@@ -421,7 +422,7 @@ async def process_robotics_description(message: types.Message) -> tuple[bool, st
             return False, "Не удалось скачать файл."
         file_path = file_name
         
-        robotics_model = genai.GenerativeModel(ROBOTICS_MODEL)
+        robotics_model = GeminiModel(gemini_client, ROBOTICS_MODEL)
         with open(file_name, "rb") as f:
             media_data = f.read()
 

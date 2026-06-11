@@ -6,7 +6,8 @@ aiofiles==25.1.0
 beautifulsoup4==4.14.3
 gigachat==0.2.0
 google-api-core==2.29.0
-google-generativeai==0.8.6
+google-genai==2.8.0
+google-api-python-client==2.188.0
 groq==1.0.0
 httpx==0.28.1
 nltk==3.9.2

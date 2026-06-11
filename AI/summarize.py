@@ -7,8 +7,6 @@ import time
 from datetime import datetime, timedelta
 from aiogram import types
 import random
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from config import LOG_FILE, model, gigachat_model, groq_ai, chat_settings
 from prompts import actions
@@ -290,10 +288,10 @@ async def _generate_and_send_summary(message: types.Message, chat_id: str, promp
 
         # Отключение фильтров безопасности (только для Gemini)
         safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
         }
 
         summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings, is_summarization=True)
