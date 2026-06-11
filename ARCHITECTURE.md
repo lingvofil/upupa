@@ -4,7 +4,11 @@
 upupa/
 ├── main.py            # точка входа: регистрация хэндлеров, запуск polling
 ├── config.py          # конфигурация: ключи, bot/dp/router, AI-клиенты (распил — этап 2)
-├── prompts.py         # промпты и текстовые данные
+├── prompts/           # промпты и текстовые данные (пакет, __init__ — фасад)
+│   ├── help_texts.py  #   справка
+│   ├── ai_prompts.py  #   AI-промпты
+│   ├── personas.py    #   персоны бота
+│   └── chat_data.py   #   ранги, стоп-слова, каналы
 ├── core/              # инфраструктура
 │   ├── middlewares.py
 │   ├── upupa_utils.py

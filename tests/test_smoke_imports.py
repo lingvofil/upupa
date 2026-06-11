@@ -36,7 +36,7 @@ for lib in HEAVY_LIBS:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT_MODULES = [
-    "config", "prompts",
+    "config", "prompts", "prompts.help_texts", "prompts.ai_prompts", "prompts.personas", "prompts.chat_data",
 ]
 CORE_MODULES = ["core.middlewares", "core.upupa_utils", "core.history_engine"]
 FEATURE_MODULES = [
