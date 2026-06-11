@@ -7,17 +7,16 @@ from aiogram import Router
 
 import random
 import logging
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
+from aiogram import F, types
+from aiogram.types import Message
 from typing import Dict
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    ADMIN_ID
 )
-from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
-from features.stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
+from prompts import actions
+from features.stat_rank_settings import get_user_statistics, generate_chat_stats_report
 from features.lexicon_settings import (
-    process_my_lexicon, process_chat_lexicon, process_user_lexicon, save_user_message
+    process_my_lexicon, process_chat_lexicon, process_user_lexicon
 )
 import features.statistics as bot_statistics
 

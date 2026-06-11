@@ -5,18 +5,16 @@
 """
 from aiogram import Router
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    BLOCKED_USERS
 )
 from core.upupa_utils import normalize_upupa_command
 from AI.birthday_calendar import (
     handle_birthday_command,
     handle_birthday_list_command,
     handle_test_greeting_command,
-    handle_admin_birthday_list_command,
-    birthday_scheduler
+    handle_admin_birthday_list_command
 )
 
 router = Router(name="birthdays")

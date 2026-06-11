@@ -7,10 +7,9 @@ from aiogram import Router
 
 import os
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    bot, BLOCKED_USERS
 )
 from services.ytp import handle_ytp_command
 from services.media_change import handle_fast_command, handle_slow_command

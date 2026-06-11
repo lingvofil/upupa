@@ -5,14 +5,13 @@
 """
 from aiogram import Router
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import F, types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    chat_settings
 )
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import (
-    process_update_all_chats, get_chats_list, add_chat, save_chat_settings, remove_chat
+    save_chat_settings
 )
 from AI.talking import (
     handle_list_prompts_command,
@@ -21,16 +20,7 @@ from AI.talking import (
     handle_set_participant_prompt_command,
     handle_change_prompt_randomly_command,
     handle_poem_command,
-    process_general_message,
-    handle_switch_to_gigachat,
-    handle_switch_to_gemini,
-    handle_switch_to_groq,
-    handle_which_model,
-    handle_switch_to_history,
-    handle_serious_mode_command,
-    handle_serious_mode_reply,
-    handle_switch_to_openrouter,
-    handle_switch_to_siliconflow
+    handle_serious_mode_command
 )
 
 router = Router(name="ai_prompts")

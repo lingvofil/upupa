@@ -6,16 +6,15 @@
 from aiogram import Router
 
 import logging
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, Filter
+from aiogram import F, types
+from aiogram.filters import CommandStart
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    bot, ADMIN_ID, BLOCKED_USERS, conversation_history
 )
 from core.upupa_utils import normalize_upupa_command
 from features.common_settings import process_leave_chat, process_leave_empty_chats
 from features.chat_settings import (
-    process_update_all_chats, get_chats_list, add_chat, save_chat_settings, remove_chat
+    process_update_all_chats, get_chats_list, add_chat, remove_chat
 )
 from features.interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
 
