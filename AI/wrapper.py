@@ -9,7 +9,8 @@ from groq import Groq
 from PIL import Image
 import base64
 import io
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from gigachat import GigaChat
 import requests
 
@@ -46,6 +47,113 @@ def _is_retryable(error: Exception) -> bool:
     if error_type in ("ResourceExhausted", "QuotaExceeded"):
         return True
     return any(marker in text for marker in ("429", "503", "resourceexhausted", "quotaexceeded"))
+
+
+# =========================
+# === GOOGLE-GENAI ADAPTERS ===
+# Новый SDK (google-genai) клиентный, старый (google.generativeai) — глобальный.
+# Эти адаптеры дают СТАРЫЙ интерфейс (.generate_content / .start_chat / .history),
+# чтобы не менять модули-потребители. Поддерживают легаси-формат контента
+# {"mime_type": ..., "data": ...} и kwargs generation_config / safety_settings.
+# =========================
+_client_cache: dict = {}
+
+
+def _get_client(api_key: str) -> "genai.Client":
+    with _genai_lock:
+        client = _client_cache.get(api_key)
+        if client is None:
+            client = genai.Client(api_key=api_key)
+            _client_cache[api_key] = client
+        return client
+
+
+def _normalize_part(item):
+    """Старый блоб {"mime_type","data"} -> types.Part; остальное как есть."""
+    if isinstance(item, dict) and set(item) == {"mime_type", "data"}:
+        return genai_types.Part.from_bytes(data=item["data"], mime_type=item["mime_type"])
+    return item
+
+
+def _normalize_contents(contents):
+    if isinstance(contents, (list, tuple)):
+        return [_normalize_part(i) for i in contents]
+    return contents
+
+
+def _normalize_history(history):
+    """Старая история [{'role','parts':[str,...]}] -> формат нового SDK."""
+    if not history:
+        return None
+    out = []
+    for item in history:
+        if isinstance(item, dict):
+            parts = [
+                {"text": p} if isinstance(p, str) else p
+                for p in item.get("parts", [])
+            ]
+            out.append({"role": item.get("role", "user"), "parts": parts})
+        else:
+            out.append(item)  # уже types.Content (например, из get_history)
+    return out
+
+
+def _build_config(kwargs: dict):
+    """Собирает GenerateContentConfig из легаси-kwargs старого SDK.
+
+    Поддерживает: generation_config (dict), safety_settings (dict или list),
+    остальные ключи уходят в конфиг как есть (temperature и т.п.).
+    """
+    cfg = {}
+    gen_cfg = kwargs.pop("generation_config", None)
+    if gen_cfg:
+        cfg.update(dict(gen_cfg))
+    safety = kwargs.pop("safety_settings", None)
+    if safety:
+        if isinstance(safety, dict):  # старый формат {категория: порог}
+            safety = [{"category": k, "threshold": v} for k, v in safety.items()]
+        cfg["safety_settings"] = safety
+    cfg.update(kwargs)
+    return genai_types.GenerateContentConfig(**cfg) if cfg else None
+
+
+class _ChatAdapter:
+    def __init__(self, chat):
+        self._chat = chat
+
+    def send_message(self, content, **kwargs):
+        config = _build_config(kwargs)
+        content = _normalize_contents(content)
+        if config is not None:
+            return self._chat.send_message(content, config=config)
+        return self._chat.send_message(content)
+
+    @property
+    def history(self):
+        return self._chat.get_history()
+
+
+class GeminiModel:
+    """Старый интерфейс GenerativeModel поверх клиента google-genai."""
+
+    def __init__(self, client: "genai.Client", model_name: str):
+        self._client = client
+        self.model_name = model_name
+
+    def generate_content(self, contents, **kwargs):
+        return self._client.models.generate_content(
+            model=self.model_name,
+            contents=_normalize_contents(contents),
+            config=_build_config(kwargs),
+        )
+
+    def start_chat(self, history=None):
+        return _ChatAdapter(
+            self._client.chats.create(
+                model=self.model_name,
+                history=_normalize_history(history),
+            )
+        )
 
 
 # =========================
@@ -133,9 +241,8 @@ class ModelFallbackWrapper:
         return self.default_queue
 
     def _normalize_model_name(self, model_name: str) -> str:
-        if not model_name.startswith("models/"):
-            return f"models/{model_name}"
-        return model_name
+        # google-genai принимает имя и с префиксом models/, и без; храним без
+        return model_name.removeprefix("models/")
 
     def _iter_key_indices(self):
         if not self.keys_pool:
@@ -147,9 +254,7 @@ class ModelFallbackWrapper:
         return order
 
     def _build_model(self, api_key: str, model_name: str):
-        with _genai_lock:
-            genai.configure(api_key=api_key)
-            return genai.GenerativeModel(model_name)
+        return GeminiModel(_get_client(api_key), model_name)
 
     def _run_with_fallback(self, action_name: str, chat_id: Optional[int], request_fn: Callable):
         model_queue = [self._normalize_model_name(name) for name in self._get_queue(chat_id)]

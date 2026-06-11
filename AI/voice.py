@@ -13,8 +13,8 @@ from config import (
 )
 from AI.talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
 from services.distortion import apply_ffmpeg_audio_distortion
-import google.generativeai as genai
-from google.api_core import exceptions
+from AI.wrapper import GeminiModel
+from core.ai_clients import gemini_client
 import io
 from pydub import AudioSegment
 
@@ -77,7 +77,7 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
             elif active_model == "groq":
                 return groq_ai.generate_text(full_prompt, max_tokens=500)
             else:  # gemini
-                light_model = genai.GenerativeModel(TEXT_GENERATION_MODEL_LIGHT)
+                light_model = GeminiModel(gemini_client, TEXT_GENERATION_MODEL_LIGHT)
                 response = light_model.generate_content(full_prompt)
                 return response.text
             
@@ -177,7 +177,7 @@ async def generate_audio_from_text_gemini(text: str, output_path: str) -> bool:
             base_delay = 15 
             
             for model_name in TTS_MODELS_QUEUE:
-                tts_model = genai.GenerativeModel(model_name)
+                tts_model = GeminiModel(gemini_client, model_name)
                 
                 for attempt in range(max_retries):
                     try:
@@ -188,24 +188,27 @@ async def generate_audio_from_text_gemini(text: str, output_path: str) -> bool:
                         )
                         return response
                         
-                    except exceptions.ResourceExhausted as e:
-                        if attempt < max_retries - 1:
-                            delay = base_delay * (attempt + 1) + random.uniform(1, 5)
-                            logging.warning(f"⚠️ Quota exceeded for {model_name}. Sleeping for {delay:.1f}s...")
-                            time.sleep(delay)
-                        else:
-                            logging.error(f"❌ Max retries reached for {model_name}.")
-                            break 
-                            
                     except Exception as e:
-                        if "404" in str(e):
+                        err_text = str(e)
+                        code = getattr(e, "code", None)
+                        # квота: google-genai кидает APIError(code=429) / RESOURCE_EXHAUSTED
+                        if code == 429 or "429" in err_text or "RESOURCE_EXHAUSTED" in err_text.upper():
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (attempt + 1) + random.uniform(1, 5)
+                                logging.warning(f"⚠️ Quota exceeded for {model_name}. Sleeping for {delay:.1f}s...")
+                                time.sleep(delay)
+                            else:
+                                logging.error(f"❌ Max retries reached for {model_name}.")
+                                break
+                        elif code == 404 or "404" in err_text:
                             logging.error(f"❌ Model {model_name} not found (404). Skipping.")
                             break
-                        logging.error(f"Error with model {model_name}: {e}")
-                        if attempt < max_retries - 1:
-                            time.sleep(5)
                         else:
-                            break
+                            logging.error(f"Error with model {model_name}: {e}")
+                            if attempt < max_retries - 1:
+                                time.sleep(5)
+                            else:
+                                break
             return None
 
         response = await asyncio.to_thread(sync_tts_call_with_retry)

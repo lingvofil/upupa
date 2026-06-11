@@ -9,8 +9,6 @@ from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from aiogram import types
 from aiogram.types import FSInputFile, Message
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-from google.generativeai import protos
 from collections import deque
 import hashlib
 
@@ -19,7 +17,6 @@ from config import (
     API_TOKEN, 
     model, 
     bot, 
-    search_model, 
     GOOGLE_API_KEY, 
     SEARCH_ENGINE_ID, 
     giphy_api_key

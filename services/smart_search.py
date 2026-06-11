@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-import google.generativeai as genai
+from core.ai_clients import gemini_client
 from config import model  # Используем настройку из конфига
 
 # Если в config.py нет переменной EMBEDDING_MODEL, используем дефолтную
@@ -12,13 +12,12 @@ def get_embedding(text: str):
     """
     try:
         # Используем genai напрямую, так как обертка model может не поддерживать embed_content
-        result = genai.embed_content(
+        result = gemini_client.models.embed_content(
             model=EMBEDDING_MODEL_NAME,
-            content=text,
-            task_type="retrieval_document",
-            title="User Message"
+            contents=text,
+            config={"task_type": "RETRIEVAL_DOCUMENT", "title": "User Message"},
         )
-        return result['embedding']
+        return result.embeddings[0].values
     except Exception as e:
         logging.error(f"Ошибка получения эмбеддинга: {e}")
         return None
@@ -54,11 +53,11 @@ async def find_relevant_context(query_text: str, candidate_messages: list, top_k
 
     # 1. Получаем вектор запроса
     try:
-        query_embedding = genai.embed_content(
+        query_embedding = gemini_client.models.embed_content(
             model=EMBEDDING_MODEL_NAME,
-            content=query_text,
-            task_type="retrieval_query"
-        )['embedding']
+            contents=query_text,
+            config={"task_type": "RETRIEVAL_QUERY"},
+        ).embeddings[0].values
     except Exception as e:
         logging.error(f"Не удалось получить вектор запроса: {e}")
         return []
@@ -83,11 +82,14 @@ async def find_relevant_context(query_text: str, candidate_messages: list, top_k
     
     try:
         # Получаем эмбеддинги пачкой (поддерживается в новых версиях SDK)
-        batch_embeddings = genai.embed_content(
-            model=EMBEDDING_MODEL_NAME,
-            content=search_pool,
-            task_type="retrieval_document"
-        )['embedding']
+        batch_embeddings = [
+            e.values
+            for e in gemini_client.models.embed_content(
+                model=EMBEDDING_MODEL_NAME,
+                contents=search_pool,
+                config={"task_type": "RETRIEVAL_DOCUMENT"},
+            ).embeddings
+        ]
         
         for i, msg in enumerate(search_pool):
             score = cosine_similarity(query_embedding, batch_embeddings[i])

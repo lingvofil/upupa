@@ -1,5 +1,5 @@
 """Инициализация AI-клиентов: Gemini, Groq, GigaChat, OpenAI-совместимые."""
-import google.generativeai as genai
+from google import genai
 from gigachat import GigaChat
 
 from AI.wrapper import (
@@ -19,7 +19,8 @@ from core.settings import (
     GROQ_TTS_MODEL, GROQ_SUMMARIZATION_MODEL,
 )
 
-genai.configure(api_key=PRIMARY_GEMINI_KEY)
+# Общий клиент Gemini на основном ключе (для одиночных вызовов вне фоллбэка)
+gemini_client = genai.Client(api_key=PRIMARY_GEMINI_KEY)
 
 # =========================
 # === ИНИЦИАЛИЗАЦИЯ GROQ (ПОСЛЕ ОБЪЯВЛЕНИЯ КОНСТАНТ) ===
@@ -33,14 +34,6 @@ groq_ai = GroqWrapper(
     summarization_model=GROQ_SUMMARIZATION_MODEL
 )
 
-# =========================
-# === STATIC MODELS ===
-# =========================
-search_model = genai.GenerativeModel("gemini-2.5-flash")
-image_model = genai.GenerativeModel("imagen-3.0-generate-001")
-edit_model = genai.GenerativeModel(
-    "models/gemini-2.0-flash-preview-image-generation"
-)
 
 # =========================
 # === PUBLIC CONTRACT ===
