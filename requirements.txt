@@ -1,34 +1,33 @@
-# requirements for lingvofil/upupa
-# Проверьте и при необходимости зафиксируйте версии (например package==1.2.3)
+# Зависимости проекта — версии зафиксированы по рабочему окружению VPS
+# (snapshot: /root/upupa/venv, июнь 2026).
+#
 # Системные зависимости:
-# - ffmpeg (для pydub) — устанавливается через пакетный менеджер ОС
-# - Playwright: после установки пакета выполните `playwright install` для загрузки браузеров
+# - ffmpeg (для pydub/moviepy) — через пакетный менеджер ОС
+# - Playwright: после установки выполнить `playwright install`
+#
+# При обновлении версии: меняем здесь, проверяем в CI и на проде,
+# коммитим только после успешной проверки.
 
-aiogram
-aiohttp
-aiofiles
-beautifulsoup4
-gigachat
-# альтернатива/вариант: gigachat-sdk
-google-api-core
-google-api-python-client
-google-generativeai
-groq
-httpx
-nltk
-numpy
-moviepy
-Pillow
-playwright
-pydub
-python-socketio
-pytz
-requests
-seam-carving
-thefuzz
-transliterate
-
-# Необязательные / возможно полезные (проверьте, нужны ли в проекте):
-# python-dotenv
-# python-multipart
-gradio_client
+aiogram==3.24.0
+aiohttp==3.13.3
+aiofiles==25.1.0
+beautifulsoup4==4.14.3
+gigachat==0.2.0
+google-api-core==2.29.0
+google-api-python-client==2.188.0
+google-generativeai==0.8.6  # SDK мёртв, в бэклоге миграция на google-genai
+gradio_client==2.3.0
+groq==1.0.0
+httpx==0.28.1
+moviepy==1.0.3
+nltk==3.9.2
+numpy==2.3.5
+Pillow==11.3.0
+playwright==1.57.0
+pydub==0.25.1
+python-socketio==5.16.0
+pytz==2025.2
+requests==2.32.5
+seam-carving==1.1.0
+thefuzz==0.22.1
+transliterate==1.10.2
