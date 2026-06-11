@@ -5,13 +5,11 @@
 """
 from aiogram import Router
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    BLOCKED_USERS
 )
 from AI.adddescribe import (
-    process_image_description,
     handle_add_text_command
 )
 from AI.picgeneration import (

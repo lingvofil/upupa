@@ -6,14 +6,13 @@
 from aiogram import Router
 
 import random
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
+from aiogram import types
+from aiogram.types import Message
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    BLOCKED_USERS
 )
 from core.upupa_utils import normalize_upupa_command
-from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
+from prompts import actions, CHANNEL_SETTINGS, queries
 from features.channels_settings import process_channel_command
 from services.search import (
     handle_message,

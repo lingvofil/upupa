@@ -5,14 +5,13 @@
 """
 from aiogram import Router
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    bot, chat_list, sms_disabled_chats
 )
 from features.sms_settings import (
     process_disable_sms, process_enable_sms,
-    process_send_sms, process_send_mms, process_what_they_say
+    process_send_sms, process_send_mms
 )
 
 router = Router(name="sms")

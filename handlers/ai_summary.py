@@ -6,12 +6,11 @@
 from aiogram import Router
 
 import random
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import F, types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    ADMIN_ID, BLOCKED_USERS, model, LOG_FILE
 )
-from prompts import HELP_TEXT, actions, CHANNEL_SETTINGS, queries
+from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
 from AI.tutu import process_tickets_command

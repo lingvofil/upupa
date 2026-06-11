@@ -5,17 +5,15 @@
 """
 from aiogram import Router
 
-import os
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import FSInputFile, Message, PollAnswer, BufferedInputFile
+from aiogram import Bot, F, types
+from aiogram.types import Message, PollAnswer
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    bot
 )
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
 from games import crocodile
-from AI.quiz import process_quiz_start, process_poll_answer, schedule_daily_quiz, process_participant_quiz_start
+from AI.quiz import process_poll_answer
 
 
 router = Router(name="games")

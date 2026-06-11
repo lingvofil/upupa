@@ -6,39 +6,23 @@
 from aiogram import Router
 
 import logging
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import types
 from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history, model,
-    chat_settings, chat_list, sms_disabled_chats, LOG_FILE
+    model, chat_settings
 )
 from features.chat_settings import (
-    process_update_all_chats, get_chats_list, add_chat, save_chat_settings, remove_chat
+    add_chat, save_chat_settings
 )
-from features.stat_rank_settings import get_user_statistics, generate_chat_stats_report, track_message_statistics
+from features.stat_rank_settings import track_message_statistics
 from features.lexicon_settings import (
-    process_my_lexicon, process_chat_lexicon, process_user_lexicon, save_user_message
+    save_user_message
 )
 import features.statistics as bot_statistics
 from services import memegenerator
 from games import crocodile
 from AI.random_reactions import process_random_reactions
 from AI.talking import (
-    handle_list_prompts_command,
-    handle_current_prompt_command,
-    handle_set_prompt_command,
-    handle_set_participant_prompt_command,
-    handle_change_prompt_randomly_command,
-    handle_poem_command,
-    process_general_message,
-    handle_switch_to_gigachat,
-    handle_switch_to_gemini,
-    handle_switch_to_groq,
-    handle_which_model,
-    handle_switch_to_history,
-    handle_serious_mode_command,
-    handle_serious_mode_reply,
-    handle_switch_to_openrouter,
-    handle_switch_to_siliconflow
+    process_general_message
 )
 
 router = Router(name="dialog")
