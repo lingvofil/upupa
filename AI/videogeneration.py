@@ -30,34 +30,44 @@ BASE_URL = "https://gen.pollinations.ai"
 # Предпочтительный порядок моделей (дешёвые/бесплатные сначала).
 # Реальный список берём из живого каталога /image/models — он у Pollinations
 # динамический, имена моделей появляются и исчезают без предупреждения.
+# Порядок — по фактической цене в поллене (из ответов API, июнь 2026):
+# ltx-2 ~0.025 | wan-fast 0.063 | p-video-720p 0.10 | seedance-pro 0.16
+# p-video-1080p 0.20 | wan 0.61 | veo 0.97 | seedance-2.0 0.99
 VIDEO_MODEL_PREFERENCE = [
-    "p-video-720p", "p-video-1080p",
-    "seedance", "seedance-2.0", "seedance-pro",
-    "wan-fast", "wan", "ltx-2",
+    "ltx-2",
+    "wan-fast",
+    "p-video-720p",
+    "seedance-pro",
+    "p-video-1080p",
+    "wan",
+    "seedance", "seedance-2.0",
     "veo",
 ]
-_FALLBACK_QUEUE = ["p-video-720p", "seedance-2.0", "wan-fast", "veo"]
+_FALLBACK_QUEUE = ["ltx-2", "wan-fast", "p-video-720p"]
 
 _models_cache: dict = {"ts": 0.0, "queue": None}
 _MODELS_CACHE_TTL = 3600
 
 VIDEO_DURATION_SECONDS = 5
 VIDEO_TIMEOUT_SECONDS = 420       # генерация видео идёт десятки секунд — минуты
-DAILY_LIMIT_PER_CHAT = 5          # бережём бесплатные гранты Pollen
+DAILY_LIMIT_PER_CHAT = 3          # бережём бесплатные гранты Pollen
+DAILY_LIMIT_GLOBAL = 10           # суммарно по всем чатам в день
 
 # {(isodate, chat_id): count} — сбрасывается сменой даты, потеря при рестарте ок
 _usage: dict = {}
 
 
 def _check_and_count_limit(chat_id: int) -> bool:
-    key = (date.today().isoformat(), chat_id)
+    today = date.today().isoformat()
+    # подчистка старых дат
+    for k in [k for k in _usage if k[0] != today]:
+        del _usage[k]
+    if sum(_usage.values()) >= DAILY_LIMIT_GLOBAL:
+        return False
+    key = (today, chat_id)
     if _usage.get(key, 0) >= DAILY_LIMIT_PER_CHAT:
         return False
     _usage[key] = _usage.get(key, 0) + 1
-    # подчистка старых дат
-    today = date.today().isoformat()
-    for k in [k for k in _usage if k[0] != today]:
-        del _usage[k]
     return True
 
 
