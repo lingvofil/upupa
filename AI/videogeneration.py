@@ -15,6 +15,7 @@
 
 import asyncio
 import logging
+import time
 import urllib.parse
 from datetime import date
 
@@ -26,8 +27,19 @@ from AI.adddescribe import download_telegram_image
 
 BASE_URL = "https://gen.pollinations.ai"
 
-# Очередь моделей: первая успешная побеждает
-VIDEO_MODEL_QUEUE = ["seedance", "wan-fast", "veo"]
+# Предпочтительный порядок моделей (дешёвые/бесплатные сначала).
+# Реальный список берём из живого каталога /image/models — он у Pollinations
+# динамический, имена моделей появляются и исчезают без предупреждения.
+VIDEO_MODEL_PREFERENCE = [
+    "p-video-720p", "p-video-1080p",
+    "seedance", "seedance-2.0", "seedance-pro",
+    "wan-fast", "wan", "ltx-2",
+    "veo",
+]
+_FALLBACK_QUEUE = ["p-video-720p", "seedance-2.0", "wan-fast", "veo"]
+
+_models_cache: dict = {"ts": 0.0, "queue": None}
+_MODELS_CACHE_TTL = 3600
 
 VIDEO_DURATION_SECONDS = 5
 VIDEO_TIMEOUT_SECONDS = 420       # генерация видео идёт десятки секунд — минуты
@@ -53,21 +65,81 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
 
 
+def _order_models(names: list) -> list:
+    """Сортирует имена видео-моделей по VIDEO_MODEL_PREFERENCE, незнакомые — в конец."""
+    known = [m for m in VIDEO_MODEL_PREFERENCE if m in names]
+    unknown = [n for n in names if n not in VIDEO_MODEL_PREFERENCE]
+    return known + unknown
+
+
+def _extract_video_models(catalog) -> list:
+    """Достаёт имена видео-моделей из каталога, форма которого может меняться."""
+    names = []
+    items = catalog if isinstance(catalog, list) else catalog.get("models", []) if isinstance(catalog, dict) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("id") or ""
+        is_video = (
+            item.get("video") is True
+            or "video" in (item.get("output_modalities") or [])
+            or "video_capabilities" in item
+            or item.get("type") == "video"
+        )
+        if name and is_video:
+            names.append(name)
+    return names
+
+
+async def get_video_model_queue() -> list:
+    """Очередь видео-моделей из живого каталога (кэш 1 час), при сбое — статическая."""
+    now = time.time()
+    if _models_cache["queue"] and now - _models_cache["ts"] < _MODELS_CACHE_TTL:
+        return _models_cache["queue"]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{BASE_URL}/image/models",
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status == 200:
+                    names = _extract_video_models(await resp.json())
+                    if names:
+                        queue = _order_models(names)
+                        _models_cache.update(ts=now, queue=queue)
+                        logging.info(f"Видео-модели из каталога: {queue}")
+                        return queue
+                logging.warning(f"Каталог моделей: HTTP {resp.status}")
+    except Exception as e:
+        logging.warning(f"Каталог моделей недоступен: {e}")
+    return _models_cache["queue"] or _FALLBACK_QUEUE
+
+
 async def upload_media(data: bytes, filename: str = "frame.jpg") -> str | None:
     """Загружает байты в content-addressed store Pollinations, возвращает URL."""
     try:
-        form = aiohttp.FormData()
-        form.add_field("file", data, filename=filename, content_type="image/jpeg")
+        endpoints = (
+            f"{BASE_URL}/upload",
+            f"{BASE_URL}/v1/upload",
+            "https://media.pollinations.ai/upload",
+        )
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{BASE_URL}/upload", headers=_headers(), data=form,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status != 200:
-                    logging.error(f"Pollinations upload: HTTP {resp.status}: {await resp.text()}")
-                    return None
-                payload = await resp.json()
-                return payload.get("url")
+            for url in endpoints:
+                form = aiohttp.FormData()
+                form.add_field("file", data, filename=filename, content_type="image/jpeg")
+                async with session.post(
+                    url, headers=_headers(), data=form,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status == 200:
+                        payload = await resp.json()
+                        media_url = payload.get("url")
+                        if media_url:
+                            logging.info(f"Кадр загружен через {url}")
+                            return media_url
+                    body = (await resp.text())[:200]
+                    logging.warning(f"Pollinations upload {url}: HTTP {resp.status}: {body}")
+        return None
     except Exception as e:
         logging.error(f"Pollinations upload error: {e}")
         return None
@@ -78,15 +150,21 @@ async def generate_video(
     start_frame_url: str | None = None,
     duration: int = VIDEO_DURATION_SECONDS,
 ) -> tuple[bytes | None, str | None]:
-    """Генерирует видео, перебирая очередь моделей. Возвращает (mp4, имя модели)."""
+    """Генерирует видео, перебирая очередь моделей.
+
+    Возвращает (mp4, имя модели); (None, "no_pollen") — если всё упёрлось
+    в пустой баланс Pollen (HTTP 402).
+    """
     encoded = urllib.parse.quote(prompt[:500])
+    model_queue = await get_video_model_queue()
+    saw_402 = 0
     params_base = {"duration": str(duration), "aspectRatio": "16:9"}
     if start_frame_url:
         params_base["image"] = start_frame_url
 
     timeout = aiohttp.ClientTimeout(total=VIDEO_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        for model in VIDEO_MODEL_QUEUE:
+        for model in model_queue:
             params = dict(params_base, model=model)
             try:
                 async with session.get(
@@ -98,6 +176,9 @@ async def generate_video(
                         return data, model
                     body = (await resp.text())[:300]
                     logging.warning(f"Видео {model}: HTTP {resp.status}: {body}")
+                    if resp.status == 402:
+                        saw_402 += 1
+                        continue
                     if resp.status in (429, 503):
                         retry_after = resp.headers.get("Retry-After")
                         if retry_after and retry_after.isdigit() and int(retry_after) <= 60:
@@ -106,6 +187,8 @@ async def generate_video(
                 logging.warning(f"Видео {model}: таймаут {VIDEO_TIMEOUT_SECONDS}с")
             except Exception as e:
                 logging.error(f"Видео {model}: {e}")
+    if saw_402 and saw_402 == len(model_queue):
+        return None, "no_pollen"
     return None, None
 
 
@@ -139,7 +222,13 @@ async def process_video_generation(message: types.Message, bot) -> None:
                 start_url = await upload_media(img)
         video, model = await generate_video(prompt or "cinematic scene", start_frame_url=start_url)
         if not video:
-            await status.edit_text("Не вышло снять. Все видео-модели отказали, попробуй позже.")
+            if model == "no_pollen":
+                await status.edit_text(
+                    "🎬 Кончилось топливо: на балансе Pollinations ноль поллена.\n"
+                    "Админу нужно заглянуть в enter.pollinations.ai."
+                )
+            else:
+                await status.edit_text("Не вышло снять. Все видео-модели отказали, попробуй позже.")
             return
         await message.reply_video(
             types.BufferedInputFile(video, filename="upupa_video.mp4"),
@@ -179,7 +268,13 @@ async def process_animate_photo(message: types.Message, bot) -> None:
             start_frame_url=start_url,
         )
         if not video:
-            await status.edit_text("Оживить не вышло. Все видео-модели отказали, попробуй позже.")
+            if model == "no_pollen":
+                await status.edit_text(
+                    "🎬 Кончилось топливо: на балансе Pollinations ноль поллена.\n"
+                    "Админу нужно заглянуть в enter.pollinations.ai."
+                )
+            else:
+                await status.edit_text("Оживить не вышло. Все видео-модели отказали, попробуй позже.")
             return
         await message.reply_video(
             types.BufferedInputFile(video, filename="upupa_alive.mp4"),
