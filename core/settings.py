@@ -97,15 +97,15 @@ SPECIAL_CHAT_ID = -1001707530786
 # =========================
 
 # --- GEMINI MODEL QUEUES ---
+# ВАЖНО: gemini-2.0-* отключены Google 1 июня 2026 — в очередь не добавлять.
+# Порядок = приоритет: сначала лучший по качество/квота, в конце gemma-фоллбэки.
 MODEL_QUEUE_DEFAULT = [
-    "models/gemini-2.5-flash-lite",
-    "models/gemini-2.5-flash",
-    "models/gemini-2.0-flash-lite",
-    "models/gemini-2.0-flash",
-    "models/gemini-2.0-flash-001",
-    "models/gemini-2.0-flash-lite-001",
-    "models/gemma-3-12b-it",
-    "models/gemma-3-4b-it",
+    "gemini-3.1-flash-lite",   # GA с мая 2026, быстрее и умнее 2.5-flash-lite
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",  # preview: квоты жёстче, поэтому после GA-моделей
+    "gemma-3-12b-it",
+    "gemma-3-4b-it",
 ]
 
 MODEL_QUEUE_SPECIAL = [
@@ -113,7 +113,7 @@ MODEL_QUEUE_SPECIAL = [
 ] + MODEL_QUEUE_DEFAULT
 
 # --- GEMINI PUBLIC MODEL CONSTANTS ---
-TEXT_GENERATION_MODEL_LIGHT = "gemini-2.0-flash-lite-preview-02-05"
+TEXT_GENERATION_MODEL_LIGHT = "gemini-3.1-flash-lite"
 ROBOTICS_MODEL = "gemini-robotics-er-1.5-preview"
 
 TTS_MODELS_QUEUE = [

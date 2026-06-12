@@ -17,19 +17,31 @@ import requests
 # =========================
 # === RATE LIMIT CONTROL ===
 # =========================
-GLOBAL_MIN_DELAY = 2.5
+# Минимальный интервал между запросами НА ОДИН КЛЮЧ.
+# Лимиты Google считаются по ключу, поэтому глобальный замок на все вызовы
+# (как было раньше) душил параллельные чаты без всякой пользы.
+PER_KEY_MIN_DELAY = 2.5
 
-_last_call_ts = 0.0
+_last_call_ts: dict = {}
+_throttle_lock = threading.Lock()
 _genai_lock = threading.RLock()
 
 
-def _global_throttle():
-    global _last_call_ts
-    now = time.time()
-    delta = now - _last_call_ts
-    if delta < GLOBAL_MIN_DELAY:
-        time.sleep(GLOBAL_MIN_DELAY - delta)
-    _last_call_ts = time.time()
+def _throttle_key(api_key: str):
+    """Выдерживает PER_KEY_MIN_DELAY между запросами на конкретный ключ.
+
+    Разные ключи друг друга не блокируют. Потокобезопасно: слот времени
+    резервируется под локом, ожидание — вне лока.
+    """
+    while True:
+        with _throttle_lock:
+            now = time.time()
+            last = _last_call_ts.get(api_key, 0.0)
+            wait = PER_KEY_MIN_DELAY - (now - last)
+            if wait <= 0:
+                _last_call_ts[api_key] = now
+                return
+        time.sleep(wait)
 
 
 def _extract_error_details(error: Exception) -> Tuple[Optional[int], str]:
@@ -272,7 +284,7 @@ class ModelFallbackWrapper:
                 for attempt in range(1, self._max_retries_per_pair + 1):
                     attempts += 1
                     try:
-                        _global_throttle()
+                        _throttle_key(api_key)
                         model_obj = self._build_model(api_key, model_name)
                         result = request_fn(model_obj)
                         self.last_used_model_name = model_name
