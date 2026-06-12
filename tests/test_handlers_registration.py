@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 87  # столько было в монолитном main.py
+EXPECTED_TOTAL_HANDLERS = 89  # 87 из монолита + 2 видео (этап 9)
 
 
 def _count_handlers(router):
@@ -27,4 +27,4 @@ def test_dialog_router_is_last():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 14
+    assert len(ROUTERS) == 15

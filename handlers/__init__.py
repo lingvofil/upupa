@@ -5,7 +5,7 @@ aiogram матчит сообщение по роутерам последова
 from handlers import (
     basic, sms, stats_lexicon, media_search, games, media_tools,
     ai_modes, ai_profiles, ai_vision, ai_generation, birthdays,
-    ai_summary, ai_prompts, dialog,
+    ai_summary, ai_prompts, video, dialog,
 )
 
 ROUTERS = [
@@ -22,5 +22,6 @@ ROUTERS = [
     birthdays.router,
     ai_summary.router,
     ai_prompts.router,
+    video.router,   # видеогенерация — до catch-all
     dialog.router,
 ]
