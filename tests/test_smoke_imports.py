@@ -56,13 +56,13 @@ HANDLER_MODULES = [
     "handlers.media_search", "handlers.games", "handlers.media_tools",
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
-    "handlers.ai_prompts", "handlers.dialog",
+    "handlers.ai_prompts", "handlers.video", "handlers.dialog",
 ]
 AI_MODULES = [
     "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
     "AI.random_reactions", "AI.summarize", "AI.talking", "AI.tutu",
-    "AI.voice", "AI.whatisthere", "AI.whoparody",
+    "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
 ]
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
