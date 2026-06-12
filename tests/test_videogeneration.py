@@ -22,9 +22,10 @@ def test_extract_prompt():
 
 
 def test_order_models_preference():
-    names = ["veo", "p-video-720p", "neizvestnaya-model", "wan-fast"]
+    names = ["veo", "p-video-720p", "neizvestnaya-model", "wan-fast", "ltx-2"]
     out = vg._order_models(names)
-    assert out[0] == "p-video-720p"
+    assert out[0] == "ltx-2", "самая дешёвая модель должна идти первой"
+    assert out[1] == "wan-fast"
     assert out[-1] == "neizvestnaya-model"
 
 
@@ -39,3 +40,13 @@ def test_extract_video_models_tolerates_shapes():
     assert vg._extract_video_models(catalog) == ["p-video-720p", "veo", "seedance"]
     assert vg._extract_video_models({"models": catalog}) == ["p-video-720p", "veo", "seedance"]
     assert vg._extract_video_models("совсем мусор") == []
+
+
+def test_global_daily_limit():
+    vg._usage.clear()
+    granted = 0
+    for chat in range(100, 100 + vg.DAILY_LIMIT_GLOBAL * 2):
+        if vg._check_and_count_limit(chat):
+            granted += 1
+    assert granted == vg.DAILY_LIMIT_GLOBAL, "глобальный лимит должен остановить выдачу"
+    vg._usage.clear()
