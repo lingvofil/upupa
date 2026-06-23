@@ -129,9 +129,9 @@ async def upload_media(data: bytes, filename: str = "frame.jpg") -> str | None:
     """Загружает байты в content-addressed store Pollinations, возвращает URL."""
     try:
         endpoints = (
-            f"{BASE_URL}/upload",
+            "https://media.pollinations.ai/upload",  # рабочий (июнь 2026)
+            f"{BASE_URL}/upload",                     # запасные, если основной переедет
             f"{BASE_URL}/v1/upload",
-            "https://media.pollinations.ai/upload",
         )
         async with aiohttp.ClientSession() as session:
             for url in endpoints:
@@ -148,7 +148,9 @@ async def upload_media(data: bytes, filename: str = "frame.jpg") -> str | None:
                             logging.info(f"Кадр загружен через {url}")
                             return media_url
                     body = (await resp.text())[:200]
-                    logging.warning(f"Pollinations upload {url}: HTTP {resp.status}: {body}")
+                    # пока работает основной адрес, провал запасных — не повод шуметь
+                    logging.debug(f"Pollinations upload {url}: HTTP {resp.status}: {body}")
+        logging.error("Pollinations upload: все адреса недоступны")
         return None
     except Exception as e:
         logging.error(f"Pollinations upload error: {e}")

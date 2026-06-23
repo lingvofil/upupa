@@ -226,67 +226,120 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # ГЕНЕРАТОРЫ
 # =============================================================================
 
+# Предпочтительный порядок БЕСПЛАТНЫХ моделей картинок (лучшие сначала).
+# Реальный список и цены берём из живого каталога /image/models — он
+# динамический. Премиум-модели (seedream, nanobanana, gptimage и т.п.)
+# сюда не попадают: в очередь идут только модели ценой 0 поллена.
+IMAGE_MODEL_PREFERENCE = ["flux", "zimage", "turbo", "klein", "qwen-image"]
+_IMAGE_FALLBACK_QUEUE = ["flux", "zimage"]
+
+_image_models_cache: dict = {"ts": 0.0, "queue": None}
+_IMAGE_MODELS_CACHE_TTL = 3600
+
+
+def _is_free(item: dict) -> bool:
+    """Бесплатна ли модель: цена 0 / явный флаг free / тир anonymous."""
+    for key in ("price", "cost", "pollen", "pollen_cost"):
+        val = item.get(key)
+        if isinstance(val, (int, float)):
+            return val == 0
+    if item.get("free") is True or item.get("paid") is False:
+        return True
+    tier = (item.get("tier") or "").lower()
+    if tier in ("anonymous", "free", "seed"):
+        return True
+    return False
+
+
+def _extract_free_image_models(catalog) -> list:
+    """Имена бесплатных image-моделей из каталога (форма может меняться)."""
+    items = catalog if isinstance(catalog, list) else (
+        catalog.get("models", []) if isinstance(catalog, dict) else [])
+    names = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("id") or ""
+        # отсекаем видео-модели
+        is_video = (
+            item.get("video") is True
+            or "video" in (item.get("output_modalities") or [])
+            or "video_capabilities" in item
+            or item.get("type") == "video"
+        )
+        if name and not is_video and _is_free(item):
+            names.append(name)
+    return names
+
+
+def _order_image_models(names: list) -> list:
+    known = [m for m in IMAGE_MODEL_PREFERENCE if m in names]
+    unknown = [n for n in names if n not in IMAGE_MODEL_PREFERENCE]
+    return known + unknown
+
+
+async def get_free_image_model_queue() -> list:
+    """Очередь бесплатных image-моделей из каталога (кэш 1 час); при сбое — статика."""
+    now = time.time()
+    if _image_models_cache["queue"] and now - _image_models_cache["ts"] < _IMAGE_MODELS_CACHE_TTL:
+        return _image_models_cache["queue"]
+    headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
+    try:
+        r = await asyncio.to_thread(
+            lambda: requests.get("https://gen.pollinations.ai/image/models",
+                                 headers=headers, timeout=20)
+        )
+        if r.status_code == 200:
+            names = _extract_free_image_models(r.json())
+            if names:
+                queue = _order_image_models(names)
+                _image_models_cache.update(ts=now, queue=queue)
+                logging.info(f"Бесплатные image-модели из каталога: {queue}")
+                return queue
+        logging.warning(f"Каталог image-моделей: HTTP {r.status_code}")
+    except Exception as e:
+        logging.warning(f"Каталог image-моделей недоступен: {e}")
+    return _image_models_cache["queue"] or _IMAGE_FALLBACK_QUEUE
+
+
 async def pollinations_generate(prompt: str) -> Optional[bytes]:
-    """
-    Пробует модели по очереди: flux → turbo.
-    fetch failed = бэкенд Pollinations не ответил, переключаемся на следующую модель.
+    """Генерация картинки по очереди бесплатных моделей из живого каталога.
+
+    Очередь: flux/zimage и прочие бесплатные. Таймаут первой модели = очередь
+    IP занята, следующие словят 429 — поэтому при таймауте сразу выходим
+    (дальше вызывающий код идёт на Kandinsky), не теряя время.
     """
     prompt_q = quote(prompt[:200])
     seed = random.randint(1, 99999)
-
     headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
+    queue = await get_free_image_model_queue()
 
     def make_url(model_name):
-        # Правильный базовый домен по документации: gen.pollinations.ai
         return (
             f"https://gen.pollinations.ai/image/{prompt_q}"
-            f"?width=1024&height=1024"
-            f"&model={model_name}"
-            f"&seed={seed}"
+            f"?width=1024&height=1024&model={model_name}&seed={seed}"
         )
 
-    # 1. Пробуем flux
-    try:
-        logging.info(f"Pollinations [flux]: {prompt[:80]}...")
-        r = await asyncio.to_thread(
-            lambda: requests.get(make_url("flux"), headers=headers, timeout=60)
-        )
-        logging.info(f"Pollinations [flux] статус: {r.status_code}, размер: {len(r.content)} байт")
-        if r.status_code == 200 and len(r.content) > 1000:
-            return r.content
+    for i, model_name in enumerate(queue):
         try:
-            logging.warning(f"Pollinations [flux] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
-        except Exception:
-            pass
-        # flux быстро вернул ошибку — очередь свободна, пробуем zimage
-        flux_timed_out = False
-    except requests.exceptions.Timeout:
-        # flux завис — его запрос ещё висит в очереди IP, следующий получит 429
-        logging.warning("Pollinations [flux] timeout — очередь занята, пропускаем следующую модель")
-        flux_timed_out = True
-    except Exception as e:
-        logging.error(f"Pollinations [flux] exception: {e}")
-        flux_timed_out = False
-
-    if flux_timed_out:
-        return None  # идём на Kandinsky, не теряем время на 429
-
-    # 2. flux вернул быстрый не-200 — пробуем zimage (дефолтная и стабильная модель)
-    await asyncio.sleep(2)
-    try:
-        logging.info(f"Pollinations [zimage]: {prompt[:80]}...")
-        r = await asyncio.to_thread(
-            lambda: requests.get(make_url("zimage"), headers=headers, timeout=60)
-        )
-        logging.info(f"Pollinations [zimage] статус: {r.status_code}, размер: {len(r.content)} байт")
-        if r.status_code == 200 and len(r.content) > 1000:
-            return r.content
-        try:
-            logging.warning(f"Pollinations [zimage] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
-        except Exception:
-            pass
-    except Exception as e:
-        logging.error(f"Pollinations [zimage] exception: {e}")
+            logging.info(f"Pollinations [{model_name}]: {prompt[:80]}...")
+            r = await asyncio.to_thread(
+                lambda: requests.get(make_url(model_name), headers=headers, timeout=60)
+            )
+            logging.info(f"Pollinations [{model_name}] статус: {r.status_code}, размер: {len(r.content)} байт")
+            if r.status_code == 200 and len(r.content) > 1000:
+                return r.content
+            try:
+                logging.warning(f"Pollinations [{model_name}] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
+            except Exception:
+                pass
+        except requests.exceptions.Timeout:
+            logging.warning(f"Pollinations [{model_name}] timeout — очередь IP занята, выходим")
+            return None  # идём на Kandinsky, не ловим 429 на следующих
+        except Exception as e:
+            logging.error(f"Pollinations [{model_name}] exception: {e}")
+        if i < len(queue) - 1:
+            await asyncio.sleep(2)  # пауза перед следующей моделью
 
     return None
 
