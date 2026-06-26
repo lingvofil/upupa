@@ -244,7 +244,6 @@ async def process_video_generation(message: types.Message, bot) -> None:
             return
         await message.reply_video(
             types.BufferedInputFile(video, filename="upupa_video.mp4"),
-            caption=f"🎬 {model}",
         )
         await status.delete()
     except Exception as e:
@@ -290,7 +289,6 @@ async def process_animate_photo(message: types.Message, bot) -> None:
             return
         await message.reply_video(
             types.BufferedInputFile(video, filename="upupa_alive.mp4"),
-            caption=f"🧟 {model}",
         )
         await status.delete()
     except Exception as e:
