@@ -12,7 +12,7 @@ from config import (
     bot, BLOCKED_USERS
 )
 from services.ytp import handle_ytp_command
-from services.media_change import handle_fast_command, handle_slow_command
+from services.media_change import handle_fast_command, handle_reverse_command, handle_slow_command
 
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
@@ -95,6 +95,16 @@ async def handle_faster_media_command(message: types.Message):
 )
 async def handle_slower_media_command(message: types.Message):
     await handle_slow_command(message, bot)
+
+
+@router.message(
+    lambda message: (
+        (message.text and "наоборот" in message.text.lower())
+        or (message.caption and "наоборот" in message.caption.lower())
+    ) and message.from_user.id not in BLOCKED_USERS
+)
+async def handle_reverse_media_command(message: types.Message):
+    await handle_reverse_command(message, bot)
 
 # ================== БЛОК 6: ХЭНДЛЕРЫ С AI ==================
 
