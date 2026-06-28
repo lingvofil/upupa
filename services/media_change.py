@@ -67,6 +67,18 @@ def _get_duration_seconds(source: types.Message) -> int | None:
     return None
 
 
+def _extract_reversible_media_source(message: types.Message) -> types.Message | None:
+    if message.reply_to_message:
+        source = message.reply_to_message
+        if source.video or source.animation or (source.document and _is_video_document(source.document)):
+            return source
+
+    if message.video or message.animation or (message.document and _is_video_document(message.document)):
+        return message
+
+    return None
+
+
 async def _run_command(command: list[str]) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command,
@@ -290,3 +302,108 @@ async def handle_slow_command(message: types.Message, bot: Bot) -> None:
 
 async def handle_fast_command(message: types.Message, bot: Bot) -> None:
     await handle_speed_command(message, bot, 2.0)
+
+
+async def _reverse_video_ffmpeg(input_path: str, output_path: str, with_audio: bool) -> tuple[bool, str]:
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-vf",
+        "reverse",
+    ]
+
+    if with_audio:
+        cmd += ["-af", "areverse", "-c:a", "aac", "-b:a", "128k"]
+    else:
+        cmd += ["-an"]
+
+    cmd += [
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-y",
+        output_path,
+    ]
+
+    return await _run_command(cmd)
+
+
+async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
+    media_source = _extract_reversible_media_source(message)
+
+    if not media_source:
+        await message.reply("Реплайни на видео/гифку или отправь её с подписью «наоборот».")
+        return
+
+    file_obj = media_source.video or media_source.animation or media_source.document
+
+    if not file_obj:
+        await message.reply("Реплайни на видео/гифку или отправь её с подписью «наоборот».")
+        return
+
+    if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        await message.reply("Файл весит дохуя. Максимум 50 МБ.")
+        return
+
+    duration = _get_duration_seconds(media_source)
+    if duration and duration > MAX_INPUT_DURATION_SEC:
+        await message.reply(f"Слишком длинно. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
+        return
+
+    if _media_change_semaphore.locked():
+        await message.reply("Я тут вообще-то работаю, отъебись.")
+        return
+
+    processing_msg = await message.reply("⚙️ обращаю вспять...")
+
+    input_path = None
+    output_path = None
+
+    try:
+        async with _media_change_semaphore:
+            if media_source.animation:
+                input_suffix = ".webm"
+            elif media_source.document:
+                input_suffix = os.path.splitext(media_source.document.file_name or "")[1].lower() or ".mp4"
+            else:
+                input_suffix = ".mp4"
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=input_suffix, prefix="rev_in_") as in_file:
+                input_path = in_file.name
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", prefix="rev_out_") as out_file:
+                output_path = out_file.name
+
+            file_info = await bot.get_file(file_obj.file_id)
+            await bot.download_file(file_info.file_path, input_path)
+
+            success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=True)
+            if not success:
+                success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=False)
+
+            if not success:
+                logging.error("[media_change] reverse ffmpeg error: %s", ffmpeg_output)
+                await message.reply("❌ Не удалось обратить видео вспять.")
+                return
+
+            await message.reply_video(FSInputFile(output_path, filename="reversed.mp4"))
+            await processing_msg.delete()
+
+    except Exception as exc:
+        logging.error("[media_change] Ошибка реверса: %s", exc, exc_info=True)
+        await message.reply("❌ Что-то пошло не так при реверсе.")
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
+    finally:
+        for path in (input_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as exc:
+                    logging.warning("[media_change] Не удалось удалить %s: %s", path, exc)

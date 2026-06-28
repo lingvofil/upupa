@@ -28,6 +28,7 @@ HEAVY_LIBS = ["moviepy", "moviepy.editor",
               "moviepy.video", "moviepy.video.fx", "moviepy.video.fx.all",
               "moviepy.audio", "moviepy.audio.fx", "moviepy.audio.fx.all",
               "playwright", "playwright.async_api",
+              "pydub", "pydub.AudioSegment",
               "seam_carving", "socketio", "gradio_client"]
 for lib in HEAVY_LIBS:
     if lib not in sys.modules:
