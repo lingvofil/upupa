@@ -18,6 +18,7 @@ import features.statistics as bot_statistics
 from AI.dnd import dnd_router
 from AI.quiz import schedule_daily_quiz
 from AI.birthday_calendar import birthday_scheduler
+from features.proactive import proactive_loop
 from games import crocodile
 
 from handlers import ROUTERS
@@ -51,6 +52,11 @@ async def main():
     # --- планировщик дней рождения ---
     asyncio.create_task(
         birthday_scheduler(bot)
+    )
+
+    # --- проактивный режим (вбросы в молчащие чаты) ---
+    asyncio.create_task(
+        proactive_loop(bot)
     )
 
     # --- КРОКОДИЛ: socket.io сервер ---

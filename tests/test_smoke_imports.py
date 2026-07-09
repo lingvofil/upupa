@@ -44,14 +44,14 @@ FEATURE_MODULES = [
     "features.broadcast", "features.channels_settings", "features.chat_settings",
     "features.common_settings", "features.content_filter", "features.interactive_settings",
     "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
-    "features.statistics",
+    "features.statistics", "features.proactive",
 ]
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
     "services.sherlock", "services.ytp", "services.media_change", "services.distortion",
     "services.memegenerator", "services.news", "services.web_context",
 ]
-GAME_MODULES = ["games.crocodile", "games.egra"]
+GAME_MODULES = ["games.crocodile", "games.egra", "games.reverse_crocodile"]
 HANDLER_MODULES = [
     "handlers", "handlers.basic", "handlers.sms", "handlers.stats_lexicon",
     "handlers.media_search", "handlers.games", "handlers.media_tools",
@@ -64,6 +64,7 @@ AI_MODULES = [
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
     "AI.random_reactions", "AI.summarize", "AI.talking", "AI.translate",
     "AI.tutu", "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
+    "AI.chat_recall", "AI.comic",
 ]
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)

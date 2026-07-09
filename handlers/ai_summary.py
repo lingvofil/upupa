@@ -15,9 +15,40 @@ from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
 from AI.tutu import process_tickets_command
+from AI.chat_recall import (
+    process_recall_command, process_verdict_command, process_factcheck_command
+)
+from AI.comic import process_comic_command
 from services.news import process_tv_news_command, process_football_news_command
 
 router = Router(name="ai_summary")
+
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
+    "упупа когда мы говорили"
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_recall(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_recall_command(message)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
+    "упупа рассуди"
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_verdict(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_verdict_command(message)
+
+@router.message(lambda message: message.text and message.text.lower().strip() in ("пиздиш", "пиздишь")
+                and message.reply_to_message and message.from_user.id not in BLOCKED_USERS)
+async def handle_factcheck(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_factcheck_command(message)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) in ("комикс", "упупа комикс")
+                and message.from_user.id not in BLOCKED_USERS)
+async def handle_comic(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+    await process_comic_command(message)
 
 
 @router.message(F.text.lower() == "чобыло")

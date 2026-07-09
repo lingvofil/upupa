@@ -73,9 +73,10 @@ async def get_main_settings_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
     
     dialog_enabled = settings.get("dialog_enabled", True)
-    reactions_enabled = settings.get("reactions_enabled", True) 
+    reactions_enabled = settings.get("reactions_enabled", True)
     emoji_enabled = settings.get("emoji_enabled", True)
     random_memes_enabled = settings.get("random_memes_enabled", False)
+    proactive_enabled = settings.get("proactive_enabled", True)
     
     sms_enabled = chat_id not in sms_disabled_chats
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
@@ -90,6 +91,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"💬 *СМС/ММС:* {'Вкл. ✅' if sms_enabled else 'Выкл. ❌'}\n"
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
     text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n"
+    text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
@@ -101,7 +103,8 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if sms_enabled else 'Вкл.'} СМС", callback_data="settings:toggle:sms")
     builder.button(text=f"{'Выкл.' if antispam_enabled else 'Вкл.'} антиспам", callback_data="settings:toggle:antispam")
     builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
-    
+    builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
+
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
     builder.button(text="🎬 Настройки YTP", callback_data="settings:view:ytp_menu")
@@ -307,6 +310,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             if chat_id in rank_notifications_disabled_chats: rank_notifications_disabled_chats.remove(chat_id)
             else: rank_notifications_disabled_chats.add(chat_id)
             save_rank_notifications_settings()
+        elif value == "proactive":
+            chat_settings[chat_id]["proactive_enabled"] = not chat_settings[chat_id].get("proactive_enabled", True)
         
         save_chat_settings()
         text, markup = await get_main_settings_markup(chat_id)

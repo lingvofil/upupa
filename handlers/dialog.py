@@ -19,7 +19,7 @@ from features.lexicon_settings import (
 )
 import features.statistics as bot_statistics
 from services import memegenerator
-from games import crocodile
+from games import crocodile, reverse_crocodile
 from AI.random_reactions import process_random_reactions
 from AI.talking import (
     process_general_message
@@ -30,8 +30,10 @@ router = Router(name="dialog")
 
 @router.message()
 async def process_message(message: types.Message):
-    # 1) Крокодил: перехватываем только правильное угадывание
+    # 1) Крокодил (обычный и наоборот): перехватываем только правильное угадывание
     if await crocodile.check_answer(message):
+        return
+    if await reverse_crocodile.check_answer(message):
         return
 
     # 2. Обычная обработка сообщений

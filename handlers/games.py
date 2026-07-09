@@ -12,7 +12,7 @@ from config import (
 )
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
-from games import crocodile
+from games import crocodile, reverse_crocodile
 from AI.quiz import process_poll_answer
 
 
@@ -59,3 +59,11 @@ async def croc_callback(callback: types.CallbackQuery):
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
     await crocodile.handle_text_stop(message)
+
+@router.message(F.text.lower() == "кракадил наоборот")
+async def start_reverse_croc(message: types.Message):
+    await reverse_crocodile.start_game(message)
+
+@router.callback_query(F.data.startswith("rcroc_"))
+async def reverse_croc_callback(callback: types.CallbackQuery):
+    await reverse_crocodile.handle_callback(callback)
