@@ -15,7 +15,7 @@ from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
 from AI.tutu import process_tickets_command
-from services.news import process_tv_news_command
+from services.news import process_tv_news_command, process_football_news_command
 
 router = Router(name="ai_summary")
 
@@ -26,11 +26,17 @@ async def handle_chobylo(message: types.Message):
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
-    ("упупа чо по телеку", "упупа что по телеку")
+    ("чо по телеку", "что по телеку", "упупа чо по телеку", "упупа что по телеку")
 ) and message.from_user.id not in BLOCKED_USERS)
 async def handle_tv_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_tv_news_command(message)
+
+@router.message(lambda message: message.text and message.text.lower().startswith("новости футбола")
+                and message.from_user.id not in BLOCKED_USERS)
+async def handle_football_news(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_football_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
