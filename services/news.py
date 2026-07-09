@@ -27,6 +27,18 @@ FOOTBALL_FEEDS = [
 ]
 MAX_ITEMS = 12
 
+# Фильтр политики для "чо по телеку": новости с этими словами отбрасываются
+# ещё до передачи модели (плюс дублирующая инструкция в промпте).
+_POLITICS_RE = re.compile(
+    r"путин|трамп|зеленск|украин|всу\b|\bсво\b|войн|фронт|обстрел|ракет"
+    r"|дрон|бпла|санкци|госдум|кремл|белы[йм] дом|президент|премьер"
+    r"|министр|мид\b|депутат|сенатор|губернатор|выбор[ыа]х?\b|парти[ия]"
+    r"|нато|посол|диплома|оппозици|митинг|протест|мобилизац|военн|оборон|армия"
+    r"|правозащит|замглав|чиновник|\bмэр|херсон|донецк|донбас|луганск"
+    r"|запорожск|белгород|обесточ",
+    re.IGNORECASE,
+)
+
 
 def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text or "").strip()
@@ -44,7 +56,7 @@ def _parse_rss(content: bytes) -> list[str]:
     return items
 
 
-def _fetch_news_sync(feeds: list[str]) -> list[str]:
+def _fetch_news_sync(feeds: list[str], exclude: re.Pattern | None = None) -> list[str]:
     news: list[str] = []
     for feed_url in feeds:
         try:
@@ -55,7 +67,12 @@ def _fetch_news_sync(feeds: list[str]) -> list[str]:
             )
             response.raise_for_status()
             items = _parse_rss(response.content)
-            logging.info(f"RSS {feed_url}: {len(items)} новостей")
+            if exclude:
+                kept = [item for item in items if not exclude.search(item)]
+                logging.info(f"RSS {feed_url}: {len(kept)}/{len(items)} новостей после фильтра")
+                items = kept
+            else:
+                logging.info(f"RSS {feed_url}: {len(items)} новостей")
             news.extend(items)
         except Exception as e:
             logging.warning(f"RSS {feed_url} недоступен: {e}")
@@ -64,7 +81,7 @@ def _fetch_news_sync(feeds: list[str]) -> list[str]:
     return news[:MAX_ITEMS]
 
 
-def _build_review_prompt(news: list[str], topic_line: str) -> str:
+def _build_review_prompt(news: list[str], topic_line: str, extra_rule: str = "") -> str:
     news_text = "\n".join(f"- {item}" for item in news)
     # В базовом промпте "чотам" зашит лимит "не более N слов" — для обзора
     # новостей его убираем: тут нужен развёрнутый ответ по абзацам.
@@ -73,7 +90,7 @@ def _build_review_prompt(news: list[str], topic_line: str) -> str:
         f"{base_prompt}.\n"
         f"Сделай обзор новостей ниже: выбери 5-8 самых интересных, "
         f"на каждую — отдельный абзац из 1-3 предложений, между абзацами пустая строка. "
-        f"Всего не более 250 слов. Без вступлений и заключений, сразу обзор.\n\n"
+        f"Всего не более 250 слов. Без вступлений и заключений, сразу обзор. {extra_rule}\n\n"
         f"{topic_line}:\n{news_text}"
     )
 
@@ -84,18 +101,20 @@ async def _process_news_review(
     status_text: str,
     fail_text: str,
     topic_line: str,
+    exclude: re.Pattern | None = None,
+    extra_rule: str = "",
 ) -> None:
     # Ленивый импорт: избегаем цикла services.news <-> AI.talking
     from AI.talking import generate_simple_response
 
     status = await message.reply(status_text)
     try:
-        news = await asyncio.to_thread(_fetch_news_sync, feeds)
+        news = await asyncio.to_thread(_fetch_news_sync, feeds, exclude)
         if not news:
             await status.edit_text(fail_text)
             return
 
-        prompt = _build_review_prompt(news, topic_line)
+        prompt = _build_review_prompt(news, topic_line, extra_rule)
         response_text = await generate_simple_response(prompt, str(message.chat.id))
         await status.delete()
         await message.reply(response_text)
@@ -108,13 +127,15 @@ async def _process_news_review(
 
 
 async def process_tv_news_command(message: types.Message) -> None:
-    """Команда 'чо по телеку' — обзор последних новостей."""
+    """Команда 'чо по телеку' / 'упупа новости' — обзор новостей без политики."""
     await _process_news_review(
         message,
         feeds=NEWS_FEEDS,
         status_text="Включаю телек...",
         fail_text="Телек не ловит, антенну сдуло. Попробуй позже.",
         topic_line="Последние новости для обзора",
+        exclude=_POLITICS_RE,
+        extra_rule="Политику, войну и чиновников не бери — только житейские, культурные, научные и прочие неполитические новости.",
     )
 
 

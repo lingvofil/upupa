@@ -25,18 +25,22 @@ async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
 
+# Футбол регистрируется ДО общего обзора, чтобы "упупа новости футбола"
+# не перехватывался триггером "упупа новости".
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
-    ("чо по телеку", "что по телеку", "упупа чо по телеку", "упупа что по телеку")
+    ("новости футбола", "упупа новости футбола")
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_football_news(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_football_news_command(message)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
+    ("чо по телеку", "что по телеку",
+     "упупа чо по телеку", "упупа что по телеку", "упупа новости")
 ) and message.from_user.id not in BLOCKED_USERS)
 async def handle_tv_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_tv_news_command(message)
-
-@router.message(lambda message: message.text and message.text.lower().startswith("новости футбола")
-                and message.from_user.id not in BLOCKED_USERS)
-async def handle_football_news(message: types.Message):
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    await process_football_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
