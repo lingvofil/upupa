@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import logging
 import requests
@@ -210,13 +211,15 @@ async def save_and_send_searched_image(message: Message, image_data: bytes):
 
 def search_gifs(query: str = "cat"):
     url = 'https://api.giphy.com/v1/gifs/search'
+    # Русскоязычные запросы Giphy понимает лучше с lang=ru
+    lang = 'ru' if re.search(r'[а-яё]', query, re.IGNORECASE) else 'en'
     params = {
         'api_key': giphy_api_key,
         'q': query,
         'limit': 10,
         'offset': 0,
         'rating': 'g',
-        'lang': 'en'
+        'lang': lang
     }
     try:
         response = requests.get(url, params=params)

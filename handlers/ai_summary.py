@@ -10,10 +10,12 @@ from aiogram import F, types
 from config import (
     ADMIN_ID, BLOCKED_USERS, model, LOG_FILE
 )
+from core.upupa_utils import normalize_upupa_command
 from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
 from AI.tutu import process_tickets_command
+from services.news import process_tv_news_command
 
 router = Router(name="ai_summary")
 
@@ -22,6 +24,13 @@ router = Router(name="ai_summary")
 async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
+    ("упупа чо по телеку", "упупа что по телеку")
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_tv_news(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_tv_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):

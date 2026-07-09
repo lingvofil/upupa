@@ -11,7 +11,8 @@
 #   "упупа сними <промпт>"            — текст -> видео
 #   "упупа сними <промпт>" реплаем
 #       на фото                       — фото как стартовый кадр
-#   "оживи [промпт]" реплаем на фото  — анимация фото
+#   "оживи [промпт]" реплаем на фото
+#       или подписью к фото            — анимация фото
 
 import asyncio
 import logging
@@ -255,18 +256,22 @@ async def process_video_generation(message: types.Message, bot) -> None:
 
 
 async def process_animate_photo(message: types.Message, bot) -> None:
-    """Команда 'оживи [промпт]' реплаем на фото — image-to-video."""
-    if not (message.reply_to_message and message.reply_to_message.photo):
-        await message.reply("Оживить можно только фото — ответь командой на картинку.")
+    """Команда 'оживи [промпт]' реплаем на фото или подписью к фото — image-to-video."""
+    if message.photo:
+        photo = message.photo[-1]
+    elif message.reply_to_message and message.reply_to_message.photo:
+        photo = message.reply_to_message.photo[-1]
+    else:
+        await message.reply("Оживить можно только фото — ответь командой на картинку или отправь фото с подписью 'оживи'.")
         return
     if not _check_and_count_limit(message.chat.id):
         await message.reply(f"🎬 Лимит видео на сегодня исчерпан ({DAILY_LIMIT_PER_CHAT}/день на чат).")
         return
 
-    prompt = _extract_prompt(message.text or "", "оживи")
+    prompt = _extract_prompt(message.text or message.caption or "", "оживи")
     status = await message.reply("🧟 Оживляю...")
     try:
-        img = await download_telegram_image(bot, message.reply_to_message.photo[-1])
+        img = await download_telegram_image(bot, photo)
         if not img:
             await status.edit_text("Не смог скачать фото.")
             return

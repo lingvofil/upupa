@@ -34,3 +34,4 @@ target/
 
 # Local private config
 config_private.py
+bot_log.txt

@@ -57,6 +57,21 @@ async def universal_handler(message: types.Message):
     query, temp_img_path, error_msg = queries[keyword]
     await handle_message(message, query, temp_img_path, error_msg)
 
+@router.message(lambda message: message.text and (
+    message.text.lower() == "гиф" or message.text.lower().startswith("гиф ")
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_gif_search(message: types.Message):
+    query = message.text[len("гиф"):].strip()
+    if not query:
+        await message.reply("Гиф чего? Пиши: гиф [запрос], например: гиф кот")
+        return
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    success, error_message, gif_data = await process_gif_search(query)
+    if success and gif_data:
+        await save_and_send_gif(message, gif_data)
+    elif error_message:
+        await message.reply(error_message)
+
 @router.message(lambda message: message.text and message.text.lower().replace(" ", "") == "котогиф" and message.from_user.id not in BLOCKED_USERS)
 async def send_kotogif(message: types.Message):
     random_action = random.choice(actions)

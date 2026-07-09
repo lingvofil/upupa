@@ -21,9 +21,15 @@ async def generate_video_command(message: types.Message):
 
 
 @router.message(
-    lambda message: message.text
-    and message.text.lower().startswith("оживи")
-    and message.reply_to_message is not None
+    lambda message: (
+        message.text
+        and message.text.lower().startswith("оживи")
+        and message.reply_to_message is not None
+    ) or (
+        message.photo
+        and message.caption
+        and message.caption.lower().startswith("оживи")
+    )
 )
 async def animate_photo_command(message: types.Message):
     await process_animate_photo(message, bot)

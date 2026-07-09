@@ -41,6 +41,7 @@ from features.stat_rank_settings import track_message_statistics
 
 # === ИМПОРТ SMART SEARCH И НОВОГО ENGINE ===
 from services.smart_search import find_relevant_context
+from services.web_context import needs_web_search, get_web_context
 from core.history_engine import load_and_find_answer
 
 # =============================================================================
@@ -403,7 +404,16 @@ async def handle_serious_mode_command(message: types.Message):
     
     # Используем серьёзный промпт
     from prompts import PROMPT_SERIOUS_MODE
-    full_prompt = f"{PROMPT_SERIOUS_MODE}\n\nВопрос: {user_question}"
+
+    # Для вопросов про актуальные события подтягиваем данные из интернета
+    web_context = ""
+    if needs_web_search(user_question):
+        try:
+            web_context = await get_web_context(user_question)
+        except Exception as e:
+            logging.warning(f"Web Search failed (serious mode): {e}")
+
+    full_prompt = f"{PROMPT_SERIOUS_MODE}{web_context}\n\nВопрос: {user_question}"
     
     try:
         response_text = await generate_simple_response(full_prompt, chat_id)
@@ -633,12 +643,24 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
                     logging.info(f"Smart Search added context for {prompt_name}: {relevant_msgs}")
 
     # ===============================================================
+    # WEB CONTEXT: если вопрос про актуальные события — подтягиваем
+    # свежую информацию из интернета (иначе модель отвечает по устаревшей базе)
+    # ===============================================================
+    web_context = ""
+    if current_settings.get("active_model", "gemini") != "history" and needs_web_search(user_input):
+        try:
+            web_context = await get_web_context(user_input)
+            if web_context:
+                logging.info(f"Web Search added context for: {user_input[:80]}")
+        except Exception as e:
+            logging.warning(f"Web Search failed: {e}")
 
     chat_history_formatted = format_chat_history(chat_id)
-    
+
     full_prompt = (
         f"{selected_prompt}\n"
-        f"{additional_context}\n"
+        f"{additional_context}"
+        f"{web_context}\n"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
         f"{prompt_name}:"

@@ -22,6 +22,7 @@ from AI.talking import (
     handle_poem_command,
     handle_serious_mode_command
 )
+from AI.translate import is_translate_command, process_translate_command
 
 router = Router(name="ai_prompts")
 
@@ -72,6 +73,10 @@ async def handle_poem(message: types.Message):
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа умоляю"))
 async def serious_mode_command(message: types.Message):
     await handle_serious_mode_command(message)
+
+@router.message(lambda message: is_translate_command(message.text))
+async def translate_command(message: types.Message):
+    await process_translate_command(message)
 
 # ================== БЛОК 6.12: ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ==================
         

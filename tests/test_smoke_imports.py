@@ -49,7 +49,7 @@ FEATURE_MODULES = [
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
     "services.sherlock", "services.ytp", "services.media_change", "services.distortion",
-    "services.memegenerator",
+    "services.memegenerator", "services.news", "services.web_context",
 ]
 GAME_MODULES = ["games.crocodile", "games.egra"]
 HANDLER_MODULES = [
@@ -62,8 +62,8 @@ HANDLER_MODULES = [
 AI_MODULES = [
     "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
-    "AI.random_reactions", "AI.summarize", "AI.talking", "AI.tutu",
-    "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
+    "AI.random_reactions", "AI.summarize", "AI.talking", "AI.translate",
+    "AI.tutu", "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
 ]
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
