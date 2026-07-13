@@ -149,6 +149,20 @@ async def process_recall_command(message: types.Message):
 
 VERDICT_CONTEXT_RADIUS = 15   # сообщений вокруг реплайнутого
 VERDICT_FALLBACK_TAIL = 30    # без реплая берём хвост переписки
+VERDICT_MAX_GAP_SECONDS = 300  # разрыв во времени, после которого считаем, что начался другой разговор
+
+
+def _trim_to_same_conversation(messages: list[dict], center: int) -> list[dict]:
+    """Обрезает окно по времени: как только между соседними сообщениями
+    разрыв больше VERDICT_MAX_GAP_SECONDS, считаем, что дальше уже другой
+    диалог, и туда не заходим (даже если позиционно это в радиусе)."""
+    lo = center
+    while lo > 0 and (messages[lo]["dt"] - messages[lo - 1]["dt"]).total_seconds() <= VERDICT_MAX_GAP_SECONDS:
+        lo -= 1
+    hi = center
+    while hi < len(messages) - 1 and (messages[hi + 1]["dt"] - messages[hi]["dt"]).total_seconds() <= VERDICT_MAX_GAP_SECONDS:
+        hi += 1
+    return messages[lo:hi + 1]
 
 
 def _build_dispute_context(messages: list[dict], target_text: str) -> list[dict]:
@@ -159,7 +173,10 @@ def _build_dispute_context(messages: list[dict], target_text: str) -> list[dict]
             if messages[i]["text"] == target_text:
                 lo = max(0, i - VERDICT_CONTEXT_RADIUS)
                 hi = min(len(messages), i + VERDICT_CONTEXT_RADIUS + 1)
-                return messages[lo:hi]
+                window = messages[lo:hi]
+                # индекс целевого сообщения внутри window
+                center = i - lo
+                return _trim_to_same_conversation(window, center)
     return messages[-VERDICT_FALLBACK_TAIL:]
 
 

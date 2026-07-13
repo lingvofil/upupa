@@ -59,7 +59,7 @@ async def handle_chobylo(message: types.Message):
 # Футбол регистрируется ДО общего обзора, чтобы "упупа новости футбола"
 # не перехватывался триггером "упупа новости".
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
-    ("новости футбола", "упупа новости футбола")
+    ("новости футбола", "упупа новости футбола", "футбольные новости", "упупа футбольные новости")
 ) and message.from_user.id not in BLOCKED_USERS)
 async def handle_football_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
