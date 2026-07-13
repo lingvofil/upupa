@@ -92,7 +92,7 @@ async def extract_messages_by_full_name(full_name: str, chat_id: int) -> list:
 # Функция для извлечения сообщений всего чата по chat_id
 async def extract_chat_messages(chat_id: int) -> list:
     messages = []
-    pattern = re.compile(rf".* - Chat {chat_id}\b - User .+?: (.*)")
+    pattern = re.compile(rf".* - Chat {chat_id}\b.*User .+?: (.*)")
     async with aiofiles.open(LOG_FILE, mode="r", encoding="utf-8") as f:
         async for line in f:
             match = pattern.match(line)
