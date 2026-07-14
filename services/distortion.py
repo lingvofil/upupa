@@ -1,12 +1,15 @@
 import os
 import asyncio
+import glob
 import json
+import math
 import random
 import logging
 import re
 import subprocess
 import shutil
 import time
+import concurrent.futures
 import numpy as np
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
@@ -29,8 +32,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- ОГРАНИЧЕНИЯ РЕСУРСОВ ---
 MAX_AUDIO_DURATION = 180 # 3 минуты
+MAX_VIDEO_DISTORTION_SECONDS = 15  # покадровый seam carving дорогой, длинные видео режем
+VIDEO_DISTORTION_FPS = 8  # ниже, чем было в старом фильтре — компромисс скорость/плавность
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 processing_semaphore = asyncio.Semaphore(1)
+
+# Пул процессов для покадрового seam carving (CPU-bound, поэтому процессы, а не потоки)
+_frame_distortion_pool = concurrent.futures.ProcessPoolExecutor(
+    max_workers=max(1, (os.cpu_count() or 2) - 1)
+)
 
 # --- Вспомогательные функции ---
 
@@ -199,6 +209,103 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, inten
         logging.error(f"Ошибка seam carving: {e}", exc_info=True)
         return False
 
+
+# --- Seam carving для видео/гифок (тот же принцип, что для фото, только покадрово) ---
+
+def _distort_frame_task(frame_path: str, distort_percent: int) -> None:
+    """Блокирующая CPU-задача: сжимает кадр seam carving'ом и растягивает обратно
+    до исходного размера. Выполняется в отдельном процессе (см. _frame_distortion_pool)."""
+    with Image.open(frame_path) as img:
+        original_size = img.size
+        src = np.array(img.convert("RGB"))
+    w, h = original_size
+    distort_percent = max(5, min(distort_percent, 90))
+    new_w = max(int(w * (100 - distort_percent) / 100), 20)
+    new_h = max(int(h * (100 - distort_percent) / 100), 20)
+    dst = seam_carving.resize(src, (new_w, new_h), energy_mode='backward', order='width-first')
+    Image.fromarray(dst).resize(original_size, Image.LANCZOS).save(frame_path, "PNG")
+
+
+async def _has_audio_stream(input_path: str) -> bool:
+    info = await get_media_info(input_path)
+    if not info or 'streams' not in info:
+        return False
+    return any(s.get('codec_type') == 'audio' for s in info['streams'])
+
+
+async def apply_seam_carving_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
+    """Видео-версия того же искажения, что для фото: покадровый seam carving
+    (сжатие по контенту + растягивание обратно), из-за интенсивности которое
+    "дышит" во времени, чтобы в динамике был эффект переливания, а не
+    одинаковый статичный сквош на каждом кадре. Звук не трогаем алгоритмом —
+    берём уже рабочий аудио-пайплайн как есть."""
+    if not SEAM_CARVING_AVAILABLE:
+        return False
+
+    work_dir = f"{input_path}_frames_{random.randint(1000, 9999)}"
+    os.makedirs(work_dir, exist_ok=True)
+    frames_pattern = os.path.join(work_dir, "frame_%05d.png")
+    audio_path = os.path.join(work_dir, "audio.m4a")
+
+    try:
+        extract_cmd = [
+            'ffmpeg', '-y', '-i', input_path,
+            '-t', str(MAX_VIDEO_DISTORTION_SECONDS),
+            '-vf', f"scale='min(360,iw)':-2,fps={VIDEO_DISTORTION_FPS}",
+            frames_pattern
+        ]
+        ok, err = await run_ffmpeg_command(extract_cmd)
+        if not ok:
+            logging.error(f"Не удалось разложить видео на кадры: {err}")
+            return False
+
+        frame_files = sorted(glob.glob(os.path.join(work_dir, "frame_*.png")))
+        if not frame_files:
+            return False
+
+        base_percent = max(5, min(intensity, 90))
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for i, frame_path in enumerate(frame_files):
+            # Лёгкое синусоидальное "дыхание" интенсивности кадр от кадра —
+            # без этого при одинаковом % сжатия на каждом кадре в динамике
+            # почти не видно разницы между соседними кадрами.
+            wobble = 12 * math.sin(i / 5.0)
+            frame_percent = int(base_percent + wobble)
+            tasks.append(loop.run_in_executor(_frame_distortion_pool, _distort_frame_task, frame_path, frame_percent))
+        await asyncio.gather(*tasks)
+
+        has_audio = await _has_audio_stream(input_path)
+        if has_audio:
+            af_string = get_audio_distortion_filter(intensity)
+            audio_cmd = [
+                'ffmpeg', '-y', '-i', input_path,
+                '-t', str(MAX_VIDEO_DISTORTION_SECONDS),
+                '-vn', '-af', af_string, '-c:a', 'aac', '-b:a', '128k', audio_path
+            ]
+            ok, err = await run_ffmpeg_command(audio_cmd)
+            if not ok:
+                logging.warning(f"Не удалось искозить звук отдельно, видео пойдёт без звука: {err}")
+                has_audio = False
+
+        assemble_cmd = ['ffmpeg', '-y', '-framerate', str(VIDEO_DISTORTION_FPS), '-i', frames_pattern]
+        if has_audio and os.path.exists(audio_path):
+            assemble_cmd += ['-i', audio_path, '-c:a', 'aac', '-shortest']
+        assemble_cmd += [
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+            '-pix_fmt', 'yuv420p', output_path
+        ]
+        ok, err = await run_ffmpeg_command(assemble_cmd)
+        if not ok:
+            logging.error(f"Не удалось собрать видео из кадров: {err}")
+            return False
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка seam carving видео: {e}", exc_info=True)
+        return False
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
 # --- ИЗОЛИРОВАННЫЙ ПРОЦЕСС ОБРАБОТКИ ---
 
 async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict, intensity: int):
@@ -241,13 +348,17 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
 
         elif media_type == 'video':
             output_path = f"{input_path}_out.mp4"
-            success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
+            success = await apply_seam_carving_video_distortion(input_path, output_path, intensity)
+            if not success:
+                success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
             final_media_type = 'video'
 
         elif media_type in ['animation', 'sticker_video']:
             # GIF и видео-стикеры — отправляем как анимацию (отображается в чате)
             output_path = f"{input_path}_out.mp4"
-            success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
+            success = await apply_seam_carving_video_distortion(input_path, output_path, intensity)
+            if not success:
+                success = await apply_ffmpeg_video_distortion(input_path, output_path, intensity)
             final_media_type = 'video'
 
         elif media_type == 'sticker_tgs':
@@ -257,7 +368,9 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                 await bot_instance.send_message(chat_id, "❌ Не удалось конвертировать TGS в видео.")
                 return
             output_path = f"{input_path}_out.mp4"
-            success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
+            success = await apply_seam_carving_video_distortion(converted_path, output_path, intensity)
+            if not success:
+                success = await apply_ffmpeg_video_distortion(converted_path, output_path, intensity)
             final_media_type = 'video'
 
         if success and output_path and os.path.exists(output_path):
