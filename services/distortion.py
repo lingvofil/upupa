@@ -277,15 +277,22 @@ async def apply_seam_carving_video_distortion(input_path: str, output_path: str,
 
         has_audio = await _has_audio_stream(input_path)
         if has_audio:
-            af_string = get_audio_distortion_filter(intensity)
-            audio_cmd = [
-                'ffmpeg', '-y', '-i', input_path,
-                '-t', str(MAX_VIDEO_DISTORTION_SECONDS),
-                '-vn', '-af', af_string, '-c:a', 'aac', '-b:a', '128k', audio_path
-            ]
-            ok, err = await run_ffmpeg_command(audio_cmd)
-            if not ok:
-                logging.warning(f"Не удалось искозить звук отдельно, видео пойдёт без звука: {err}")
+            # Важно: искажаем звук в MP3 тем же путём, что и рабочая
+            # apply_ffmpeg_audio_distortion (её же использует чистое аудио-искажение) —
+            # acrusher иногда даёт NaN/Inf-сэмплы, libmp3lame их спокойно проглатывает,
+            # а вот AAC-энкодер на них падает намертво. Поэтому сначала честный
+            # проверенный MP3-путь, а потом просто перегоняем готовый MP3 в AAC —
+            # на этом шаге фильтров уже нет, NaN взяться неоткуда.
+            audio_mp3_path = os.path.join(work_dir, "audio.mp3")
+            mp3_ok = await apply_ffmpeg_audio_distortion(input_path, audio_mp3_path, intensity)
+            if mp3_ok:
+                transcode_cmd = ['ffmpeg', '-y', '-i', audio_mp3_path, '-c:a', 'aac', '-b:a', '128k', audio_path]
+                ok, err = await run_ffmpeg_command(transcode_cmd)
+                if not ok:
+                    logging.warning(f"Не удалось перегнать искажённый звук в AAC, видео пойдёт без звука: {err}")
+                    has_audio = False
+            else:
+                logging.warning("Не удалось искозить звук, видео пойдёт без звука")
                 has_audio = False
 
         assemble_cmd = ['ffmpeg', '-y', '-framerate', str(VIDEO_DISTORTION_FPS), '-i', frames_pattern]
