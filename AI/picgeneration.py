@@ -10,7 +10,7 @@ import random
 import re
 import textwrap
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from io import BytesIO
 from typing import Optional, Tuple, Union
 from urllib.parse import quote
@@ -45,6 +45,7 @@ NVIDIA_GLOBAL_LIMIT = 6            # не больше 6 запросов сум
 NVIDIA_GLOBAL_WINDOW = 60 * 60 * 10  # окно 10 часов
 
 _nvidia_global_calls: list[float] = []  # timestamps всех вызовов
+_pun_recent_by_chat: dict[str, deque[str]] = defaultdict(lambda: deque(maxlen=12))
 
 def get_active_model(chat_id: str) -> str:
     """Возвращает активную модель для чата"""
@@ -493,8 +494,17 @@ async def handle_pun_image_command(message: types.Message):
     
     try:
         active_model = get_active_model(chat_id)
+        recent_puns = list(_pun_recent_by_chat[chat_id])
+        recent_block = (
+            "Недавние варианты, их нельзя повторять и нельзя использовать те же пары слов: "
+            f"{'; '.join(recent_puns)}.\n"
+            if recent_puns else ""
+        )
+        entropy_seed = random.randint(100000, 999999)
         
         pun_prompt = (
+            f"Случайный seed для разнообразия: {entropy_seed}.\n"
+            f"{recent_block}"
             "Придумай смешной визуальный каламбур-гибрид на русском языке по такому принципу: "
             "конец первого слова совпадает с началом второго слова — они сливаются в одно новое слово.\n"
             "Правило: слова должны иметь ОБЩУЮ часть на стыке, а не просто склеиваться!\n"
@@ -513,12 +523,34 @@ async def handle_pun_image_command(message: types.Message):
         
         if active_model == "gigachat":
             pun_res = await asyncio.to_thread(
-                lambda: gigachat_model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip()
+                lambda: gigachat_model.generate_content(
+                    pun_prompt,
+                    chat_id=int(chat_id),
+                    temperature=1.0,
+                    max_tokens=120,
+                ).text.strip()
             )
         elif active_model == "groq":
-            pun_res = await asyncio.to_thread(lambda: groq_ai.generate_text(pun_prompt))
+            pun_res = await asyncio.to_thread(
+                lambda: groq_ai.generate_text(
+                    pun_prompt,
+                    max_tokens=120,
+                    temperature=1.0,
+                    presence_penalty=0.6,
+                )
+            )
         else:  # gemini
-            pun_res = await asyncio.to_thread(lambda: model.generate_content(pun_prompt, chat_id=int(chat_id)).text.strip())
+            pun_res = await asyncio.to_thread(
+                lambda: model.generate_content(
+                    pun_prompt,
+                    chat_id=int(chat_id),
+                    generation_config={
+                        "temperature": 1.0,
+                        "top_p": 0.95,
+                        "max_output_tokens": 120,
+                    },
+                ).text.strip()
+            )
         
         pun_res = pun_res.replace('*', '').replace('"', '').replace("'", "").strip()
         
@@ -528,6 +560,7 @@ async def handle_pun_image_command(message: types.Message):
         parts = pun_res.split('=')
         source_raw = parts[0].strip()
         final_word = parts[1].strip()
+        _pun_recent_by_chat[chat_id].append(f"{source_raw} = {final_word}")
         
         await msg.edit_text("Ща скаламбурю нахуй")
         
@@ -540,6 +573,19 @@ async def handle_pun_image_command(message: types.Message):
             if PIPELINE_ID:
                 uuid, _ = await asyncio.to_thread(kandinsky_api.generate, f"Гибрид {source_raw}, каламбур", PIPELINE_ID)
                 if uuid: img_data, _ = await asyncio.to_thread(kandinsky_api.check, uuid)
+                if img_data:
+                    logging.info("Pun image generated via Kandinsky")
+                else:
+                    logging.warning("Pun Kandinsky returned no image")
+            else:
+                logging.warning("Pun Kandinsky pipeline id is unavailable")
+
+        if not img_data:
+            logging.info("Pun image: trying HuggingFace fallback")
+            img_data = await hf_generate(prompt_en, 'black-forest-labs/FLUX.1-schnell')
+        if not img_data:
+            logging.info("Pun image: trying Cloudflare fallback")
+            img_data = await cf_generate_t2i(prompt_en)
         
         if img_data:
             path = await asyncio.to_thread(_overlay_text_on_image, img_data, final_word)
@@ -547,6 +593,7 @@ async def handle_pun_image_command(message: types.Message):
             os.remove(path)
             await msg.delete()
         else:
+            logging.warning("Pun image generation failed in all providers")
             await msg.edit_text(f"Вот тебе калом бур: {pun_res}\nРисуй сам, раз такой умный.")
             
     except Exception as e:
