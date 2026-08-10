@@ -1,19 +1,16 @@
 # === services/news.py — обзоры новостей: "чо по телеку", "новости футбола" ===
 #
-# Тянем свежие заголовки из публичных RSS-лент и суммируем их тем же
-# промптом, что и команда "чотам" (PROMPTS_MEDIA), через активную модель чата.
+# Тянем свежие заголовки из публичных RSS-лент и суммируем их текущим
+# промптом чата через активную модель.
 # Обзор развёрнутый: отдельный абзац на каждую новость.
 
 import asyncio
 import logging
-import random
 import re
 import xml.etree.ElementTree as ET
 
 import requests
 from aiogram import types
-
-from prompts import PROMPTS_MEDIA
 
 # Ленты пробуются по порядку, пока не наберётся MAX_ITEMS новостей
 NEWS_FEEDS = [
@@ -81,13 +78,9 @@ def _fetch_news_sync(feeds: list[str], exclude: re.Pattern | None = None) -> lis
     return news[:MAX_ITEMS]
 
 
-def _build_review_prompt(news: list[str], topic_line: str, extra_rule: str = "") -> str:
+def _build_review_task_prompt(news: list[str], topic_line: str, extra_rule: str = "") -> str:
     news_text = "\n".join(f"- {item}" for item in news)
-    # В базовом промпте "чотам" зашит лимит "не более N слов" — для обзора
-    # новостей его убираем: тут нужен развёрнутый ответ по абзацам.
-    base_prompt = re.sub(r",?\s*не более \d+ слов", "", random.choice(PROMPTS_MEDIA))
     return (
-        f"{base_prompt}.\n"
         f"Сделай обзор новостей ниже: выбери 5-8 самых интересных, "
         f"на каждую — отдельный абзац из 1-3 предложений, между абзацами пустая строка. "
         f"Всего не более 250 слов. Без вступлений и заключений, сразу обзор. {extra_rule}\n\n"
@@ -105,7 +98,7 @@ async def _process_news_review(
     extra_rule: str = "",
 ) -> None:
     # Ленивый импорт: избегаем цикла services.news <-> AI.talking
-    from AI.talking import generate_simple_response
+    from AI.talking import build_prompt_with_current_chat_prompt, generate_simple_response
 
     status = await message.reply(status_text)
     try:
@@ -114,7 +107,12 @@ async def _process_news_review(
             await status.edit_text(fail_text)
             return
 
-        prompt = _build_review_prompt(news, topic_line, extra_rule)
+        task_prompt = _build_review_task_prompt(news, topic_line, extra_rule)
+        prompt = build_prompt_with_current_chat_prompt(
+            str(message.chat.id),
+            task_prompt,
+            task_name="обзор новостей",
+        )
         response_text = await generate_simple_response(prompt, str(message.chat.id))
         await status.delete()
         await message.reply(response_text)

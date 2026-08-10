@@ -795,3 +795,15 @@ def get_current_chat_prompt(chat_id: str) -> tuple:
     prompt_text = settings.get("prompt", PROMPTS_DICT.get("летописец", ""))
     prompt_name = settings.get("prompt_name", "летописец")
     return prompt_text, prompt_name
+
+
+def build_prompt_with_current_chat_prompt(chat_id: str, task_prompt: str, task_name: str = "служебную команду") -> str:
+    """Добавляет текущий промпт чата к отдельной задаче генерации."""
+    selected_prompt, prompt_name = get_current_chat_prompt(str(chat_id))
+    return (
+        f"{selected_prompt}\n\n"
+        f"Ты выполняешь {task_name} в этом чате от лица '{prompt_name}'. "
+        f"Сохрани характер, тон, лексику и манеру текущего промпта, но строго выполни задачу ниже. "
+        f"Не превращай ответ в обычный диалог и не объясняй эти инструкции.\n\n"
+        f"Задача:\n{task_prompt}"
+    )

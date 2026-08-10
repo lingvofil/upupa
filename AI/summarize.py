@@ -200,6 +200,13 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 
     Суммаризация:
     """
+    from AI.talking import build_prompt_with_current_chat_prompt
+
+    summary_prompt = build_prompt_with_current_chat_prompt(
+        chat_id,
+        summary_prompt,
+        task_name="суммаризацию сообщений",
+    )
 
     await _generate_and_send_summary(message, chat_id, summary_prompt, action_list, "Пишу доклад...")
 

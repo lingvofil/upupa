@@ -102,7 +102,13 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
     message_sample = random.sample(messages, sample_size)
     
     messages_text = "\n".join(message_sample)
-    prompt = WHO_AM_I_PROMPT.format(messages=messages_text)
+    from AI.talking import build_prompt_with_current_chat_prompt
+
+    prompt = build_prompt_with_current_chat_prompt(
+        str(chat_id),
+        WHO_AM_I_PROMPT.format(messages=messages_text),
+        task_name="анализ участника",
+    )
     
     try:
         random_action = random.choice(actions)
@@ -133,7 +139,13 @@ async def process_chat_profile(message: types.Message):
     message_sample = random.sample(messages, sample_size)
     messages_text = "\n".join(message_sample)
 
-    prompt = CHAT_PROFILE_PROMPT.format(messages=messages_text)
+    from AI.talking import build_prompt_with_current_chat_prompt
+
+    prompt = build_prompt_with_current_chat_prompt(
+        str(chat_id),
+        CHAT_PROFILE_PROMPT.format(messages=messages_text),
+        task_name="анализ чата",
+    )
 
     try:
         random_action = random.choice(actions)
