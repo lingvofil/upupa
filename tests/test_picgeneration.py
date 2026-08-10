@@ -1,5 +1,8 @@
 """Юнит-тесты подбора бесплатных image-моделей из каталога Pollinations."""
+from io import BytesIO
+
 import pytest
+from PIL import Image, ImageDraw
 
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
@@ -41,6 +44,22 @@ def test_order_prefers_flux_first():
 def test_fallback_queue_when_empty():
     assert pg._extract_free_image_models("мусор") == []
     assert pg._IMAGE_FALLBACK_QUEUE[0] == "flux"
+
+
+def test_move_nvidia_comparison_labels_to_bottom():
+    image = Image.new("RGB", (800, 400), (90, 100, 110))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((90, 280, 310, 340), fill=(0, 0, 0))
+    draw.rectangle((500, 275, 720, 335), fill=(255, 255, 255))
+    draw.rectangle((500, 335, 720, 340), fill=(118, 185, 0))
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+
+    result = Image.open(BytesIO(pg.move_nvidia_comparison_labels_to_bottom(buffer.getvalue()))).convert("RGB")
+
+    assert pg._find_nvidia_label_box(result, 0, 400, "dark")[3] == 400
+    assert pg._find_nvidia_label_box(result, 400, 800, "light")[3] == 400
 
 
 @pytest.mark.anyio

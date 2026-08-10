@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 from gradio_client import Client, handle_file
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from transliterate import translit
@@ -242,6 +242,112 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # Реальный список и цены берём из живого каталога /image/models — он
 # динамический. Премиум-модели (seedream, nanobanana, gptimage и т.п.)
 # сюда не попадают: в очередь идут только модели ценой 0 поллена.
+def _find_nvidia_label_box(image: Image.Image, x0: int, x1: int, mode: str) -> Optional[Tuple[int, int, int, int]]:
+    width, height = image.size
+    y_search_start = int(height * 0.55)
+    min_row_pixels = max(8, int((x1 - x0) * 0.18))
+    row_hits = []
+
+    for y in range(y_search_start, height):
+        hits = 0
+        for x in range(x0, x1, 2):
+            r, g, b = image.getpixel((x, y))[:3]
+            if mode == "light":
+                matched = r > 230 and g > 230 and b > 230 and max(r, g, b) - min(r, g, b) < 35
+            else:
+                matched = r < 45 and g < 45 and b < 45
+            if matched:
+                hits += 2
+        row_hits.append(hits >= min_row_pixels)
+
+    runs = []
+    run_start = None
+    for index, hit in enumerate(row_hits + [False]):
+        if hit and run_start is None:
+            run_start = index
+        elif not hit and run_start is not None:
+            runs.append((y_search_start + run_start, y_search_start + index - 1))
+            run_start = None
+
+    min_height = max(18, int(height * 0.045))
+    runs = [(top, bottom) for top, bottom in runs if bottom - top + 1 >= min_height]
+    if not runs:
+        return None
+
+    top, bottom = max(runs, key=lambda run: (run[1] - run[0], run[1]))
+    min_col_pixels = max(6, int((bottom - top + 1) * 0.45))
+    columns = []
+
+    for x in range(x0, x1):
+        hits = 0
+        for y in range(top, bottom + 1):
+            r, g, b = image.getpixel((x, y))[:3]
+            if mode == "light":
+                matched = r > 230 and g > 230 and b > 230 and max(r, g, b) - min(r, g, b) < 35
+            else:
+                matched = r < 55 and g < 55 and b < 55
+            if matched:
+                hits += 1
+        columns.append(hits >= min_col_pixels)
+
+    col_runs = []
+    col_start = None
+    for index, hit in enumerate(columns + [False]):
+        if hit and col_start is None:
+            col_start = index
+        elif not hit and col_start is not None:
+            col_runs.append((x0 + col_start, x0 + index - 1))
+            col_start = None
+
+    min_width = max(40, int(width * 0.12))
+    col_runs = [(left, right) for left, right in col_runs if right - left + 1 >= min_width]
+    if not col_runs:
+        return None
+
+    left, right = max(col_runs, key=lambda run: run[1] - run[0])
+    return (left, top, right + 1, bottom + 1)
+
+
+def _cover_nvidia_label_source(image: Image.Image, box: Tuple[int, int, int, int]) -> None:
+    left, top, right, bottom = box
+    label_height = bottom - top
+    source_top = max(0, top - label_height)
+    source_bottom = top
+
+    if source_bottom - source_top >= max(10, label_height // 3):
+        fill = image.crop((left, source_top, right, source_bottom)).resize((right - left, label_height))
+    else:
+        fill = image.crop(box).filter(ImageFilter.GaussianBlur(radius=max(8, label_height // 8)))
+
+    image.paste(fill, (left, top))
+
+
+def move_nvidia_comparison_labels_to_bottom(image_bytes: bytes) -> bytes:
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    width, height = image.size
+    boxes = [
+        _find_nvidia_label_box(image, 0, width // 2, "dark"),
+        _find_nvidia_label_box(image, width // 2, width, "light"),
+    ]
+    boxes = [box for box in boxes if box]
+    if not boxes:
+        return image_bytes
+
+    labels = [(box, image.crop(box)) for box in boxes]
+    for box, _ in labels:
+        _cover_nvidia_label_source(image, box)
+
+    for box, label in labels:
+        left, _top, _right, _bottom = box
+        _label_width, label_height = label.size
+        target_y = max(0, height - label_height)
+        image.paste(label, (left, target_y))
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
 IMAGE_MODEL_PREFERENCE = ["flux", "zimage", "turbo", "klein", "qwen-image"]
 _IMAGE_FALLBACK_QUEUE = ["flux", "zimage"]
 
@@ -844,6 +950,7 @@ async def handle_nvidia_command(message: types.Message):
             await msg.edit_text("Nvidia недоступна, генерирую через Flux...")
             await robust_image_generation(message, prompt or "enhance, upscale, detailed", msg)
             return
+        generated_bytes = move_nvidia_comparison_labels_to_bottom(generated_bytes)
         await msg.delete()
         await send_generated_photo(message, generated_bytes, "nvidia.png")
     except Exception as e:
