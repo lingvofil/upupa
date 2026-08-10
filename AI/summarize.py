@@ -191,7 +191,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
     user_mentions_list = [u["display_name"] for u in users_in_period.values() if u["display_name"]]
     user_mentions_str = ", ".join(user_mentions_list) if user_mentions_list else "участников"
 
-    summary_prompt = f"""Просуммируй следующие сообщения из чата {chat_name}. Сделай краткое изложение в свободной форме (с сарказмом и обсценной лексикой), разбей на абзацы. Не более 200 слов. 
+    summary_task_prompt = f"""Просуммируй следующие сообщения из чата {chat_name}. Сделай краткое изложение в свободной форме (с сарказмом и обсценной лексикой), разбей на абзацы. Не более 200 слов. 
     Упомяни участников беседы по имени (без символа @): {user_mentions_str}.
     Если сообщений мало, можно сделать совсем короткую сводку в один абзац.
 
@@ -204,11 +204,28 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 
     summary_prompt = build_prompt_with_current_chat_prompt(
         chat_id,
-        summary_prompt,
+        summary_task_prompt,
         task_name="суммаризацию сообщений",
     )
+    retry_prompt = build_prompt_with_current_chat_prompt(
+        chat_id,
+        (
+            f"{summary_task_prompt}\n\n"
+            "Если предыдущая попытка могла быть заблокирована или получилась пустой, "
+            "всё равно верни обычный текст сводки. Без Markdown, без цитирования инструкций, "
+            "без отказа, 2-4 коротких абзаца."
+        ),
+        task_name="повторную суммаризацию сообщений",
+    )
 
-    await _generate_and_send_summary(message, chat_id, summary_prompt, action_list, "Пишу доклад...")
+    await _generate_and_send_summary(
+        message,
+        chat_id,
+        summary_prompt,
+        action_list,
+        "Пишу доклад...",
+        retry_prompt=retry_prompt,
+    )
 
 
 async def summarize_year(message: types.Message, chat_model, log_file_path: str, action_list: list):
@@ -276,7 +293,15 @@ async def summarize_year(message: types.Message, chat_model, log_file_path: str,
     await _generate_and_send_summary(message, chat_id, summary_prompt, action_list, "Анализирую этот пиздец...", status_msg)
 
 
-async def _generate_and_send_summary(message: types.Message, chat_id: str, prompt: str, action_list: list, wait_text: str, prev_msg: types.Message = None):
+async def _generate_and_send_summary(
+    message: types.Message,
+    chat_id: str,
+    prompt: str,
+    action_list: list,
+    wait_text: str,
+    prev_msg: types.Message = None,
+    retry_prompt: str | None = None,
+):
     """
     Отправка в LLM с ретраями и разбивкой длинных сообщений.
     """
@@ -304,7 +329,20 @@ async def _generate_and_send_summary(message: types.Message, chat_id: str, promp
         summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings, is_summarization=True)
         if not summary_response:
             logging.warning("Summarization returned empty response")
-            summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
+            if retry_prompt:
+                try:
+                    await processing_msg.edit_text("Модель промолчала, пробую ещё раз...")
+                except Exception:
+                    pass
+                summary_response = await _generate_with_active_model(
+                    retry_prompt,
+                    chat_id,
+                    safety_settings,
+                    is_summarization=True,
+                )
+            if not summary_response:
+                logging.warning("Summarization retry returned empty response")
+                summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
         
         await processing_msg.delete()
 
