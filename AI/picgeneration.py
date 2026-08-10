@@ -307,7 +307,12 @@ async def get_free_image_model_queue() -> list:
                 _image_models_cache.update(ts=now, queue=queue)
                 logging.info(f"Бесплатные image-модели из каталога: {queue}")
                 return queue
-        logging.warning(f"Каталог image-моделей: HTTP {r.status_code}")
+            logging.warning(
+                f"Каталог image-моделей не пометил бесплатные модели; "
+                f"использую статическую очередь: {_IMAGE_FALLBACK_QUEUE}"
+            )
+        else:
+            logging.warning(f"Каталог image-моделей: HTTP {r.status_code}")
     except Exception as e:
         logging.warning(f"Каталог image-моделей недоступен: {e}")
     return _image_models_cache["queue"] or _IMAGE_FALLBACK_QUEUE
