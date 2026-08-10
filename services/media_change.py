@@ -29,6 +29,15 @@ def _is_ogg_document(document: types.Document) -> bool:
     return False
 
 
+def _is_audio_document(document: types.Document) -> bool:
+    if document.mime_type and document.mime_type.startswith("audio/"):
+        return True
+    if document.file_name:
+        ext = os.path.splitext(document.file_name)[1].lower()
+        return ext in {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+    return False
+
+
 def _extract_media_source(message: types.Message) -> types.Message | None:
     if message.reply_to_message:
         source = message.reply_to_message
@@ -70,10 +79,22 @@ def _get_duration_seconds(source: types.Message) -> int | None:
 def _extract_reversible_media_source(message: types.Message) -> types.Message | None:
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or source.animation or (source.document and _is_video_document(source.document)):
+        if (
+            source.video
+            or source.animation
+            or source.audio
+            or source.voice
+            or (source.document and (_is_video_document(source.document) or _is_audio_document(source.document)))
+        ):
             return source
 
-    if message.video or message.animation or (message.document and _is_video_document(message.document)):
+    if (
+        message.video
+        or message.animation
+        or message.audio
+        or message.voice
+        or (message.document and (_is_video_document(message.document) or _is_audio_document(message.document)))
+    ):
         return message
 
     return None
@@ -332,17 +353,40 @@ async def _reverse_video_ffmpeg(input_path: str, output_path: str, with_audio: b
     return await _run_command(cmd)
 
 
+async def _reverse_audio_ffmpeg(input_path: str, output_path: str, codec: str) -> tuple[bool, str]:
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_path,
+        "-vn",
+        "-af",
+        "areverse",
+    ]
+
+    if codec == "opus":
+        cmd += ["-c:a", "libopus"]
+    else:
+        cmd += ["-c:a", "libmp3lame", "-b:a", "192k"]
+
+    cmd += [
+        "-y",
+        output_path,
+    ]
+
+    return await _run_command(cmd)
+
+
 async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     media_source = _extract_reversible_media_source(message)
 
     if not media_source:
-        await message.reply("Реплайни на видео/гифку или отправь её с подписью «наоборот».")
+        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «наоборот».")
         return
 
-    file_obj = media_source.video or media_source.animation or media_source.document
+    file_obj = media_source.video or media_source.animation or media_source.audio or media_source.voice or media_source.document
 
     if not file_obj:
-        await message.reply("Реплайни на видео/гифку или отправь её с подписью «наоборот».")
+        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «наоборот».")
         return
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -365,8 +409,13 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
 
     try:
         async with _media_change_semaphore:
+            is_voice_input = bool(media_source.voice)
+            is_audio_input = bool(media_source.audio or (media_source.document and _is_audio_document(media_source.document)))
+
             if media_source.animation:
                 input_suffix = ".webm"
+            elif media_source.audio or media_source.voice:
+                input_suffix = ".ogg"
             elif media_source.document:
                 input_suffix = os.path.splitext(media_source.document.file_name or "")[1].lower() or ".mp4"
             else:
@@ -375,22 +424,33 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
             with tempfile.NamedTemporaryFile(delete=False, suffix=input_suffix, prefix="rev_in_") as in_file:
                 input_path = in_file.name
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", prefix="rev_out_") as out_file:
+            output_suffix = ".ogg" if is_voice_input else ".mp3" if is_audio_input else ".mp4"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix, prefix="rev_out_") as out_file:
                 output_path = out_file.name
 
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
 
-            success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=True)
-            if not success:
-                success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=False)
+            if is_voice_input:
+                success, ffmpeg_output = await _reverse_audio_ffmpeg(input_path, output_path, codec="opus")
+            elif is_audio_input:
+                success, ffmpeg_output = await _reverse_audio_ffmpeg(input_path, output_path, codec="mp3")
+            else:
+                success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=True)
+                if not success:
+                    success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=False)
 
             if not success:
                 logging.error("[media_change] reverse ffmpeg error: %s", ffmpeg_output)
-                await message.reply("❌ Не удалось обратить видео вспять.")
+                await message.reply("❌ Не удалось обратить медиа вспять.")
                 return
 
-            await message.reply_video(FSInputFile(output_path, filename="reversed.mp4"))
+            if is_voice_input:
+                await message.reply_voice(FSInputFile(output_path, filename="voice_reversed.ogg"))
+            elif is_audio_input:
+                await message.reply_audio(FSInputFile(output_path, filename="audio_reversed.mp3"))
+            else:
+                await message.reply_video(FSInputFile(output_path, filename="reversed.mp4"))
             await processing_msg.delete()
 
     except Exception as exc:
