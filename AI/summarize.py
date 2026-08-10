@@ -95,6 +95,24 @@ def _compress_messages_for_groq(messages: list, max_chars: int = 15000) -> tuple
     return compressed, compression_ratio
 
 
+def _build_limited_messages_text(messages: list, max_chars: int) -> tuple[str, int]:
+    """Собирает последние сообщения так, чтобы весь текст укладывался в max_chars."""
+    selected_reversed = []
+    total_chars = 0
+
+    for msg in reversed(messages):
+        line = f"{msg['display_name']}: {msg['text']}\n"
+        if selected_reversed and total_chars + len(line) > max_chars:
+            break
+        if not selected_reversed and len(line) > max_chars:
+            line = line[:max_chars - 4].rstrip() + "...\n"
+        selected_reversed.append(line)
+        total_chars += len(line)
+
+    selected = list(reversed(selected_reversed))
+    return "".join(selected), len(selected)
+
+
 async def _generate_with_active_model(
     prompt: str,
     chat_id: str,
@@ -234,21 +252,17 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         "Важное уточнение: верни обычный текст сводки. Без Markdown, без объяснения инструкций, "
         "2-4 коротких абзаца."
     )
-    groq_fallback_prompt = legacy_retry_prompt
-    if active_model != "groq":
-        groq_messages, groq_compression_ratio = _compress_messages_for_groq(messages_to_summarize, max_chars=12000)
-        if groq_compression_ratio > 1:
-            groq_input_text = f"Сообщения из чата {chat_name} за последние 12 часов (сжатая выборка, всего {len(groq_messages)} сообщений):\n\n"
-            for msg in groq_messages:
-                groq_input_text += f"{msg['display_name']}: {msg['text']}\n"
-            groq_fallback_prompt = f"""Просуммируй следующие сообщения из чата {chat_name}. Сделай краткое изложение в свободной форме (с сарказмом и обсценной лексикой), разбей на абзацы. Не более 200 слов.
+    groq_messages_text, groq_message_count = _build_limited_messages_text(messages_to_summarize, max_chars=6500)
+    groq_fallback_prompt = f"""Просуммируй следующие сообщения из чата {chat_name}. Сделай краткое изложение в свободной форме (с сарказмом и обсценной лексикой), разбей на абзацы. Не более 180 слов.
 Упомяни участников беседы по имени (без символа @): {user_mentions_str}.
+Если данных мало из-за лимита, суммируй только предоставленную выборку.
 
-Вот сообщения:
-{groq_input_text}
+Вот последние сообщения для аварийной суммаризации (выборка {groq_message_count} сообщений):
+{groq_messages_text}
 
 Суммаризация:
 """
+    logging.info("Emergency Groq summary prompt length=%s chars, messages=%s", len(groq_fallback_prompt), groq_message_count)
 
     await _generate_and_send_summary(
         message,
