@@ -1,4 +1,6 @@
 """Юнит-тесты подбора бесплатных image-моделей из каталога Pollinations."""
+import pytest
+
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
 from AI import picgeneration as pg
@@ -39,3 +41,25 @@ def test_order_prefers_flux_first():
 def test_fallback_queue_when_empty():
     assert pg._extract_free_image_models("мусор") == []
     assert pg._IMAGE_FALLBACK_QUEUE[0] == "flux"
+
+
+@pytest.mark.anyio
+async def test_pollinations_stops_on_payment_required(monkeypatch):
+    calls = []
+
+    async def fake_queue():
+        return ["flux", "zimage"]
+
+    class Response:
+        status_code = 402
+        content = b'{"error":{"code":"PAYMENT_REQUIRED"}}'
+
+    def fake_get(*args, **kwargs):
+        calls.append(args)
+        return Response()
+
+    monkeypatch.setattr(pg, "get_free_image_model_queue", fake_queue)
+    monkeypatch.setattr(pg.requests, "get", fake_get)
+
+    assert await pg.pollinations_generate("bike") is None
+    assert len(calls) == 1

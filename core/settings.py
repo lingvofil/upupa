@@ -130,7 +130,7 @@ GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # для диалогов, пирожки, порошки, днд, чотам (текст, картинки: обработка считывания), 
 # пародия, кто я, что за чат, кем стать, викторина
-GROQ_TEXT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct" #"llama-3.3-70b-versatile"
+GROQ_TEXT_MODEL = "openai/gpt-oss-120b"  # available for the current Groq key
 
 # для чотам (аудио)
 GROQ_AUDIO_MODEL = "whisper-large-v3"

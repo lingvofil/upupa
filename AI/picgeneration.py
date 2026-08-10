@@ -69,10 +69,16 @@ class FusionBrainAPI:
     def get_pipeline(self) -> Optional[str]:
         try:
             r = requests.get(self.URL + 'key/api/v1/pipelines', headers=self.headers, timeout=7)
-            if r.status_code != 200: return None
+            if r.status_code != 200:
+                logging.warning(
+                    f"Kandinsky get_pipeline HTTP {r.status_code}: "
+                    f"{r.text[:200]}"
+                )
+                return None
             data = r.json()
             return data[0]['id'] if data else None
-        except Exception:
+        except Exception as e:
+            logging.warning(f"Kandinsky get_pipeline error: {e}")
             return None
 
     def generate(self, prompt: str, pipeline_id: str) -> Tuple[Optional[str], Optional[str]]:
@@ -93,6 +99,7 @@ class FusionBrainAPI:
             res = r.json()
             return res.get('uuid'), None
         except Exception as e:
+            logging.warning(f"Kandinsky generate error: {e}")
             return None, str(e)
 
     def check(self, uuid: str) -> Tuple[Optional[bytes], Optional[str]]:
@@ -107,10 +114,14 @@ class FusionBrainAPI:
                     img_b64 = data['result']['files'][0]
                     return base64.b64decode(img_b64.split(',')[-1]), None
                 if data.get('status') == 'FAIL':
-                    return None, data.get('errorDescription', 'Unknown fail')
+                    err = data.get('errorDescription', 'Unknown fail')
+                    logging.warning(f"Kandinsky check failed: {err}")
+                    return None, err
                 time.sleep(3)
             except Exception as e:
+                logging.warning(f"Kandinsky check error: {e}")
                 return None, str(e)
+        logging.warning("Kandinsky check timeout")
         return None, "Timeout"
 
 kandinsky_api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
@@ -329,6 +340,11 @@ async def pollinations_generate(prompt: str) -> Optional[bytes]:
             logging.info(f"Pollinations [{model_name}] статус: {r.status_code}, размер: {len(r.content)} байт")
             if r.status_code == 200 and len(r.content) > 1000:
                 return r.content
+            if r.status_code == 402:
+                logging.warning(
+                    "Pollinations balance is empty; skipping remaining Pollinations image models"
+                )
+                return None
             try:
                 logging.warning(f"Pollinations [{model_name}] ответ: {r.content[:200].decode('utf-8', errors='replace')}")
             except Exception:
@@ -388,6 +404,11 @@ async def robust_image_generation(message: types.Message, prompt_ru: str, proces
             if img:
                 await processing_msg.delete()
                 return await send_generated_photo(message, img, "kandinsky.png")
+            logging.warning("Kandinsky returned no image")
+        else:
+            logging.warning("Kandinsky did not return generation uuid")
+    else:
+        logging.warning("Kandinsky pipeline id is unavailable")
 
     # 3. Резервы
     await processing_msg.edit_text("Использую резервный анал...")
