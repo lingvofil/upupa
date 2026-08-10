@@ -181,6 +181,9 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
+        if response_text is None:
+            logging.warning("generate_simple_response: модель вернула None")
+            response_text = ""
         
         logging.info(f"generate_simple_response: получен ответ длиной {len(response_text)} символов")
         logging.info(f"generate_simple_response: ответ = '{response_text[:200]}'")
@@ -571,6 +574,9 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
+        if response_text is None:
+            logging.warning("generate_response: модель вернула None")
+            response_text = ""
         
         if not response_text.strip():
             response_text = "Я пока не знаю, что ответить... 😅"

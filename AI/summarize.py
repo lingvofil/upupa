@@ -134,7 +134,7 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                         safety_settings=safety_settings,
                         chat_id=int(chat_id)
                     )
-                    return response.text
+                    return response.text or ""
                     
             except Exception as e:
                 error_str = str(e)
@@ -302,6 +302,9 @@ async def _generate_and_send_summary(message: types.Message, chat_id: str, promp
         }
 
         summary_response = await _generate_with_active_model(prompt, chat_id, safety_settings, is_summarization=True)
+        if not summary_response:
+            logging.warning("Summarization returned empty response")
+            summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
         
         await processing_msg.delete()
 

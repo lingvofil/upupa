@@ -75,10 +75,10 @@ async def generate_with_active_model(prompt: str, chat_id: int) -> str:
                 response = gigachat_model.generate_content(prompt, chat_id=chat_id)
                 return response.text
             elif active_model == "groq":
-                return groq_ai.generate_text(prompt)
+                return groq_ai.generate_text(prompt) or ""
             else:  # gemini
                 response = model.generate_content(prompt, chat_id=chat_id)
-                return response.text
+                return response.text or ""
         
         return await asyncio.to_thread(sync_generate)
         
@@ -114,7 +114,7 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
         random_action = random.choice(actions)
         await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
         
-        description = await generate_with_active_model(prompt, chat_id)
+        description = await generate_with_active_model(prompt, chat_id) or "Модель промолчала. Попробуй ещё раз."
     except Exception as e:
         logging.error(f"Ошибка при анализе личности 'кто я': {e}")
         description = f"Не могу составить твой портрет, ты слишком сложная и непонятная хуйня. Ошибка: {e}"
@@ -150,7 +150,7 @@ async def process_chat_profile(message: types.Message):
     try:
         random_action = random.choice(actions)
         await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
-        description = await generate_with_active_model(prompt, chat_id)
+        description = await generate_with_active_model(prompt, chat_id) or "Модель промолчала. Попробуй ещё раз."
     except Exception as e:
         logging.error(f"Ошибка при генерации характеристики чата: {e}")
         description = "Не могу понять, что это за притон. Слишком много кринжа."
