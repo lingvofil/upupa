@@ -132,8 +132,7 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                     response = model.generate_content(
                         prompt, 
                         safety_settings=safety_settings,
-                        chat_id=int(chat_id),
-                        require_text=True,
+                        chat_id=int(chat_id)
                     )
                     return response.text or ""
                     
@@ -218,6 +217,11 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         ),
         task_name="повторную суммаризацию сообщений",
     )
+    legacy_retry_prompt = (
+        f"{summary_task_prompt}\n\n"
+        "Важное уточнение: верни обычный текст сводки. Без Markdown, без объяснения инструкций, "
+        "2-4 коротких абзаца."
+    )
 
     await _generate_and_send_summary(
         message,
@@ -226,6 +230,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         action_list,
         "Пишу доклад...",
         retry_prompt=retry_prompt,
+        fallback_prompt=legacy_retry_prompt,
     )
 
 
@@ -302,6 +307,7 @@ async def _generate_and_send_summary(
     wait_text: str,
     prev_msg: types.Message = None,
     retry_prompt: str | None = None,
+    fallback_prompt: str | None = None,
 ):
     """
     Отправка в LLM с ретраями и разбивкой длинных сообщений.
@@ -343,6 +349,19 @@ async def _generate_and_send_summary(
                 )
             if not summary_response:
                 logging.warning("Summarization retry returned empty response")
+                if fallback_prompt:
+                    try:
+                        await processing_msg.edit_text("Текущий промпт душит ответ, пробую старый режим...")
+                    except Exception:
+                        pass
+                    summary_response = await _generate_with_active_model(
+                        fallback_prompt,
+                        chat_id,
+                        safety_settings,
+                        is_summarization=True,
+                    )
+            if not summary_response:
+                logging.warning("Summarization fallback returned empty response")
                 summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
         
         await processing_msg.delete()

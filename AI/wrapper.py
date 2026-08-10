@@ -55,7 +55,7 @@ def _is_retryable(error: Exception) -> bool:
     status_code, error_type = _extract_error_details(error)
     text = str(error).lower()
     if error_type == "EmptyModelResponseError":
-        return True
+        return False
     if status_code in (429, 503):
         return True
     if error_type in ("ResourceExhausted", "QuotaExceeded"):
@@ -350,6 +350,7 @@ class ModelFallbackWrapper:
                         if error_type == "EmptyModelResponseError":
                             temporary_failure_only = False
                             hard_failures.append(error)
+                            raise RuntimeError(f"Gemini returned empty text response: {error}")
                         if retryable and attempt < self._max_retries_per_pair:
                             time.sleep(2 ** (attempt - 1))
                             continue
