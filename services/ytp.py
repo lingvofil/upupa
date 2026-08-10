@@ -7,7 +7,7 @@ import subprocess
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 
-from moviepy.editor import VideoFileClip, concatenate_videoclips
+from moviepy.editor import AudioFileClip, VideoFileClip, concatenate_audioclips, concatenate_videoclips
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
 from config import chat_settings
@@ -218,6 +218,117 @@ def _make_ytp_sync(
                 pass
 
 
+def _make_audio_ytp_sync(
+    input_path: str,
+    output_path: str,
+    target_duration: int = 10,
+    preset: str = "normal",
+) -> None:
+    clip = None
+    final_clip = None
+    clips = []
+
+    try:
+        clip = AudioFileClip(input_path)
+        duration = clip.duration
+
+        if duration < 3:
+            raise ValueError("Аудио слишком короткое.")
+
+        audio_effects = [
+            "stutter",
+            "ping_pong",
+            "reverse",
+            "earrape",
+            "speedup",
+            "slowmo",
+            "triple_repeat",
+            "silence",
+            "normal",
+        ]
+        chunk_min = 0.1 if preset == "hell" else 0.3
+        chunk_max = 0.8 if preset == "hell" else 1.5
+        current_time = 0.0
+
+        while current_time < target_duration:
+            chunk_len = random.uniform(chunk_min, chunk_max)
+            max_start = max(0.0, duration - chunk_len)
+            start = random.uniform(0.0, max_start)
+            end = min(duration, start + chunk_len)
+
+            if end - start < 0.1:
+                continue
+
+            snippet = clip.subclip(start, end)
+            effect = random.choice(audio_effects)
+
+            try:
+                if effect == "stutter":
+                    stutter_duration = random.uniform(0.05, 0.15)
+                    piece = snippet.subclip(0, min(stutter_duration, snippet.duration))
+                    repeats = int(snippet.duration / piece.duration)
+                    if repeats > 0:
+                        snippet = concatenate_audioclips([piece] * repeats)
+
+                elif effect == "ping_pong":
+                    rev = snippet.fx(vfx.time_mirror)
+                    snippet = concatenate_audioclips([snippet, rev, snippet])
+
+                elif effect == "reverse":
+                    snippet = snippet.fx(vfx.time_mirror)
+
+                elif effect == "earrape":
+                    snippet = snippet.fx(afx.volumex, 10.0)
+
+                elif effect == "speedup":
+                    snippet = snippet.fx(vfx.speedx, random.uniform(2.0, 4.0))
+
+                elif effect == "slowmo":
+                    snippet = snippet.fx(vfx.speedx, 0.5)
+
+                elif effect == "triple_repeat":
+                    repeats = random.randint(3, 6)
+                    snippet = concatenate_audioclips([snippet] * repeats)
+
+                elif effect == "silence":
+                    snippet = snippet.fx(afx.volumex, 0.0)
+            except Exception as exc:
+                logging.warning(f"[ytp] Audio effect '{effect}' failed: {exc}")
+
+            clips.append(snippet)
+            current_time += snippet.duration
+
+        if not clips:
+            raise RuntimeError("Не удалось нарезать ни одного аудио-фрагмента.")
+
+        final_clip = concatenate_audioclips(clips)
+        final_clip.write_audiofile(
+            output_path,
+            codec="libmp3lame",
+            bitrate="128k",
+            fps=44100,
+            logger=None,
+        )
+    finally:
+        for snippet in clips:
+            try:
+                snippet.close()
+            except Exception:
+                pass
+
+        if final_clip is not None:
+            try:
+                final_clip.close()
+            except Exception:
+                pass
+
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
+
+
 def _is_video_document(document: types.Document) -> bool:
     if document.mime_type and document.mime_type.startswith("video/"):
         return True
@@ -385,9 +496,16 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             else:
                 suffix = ".mp4"
 
+            is_audio_input = bool(
+                video_source.audio
+                or video_source.voice
+                or (video_source.document and _is_audio_document(video_source.document))
+            )
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ytp_in_") as in_file:
                 input_path = in_file.name
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm", prefix="ytp_out_") as out_file:
+            output_suffix = ".mp3" if is_audio_input else ".webm"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix, prefix="ytp_out_") as out_file:
                 output_path = out_file.name
 
             file_info = await bot.get_file(file_obj.file_id)
@@ -402,7 +520,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                     await message.reply("❌ Не удалось конвертировать TGS в видео.")
                     return
                 real_input_path = converted_input_path
-            elif suffix == ".ogg":
+            elif suffix == ".ogg" and not is_audio_input:
                 converted_input_path = input_path + "_converted.mp4"
                 converted = await convert_audio_to_mp4(input_path, converted_input_path)
                 if not converted:
@@ -417,20 +535,28 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             target_dur = chat_cfg.get("ytp_duration", TARGET_DURATION)
             preset = chat_cfg.get("ytp_preset", "normal")
 
-            await loop.run_in_executor(
-                None, _make_ytp_sync, real_input_path, output_path, target_dur, preset
-            )
-
-            mp4_path = output_path.replace(".webm", ".mp4")
-            converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
-            if converted_to_mp4 and os.path.exists(mp4_path):
-                await message.reply_video(
-                    FSInputFile(mp4_path, filename="pup.mp4"),
+            if is_audio_input:
+                await loop.run_in_executor(
+                    None, _make_audio_ytp_sync, real_input_path, output_path, target_dur, preset
+                )
+                await message.reply_audio(
+                    FSInputFile(output_path, filename="pup.mp3"),
                 )
             else:
-                await message.reply_document(
-                    FSInputFile(output_path, filename="pup.webm"),
+                await loop.run_in_executor(
+                    None, _make_ytp_sync, real_input_path, output_path, target_dur, preset
                 )
+
+                mp4_path = output_path.replace(".webm", ".mp4")
+                converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
+                if converted_to_mp4 and os.path.exists(mp4_path):
+                    await message.reply_video(
+                        FSInputFile(mp4_path, filename="pup.mp4"),
+                    )
+                else:
+                    await message.reply_document(
+                        FSInputFile(output_path, filename="pup.webm"),
+                    )
 
         await processing_msg.delete()
 
