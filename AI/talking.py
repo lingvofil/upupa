@@ -590,6 +590,7 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     chat_id = str(message.chat.id)
     
     # Подготовка ввода пользователя
+    original_user_input = message.text or ""
     user_input = message.text
     if not user_input or not isinstance(user_input, str):
         user_input = ""
@@ -605,6 +606,9 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
             user_input = user_input[len(keyword):].lstrip(' ,')
             break
     
+    if not user_input.strip() and message.from_user and message.from_user.is_bot:
+        user_input = original_user_input.strip()
+
     if not user_input.strip():
         return "Хули?"
 
