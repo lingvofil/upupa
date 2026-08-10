@@ -28,3 +28,12 @@ def test_dialog_router_is_last():
 def test_routers_count():
     from handlers import ROUTERS
     assert len(ROUTERS) == 15
+
+
+def test_whatisthere_guard_does_not_match_pun_command():
+    from types import SimpleNamespace
+    from handlers.ai_vision import _contains_whatisthere_command
+
+    message = SimpleNamespace(text="скаламбурь", caption=None)
+
+    assert not _contains_whatisthere_command(message)

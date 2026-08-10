@@ -5,6 +5,7 @@
 """
 from aiogram import Router
 
+import logging
 import random
 from aiogram import types
 from config import (
@@ -21,6 +22,11 @@ from AI.whatisthere import (
 )
 
 router = Router(name="ai_vision")
+
+
+def _contains_whatisthere_command(message: types.Message) -> bool:
+    text = (message.text or message.caption or "").lower()
+    return "чотам" in text
 
 
 @router.message(lambda message: 
@@ -47,6 +53,13 @@ router = Router(name="ai_vision")
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_whatisthere_unified(message: types.Message):
+    if not _contains_whatisthere_command(message):
+        logging.warning(
+            "handle_whatisthere_unified skipped non-чотам message: %r",
+            message.text or message.caption,
+        )
+        return
+
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     
@@ -55,7 +68,10 @@ async def handle_whatisthere_unified(message: types.Message):
     
     success, response = await process_whatisthere_unified(message)
     await processing_msg.delete()
-    await message.reply(response)
+    if response:
+        await message.reply(response)
+    else:
+        logging.warning("process_whatisthere_unified returned empty response")
 
 @router.message(lambda message: 
     (
