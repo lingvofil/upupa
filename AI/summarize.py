@@ -132,7 +132,8 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                     response = model.generate_content(
                         prompt, 
                         safety_settings=safety_settings,
-                        chat_id=int(chat_id)
+                        chat_id=int(chat_id),
+                        require_text=True,
                     )
                     return response.text or ""
                     

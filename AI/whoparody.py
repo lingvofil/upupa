@@ -77,7 +77,7 @@ async def generate_with_active_model(prompt: str, chat_id: int) -> str:
             elif active_model == "groq":
                 return groq_ai.generate_text(prompt) or ""
             else:  # gemini
-                response = model.generate_content(prompt, chat_id=chat_id)
+                response = model.generate_content(prompt, chat_id=chat_id, require_text=True)
                 return response.text or ""
         
         return await asyncio.to_thread(sync_generate)

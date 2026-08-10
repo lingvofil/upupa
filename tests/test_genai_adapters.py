@@ -9,6 +9,7 @@ from google.genai import types as genai_types
 
 from AI.wrapper import (
     GeminiModel,
+    ModelFallbackWrapper,
     _build_config,
     _normalize_contents,
     _normalize_history,
@@ -62,6 +63,10 @@ def test_build_config_empty():
     assert _build_config({}) is None
 
 
+def test_build_config_ignores_internal_require_text_flag():
+    assert _build_config({"require_text": True}) is None
+
+
 def test_gemini_model_routes_to_client():
     """GeminiModel передаёт нормализованные параметры в client.models.generate_content."""
     calls = {}
@@ -83,3 +88,29 @@ def test_gemini_model_routes_to_client():
     assert calls["model"] == "gemini-2.5-flash"
     assert isinstance(calls["contents"][1], genai_types.Part)
     assert calls["config"].temperature == 0.5
+
+
+def test_require_text_treats_empty_response_as_failure(monkeypatch):
+    """HTTP 200 без текста должен запускать fallback, а не считаться успехом."""
+
+    class EmptyResponse:
+        text = None
+        candidates = []
+
+    class FakeGeminiModel:
+        def generate_content(self, prompt):
+            return EmptyResponse()
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel()
+
+    monkeypatch.setattr("AI.wrapper._throttle_key", lambda api_key: None)
+
+    wrapper = FakeWrapper(["gemini-empty"], ["gemini-empty"], keys_pool=["key"])
+    try:
+        wrapper.generate_content("дай текст", require_text=True)
+    except RuntimeError as error:
+        assert "EmptyModelResponseError" in str(error) or "no candidate text" in str(error)
+    else:
+        raise AssertionError("empty response was treated as success")

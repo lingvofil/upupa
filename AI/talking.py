@@ -177,7 +177,7 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
                 logging.info(f"SiliconFlow вернул: '{result[:100] if result else ''}'")
                 return result
             else:  # gemini
-                response = model.generate_content(prompt, chat_id=int(chat_id))
+                response = model.generate_content(prompt, chat_id=int(chat_id), require_text=True)
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)
@@ -570,7 +570,12 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                     gemini_kwargs["generation_config"] = {
                         "temperature": generation_kwargs["temperature"],
                     }
-                response = model.generate_content(prompt, chat_id=int(chat_id), **gemini_kwargs)
+                response = model.generate_content(
+                    prompt,
+                    chat_id=int(chat_id),
+                    require_text=True,
+                    **gemini_kwargs,
+                )
                 return response.text
         
         response_text = await asyncio.to_thread(sync_model_call)

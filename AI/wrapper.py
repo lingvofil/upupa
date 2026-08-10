@@ -54,11 +54,46 @@ def _extract_error_details(error: Exception) -> Tuple[Optional[int], str]:
 def _is_retryable(error: Exception) -> bool:
     status_code, error_type = _extract_error_details(error)
     text = str(error).lower()
+    if error_type == "EmptyModelResponseError":
+        return True
     if status_code in (429, 503):
         return True
     if error_type in ("ResourceExhausted", "QuotaExceeded"):
         return True
     return any(marker in text for marker in ("429", "503", "resourceexhausted", "quotaexceeded"))
+
+
+class EmptyModelResponseError(RuntimeError):
+    """Gemini вернул успешный HTTP-ответ без текстового содержимого."""
+
+
+def _extract_response_text(response: Any) -> str:
+    try:
+        text = getattr(response, "text", None)
+    except Exception:
+        text = None
+    if text:
+        return str(text)
+
+    for candidate in getattr(response, "candidates", None) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                return str(part_text)
+    return ""
+
+
+def _empty_response_details(response: Any) -> str:
+    details = []
+    for candidate in getattr(response, "candidates", None) or []:
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason:
+            details.append(f"finish_reason={finish_reason}")
+        safety = getattr(candidate, "safety_ratings", None)
+        if safety:
+            details.append(f"safety_ratings={safety}")
+    return "; ".join(details) or "no candidate text"
 
 
 # =========================
@@ -117,6 +152,7 @@ def _build_config(kwargs: dict):
     остальные ключи уходят в конфиг как есть (temperature и т.п.).
     """
     cfg = {}
+    kwargs.pop("require_text", None)
     gen_cfg = kwargs.pop("generation_config", None)
     if gen_cfg:
         cfg.update(dict(gen_cfg))
@@ -222,20 +258,23 @@ class ModelFallbackWrapper:
             return self.special_queue
         return self.default_queue
 
-    def generate_content(self, prompt, *, chat_id=None, **kwargs):
+    def generate_content(self, prompt, *, chat_id=None, require_text: bool = False, **kwargs):
         return self._run_with_fallback(
             action_name="generate_content",
             chat_id=chat_id,
-            request_fn=lambda model_obj: model_obj.generate_content(prompt, **kwargs)
+            request_fn=lambda model_obj: model_obj.generate_content(prompt, **kwargs),
+            require_text=require_text,
         )
 
     def generate_custom(self, model_name: str, *args, **kwargs):
         model_name = self._normalize_model_name(model_name)
         temp_wrapper = ModelFallbackWrapper([model_name], [model_name], keys_pool=self.keys_pool)
+        require_text = kwargs.pop("require_text", False)
         return temp_wrapper._run_with_fallback(
             action_name="generate_custom",
             chat_id=kwargs.pop("chat_id", None),
-            request_fn=lambda model_obj: model_obj.generate_content(*args, **kwargs)
+            request_fn=lambda model_obj: model_obj.generate_content(*args, **kwargs),
+            require_text=require_text,
         )
 
     def start_chat(self, history=None, chat_id=None, user_id=None):
@@ -268,7 +307,13 @@ class ModelFallbackWrapper:
     def _build_model(self, api_key: str, model_name: str):
         return GeminiModel(_get_client(api_key), model_name)
 
-    def _run_with_fallback(self, action_name: str, chat_id: Optional[int], request_fn: Callable):
+    def _run_with_fallback(
+        self,
+        action_name: str,
+        chat_id: Optional[int],
+        request_fn: Callable,
+        require_text: bool = False,
+    ):
         model_queue = [self._normalize_model_name(name) for name in self._get_queue(chat_id)]
         key_indices = self._iter_key_indices()
         if not key_indices:
@@ -287,6 +332,8 @@ class ModelFallbackWrapper:
                         _throttle_key(api_key)
                         model_obj = self._build_model(api_key, model_name)
                         result = request_fn(model_obj)
+                        if require_text and not _extract_response_text(result).strip():
+                            raise EmptyModelResponseError(_empty_response_details(result))
                         self.last_used_model_name = model_name
                         logging.info(
                             "Gemini success action=%s key_idx=%s model=%s attempts=%s",
@@ -300,6 +347,9 @@ class ModelFallbackWrapper:
                             "Gemini fail action=%s key_idx=%s model=%s attempt=%s code=%s type=%s retryable=%s",
                             action_name, key_idx, model_name, attempt, status_code, error_type, retryable
                         )
+                        if error_type == "EmptyModelResponseError":
+                            temporary_failure_only = False
+                            hard_failures.append(error)
                         if retryable and attempt < self._max_retries_per_pair:
                             time.sleep(2 ** (attempt - 1))
                             continue
