@@ -377,6 +377,9 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
         elif message_to_forward.video:
             media = message_to_forward.video.file_id
             await bot.send_video(target_chat_id, media, caption=caption)
+        elif message_to_forward.video_note:
+            media = message_to_forward.video_note.file_id
+            await bot.send_video_note(target_chat_id, media)
         elif message_to_forward.animation:
             media = message_to_forward.animation.file_id
             await bot.send_animation(target_chat_id, media, caption=caption)
