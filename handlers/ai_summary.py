@@ -19,6 +19,7 @@ from AI.chat_recall import (
     process_recall_command, process_verdict_command, process_factcheck_command
 )
 from AI.comic import process_comic_command
+from services.holidays import process_holidays_command
 from services.news import process_tv_news_command, process_football_news_command
 
 router = Router(name="ai_summary")
@@ -55,6 +56,13 @@ async def handle_comic(message: types.Message):
 async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
     await summarize_chat_history(message, model, LOG_FILE, actions)
+
+@router.message(lambda message: message.text and normalize_upupa_command(message.text) in (
+    "праздники", "упупа праздники"
+) and message.from_user.id not in BLOCKED_USERS)
+async def handle_holidays(message: types.Message):
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await process_holidays_command(message)
 
 # Футбол регистрируется ДО общего обзора, чтобы "упупа новости футбола"
 # не перехватывался триггером "упупа новости".

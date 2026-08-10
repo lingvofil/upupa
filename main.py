@@ -20,6 +20,7 @@ from AI.quiz import schedule_daily_quiz
 from AI.birthday_calendar import birthday_scheduler
 from features.proactive import proactive_loop
 from games import crocodile
+from services.holidays import HOLIDAYS_CHAT_ID, schedule_daily_holidays
 
 from handlers import ROUTERS
 
@@ -52,6 +53,10 @@ async def main():
     # --- планировщик дней рождения ---
     asyncio.create_task(
         birthday_scheduler(bot)
+    )
+
+    asyncio.create_task(
+        schedule_daily_holidays(bot, HOLIDAYS_CHAT_ID)
     )
 
     # --- проактивный режим (вбросы в молчащие чаты) ---

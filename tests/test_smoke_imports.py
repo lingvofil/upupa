@@ -49,7 +49,7 @@ FEATURE_MODULES = [
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
     "services.sherlock", "services.ytp", "services.media_change", "services.distortion",
-    "services.memegenerator", "services.news", "services.web_context",
+    "services.memegenerator", "services.news", "services.web_context", "services.holidays",
 ]
 GAME_MODULES = ["games.crocodile", "games.egra", "games.reverse_crocodile"]
 HANDLER_MODULES = [
