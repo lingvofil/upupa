@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 from gradio_client import Client, handle_file
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from transliterate import translit
@@ -308,21 +308,47 @@ def _find_nvidia_label_box(image: Image.Image, x0: int, x1: int, mode: str) -> O
     return (left, top, right + 1, bottom + 1)
 
 
-def _cover_nvidia_label_source(image: Image.Image, box: Tuple[int, int, int, int]) -> None:
+def _load_nvidia_label_font(size: int) -> ImageFont.ImageFont:
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
+
+
+def _draw_centered_nvidia_label(
+    draw: ImageDraw.ImageDraw,
+    box: Tuple[int, int, int, int],
+    text: str,
+    fill: Tuple[int, int, int],
+) -> None:
     left, top, right, bottom = box
-    label_height = bottom - top
-    source_top = max(0, top - label_height)
-    source_bottom = top
+    max_width = int((right - left) * 0.78)
+    max_height = int((bottom - top) * 0.62)
+    font_size = max(20, int((bottom - top) * 0.5))
 
-    if source_bottom - source_top >= max(10, label_height // 3):
-        fill = image.crop((left, source_top, right, source_bottom)).resize((right - left, label_height))
-    else:
-        fill = image.crop(box).filter(ImageFilter.GaussianBlur(radius=max(8, label_height // 8)))
+    while font_size > 16:
+        font = _load_nvidia_label_font(font_size)
+        text_box = draw.textbbox((0, 0), text, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        if text_width <= max_width and text_height <= max_height:
+            break
+        font_size -= 2
 
-    image.paste(fill, (left, top))
+    x = left + (right - left - text_width) / 2
+    y = top + (bottom - top - text_height) / 2 - text_box[1]
+    draw.text((x, y), text, font=font, fill=fill)
 
 
-def move_nvidia_comparison_labels_to_bottom(image_bytes: bytes) -> bytes:
+def add_nvidia_comparison_labels_below_image(image_bytes: bytes) -> bytes:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     width, height = image.size
     boxes = [
@@ -330,21 +356,33 @@ def move_nvidia_comparison_labels_to_bottom(image_bytes: bytes) -> bytes:
         _find_nvidia_label_box(image, width // 2, width, "light"),
     ]
     boxes = [box for box in boxes if box]
-    if not boxes:
-        return image_bytes
+    crop_bottom = min((box[1] for box in boxes), default=int(height * 0.82))
+    crop_bottom = max(int(height * 0.6), min(crop_bottom, height))
+    image = image.crop((0, 0, width, crop_bottom))
 
-    labels = [(box, image.crop(box)) for box in boxes]
-    for box, _ in labels:
-        _cover_nvidia_label_source(image, box)
+    label_height = max(90, int(crop_bottom * 0.16))
+    green_height = max(8, int(label_height * 0.12))
+    output_image = Image.new("RGB", (width, crop_bottom + label_height), (255, 255, 255))
+    output_image.paste(image, (0, 0))
 
-    for box, label in labels:
-        left, _top, _right, _bottom = box
-        _label_width, label_height = label.size
-        target_y = max(0, height - label_height)
-        image.paste(label, (left, target_y))
+    draw = ImageDraw.Draw(output_image)
+    label_top = crop_bottom
+    label_bottom = crop_bottom + label_height
+    half_width = width // 2
+    draw.rectangle((0, label_top, half_width, label_bottom), fill=(0, 0, 0))
+    draw.rectangle((half_width, label_top, width, label_bottom), fill=(255, 255, 255))
+    draw.rectangle((half_width, label_bottom - green_height, width, label_bottom), fill=(118, 185, 0))
+
+    _draw_centered_nvidia_label(draw, (0, label_top, half_width, label_bottom), "DLSS 5 OFF", (255, 255, 255))
+    _draw_centered_nvidia_label(
+        draw,
+        (half_width, label_top, width, label_bottom - green_height),
+        "DLSS 5 On",
+        (0, 0, 0),
+    )
 
     output = BytesIO()
-    image.save(output, format="PNG")
+    output_image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -950,7 +988,7 @@ async def handle_nvidia_command(message: types.Message):
             await msg.edit_text("Nvidia недоступна, генерирую через Flux...")
             await robust_image_generation(message, prompt or "enhance, upscale, detailed", msg)
             return
-        generated_bytes = move_nvidia_comparison_labels_to_bottom(generated_bytes)
+        generated_bytes = add_nvidia_comparison_labels_below_image(generated_bytes)
         await msg.delete()
         await send_generated_photo(message, generated_bytes, "nvidia.png")
     except Exception as e:
