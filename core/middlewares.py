@@ -1,9 +1,11 @@
 # middlewares.py
 import asyncio
+import json
 import logging
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
+from aiogram.enums import ContentType
 from aiogram.types import Message
 
 from features.statistics import log_message # Импортируем вашу функцию логирования
@@ -71,5 +73,11 @@ class IncomingMessageLogMiddleware(BaseMiddleware):
                 event.content_type,
                 safe_text,
             )
+            if event.content_type == ContentType.UNKNOWN:
+                raw_event = event.model_dump(exclude_none=True)
+                logging.info(
+                    "UNKNOWN message payload: %s",
+                    json.dumps(raw_event, ensure_ascii=False, default=str)[:4000],
+                )
 
         return await handler(event, data)

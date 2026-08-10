@@ -5,6 +5,7 @@ import asyncio
 import os
 import json
 from aiogram import types
+from aiogram.enums import ContentType
 
 # Импорт функции нормализации команд с "упупа"
 from core.upupa_utils import normalize_upupa_command
@@ -608,6 +609,8 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
     
     if not user_input.strip() and message.from_user and message.from_user.is_bot:
         user_input = original_user_input.strip()
+        if not user_input and message.content_type == ContentType.UNKNOWN:
+            user_input = "[сообщение другого бота без доступного текста]"
 
     if not user_input.strip():
         return "Хули?"
@@ -687,6 +690,12 @@ async def process_general_message(message: types.Message):
     is_direct_appeal = False
     is_private_chat = message.chat.type == "private"
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    is_unknown_bot_message = (
+        message.from_user
+        and message.from_user.is_bot
+        and message.content_type == ContentType.UNKNOWN
+        and not (message.text or message.caption)
+    )
     
     if message.text:
         # Нормализуем команды с "упупа"
@@ -706,7 +715,7 @@ async def process_general_message(message: types.Message):
                     is_direct_appeal = True
                     break
 
-    if (is_private_chat or is_reply_to_bot or is_direct_appeal) and current_settings.get("dialog_enabled", True):
+    if (is_private_chat or is_reply_to_bot or is_direct_appeal or is_unknown_bot_message) and current_settings.get("dialog_enabled", True):
         user_first_name = message.from_user.first_name or "Пользователь"
         await bot.send_chat_action(chat_id=chat_id, action="typing")
         response = await handle_bot_conversation(message, user_first_name)
