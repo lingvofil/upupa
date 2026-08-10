@@ -95,9 +95,15 @@ def _compress_messages_for_groq(messages: list, max_chars: int = 15000) -> tuple
     return compressed, compression_ratio
 
 
-async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings=None, is_summarization=False):
+async def _generate_with_active_model(
+    prompt: str,
+    chat_id: str,
+    safety_settings=None,
+    is_summarization=False,
+    force_model: str | None = None,
+):
     """Генерирует текст с использованием активной модели чата"""
-    active_model = _get_active_model(chat_id)
+    active_model = force_model or _get_active_model(chat_id)
     
     # Режим истории не подходит для суммаризации
     if active_model == "history":
@@ -134,6 +140,12 @@ async def _generate_with_active_model(prompt: str, chat_id: str, safety_settings
                         safety_settings=safety_settings,
                         chat_id=int(chat_id)
                     )
+                    if not (response.text or ""):
+                        try:
+                            from AI.wrapper import _empty_response_details
+                            logging.warning("Gemini empty summary details: %s", _empty_response_details(response))
+                        except Exception:
+                            logging.warning("Gemini empty summary response without details")
                     return response.text or ""
                     
             except Exception as e:
@@ -222,6 +234,21 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         "Важное уточнение: верни обычный текст сводки. Без Markdown, без объяснения инструкций, "
         "2-4 коротких абзаца."
     )
+    groq_fallback_prompt = legacy_retry_prompt
+    if active_model != "groq":
+        groq_messages, groq_compression_ratio = _compress_messages_for_groq(messages_to_summarize, max_chars=12000)
+        if groq_compression_ratio > 1:
+            groq_input_text = f"Сообщения из чата {chat_name} за последние 12 часов (сжатая выборка, всего {len(groq_messages)} сообщений):\n\n"
+            for msg in groq_messages:
+                groq_input_text += f"{msg['display_name']}: {msg['text']}\n"
+            groq_fallback_prompt = f"""Просуммируй следующие сообщения из чата {chat_name}. Сделай краткое изложение в свободной форме (с сарказмом и обсценной лексикой), разбей на абзацы. Не более 200 слов.
+Упомяни участников беседы по имени (без символа @): {user_mentions_str}.
+
+Вот сообщения:
+{groq_input_text}
+
+Суммаризация:
+"""
 
     await _generate_and_send_summary(
         message,
@@ -231,6 +258,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         "Пишу доклад...",
         retry_prompt=retry_prompt,
         fallback_prompt=legacy_retry_prompt,
+        emergency_prompt=groq_fallback_prompt,
     )
 
 
@@ -308,6 +336,7 @@ async def _generate_and_send_summary(
     prev_msg: types.Message = None,
     retry_prompt: str | None = None,
     fallback_prompt: str | None = None,
+    emergency_prompt: str | None = None,
 ):
     """
     Отправка в LLM с ретраями и разбивкой длинных сообщений.
@@ -362,6 +391,23 @@ async def _generate_and_send_summary(
                     )
             if not summary_response:
                 logging.warning("Summarization fallback returned empty response")
+                if emergency_prompt:
+                    try:
+                        await processing_msg.edit_text("Gemini опять молчит, пробую запасную модель...")
+                    except Exception:
+                        pass
+                    try:
+                        summary_response = await _generate_with_active_model(
+                            emergency_prompt,
+                            chat_id,
+                            safety_settings,
+                            is_summarization=True,
+                            force_model="groq",
+                        )
+                    except Exception as e:
+                        logging.error(f"Emergency Groq summarization failed: {e}", exc_info=True)
+            if not summary_response:
+                logging.warning("Summarization emergency fallback returned empty response")
                 summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
         
         await processing_msg.delete()
