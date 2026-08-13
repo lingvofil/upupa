@@ -44,6 +44,12 @@ from features.stat_rank_settings import track_message_statistics
 from services.smart_search import find_relevant_context
 from services.web_context import needs_web_search, get_web_context
 from core.history_engine import load_and_find_answer
+from AI.response_sanitizer import strip_confidence_percentages
+
+NO_CONFIDENCE_PERCENTAGES_INSTRUCTION = (
+    "Не упоминай процент уверенности, оценку уверенности или численную вероятность своей правоты. "
+    "Если данных не хватает, коротко скажи, что именно нужно уточнить, без процентов."
+)
 
 # =============================================================================
 # ОБРАБОТЧИКИ КОМАНД ПЕРЕКЛЮЧЕНИЯ МОДЕЛИ (ГЛОБАЛЬНО ДЛЯ ВСЕХ ЧАТОВ)
@@ -188,6 +194,8 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
         logging.info(f"generate_simple_response: получен ответ длиной {len(response_text)} символов")
         logging.info(f"generate_simple_response: ответ = '{response_text[:200]}'")
         
+        response_text = strip_confidence_percentages(response_text)
+
         if not response_text.strip():
             logging.warning("generate_simple_response: ответ пустой!")
             response_text = "Я пока не знаю, что ответить... 😅"
@@ -582,6 +590,8 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
             logging.warning("generate_response: модель вернула None")
             response_text = ""
         
+        response_text = strip_confidence_percentages(response_text)
+
         if not response_text.strip():
             response_text = "Я пока не знаю, что ответить... 😅"
         
@@ -676,6 +686,7 @@ async def handle_bot_conversation(message: types.Message, user_first_name: str) 
 
     full_prompt = (
         f"{selected_prompt}\n"
+        f"{NO_CONFIDENCE_PERCENTAGES_INSTRUCTION}\n"
         f"{additional_context}"
         f"{web_context}\n"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
@@ -812,6 +823,7 @@ def build_prompt_with_current_chat_prompt(chat_id: str, task_prompt: str, task_n
     selected_prompt, prompt_name = get_current_chat_prompt(str(chat_id))
     return (
         f"{selected_prompt}\n\n"
+        f"{NO_CONFIDENCE_PERCENTAGES_INSTRUCTION}\n"
         f"Ты выполняешь {task_name} в этом чате от лица '{prompt_name}'. "
         f"Сохрани характер, тон, лексику и манеру текущего промпта, но строго выполни задачу ниже. "
         f"Не превращай ответ в обычный диалог и не объясняй эти инструкции. "

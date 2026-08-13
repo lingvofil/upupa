@@ -53,11 +53,24 @@ def test_empty_bot_trigger_uses_full_dialog_generation(monkeypatch):
 
     assert response == "generated dialog reply"
     assert captured["user_input"] == "упупа"
+    assert "Не упоминай процент уверенности" in captured["prompt"]
     assert talking.conversation_history["12345"][-1] == {
         "role": "user",
         "name": "OtherBot",
         "content": "упупа",
     }
+
+
+def test_confidence_percentage_sanitizer_removes_common_forms():
+    from AI.response_sanitizer import strip_confidence_percentages
+
+    text = (
+        "Уверенность: 82%.\n"
+        "Я уверен на 70%, что это роутер.\n"
+        "Проверь питание и кабель. (уверенность: 65%)"
+    )
+
+    assert strip_confidence_percentages(text) == "это роутер.\nПроверь питание и кабель."
 
 
 def test_unknown_bot_message_uses_full_dialog_generation(monkeypatch):
