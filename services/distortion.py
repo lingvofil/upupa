@@ -151,8 +151,12 @@ def get_audio_distortion_filter(intensity: int) -> str:
 
     return ",".join(filters)
 
+def get_safe_audio_distortion_filter(intensity: int) -> str:
+    filters = get_audio_distortion_filter(intensity)
+    return f"{filters},aresample=48000,aformat=sample_fmts=s16,alimiter=limit=0.95"
+
 async def apply_ffmpeg_audio_distortion(input_path: str, output_path: str, intensity: int) -> bool:
-    af_string = get_audio_distortion_filter(intensity)
+    af_string = get_safe_audio_distortion_filter(intensity)
     cmd = ['ffmpeg', '-i', input_path, '-af', af_string, '-c:a', 'libmp3lame', '-q:a', '4', '-y', output_path]
     success, _ = await run_ffmpeg_command(cmd)
     return success
@@ -169,7 +173,7 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, inten
         f"[base][xmap][ymap]displace=edge=wrap,"
         f"eq=contrast=1.5:saturation=2"
     )
-    af_chain = get_audio_distortion_filter(intensity)
+    af_chain = get_safe_audio_distortion_filter(intensity)
 
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
@@ -233,6 +237,43 @@ async def _has_audio_stream(input_path: str) -> bool:
     return any(s.get('codec_type') == 'audio' for s in info['streams'])
 
 
+async def _write_distorted_video_audio(input_path: str, output_path: str, intensity: int) -> bool:
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-t', str(MAX_VIDEO_DISTORTION_SECONDS),
+        '-vn', '-map', '0:a:0',
+        '-af', get_safe_audio_distortion_filter(intensity),
+        '-c:a', 'aac', '-b:a', '128k',
+        output_path
+    ]
+    ok, err = await run_ffmpeg_command(cmd)
+    if not ok:
+        logging.warning(f"Не удалось исказить звук для видео: {err}")
+    return ok
+
+
+async def _write_original_video_audio(input_path: str, output_path: str) -> bool:
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-t', str(MAX_VIDEO_DISTORTION_SECONDS),
+        '-vn', '-map', '0:a:0',
+        '-c:a', 'aac', '-b:a', '128k',
+        output_path
+    ]
+    ok, err = await run_ffmpeg_command(cmd)
+    if not ok:
+        logging.warning(f"Не удалось сохранить исходный звук для видео: {err}")
+    return ok
+
+
+async def _prepare_video_audio_track(input_path: str, output_path: str, intensity: int) -> bool:
+    if await _write_distorted_video_audio(input_path, output_path, intensity):
+        return True
+
+    logging.warning("Искаженный звук не собрался, пробую оставить исходный звук")
+    return await _write_original_video_audio(input_path, output_path)
+
+
 async def apply_seam_carving_video_distortion(input_path: str, output_path: str, intensity: int) -> bool:
     """Видео-версия того же искажения, что для фото: покадровый seam carving
     (сжатие по контенту + растягивание обратно), из-за интенсивности которое
@@ -277,27 +318,11 @@ async def apply_seam_carving_video_distortion(input_path: str, output_path: str,
 
         has_audio = await _has_audio_stream(input_path)
         if has_audio:
-            # Важно: искажаем звук в MP3 тем же путём, что и рабочая
-            # apply_ffmpeg_audio_distortion (её же использует чистое аудио-искажение) —
-            # acrusher иногда даёт NaN/Inf-сэмплы, libmp3lame их спокойно проглатывает,
-            # а вот AAC-энкодер на них падает намертво. Поэтому сначала честный
-            # проверенный MP3-путь, а потом просто перегоняем готовый MP3 в AAC —
-            # на этом шаге фильтров уже нет, NaN взяться неоткуда.
-            audio_mp3_path = os.path.join(work_dir, "audio.mp3")
-            mp3_ok = await apply_ffmpeg_audio_distortion(input_path, audio_mp3_path, intensity)
-            if mp3_ok:
-                transcode_cmd = ['ffmpeg', '-y', '-i', audio_mp3_path, '-c:a', 'aac', '-b:a', '128k', audio_path]
-                ok, err = await run_ffmpeg_command(transcode_cmd)
-                if not ok:
-                    logging.warning(f"Не удалось перегнать искажённый звук в AAC, видео пойдёт без звука: {err}")
-                    has_audio = False
-            else:
-                logging.warning("Не удалось искозить звук, видео пойдёт без звука")
-                has_audio = False
+            has_audio = await _prepare_video_audio_track(input_path, audio_path, intensity)
 
         assemble_cmd = ['ffmpeg', '-y', '-framerate', str(VIDEO_DISTORTION_FPS), '-i', frames_pattern]
         if has_audio and os.path.exists(audio_path):
-            assemble_cmd += ['-i', audio_path, '-c:a', 'aac', '-shortest']
+            assemble_cmd += ['-i', audio_path, '-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-shortest']
         assemble_cmd += [
             '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
             '-pix_fmt', 'yuv420p', output_path
