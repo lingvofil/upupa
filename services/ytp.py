@@ -3,7 +3,8 @@ import random
 import asyncio
 import tempfile
 import logging
-import subprocess
+import multiprocessing
+import queue
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
 
@@ -16,6 +17,10 @@ from config import chat_settings
 TARGET_DURATION = 10
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
+COMMAND_TIMEOUT_SEC = 60
+YTP_RENDER_TIMEOUT_SEC = 180
+TELEGRAM_FILE_TIMEOUT_SEC = 90
+TELEGRAM_UPLOAD_TIMEOUT_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
 _ytp_semaphore = asyncio.Semaphore(1)
@@ -346,14 +351,75 @@ def _is_audio_document(document: types.Document) -> bool:
     return False
 
 
-async def run_command(command: list[str]) -> tuple[bool, str]:
+async def run_command(command: list[str], timeout: float = COMMAND_TIMEOUT_SEC) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        stdout, stderr = await proc.communicate()
+        output = (stderr or stdout).decode(errors="ignore").strip()
+        details = f": {output}" if output else ""
+        return False, f"Command timed out after {timeout}s ({command[0]}){details}"
+
     if proc.returncode != 0:
         return False, stderr.decode(errors="ignore")
     return True, stdout.decode(errors="ignore")
+
+
+def _ytp_worker_entry(result_queue, func_name: str, args: tuple) -> None:
+    try:
+        globals()[func_name](*args)
+        result_queue.put((True, None, None))
+    except Exception as exc:
+        result_queue.put((False, exc.__class__.__name__, str(exc)))
+
+
+async def _run_blocking_ytp(func_name: str, *args, timeout: int = YTP_RENDER_TIMEOUT_SEC) -> None:
+    start_methods = multiprocessing.get_all_start_methods()
+    ctx = multiprocessing.get_context("fork" if "fork" in start_methods else "spawn")
+    result_queue = ctx.Queue()
+    process = ctx.Process(target=_ytp_worker_entry, args=(result_queue, func_name, args))
+    process.start()
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while process.is_alive() and loop.time() < deadline:
+        await asyncio.sleep(0.25)
+
+    timed_out = process.is_alive()
+    if timed_out:
+        process.terminate()
+        for _ in range(20):
+            process.join(0)
+            if not process.is_alive():
+                break
+            await asyncio.sleep(0.25)
+
+        if process.is_alive():
+            process.kill()
+            process.join()
+        raise asyncio.TimeoutError
+
+    process.join()
+
+    try:
+        ok, error_type, error_message = await loop.run_in_executor(None, result_queue.get, True, 1)
+    except queue.Empty:
+        if process.exitcode == 0:
+            return
+        raise RuntimeError(f"YTP worker exited with code {process.exitcode}")
+
+    if ok:
+        return
+    if error_type == "ValueError":
+        raise ValueError(error_message)
+    raise RuntimeError(error_message)
 
 
 async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
@@ -508,8 +574,14 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
             with tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix, prefix="ytp_out_") as out_file:
                 output_path = out_file.name
 
-            file_info = await bot.get_file(file_obj.file_id)
-            await bot.download_file(file_info.file_path, input_path)
+            file_info = await asyncio.wait_for(
+                bot.get_file(file_obj.file_id),
+                timeout=TELEGRAM_FILE_TIMEOUT_SEC,
+            )
+            await asyncio.wait_for(
+                bot.download_file(file_info.file_path, input_path),
+                timeout=TELEGRAM_FILE_TIMEOUT_SEC,
+            )
 
             real_input_path = input_path
             if suffix == ".tgs":
@@ -529,37 +601,43 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                     return
                 real_input_path = converted_input_path
 
-            loop = asyncio.get_running_loop()
             chat_id_str = str(message.chat.id)
             chat_cfg = chat_settings.get(chat_id_str, {})
             target_dur = chat_cfg.get("ytp_duration", TARGET_DURATION)
             preset = chat_cfg.get("ytp_preset", "normal")
 
             if is_audio_input:
-                await loop.run_in_executor(
-                    None, _make_audio_ytp_sync, real_input_path, output_path, target_dur, preset
+                await _run_blocking_ytp(
+                    "_make_audio_ytp_sync", real_input_path, output_path, target_dur, preset
                 )
-                await message.reply_audio(
-                    FSInputFile(output_path, filename="pup.mp3"),
+                await asyncio.wait_for(
+                    message.reply_audio(FSInputFile(output_path, filename="pup.mp3")),
+                    timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
                 )
             else:
-                await loop.run_in_executor(
-                    None, _make_ytp_sync, real_input_path, output_path, target_dur, preset
+                await _run_blocking_ytp(
+                    "_make_ytp_sync", real_input_path, output_path, target_dur, preset
                 )
 
                 mp4_path = output_path.replace(".webm", ".mp4")
                 converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
                 if converted_to_mp4 and os.path.exists(mp4_path):
-                    await message.reply_video(
-                        FSInputFile(mp4_path, filename="pup.mp4"),
+                    await asyncio.wait_for(
+                        message.reply_video(FSInputFile(mp4_path, filename="pup.mp4")),
+                        timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
                     )
                 else:
-                    await message.reply_document(
-                        FSInputFile(output_path, filename="pup.webm"),
+                    await asyncio.wait_for(
+                        message.reply_document(FSInputFile(output_path, filename="pup.webm")),
+                        timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
                     )
 
         await processing_msg.delete()
 
+    except asyncio.TimeoutError:
+        logging.warning("[ytp] Обработка зависла дольше %s секунд", YTP_RENDER_TIMEOUT_SEC)
+        await processing_msg.delete()
+        await message.reply("❌ Пупизация зависла и была остановлена. Попробуй другое видео или пресет попроще.")
     except ValueError as exc:
         await processing_msg.delete()
         await message.reply(f"❌ {exc}")
