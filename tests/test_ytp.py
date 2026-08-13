@@ -18,11 +18,19 @@ class DummyProcessingMessage:
         self.deleted = True
 
 
+DEFAULT_VIDEO = object()
+
+
 class DummyMessage:
-    def __init__(self):
+    def __init__(self, *, video=DEFAULT_VIDEO, video_note=None, reply_to_message=None):
         self.chat = SimpleNamespace(id=123)
-        self.reply_to_message = None
-        self.video = SimpleNamespace(file_id="video-file-id", file_size=1024, duration=5)
+        self.reply_to_message = reply_to_message
+        self.video = (
+            SimpleNamespace(file_id="video-file-id", file_size=1024, duration=5)
+            if video is DEFAULT_VIDEO
+            else video
+        )
+        self.video_note = video_note
         self.animation = None
         self.audio = None
         self.voice = None
@@ -36,6 +44,9 @@ class DummyMessage:
         msg = DummyProcessingMessage()
         self.processing_messages.append(msg)
         return msg
+
+    async def reply_video(self, video, **kwargs):
+        self.replies.append(("video", video, kwargs))
 
 
 class DummyBot:
@@ -73,5 +84,32 @@ def test_ytp_timeout_releases_semaphore(monkeypatch):
         assert not ytp._ytp_semaphore.locked()
         assert message.processing_messages[0].deleted
         assert any("Пупизация зависла" in reply for reply in message.replies)
+
+    asyncio.run(run())
+
+
+def test_ytp_accepts_video_note_reply(monkeypatch):
+    async def fake_render(_func_name, _input_path, output_path, *_args, **_kwargs):
+        with open(output_path, "wb") as file:
+            file.write(b"fake ytp")
+
+    async def fake_convert(_input_webm, output_mp4):
+        with open(output_mp4, "wb") as file:
+            file.write(b"fake mp4")
+        return True
+
+    async def run():
+        monkeypatch.setattr(ytp, "_ytp_semaphore", asyncio.Semaphore(1))
+        monkeypatch.setattr(ytp, "_run_blocking_ytp", fake_render)
+        monkeypatch.setattr(ytp, "convert_webm_to_mp4", fake_convert)
+
+        video_note = SimpleNamespace(file_id="video-note-file-id", file_size=1024, duration=5)
+        source = DummyMessage(video=None, video_note=video_note)
+        message = DummyMessage(video=None, reply_to_message=source)
+
+        await ytp.handle_ytp_command(message, DummyBot())
+
+        assert any(reply[0] == "video" for reply in message.replies if isinstance(reply, tuple))
+        assert message.processing_messages[0].deleted
 
     asyncio.run(run())

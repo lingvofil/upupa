@@ -449,6 +449,7 @@ def is_distortion_command(message: types.Message) -> bool:
                 or target.voice
                 or target.text
                 or target.video
+                or getattr(target, "video_note", None)
                 or target.animation
                 or is_video_doc
             )
@@ -483,6 +484,9 @@ async def handle_distortion_request(message: types.Message):
         elif target_message.video:
             media_info = {'media_type': 'video', 'ext': '.mp4'}
             file_to_download = target_message.video
+        elif getattr(target_message, "video_note", None):
+            media_info = {'media_type': 'video', 'ext': '.mp4'}
+            file_to_download = target_message.video_note
         elif target_message.animation:
             media_info = {'media_type': 'animation', 'ext': '.webm'}
             file_to_download = target_message.animation

@@ -351,6 +351,19 @@ def _is_audio_document(document: types.Document) -> bool:
     return False
 
 
+def _has_supported_ytp_media(message: types.Message) -> bool:
+    document = getattr(message, "document", None)
+    return bool(
+        getattr(message, "video", None)
+        or getattr(message, "video_note", None)
+        or getattr(message, "animation", None)
+        or getattr(message, "audio", None)
+        or getattr(message, "voice", None)
+        or getattr(message, "sticker", None) is not None
+        or (document and (_is_video_document(document) or _is_audio_document(document)))
+    )
+
+
 async def run_command(command: list[str], timeout: float = COMMAND_TIMEOUT_SEC) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -495,11 +508,11 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     # Проверяем реплай
     if message.reply_to_message:
         source = message.reply_to_message
-        if source.video or source.animation or source.audio or source.voice or source.sticker is not None or (source.document and (_is_video_document(source.document) or _is_audio_document(source.document))):
+        if _has_supported_ytp_media(source):
             video_source = source
 
     # Проверяем само сообщение
-    if video_source is None and (message.video or message.animation or message.audio or message.voice or message.sticker is not None or (message.document and (_is_video_document(message.document) or _is_audio_document(message.document)))):
+    if video_source is None and _has_supported_ytp_media(message):
         video_source = message
 
     if not video_source:
@@ -507,7 +520,15 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         return
 
     # Достаем объект файла (видео, гифка, документ или стикер)
-    file_obj = video_source.video or video_source.animation or video_source.audio or video_source.voice or video_source.document or video_source.sticker
+    file_obj = (
+        video_source.video
+        or getattr(video_source, "video_note", None)
+        or video_source.animation
+        or video_source.audio
+        or video_source.voice
+        or video_source.document
+        or video_source.sticker
+    )
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         await message.reply(f"Да пошел ты нахуй, файл слишком большой. Максимум {MAX_FILE_SIZE_MB} МБ.")
@@ -516,6 +537,12 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     if video_source.video and video_source.video.duration:
         if video_source.video.duration > MAX_INPUT_DURATION_SEC:
             await message.reply(f"Видео слишком длинное. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
+            return
+
+    video_note = getattr(video_source, "video_note", None)
+    if video_note and video_note.duration:
+        if video_note.duration > MAX_INPUT_DURATION_SEC:
+            await message.reply(f"Видеокружок слишком длинный. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
             return
 
     if video_source.audio and video_source.audio.duration:

@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 from tests import test_smoke_imports
 
@@ -59,3 +60,28 @@ def test_video_audio_skips_fallback_when_distortion_succeeds(monkeypatch):
     ok = asyncio.run(distortion._prepare_video_audio_track("input.mp4", "audio.m4a", 45))
 
     assert ok is True
+
+
+def test_distortion_command_accepts_video_note_reply():
+    from services.distortion import is_distortion_command
+
+    video_note = SimpleNamespace(file_id="video-note-file-id", file_size=1024, duration=5)
+    source = SimpleNamespace(
+        photo=None,
+        sticker=None,
+        audio=None,
+        voice=None,
+        text=None,
+        video=None,
+        video_note=video_note,
+        animation=None,
+        document=None,
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        text="дисторшн",
+        caption=None,
+        reply_to_message=source,
+    )
+
+    assert is_distortion_command(message)

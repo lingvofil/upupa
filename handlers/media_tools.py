@@ -49,6 +49,7 @@ router = Router(name="media_tools")
             message.reply_to_message and
             (
                 message.reply_to_message.video
+                or getattr(message.reply_to_message, "video_note", None)
                 or message.reply_to_message.animation
                 or is_video_document(message.reply_to_message)
                 or message.reply_to_message.audio
@@ -61,6 +62,7 @@ router = Router(name="media_tools")
         (
             (
                 message.video
+                or getattr(message, "video_note", None)
                 or message.animation
                 or is_video_document(message)
                 or message.audio
