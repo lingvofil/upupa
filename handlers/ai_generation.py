@@ -12,6 +12,13 @@ from config import (
 from AI.adddescribe import (
     handle_add_text_command
 )
+import AI.picgeneration as picgeneration
+from AI.kandinsky_client import install_into_picgeneration
+
+# В AI.picgeneration исторически встроен старый минимальный FusionBrain-клиент.
+# Подменяем только его экземпляр, оставляя остальной image-waterfall без рефакторинга.
+install_into_picgeneration(picgeneration)
+
 from AI.picgeneration import (
     handle_pun_image_command,
     handle_image_generation_command,
