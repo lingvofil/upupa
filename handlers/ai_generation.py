@@ -14,10 +14,14 @@ from AI.adddescribe import (
 )
 import AI.picgeneration as picgeneration
 from AI.gigachat_image import install_into_picgeneration
+from AI.pun_generation import install_into_picgeneration as install_pun_generation
 
 # Заменяем недоступную Kandinsky/FusionBrain-ступень на GigaChat-2 text2image.
 # Сохраняем остальной waterfall и публичные имена функций для совместимости.
 install_into_picgeneration(picgeneration)
+# Заменяем старый single-shot `скаламбурь` на генерацию пачки кандидатов
+# с проверкой пересечения слов и долговременной защитой от повторов.
+install_pun_generation(picgeneration)
 
 from AI.picgeneration import (
     handle_pun_image_command,

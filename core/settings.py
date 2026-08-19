@@ -121,8 +121,22 @@ TTS_MODELS_QUEUE = [
 ]
 
 # --- GIGACHAT MODEL QUEUES ---
-GIGACHAT_MODEL_QUEUE_DEFAULT = ["GigaChat-2"]
-GIGACHAT_MODEL_QUEUE_SPECIAL = ["GigaChat-2-Max"]
+# Wrapper идёт по списку слева направо и переключается только при ошибке.
+# Обычные чаты: экономим основной большой Lite-пул, затем усиливаем качество.
+GIGACHAT_MODEL_QUEUE_DEFAULT = [
+    "GigaChat-2",
+    "GigaChat-2-Pro",
+    "GigaChat-2-Max",
+    "GigaChat-3-Ultra",
+]
+
+# Специальный чат: качество прежде всего, Lite оставляем последним резервом.
+GIGACHAT_MODEL_QUEUE_SPECIAL = [
+    "GigaChat-3-Ultra",
+    "GigaChat-2-Max",
+    "GigaChat-2-Pro",
+    "GigaChat-2",
+]
 
 # --- GROQ MODELS ---
 # для чотам (картинки: считывание), скаламбурь, добавь, нарисуй, опиши
