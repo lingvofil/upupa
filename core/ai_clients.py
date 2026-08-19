@@ -5,10 +5,10 @@ from gigachat import GigaChat
 from AI.wrapper import (
     GroqWrapper,
     ModelFallbackWrapper,
-    GigaChatWrapper,
     FallbackChatSession,
     OpenAICompatibleWrapper,
 )
+from AI.gigachat_client import GigaChatConversationWrapper, GIGACHAT_BASE_URL
 from core.settings import (
     GEMINI_KEYS_POOL, PRIMARY_GEMINI_KEY,
     GROQ_API_KEY, GIGACHAT_API_KEY,
@@ -44,7 +44,7 @@ model = ModelFallbackWrapper(
     keys_pool=GEMINI_KEYS_POOL
 )
 
-gigachat_model = GigaChatWrapper(
+gigachat_model = GigaChatConversationWrapper(
     GIGACHAT_API_KEY,
     GIGACHAT_MODEL_QUEUE_DEFAULT,
     GIGACHAT_MODEL_QUEUE_SPECIAL
@@ -55,6 +55,7 @@ gigachat_model = GigaChatWrapper(
 # =========================
 gigachat = GigaChat(
     credentials=GIGACHAT_API_KEY,
+    base_url=GIGACHAT_BASE_URL,
     model="GigaChat-2",
     verify_ssl_certs=False
 )
