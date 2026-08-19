@@ -20,10 +20,16 @@ from features.lexicon_settings import (
 import features.statistics as bot_statistics
 from services import memegenerator
 from games import crocodile, reverse_crocodile
-from AI.random_reactions import process_random_reactions
+import AI.random_reactions as random_reactions
+from AI.situational_summary import install_into_random_reactions
 from AI.talking import (
     process_general_message
 )
+
+# Старый random_reactions.py большой и содержит много независимых реакций.
+# Меняем только ситуативную «кинематографичную» вставку, не трогая остальной пайплайн.
+install_into_random_reactions(random_reactions)
+process_random_reactions = random_reactions.process_random_reactions
 
 router = Router(name="dialog")
 
