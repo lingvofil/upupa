@@ -11,6 +11,7 @@ from uuid import uuid4
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 
+from AI.gigachat_client import GIGACHAT_BASE_URL
 from core.settings import GIGACHAT_API_KEY
 
 
@@ -20,6 +21,7 @@ _SYNC_LOCK = threading.Lock()
 
 gigachat_image_client = GigaChat(
     credentials=GIGACHAT_API_KEY,
+    base_url=GIGACHAT_BASE_URL,
     model="GigaChat-2",
     verify_ssl_certs=False,
     timeout=120,
