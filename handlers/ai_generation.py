@@ -13,10 +13,10 @@ from AI.adddescribe import (
     handle_add_text_command
 )
 import AI.picgeneration as picgeneration
-from AI.kandinsky_client import install_into_picgeneration
+from AI.gigachat_image import install_into_picgeneration
 
-# В AI.picgeneration исторически встроен старый минимальный FusionBrain-клиент.
-# Подменяем только его экземпляр, оставляя остальной image-waterfall без рефакторинга.
+# Заменяем недоступную Kandinsky/FusionBrain-ступень на GigaChat-2 text2image.
+# Сохраняем остальной waterfall и публичные имена функций для совместимости.
 install_into_picgeneration(picgeneration)
 
 from AI.picgeneration import (
@@ -66,7 +66,7 @@ async def generate_image(message: types.Message):
         )
     )
 )
-async def generate_image_kandinsky(message: types.Message):
+async def generate_image_gigachat(message: types.Message):
     await handle_kandinsky_generation_command(message)
 
 @router.message(
