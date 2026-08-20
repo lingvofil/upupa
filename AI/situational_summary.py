@@ -4,6 +4,10 @@
 ``происходит <слово>`` или ``произошёл <слово>``.
 Часть ответов осмысленно резюмирует ситуацию через LLM, часть намеренно
 подхватывает одно содержательное слово из последних реплик.
+
+Для этой реакции используется отдельный короткий буфер живых сообщений чата.
+Он не зависит от ``conversation_history`` диалогового режима, куда обычная
+болтовня без обращения к боту не попадает.
 """
 
 from collections import deque
@@ -34,7 +38,14 @@ _STOP_WORDS = {
 
 # Последние слова именно этой реакции — защита от локального зацикливания модели.
 _recent_event_words: dict[str, deque[str]] = {}
+# Отдельный живой контекст для ситуативной реакции.
+_recent_chat_messages: dict[str, deque[dict]] = {}
+# Защита от двойного process_random_reactions для одного Telegram message_id.
+_seen_message_ids: dict[str, deque[int]] = {}
+
 _RECENT_LIMIT = 20
+_CONTEXT_LIMIT = 12
+_SEEN_MESSAGE_LIMIT = 100
 _DIRECT_WORD_PROBABILITY = 0.42
 
 
@@ -43,6 +54,73 @@ def _recent_for_chat(chat_id: int | str) -> deque[str]:
     if key not in _recent_event_words:
         _recent_event_words[key] = deque(maxlen=_RECENT_LIMIT)
     return _recent_event_words[key]
+
+
+def _context_for_chat(chat_id: int | str) -> deque[dict]:
+    key = str(chat_id)
+    if key not in _recent_chat_messages:
+        _recent_chat_messages[key] = deque(maxlen=_CONTEXT_LIMIT)
+    return _recent_chat_messages[key]
+
+
+def _seen_for_chat(chat_id: int | str) -> deque[int]:
+    key = str(chat_id)
+    if key not in _seen_message_ids:
+        _seen_message_ids[key] = deque(maxlen=_SEEN_MESSAGE_LIMIT)
+    return _seen_message_ids[key]
+
+
+def _message_author(message) -> str:
+    user = getattr(message, "from_user", None)
+    if not user:
+        return "Участник"
+    return (
+        getattr(user, "full_name", None)
+        or getattr(user, "first_name", None)
+        or getattr(user, "username", None)
+        or "Участник"
+    )
+
+
+def _register_incoming_message(message) -> bool:
+    """Запоминает человеческую реплику и возвращает False для повторного вызова того же message_id."""
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None:
+        return True
+
+    message_id = getattr(message, "message_id", None)
+    if message_id is not None:
+        seen = _seen_for_chat(chat_id)
+        if message_id in seen:
+            logging.debug(
+                "[situational-summary] Повторная обработка message_id=%s в чате %s пропущена",
+                message_id,
+                chat_id,
+            )
+            return False
+        seen.append(message_id)
+
+    user = getattr(message, "from_user", None)
+    if user and getattr(user, "is_bot", False):
+        return True
+
+    text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    if text:
+        _context_for_chat(chat_id).append(
+            {
+                "role": "user",
+                "name": _message_author(message),
+                "content": text,
+            }
+        )
+        logging.debug(
+            "[situational-summary] Контекст чата %s: %s сообщений",
+            chat_id,
+            len(_context_for_chat(chat_id)),
+        )
+
+    return True
 
 
 def _usable_messages(history: Sequence[Mapping]) -> list[Mapping]:
@@ -147,10 +225,11 @@ async def generate_absurd_situational_reaction(
 ) -> str | None:
     """Сгенерировать короткое ``происходит/произошёл + одно слово``."""
     usable = _usable_messages(history)
-    if len(usable) < 3:
-        logging.info("[situational-summary] Недостаточно контекста для чата %s", chat_id)
+    if not usable:
+        logging.info("[situational-summary] Нет текстового контекста для чата %s", chat_id)
         return None
 
+    # Одной свежей реплики уже достаточно: абсурдная вставка не требует полноценного диалога.
     focus_messages = usable[-5:]
     recent = _recent_for_chat(chat_id)
 
@@ -200,14 +279,31 @@ async def generate_absurd_situational_reaction(
 
 
 def install_into_random_reactions(random_reactions_module) -> None:
-    """Подменяет только старую кинематографичную вставку, не трогая остальные реакции."""
+    """Подменяет ситуативную вставку и делает обработку одного Telegram-сообщения идемпотентной."""
+    if getattr(random_reactions_module, "_situational_summary_patch_installed", False):
+        return
+
+    original_process_random_reactions = random_reactions_module.process_random_reactions
+
+    async def patched_process_random_reactions(message, *args, **kwargs):
+        # handlers/dialog.py и process_general_message исторически вызывают этот пайплайн дважды.
+        # Первым вызовом сохраняем реплику и выполняем реакции, второй для того же message_id пропускаем.
+        if not _register_incoming_message(message):
+            return False
+        return await original_process_random_reactions(message, *args, **kwargs)
 
     async def patched_generate_situational_reaction(chat_id: int) -> str | None:
-        history = random_reactions_module.conversation_history.get(str(chat_id), [])
+        # Основной источник — отдельный буфер живой болтовни. conversation_history оставляем
+        # только как fallback для старых/прямых сценариев вызова.
+        history = list(_context_for_chat(chat_id))
+        if not history:
+            history = random_reactions_module.conversation_history.get(str(chat_id), [])
         return await generate_absurd_situational_reaction(
             chat_id,
             history,
             random_reactions_module.generate_with_model,
         )
 
+    random_reactions_module.process_random_reactions = patched_process_random_reactions
     random_reactions_module.generate_situational_reaction = patched_generate_situational_reaction
+    random_reactions_module._situational_summary_patch_installed = True
