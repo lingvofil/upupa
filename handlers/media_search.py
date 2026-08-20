@@ -28,11 +28,16 @@ from services.weather import (
 )
 from services.nameinfo import process_name_info
 import services.distortion as distortion
+import services.distortion_stickers as distortion_stickers
+from services.distortion_alpha_safe import install_alpha_safe_rgba
 from services.distortion_stickers import install_into_distortion
 from features.broadcast import handle_broadcast_command, is_broadcast_command
 
 # Сохраняем старый distortion-пайплайн для обычных медиа, но перехватываем
 # статические/видео/TGS-стикеры, чтобы результат снова отправлялся стикером.
+# RGBA-обработку ставим первой: один seam-map применяется сразу ко всем каналам,
+# чтобы прозрачный фон не превращался в чёрный силуэт после деформации.
+install_alpha_safe_rgba(distortion_stickers)
 install_into_distortion(distortion)
 is_distortion_command = distortion.is_distortion_command
 handle_distortion_request = distortion.handle_distortion_request
