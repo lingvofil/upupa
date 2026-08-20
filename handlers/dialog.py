@@ -22,14 +22,18 @@ from services import memegenerator
 from games import crocodile, reverse_crocodile
 import AI.random_reactions as random_reactions
 from AI.situational_summary import install_into_random_reactions
-from AI.talking import (
-    process_general_message
-)
+import AI.talking as talking
 
 # Старый random_reactions.py большой и содержит много независимых реакций.
-# Меняем только ситуативную «кинематографичную» вставку, не трогая остальной пайплайн.
+# Меняем ситуативную вставку и добавляем защиту от двойной обработки одного message_id.
 install_into_random_reactions(random_reactions)
 process_random_reactions = random_reactions.process_random_reactions
+
+# AI.talking исторически импортирует process_random_reactions напрямую и затем вызывает его
+# ещё раз внутри process_general_message. Привязываем туда тот же идемпотентный wrapper,
+# чтобы второй проход не повторял реакции, сохранение сообщений и статистику.
+talking.process_random_reactions = process_random_reactions
+process_general_message = talking.process_general_message
 
 router = Router(name="dialog")
 
