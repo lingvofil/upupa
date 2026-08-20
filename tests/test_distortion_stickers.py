@@ -47,7 +47,29 @@ def test_static_webp_distortion_preserves_rgba(monkeypatch, tmp_path):
         assert alpha_max > 0
 
 
-def test_video_sticker_encoder_uses_vp9_no_audio_and_telegram_limits(monkeypatch, tmp_path):
+def test_alpha_preserving_input_args_force_libvpx_for_vp9_and_vp8(monkeypatch):
+    from services import distortion, distortion_stickers as stickers
+
+    codec = {"value": "vp9"}
+
+    async def fake_media_info(path):
+        return {"streams": [{"codec_type": "video", "codec_name": codec["value"]}]}
+
+    monkeypatch.setattr(distortion, "get_media_info", fake_media_info)
+
+    vp9 = asyncio.run(stickers._alpha_preserving_input_args("input.webm"))
+    assert vp9 == ["-c:v", "libvpx-vp9", "-i", "input.webm"]
+
+    codec["value"] = "vp8"
+    vp8 = asyncio.run(stickers._alpha_preserving_input_args("input.webm"))
+    assert vp8 == ["-c:v", "libvpx", "-i", "input.webm"]
+
+    codec["value"] = "h264"
+    other = asyncio.run(stickers._alpha_preserving_input_args("input.mp4"))
+    assert other == ["-i", "input.mp4"]
+
+
+def test_video_sticker_encoder_uses_vp9_alpha_decoder_and_safe_alpha_flags(monkeypatch, tmp_path):
     from services import distortion, distortion_stickers as stickers
 
     calls = []
@@ -55,7 +77,8 @@ def test_video_sticker_encoder_uses_vp9_no_audio_and_telegram_limits(monkeypatch
 
     async def fake_ffmpeg(command):
         calls.append(command)
-        output_path.write_bytes(b"webm")
+        if "alphaextract" not in command:
+            output_path.write_bytes(b"webm")
         return True, "Success"
 
     async def fake_media_info(path):
@@ -77,18 +100,31 @@ def test_video_sticker_encoder_uses_vp9_no_audio_and_telegram_limits(monkeypatch
     monkeypatch.setattr(distortion, "get_media_info", fake_media_info)
 
     ok = asyncio.run(
-        stickers.encode_media_as_video_sticker("input.mp4", str(output_path))
+        stickers.encode_media_as_video_sticker("input.webm", str(output_path))
     )
 
     assert ok is True
-    assert len(calls) == 1
-    command = calls[0]
-    assert "libvpx-vp9" in command
-    assert "-an" in command
-    assert "-t" in command
-    assert str(stickers.TELEGRAM_VIDEO_STICKER_MAX_SECONDS) in command
-    assert "yuva420p" in command
+    assert len(calls) == 2
+
+    encode_command = calls[0]
+    assert "libvpx-vp9" in encode_command
+    decoder_index = encode_command.index("-c:v")
+    assert encode_command[decoder_index + 1] == "libvpx-vp9"
+    assert encode_command[decoder_index + 2:decoder_index + 4] == ["-i", "input.webm"]
+    assert "-an" in encode_command
+    assert "-t" in encode_command
+    assert str(stickers.TELEGRAM_VIDEO_STICKER_MAX_SECONDS) in encode_command
+    assert "yuva420p" in encode_command
+    assert "-auto-alt-ref" in encode_command
+    assert encode_command[encode_command.index("-auto-alt-ref") + 1] == "0"
+    assert "-lag-in-frames" in encode_command
+    assert encode_command[encode_command.index("-lag-in-frames") + 1] == "0"
     assert str(output_path).endswith(".webm")
+
+    alpha_check = calls[1]
+    assert alpha_check[:4] == ["ffmpeg", "-v", "error", "-c:v"]
+    assert "libvpx-vp9" in alpha_check
+    assert "alphaextract" in alpha_check
 
 
 def test_video_sticker_validation_rejects_audio(monkeypatch, tmp_path):
@@ -113,6 +149,37 @@ def test_video_sticker_validation_rejects_audio(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(distortion, "get_media_info", fake_media_info)
+
+    assert asyncio.run(stickers.validate_telegram_video_sticker(str(output_path))) is False
+
+
+def test_video_sticker_validation_rejects_opaque_vp9(monkeypatch, tmp_path):
+    from services import distortion, distortion_stickers as stickers
+
+    output_path = tmp_path / "opaque.webm"
+    output_path.write_bytes(b"webm")
+
+    async def fake_media_info(path):
+        return {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "vp9",
+                    "width": 512,
+                    "height": 512,
+                    "avg_frame_rate": "12/1",
+                }
+            ],
+            "format": {"duration": "2.5"},
+        }
+
+    async def fake_ffmpeg(command):
+        assert "alphaextract" in command
+        assert "libvpx-vp9" in command
+        return False, "Requested planes not available"
+
+    monkeypatch.setattr(distortion, "get_media_info", fake_media_info)
+    monkeypatch.setattr(distortion, "run_ffmpeg_command", fake_ffmpeg)
 
     assert asyncio.run(stickers.validate_telegram_video_sticker(str(output_path))) is False
 
