@@ -25,12 +25,21 @@ from services import distortion
 from services import distortion_stickers as stickers
 
 try:
-    # seam-carving is pinned to 1.1.0 in requirements.txt. Its public resize()
-    # does not expose the seam map, while _get_seams() lets us apply one exact
-    # map to all four premultiplied RGBA channels.
-    from seam_carving.carve import _get_seams as _sc_get_seams
-    SEAM_MAP_AVAILABLE = True
-except (ImportError, AttributeError):  # pragma: no cover - dependency is pinned
+    # seam-carving==1.1.0 is distributed as a top-level module, not a
+    # ``seam_carving.carve`` package.  Its public resize() does not expose the
+    # seam map, while the private _get_seams() lets us apply one exact map to
+    # all four premultiplied RGBA channels.
+    import seam_carving as _seam_carving_impl
+    _sc_get_seams = getattr(_seam_carving_impl, "_get_seams", None)
+    if _sc_get_seams is None:
+        # Keep a compatibility fallback in case the dependency ever changes to
+        # a package layout while retaining the helper.
+        try:
+            from seam_carving.carve import _get_seams as _sc_get_seams
+        except (ImportError, AttributeError):
+            _sc_get_seams = None
+    SEAM_MAP_AVAILABLE = callable(_sc_get_seams)
+except ImportError:  # pragma: no cover - dependency is pinned in production
     _sc_get_seams = None
     SEAM_MAP_AVAILABLE = False
 
