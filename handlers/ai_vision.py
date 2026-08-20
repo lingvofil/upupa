@@ -20,6 +20,7 @@ from AI.whatisthere import (
     get_processing_message,
     process_robotics_description
 )
+from AI.whatisthere_prompt import apply_current_prompt_to_whatisthere
 
 router = Router(name="ai_vision")
 
@@ -67,6 +68,9 @@ async def handle_whatisthere_unified(message: types.Message):
     processing_msg = await message.reply(processing_text)
     
     success, response = await process_whatisthere_unified(message)
+    if success and response:
+        response = await apply_current_prompt_to_whatisthere(response, message.chat.id)
+
     await processing_msg.delete()
     if response:
         await message.reply(response)
