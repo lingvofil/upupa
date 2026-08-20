@@ -2,7 +2,7 @@
 
 The sticker pipeline must transform colour and alpha with the *same* seam map.
 Running seam carving independently for RGB and alpha can expose the black RGB
-stored under transparent pixels, producing dark silhouettes/halos.  This module
+stored under transparent pixels, producing dark silhouettes/halos. This module
 keeps RGBA spatially aligned and performs resampling in premultiplied-alpha
 space before restoring straight RGBA for WEBP/VP9 encoding.
 """
@@ -25,7 +25,7 @@ from services import distortion
 from services import distortion_stickers as stickers
 
 try:
-    # seam-carving is pinned to 1.1.0 in requirements.txt.  Its public resize()
+    # seam-carving is pinned to 1.1.0 in requirements.txt. Its public resize()
     # does not expose the seam map, while _get_seams() lets us apply one exact
     # map to all four premultiplied RGBA channels.
     from seam_carving.carve import _get_seams as _sc_get_seams
@@ -51,7 +51,7 @@ def _seam_energy_source(premultiplied_rgba: np.ndarray) -> np.ndarray:
     """Build a grayscale source for seam selection.
 
     Premultiplied colour prevents hidden RGB from influencing energy in fully
-    transparent regions.  A small alpha term preserves useful contour energy
+    transparent regions. A small alpha term preserves useful contour energy
     even for dark/black sticker artwork.
     """
     rgb_luma = premultiplied_rgba[:, :, :3] @ _LUMA
@@ -130,12 +130,15 @@ def _restore_straight_rgba(
     )
     rgb = np.clip(rgb, 0.0, 255.0)
 
-    # Fully/near-transparent pixels must not retain arbitrary hidden colour.
-    transparent = alpha[:, :, 0] <= 1.0
+    # Base cleanup on the alpha value that will actually be written to uint8.
+    # This prevents e.g. alpha=1.4 -> 1 while keeping non-zero hidden RGB.
+    alpha_u8 = np.rint(alpha).astype(np.uint8)
+    transparent = alpha_u8[:, :, 0] <= 1
     rgb[transparent] = 0.0
 
-    rgba = np.concatenate((rgb, alpha), axis=2)
-    return Image.fromarray(np.rint(rgba).astype(np.uint8), "RGBA")
+    rgb_u8 = np.rint(rgb).astype(np.uint8)
+    rgba_u8 = np.concatenate((rgb_u8, alpha_u8), axis=2)
+    return Image.fromarray(rgba_u8)
 
 
 def _seam_resize_rgba_same_map(
