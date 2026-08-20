@@ -27,8 +27,15 @@ from services.weather import (
     handle_weekly_forecast_command
 )
 from services.nameinfo import process_name_info
-from services.distortion import is_distortion_command, handle_distortion_request
+import services.distortion as distortion
+from services.distortion_stickers import install_into_distortion
 from features.broadcast import handle_broadcast_command, is_broadcast_command
+
+# Сохраняем старый distortion-пайплайн для обычных медиа, но перехватываем
+# статические/видео/TGS-стикеры, чтобы результат снова отправлялся стикером.
+install_into_distortion(distortion)
+is_distortion_command = distortion.is_distortion_command
+handle_distortion_request = distortion.handle_distortion_request
 
 router = Router(name="media_search")
 
@@ -109,5 +116,5 @@ async def handle_weather_command(message: types.Message):
     await handle_current_weather_command(message)
         
 @router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
-async def handle_weekly_forecast(message: types.Message):
+async def handle_weekly_forecast_command(message: types.Message):
     await handle_weekly_forecast_command(message)
