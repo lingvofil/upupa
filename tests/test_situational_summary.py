@@ -185,6 +185,7 @@ def test_installer_uses_live_context_and_makes_random_pipeline_idempotent(monkey
     assert list(ss._context_for_chat(77))[-1]["content"] == "в чат прилетел голубь"
 
     # Генератор теперь берёт именно живой контекст, даже если conversation_history пуст.
+    monkeypatch.setattr(ss, "_DIRECT_WORD_PROBABILITY", 0.0)
     result = asyncio.run(module.generate_situational_reaction(77))
     assert result == "*происходит наблюдение*"
 
