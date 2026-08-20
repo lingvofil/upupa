@@ -1,7 +1,7 @@
 """Sticker-preserving output pipeline for the ``дисторшн`` command.
 
 The legacy distortion worker intentionally remains responsible for text, photo,
-audio and regular video.  This module patches only sticker media types so a
+audio and regular video. This module patches only sticker media types so a
 sticker goes back to Telegram as a sticker instead of being downgraded to a
 photo/video message.
 """
@@ -138,8 +138,45 @@ def _parse_fps(value: str | None) -> float:
         return 0.0
 
 
+async def _alpha_preserving_input_args(input_path: str) -> list[str]:
+    """Select libvpx decoders for WebM alpha instead of FFmpeg's native VPx decoder.
+
+    VP9 alpha is stored separately in WebM. FFmpeg's native VP9 decoder can expose
+    only the opaque YUV planes, so transparent Telegram stickers become black before
+    we even extract RGBA frames. libvpx-vp9/libvpx preserve that alpha plane.
+    """
+    try:
+        info = await distortion.get_media_info(input_path)
+        streams = info.get("streams", []) if info else []
+        video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+        codec = (video or {}).get("codec_name")
+        if codec == "vp9":
+            return ["-c:v", "libvpx-vp9", "-i", input_path]
+        if codec == "vp8":
+            return ["-c:v", "libvpx", "-i", input_path]
+    except Exception as exc:
+        logging.warning("Could not inspect sticker input codec %s: %s", input_path, exc)
+    return ["-i", input_path]
+
+
+async def _has_decodable_alpha(output_path: str) -> bool:
+    """Verify that the encoded VP9 stream contains a real, decodable alpha plane."""
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-c:v", "libvpx-vp9",
+        "-i", output_path,
+        "-frames:v", "1",
+        "-vf", "alphaextract",
+        "-f", "null", "-",
+    ]
+    ok, err = await distortion.run_ffmpeg_command(cmd)
+    if not ok:
+        logging.warning("Encoded video sticker has no decodable alpha plane: %s", err)
+    return ok
+
+
 async def validate_telegram_video_sticker(output_path: str) -> bool:
-    """Verify the hard format limits required for a Telegram video sticker."""
+    """Verify Telegram format limits and that VP9 transparency survived encoding."""
     if not os.path.exists(output_path):
         return False
     if os.path.getsize(output_path) > TELEGRAM_VIDEO_STICKER_MAX_BYTES:
@@ -172,7 +209,8 @@ async def validate_telegram_video_sticker(output_path: str) -> bool:
             return False
     except (TypeError, ValueError):
         return False
-    return True
+
+    return await _has_decodable_alpha(output_path)
 
 
 def _telegram_video_filter(fps: int, *, extra_filter: str | None = None) -> str:
@@ -215,6 +253,9 @@ async def _encode_video_sticker_attempts(
             "-deadline", "good",
             "-cpu-used", "4",
             "-row-mt", "1",
+            # libvpx alt-ref frames can silently drop the VP9 alpha plane.
+            "-auto-alt-ref", "0",
+            "-lag-in-frames", "0",
             "-pix_fmt", "yuva420p",
             "-metadata:s:v:0", "alpha_mode=1",
             output_path,
@@ -227,7 +268,7 @@ async def _encode_video_sticker_attempts(
             return True
         size = os.path.getsize(output_path) if os.path.exists(output_path) else -1
         logging.info(
-            "VP9 sticker attempt did not fit constraints: fps=%s crf=%s size=%s",
+            "VP9 sticker attempt did not fit constraints/alpha validation: fps=%s crf=%s size=%s",
             fps,
             crf,
             size,
@@ -241,8 +282,9 @@ async def encode_media_as_video_sticker(
     *,
     extra_filter: str | None = None,
 ) -> bool:
+    input_args = await _alpha_preserving_input_args(input_path)
     return await _encode_video_sticker_attempts(
-        ["-i", input_path],
+        input_args,
         output_path,
         extra_filter=extra_filter,
     )
@@ -261,8 +303,9 @@ async def apply_rgba_video_sticker_distortion(
     os.makedirs(work_dir, exist_ok=True)
     frames_pattern = os.path.join(work_dir, "frame_%05d.png")
     try:
+        input_args = await _alpha_preserving_input_args(input_path)
         extract_cmd = [
-            "ffmpeg", "-y", "-i", input_path,
+            "ffmpeg", "-y", *input_args,
             "-an",
             "-t", str(TELEGRAM_VIDEO_STICKER_MAX_SECONDS),
             "-vf", (
@@ -274,7 +317,7 @@ async def apply_rgba_video_sticker_distortion(
         ]
         ok, err = await distortion.run_ffmpeg_command(extract_cmd)
         if not ok:
-            logging.warning("Could not extract sticker frames: %s", err)
+            logging.warning("Could not extract sticker frames with alpha: %s", err)
             return False
 
         frames = sorted(glob.glob(os.path.join(work_dir, "frame_*.png")))
@@ -316,9 +359,9 @@ async def create_distorted_video_sticker(
     if await apply_rgba_video_sticker_distortion(input_path, output_path, intensity):
         return True
 
-    # If seam carving or alpha-frame extraction fails, retain distortion rather
-    # than silently returning the original sticker.  This fallback is visual
-    # only and the final encoder still enforces VP9/no-audio/size/duration.
+    # If seam carving fails, retain distortion rather than silently returning
+    # the original sticker. The input decoder and final VP9 encoder still keep
+    # alpha, and validation refuses to send an opaque fallback as a video sticker.
     safe_intensity = max(0, min(intensity, 80))
     visual_fallback = (
         f"noise=alls={int(distortion.map_intensity(safe_intensity, 12, 55))}:allf=t+u,"
