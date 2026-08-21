@@ -15,5 +15,9 @@ jobs:
           python-version: "3.11"
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
-      - name: Run tests
-        run: python -m pytest tests/ -q
+      - name: Run tests with coverage
+        run: >-
+          python -m pytest tests/ -q
+          --cov=AI --cov=core --cov=features --cov=games
+          --cov=handlers --cov=services --cov=prompts
+          --cov-report=term-missing

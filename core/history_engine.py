@@ -3,7 +3,7 @@ import logging
 import random
 import os
 from thefuzz import process
-from config import LOG_FILE
+from core.state import LOG_FILE
 
 # === ПУЛЬТ УПРАВЛЕНИЯ РЕЖИМОМ ===
 MATCH_THRESHOLD = 70      # Схожесть (0-100). Чем выше, тем строже контекст.
