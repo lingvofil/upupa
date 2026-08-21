@@ -21,3 +21,4 @@ jobs:
           --cov=AI --cov=core --cov=features --cov=games
           --cov=handlers --cov=services --cov=prompts
           --cov-report=term-missing
+          --cov-fail-under=26
