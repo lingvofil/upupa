@@ -28,7 +28,7 @@ def test_holiday_setting_is_off_by_default(monkeypatch):
 
     text, markup = asyncio.run(interactive_settings.get_main_settings_markup("-1001"))
 
-    assert "📅 *Праздники:* Выкл. ❌" in text
+    assert "📅 *Празднеки:* Выкл. ❌" in text
     assert "вкл празднеки" in _button_texts(markup)
 
 
@@ -41,5 +41,5 @@ def test_holiday_setting_shows_disable_action_when_enabled(monkeypatch):
 
     text, markup = asyncio.run(interactive_settings.get_main_settings_markup("-1001"))
 
-    assert "📅 *Праздники:* Вкл. ✅" in text
+    assert "📅 *Празднеки:* Вкл. ✅" in text
     assert "выкл празднеки" in _button_texts(markup)
