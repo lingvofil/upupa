@@ -15,8 +15,9 @@ from aiogram import Bot
 from aiogram import types
 from bs4 import BeautifulSoup
 
+from config import chat_settings
+
 CALEND_BASE_URL = "https://www.calend.ru"
-HOLIDAYS_CHAT_ID = -1001707530786
 MAX_HOLIDAYS = 5
 
 
@@ -72,6 +73,19 @@ async def fetch_today_holidays() -> list[Holiday]:
     moscow_tz = pytz.timezone("Europe/Moscow")
     now = datetime.now().astimezone(moscow_tz)
     return await asyncio.to_thread(_fetch_calend_holidays_sync, now.month, now.day)
+
+
+def get_holiday_broadcast_chat_ids() -> list[int]:
+    """Возвращает чаты, где ежедневная рассылка праздников явно включена."""
+    enabled_chat_ids: list[int] = []
+    for chat_id, settings in chat_settings.items():
+        if not isinstance(settings, dict) or not settings.get("holidays_enabled", False):
+            continue
+        try:
+            enabled_chat_ids.append(int(chat_id))
+        except (TypeError, ValueError):
+            logging.warning("Holiday digest: invalid chat id in settings: %r", chat_id)
+    return enabled_chat_ids
 
 
 def _extract_json_list(text: str) -> list[dict]:
@@ -154,8 +168,8 @@ def format_holiday_digest(holidays: list[Holiday], descriptions: dict[str, str] 
     return "\n".join(lines)
 
 
-async def send_daily_holidays(bot: Bot, chat_id: int = HOLIDAYS_CHAT_ID) -> None:
-    holidays = await fetch_today_holidays()
+async def send_daily_holidays(bot: Bot, chat_id: int, holidays: list[Holiday] | None = None) -> None:
+    holidays = holidays if holidays is not None else await fetch_today_holidays()
     if not holidays:
         logging.warning("Holiday digest: calend.ru returned no holidays")
         return
@@ -183,7 +197,7 @@ async def process_holidays_command(message: types.Message) -> None:
     )
 
 
-async def schedule_daily_holidays(bot: Bot, chat_id: int = HOLIDAYS_CHAT_ID) -> None:
+async def schedule_daily_holidays(bot: Bot) -> None:
     while True:
         moscow_tz = pytz.timezone("Europe/Moscow")
         now = datetime.now().astimezone(moscow_tz)
@@ -196,6 +210,23 @@ async def schedule_daily_holidays(bot: Bot, chat_id: int = HOLIDAYS_CHAT_ID) -> 
         await asyncio.sleep(wait_seconds)
 
         try:
-            await send_daily_holidays(bot, chat_id)
+            holidays = await fetch_today_holidays()
+            if not holidays:
+                logging.warning("Holiday digest: calend.ru returned no holidays")
+                continue
+
+            chat_ids = get_holiday_broadcast_chat_ids()
+            if not chat_ids:
+                logging.info("Holiday digest: no chats have holiday broadcasts enabled")
+                continue
+
+            for chat_id in chat_ids:
+                try:
+                    await send_daily_holidays(bot, chat_id, holidays)
+                except Exception as e:
+                    logging.error(
+                        f"Holiday digest scheduler failed for chat {chat_id}: {e}",
+                        exc_info=True,
+                    )
         except Exception as e:
-            logging.error(f"Holiday digest scheduler failed for chat {chat_id}: {e}", exc_info=True)
+            logging.error(f"Holiday digest scheduler failed: {e}", exc_info=True)
