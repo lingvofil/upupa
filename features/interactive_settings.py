@@ -77,6 +77,7 @@ async def get_main_settings_markup(chat_id: str):
     emoji_enabled = settings.get("emoji_enabled", True)
     random_memes_enabled = settings.get("random_memes_enabled", False)
     proactive_enabled = settings.get("proactive_enabled", True)
+    holidays_enabled = settings.get("holidays_enabled", False)
     
     sms_enabled = chat_id not in sms_disabled_chats
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
@@ -92,6 +93,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
     text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n"
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
+    text += f"📅 *Праздники:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
@@ -104,6 +106,7 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if antispam_enabled else 'Вкл.'} антиспам", callback_data="settings:toggle:antispam")
     builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
+    builder.button(text=f"{'выкл' if holidays_enabled else 'вкл'} празднеки", callback_data="settings:toggle:holidays")
 
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
@@ -312,6 +315,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             save_rank_notifications_settings()
         elif value == "proactive":
             chat_settings[chat_id]["proactive_enabled"] = not chat_settings[chat_id].get("proactive_enabled", True)
+        elif value == "holidays":
+            chat_settings[chat_id]["holidays_enabled"] = not chat_settings[chat_id].get("holidays_enabled", False)
         
         save_chat_settings()
         text, markup = await get_main_settings_markup(chat_id)
