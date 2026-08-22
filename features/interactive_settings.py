@@ -93,7 +93,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
     text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n"
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
-    text += f"📅 *Праздники:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
+    text += f"📅 *Празднеки:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
