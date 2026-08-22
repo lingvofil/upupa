@@ -4,7 +4,6 @@ import asyncio
 import html
 import json
 import logging
-import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,8 +14,6 @@ import requests
 from aiogram import Bot
 from aiogram import types
 from bs4 import BeautifulSoup
-
-from prompts import PROMPTS_MEDIA
 
 CALEND_BASE_URL = "https://www.calend.ru"
 HOLIDAYS_CHAT_ID = -1001707530786
@@ -95,12 +92,11 @@ def _build_digest_prompt(holidays: list[Holiday]) -> str:
         f"Описание с calend.ru: {holiday.description}"
         for index, holiday in enumerate(holidays, 1)
     )
-    media_prompt = random.choice(PROMPTS_MEDIA)
     return (
-        f"{media_prompt}\n\n"
         "Сделай ежедневную рассылку праздников для Telegram по данным ниже. "
         "Для каждого праздника верни короткое описание на русском: 1-3 предложения, без вводной болтовни. "
         "Сохрани ровно эти названия праздников, не добавляй праздники от себя. "
+        "Стиль описаний должен соответствовать текущему промпту чата. "
         "Ответ верни строго JSON-массивом без markdown: "
         '[{"title": "название", "description": "краткое описание"}].\n\n'
         f"Данные:\n{source}"
@@ -108,13 +104,18 @@ def _build_digest_prompt(holidays: list[Holiday]) -> str:
 
 
 async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -> dict[str, str]:
-    from AI.talking import generate_simple_response
+    from AI.talking import build_prompt_with_current_chat_prompt, generate_simple_response
 
     if not holidays:
         return {}
 
     try:
-        prompt = _build_digest_prompt(holidays)
+        task_prompt = _build_digest_prompt(holidays)
+        prompt = build_prompt_with_current_chat_prompt(
+            str(chat_id),
+            task_prompt,
+            task_name="ежедневную рассылку праздников",
+        )
         response_text = await generate_simple_response(prompt, str(chat_id))
         generated = _extract_json_list(response_text)
     except Exception as e:
