@@ -11,12 +11,20 @@ from datetime import datetime
 
 from core.settings import SPECIAL_CHAT_ID
 from core.state import chat_list
-from prompts.channel import CHANNEL_PERSONA, OPTIONAL_NUDGES, UPUPA_CAPABILITIES
+from features.channel.batya_source import BATYA_CHANNEL, fetch_batya_posts
 from features.channel.storage import append_post, load_posts
+from prompts.channel import (
+    BATYA_COMMENT_PROMPT,
+    CHANNEL_PERSONA,
+    OPTIONAL_NUDGES,
+    UPUPA_CAPABILITIES,
+)
 
 CHANNEL_TARGET = os.getenv("UPUPA_CHANNEL", "@upupa_channel")
 CHAT_CONTEXT_PROBABILITY = 0.25
+BATYA_COMMENT_PROBABILITY = 0.10
 RECENT_POSTS_LIMIT = 25
+BATYA_POSTS_LIMIT = 20
 CHAT_TAIL_LIMIT = 200
 CHAT_WINDOW_MIN = 12
 CHAT_WINDOW_MAX = 25
@@ -116,6 +124,20 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     return None
 
 
+def _pick_uncommented_batya_post(source_posts: list[dict], recent_posts: list[dict]) -> dict | None:
+    """Не комментируем одну и ту же ссылку повторно, пока запись есть в истории канала."""
+    used_urls = {
+        str(post.get("external_source_url"))
+        for post in recent_posts
+        if post.get("external_source_url")
+    }
+    candidates = [post for post in source_posts if post.get("url") not in used_urls and post.get("text")]
+    if not candidates:
+        return None
+    # Берём случайный из свежих, чтобы канал не выглядел как строгий RSS-репостер.
+    return random.choice(candidates[-10:])
+
+
 def _build_prompt(recent_posts: list[dict], chat_fragment: str | None, retry_note: str = "") -> str:
     nudge = random.choice(OPTIONAL_NUDGES)
     context_block = (
@@ -137,11 +159,60 @@ def _build_prompt(recent_posts: list[dict], chat_fragment: str | None, retry_not
     )
 
 
-async def generate_channel_post() -> tuple[str, bool]:
-    """Генерирует один пост. Возвращает (текст, использовался_ли_контекст_чата)."""
+def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
+    source_text = str(source_post.get("text") or "")[:5000]
+    retry_block = f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий." if retry_note else ""
+    return (
+        f"{CHANNEL_PERSONA}\n\n"
+        f"{BATYA_COMMENT_PROMPT.format(source_text=source_text)}"
+        f"{retry_block}"
+    )
+
+
+async def _try_generate_batya_comment(recent_posts: list[dict]) -> tuple[str, dict] | None:
+    """Редкий режим: ссылка на реальный пост бати + короткий комментарий Упупы."""
+    from AI.summarize import _generate_with_active_model
+
+    source_posts = await fetch_batya_posts(limit=BATYA_POSTS_LIMIT)
+    source_post = _pick_uncommented_batya_post(source_posts, recent_posts)
+    if not source_post:
+        return None
+
+    retry_note = ""
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        prompt = _build_batya_prompt(source_post, retry_note)
+        comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
+        final_text = f"{source_post['url']}\n\n{(comment or '').strip()}"
+        reason = _validate_post(final_text, recent_posts)
+        if not reason:
+            return final_text, {
+                "post_kind": "batya_comment",
+                "chat_context_used": False,
+                "external_source_channel": f"@{BATYA_CHANNEL}",
+                "external_source_url": source_post["url"],
+            }
+        logging.warning("[channel] batya comment attempt %s rejected: %s", attempt, reason)
+        retry_note = reason
+
+    logging.warning("[channel] batya comment generation exhausted, falling back to normal post")
+    return None
+
+
+async def generate_channel_post() -> tuple[str, dict]:
+    """Генерирует один пост и метаданные о его происхождении."""
     from AI.summarize import _generate_with_active_model
 
     recent_posts = await asyncio.to_thread(load_posts, RECENT_POSTS_LIMIT)
+
+    if random.random() < BATYA_COMMENT_PROBABILITY:
+        try:
+            batya_post = await _try_generate_batya_comment(recent_posts)
+        except Exception as exc:
+            logging.warning("[channel] batya comment mode failed, fallback to normal: %s", exc)
+            batya_post = None
+        if batya_post is not None:
+            return batya_post
+
     chat_fragment = None
     if random.random() < CHAT_CONTEXT_PROBABILITY:
         chat_fragment = await asyncio.to_thread(_pick_chat_fragment)
@@ -152,7 +223,10 @@ async def generate_channel_post() -> tuple[str, bool]:
         text = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
         reason = _validate_post(text or "", recent_posts)
         if not reason:
-            return text.strip(), bool(chat_fragment)
+            return text.strip(), {
+                "post_kind": "normal",
+                "chat_context_used": bool(chat_fragment),
+            }
         logging.warning("[channel] generation attempt %s rejected: %s", attempt, reason)
         retry_note = reason
 
@@ -162,20 +236,21 @@ async def generate_channel_post() -> tuple[str, bool]:
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
     """Генерирует пост, публикует в канал и только после успеха сохраняет в историю."""
     async with _publish_lock:
-        text, chat_context_used = await generate_channel_post()
+        text, metadata = await generate_channel_post()
         sent = await bot.send_message(CHANNEL_TARGET, text)
         record = {
             "created_at": datetime.now().isoformat(),
             "source": source,
             "text": text,
-            "chat_context_used": chat_context_used,
             "message_id": getattr(sent, "message_id", None),
+            **metadata,
         }
         await asyncio.to_thread(append_post, record)
         logging.info(
-            "[channel] published source=%s message_id=%s context=%s",
+            "[channel] published source=%s message_id=%s kind=%s context=%s",
             source,
             record["message_id"],
-            chat_context_used,
+            record.get("post_kind"),
+            record.get("chat_context_used"),
         )
         return sent, text
