@@ -55,6 +55,33 @@ def test_background_task_set_is_explicit_and_idempotent():
     ]
 
 
+def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
+    import app.bootstrap as bootstrap
+    from AI.dnd import dnd_router
+
+    fake_main_router = object()
+
+    class RecordingDispatcher:
+        def __init__(self):
+            self.sub_routers = []
+
+        def include_router(self, router):
+            self.sub_routers.append(router)
+
+    dispatcher = RecordingDispatcher()
+    application = UpupaApplication(
+        bot=object(),
+        dispatcher=dispatcher,
+        supervisor=RecordingSupervisor(),
+    )
+    monkeypatch.setattr(bootstrap, "get_main_router", lambda: fake_main_router)
+
+    application.configure_dispatcher()
+    application.configure_dispatcher()
+
+    assert dispatcher.sub_routers == [dnd_router, fake_main_router]
+
+
 def test_main_delegates_to_application_runner(monkeypatch):
     import main
 
