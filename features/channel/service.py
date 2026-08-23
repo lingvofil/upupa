@@ -17,6 +17,7 @@ from prompts.channel import (
     BATYA_COMMENT_PROMPT,
     CHANNEL_PERSONA,
     OPTIONAL_NUDGES,
+    POST_LENGTH_MODES,
     UPUPA_CAPABILITIES,
 )
 
@@ -28,8 +29,9 @@ BATYA_POSTS_LIMIT = 20
 CHAT_TAIL_LIMIT = 200
 CHAT_WINDOW_MIN = 12
 CHAT_WINDOW_MAX = 25
-MAX_POST_LENGTH = 1200
-MAX_BATYA_COMMENT_LENGTH = 400
+MAX_POST_LENGTH = 280
+MAX_BATYA_COMMENT_LENGTH = 100
+MAX_BATYA_COMMENT_WORDS = 8
 MAX_GENERATION_ATTEMPTS = 3
 
 _publish_lock = asyncio.Lock()
@@ -104,6 +106,15 @@ def _normalize_for_duplicate_check(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\S+", text.strip()))
+
+
+def _choose_length_mode(*, rng=random) -> dict:
+    modes = list(POST_LENGTH_MODES)
+    return rng.choices(modes, weights=[mode["weight"] for mode in modes], k=1)[0]
+
+
 def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     clean = text.strip()
     if not clean:
@@ -125,12 +136,28 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     return None
 
 
+def _validate_length_mode(text: str, mode: dict) -> str | None:
+    clean = text.strip()
+    words = _word_count(clean)
+    min_words = int(mode["min_words"])
+    max_words = int(mode["max_words"])
+    max_chars = int(mode["max_chars"])
+
+    if words < min_words or words > max_words:
+        return f"режим {mode['name']}: нужно {min_words}–{max_words} слов, получено {words}"
+    if len(clean) > max_chars:
+        return f"режим {mode['name']}: максимум {max_chars} символов, получено {len(clean)}"
+    return None
+
+
 def _validate_batya_comment(comment: str) -> str | None:
     reason = _validate_post(comment, [])
     if reason:
         return reason
     if len(comment.strip()) > MAX_BATYA_COMMENT_LENGTH:
         return f"слишком длинный комментарий ({len(comment.strip())} символов)"
+    if _word_count(comment) > MAX_BATYA_COMMENT_WORDS:
+        return f"слишком многословный комментарий ({_word_count(comment)} слов)"
     if "https://t.me/" in comment.casefold():
         return "модель сама добавила Telegram-ссылку"
     return None
@@ -146,11 +173,15 @@ def _pick_uncommented_batya_post(source_posts: list[dict], published_posts: list
     candidates = [post for post in source_posts if post.get("url") not in used_urls and post.get("text")]
     if not candidates:
         return None
-    # Берём случайный из свежих, чтобы канал не выглядел как строгий RSS-репостер.
     return random.choice(candidates[-10:])
 
 
-def _build_prompt(recent_posts: list[dict], chat_fragment: str | None, retry_note: str = "") -> str:
+def _build_prompt(
+    recent_posts: list[dict],
+    chat_fragment: str | None,
+    length_mode: dict,
+    retry_note: str = "",
+) -> str:
     nudge = random.choice(OPTIONAL_NUDGES)
     context_block = (
         "\n\nСЛУЧАЙНЫЙ ФРАГМЕНТ ОДНОГО ИЗ ЧАТОВ (необязательный материал):\n"
@@ -158,10 +189,15 @@ def _build_prompt(recent_posts: list[dict], chat_fragment: str | None, retry_not
         if chat_fragment
         else "\n\nФрагмент чужой переписки в этот раз не дан."
     )
-    retry_block = f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Напиши другой вариант." if retry_note else ""
+    retry_block = (
+        f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Напиши другой вариант."
+        if retry_note
+        else ""
+    )
     return (
         f"{CHANNEL_PERSONA}\n\n"
         f"{UPUPA_CAPABILITIES}\n\n"
+        f"РАЗМЕР ЭТОГО ПОСТА — ОБЯЗАТЕЛЬНО: {length_mode['instruction']}\n\n"
         f"Необязательный импульс для этого раза: {nudge}\n\n"
         "ТВОИ НЕДАВНИЕ ПОСТЫ:\n"
         f"{_format_recent_posts(recent_posts)}"
@@ -173,7 +209,11 @@ def _build_prompt(recent_posts: list[dict], chat_fragment: str | None, retry_not
 
 def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
     source_text = str(source_post.get("text") or "")[:5000]
-    retry_block = f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий." if retry_note else ""
+    retry_block = (
+        f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий."
+        if retry_note
+        else ""
+    )
     return (
         f"{CHANNEL_PERSONA}\n\n"
         f"{BATYA_COMMENT_PROMPT.format(batya_channel=f'@{BATYA_CHANNEL}', source_text=source_text)}"
@@ -236,15 +276,19 @@ async def generate_channel_post() -> tuple[str, dict]:
     if random.random() < CHAT_CONTEXT_PROBABILITY:
         chat_fragment = await asyncio.to_thread(_pick_chat_fragment)
 
+    length_mode = _choose_length_mode()
     retry_note = ""
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        prompt = _build_prompt(recent_posts, chat_fragment, retry_note)
+        prompt = _build_prompt(recent_posts, chat_fragment, length_mode, retry_note)
         text = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
         reason = _validate_post(text or "", recent_posts)
+        if not reason:
+            reason = _validate_length_mode(text or "", length_mode)
         if not reason:
             return text.strip(), {
                 "post_kind": "normal",
                 "chat_context_used": bool(chat_fragment),
+                "length_mode": length_mode["name"],
             }
         logging.warning("[channel] generation attempt %s rejected: %s", attempt, reason)
         retry_note = reason
@@ -266,10 +310,11 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
         }
         await asyncio.to_thread(append_post, record)
         logging.info(
-            "[channel] published source=%s message_id=%s kind=%s context=%s",
+            "[channel] published source=%s message_id=%s kind=%s length=%s context=%s",
             source,
             record["message_id"],
             record.get("post_kind"),
+            record.get("length_mode"),
             record.get("chat_context_used"),
         )
         return sent, text
