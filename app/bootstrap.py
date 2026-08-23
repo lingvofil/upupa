@@ -1,8 +1,8 @@
 """Явная сборка и запуск Telegram-приложения Упупы.
 
 На этом этапе сохраняются legacy-синглтоны bot/dp из core.loader: многие модули
-ещё импортируют bot через config.py. Владелец жизненного цикла уже находится здесь,
-а создание самих внешних клиентов будет вынесено из import-time на следующих этапах.
+ещё импортируют bot через config.py. Прикладные модули загружаются только на startup,
+чтобы простой import composition root не запускал их import-time side effects.
 """
 
 from dataclasses import dataclass, field
@@ -10,22 +10,10 @@ from dataclasses import dataclass, field
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
-from AI.birthday_calendar import birthday_scheduler
-from AI.dnd import dnd_router
-from AI.quiz import schedule_daily_quiz
+from app.lifecycle import TaskSupervisor
 from core.loader import bot as legacy_bot
 from core.loader import dp as legacy_dispatcher
 from core.logging_setup import logger
-from features.content_filter import ContentFilterMiddleware, load_antispam_settings
-from features.proactive import proactive_loop
-from features.statistics import PrivateRateLimitMiddleware
-import features.statistics as bot_statistics
-from games import crocodile
-from handlers import ROUTERS
-from services.holidays import schedule_daily_holidays
-
-from app.lifecycle import TaskSupervisor
-from core.middlewares import IncomingMessageLogMiddleware
 
 
 QUIZ_CHAT_IDS = (-1001707530786, -1001781970364)
@@ -38,6 +26,11 @@ def get_main_router() -> Router:
     global _main_router
     if _main_router is not None:
         return _main_router
+
+    from core.middlewares import IncomingMessageLogMiddleware
+    from features.content_filter import ContentFilterMiddleware
+    from features.statistics import PrivateRateLimitMiddleware
+    from handlers import ROUTERS
 
     router = Router(name="main")
     router.message.middleware(IncomingMessageLogMiddleware())
@@ -60,12 +53,21 @@ class UpupaApplication:
     _background_tasks_started: bool = field(default=False, init=False)
 
     def initialize_state(self) -> None:
+        from features.content_filter import load_antispam_settings
+        import features.statistics as bot_statistics
+
         load_antispam_settings()
         bot_statistics.init_db()
 
     def start_background_tasks(self) -> None:
         if self._background_tasks_started:
             return
+
+        from AI.birthday_calendar import birthday_scheduler
+        from AI.quiz import schedule_daily_quiz
+        from features.proactive import proactive_loop
+        from games import crocodile
+        from services.holidays import schedule_daily_holidays
 
         for chat_id in QUIZ_CHAT_IDS:
             self.supervisor.start(
@@ -94,6 +96,8 @@ class UpupaApplication:
     def configure_dispatcher(self) -> None:
         if self._dispatcher_configured:
             return
+
+        from AI.dnd import dnd_router
 
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
