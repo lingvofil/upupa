@@ -1,5 +1,6 @@
 """Tests for the GigaChat text2image image provider."""
 
+import asyncio
 import base64
 from types import SimpleNamespace
 
@@ -84,3 +85,54 @@ def test_install_replaces_kandinsky_provider_for_pun():
     assert isinstance(module.kandinsky_api, gi.GigaChatImageCompatAPI)
     assert callable(module.robust_image_generation)
     assert callable(module.handle_kandinsky_generation_command)
+
+
+def test_waterfall_prefers_gigachat_without_translation_or_pollinations(monkeypatch):
+    sent = []
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("fallback provider must not run when GigaChat succeeds")
+
+    async def send_generated_photo(message, data, filename):
+        sent.append((data, filename))
+
+    module = SimpleNamespace(
+        PIPELINE_ID="old",
+        kandinsky_api=object(),
+        translate_to_en=fail_if_called,
+        pollinations_generate=fail_if_called,
+        hf_generate=fail_if_called,
+        cf_generate_t2i=fail_if_called,
+        send_generated_photo=send_generated_photo,
+    )
+    gi.install_into_picgeneration(module)
+
+    async def fake_gigachat(prompt):
+        assert prompt == "красный гриб"
+        return b"generated-by-gigachat"
+
+    monkeypatch.setattr(gi, "generate_gigachat_image", fake_gigachat)
+
+    class ProcessingMessage:
+        def __init__(self):
+            self.edits = []
+            self.deleted = False
+
+        async def edit_text(self, text):
+            self.edits.append(text)
+
+        async def delete(self):
+            self.deleted = True
+
+    processing = ProcessingMessage()
+    asyncio.run(
+        module.robust_image_generation(
+            message=object(),
+            prompt_ru="красный гриб",
+            processing_msg=processing,
+        )
+    )
+
+    assert processing.edits == ["Использую ебучий GigaChat..."]
+    assert processing.deleted is True
+    assert sent == [(b"generated-by-gigachat", "gigachat.png")]
