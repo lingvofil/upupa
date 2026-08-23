@@ -53,12 +53,21 @@ class UpupaApplication:
     _background_tasks_started: bool = field(default=False, init=False)
 
     def initialize_state(self) -> None:
+        from core.paths import STATISTICS_DB_PATH
         from features.chat_settings import load_chat_state
         from features.content_filter import load_antispam_settings
+        from features.sms_settings import load_sms_disabled_chats
+        from features.stat_rank_settings import load_stat_rank_state
         import features.statistics as bot_statistics
+        from infrastructure.persistence import SQLiteStatisticsRepository
 
         load_chat_state()
         load_antispam_settings()
+        load_sms_disabled_chats()
+        load_stat_rank_state()
+        bot_statistics.configure_statistics_repository(
+            SQLiteStatisticsRepository(STATISTICS_DB_PATH)
+        )
         bot_statistics.init_db()
 
     def start_background_tasks(self) -> None:

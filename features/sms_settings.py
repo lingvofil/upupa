@@ -1,13 +1,17 @@
+import asyncio
 import os
-import json
 import logging
 import re
 from collections import deque
 from datetime import datetime, timedelta
 from aiogram import Bot, types
-# ИСПРАВЛЕНИЕ: Добавляем импорт `sms_disabled_chats` из config.py
-from config import SMS_DISABLED_CHATS_FILE, SPECIAL_CHAT_ID, LOG_FILE, sms_disabled_chats
 
+from core.json_repository import JsonFileRepository, JsonRepository
+from core.paths import SMS_DISABLED_CHATS_PATH, USER_MESSAGES_LOG_PATH
+from core.settings import SPECIAL_CHAT_ID
+from core.state import sms_disabled_chats
+
+LOG_FILE = str(USER_MESSAGES_LOG_PATH)
 
 LOG_START_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -185,161 +189,139 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
     fitted_messages = _fit_recent_messages_to_telegram_limit(recent_messages)
     await message.reply("\n".join(fitted_messages))
 
-# ✅ Функция загрузки списка чатов с отключёнными смс
-def load_sms_disabled_chats():
-    """
-    Загружает чаты с отключенными СМС из файла.
-    Модифицирует глобальное множество `sms_disabled_chats` на месте, чтобы все модули видели изменения.
-    """
-    if os.path.exists(SMS_DISABLED_CHATS_FILE):
-        try:
-            with open(SMS_DISABLED_CHATS_FILE, "r", encoding="utf-8") as file:
-                data = json.load(file)
-                # Проверяем, что из файла загрузился именно список
-                if isinstance(data, list):
-                    # ИСПРАВЛЕНИЕ: Очищаем и обновляем существующий объект, а не создаем новый
-                    sms_disabled_chats.clear()
-                    sms_disabled_chats.update(data)
-                    logging.info(f"Загружено {len(sms_disabled_chats)} чатов с отключёнными смс.")
-                else:
-                    sms_disabled_chats.clear()
-                    logging.warning(f"Файл {SMS_DISABLED_CHATS_FILE} содержит не список, а {type(data)}. Настройки сброшены.")
-        except Exception as e:
-            logging.error(f"Ошибка при загрузке списка отключённых смс: {e}")
-            sms_disabled_chats.clear()
-    else:
-        # Если файла нет, просто убедимся, что множество пустое
-        sms_disabled_chats.clear()
 
-# ✅ Функция сохранения списка чатов с отключёнными смс
-def save_sms_disabled_chats():
+def _sms_disabled_repository() -> JsonFileRepository:
+    return JsonFileRepository(SMS_DISABLED_CHATS_PATH)
+
+
+def load_sms_disabled_chats(repository: JsonRepository | None = None):
+    """Загрузить список отключённых чатов, сохраняя identity shared set."""
+    repo = repository or _sms_disabled_repository()
     try:
-        with open(SMS_DISABLED_CHATS_FILE, "w", encoding="utf-8") as file:
-            # Преобразуем множество в список для сохранения в JSON
-            json.dump(list(sms_disabled_chats), file, ensure_ascii=False, indent=4)
+        data = repo.load()
+    except FileNotFoundError:
+        sms_disabled_chats.clear()
+        return
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке списка отключённых смс: {e}")
+        sms_disabled_chats.clear()
+        return
+
+    if isinstance(data, list):
+        sms_disabled_chats.clear()
+        sms_disabled_chats.update(data)
+        logging.info(f"Загружено {len(sms_disabled_chats)} чатов с отключёнными смс.")
+    else:
+        sms_disabled_chats.clear()
+        logging.warning(
+            f"Файл {SMS_DISABLED_CHATS_PATH} содержит не список, а {type(data)}. Настройки сброшены."
+        )
+
+
+def save_sms_disabled_chats(repository: JsonRepository | None = None):
+    repo = repository or _sms_disabled_repository()
+    try:
+        repo.save(list(sms_disabled_chats))
         logging.info("Список чатов с отключёнными смс сохранён.")
     except Exception as e:
         logging.error(f"Ошибка при сохранении списка отключённых смс: {e}")
 
-# ✅ Загружаем список отключённых чатов при старте бота
-load_sms_disabled_chats()
 
-# Вынесенная логика отключения СМС
 async def process_disable_sms(chat_id, user_id, bot):
-    # Проверяем, является ли пользователь админом или суперюзером
     chat_member = await bot.get_chat_member(chat_id, user_id)
     is_admin = chat_member.status in ["administrator", "creator"]
-    is_superuser = user_id == 126386976  # 👑 Наш суперюзер
-    
+    is_superuser = user_id == 126386976
+
     if not (is_admin or is_superuser):
         return "Ты не админ и не бог, иди нахуй."
-    
+
     chat_id_str = str(chat_id)
     if chat_id_str in sms_disabled_chats:
         return "СМС и ММС уже отключены в этом чате."
-    else:
-        sms_disabled_chats.add(chat_id_str)
-        save_sms_disabled_chats()
-        return "Теперь я не принимаю и не отправляю смс и ммс в этом чате."
 
-# Вынесенная логика включения СМС
+    sms_disabled_chats.add(chat_id_str)
+    await asyncio.to_thread(save_sms_disabled_chats)
+    return "Теперь я не принимаю и не отправляю смс и ммс в этом чате."
+
+
 async def process_enable_sms(chat_id, user_id, bot):
-    # Проверяем, является ли пользователь админом
     chat_member = await bot.get_chat_member(chat_id, user_id)
     if chat_member.status not in ["administrator", "creator"]:
         return "Ты не админ, иди нахуй."
-    
+
     chat_id_str = str(chat_id)
     if chat_id_str in sms_disabled_chats:
         sms_disabled_chats.remove(chat_id_str)
-        save_sms_disabled_chats()
+        await asyncio.to_thread(save_sms_disabled_chats)
         return "Теперь я снова принимаю и отправляю смс и ммс в этом чате."
-    else:
-        return "СМС и ММС уже разрешены в этом чате."
+    return "СМС и ММС уже разрешены в этом чате."
 
-# 🔴 ИСПРАВЛЕННАЯ ЛОГИКА ОТПРАВКИ СМС
+
 async def process_send_sms(message: types.Message, chat_list: list, bot: Bot):
     chat_id = str(message.chat.id)
     is_reply = message.reply_to_message is not None
-    
-    # ИСПРАВЛЕНИЕ 1: Читаем команду из .text или .caption, как в ММС
+
     command_text = message.text or message.caption
     if not command_text:
-        # На случай, если хэндлер сработал на сообщение без текста или caption
         logging.warning("process_send_sms вызван без command_text")
         return
-        
-    parts = command_text.split(maxsplit=2)  # Разделяем команду
-    
-    text_message = None # Текст для отправки
 
-    # ИСПРАВЛЕНИЕ 2: Новая логика определения текста
-    # Сначала ищем текст в самой команде (parts[2])
+    parts = command_text.split(maxsplit=2)
+
+    text_message = None
     if len(parts) > 2:
         text_message = parts[2]
-    # Если текста в команде нет, И это реплай, берем текст из реплая
     elif is_reply:
         text_message = message.reply_to_message.text or message.reply_to_message.caption or "(без текста)"
-    
-    # Если текста все еще нет (т.е. не реплай И нет parts[2])
+
     if text_message is None:
-        # Проверяем, был ли указан хотя бы номер чата
         if len(parts) < 2:
             await message.reply("эээ далбаеб: смс <номер чата> <текст> (или ответь на сообщение)")
             return
-        else:
-            # Случай "смс <номер>" без реплая и без текста
-            text_message = "(без текста)"
-            
-    # --- Теперь остальная логика ---
-    
+        text_message = "(без текста)"
+
     try:
-        # Номер чата теперь всегда в parts[1]
         if len(parts) < 2:
-            # Этот случай должен был отсечься выше, но для надежности
             await message.reply("эээ далбаеб: смс <номер чата> <текст>")
             return
-            
+
         chat_index = int(parts[1]) - 1
-        
         filtered_chats = _get_numbered_chats(chat_list)
-        
+
         if chat_index < 0 or chat_index >= len(filtered_chats):
             await message.reply("Чат с таким номером не найден, иди нахуй")
             return
-            
+
         target_chat_id = str(filtered_chats[chat_index]["id"])
-        # Проверяем, отключены ли СМС в целевом чате
         if target_chat_id in sms_disabled_chats:
             await message.reply("Это хуесосы-бирюки, не принимают СМС, блядь")
             return
-            
+
         source_chat_title = message.chat.title or "Неизвестный чат"
-        # Находим номер исходного чата в отсортированном списке
-        source_chat_number = next((i + 1 for i, chat in enumerate(filtered_chats) if str(chat["id"]) == chat_id), "❓")
-        
-        # Старая логика с "if is_reply:" больше не нужна,
-        # так как text_message уже определен выше
-        
+        source_chat_number = next(
+            (i + 1 for i, chat in enumerate(filtered_chats) if str(chat["id"]) == chat_id),
+            "❓",
+        )
+
         formatted_message = f'Вам песьмо из чата "{source_chat_title}" (Чат #{source_chat_number}):\n\n{text_message}'
         await bot.send_message(target_chat_id, formatted_message)
         await message.reply(f"Песьмо отправлено в чат {filtered_chats[chat_index]['title']}!")
-        
+
     except ValueError:
         await message.reply("Неверный формат, дурачок. Используй: смс <номер чата> <текст>")
     except Exception as e:
         logging.error(f"Ошибка при отправке сообщения в чат: {e}")
         await message.reply("Не удалось отправить сообщение. Возможно, я хуисос")
 
-# Вынесенная логика отправки ММС (без изменений, как в вашем файле)
+
 async def process_send_mms(message: types.Message, chat_list_param: list, bot: Bot):
-    chat_list = chat_list_param  # Используем локальную переменную вместо global
+    chat_list = chat_list_param
     chat_id = str(message.chat.id)
 
     is_reply = message.reply_to_message is not None
 
-    command_text = message.text or message.caption  
-    parts = command_text.split(maxsplit=2)  
+    command_text = message.text or message.caption
+    parts = command_text.split(maxsplit=2)
 
     if len(parts) < 2 and not is_reply:
         await message.reply("эээ далбаеб: ммс <номер чата> (и прикрепи медиафайл)")
@@ -347,28 +329,28 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
 
     try:
         chat_index = int(parts[1]) - 1
-        
+
         filtered_chats = _get_numbered_chats(chat_list)
-        
+
         if chat_index < 0 or chat_index >= len(filtered_chats):
             await message.reply("Чат с таким номером не найден, иди нахуй")
             return
 
         target_chat_id = str(filtered_chats[chat_index]["id"])
 
-        # Проверяем, отключены ли ММС в целевом чате
         if target_chat_id in sms_disabled_chats:
             await message.reply("Это хуесосы-бирюки, не принимают ММС, блядь")
             return
 
         source_chat_title = message.chat.title or "Неизвестный чат"
-        # Находим номер исходного чата в отсортированном списке
-        source_chat_number = next((i + 1 for i, chat in enumerate(filtered_chats) if str(chat["id"]) == chat_id), "❓")
-        user_text = parts[2] if len(parts) > 2 else ""  
+        source_chat_number = next(
+            (i + 1 for i, chat in enumerate(filtered_chats) if str(chat["id"]) == chat_id),
+            "❓",
+        )
+        user_text = parts[2] if len(parts) > 2 else ""
         caption = f'Вам аткрытка из чата "{source_chat_title}" (Чат #{source_chat_number}):\n\n{user_text}'
 
         media = None
-
         message_to_forward = message.reply_to_message if is_reply else message
 
         if message_to_forward.photo:
@@ -407,7 +389,7 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
                 is_anonymous=poll.is_anonymous,
                 allows_multiple_answers=poll.allows_multiple_answers
             )
-            media = "poll" # To indicate success
+            media = "poll"
 
         if media:
             await message.reply(f"Аткрытка отправлена в чат {filtered_chats[chat_index]['title']}!")
@@ -419,4 +401,3 @@ async def process_send_mms(message: types.Message, chat_list_param: list, bot: B
     except Exception as e:
         logging.error(f"Ошибка при отправке аткрытки в чат: {e}")
         await message.reply("Не удалось отправить медиа. Возможно, я хуисос")
-
