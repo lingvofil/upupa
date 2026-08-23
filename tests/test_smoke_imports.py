@@ -47,7 +47,7 @@ FEATURE_MODULES = [
     "features.common_settings", "features.content_filter", "features.interactive_settings",
     "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
     "features.statistics", "features.proactive", "features.channel", "features.channel.storage",
-    "features.channel.service", "features.channel.scheduler",
+    "features.channel.batya_source", "features.channel.service", "features.channel.scheduler",
 ]
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
