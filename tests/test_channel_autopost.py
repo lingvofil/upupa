@@ -69,7 +69,7 @@ def test_batya_public_feed_parser_extracts_real_text_post_links():
         {
             "message_id": 5404,
             "url": "https://t.me/lukeimyourmouth/5404",
-            "text": "второй\nпост",
+            "text": "второй пост",
         },
     ]
 
