@@ -11,7 +11,7 @@ upupa/
 ├── core/              # shared settings/state/paths/storage/loader + compatibility exports
 ├── infrastructure/    # адаптеры внешних систем
 │   └── ai/            # Gemini/Groq/GigaChat/OpenAI-compatible providers и lazy resources
-├── features/          # функциональные блоки бота (настройки, статистика, фильтры)
+├── features/          # функциональные блоки бота, включая явный dialog pipeline
 ├── services/          # внешние сервисы и обработка медиа (поиск, погода, ytp, мемы)
 ├── games/             # игры (крокодил, егра)
 ├── AI/                # AI-функции; старые provider import paths оставлены фасадами
@@ -38,6 +38,16 @@ upupa/
 - Импорт `core.ai_clients`/`config.py` больше не создаёт эти SDK-клиенты: реальный объект создаётся потокобезопасно при первом обращении и затем переиспользуется.
 - Публичные имена `model`, `groq_ai`, `gigachat_model`, `gemini_client`, `openrouter_ai`, `siliconflow_ai` сохранены, поэтому миграция потребителей может идти постепенно.
 - Provider wrappers пока синхронные. Async call-sites должны продолжать выносить их в `asyncio.to_thread`; переход на native async transport не входит в R4.
+
+## Dialog pipeline
+
+- Production catch-all handler делегирует реакции и прямой диалог в `features.dialog_pipeline`.
+- Канонический порядок внутри pipeline: один проход random reactions/accounting, затем serious/direct dialogue.
+- `handlers.dialog` больше не вызывает `AI.situational_summary.install_into_random_reactions` и не присваивает функции в `AI.talking` во время импорта.
+- Живой буфер ситуативной реакции и защита от повторного `message_id` используются явно из `AI.situational_summary`; ситуативный текст генерируется через `generate_absurd_situational_reaction` без замены функций другого модуля.
+- Legacy `AI.talking.process_general_message` и `AI.random_reactions.process_random_reactions` пока сохранены для совместимости и прямых тестов, но production handler их не компонует. Их дальнейшее разделение относится к более глубокому split `AI/talking.py`.
+- Случайная реакция по-прежнему прерывает catch-all handler, а serious/direct dialogue не пропускает финальную запись `features.statistics.log_message`.
+- Architecture regression-тест запрещает возвращать runtime monkeypatch в `handlers.dialog` и запрещает каноническому pipeline вызывать legacy composed entrypoints.
 
 ## Lifecycle
 
