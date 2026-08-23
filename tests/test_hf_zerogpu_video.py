@@ -40,9 +40,9 @@ def test_generate_hf_video_uses_public_space_and_downloads_result(monkeypatch):
             return (str(self.output_path), 12345)
 
     class FakeClient:
-        def __init__(self, space_id, hf_token=None, verbose=True, download_files=None):
+        def __init__(self, space_id, token=None, verbose=True, download_files=None):
             calls["space_id"] = space_id
-            calls["hf_token"] = hf_token
+            calls["token"] = token
             calls["download_files"] = download_files
             self.download_files = Path(download_files)
 
@@ -76,7 +76,7 @@ def test_generate_hf_video_uses_public_space_and_downloads_result(monkeypatch):
     assert video == b"fake-mp4"
     assert status == "ok"
     assert calls["space_id"] == "multimodalart/wan2-1-fast"
-    assert calls["hf_token"] == "hf_test"
+    assert calls["token"] == "hf_test"
     assert calls["kwargs"] == {"api_name": "/generate_video"}
     assert calls["timeout"] == hfvideo.HF_VIDEO_TIMEOUT_SECONDS
     assert calls["closed"] is True
