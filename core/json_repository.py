@@ -55,6 +55,7 @@ class JsonFileRepository:
                 suffix=".tmp",
                 delete=False,
             ) as temp_file:
+                temp_path = Path(temp_file.name)
                 json.dump(
                     value,
                     temp_file,
@@ -63,7 +64,6 @@ class JsonFileRepository:
                 )
                 temp_file.flush()
                 os.fsync(temp_file.fileno())
-                temp_path = Path(temp_file.name)
 
             os.replace(temp_path, self.path)
         except Exception:

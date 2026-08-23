@@ -32,6 +32,17 @@ def test_json_file_repository_keeps_old_file_if_atomic_replace_fails(tmp_path, m
     assert not list(tmp_path.glob(".state.json.*.tmp"))
 
 
+def test_json_file_repository_cleans_temp_file_if_serialization_fails(tmp_path):
+    path = tmp_path / "state.json"
+    repository = JsonFileRepository(path)
+
+    with pytest.raises(TypeError):
+        repository.save({"not-json": object()})
+
+    assert not path.exists()
+    assert not list(tmp_path.glob(".state.json.*.tmp"))
+
+
 def test_json_file_repository_reports_missing_file(tmp_path):
     repository = JsonFileRepository(tmp_path / "missing.json")
 
