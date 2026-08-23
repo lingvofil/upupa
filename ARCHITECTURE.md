@@ -47,6 +47,17 @@ upupa/
 - `features.chat_settings` больше не открывает JSON напрямую и сохраняет identity общих
   `chat_settings`/`chat_list`, на которые уже ссылаются другие модули.
 
+## Async I/O
+
+- Сетевые вызовы внутри `async def` не должны использовать синхронные HTTP-клиенты.
+- На R3 `services.search` переведён с `requests` на `httpx.AsyncClient`.
+- Синхронные SDK без async API (Google Custom Search и legacy `model.generate_content`) вызываются
+  через `asyncio.to_thread`, чтобы не останавливать Telegram event loop.
+- Найденные изображения и GIF передаются в aiogram через `BufferedInputFile` прямо из памяти;
+  общие временные файлы для параллельных запросов не используются.
+- CPU-bound обработка изображения в `handle_add_text_command` также вынесена в worker thread.
+- Regression-тест запрещает возвращать известные блокирующие вызовы непосредственно в async-функции `services.search`.
+
 ## Прочее
 
 - Секреты: `config_private.py` (локально, в .gitignore) или env-переменные.
