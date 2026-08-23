@@ -176,7 +176,7 @@ def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
     retry_block = f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий." if retry_note else ""
     return (
         f"{CHANNEL_PERSONA}\n\n"
-        f"{BATYA_COMMENT_PROMPT.format(source_text=source_text)}"
+        f"{BATYA_COMMENT_PROMPT.format(batya_channel=f'@{BATYA_CHANNEL}', source_text=source_text)}"
         f"{retry_block}"
     )
 
