@@ -6,18 +6,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = ROOT / "core"
+INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
 BOOTSTRAP_FILE = ROOT / "app" / "bootstrap.py"
 CHAT_SETTINGS_FILE = ROOT / "features" / "chat_settings.py"
 
-# core.ai_clients -> AI.* пока остаётся известным долгом. На этом этапе
-# запрещаем только новые обратные зависимости core от прикладных слоёв
-# и возврат к compatibility-фасаду config.py.
-FORBIDDEN_CORE_PREFIXES = ("config", "features", "services", "games", "handlers")
+FORBIDDEN_CORE_PREFIXES = (
+    "config",
+    "AI",
+    "features",
+    "services",
+    "games",
+    "handlers",
+)
 
-# Composition root имеет право знать обо всех слоях, но прикладные модули должны
-# загружаться только во время startup. Иначе простой import app.bootstrap снова
-# начнёт запускать monkeypatch/load side effects и сделает поведение зависимым от
-# порядка импортов.
+FORBIDDEN_AI_INFRA_PREFIXES = (
+    "config",
+    "AI",
+    "features",
+    "services",
+    "games",
+    "handlers",
+)
+
 FORBIDDEN_BOOTSTRAP_TOP_LEVEL_PREFIXES = (
     "AI",
     "features",
@@ -63,18 +73,34 @@ def _matches_prefix(module_name: str, prefix: str) -> bool:
     return module_name == prefix or module_name.startswith(prefix + ".")
 
 
-def test_core_does_not_depend_on_legacy_or_upper_layers():
+def _collect_import_violations(directory: Path, forbidden_prefixes: tuple[str, ...]):
     violations = []
-
-    for path in sorted(CORE_DIR.glob("*.py")):
+    for path in sorted(directory.glob("*.py")):
         for module_name in _imports(path):
-            for prefix in FORBIDDEN_CORE_PREFIXES:
+            for prefix in forbidden_prefixes:
                 if _matches_prefix(module_name, prefix):
                     violations.append(f"{path.relative_to(ROOT)} -> {module_name}")
+    return violations
+
+
+def test_core_does_not_depend_on_legacy_or_upper_layers():
+    violations = _collect_import_violations(CORE_DIR, FORBIDDEN_CORE_PREFIXES)
 
     assert not violations, (
-        "core должен оставаться нижним инфраструктурным слоем. "
+        "core не должен зависеть от legacy/application слоёв. "
         "Найдены запрещённые зависимости:\n" + "\n".join(violations)
+    )
+
+
+def test_ai_infrastructure_does_not_depend_on_application_layer():
+    violations = _collect_import_violations(
+        INFRA_AI_DIR,
+        FORBIDDEN_AI_INFRA_PREFIXES,
+    )
+
+    assert not violations, (
+        "infrastructure.ai должен быть нижним provider-слоем. "
+        "Найдены обратные зависимости:\n" + "\n".join(violations)
     )
 
 

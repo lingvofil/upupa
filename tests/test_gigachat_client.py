@@ -1,10 +1,10 @@
-"""Tests for the current GigaChat conversation wrapper."""
+"""Tests for the GigaChat infrastructure conversation adapter."""
 
 from types import SimpleNamespace
 
 from tests import test_smoke_imports  # noqa: F401  (env + mocks)
 from core.settings import SPECIAL_CHAT_ID
-from AI import gigachat_client as gc
+from infrastructure.ai import gigachat as gc
 
 
 def _response(model_name: str, text: str = "ok"):
@@ -12,6 +12,12 @@ def _response(model_name: str, text: str = "ok"):
         model=f"{model_name}:test",
         choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
     )
+
+
+def test_legacy_gigachat_facade_reexports_infrastructure_adapter():
+    from AI.gigachat_client import GigaChatConversationWrapper as LegacyWrapper
+
+    assert LegacyWrapper is gc.GigaChatConversationWrapper
 
 
 def test_request_uses_new_endpoint_and_chat_payload(monkeypatch):
@@ -84,7 +90,6 @@ def test_special_chat_falls_back_and_remembers_model_per_chat(monkeypatch):
         ["GigaChat-3-Ultra", "GigaChat-2-Max", "GigaChat-2"],
     )
 
-    # Before a request the diagnostic reports the configured head for each chat.
     assert wrapper.get_last_used_model(999) == "GigaChat-2"
     assert wrapper.get_last_used_model(SPECIAL_CHAT_ID) == "GigaChat-3-Ultra"
 
@@ -92,12 +97,11 @@ def test_special_chat_falls_back_and_remembers_model_per_chat(monkeypatch):
 
     assert attempted_models == ["GigaChat-3-Ultra", "GigaChat-2-Max"]
     assert wrapper.get_last_used_model(SPECIAL_CHAT_ID) == "GigaChat-2-Max"
-    # A different chat must not inherit the special chat's last-used model.
     assert wrapper.get_last_used_model(999) == "GigaChat-2"
     assert wrapper.last_used_model_name == "GigaChat-2-Max"
 
 
-def test_non_text_prompt_is_rejected_before_network(monkeypatch):
+def test_non_text_prompt_is_rejected_before_network():
     wrapper = gc.GigaChatConversationWrapper(
         "fake-key",
         ["GigaChat-2"],
