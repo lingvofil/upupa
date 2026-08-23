@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 
 async def generate_channel_image(prompt_ru: str) -> tuple[bytes | None, str | None]:
     """Генерирует изображение без Telegram-side-effects.
 
-    Использует тот же порядок провайдеров, что обычная команда генерации картинок:
-    Pollinations/Flux -> Kandinsky -> HuggingFace -> Cloudflare.
+    Использует фактический порядок провайдеров обычной генерации картинок:
+    Pollinations/Flux -> GigaChat-2 text2image -> HuggingFace -> Cloudflare.
+
+    В ``AI.picgeneration`` исторически ещё остаются имена ``kandinsky_api`` и
+    ``PIPELINE_ID``, но обычные handlers подменяют эту старую FusionBrain-ступень
+    на GigaChat при импорте. Канал не зависит от этого import-side-effect и
+    вызывает GigaChat напрямую.
     """
     from AI import picgeneration as pg
+    from AI.gigachat_image import generate_gigachat_image
 
     try:
         prompt_en = await pg.translate_to_en(prompt_ru)
@@ -21,18 +26,9 @@ async def generate_channel_image(prompt_ru: str) -> tuple[bytes | None, str | No
         if image:
             return image, "pollinations"
 
-        if not pg.PIPELINE_ID:
-            pg.PIPELINE_ID = await asyncio.to_thread(pg.kandinsky_api.get_pipeline)
-        if pg.PIPELINE_ID:
-            generation_id, _ = await asyncio.to_thread(
-                pg.kandinsky_api.generate,
-                prompt_ru,
-                pg.PIPELINE_ID,
-            )
-            if generation_id:
-                image, _ = await asyncio.to_thread(pg.kandinsky_api.check, generation_id)
-                if image:
-                    return image, "kandinsky"
+        image = await generate_gigachat_image(prompt_ru)
+        if image:
+            return image, "gigachat"
 
         image = await pg.hf_generate(prompt_en, "black-forest-labs/FLUX.1-schnell")
         if image:
