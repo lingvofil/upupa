@@ -11,7 +11,7 @@ from datetime import datetime
 
 from core.settings import SPECIAL_CHAT_ID
 from core.state import chat_list
-from features.channel.batya_source import BATYA_CHANNEL, fetch_public_posts
+from features.channel.batya_source import BATYA_CHANNEL, fetch_public_image, fetch_public_posts
 from features.channel.storage import append_post, load_posts
 from prompts.channel import (
     BATYA_MENTION_PROMPT,
@@ -36,7 +36,8 @@ CHAT_WINDOW_MIN = 12
 CHAT_WINDOW_MAX = 25
 MAX_POST_LENGTH = 280
 MAX_EXTERNAL_COMMENT_LENGTH = 100
-MAX_EXTERNAL_COMMENT_WORDS = 8
+MAX_EXTERNAL_COMMENT_WORDS = 14
+MAX_EXTERNAL_IMAGE_DESCRIPTION_CHARS = 1600
 MAX_IMAGE_CAPTION_LENGTH = 100
 MAX_IMAGE_CAPTION_WORDS = 8
 MIN_IMAGE_PROMPT_LENGTH = 12
@@ -48,18 +49,21 @@ MAX_GENERATION_ATTEMPTS = 3
 EXTERNAL_COMMENT_SOURCES = (
     {
         "channel": BATYA_CHANNEL,
-        "description": f"@{BATYA_CHANNEL}",
+        "description": f"@{BATYA_CHANNEL}; этот канал ведёт твой батя",
         "owner": None,
+        "allow_batya_reference": True,
     },
     {
         "channel": "muhtarboodka",
         "description": "@muhtarboodka; этот канал ведёт Мухтар",
         "owner": "Мухтар",
+        "allow_batya_reference": False,
     },
     {
         "channel": "kapibara_fen",
         "description": "@kapibara_fen",
         "owner": None,
+        "allow_batya_reference": False,
     },
 )
 
@@ -224,7 +228,7 @@ def _validate_batya_mention_policy(text: str, *, allow_batya_mention: bool) -> s
     return None
 
 
-def _validate_external_comment(comment: str) -> str | None:
+def _validate_external_comment(comment: str, *, allow_batya_mention: bool = False) -> str | None:
     reason = _validate_post(comment, [])
     if reason:
         return reason
@@ -234,14 +238,14 @@ def _validate_external_comment(comment: str) -> str | None:
         return f"слишком многословный комментарий ({_word_count(comment)} слов)"
     if "https://t.me/" in comment.casefold():
         return "модель сама добавила Telegram-ссылку"
-    if _contains_batya_mention(comment):
-        return "комментарий к внешнему каналу не должен использовать легенду про батю"
+    if not allow_batya_mention and _contains_batya_mention(comment):
+        return "комментарий к этому внешнему каналу не должен использовать легенду про батю"
     return None
 
 
-# Совместимый alias старого имени.
+# Совместимый alias старого имени: исторически это был комментарий именно к каналу бати.
 def _validate_batya_comment(comment: str) -> str | None:
-    return _validate_external_comment(comment)
+    return _validate_external_comment(comment, allow_batya_mention=True)
 
 
 def _parse_image_plan(raw: str) -> tuple[str, str] | None:
@@ -292,7 +296,11 @@ def _pick_uncommented_external_post(source_posts: list[dict], published_posts: l
         for post in published_posts
         if post.get("external_source_url")
     }
-    candidates = [post for post in source_posts if post.get("url") not in used_urls and post.get("text")]
+    candidates = [
+        post
+        for post in source_posts
+        if post.get("url") not in used_urls and (post.get("text") or post.get("image_url"))
+    ]
     if not candidates:
         return None
     return random.choice(candidates[-10:])
@@ -342,8 +350,24 @@ def _build_prompt(
     )
 
 
-def _build_external_prompt(source: dict, source_post: dict, retry_note: str = "") -> str:
-    source_text = str(source_post.get("text") or "")[:5000]
+def _external_source_material(source_post: dict, image_description: str | None) -> str:
+    parts: list[str] = []
+    source_text = str(source_post.get("text") or "").strip()
+    if source_text:
+        parts.append(f"ТЕКСТ:\n{source_text[:5000]}")
+    if image_description:
+        parts.append(f"ОПИСАНИЕ ФОТО:\n{image_description[:MAX_EXTERNAL_IMAGE_DESCRIPTION_CHARS]}")
+    return "\n\n".join(parts) or "(нет доступного текстового содержимого)"
+
+
+def _build_external_prompt(
+    source: dict,
+    source_post: dict,
+    retry_note: str = "",
+    *,
+    image_description: str | None = None,
+) -> str:
+    source_material = _external_source_material(source_post, image_description)
     retry_block = (
         f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий."
         if retry_note
@@ -351,7 +375,7 @@ def _build_external_prompt(source: dict, source_post: dict, retry_note: str = ""
     )
     return (
         f"{CHANNEL_PERSONA}\n\n"
-        f"{EXTERNAL_COMMENT_PROMPT.format(source_description=source['description'], source_text=source_text)}"
+        f"{EXTERNAL_COMMENT_PROMPT.format(source_description=source['description'], source_text=source_material)}"
         f"{retry_block}"
     )
 
@@ -363,6 +387,42 @@ def _build_image_prompt(retry_note: str = "") -> str:
         else ""
     )
     return f"{CHANNEL_IMAGE_POST_PROMPT}{retry_block}"
+
+
+async def _describe_external_image(source_post: dict) -> str | None:
+    """Лениво распознаёт фото только у уже выбранного внешнего поста."""
+    image_url = str(source_post.get("image_url") or "").strip()
+    if not image_url:
+        return None
+
+    downloaded = await fetch_public_image(image_url)
+    if not downloaded:
+        return None
+    image_bytes, mime_type = downloaded
+
+    try:
+        from AI.whatisthere import analyze_media_bytes
+
+        description = await analyze_media_bytes(
+            image_bytes,
+            mime_type,
+            custom_prompt=(
+                "Кратко и нейтрально опиши изображение для другой модели, которая будет писать комментарий. "
+                "Укажи основные объекты, людей, действие и заметный текст на картинке. Ничего не выдумывай"
+            ),
+            chat_id=SPECIAL_CHAT_ID,
+        )
+    except Exception as exc:
+        logging.warning("[channel] external image vision failed: %s", exc)
+        return None
+
+    clean = str(description or "").strip()
+    lowered = clean.casefold()
+    if not clean or lowered.startswith("нихуя не понял"):
+        return None
+    if any(marker in lowered for marker in _PROVIDER_ERROR_MARKERS):
+        return None
+    return clean[:MAX_EXTERNAL_IMAGE_DESCRIPTION_CHARS]
 
 
 async def _try_generate_external_comment(
@@ -388,12 +448,28 @@ async def _try_generate_external_comment(
     if not selected_source or not selected_post:
         return None
 
+    image_description = None
+    if selected_post.get("image_url"):
+        try:
+            image_description = await _describe_external_image(selected_post)
+        except Exception as exc:
+            logging.warning("[channel] external image mode failed: %s", exc)
+        if not selected_post.get("text") and not image_description:
+            logging.warning("[channel] image-only external post could not be described, fallback to normal")
+            return None
+
     retry_note = ""
+    allow_batya_reference = bool(selected_source.get("allow_batya_reference"))
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        prompt = _build_external_prompt(selected_source, selected_post, retry_note)
+        prompt = _build_external_prompt(
+            selected_source,
+            selected_post,
+            retry_note,
+            image_description=image_description,
+        )
         raw_comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
         comment = (raw_comment or "").strip()
-        reason = _validate_external_comment(comment)
+        reason = _validate_external_comment(comment, allow_batya_mention=allow_batya_reference)
         final_text = f"{selected_post['url']}\n\n{comment}"
         if not reason:
             reason = _validate_post(final_text, recent_posts)
@@ -403,6 +479,8 @@ async def _try_generate_external_comment(
                 "chat_context_used": False,
                 "external_source_channel": f"@{selected_source['channel']}",
                 "external_source_url": selected_post["url"],
+                "external_source_has_image": bool(selected_post.get("image_url")),
+                "external_image_analyzed": bool(image_description),
             }
             if selected_source.get("owner"):
                 metadata["external_source_owner"] = selected_source["owner"]
@@ -536,7 +614,7 @@ async def _store_published_post(sent, *, source: str, text: str, metadata: dict)
     }
     await asyncio.to_thread(append_post, record)
     logging.info(
-        "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s external=%s image_provider=%s",
+        "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s external=%s image_provider=%s external_image=%s",
         source,
         record["message_id"],
         record.get("post_kind"),
@@ -546,6 +624,7 @@ async def _store_published_post(sent, *, source: str, text: str, metadata: dict)
         record.get("chat_context_used"),
         record.get("external_source_channel"),
         record.get("image_provider"),
+        record.get("external_image_analyzed"),
     )
     return record
 
