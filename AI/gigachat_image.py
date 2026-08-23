@@ -150,21 +150,23 @@ def install_into_picgeneration(picgeneration_module) -> None:
     picgeneration_module.PIPELINE_ID = None
 
     async def robust_image_generation(message, prompt_ru, processing_msg, skip_translate=False):
-        await processing_msg.edit_text("Использую ебучий Flux...")
-        prompt_en = prompt_ru if skip_translate else await picgeneration_module.translate_to_en(prompt_ru)
-
-        # 1. Pollinations / Flux
-        img = await picgeneration_module.pollinations_generate(prompt_en)
-        if img:
-            await processing_msg.delete()
-            return await picgeneration_module.send_generated_photo(message, img, "flux.png")
-
-        # 2. GigaChat-2 text2image
+        # 1. GigaChat-2 text2image. It understands Russian directly, so do not
+        # spend time/tokens translating the prompt until the first provider fails.
         await processing_msg.edit_text("Использую ебучий GigaChat...")
         img = await generate_gigachat_image(prompt_ru)
         if img:
             await processing_msg.delete()
             return await picgeneration_module.send_generated_photo(message, img, "gigachat.png")
+
+        # Translate/enhance only for providers that benefit from an English prompt.
+        prompt_en = prompt_ru if skip_translate else await picgeneration_module.translate_to_en(prompt_ru)
+
+        # 2. Pollinations / Flux
+        await processing_msg.edit_text("Использую ебучий Flux...")
+        img = await picgeneration_module.pollinations_generate(prompt_en)
+        if img:
+            await processing_msg.delete()
+            return await picgeneration_module.send_generated_photo(message, img, "flux.png")
 
         # 3. Existing reserves
         await processing_msg.edit_text("Использую резервный анал...")
