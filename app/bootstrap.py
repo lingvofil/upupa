@@ -53,9 +53,11 @@ class UpupaApplication:
     _background_tasks_started: bool = field(default=False, init=False)
 
     def initialize_state(self) -> None:
+        from features.chat_settings import load_chat_state
         from features.content_filter import load_antispam_settings
         import features.statistics as bot_statistics
 
+        load_chat_state()
         load_antispam_settings()
         bot_statistics.init_db()
 
