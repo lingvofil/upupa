@@ -74,11 +74,11 @@ def test_nonsense_is_a_valid_channel_post_but_exact_duplicate_is_not():
     assert _validate_post("я червяк", [{"text": "я червяк"}]) == "точный дубль недавнего поста"
 
 
-def test_channel_length_distribution_strongly_prefers_two_or_three_words():
+def test_channel_length_distribution_is_50_40_10():
     from prompts.channel import POST_LENGTH_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_LENGTH_MODES}
-    assert weights == {"micro": 70, "short": 25, "medium": 5}
+    assert weights == {"micro": 50, "short": 40, "medium": 10}
     micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
     assert micro["min_words"] == 2
     assert micro["max_words"] == 3
@@ -114,6 +114,17 @@ def test_content_distribution_is_mostly_absurd_and_domestic():
     assert weights["absurd"] + weights["domestic"] == 85
 
 
+def test_functionality_mode_knows_upupa_is_new_to_running_a_channel():
+    from prompts.channel import POST_CONTENT_MODES
+
+    functionality = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "functionality")
+    instruction = functionality["instruction"].casefold()
+
+    assert "впервые ведёшь" in instruction
+    assert "канал" in instruction
+    assert "выругаться" in instruction
+
+
 def test_base_prompt_does_not_prime_batya_or_capabilities():
     from features.channel.service import _build_prompt
     from prompts.channel import CHANNEL_PERSONA, POST_CONTENT_MODES, POST_LENGTH_MODES
@@ -140,6 +151,7 @@ def test_capabilities_and_batya_are_injected_only_in_selected_modes():
 
     assert "батя" in prompt.casefold()
     assert "фактчекать" in prompt.casefold()
+    assert "впервые ведёшь" in prompt.casefold()
 
 
 def test_batya_mention_is_hard_blocked_outside_rare_mode():
@@ -182,17 +194,19 @@ def test_recent_batya_posts_are_hidden_from_normal_prompt_memory():
     assert "мне похуй" in formatted.casefold()
 
 
-def test_external_sources_include_muhtar_and_kapibara_channels():
+def test_external_sources_include_batya_muhtar_and_kapibara_channels():
     from features.channel.service import EXTERNAL_COMMENT_SOURCES
 
     by_channel = {source["channel"]: source for source in EXTERNAL_COMMENT_SOURCES}
     assert "lukeimyourmouth" in by_channel
+    assert by_channel["lukeimyourmouth"]["allow_batya_reference"] is True
+    assert "батя" in by_channel["lukeimyourmouth"]["description"]
     assert by_channel["muhtarboodka"]["owner"] == "Мухтар"
     assert "Мухтар" in by_channel["muhtarboodka"]["description"]
     assert "kapibara_fen" in by_channel
 
 
-def test_public_feed_parser_works_for_any_configured_channel():
+def test_public_feed_parser_keeps_text_and_photo_posts():
     from features.channel.batya_source import _parse_public_feed
 
     html = """
@@ -200,9 +214,13 @@ def test_public_feed_parser_works_for_any_configured_channel():
       <div class="tgme_widget_message_text">первый <b>пост</b></div>
     </div>
     <div class="tgme_widget_message" data-post="muhtarboodka/102">
+      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example/photo.jpg')"></a>
       <div class="tgme_widget_message_text">второй<br>пост</div>
     </div>
-    <div class="tgme_widget_message" data-post="muhtarboodka/103"></div>
+    <div class="tgme_widget_message" data-post="muhtarboodka/103">
+      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example/only-photo.jpg')"></a>
+    </div>
+    <div class="tgme_widget_message" data-post="muhtarboodka/104"></div>
     <div class="tgme_widget_message" data-post="other/1">
       <div class="tgme_widget_message_text">чужое</div>
     </div>
@@ -220,11 +238,18 @@ def test_public_feed_parser_works_for_any_configured_channel():
             "message_id": 102,
             "url": "https://t.me/muhtarboodka/102",
             "text": "второй пост",
+            "image_url": "https://cdn.example/photo.jpg",
+        },
+        {
+            "message_id": 103,
+            "url": "https://t.me/muhtarboodka/103",
+            "text": "",
+            "image_url": "https://cdn.example/only-photo.jpg",
         },
     ]
 
 
-def test_external_comment_can_be_one_word_and_does_not_repeat_source_link():
+def test_external_comment_prefers_longer_reactions_and_keeps_source_policy():
     from features.channel.service import (
         _pick_uncommented_external_post,
         _validate_external_comment,
@@ -233,19 +258,23 @@ def test_external_comment_can_be_one_word_and_does_not_repeat_source_link():
     source_posts = [
         {"url": "https://t.me/muhtarboodka/101", "text": "старое"},
         {"url": "https://t.me/muhtarboodka/102", "text": "новое"},
+        {"url": "https://t.me/muhtarboodka/103", "text": "", "image_url": "https://cdn.example/photo.jpg"},
     ]
     published = [
         {"external_source_url": "https://t.me/muhtarboodka/101", "text": "что-то"},
+        {"external_source_url": "https://t.me/muhtarboodka/102", "text": "что-то ещё"},
     ]
 
     picked = _pick_uncommented_external_post(source_posts, published)
-    assert picked["url"] == "https://t.me/muhtarboodka/102"
+    assert picked["url"] == "https://t.me/muhtarboodka/103"
     assert _validate_external_comment("дебил") is None
-    assert _validate_external_comment("ну и хули это вообще было блять опять") is None
-    assert "многословный" in _validate_external_comment("раз два три четыре пять шесть семь восемь девять")
+    assert _validate_external_comment("а б в г д е ё ж з и") is None
+    assert _validate_external_comment("а б в г д е ё ж з и й к л м") is None
+    assert "многословный" in _validate_external_comment("а б в г д е ё ж з и й к л м н")
     assert _validate_external_comment("") == "пустой ответ"
     assert _validate_external_comment("https://t.me/muhtarboodka/102 дебил") == "модель сама добавила Telegram-ссылку"
-    assert "легенду про батю" in _validate_external_comment("батя дебил")
+    assert "легенду про батю" in _validate_external_comment("батя ну ты чего")
+    assert _validate_external_comment("батя ну ты чего", allow_batya_mention=True) is None
 
 
 def test_external_prompt_knows_muhtar_owns_muhtarboodka():
@@ -257,6 +286,23 @@ def test_external_prompt_knows_muhtar_owns_muhtarboodka():
     assert "@muhtarboodka" in prompt
     assert "Мухтар" in prompt
     assert "тест" in prompt
+    assert "5–10 слов" in prompt
+
+
+def test_batya_external_prompt_can_address_him_and_include_photo_description():
+    from features.channel.service import EXTERNAL_COMMENT_SOURCES, _build_external_prompt
+
+    source = next(source for source in EXTERNAL_COMMENT_SOURCES if source["channel"] == "lukeimyourmouth")
+    prompt = _build_external_prompt(
+        source,
+        {"text": "", "url": "https://t.me/lukeimyourmouth/1", "image_url": "https://cdn.example/photo.jpg"},
+        image_description="На фото мужчина держит огромную кружку и смотрит в камеру.",
+    )
+
+    assert "твой батя" in prompt.casefold()
+    assert "обратиться к нему напрямую" in prompt.casefold()
+    assert "ОПИСАНИЕ ФОТО" in prompt
+    assert "огромную кружку" in prompt
 
 
 def test_channel_storage_roundtrip(tmp_path, monkeypatch):
