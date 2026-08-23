@@ -42,6 +42,59 @@ def test_nonsense_is_a_valid_channel_post_but_exact_duplicate_is_not():
     assert _validate_post("я червяк", [{"text": "я червяк"}]) == "точный дубль недавнего поста"
 
 
+def test_batya_public_feed_parser_extracts_real_text_post_links():
+    from features.channel.batya_source import _parse_public_feed
+
+    html = """
+    <div class="tgme_widget_message" data-post="lukeimyourmouth/5403">
+      <div class="tgme_widget_message_text">первый <b>пост</b></div>
+    </div>
+    <div class="tgme_widget_message" data-post="lukeimyourmouth/5404">
+      <div class="tgme_widget_message_text">второй<br>пост</div>
+    </div>
+    <div class="tgme_widget_message" data-post="lukeimyourmouth/5405"></div>
+    <div class="tgme_widget_message" data-post="other/1">
+      <div class="tgme_widget_message_text">чужое</div>
+    </div>
+    """
+
+    posts = _parse_public_feed(html, channel="lukeimyourmouth")
+
+    assert posts == [
+        {
+            "message_id": 5403,
+            "url": "https://t.me/lukeimyourmouth/5403",
+            "text": "первый пост",
+        },
+        {
+            "message_id": 5404,
+            "url": "https://t.me/lukeimyourmouth/5404",
+            "text": "второй\nпост",
+        },
+    ]
+
+
+def test_batya_comment_can_be_one_word_and_does_not_repeat_source_link():
+    from features.channel.service import (
+        _pick_uncommented_batya_post,
+        _validate_batya_comment,
+    )
+
+    source_posts = [
+        {"url": "https://t.me/lukeimyourmouth/5403", "text": "старое"},
+        {"url": "https://t.me/lukeimyourmouth/5404", "text": "новое"},
+    ]
+    published = [
+        {"external_source_url": "https://t.me/lukeimyourmouth/5403", "text": "что-то"},
+    ]
+
+    picked = _pick_uncommented_batya_post(source_posts, published)
+    assert picked["url"] == "https://t.me/lukeimyourmouth/5404"
+    assert _validate_batya_comment("дебил") is None
+    assert _validate_batya_comment("") == "пустой ответ"
+    assert _validate_batya_comment("https://t.me/lukeimyourmouth/5404 дебил") == "модель сама добавила Telegram-ссылку"
+
+
 def test_channel_storage_roundtrip(tmp_path, monkeypatch):
     from features.channel import storage
 
