@@ -34,7 +34,7 @@ def _parse_public_feed(html: str, *, channel: str = BATYA_CHANNEL) -> list[dict]
             continue
 
         text_node = node.select_one(".tgme_widget_message_text")
-        text = text_node.get_text("\n", strip=True) if text_node else ""
+        text = " ".join(text_node.stripped_strings) if text_node else ""
         if not text:
             # Пока не притворяемся, что Упупа умеет видеть фото/видео из web-preview.
             continue
