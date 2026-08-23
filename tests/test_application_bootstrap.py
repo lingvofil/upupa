@@ -51,6 +51,7 @@ def test_background_task_set_is_explicit_and_idempotent():
         "birthday-scheduler",
         "holiday-scheduler",
         "proactive-loop",
+        "channel-scheduler",
         "crocodile-socket-server",
     ]
 
