@@ -42,6 +42,35 @@ def test_nonsense_is_a_valid_channel_post_but_exact_duplicate_is_not():
     assert _validate_post("я червяк", [{"text": "я червяк"}]) == "точный дубль недавнего поста"
 
 
+def test_channel_length_distribution_prefers_two_or_three_words():
+    from prompts.channel import POST_LENGTH_MODES
+
+    weights = {mode["name"]: mode["weight"] for mode in POST_LENGTH_MODES}
+    assert weights == {"micro": 60, "short": 30, "medium": 10}
+    micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
+    assert micro["min_words"] == 2
+    assert micro["max_words"] == 3
+
+
+def test_micro_length_mode_is_enforced_not_just_prompted():
+    from features.channel.service import _validate_length_mode
+    from prompts.channel import POST_LENGTH_MODES
+
+    micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
+
+    assert _validate_length_mode("я червяк", micro) is None
+    assert _validate_length_mode("батя не знает", micro) is None
+    assert "нужно 2–3 слов" in _validate_length_mode("я", micro)
+    assert "нужно 2–3 слов" in _validate_length_mode("я теперь снова червяк", micro)
+
+
+def test_all_normal_length_modes_are_bounded():
+    from prompts.channel import POST_LENGTH_MODES
+
+    assert max(mode["max_chars"] for mode in POST_LENGTH_MODES) == 240
+    assert sum(mode["weight"] for mode in POST_LENGTH_MODES) == 100
+
+
 def test_batya_public_feed_parser_extracts_real_text_post_links():
     from features.channel.batya_source import _parse_public_feed
 
@@ -91,6 +120,8 @@ def test_batya_comment_can_be_one_word_and_does_not_repeat_source_link():
     picked = _pick_uncommented_batya_post(source_posts, published)
     assert picked["url"] == "https://t.me/lukeimyourmouth/5404"
     assert _validate_batya_comment("дебил") is None
+    assert _validate_batya_comment("ну и хули это вообще было блять опять") is None
+    assert "многословный" in _validate_batya_comment("раз два три четыре пять шесть семь восемь девять")
     assert _validate_batya_comment("") == "пустой ответ"
     assert _validate_batya_comment("https://t.me/lukeimyourmouth/5404 дебил") == "модель сама добавила Telegram-ссылку"
 
