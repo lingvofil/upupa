@@ -15,15 +15,17 @@ from features.channel.batya_source import BATYA_CHANNEL, fetch_batya_posts
 from features.channel.storage import append_post, load_posts
 from prompts.channel import (
     BATYA_COMMENT_PROMPT,
+    BATYA_MENTION_PROMPT,
     CHANNEL_PERSONA,
-    OPTIONAL_NUDGES,
+    POST_CONTENT_MODES,
     POST_LENGTH_MODES,
     UPUPA_CAPABILITIES,
 )
 
 CHANNEL_TARGET = os.getenv("UPUPA_CHANNEL", "@upupa_channel")
-CHAT_CONTEXT_PROBABILITY = 0.25
 BATYA_COMMENT_PROBABILITY = 0.10
+BATYA_MENTION_PROBABILITY = 0.04
+BATYA_MENTION_COOLDOWN_POSTS = 20
 RECENT_POSTS_LIMIT = 25
 BATYA_POSTS_LIMIT = 20
 CHAT_TAIL_LIMIT = 200
@@ -40,6 +42,11 @@ _PROVIDER_ERROR_MARKERS = (
     "groq вернул пустой ответ",
     "google зассал и заблокировал ответ",
     "логов слишком много для groq",
+)
+
+_BATYA_MENTION_RE = re.compile(
+    r"\b(?:бат(?:я|и|е|ю|ей)|пап(?:а|ы|е|у|ой)|от(?:ец|ца|цу|цом|це))\b",
+    re.IGNORECASE,
 )
 
 
@@ -91,15 +98,31 @@ def _pick_chat_fragment() -> str | None:
     return None
 
 
-def _format_recent_posts(posts: list[dict]) -> str:
+def _contains_batya_mention(text: str) -> bool:
+    return bool(_BATYA_MENTION_RE.search(text or ""))
+
+
+def _should_allow_batya_mention(published_posts: list[dict], *, rng=random) -> bool:
+    """Легенда про батю доступна редко и никогда не повторяется в соседних постах."""
+    recent = published_posts[-BATYA_MENTION_COOLDOWN_POSTS:]
+    if any(_contains_batya_mention(str(post.get("text") or "")) for post in recent):
+        return False
+    return rng.random() < BATYA_MENTION_PROBABILITY
+
+
+def _format_recent_posts(posts: list[dict], *, allow_batya_mention: bool) -> str:
     if not posts:
         return "(пока нет опубликованных постов)"
     chunks = []
     for index, post in enumerate(posts, 1):
         text = str(post.get("text") or "").strip()
-        if text:
-            chunks.append(f"{index}. {text}")
-    return "\n\n".join(chunks) or "(пока нет опубликованных постов)"
+        if not text:
+            continue
+        # Когда редкий режим не выбран, даже история не должна праймить модель темой бати.
+        if not allow_batya_mention and _contains_batya_mention(text):
+            continue
+        chunks.append(f"{index}. {text}")
+    return "\n\n".join(chunks) or "(недавние посты скрыты из текущего контекста)"
 
 
 def _normalize_for_duplicate_check(text: str) -> str:
@@ -112,6 +135,11 @@ def _word_count(text: str) -> int:
 
 def _choose_length_mode(*, rng=random) -> dict:
     modes = list(POST_LENGTH_MODES)
+    return rng.choices(modes, weights=[mode["weight"] for mode in modes], k=1)[0]
+
+
+def _choose_content_mode(*, rng=random) -> dict:
+    modes = list(POST_CONTENT_MODES)
     return rng.choices(modes, weights=[mode["weight"] for mode in modes], k=1)[0]
 
 
@@ -150,6 +178,12 @@ def _validate_length_mode(text: str, mode: dict) -> str | None:
     return None
 
 
+def _validate_batya_mention_policy(text: str, *, allow_batya_mention: bool) -> str | None:
+    if not allow_batya_mention and _contains_batya_mention(text):
+        return "редкий режим бати не выбран"
+    return None
+
+
 def _validate_batya_comment(comment: str) -> str | None:
     reason = _validate_post(comment, [])
     if reason:
@@ -180,27 +214,35 @@ def _build_prompt(
     recent_posts: list[dict],
     chat_fragment: str | None,
     length_mode: dict,
+    content_mode: dict,
+    allow_batya_mention: bool,
     retry_note: str = "",
 ) -> str:
-    nudge = random.choice(OPTIONAL_NUDGES)
     context_block = (
         "\n\nСЛУЧАЙНЫЙ ФРАГМЕНТ ОДНОГО ИЗ ЧАТОВ (необязательный материал):\n"
         f"{chat_fragment}"
         if chat_fragment
-        else "\n\nФрагмент чужой переписки в этот раз не дан."
+        else ""
     )
+    capabilities_block = (
+        f"\n\n{UPUPA_CAPABILITIES}"
+        if content_mode.get("include_capabilities")
+        else ""
+    )
+    batya_block = f"\n\n{BATYA_MENTION_PROMPT}" if allow_batya_mention else ""
     retry_block = (
         f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Напиши другой вариант."
         if retry_note
         else ""
     )
     return (
-        f"{CHANNEL_PERSONA}\n\n"
-        f"{UPUPA_CAPABILITIES}\n\n"
+        f"{CHANNEL_PERSONA}"
+        f"{capabilities_block}"
+        f"{batya_block}\n\n"
+        f"ТИП ИМПУЛЬСА ДЛЯ ЭТОГО ПОСТА: {content_mode['instruction']}\n\n"
         f"РАЗМЕР ЭТОГО ПОСТА — ОБЯЗАТЕЛЬНО: {length_mode['instruction']}\n\n"
-        f"Необязательный импульс для этого раза: {nudge}\n\n"
         "ТВОИ НЕДАВНИЕ ПОСТЫ:\n"
-        f"{_format_recent_posts(recent_posts)}"
+        f"{_format_recent_posts(recent_posts, allow_batya_mention=allow_batya_mention)}"
         f"{context_block}"
         f"{retry_block}\n\n"
         "ТЕКУЩИЙ ПОСТ:"
@@ -272,23 +314,40 @@ async def generate_channel_post() -> tuple[str, dict]:
         if batya_post is not None:
             return batya_post
 
+    content_mode = _choose_content_mode()
     chat_fragment = None
-    if random.random() < CHAT_CONTEXT_PROBABILITY:
+    if content_mode.get("use_chat_context"):
         chat_fragment = await asyncio.to_thread(_pick_chat_fragment)
 
     length_mode = _choose_length_mode()
+    allow_batya_mention = _should_allow_batya_mention(published_posts)
     retry_note = ""
+
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        prompt = _build_prompt(recent_posts, chat_fragment, length_mode, retry_note)
+        prompt = _build_prompt(
+            recent_posts,
+            chat_fragment,
+            length_mode,
+            content_mode,
+            allow_batya_mention,
+            retry_note,
+        )
         text = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
         reason = _validate_post(text or "", recent_posts)
         if not reason:
             reason = _validate_length_mode(text or "", length_mode)
         if not reason:
+            reason = _validate_batya_mention_policy(
+                text or "",
+                allow_batya_mention=allow_batya_mention,
+            )
+        if not reason:
             return text.strip(), {
                 "post_kind": "normal",
                 "chat_context_used": bool(chat_fragment),
                 "length_mode": length_mode["name"],
+                "content_mode": content_mode["name"],
+                "batya_mention_allowed": allow_batya_mention,
             }
         logging.warning("[channel] generation attempt %s rejected: %s", attempt, reason)
         retry_note = reason
@@ -310,11 +369,13 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
         }
         await asyncio.to_thread(append_post, record)
         logging.info(
-            "[channel] published source=%s message_id=%s kind=%s length=%s context=%s",
+            "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s",
             source,
             record["message_id"],
             record.get("post_kind"),
             record.get("length_mode"),
+            record.get("content_mode"),
+            record.get("batya_mention_allowed"),
             record.get("chat_context_used"),
         )
         return sent, text
