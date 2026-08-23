@@ -1,7 +1,7 @@
-"""Чтение свежих публичных постов из Telegram-канала «бати» через web-preview.
+"""Чтение свежих публичных Telegram-постов через web-preview.
 
-Bot API не позволяет получать произвольную историю чужого канала. Для публичного
-канала используем HTML-ленту https://t.me/s/<username>. Ошибки чтения не должны
+Bot API не позволяет получать произвольную историю чужих каналов. Для публичных
+каналов используем HTML-ленту https://t.me/s/<username>. Ошибки чтения не должны
 ломать основной автопостинг: вызывающий код просто вернётся к обычному посту.
 """
 
@@ -19,7 +19,7 @@ USER_AGENT = "Mozilla/5.0 (compatible; UpupaBot/1.0; +https://t.me/upupa_channel
 
 
 def _parse_public_feed(html: str, *, channel: str = BATYA_CHANNEL) -> list[dict]:
-    """Парсит Telegram public preview и возвращает посты от старых к новым."""
+    """Парсит Telegram public preview и возвращает текстовые посты от старых к новым."""
     soup = BeautifulSoup(html, "html.parser")
     posts: list[dict] = []
     prefix = f"{channel}/"
@@ -51,9 +51,13 @@ def _parse_public_feed(html: str, *, channel: str = BATYA_CHANNEL) -> list[dict]
     return posts
 
 
-async def fetch_batya_posts(*, limit: int = 20) -> list[dict]:
+async def fetch_public_posts(channel: str, *, limit: int = 20) -> list[dict]:
     """Получает последние текстовые посты публичного канала; при ошибке возвращает []."""
-    url = f"https://t.me/s/{BATYA_CHANNEL}"
+    channel = str(channel or "").strip().lstrip("@")
+    if not channel:
+        return []
+
+    url = f"https://t.me/s/{channel}"
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
     headers = {"User-Agent": USER_AGENT}
 
@@ -61,17 +65,22 @@ async def fetch_batya_posts(*, limit: int = 20) -> list[dict]:
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.get(url, allow_redirects=True) as response:
                 if response.status != 200:
-                    logging.warning("[channel] batya feed HTTP %s", response.status)
+                    logging.warning("[channel] public feed @%s HTTP %s", channel, response.status)
                     return []
                 html = await response.text()
     except Exception as exc:
-        logging.warning("[channel] batya feed unavailable: %s", exc)
+        logging.warning("[channel] public feed @%s unavailable: %s", channel, exc)
         return []
 
     try:
-        posts = _parse_public_feed(html)
+        posts = _parse_public_feed(html, channel=channel)
     except Exception as exc:
-        logging.warning("[channel] batya feed parse failed: %s", exc)
+        logging.warning("[channel] public feed @%s parse failed: %s", channel, exc)
         return []
 
     return posts[-limit:] if limit > 0 else posts
+
+
+async def fetch_batya_posts(*, limit: int = 20) -> list[dict]:
+    """Совместимый wrapper для старого единственного источника."""
+    return await fetch_public_posts(BATYA_CHANNEL, limit=limit)
