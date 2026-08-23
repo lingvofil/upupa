@@ -118,7 +118,6 @@ def _format_recent_posts(posts: list[dict], *, allow_batya_mention: bool) -> str
         text = str(post.get("text") or "").strip()
         if not text:
             continue
-        # Когда редкий режим не выбран, даже история не должна праймить модель темой бати.
         if not allow_batya_mention and _contains_batya_mention(text):
             continue
         chunks.append(f"{index}. {text}")
@@ -194,6 +193,8 @@ def _validate_batya_comment(comment: str) -> str | None:
         return f"слишком многословный комментарий ({_word_count(comment)} слов)"
     if "https://t.me/" in comment.casefold():
         return "модель сама добавила Telegram-ссылку"
+    if _contains_batya_mention(comment):
+        return "комментарий к исходному каналу не должен использовать легенду про батю"
     return None
 
 
