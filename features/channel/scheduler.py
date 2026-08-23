@@ -1,4 +1,4 @@
-"""Два автономных поста Упупы в случайное время каждого дня."""
+"""Пять автономных постов Упупы в случайное время каждого дня."""
 
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ from features.channel.storage import load_schedule, save_schedule
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAY_START = time(10, 0)
 DAY_END = time(23, 30)
-POSTS_PER_DAY = 2
-PREFERRED_GAP_MINUTES = 180
+POSTS_PER_DAY = 5
+PREFERRED_GAP_MINUTES = 120
+MIN_GAP_MINUTES = 45
 STARTUP_LEAD_MINUTES = 5
 MISSED_GRACE_MINUTES = 20
 RETRY_MINUTES = 30
@@ -28,7 +29,7 @@ def _local_dt(day: date, clock: time) -> datetime:
 
 
 def _pick_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> list[datetime]:
-    """Выбирает до двух будущих слотов; в обычный день между ними стараемся держать 3 часа."""
+    """Выбирает до пяти будущих слотов, стараясь не ставить публикации кучно."""
     start = _local_dt(day, DAY_START)
     end = _local_dt(day, DAY_END)
     if now is not None and now.date() == day:
@@ -40,16 +41,19 @@ def _pick_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> 
     if span_minutes == 0:
         return [start]
 
-    effective_gap = min(PREFERRED_GAP_MINUTES, max(30, span_minutes // 2))
-    for _ in range(500):
-        first = rng.randint(0, span_minutes)
-        second = rng.randint(0, span_minutes)
-        if first == second:
-            continue
-        if abs(first - second) >= effective_gap:
-            return sorted([start + timedelta(minutes=first), start + timedelta(minutes=second)])
+    # При обычном старте хватает места на все 5 постов с интервалом >= 2 часов.
+    # При позднем рестарте уменьшаем количество слотов, а не устраиваем очередь из постов.
+    count = min(POSTS_PER_DAY, span_minutes // MIN_GAP_MINUTES + 1)
+    if count <= 1:
+        return [start + timedelta(minutes=rng.randint(0, span_minutes))]
 
-    offsets = sorted(rng.sample(range(span_minutes + 1), k=2))
+    effective_gap = min(PREFERRED_GAP_MINUTES, span_minutes // (count - 1))
+    slack = span_minutes - effective_gap * (count - 1)
+
+    # Если вычесть обязательные промежутки, остаётся slack. Случайно распределяем
+    # его между позициями; после возврата gap гарантирован математически.
+    jitter = sorted(rng.randint(0, slack) for _ in range(count)) if slack > 0 else [0] * count
+    offsets = [jitter[index] + index * effective_gap for index in range(count)]
     return [start + timedelta(minutes=offset) for offset in offsets]
 
 
@@ -57,6 +61,7 @@ def _new_schedule(now: datetime) -> dict:
     slots = _pick_daily_slots(now.date(), now=now)
     return {
         "date": now.date().isoformat(),
+        "target_posts": POSTS_PER_DAY,
         "slots": [
             {"at": slot.isoformat(), "done": False, "missed": False}
             for slot in slots
@@ -84,7 +89,7 @@ def _random_future_slot(now: datetime, rng=random) -> datetime | None:
 
 
 def _repair_missed_slots(state: dict, now: datetime, rng=random) -> bool:
-    """После долгого рестарта не вываливает два просроченных поста подряд, а переносит их вперёд."""
+    """После долгого рестарта переносит просроченные слоты вперёд вместо burst-публикации."""
     changed = False
     for slot in state.get("slots", []):
         if slot.get("done"):
@@ -109,6 +114,34 @@ def _repair_missed_slots(state: dict, now: datetime, rng=random) -> bool:
     return changed
 
 
+def _top_up_schedule_slots(state: dict, now: datetime, rng=random) -> bool:
+    """Миграция старого дневного расписания: добавляет будущие слоты до нового лимита 5."""
+    slots = state.setdefault("slots", [])
+    changed = False
+
+    if state.get("target_posts") != POSTS_PER_DAY:
+        state["target_posts"] = POSTS_PER_DAY
+        changed = True
+
+    if len(slots) >= POSTS_PER_DAY:
+        return changed
+
+    occupied = [parsed for slot in slots if (parsed := _parse_slot(slot.get("at"))) is not None]
+    candidates = _pick_daily_slots(now.date(), now=now, rng=rng)
+
+    for candidate in candidates:
+        if len(slots) >= POSTS_PER_DAY:
+            break
+        if any(abs((candidate - other).total_seconds()) < MIN_GAP_MINUTES * 60 for other in occupied):
+            continue
+        slots.append({"at": candidate.isoformat(), "done": False, "missed": False})
+        occupied.append(candidate)
+        changed = True
+
+    slots.sort(key=lambda slot: str(slot.get("at") or ""))
+    return changed
+
+
 def _get_schedule_for_now(now: datetime) -> dict:
     state = load_schedule()
     if state.get("date") != now.date().isoformat():
@@ -117,13 +150,16 @@ def _get_schedule_for_now(now: datetime) -> dict:
         logging.info("[channel] daily slots: %s", [slot["at"] for slot in state["slots"]])
         return state
 
-    if _repair_missed_slots(state, now):
+    changed = _repair_missed_slots(state, now)
+    changed = _top_up_schedule_slots(state, now) or changed
+    if changed:
         save_schedule(state)
+        logging.info("[channel] adjusted daily slots: %s", [slot["at"] for slot in state["slots"]])
     return state
 
 
 async def channel_scheduler_loop(bot) -> None:
-    """Фоновый цикл: публикует два случайно запланированных поста в сутки."""
+    """Фоновый цикл: публикует до пяти случайно запланированных постов в сутки."""
     await asyncio.sleep(60)
     while True:
         try:

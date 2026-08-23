@@ -4,16 +4,48 @@ from datetime import date, datetime
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
 
-def test_daily_scheduler_picks_two_random_slots_with_preferred_gap():
-    from features.channel.scheduler import DAY_END, DAY_START, MOSCOW_TZ, _pick_daily_slots
+def test_daily_scheduler_picks_five_random_slots_with_preferred_gap():
+    from features.channel.scheduler import DAY_END, DAY_START, MOSCOW_TZ, POSTS_PER_DAY, _pick_daily_slots
 
     now = MOSCOW_TZ.localize(datetime(2026, 8, 23, 0, 0))
     slots = _pick_daily_slots(date(2026, 8, 23), now=now, rng=random.Random(42))
 
-    assert len(slots) == 2
+    assert POSTS_PER_DAY == 5
+    assert len(slots) == 5
     assert slots[0].time().replace(tzinfo=None) >= DAY_START
-    assert slots[1].time().replace(tzinfo=None) <= DAY_END
-    assert (slots[1] - slots[0]).total_seconds() >= 3 * 60 * 60
+    assert slots[-1].time().replace(tzinfo=None) <= DAY_END
+    for previous, current in zip(slots, slots[1:]):
+        assert (current - previous).total_seconds() >= 2 * 60 * 60
+
+
+def test_late_start_reduces_slot_count_instead_of_bursting_five_posts():
+    from features.channel.scheduler import MIN_GAP_MINUTES, MOSCOW_TZ, _pick_daily_slots
+
+    now = MOSCOW_TZ.localize(datetime(2026, 8, 23, 22, 0))
+    slots = _pick_daily_slots(date(2026, 8, 23), now=now, rng=random.Random(7))
+
+    assert 1 <= len(slots) < 5
+    for previous, current in zip(slots, slots[1:]):
+        assert (current - previous).total_seconds() >= MIN_GAP_MINUTES * 60
+
+
+def test_old_two_slot_schedule_is_marked_for_five_post_target():
+    from features.channel.scheduler import MOSCOW_TZ, POSTS_PER_DAY, _top_up_schedule_slots
+
+    now = MOSCOW_TZ.localize(datetime(2026, 8, 23, 17, 0))
+    state = {
+        "date": "2026-08-23",
+        "slots": [
+            {"at": MOSCOW_TZ.localize(datetime(2026, 8, 23, 12, 0)).isoformat(), "done": True, "missed": False},
+            {"at": MOSCOW_TZ.localize(datetime(2026, 8, 23, 20, 0)).isoformat(), "done": False, "missed": False},
+        ],
+    }
+
+    changed = _top_up_schedule_slots(state, now, rng=random.Random(42))
+
+    assert changed is True
+    assert state["target_posts"] == POSTS_PER_DAY == 5
+    assert 2 < len(state["slots"]) <= 5
 
 
 def test_chat_fragment_is_anonymized_before_ai_prompt():
@@ -150,60 +182,81 @@ def test_recent_batya_posts_are_hidden_from_normal_prompt_memory():
     assert "мне похуй" in formatted.casefold()
 
 
-def test_batya_public_feed_parser_extracts_real_text_post_links():
+def test_external_sources_include_muhtar_and_kapibara_channels():
+    from features.channel.service import EXTERNAL_COMMENT_SOURCES
+
+    by_channel = {source["channel"]: source for source in EXTERNAL_COMMENT_SOURCES}
+    assert "lukeimyourmouth" in by_channel
+    assert by_channel["muhtarboodka"]["owner"] == "Мухтар"
+    assert "Мухтар" in by_channel["muhtarboodka"]["description"]
+    assert "kapibara_fen" in by_channel
+
+
+def test_public_feed_parser_works_for_any_configured_channel():
     from features.channel.batya_source import _parse_public_feed
 
     html = """
-    <div class="tgme_widget_message" data-post="lukeimyourmouth/5403">
+    <div class="tgme_widget_message" data-post="muhtarboodka/101">
       <div class="tgme_widget_message_text">первый <b>пост</b></div>
     </div>
-    <div class="tgme_widget_message" data-post="lukeimyourmouth/5404">
+    <div class="tgme_widget_message" data-post="muhtarboodka/102">
       <div class="tgme_widget_message_text">второй<br>пост</div>
     </div>
-    <div class="tgme_widget_message" data-post="lukeimyourmouth/5405"></div>
+    <div class="tgme_widget_message" data-post="muhtarboodka/103"></div>
     <div class="tgme_widget_message" data-post="other/1">
       <div class="tgme_widget_message_text">чужое</div>
     </div>
     """
 
-    posts = _parse_public_feed(html, channel="lukeimyourmouth")
+    posts = _parse_public_feed(html, channel="muhtarboodka")
 
     assert posts == [
         {
-            "message_id": 5403,
-            "url": "https://t.me/lukeimyourmouth/5403",
+            "message_id": 101,
+            "url": "https://t.me/muhtarboodka/101",
             "text": "первый пост",
         },
         {
-            "message_id": 5404,
-            "url": "https://t.me/lukeimyourmouth/5404",
+            "message_id": 102,
+            "url": "https://t.me/muhtarboodka/102",
             "text": "второй пост",
         },
     ]
 
 
-def test_batya_comment_can_be_one_word_and_does_not_repeat_source_link():
+def test_external_comment_can_be_one_word_and_does_not_repeat_source_link():
     from features.channel.service import (
-        _pick_uncommented_batya_post,
-        _validate_batya_comment,
+        _pick_uncommented_external_post,
+        _validate_external_comment,
     )
 
     source_posts = [
-        {"url": "https://t.me/lukeimyourmouth/5403", "text": "старое"},
-        {"url": "https://t.me/lukeimyourmouth/5404", "text": "новое"},
+        {"url": "https://t.me/muhtarboodka/101", "text": "старое"},
+        {"url": "https://t.me/muhtarboodka/102", "text": "новое"},
     ]
     published = [
-        {"external_source_url": "https://t.me/lukeimyourmouth/5403", "text": "что-то"},
+        {"external_source_url": "https://t.me/muhtarboodka/101", "text": "что-то"},
     ]
 
-    picked = _pick_uncommented_batya_post(source_posts, published)
-    assert picked["url"] == "https://t.me/lukeimyourmouth/5404"
-    assert _validate_batya_comment("дебил") is None
-    assert _validate_batya_comment("ну и хули это вообще было блять опять") is None
-    assert "многословный" in _validate_batya_comment("раз два три четыре пять шесть семь восемь девять")
-    assert _validate_batya_comment("") == "пустой ответ"
-    assert _validate_batya_comment("https://t.me/lukeimyourmouth/5404 дебил") == "модель сама добавила Telegram-ссылку"
-    assert "легенду про батю" in _validate_batya_comment("батя дебил")
+    picked = _pick_uncommented_external_post(source_posts, published)
+    assert picked["url"] == "https://t.me/muhtarboodka/102"
+    assert _validate_external_comment("дебил") is None
+    assert _validate_external_comment("ну и хули это вообще было блять опять") is None
+    assert "многословный" in _validate_external_comment("раз два три четыре пять шесть семь восемь девять")
+    assert _validate_external_comment("") == "пустой ответ"
+    assert _validate_external_comment("https://t.me/muhtarboodka/102 дебил") == "модель сама добавила Telegram-ссылку"
+    assert "легенду про батю" in _validate_external_comment("батя дебил")
+
+
+def test_external_prompt_knows_muhtar_owns_muhtarboodka():
+    from features.channel.service import EXTERNAL_COMMENT_SOURCES, _build_external_prompt
+
+    source = next(source for source in EXTERNAL_COMMENT_SOURCES if source["channel"] == "muhtarboodka")
+    prompt = _build_external_prompt(source, {"text": "тест", "url": "https://t.me/muhtarboodka/1"})
+
+    assert "@muhtarboodka" in prompt
+    assert "Мухтар" in prompt
+    assert "тест" in prompt
 
 
 def test_channel_storage_roundtrip(tmp_path, monkeypatch):
