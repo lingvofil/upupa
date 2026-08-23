@@ -57,6 +57,12 @@ upupa/
   общие временные файлы для параллельных запросов не используются.
 - CPU-bound обработка изображения в `handle_add_text_command` также вынесена в worker thread.
 - Regression-тест запрещает возвращать известные блокирующие вызовы непосредственно в async-функции `services.search`.
+- На R3.2 `AI.whatisthere` переведён на `httpx.AsyncClient` для URL/Telegram downloads; ответы по URL
+  читаются потоково и ограничены 50 МБ.
+- Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` временно offload'ятся через
+  `asyncio.to_thread`; их собственное разделение на provider adapters остаётся задачей R4.
+- Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.:
+  скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
 
 ## Прочее
 
