@@ -15,6 +15,7 @@ from features.channel.batya_source import BATYA_CHANNEL, fetch_public_posts
 from features.channel.storage import append_post, load_posts
 from prompts.channel import (
     BATYA_MENTION_PROMPT,
+    CHANNEL_IMAGE_POST_PROMPT,
     CHANNEL_PERSONA,
     EXTERNAL_COMMENT_PROMPT,
     POST_CONTENT_MODES,
@@ -24,6 +25,8 @@ from prompts.channel import (
 
 CHANNEL_TARGET = os.getenv("UPUPA_CHANNEL", "@upupa_channel")
 EXTERNAL_COMMENT_PROBABILITY = 0.10
+IMAGE_POST_PROBABILITY = 0.15
+IMAGE_POST_COOLDOWN_POSTS = 3
 BATYA_MENTION_PROBABILITY = 0.04
 BATYA_MENTION_COOLDOWN_POSTS = 20
 RECENT_POSTS_LIMIT = 25
@@ -34,6 +37,10 @@ CHAT_WINDOW_MAX = 25
 MAX_POST_LENGTH = 280
 MAX_EXTERNAL_COMMENT_LENGTH = 100
 MAX_EXTERNAL_COMMENT_WORDS = 8
+MAX_IMAGE_CAPTION_LENGTH = 100
+MAX_IMAGE_CAPTION_WORDS = 8
+MIN_IMAGE_PROMPT_LENGTH = 12
+MAX_IMAGE_PROMPT_LENGTH = 600
 MAX_GENERATION_ATTEMPTS = 3
 
 # Упупа знает эти публичные каналы. Описание попадает в prompt только когда код
@@ -136,6 +143,14 @@ def _should_allow_batya_mention(published_posts: list[dict], *, rng=random) -> b
     return rng.random() < BATYA_MENTION_PROBABILITY
 
 
+def _should_try_image_post(published_posts: list[dict], *, rng=random) -> bool:
+    """Картинки редкие и не могут идти вплотную друг к другу."""
+    recent = published_posts[-IMAGE_POST_COOLDOWN_POSTS:]
+    if any(post.get("post_kind") == "image" for post in recent):
+        return False
+    return rng.random() < IMAGE_POST_PROBABILITY
+
+
 def _format_recent_posts(posts: list[dict], *, allow_batya_mention: bool) -> str:
     if not posts:
         return "(пока нет опубликованных постов)"
@@ -229,6 +244,47 @@ def _validate_batya_comment(comment: str) -> str | None:
     return _validate_external_comment(comment)
 
 
+def _parse_image_plan(raw: str) -> tuple[str, str] | None:
+    """Разбирает две строгие строки КАРТИНКА/ПОДПИСЬ от LLM."""
+    lines = [line.strip() for line in (raw or "").splitlines() if line.strip()]
+    if len(lines) != 2:
+        return None
+    if not lines[0].casefold().startswith("картинка:"):
+        return None
+    if not lines[1].casefold().startswith("подпись:"):
+        return None
+    image_prompt = lines[0].split(":", 1)[1].strip()
+    caption = lines[1].split(":", 1)[1].strip().strip('"«»')
+    if not image_prompt or not caption:
+        return None
+    return image_prompt, caption
+
+
+def _validate_image_plan(image_prompt: str, caption: str, recent_posts: list[dict]) -> str | None:
+    prompt = image_prompt.strip()
+    if len(prompt) < MIN_IMAGE_PROMPT_LENGTH:
+        return "слишком короткое описание картинки"
+    if len(prompt) > MAX_IMAGE_PROMPT_LENGTH:
+        return "слишком длинное описание картинки"
+    if "http://" in prompt.casefold() or "https://" in prompt.casefold() or "@" in prompt:
+        return "в описании картинки не должно быть ссылок или usernames"
+    if _contains_batya_mention(prompt):
+        return "режим картинки не должен использовать легенду про батю"
+
+    reason = _validate_post(caption, recent_posts)
+    if reason:
+        return reason
+    if len(caption.strip()) > MAX_IMAGE_CAPTION_LENGTH:
+        return f"слишком длинная подпись ({len(caption.strip())} символов)"
+    if _word_count(caption) > MAX_IMAGE_CAPTION_WORDS:
+        return f"слишком многословная подпись ({_word_count(caption)} слов)"
+    if "http://" in caption.casefold() or "https://" in caption.casefold() or "@" in caption:
+        return "в подписи не должно быть ссылок или usernames"
+    if _contains_batya_mention(caption):
+        return "режим картинки не должен использовать легенду про батю"
+    return None
+
+
 def _pick_uncommented_external_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
     """Не комментируем одну и ту же внешнюю ссылку повторно."""
     used_urls = {
@@ -300,6 +356,15 @@ def _build_external_prompt(source: dict, source_post: dict, retry_note: str = ""
     )
 
 
+def _build_image_prompt(retry_note: str = "") -> str:
+    retry_block = (
+        f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Придумай другой вариант."
+        if retry_note
+        else ""
+    )
+    return f"{CHANNEL_IMAGE_POST_PROMPT}{retry_block}"
+
+
 async def _try_generate_external_comment(
     published_posts: list[dict],
     recent_posts: list[dict],
@@ -365,8 +430,47 @@ async def _try_generate_batya_comment(
     return await _try_generate_external_comment(published_posts, recent_posts)
 
 
+async def _try_generate_image_post(published_posts: list[dict]) -> tuple[bytes, str, dict] | None:
+    """Придумывает изображение и подпись, затем запускает существующий image-waterfall."""
+    from AI.summarize import _generate_with_active_model
+    from features.channel.image_generation import generate_channel_image
+
+    recent_posts = published_posts[-RECENT_POSTS_LIMIT:]
+    retry_note = ""
+    image_prompt = ""
+    caption = ""
+
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        raw = await _generate_with_active_model(_build_image_prompt(retry_note), str(SPECIAL_CHAT_ID))
+        plan = _parse_image_plan(raw or "")
+        if plan is None:
+            reason = "нужны ровно две строки КАРТИНКА/ПОДПИСЬ"
+        else:
+            image_prompt, caption = plan
+            reason = _validate_image_plan(image_prompt, caption, recent_posts)
+        if not reason:
+            break
+        logging.warning("[channel] image plan attempt %s rejected: %s", attempt, reason)
+        retry_note = reason
+    else:
+        logging.warning("[channel] image plan generation exhausted, falling back to text")
+        return None
+
+    image_bytes, provider = await generate_channel_image(image_prompt)
+    if not image_bytes:
+        logging.warning("[channel] image providers returned no image, falling back to text")
+        return None
+
+    return image_bytes, caption, {
+        "post_kind": "image",
+        "chat_context_used": False,
+        "image_prompt": image_prompt,
+        "image_provider": provider,
+    }
+
+
 async def generate_channel_post() -> tuple[str, dict]:
-    """Генерирует один пост и метаданные о его происхождении."""
+    """Генерирует один текстовый пост и метаданные о его происхождении."""
     from AI.summarize import _generate_with_active_model
 
     published_posts = await asyncio.to_thread(load_posts)
@@ -422,28 +526,52 @@ async def generate_channel_post() -> tuple[str, dict]:
     raise RuntimeError("Не удалось получить технически валидный пост за три попытки")
 
 
+async def _store_published_post(sent, *, source: str, text: str, metadata: dict) -> dict:
+    record = {
+        "created_at": datetime.now().isoformat(),
+        "source": source,
+        "text": text,
+        "message_id": getattr(sent, "message_id", None),
+        **metadata,
+    }
+    await asyncio.to_thread(append_post, record)
+    logging.info(
+        "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s external=%s image_provider=%s",
+        source,
+        record["message_id"],
+        record.get("post_kind"),
+        record.get("length_mode"),
+        record.get("content_mode"),
+        record.get("batya_mention_allowed"),
+        record.get("chat_context_used"),
+        record.get("external_source_channel"),
+        record.get("image_provider"),
+    )
+    return record
+
+
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
-    """Генерирует пост, публикует в канал и только после успеха сохраняет в историю."""
+    """Публикует текст или редкую картинку; историю пишет только после успешной отправки."""
     async with _publish_lock:
+        published_posts = await asyncio.to_thread(load_posts)
+
+        if _should_try_image_post(published_posts):
+            try:
+                image_post = await _try_generate_image_post(published_posts)
+            except Exception as exc:
+                logging.warning("[channel] image mode failed, fallback to text: %s", exc, exc_info=True)
+                image_post = None
+
+            if image_post is not None:
+                from aiogram import types
+
+                image_bytes, caption, metadata = image_post
+                photo = types.BufferedInputFile(image_bytes, filename="upupa-channel.png")
+                sent = await bot.send_photo(CHANNEL_TARGET, photo, caption=caption)
+                await _store_published_post(sent, source=source, text=caption, metadata=metadata)
+                return sent, caption
+
         text, metadata = await generate_channel_post()
         sent = await bot.send_message(CHANNEL_TARGET, text)
-        record = {
-            "created_at": datetime.now().isoformat(),
-            "source": source,
-            "text": text,
-            "message_id": getattr(sent, "message_id", None),
-            **metadata,
-        }
-        await asyncio.to_thread(append_post, record)
-        logging.info(
-            "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s external=%s",
-            source,
-            record["message_id"],
-            record.get("post_kind"),
-            record.get("length_mode"),
-            record.get("content_mode"),
-            record.get("batya_mention_allowed"),
-            record.get("chat_context_used"),
-            record.get("external_source_channel"),
-        )
+        await _store_published_post(sent, source=source, text=text, metadata=metadata)
         return sent, text
