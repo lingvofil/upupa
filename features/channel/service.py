@@ -11,30 +11,56 @@ from datetime import datetime
 
 from core.settings import SPECIAL_CHAT_ID
 from core.state import chat_list
-from features.channel.batya_source import BATYA_CHANNEL, fetch_batya_posts
+from features.channel.batya_source import BATYA_CHANNEL, fetch_public_posts
 from features.channel.storage import append_post, load_posts
 from prompts.channel import (
-    BATYA_COMMENT_PROMPT,
     BATYA_MENTION_PROMPT,
     CHANNEL_PERSONA,
+    EXTERNAL_COMMENT_PROMPT,
     POST_CONTENT_MODES,
     POST_LENGTH_MODES,
     UPUPA_CAPABILITIES,
 )
 
 CHANNEL_TARGET = os.getenv("UPUPA_CHANNEL", "@upupa_channel")
-BATYA_COMMENT_PROBABILITY = 0.10
+EXTERNAL_COMMENT_PROBABILITY = 0.10
 BATYA_MENTION_PROBABILITY = 0.04
 BATYA_MENTION_COOLDOWN_POSTS = 20
 RECENT_POSTS_LIMIT = 25
-BATYA_POSTS_LIMIT = 20
+EXTERNAL_POSTS_LIMIT = 20
 CHAT_TAIL_LIMIT = 200
 CHAT_WINDOW_MIN = 12
 CHAT_WINDOW_MAX = 25
 MAX_POST_LENGTH = 280
-MAX_BATYA_COMMENT_LENGTH = 100
-MAX_BATYA_COMMENT_WORDS = 8
+MAX_EXTERNAL_COMMENT_LENGTH = 100
+MAX_EXTERNAL_COMMENT_WORDS = 8
 MAX_GENERATION_ATTEMPTS = 3
+
+# Упупа знает эти публичные каналы. Описание попадает в prompt только когда код
+# уже выбрал редкий режим внешнего комментария, чтобы не праймить обычные посты.
+EXTERNAL_COMMENT_SOURCES = (
+    {
+        "channel": BATYA_CHANNEL,
+        "description": f"@{BATYA_CHANNEL}",
+        "owner": None,
+    },
+    {
+        "channel": "muhtarboodka",
+        "description": "@muhtarboodka; этот канал ведёт Мухтар",
+        "owner": "Мухтар",
+    },
+    {
+        "channel": "kapibara_fen",
+        "description": "@kapibara_fen",
+        "owner": None,
+    },
+)
+
+# Старые имена оставлены alias-ами для совместимости.
+BATYA_COMMENT_PROBABILITY = EXTERNAL_COMMENT_PROBABILITY
+BATYA_POSTS_LIMIT = EXTERNAL_POSTS_LIMIT
+MAX_BATYA_COMMENT_LENGTH = MAX_EXTERNAL_COMMENT_LENGTH
+MAX_BATYA_COMMENT_WORDS = MAX_EXTERNAL_COMMENT_WORDS
 
 _publish_lock = asyncio.Lock()
 
@@ -183,23 +209,28 @@ def _validate_batya_mention_policy(text: str, *, allow_batya_mention: bool) -> s
     return None
 
 
-def _validate_batya_comment(comment: str) -> str | None:
+def _validate_external_comment(comment: str) -> str | None:
     reason = _validate_post(comment, [])
     if reason:
         return reason
-    if len(comment.strip()) > MAX_BATYA_COMMENT_LENGTH:
+    if len(comment.strip()) > MAX_EXTERNAL_COMMENT_LENGTH:
         return f"слишком длинный комментарий ({len(comment.strip())} символов)"
-    if _word_count(comment) > MAX_BATYA_COMMENT_WORDS:
+    if _word_count(comment) > MAX_EXTERNAL_COMMENT_WORDS:
         return f"слишком многословный комментарий ({_word_count(comment)} слов)"
     if "https://t.me/" in comment.casefold():
         return "модель сама добавила Telegram-ссылку"
     if _contains_batya_mention(comment):
-        return "комментарий к исходному каналу не должен использовать легенду про батю"
+        return "комментарий к внешнему каналу не должен использовать легенду про батю"
     return None
 
 
-def _pick_uncommented_batya_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
-    """Не комментируем одну и ту же ссылку повторно."""
+# Совместимый alias старого имени.
+def _validate_batya_comment(comment: str) -> str | None:
+    return _validate_external_comment(comment)
+
+
+def _pick_uncommented_external_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
+    """Не комментируем одну и ту же внешнюю ссылку повторно."""
     used_urls = {
         str(post.get("external_source_url"))
         for post in published_posts
@@ -209,6 +240,11 @@ def _pick_uncommented_batya_post(source_posts: list[dict], published_posts: list
     if not candidates:
         return None
     return random.choice(candidates[-10:])
+
+
+# Совместимый alias старого имени.
+def _pick_uncommented_batya_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
+    return _pick_uncommented_external_post(source_posts, published_posts)
 
 
 def _build_prompt(
@@ -250,7 +286,7 @@ def _build_prompt(
     )
 
 
-def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
+def _build_external_prompt(source: dict, source_post: dict, retry_note: str = "") -> str:
     source_text = str(source_post.get("text") or "")[:5000]
     retry_block = (
         f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий."
@@ -259,44 +295,74 @@ def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
     )
     return (
         f"{CHANNEL_PERSONA}\n\n"
-        f"{BATYA_COMMENT_PROMPT.format(batya_channel=f'@{BATYA_CHANNEL}', source_text=source_text)}"
+        f"{EXTERNAL_COMMENT_PROMPT.format(source_description=source['description'], source_text=source_text)}"
         f"{retry_block}"
     )
+
+
+async def _try_generate_external_comment(
+    published_posts: list[dict],
+    recent_posts: list[dict],
+) -> tuple[str, dict] | None:
+    """Редкий режим: ссылка на свежий пост одного знакомого канала + реакция Упупы."""
+    from AI.summarize import _generate_with_active_model
+
+    sources = list(EXTERNAL_COMMENT_SOURCES)
+    random.shuffle(sources)
+
+    selected_source = None
+    selected_post = None
+    for source in sources:
+        source_posts = await fetch_public_posts(source["channel"], limit=EXTERNAL_POSTS_LIMIT)
+        source_post = _pick_uncommented_external_post(source_posts, published_posts)
+        if source_post:
+            selected_source = source
+            selected_post = source_post
+            break
+
+    if not selected_source or not selected_post:
+        return None
+
+    retry_note = ""
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        prompt = _build_external_prompt(selected_source, selected_post, retry_note)
+        raw_comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
+        comment = (raw_comment or "").strip()
+        reason = _validate_external_comment(comment)
+        final_text = f"{selected_post['url']}\n\n{comment}"
+        if not reason:
+            reason = _validate_post(final_text, recent_posts)
+        if not reason:
+            metadata = {
+                "post_kind": "external_comment",
+                "chat_context_used": False,
+                "external_source_channel": f"@{selected_source['channel']}",
+                "external_source_url": selected_post["url"],
+            }
+            if selected_source.get("owner"):
+                metadata["external_source_owner"] = selected_source["owner"]
+            return final_text, metadata
+        logging.warning(
+            "[channel] external comment @%s attempt %s rejected: %s",
+            selected_source["channel"],
+            attempt,
+            reason,
+        )
+        retry_note = reason
+
+    logging.warning(
+        "[channel] external comment @%s exhausted, falling back to normal post",
+        selected_source["channel"],
+    )
+    return None
 
 
 async def _try_generate_batya_comment(
     published_posts: list[dict],
     recent_posts: list[dict],
 ) -> tuple[str, dict] | None:
-    """Редкий режим: ссылка на реальный пост бати + короткий комментарий Упупы."""
-    from AI.summarize import _generate_with_active_model
-
-    source_posts = await fetch_batya_posts(limit=BATYA_POSTS_LIMIT)
-    source_post = _pick_uncommented_batya_post(source_posts, published_posts)
-    if not source_post:
-        return None
-
-    retry_note = ""
-    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        prompt = _build_batya_prompt(source_post, retry_note)
-        raw_comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
-        comment = (raw_comment or "").strip()
-        reason = _validate_batya_comment(comment)
-        final_text = f"{source_post['url']}\n\n{comment}"
-        if not reason:
-            reason = _validate_post(final_text, recent_posts)
-        if not reason:
-            return final_text, {
-                "post_kind": "batya_comment",
-                "chat_context_used": False,
-                "external_source_channel": f"@{BATYA_CHANNEL}",
-                "external_source_url": source_post["url"],
-            }
-        logging.warning("[channel] batya comment attempt %s rejected: %s", attempt, reason)
-        retry_note = reason
-
-    logging.warning("[channel] batya comment generation exhausted, falling back to normal post")
-    return None
+    """Совместимый wrapper старого имени: теперь выбирает любой внешний источник."""
+    return await _try_generate_external_comment(published_posts, recent_posts)
 
 
 async def generate_channel_post() -> tuple[str, dict]:
@@ -306,14 +372,14 @@ async def generate_channel_post() -> tuple[str, dict]:
     published_posts = await asyncio.to_thread(load_posts)
     recent_posts = published_posts[-RECENT_POSTS_LIMIT:]
 
-    if random.random() < BATYA_COMMENT_PROBABILITY:
+    if random.random() < EXTERNAL_COMMENT_PROBABILITY:
         try:
-            batya_post = await _try_generate_batya_comment(published_posts, recent_posts)
+            external_post = await _try_generate_external_comment(published_posts, recent_posts)
         except Exception as exc:
-            logging.warning("[channel] batya comment mode failed, fallback to normal: %s", exc)
-            batya_post = None
-        if batya_post is not None:
-            return batya_post
+            logging.warning("[channel] external comment mode failed, fallback to normal: %s", exc)
+            external_post = None
+        if external_post is not None:
+            return external_post
 
     content_mode = _choose_content_mode()
     chat_fragment = None
@@ -370,7 +436,7 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
         }
         await asyncio.to_thread(append_post, record)
         logging.info(
-            "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s",
+            "[channel] published source=%s message_id=%s kind=%s length=%s content=%s batya=%s context=%s external=%s",
             source,
             record["message_id"],
             record.get("post_kind"),
@@ -378,5 +444,6 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
             record.get("content_mode"),
             record.get("batya_mention_allowed"),
             record.get("chat_context_used"),
+            record.get("external_source_channel"),
         )
         return sent, text
