@@ -10,7 +10,8 @@ upupa/
 ├── prompts/           # промпты и текстовые данные
 ├── core/              # shared settings/state/paths/storage/loader + compatibility exports
 ├── infrastructure/    # адаптеры внешних систем
-│   └── ai/            # Gemini/Groq/GigaChat/OpenAI-compatible providers и lazy resources
+│   ├── ai/            # Gemini/Groq/GigaChat/OpenAI-compatible providers и lazy resources
+│   └── persistence/   # SQLite и другие durable-storage adapters
 ├── features/          # функциональные блоки бота, включая явный dialog pipeline
 ├── services/          # внешние сервисы и обработка медиа (поиск, погода, ytp, мемы)
 ├── games/             # игры (крокодил, егра)
@@ -24,6 +25,7 @@ upupa/
 - `app/` — composition root: ему разрешено знать про handlers/features/services/games/AI/core/infrastructure.
 - `core/` не должен зависеть от `config.py`, `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
 - Provider-реализации находятся в `infrastructure.ai` и не зависят от `AI/` или других прикладных слоёв.
+- Durable-storage adapters находятся в `infrastructure.persistence`; feature-модули не должны содержать SQL.
 - `core.ai_clients` временно остаётся compatibility-фасадом, но импортирует только `infrastructure.ai.clients`; обратная зависимость `core.ai_clients -> AI.*` устранена на R4.
 - `AI.wrapper` и `AI.gigachat_client` — compatibility-фасады для старых import paths. Новые provider-зависимости должны идти через `infrastructure.ai`.
 - `config.py` — только compatibility-фасад; новые зависимости на него добавлять не следует.
@@ -56,38 +58,36 @@ upupa/
 Создание глобальных `bot`/`dp` в `core.loader` пока сохранено для обратной совместимости:
 многие существующие модули всё ещё импортируют `bot` через `config.py`.
 
-Постоянное состояние, которое необходимо приложению на старте, должно загружаться из
+Постоянное состояние, которое необходимо приложению на старте, загружается из
 `UpupaApplication.initialize_state()`, а не как побочный эффект импорта feature-модуля.
-На R2 это правило применено к `features.chat_settings`; остальные legacy import-time loaders
-будут выноситься поэтапно.
+На R6 это правило распространяется на chat settings/list, антиспам, SMS-disable,
+message/rank counters и rank-notification settings; SQLite schema также инициализируется
+явно из startup.
 
 ## Пути и persistence
 
 - Канонические пути к рабочим данным определяются в `core.paths` через абсолютный `PROJECT_ROOT`.
-- Физически json/db/log-файлы пока остаются в корне репозитория: R2 не требует миграции данных.
+- Физически JSON/DB/log-файлы пока остаются в корне репозитория; R6 не требует миграции production-данных и не меняет их форматы.
 - `core.state` временно переэкспортирует старые `*_FILE` имена как строки для `config.py` и legacy-кода.
-- Для JSON добавлена граница `JsonRepository` и файловая реализация `JsonFileRepository`.
-- `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи
-  не оставляла частично перезаписанный JSON.
-- `features.chat_settings` больше не открывает JSON напрямую и сохраняет identity общих
-  `chat_settings`/`chat_list`, на которые уже ссылаются другие модули.
+- Для JSON используется граница `JsonRepository` и файловая реализация `JsonFileRepository`.
+- `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи не оставляла частично перезаписанный JSON.
+- `features.chat_settings`, `features.stat_rank_settings`, `features.sms_settings` и `features.content_filter` не используют `json.load/json.dump` для своего durable state; загрузка принимает repository и обновляет shared `dict/set/list` на месте, сохраняя identity.
+- `message_stats.json`, `rank_notifications_settings.json`, `sms_disabled_chats.json` и `antispam_enabled.json` сохраняют прежний JSON-контракт.
+- SQL для `statistics.db` сосредоточен в `infrastructure.persistence.sqlite_statistics.SQLiteStatisticsRepository`; `features.statistics` является facade/application API и не открывает SQLite-соединения самостоятельно.
+- Схемы таблиц `message_stats` и `model_stats` на R6 не меняются.
 
 ## Async I/O
 
 - Сетевые вызовы внутри `async def` не должны использовать синхронные HTTP-клиенты.
 - На R3 `services.search` переведён с `requests` на `httpx.AsyncClient`.
-- Синхронные SDK без async API (Google Custom Search и legacy `model.generate_content`) вызываются
-  через `asyncio.to_thread`, чтобы не останавливать Telegram event loop.
-- Найденные изображения и GIF передаются в aiogram через `BufferedInputFile` прямо из памяти;
-  общие временные файлы для параллельных запросов не используются.
+- Синхронные SDK без async API (Google Custom Search и legacy `model.generate_content`) вызываются через `asyncio.to_thread`, чтобы не останавливать Telegram event loop.
+- Найденные изображения и GIF передаются в aiogram через `BufferedInputFile` прямо из памяти; общие временные файлы для параллельных запросов не используются.
 - CPU-bound обработка изображения в `handle_add_text_command` также вынесена в worker thread.
 - Regression-тест запрещает возвращать известные блокирующие вызовы непосредственно в async-функции `services.search`.
-- На R3.2 `AI.whatisthere` переведён на `httpx.AsyncClient` для URL/Telegram downloads; ответы по URL
-  читаются потоково и ограничены 50 МБ.
-- Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через
-  `asyncio.to_thread`.
-- Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.:
-  скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
+- На R3.2 `AI.whatisthere` переведён на `httpx.AsyncClient` для URL/Telegram downloads; ответы по URL читаются потоково и ограничены 50 МБ.
+- Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через `asyncio.to_thread`.
+- Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.: скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
+- На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
 
 ## Прочее
 

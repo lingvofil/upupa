@@ -1,5 +1,3 @@
-import json
-import os
 import asyncio
 import re
 from typing import Callable, Dict, Any, Awaitable
@@ -9,7 +7,10 @@ from datetime import timedelta
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, ChatPermissions
 
-from config import ADMIN_ID, ANTISPAM_ENABLED_CHATS
+from core.json_repository import JsonFileRepository, JsonRepository
+from core.paths import ANTISPAM_SETTINGS_PATH
+from core.settings import ADMIN_ID
+from core.state import ANTISPAM_ENABLED_CHATS
 
 # --- НАСТРОЙКИ ФИЛЬТРА ---
 MUTE_DURATION_SECONDS = 60
@@ -197,29 +198,37 @@ SPAM_PATTERNS = [
 ]
 
 # --- УПРАВЛЕНИЕ СОСТОЯНИЕМ ФИЛЬТРА ---
-ANTISPAM_SETTINGS_FILE = "antispam_enabled.json"
+def _antispam_repository() -> JsonFileRepository:
+    return JsonFileRepository(ANTISPAM_SETTINGS_PATH)
 
-def load_antispam_settings():
-    """
-    Загружает чаты с включенным антиспамом.
-    Этот код уже был написан корректно, используя .update()
-    """
-    if os.path.exists(ANTISPAM_SETTINGS_FILE):
-        try:
-            with open(ANTISPAM_SETTINGS_FILE, "r") as f:
-                ANTISPAM_ENABLED_CHATS.update(json.load(f))
-            print(f"Загружены настройки антиспама. Фильтр включен в {len(ANTISPAM_ENABLED_CHATS)} чатах.")
-        except json.JSONDecodeError:
-            print(f"Ошибка чтения файла {ANTISPAM_SETTINGS_FILE}. Файл может быть поврежден.")
-    else:
+
+def load_antispam_settings(repository: JsonRepository | None = None):
+    """Загрузить чаты с включённым антиспамом, сохраняя identity shared set."""
+    repo = repository or _antispam_repository()
+    try:
+        data = repo.load()
+    except FileNotFoundError:
+        ANTISPAM_ENABLED_CHATS.clear()
         print("Файл настроек антиспама не найден. Фильтр отключен везде по умолчанию.")
+        return
+    except Exception as exc:
+        ANTISPAM_ENABLED_CHATS.clear()
+        print(f"Ошибка чтения файла {ANTISPAM_SETTINGS_PATH}: {exc}")
+        return
 
-def save_antispam_settings():
-    with open(ANTISPAM_SETTINGS_FILE, "w") as f:
-        json.dump(list(ANTISPAM_ENABLED_CHATS), f)
+    if isinstance(data, list):
+        ANTISPAM_ENABLED_CHATS.clear()
+        ANTISPAM_ENABLED_CHATS.update(data)
+        print(f"Загружены настройки антиспама. Фильтр включен в {len(ANTISPAM_ENABLED_CHATS)} чатах.")
+    else:
+        ANTISPAM_ENABLED_CHATS.clear()
+        print(f"Ошибка чтения файла {ANTISPAM_SETTINGS_PATH}. Ожидался JSON-список.")
 
-# Загружаем настройки при старте
-load_antispam_settings()
+
+def save_antispam_settings(repository: JsonRepository | None = None):
+    repo = repository or _antispam_repository()
+    repo.save(list(ANTISPAM_ENABLED_CHATS))
+
 
 # Приводим похожие кириллические/греческие символы к латинице.
 # Это позволяет ловить смешанное написание вроде "mоbсаsh" (кирилл. о/с/а)
