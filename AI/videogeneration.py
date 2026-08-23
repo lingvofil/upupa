@@ -1,11 +1,11 @@
-# === AI/videogeneration.py — генерация видео через Pollinations ===
+# === AI/videogeneration.py — генерация видео ===
 #
-# API: GET https://gen.pollinations.ai/video/{prompt}  -> video/mp4
+# `оживи`: Hugging Face ZeroGPU (Wan I2V) -> Pollinations fallback.
+# `упупа сними`: Pollinations text/image-to-video.
+#
+# Pollinations API: GET https://gen.pollinations.ai/video/{prompt} -> video/mp4
 #   model: veo | seedance | seedance-2.0 | wan | wan-fast | ...
-#   image[0] = стартовый кадр (I2V), image[1] = конечный кадр (поддерживают
-#   veo, seedance, seedance-2.0, wan-fast). Кадры передаются как URL —
-#   байты сначала загружаются через POST /upload (хранится 30 дней).
-#   429/503 -> бэкофф по Retry-After.
+#   image[0] = стартовый кадр (I2V), image[1] = конечный кадр.
 #
 # Команды (см. handlers/video.py):
 #   "упупа сними <промпт>"            — текст -> видео
@@ -25,6 +25,7 @@ from aiogram import types
 
 from core.settings import POLLINATIONS_API_KEY
 from AI.adddescribe import download_telegram_image
+from AI.hf_zerogpu_video import generate_hf_zerogpu_video
 
 BASE_URL = "https://gen.pollinations.ai"
 
@@ -51,8 +52,8 @@ _MODELS_CACHE_TTL = 3600
 
 VIDEO_DURATION_SECONDS = 5
 VIDEO_TIMEOUT_SECONDS = 420       # генерация видео идёт десятки секунд — минуты
-DAILY_LIMIT_PER_CHAT = 3          # бережём бесплатные гранты Pollen
-DAILY_LIMIT_GLOBAL = 10           # суммарно по всем чатам в день
+DAILY_LIMIT_PER_CHAT = 3
+DAILY_LIMIT_GLOBAL = 10
 
 # {(isodate, chat_id): count} — сбрасывается сменой даты, потеря при рестарте ок
 _usage: dict = {}
@@ -60,7 +61,6 @@ _usage: dict = {}
 
 def _check_and_count_limit(chat_id: int) -> bool:
     today = date.today().isoformat()
-    # подчистка старых дат
     for k in [k for k in _usage if k[0] != today]:
         del _usage[k]
     if sum(_usage.values()) >= DAILY_LIMIT_GLOBAL:
@@ -130,8 +130,8 @@ async def upload_media(data: bytes, filename: str = "frame.jpg") -> str | None:
     """Загружает байты в content-addressed store Pollinations, возвращает URL."""
     try:
         endpoints = (
-            "https://media.pollinations.ai/upload",  # рабочий (июнь 2026)
-            f"{BASE_URL}/upload",                     # запасные, если основной переедет
+            "https://media.pollinations.ai/upload",
+            f"{BASE_URL}/upload",
             f"{BASE_URL}/v1/upload",
         )
         async with aiohttp.ClientSession() as session:
@@ -149,7 +149,6 @@ async def upload_media(data: bytes, filename: str = "frame.jpg") -> str | None:
                             logging.info(f"Кадр загружен через {url}")
                             return media_url
                     body = (await resp.text())[:200]
-                    # пока работает основной адрес, провал запасных — не повод шуметь
                     logging.debug(f"Pollinations upload {url}: HTTP {resp.status}: {body}")
         logging.error("Pollinations upload: все адреса недоступны")
         return None
@@ -163,7 +162,7 @@ async def generate_video(
     start_frame_url: str | None = None,
     duration: int = VIDEO_DURATION_SECONDS,
 ) -> tuple[bytes | None, str | None]:
-    """Генерирует видео, перебирая очередь моделей.
+    """Генерирует видео через Pollinations, перебирая очередь моделей.
 
     Возвращает (mp4, имя модели); (None, "no_pollen") — если всё упёрлось
     в пустой баланс Pollen (HTTP 402).
@@ -256,7 +255,7 @@ async def process_video_generation(message: types.Message, bot) -> None:
 
 
 async def process_animate_photo(message: types.Message, bot) -> None:
-    """Команда 'оживи [промпт]' реплаем на фото или подписью к фото — image-to-video."""
+    """Команда 'оживи [промпт]' — ZeroGPU I2V с Pollinations fallback."""
     if message.photo:
         photo = message.photo[-1]
     elif message.reply_to_message and message.reply_to_message.photo:
@@ -269,29 +268,59 @@ async def process_animate_photo(message: types.Message, bot) -> None:
         return
 
     prompt = _extract_prompt(message.text or message.caption or "", "оживи")
-    status = await message.reply("🧟 Оживляю...")
+    animation_prompt = prompt or "make this image come alive, cinematic motion, smooth natural animation"
+    status = await message.reply("🧟 Оживляю через ZeroGPU...")
+
     try:
         img = await download_telegram_image(bot, photo)
         if not img:
             await status.edit_text("Не смог скачать фото.")
             return
+
+        # Основной бесплатный путь: картинка идёт напрямую в Hugging Face,
+        # поэтому Pollinations и его баланс вообще не нужны при успехе ZeroGPU.
+        video, hf_status = await generate_hf_zerogpu_video(img, animation_prompt)
+        if video:
+            await message.reply_video(
+                types.BufferedInputFile(video, filename="upupa_alive.mp4"),
+            )
+            await status.delete()
+            return
+
+        logging.info("ZeroGPU animate failed with status=%s, trying Pollinations", hf_status)
+        await status.edit_text("🧟 ZeroGPU сейчас не дал видео. Пробую резерв...")
+
+        # Резерв — прежний Pollinations I2V. Загружаем кадр туда только сейчас,
+        # чтобы успешная бесплатная генерация не делала лишних запросов.
         start_url = await upload_media(img)
         if not start_url:
-            await status.edit_text("Не смог загрузить кадр, попробуй позже.")
-            return
-        video, model = await generate_video(
-            prompt or "bring this image to life, natural motion",
-            start_frame_url=start_url,
-        )
-        if not video:
-            if model == "no_pollen":
+            if hf_status == "quota":
                 await status.edit_text(
-                    "🎬 Кончилось топливо: на балансе Pollinations ноль поллена.\n"
-                    "Админу нужно заглянуть в enter.pollinations.ai."
+                    "У бесплатного ZeroGPU закончилась квота, а резерв Pollinations сейчас недоступен. "
+                    "Попробуй позже."
                 )
             else:
-                await status.edit_text("Оживить не вышло. Все видео-модели отказали, попробуй позже.")
+                await status.edit_text("ZeroGPU не ответил, и резерв тоже недоступен. Попробуй позже.")
             return
+
+        video, model = await generate_video(animation_prompt, start_frame_url=start_url)
+        if not video:
+            if model == "no_pollen":
+                if hf_status == "quota":
+                    text = (
+                        "У бесплатного ZeroGPU закончилась квота, а на Pollinations сейчас нулевой баланс. "
+                        "Попробуй позже."
+                    )
+                else:
+                    text = (
+                        "ZeroGPU сейчас не дал видео, а на Pollinations нулевой баланс. "
+                        "Попробуй позже."
+                    )
+                await status.edit_text(text)
+            else:
+                await status.edit_text("Оживить не вышло: ZeroGPU и резервная видео-модель отказали.")
+            return
+
         await message.reply_video(
             types.BufferedInputFile(video, filename="upupa_alive.mp4"),
         )
