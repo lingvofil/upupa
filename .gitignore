@@ -38,3 +38,5 @@ bot_log.txt
 
 # Runtime-generated state
 pun_history.json
+channel_posts.json
+channel_schedule.json
