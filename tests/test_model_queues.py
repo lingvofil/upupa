@@ -28,15 +28,16 @@ def test_gemini_queues_have_no_dead_models():
 
 def test_throttle_is_per_key(monkeypatch):
     """Разные ключи не блокируют друг друга; один ключ — выдерживает паузу."""
-    from AI import wrapper
-    monkeypatch.setattr(wrapper, "PER_KEY_MIN_DELAY", 0.3)
-    wrapper._last_call_ts.clear()
+    from infrastructure.ai import gemini
+
+    monkeypatch.setattr(gemini, "PER_KEY_MIN_DELAY", 0.3)
+    gemini._last_call_ts.clear()
 
     t0 = time.monotonic()
-    wrapper._throttle_key("key_a")
-    wrapper._throttle_key("key_b")
+    gemini._throttle_key("key_a")
+    gemini._throttle_key("key_b")
     assert time.monotonic() - t0 < 0.2, "разные ключи не должны ждать друг друга"
 
     t1 = time.monotonic()
-    wrapper._throttle_key("key_a")  # повтор того же ключа — обязан подождать
+    gemini._throttle_key("key_a")  # повтор того же ключа — обязан подождать
     assert time.monotonic() - t1 >= 0.25, "повторный вызов по ключу должен троттлиться"
