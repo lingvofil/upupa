@@ -70,54 +70,23 @@ def test_channel_image_prompt_demands_two_lines_and_no_text_inside_image():
     assert "не упоминай батю" in prompt
 
 
-def test_channel_image_adapter_reuses_pollinations_first(monkeypatch):
+def test_channel_image_adapter_tries_gigachat_first(monkeypatch):
     import AI
     from features.channel.image_generation import generate_channel_image
 
     calls = []
-
-    async def translate(prompt):
-        calls.append(("translate", prompt))
-        return "translated prompt"
-
-    async def pollinations(prompt):
-        calls.append(("pollinations", prompt))
-        return b"png-bytes"
-
-    fake = SimpleNamespace(
-        translate_to_en=translate,
-        pollinations_generate=pollinations,
-    )
-    monkeypatch.setitem(sys.modules, "AI.picgeneration", fake)
-    monkeypatch.setattr(AI, "picgeneration", fake, raising=False)
-
-    image, provider = asyncio.run(generate_channel_image("червяк в офисе"))
-
-    assert image == b"png-bytes"
-    assert provider == "pollinations"
-    assert calls == [
-        ("translate", "червяк в офисе"),
-        ("pollinations", "translated prompt"),
-    ]
-
-
-def test_channel_image_adapter_calls_gigachat_directly_after_pollinations(monkeypatch):
-    import AI
-    from features.channel.image_generation import generate_channel_image
-
-    calls = []
-
-    async def translate(prompt):
-        calls.append(("translate", prompt))
-        return "translated prompt"
-
-    async def pollinations(prompt):
-        calls.append(("pollinations", prompt))
-        return None
 
     async def gigachat(prompt):
         calls.append(("gigachat", prompt))
         return b"gigachat-image"
+
+    async def translate(prompt):
+        calls.append(("translate", prompt))
+        return "translated prompt"
+
+    async def pollinations(prompt):
+        calls.append(("pollinations", prompt))
+        return b"pollinations-image"
 
     fake_pg = SimpleNamespace(
         translate_to_en=translate,
@@ -135,9 +104,47 @@ def test_channel_image_adapter_calls_gigachat_directly_after_pollinations(monkey
     assert image == b"gigachat-image"
     assert provider == "gigachat"
     assert calls == [
+        ("gigachat", "червяк в офисе"),
+    ]
+
+
+def test_channel_image_adapter_falls_back_to_pollinations_after_gigachat(monkeypatch):
+    import AI
+    from features.channel.image_generation import generate_channel_image
+
+    calls = []
+
+    async def gigachat(prompt):
+        calls.append(("gigachat", prompt))
+        return None
+
+    async def translate(prompt):
+        calls.append(("translate", prompt))
+        return "translated prompt"
+
+    async def pollinations(prompt):
+        calls.append(("pollinations", prompt))
+        return b"pollinations-image"
+
+    fake_pg = SimpleNamespace(
+        translate_to_en=translate,
+        pollinations_generate=pollinations,
+    )
+    fake_gigachat = ModuleType("AI.gigachat_image")
+    fake_gigachat.generate_gigachat_image = gigachat
+
+    monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
+    monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
+    monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
+
+    image, provider = asyncio.run(generate_channel_image("червяк в офисе"))
+
+    assert image == b"pollinations-image"
+    assert provider == "pollinations"
+    assert calls == [
+        ("gigachat", "червяк в офисе"),
         ("translate", "червяк в офисе"),
         ("pollinations", "translated prompt"),
-        ("gigachat", "червяк в офисе"),
     ]
 
 
