@@ -108,10 +108,10 @@ def test_content_distribution_is_mostly_absurd_and_domestic():
 
     weights = {mode["name"]: mode["weight"] for mode in POST_CONTENT_MODES}
     assert sum(weights.values()) == 100
-    assert weights["absurd"] == 70
+    assert weights["absurd"] == 68
     assert weights["domestic"] == 15
     assert weights["functionality"] == 5
-    assert weights["absurd"] + weights["domestic"] == 85
+    assert weights["absurd"] + weights["domestic"] == 83
 
 
 def test_functionality_mode_knows_upupa_is_new_to_running_a_channel():
