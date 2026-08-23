@@ -11,8 +11,8 @@ def test_daily_scheduler_picks_two_random_slots_with_preferred_gap():
     slots = _pick_daily_slots(date(2026, 8, 23), now=now, rng=random.Random(42))
 
     assert len(slots) == 2
-    assert slots[0].time() >= DAY_START
-    assert slots[1].time() <= DAY_END
+    assert slots[0].time().replace(tzinfo=None) >= DAY_START
+    assert slots[1].time().replace(tzinfo=None) <= DAY_END
     assert (slots[1] - slots[0]).total_seconds() >= 3 * 60 * 60
 
 
