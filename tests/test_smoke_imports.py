@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROOT_MODULES = [
     "config", "prompts", "prompts.help_texts", "prompts.ai_prompts", "prompts.personas", "prompts.chat_data",
 ]
+APP_MODULES = ["app.lifecycle", "app.bootstrap"]
 CORE_MODULES = ["core.middlewares", "core.upupa_utils", "core.history_engine"]
 FEATURE_MODULES = [
     "features.broadcast", "features.channels_settings", "features.chat_settings",
@@ -67,7 +68,7 @@ AI_MODULES = [
     "AI.chat_recall", "AI.comic",
 ]
 
-@pytest.mark.parametrize("module_name", ROOT_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
+@pytest.mark.parametrize("module_name", ROOT_MODULES + APP_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
 def test_module_imports(module_name):
     importlib.import_module(module_name)
 

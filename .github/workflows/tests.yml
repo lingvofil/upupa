@@ -18,7 +18,7 @@ jobs:
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
-          --cov=AI --cov=core --cov=features --cov=games
+          --cov=app --cov=AI --cov=core --cov=features --cov=games
           --cov=handlers --cov=services --cov=prompts
           --cov-report=term-missing
           --cov-fail-under=26
