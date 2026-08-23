@@ -203,6 +203,7 @@ def test_batya_comment_can_be_one_word_and_does_not_repeat_source_link():
     assert "многословный" in _validate_batya_comment("раз два три четыре пять шесть семь восемь девять")
     assert _validate_batya_comment("") == "пустой ответ"
     assert _validate_batya_comment("https://t.me/lukeimyourmouth/5404 дебил") == "модель сама добавила Telegram-ссылку"
+    assert "легенду про батю" in _validate_batya_comment("батя дебил")
 
 
 def test_channel_storage_roundtrip(tmp_path, monkeypatch):
