@@ -65,6 +65,7 @@ class UpupaApplication:
 
         from AI.birthday_calendar import birthday_scheduler
         from AI.quiz import schedule_daily_quiz
+        from features.channel.scheduler import channel_scheduler_loop
         from features.proactive import proactive_loop
         from games import crocodile
         from services.holidays import schedule_daily_holidays
@@ -86,6 +87,10 @@ class UpupaApplication:
         self.supervisor.start(
             proactive_loop(self.bot),
             name="proactive-loop",
+        )
+        self.supervisor.start(
+            channel_scheduler_loop(self.bot),
+            name="channel-scheduler",
         )
         self.supervisor.start(
             crocodile.start_socket_server(),

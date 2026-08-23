@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT_MODULES = [
     "config", "prompts", "prompts.help_texts", "prompts.ai_prompts", "prompts.personas", "prompts.chat_data",
+    "prompts.channel",
 ]
 APP_MODULES = ["app.lifecycle", "app.bootstrap"]
 CORE_MODULES = ["core.middlewares", "core.upupa_utils", "core.history_engine"]
@@ -45,7 +46,8 @@ FEATURE_MODULES = [
     "features.broadcast", "features.channels_settings", "features.chat_settings",
     "features.common_settings", "features.content_filter", "features.interactive_settings",
     "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
-    "features.statistics", "features.proactive",
+    "features.statistics", "features.proactive", "features.channel", "features.channel.storage",
+    "features.channel.batya_source", "features.channel.service", "features.channel.scheduler",
 ]
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
@@ -58,7 +60,7 @@ HANDLER_MODULES = [
     "handlers.media_search", "handlers.games", "handlers.media_tools",
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
-    "handlers.ai_prompts", "handlers.video", "handlers.dialog",
+    "handlers.ai_prompts", "handlers.video", "handlers.channel", "handlers.dialog",
 ]
 AI_MODULES = [
     "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
