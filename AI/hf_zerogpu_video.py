@@ -156,7 +156,7 @@ def _generate_sync(image_bytes: bytes, prompt: str) -> tuple[bytes | None, str]:
         try:
             client = Client(
                 HF_VIDEO_SPACE_ID,
-                hf_token=HUGGINGFACE_TOKEN or None,
+                token=HUGGINGFACE_TOKEN or None,
                 verbose=False,
                 download_files=temp_dir,
             )
