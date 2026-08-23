@@ -29,6 +29,7 @@ CHAT_TAIL_LIMIT = 200
 CHAT_WINDOW_MIN = 12
 CHAT_WINDOW_MAX = 25
 MAX_POST_LENGTH = 1200
+MAX_BATYA_COMMENT_LENGTH = 400
 MAX_GENERATION_ATTEMPTS = 3
 
 _publish_lock = asyncio.Lock()
@@ -124,11 +125,22 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     return None
 
 
-def _pick_uncommented_batya_post(source_posts: list[dict], recent_posts: list[dict]) -> dict | None:
-    """Не комментируем одну и ту же ссылку повторно, пока запись есть в истории канала."""
+def _validate_batya_comment(comment: str) -> str | None:
+    reason = _validate_post(comment, [])
+    if reason:
+        return reason
+    if len(comment.strip()) > MAX_BATYA_COMMENT_LENGTH:
+        return f"слишком длинный комментарий ({len(comment.strip())} символов)"
+    if "https://t.me/" in comment.casefold():
+        return "модель сама добавила Telegram-ссылку"
+    return None
+
+
+def _pick_uncommented_batya_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
+    """Не комментируем одну и ту же ссылку повторно."""
     used_urls = {
         str(post.get("external_source_url"))
-        for post in recent_posts
+        for post in published_posts
         if post.get("external_source_url")
     }
     candidates = [post for post in source_posts if post.get("url") not in used_urls and post.get("text")]
@@ -169,21 +181,27 @@ def _build_batya_prompt(source_post: dict, retry_note: str = "") -> str:
     )
 
 
-async def _try_generate_batya_comment(recent_posts: list[dict]) -> tuple[str, dict] | None:
+async def _try_generate_batya_comment(
+    published_posts: list[dict],
+    recent_posts: list[dict],
+) -> tuple[str, dict] | None:
     """Редкий режим: ссылка на реальный пост бати + короткий комментарий Упупы."""
     from AI.summarize import _generate_with_active_model
 
     source_posts = await fetch_batya_posts(limit=BATYA_POSTS_LIMIT)
-    source_post = _pick_uncommented_batya_post(source_posts, recent_posts)
+    source_post = _pick_uncommented_batya_post(source_posts, published_posts)
     if not source_post:
         return None
 
     retry_note = ""
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
         prompt = _build_batya_prompt(source_post, retry_note)
-        comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
-        final_text = f"{source_post['url']}\n\n{(comment or '').strip()}"
-        reason = _validate_post(final_text, recent_posts)
+        raw_comment = await _generate_with_active_model(prompt, str(SPECIAL_CHAT_ID))
+        comment = (raw_comment or "").strip()
+        reason = _validate_batya_comment(comment)
+        final_text = f"{source_post['url']}\n\n{comment}"
+        if not reason:
+            reason = _validate_post(final_text, recent_posts)
         if not reason:
             return final_text, {
                 "post_kind": "batya_comment",
@@ -202,11 +220,12 @@ async def generate_channel_post() -> tuple[str, dict]:
     """Генерирует один пост и метаданные о его происхождении."""
     from AI.summarize import _generate_with_active_model
 
-    recent_posts = await asyncio.to_thread(load_posts, RECENT_POSTS_LIMIT)
+    published_posts = await asyncio.to_thread(load_posts)
+    recent_posts = published_posts[-RECENT_POSTS_LIMIT:]
 
     if random.random() < BATYA_COMMENT_PROBABILITY:
         try:
-            batya_post = await _try_generate_batya_comment(recent_posts)
+            batya_post = await _try_generate_batya_comment(published_posts, recent_posts)
         except Exception as exc:
             logging.warning("[channel] batya comment mode failed, fallback to normal: %s", exc)
             batya_post = None
