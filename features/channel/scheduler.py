@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timedelta
 import pytz
 
 from features.channel.mood import burst_probability, daily_post_target, get_current_mood
-from features.channel.service import publish_channel_post
+from features.channel.mood_service import publish_channel_post
 from features.channel.storage import load_schedule, save_schedule
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
