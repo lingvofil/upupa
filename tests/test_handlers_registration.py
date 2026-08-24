@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 102  # + автономный канал: команда «канал пост»
+EXPECTED_TOTAL_HANDLERS = 108  # + World of Upupa: 5 message handlers + diplomacy callback
 
 
 def _count_handlers(router):
@@ -25,9 +25,16 @@ def test_dialog_router_is_last():
     assert ROUTERS[-1] is dialog.router
 
 
+def test_world_router_is_registered_before_dialog():
+    from handlers import ROUTERS, dialog, world
+
+    assert world.router in ROUTERS
+    assert ROUTERS.index(world.router) < ROUTERS.index(dialog.router)
+
+
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 16
+    assert len(ROUTERS) == 17
 
 
 def test_whatisthere_guard_does_not_match_pun_command():
