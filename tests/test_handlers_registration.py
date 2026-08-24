@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 102  # + автономный канал: команда «канал пост»
+EXPECTED_TOTAL_HANDLERS = 106  # + соцграф: 3 команды и message_reaction
 
 
 def _count_handlers(router):
@@ -27,7 +27,7 @@ def test_dialog_router_is_last():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 16
+    assert len(ROUTERS) == 17
 
 
 def test_whatisthere_guard_does_not_match_pun_command():
