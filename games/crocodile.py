@@ -23,6 +23,13 @@ from aiogram.types import (
 
 # Импорт вашего бота из конфига
 from config import bot
+from core.settings import API_TOKEN
+from games.webapp_auth import (
+    WebAppAuthError,
+    authorize_crocodile_drawer,
+    normalize_crocodile_room,
+    validate_telegram_init_data,
+)
 
 # ================== НАСТРОЙКИ ==================
 BOT_USERNAME = "expertyebaniebot"
@@ -54,9 +61,10 @@ game_sessions: dict[str, dict] = {}
 _scores: Dict[str, Dict[str, dict]] = {}
 
 # =============== socket.io server ===============
+# python-socketio's default CORS policy is same-origin. Do not widen it to '*':
+# the Mini App and its Socket.IO endpoint are served from the same origin.
 sio = socketio.AsyncServer(
     async_mode="aiohttp",
-    cors_allowed_origins="*",
     ping_timeout=60,
     ping_interval=25,
     max_http_buffer_size=10 * 1024 * 1024,
@@ -345,39 +353,118 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
     )
 
 
+# ================== SOCKET SECURITY ==================
+async def _authorize_socket_room(sid, data, *, bind_room: bool = False):
+    socket_session = await sio.get_session(sid)
+    try:
+        user_id = int(socket_session["telegram_user_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WebAppAuthError("socket has no verified Telegram user") from exc
+
+    requested_room = data.get("room") if isinstance(data, dict) else None
+    if bind_room:
+        canonical_room, chat_id = authorize_crocodile_drawer(
+            requested_room,
+            user_id,
+            game_sessions,
+        )
+        start_param = socket_session.get("start_param")
+        if start_param:
+            signed_room, _signed_chat_id = normalize_crocodile_room(start_param)
+            if signed_room != canonical_room:
+                raise WebAppAuthError("room does not match signed start_param")
+        socket_session["room"] = canonical_room
+        socket_session["chat_id"] = chat_id
+        await sio.save_session(sid, socket_session)
+        return canonical_room, chat_id, game_sessions[chat_id]
+
+    bound_room = socket_session.get("room")
+    if not bound_room:
+        raise WebAppAuthError("socket has not joined an authorized room")
+
+    if requested_room:
+        requested_canonical, _requested_chat_id = normalize_crocodile_room(requested_room)
+        if requested_canonical != bound_room:
+            raise WebAppAuthError("socket attempted to switch rooms")
+
+    canonical_room, chat_id = authorize_crocodile_drawer(
+        bound_room,
+        user_id,
+        game_sessions,
+    )
+    return canonical_room, chat_id, game_sessions[chat_id]
+
+
 # ================== SOCKET EVENTS ==================
 @sio.event
-async def connect(sid, environ):
-    logging.info(f"[socket] Client connected: {sid}")
+async def connect(sid, environ, auth=None):
+    try:
+        init_data = auth.get("initData", "") if isinstance(auth, dict) else ""
+        identity = validate_telegram_init_data(init_data, API_TOKEN)
+        await sio.save_session(
+            sid,
+            {
+                "telegram_user_id": identity.user_id,
+                "start_param": identity.start_param,
+            },
+        )
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected unauthenticated Mini App connection: %s", exc)
+        return False
+
+    logging.info("[socket] authenticated Telegram user=%s", identity.user_id)
+    return True
 
 
 @sio.event
 async def disconnect(sid):
-    logging.info(f"[socket] Client disconnected: {sid}")
+    logging.info("[socket] Client disconnected")
 
 
 @sio.event
 async def join_room(sid, data):
-    room = str(data.get("room"))
-    sio.enter_room(sid, room)
-    logging.info(f"[socket] {sid} joined room {room}")
+    try:
+        room, _chat_id, _session = await _authorize_socket_room(
+            sid,
+            data,
+            bind_room=True,
+        )
+        await sio.enter_room(sid, room)
+        logging.info("[socket] verified drawer joined room=%s", room)
+        return {"ok": True}
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected room join: %s", exc)
+        return {"ok": False, "error": "unauthorized"}
 
 
 @sio.event
 async def draw_step(sid, data):
-    room = str(data.get("room"))
-    await sio.emit("draw_data", data, room=room, skip_sid=sid)
+    try:
+        room, _chat_id, _session = await _authorize_socket_room(sid, data)
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected draw_step: %s", exc)
+        return
+
+    safe_data = {
+        key: data.get(key)
+        for key in ("px", "py", "x", "y", "color")
+        if key in data
+    }
+    await sio.emit("draw_data", safe_data, room=room, skip_sid=sid)
 
 
 @sio.event
 async def snapshot(sid, data, callback=None):
-    """ИСПРАВЛЕНО: явный callback для возврата результата"""
-    room = str(data.get("room") or "")
-    image_data = data.get("image") or ""
-    result = await _process_snapshot(room, image_data, source="socket")
-    logging.info(f"[snapshot] sid={sid} room={room} result={result}")
-    
-    # Возвращаем результат через callback
+    try:
+        room, _chat_id, _session = await _authorize_socket_room(sid, data)
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected snapshot: %s", exc)
+        result = "Unauthorized"
+    else:
+        image_data = data.get("image") or ""
+        result = await _process_snapshot(room, image_data, source="socket")
+        logging.info("[snapshot] room=%s result=%s", room, result)
+
     if callback:
         await callback(result)
     return result
@@ -385,23 +472,26 @@ async def snapshot(sid, data, callback=None):
 
 @sio.event
 async def skip_turn(sid, data):
-    room = str(data.get("room"))
-    chat_id = get_chat_id_from_room(room)
-    session = game_sessions.get(chat_id)
+    try:
+        room, _chat_id, session = await _authorize_socket_room(sid, data)
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected skip_turn: %s", exc)
+        return
+
     new_w = _pick_word()
-    if session:
-        session["word"] = new_w
+    session["word"] = new_w
     await sio.emit("new_word_data", {"word": new_w}, room=room)
 
 
 @sio.event
 async def final_frame(sid, data):
     """Завершение игры кнопкой 🏁 в webapp"""
-    room = str(data.get("room"))
-    chat_id = get_chat_id_from_room(room)
-    session = game_sessions.get(chat_id)
-    if not session:
+    try:
+        _room, chat_id, session = await _authorize_socket_room(sid, data)
+    except WebAppAuthError as exc:
+        logging.warning("[socket] rejected final_frame: %s", exc)
         return
+
     try:
         _, encoded = data["image"].split(",", 1)
         image_bytes = base64.b64decode(encoded)

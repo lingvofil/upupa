@@ -111,6 +111,7 @@
   tg.ready();
 
   const roomId = tg.initDataUnsafe.start_param;
+  const telegramInitData = tg.initData;
 
   // --- COLORS ---
   const paletteEl = document.getElementById("palette");
@@ -209,6 +210,7 @@
 
   // --- SOCKET ---
   const socket = io({
+    auth: { initData: telegramInitData },
     transports: ['websocket'],
     upgrade: false,
     reconnection: true,
@@ -217,9 +219,16 @@
 
   socket.on('connect', () => {
     console.log('Socket connected');
-    socket.emit('join_room', { room: roomId });
-    isDirty = true;
-    sendSnap(true);
+    socket.emit('join_room', { room: roomId }, (response) => {
+      if (!response || !response.ok) {
+        console.error('Room authorization failed');
+        tg.showAlert('Этот холст доступен только текущему художнику.');
+        socket.disconnect();
+        return;
+      }
+      isDirty = true;
+      sendSnap(true);
+    });
   });
 
   socket.on('disconnect', () => {
@@ -379,7 +388,7 @@
       px: last.x, 
       py: last.y, 
       x: p.x, 
-      y: p.y, 
+      y: p.y,
       color: currentColor 
     });
 

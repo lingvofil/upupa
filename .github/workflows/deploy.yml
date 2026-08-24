@@ -3,33 +3,85 @@ name: Deploy to Ubuntu Server
 on:
   push:
     branches:
-      - main # Запускать етот workflow при каждом push в ветку main
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upupa-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest # Используем свежую Ubuntu для выполнения workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEPLOY_SHA: ${{ github.sha }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4 # Скачиваем ваш код из репозитория
-
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }} # Используем приватный SSH-ключ из секретов GitHub
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Deploy to Server
+      - name: Deploy exact commit with rollback
+        shell: bash
         run: |
-          echo "Deploying to production server..."
-          # Убедитесь, что ваш публичный ключ добавлен на сервер (в ~/.ssh/authorized_keys)
-          # и что у пользователя root есть доступ по SSH с этим ключом
-          # или используйте другого пользователя, если root по SSH отключен
-          
-          ssh -o StrictHostKeyChecking=no root@88.218.122.208 "cd /root/upupa/ && \
-            # --- Добавляем эту команду, чтобы настроить origin на SSH URL ---
-            git remote set-url origin git@github.com:lingvofil/upupa.git && \
-            # Теперь git pull будет использовать SSH-ключ для аутентификации с GitHub
-            git fetch origin && \
-            git reset --hard origin/main && \
-            sudo systemctl restart upupa_bot.service"
-          echo "Deployment complete."
+          set -Eeuo pipefail
+          echo "Deploying ${DEPLOY_SHA} to production server..."
+
+          # R8 keeps the existing host-key behavior until the VPS host key is
+          # provisioned as a trusted GitHub secret/known_hosts entry.
+          ssh -o StrictHostKeyChecking=no root@88.218.122.208 \
+            "bash -s -- '${DEPLOY_SHA}'" <<'REMOTE'
+          set -Eeuo pipefail
+
+          TARGET_SHA="$1"
+          APP_DIR="/root/upupa"
+          VENV_PIP="$APP_DIR/venv/bin/pip"
+          SERVICE="upupa_bot.service"
+
+          cd "$APP_DIR"
+          PREVIOUS_SHA="$(git rev-parse HEAD)"
+          DEPLOY_SUCCEEDED=0
+
+          rollback() {
+            status=$?
+            if [ "$DEPLOY_SUCCEEDED" -eq 1 ]; then
+              return "$status"
+            fi
+
+            echo "Deployment failed; rolling back to ${PREVIOUS_SHA}..." >&2
+            set +e
+            git reset --hard "$PREVIOUS_SHA"
+            "$VENV_PIP" install --disable-pip-version-check -r requirements.txt
+            systemctl restart "$SERVICE"
+            sleep 3
+            systemctl is-active --quiet "$SERVICE"
+            rollback_status=$?
+            set -e
+
+            if [ "$rollback_status" -ne 0 ]; then
+              echo "Rollback completed but ${SERVICE} is not active." >&2
+            else
+              echo "Rollback succeeded; ${SERVICE} is active." >&2
+            fi
+            exit "$status"
+          }
+          trap rollback ERR
+
+          git remote set-url origin git@github.com:lingvofil/upupa.git
+          git fetch --prune origin main
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git reset --hard "$TARGET_SHA"
+
+          "$VENV_PIP" install --disable-pip-version-check -r requirements.txt
+          systemctl restart "$SERVICE"
+          sleep 3
+          systemctl is-active --quiet "$SERVICE"
+
+          DEPLOY_SUCCEEDED=1
+          trap - ERR
+          echo "Deployment ${TARGET_SHA} succeeded; ${SERVICE} is active."
+          REMOTE
