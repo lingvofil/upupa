@@ -76,14 +76,14 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
 
 
 async def handle_voice_command(message: types.Message, bot: Bot):
-    """Legacy ``упупа скажи``: clean shared TTS followed by distortion."""
+    """Legacy voice command: clean shared TTS followed by distortion."""
     chat_id = str(message.chat.id)
     normalized_text = message.text or ""
     command_prefix = "упупа скажи"
     user_query = normalized_text[len(command_prefix):].strip()
 
     if not user_query:
-        await message.reply("А что сказать-то, епта?")
+        await message.reply("А что сказать-то?")
         return
 
     update_chat_settings(chat_id)
@@ -98,22 +98,18 @@ async def handle_voice_command(message: types.Message, bot: Bot):
         if len(text_response) > 500:
             text_response = text_response[:500] + "..."
 
-        provider_order = ("groq", "gemini") if active_model == "groq" else ("gemini", "groq")
+        provider_order = ("groq",) if active_model == "groq" else ("gemini",)
         try:
             clean_audio = await synthesize_speech(
                 text_response,
                 provider_order=provider_order,
-                # Legacy voice has historically used Groq even for Russian
-                # text when Groq is selected in chat settings.
-                allow_groq_for_cyrillic=True,
+                allow_groq_for_cyrillic=active_model == "groq",
             )
         except SpeechSynthesisError:
             logging.exception("Voice clean TTS failed")
             await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены).")
             return
 
-        # Distortion still belongs exclusively to the legacy voice command.
-        # TemporaryDirectory guarantees unique paths and cleanup on every exit.
         with tempfile.TemporaryDirectory(prefix="upupa_voice_") as temp_dir:
             clean_path = Path(temp_dir) / "clean.mp3"
             distorted_path = Path(temp_dir) / "distorted.mp3"
