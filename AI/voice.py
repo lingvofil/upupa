@@ -83,7 +83,7 @@ async def handle_voice_command(message: types.Message, bot: Bot):
     user_query = normalized_text[len(command_prefix):].strip()
 
     if not user_query:
-        await message.reply("А что сказать-то?")
+        await message.reply("А что сказать-то, епта?")
         return
 
     update_chat_settings(chat_id)
