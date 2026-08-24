@@ -13,6 +13,8 @@ from features.sms_settings import save_sms_disabled_chats
 from prompts import PROMPTS_DICT, HELP_DICT
 from features.content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
 from features.stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
+from features.world.permissions import is_chat_admin
+from features.world.service import get_world_service, is_world_enabled
 
 # --- КОНСТАНТЫ ДЛЯ МЕНЮ ВЕРОЯТНОСТЕЙ ---
 PROBABILITY_OPTIONS = [0, 0.001, 0.005, 0.008, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
@@ -82,6 +84,7 @@ async def get_main_settings_markup(chat_id: str):
     holidays_enabled = settings.get("holidays_enabled", False)
     
     sms_enabled = chat_id not in sms_disabled_chats
+    world_enabled = await is_world_enabled(chat_id)
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
     rank_notifications_enabled = chat_id not in rank_notifications_disabled_chats
     current_prompt_name = settings.get("prompt_name", "Не установлен")
@@ -92,6 +95,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"👀 *Эмодзи-реакции:* {'Вкл. ✅' if emoji_enabled else 'Выкл. ❌'}\n"
     text += f"🖼️ *Случайные мемы:* {'Вкл. ✅' if random_memes_enabled else 'Выкл. ❌'}\n"
     text += f"💬 *СМС/ММС:* {'Вкл. ✅' if sms_enabled else 'Выкл. ❌'}\n"
+    text += f"🌍 *Мир Упупы:* {'Вкл. ✅' if world_enabled else 'Выкл. ❌'}\n"
     text += f"🛡️ *Антиспам-фильтр:* {'Вкл. ✅' if antispam_enabled else 'Выкл. ❌'}\n"
     text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n"
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
@@ -105,6 +109,7 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if emoji_enabled else 'Вкл.'} эмодзи", callback_data="settings:toggle:emojis")
     builder.button(text=f"{'Выкл.' if random_memes_enabled else 'Вкл.'} мемы", callback_data="settings:toggle:random_memes")
     builder.button(text=f"{'Выкл.' if sms_enabled else 'Вкл.'} СМС", callback_data="settings:toggle:sms")
+    builder.button(text=f"{'Выкл.' if world_enabled else 'Вкл.'} Мир", callback_data="settings:toggle:world")
     builder.button(text=f"{'Выкл.' if antispam_enabled else 'Вкл.'} антиспам", callback_data="settings:toggle:antispam")
     builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
@@ -208,7 +213,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
     try:
         parts = query.data.split(":")
         action = parts[1]
-    except ValueError:
+    except (AttributeError, IndexError, ValueError):
         return
 
     if action == "view":
@@ -293,6 +298,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
     elif action == "toggle":
         value = parts[2]
         chat_settings.setdefault(chat_id, {})
+        answer_text = "Настройка сохранена"
         
         if value == "dialog":
             chat_settings[chat_id]["dialog_enabled"] = not chat_settings[chat_id].get("dialog_enabled", True)
@@ -306,6 +312,23 @@ async def handle_settings_callback(query: types.CallbackQuery):
             if chat_id in sms_disabled_chats: sms_disabled_chats.remove(chat_id)
             else: sms_disabled_chats.add(chat_id)
             save_sms_disabled_chats()
+        elif value == "world":
+            if getattr(query.message.chat, "type", None) not in {"group", "supergroup"}:
+                await query.answer("Мир Упупы работает только в групповых чатах.", show_alert=True)
+                return
+            if not await is_chat_admin(bot, query.message.chat.id, query.from_user.id):
+                await query.answer("Мир Упупы могут включать и выключать только админы этого чата.", show_alert=True)
+                return
+            service = get_world_service()
+            if await service.is_enabled(query.message.chat.id):
+                await service.disable_state(query.message.chat.id)
+                answer_text = "Мир Упупы выключен"
+            else:
+                state = await service.enable_state(
+                    query.message.chat.id,
+                    query.message.chat.title or "Безымянное государство",
+                )
+                answer_text = f"Государство №{state.world_id} включено"
         elif value == "antispam":
             cid = int(chat_id)
             if cid in ANTISPAM_ENABLED_CHATS: ANTISPAM_ENABLED_CHATS.remove(cid)
@@ -324,9 +347,9 @@ async def handle_settings_callback(query: types.CallbackQuery):
         text, markup = await get_main_settings_markup(chat_id)
         try:
             await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
-        except:
+        except Exception:
             pass 
-        await query.answer("Настройка сохранена")
+        await query.answer(answer_text)
 
 # ========================= ЛОГИКА СПРАВКИ (HELP MENU) =========================
 
@@ -346,6 +369,9 @@ def get_help_keyboard(current_section="main"):
     builder.row(
         types.InlineKeyboardButton(text="📺 Коналы", callback_data="help:content"),
         types.InlineKeyboardButton(text="🖼 Всякая хуйня", callback_data="help:utils")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🌍 Мир Упупы", callback_data="help:world")
     )
     
     # Кнопка "В ночало", если мы не в главном меню
@@ -389,7 +415,7 @@ async def handle_help_callback(query: types.CallbackQuery):
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
-    except Exception as e:
+    except Exception:
         pass # Игнорируем, если контент тот же
     
     await query.answer()
