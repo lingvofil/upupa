@@ -29,10 +29,10 @@ class DiplomaticRequest:
 class WorldProfile:
     state: WorldState
     allies: tuple[WorldState, ...]
-    hostile: tuple[WorldState, ...]
+    wars: tuple[WorldState, ...]
     neutral: tuple[WorldState, ...]
     inactive_allies: tuple[WorldState, ...]
-    inactive_hostile: tuple[WorldState, ...]
+    inactive_wars: tuple[WorldState, ...]
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,7 @@ class BreakAllianceResult:
 
 
 @dataclass(frozen=True)
-class HostilityResult:
+class WarResult:
     status: str
     source: WorldState | None = None
     target: WorldState | None = None
