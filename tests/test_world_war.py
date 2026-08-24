@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 
 from features.world.service import WorldService, format_world_profile
 from infrastructure.persistence.sqlite_world import SQLiteWorldRepository
@@ -112,3 +113,46 @@ def test_world_profile_formats_current_population(tmp_path):
 
     assert "👥 Долбоебов: 37" in text
     assert "⚔️ Война: —" in text
+
+
+def test_legacy_alliance_schema_migrates_to_support_war(tmp_path):
+    db_path = tmp_path / "world.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE world_states (
+                world_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id BIGINT NOT NULL UNIQUE,
+                chat_title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1))
+            );
+            CREATE TABLE diplomatic_relations (
+                state_a INTEGER NOT NULL,
+                state_b INTEGER NOT NULL,
+                relation TEXT NOT NULL CHECK(relation = 'allied'),
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (state_a, state_b),
+                CHECK(state_a < state_b),
+                FOREIGN KEY(state_a) REFERENCES world_states(world_id),
+                FOREIGN KEY(state_b) REFERENCES world_states(world_id)
+            );
+            INSERT INTO world_states(world_id, chat_id, chat_title, created_at, updated_at, enabled)
+            VALUES
+                (1, -1001, 'Alpha', '2026-08-25T00:00:00+00:00', '2026-08-25T00:00:00+00:00', 1),
+                (2, -1002, 'Beta', '2026-08-25T00:00:00+00:00', '2026-08-25T00:00:00+00:00', 1);
+            INSERT INTO diplomatic_relations(state_a, state_b, relation, updated_at)
+            VALUES (1, 2, 'allied', '2026-08-25T00:00:00+00:00');
+            """
+        )
+
+    repo = SQLiteWorldRepository(db_path)
+    repo.init_schema()
+    service = WorldService(repo)
+
+    assert repo.get_relation(1, 2) == "allied"
+    result = _run(service.declare_war(-1001, "Alpha", 2))
+    assert result.status == "declared"
+    assert result.previous_relation == "allied"
+    assert repo.get_relation(1, 2) == "war"
