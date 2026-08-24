@@ -8,9 +8,7 @@ from aiogram import Router
 import random
 from aiogram import types
 from aiogram.types import Message
-from config import (
-    BLOCKED_USERS
-)
+from core.settings import BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
 from prompts import actions, CHANNEL_SETTINGS, queries
 from features.channels_settings import process_channel_command

@@ -7,8 +7,9 @@ from aiogram import Router
 
 from aiogram import F, types
 from aiogram.types import Message
-from config import chat_settings, gigachat_model
+from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
+from infrastructure.ai.clients import gigachat_model
 from AI.dialog.model_commands import (
     handle_switch_to_gigachat,
     handle_switch_to_gemini,

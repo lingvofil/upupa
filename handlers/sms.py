@@ -6,9 +6,8 @@
 from aiogram import Router
 
 from aiogram import types
-from config import (
-    bot, chat_list, sms_disabled_chats
-)
+from core.loader import bot
+from core.state import chat_list, sms_disabled_chats
 from features.sms_settings import (
     process_disable_sms, process_enable_sms,
     process_send_sms, process_send_mms

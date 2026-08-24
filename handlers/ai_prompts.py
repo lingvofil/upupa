@@ -6,7 +6,7 @@
 from aiogram import Router
 
 from aiogram import F, types
-from config import chat_settings
+from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import save_chat_settings
 from AI.dialog.prompt_commands import (

@@ -10,9 +10,7 @@ import logging
 from aiogram import F, types
 from aiogram.types import Message
 from typing import Dict
-from config import (
-    ADMIN_ID
-)
+from core.settings import ADMIN_ID
 from prompts import actions
 from features.stat_rank_settings import get_user_statistics, generate_chat_stats_report
 from features.lexicon_settings import (

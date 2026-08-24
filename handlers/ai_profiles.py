@@ -8,9 +8,8 @@ from aiogram import Router
 import random
 from aiogram import Bot, F, types
 from aiogram.types import Message
-from config import (
-    bot, BLOCKED_USERS
-)
+from core.loader import bot
+from core.settings import BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
 from prompts import actions
 from AI.whoparody import (

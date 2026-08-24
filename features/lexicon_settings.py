@@ -7,7 +7,7 @@ import collections
 from collections import defaultdict
 from nltk.util import ngrams
 from aiogram import types
-from config import LOG_FILE
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from prompts import STOPWORDS
 
 

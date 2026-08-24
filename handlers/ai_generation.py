@@ -6,9 +6,7 @@
 from aiogram import Router
 
 from aiogram import types
-from config import (
-    BLOCKED_USERS
-)
+from core.settings import BLOCKED_USERS
 from AI.adddescribe import (
     handle_add_text_command
 )

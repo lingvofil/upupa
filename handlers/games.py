@@ -7,9 +7,7 @@ from aiogram import Router
 
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
-from config import (
-    bot
-)
+from core.loader import bot
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
 from games import crocodile, reverse_crocodile

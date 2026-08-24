@@ -8,9 +8,8 @@ from aiogram import Router
 import os
 
 from aiogram import types
-from config import (
-    bot, BLOCKED_USERS
-)
+from core.loader import bot
+from core.settings import BLOCKED_USERS
 from services.ytp import handle_ytp_command
 from services.media_change import handle_fast_command, handle_reverse_command, handle_slow_command
 
