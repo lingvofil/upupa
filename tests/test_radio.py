@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import inspect
+import os
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -9,21 +10,24 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-# Configure fake env and mocks for heavy optional dependencies before imports.
-from tests import test_smoke_imports  # noqa: F401
 
-import AI.voice as voice
-import features.interactive_settings as interactive_settings
-import features.radio.script as radio_script
-import features.radio.service as radio_service
-import handlers
-import handlers.radio as radio_handler
-import services.speech as speech
-from core.state import chat_settings
+FAKE_ENV = {
+    "API_TOKEN": "123456789:AAFakeTokenForRadioTestsOnly_abcdefg",
+    **{f"GENERIC_API_KEY{i if i else ''}": "fake" for i in ["", 2, 3, 4, 5, 6, 8, 9, 10]},
+    "GOOGLE_API_KEY": "fake",
+    "GOOGLE_API_KEY2": "fake",
+    "GROQ_API_KEY": "fake",
+    "OPENROUTER_API_KEY": "fake",
+    "SILICONFLOW_API_KEY": "fake",
+    "POLLINATIONS_API_KEY": "fake",
+}
+os.environ.update(FAKE_ENV)
 
 
 @pytest.fixture(autouse=True)
 def restore_chat_settings():
+    from core.state import chat_settings
+
     saved = deepcopy(chat_settings)
     yield
     chat_settings.clear()
@@ -40,6 +44,9 @@ def _message(text: str, *, name: str = "Вася") -> dict:
 
 
 def test_radio_command_variants_and_router_order():
+    import handlers
+    import handlers.radio as radio_handler
+
     assert radio_handler.is_radio_command("радио упупы")
     assert radio_handler.is_radio_command("Упупа радио")
     assert radio_handler.is_radio_command("Упупа, радио")
@@ -51,6 +58,9 @@ def test_radio_command_variants_and_router_order():
 
 
 def test_disabled_radio_stops_before_episode_build(monkeypatch):
+    import handlers.radio as radio_handler
+    from core.state import chat_settings
+
     chat_settings["-1001"] = {"radio_enabled": False}
     reply = AsyncMock()
     message = SimpleNamespace(
@@ -69,6 +79,8 @@ def test_disabled_radio_stops_before_episode_build(monkeypatch):
 
 
 def test_collect_radio_history_expands_window_then_rejects_sparse_history(monkeypatch):
+    import features.radio.service as radio_service
+
     calls = []
 
     def fake_get_chat_messages(_path, _chat_id, threshold):
@@ -92,6 +104,8 @@ def test_collect_radio_history_expands_window_then_rejects_sparse_history(monkey
 
 
 def test_collect_radio_history_uses_24_hours_when_enough(monkeypatch):
+    import features.radio.service as radio_service
+
     calls = []
     messages = [_message("Это достаточно содержательное сообщение про жизнь чата номер один.") for _ in range(8)]
 
@@ -115,6 +129,8 @@ def test_collect_radio_history_uses_24_hours_when_enough(monkeypatch):
 
 
 def test_normal_radio_script_uses_dedicated_spoken_prompt(monkeypatch):
+    import features.radio.script as radio_script
+
     prompts = []
 
     async def fake_generate(prompt, chat_id, **kwargs):
@@ -141,6 +157,8 @@ def test_normal_radio_script_uses_dedicated_spoken_prompt(monkeypatch):
 
 
 def test_large_history_is_summarized_before_final_script(monkeypatch):
+    import features.radio.script as radio_script
+
     prompts = []
 
     async def fake_generate(prompt, chat_id, **kwargs):
@@ -164,6 +182,8 @@ def test_large_history_is_summarized_before_final_script(monkeypatch):
 
 
 def test_script_sanitization_has_hard_word_limit_and_removes_markup_urls():
+    import features.radio.script as radio_script
+
     raw = "**Эфир** https://example.com\n- " + "слово " * 700
     cleaned = radio_script.sanitize_radio_script(raw)
 
@@ -173,6 +193,8 @@ def test_script_sanitization_has_hard_word_limit_and_removes_markup_urls():
 
 
 def test_speech_tts_success(monkeypatch):
+    import services.speech as speech
+
     async def fake_gemini(_text, _voice):
         return b"wav"
 
@@ -187,6 +209,8 @@ def test_speech_tts_success(monkeypatch):
 
 
 def test_speech_tts_falls_back_to_groq(monkeypatch):
+    import services.speech as speech
+
     async def broken_gemini(_text, _voice):
         raise speech.SpeechSynthesisError("gemini down")
 
@@ -209,6 +233,12 @@ def test_speech_tts_falls_back_to_groq(monkeypatch):
 
 
 def test_radio_pipeline_has_no_distortion_dependency():
+    import AI.voice as voice
+    import features.radio.script as radio_script
+    import features.radio.service as radio_service
+    import handlers.radio as radio_handler
+    import services.speech as speech
+
     modules = (radio_handler, radio_service, radio_script, speech)
     combined = "\n".join(inspect.getsource(module) for module in modules)
 
@@ -217,7 +247,11 @@ def test_radio_pipeline_has_no_distortion_dependency():
     assert "apply_ffmpeg_audio_distortion" in inspect.getsource(voice)
 
 
-def test_legacy_voice_temp_directory_is_cleaned(monkeypatch, tmp_path):
+def test_legacy_voice_temp_directory_is_cleaned(monkeypatch):
+    import AI.voice as voice
+    import services.speech as speech
+    from core.state import chat_settings
+
     chat_settings["-1001"] = {"active_model": "gemini"}
     monkeypatch.setattr(voice, "update_chat_settings", lambda _chat_id: None)
     monkeypatch.setattr(
@@ -225,11 +259,8 @@ def test_legacy_voice_temp_directory_is_cleaned(monkeypatch, tmp_path):
         "generate_text_response_for_voice",
         AsyncMock(return_value="Привет, это обычное голосовое."),
     )
-    monkeypatch.setattr(
-        voice,
-        "synthesize_speech",
-        AsyncMock(return_value=speech.SpeechAudio(b"clean", "mp3", "gemini", 1)),
-    )
+    synthesize = AsyncMock(return_value=speech.SpeechAudio(b"clean", "mp3", "gemini", 1))
+    monkeypatch.setattr(voice, "synthesize_speech", synthesize)
 
     temp_parents = []
 
@@ -255,11 +286,18 @@ def test_legacy_voice_temp_directory_is_cleaned(monkeypatch, tmp_path):
     asyncio.run(voice.handle_voice_command(message, bot))
 
     bot.send_voice.assert_awaited_once()
+    synthesize.assert_awaited_once()
+    assert synthesize.await_args.kwargs["provider_order"] == ("gemini",)
+    assert synthesize.await_args.kwargs["allow_groq_for_cyrillic"] is False
     assert temp_parents
     assert all(not path.exists() for path in temp_parents)
 
 
 def test_radio_telegram_send_error_is_user_facing(monkeypatch):
+    import features.radio.service as radio_service
+    import handlers.radio as radio_handler
+    from core.state import chat_settings
+
     chat_settings["-1001"] = {"radio_enabled": True}
     episode = radio_service.RadioEpisode(
         audio=b"mp3",
@@ -293,6 +331,9 @@ def test_radio_telegram_send_error_is_user_facing(monkeypatch):
 
 
 def test_radio_setting_toggle_is_persisted(monkeypatch):
+    import features.interactive_settings as interactive_settings
+    from core.state import chat_settings
+
     chat_settings["-1001"] = {}
     saved = []
     monkeypatch.setattr(interactive_settings, "has_settings_permission", AsyncMock(return_value=True))
@@ -320,6 +361,10 @@ def test_radio_setting_toggle_is_persisted(monkeypatch):
 
 
 def test_radio_async_pipeline_has_no_direct_blocking_io_calls():
+    import features.radio.script as radio_script
+    import features.radio.service as radio_service
+    import services.speech as speech
+
     forbidden_names = {"open", "sleep", "run", "Popen", "read_bytes", "write_bytes"}
     modules = (radio_service, radio_script, speech)
 
@@ -327,8 +372,6 @@ def test_radio_async_pipeline_has_no_direct_blocking_io_calls():
     for module in modules:
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.AsyncFunctionDef, ast.AsyncFor, ast.AsyncWith)):
-                continue
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
             for child in ast.walk(node):
@@ -341,8 +384,8 @@ def test_radio_async_pipeline_has_no_direct_blocking_io_calls():
                 elif isinstance(func, ast.Attribute):
                     name = func.attr
                 if name in forbidden_names:
-                    # Calls deliberately passed as callables to asyncio.to_thread
-                    # are Attribute/Name nodes, not Call nodes, so a Call here is direct.
+                    # Callables handed to asyncio.to_thread are Name/Attribute
+                    # nodes rather than direct Call nodes, so they do not match.
                     violations.append((module.__name__, node.name, name))
 
     assert violations == []
