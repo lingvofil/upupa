@@ -10,9 +10,14 @@ from features.lexicon_settings import (
     extract_messages_by_full_name,
     extract_chat_messages
 )
-from config import (
-    model, LOG_FILE, gigachat_model, groq_ai, chat_settings,
-    openrouter_ai, siliconflow_ai
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.state import chat_settings
+from infrastructure.ai.clients import (
+    gigachat_model,
+    groq_ai,
+    model,
+    openrouter_ai,
+    siliconflow_ai,
 )
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from prompts import actions, PARODY_PROMPT

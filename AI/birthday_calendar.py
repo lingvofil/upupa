@@ -10,7 +10,10 @@ from aiogram import types
 from aiogram.types import Message
 import logging
 import traceback
-from config import model, LOG_FILE, ADMIN_ID, gigachat_model, groq_ai, chat_settings
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.settings import ADMIN_ID
+from core.state import chat_settings
+from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from features.chat_settings import save_chat_settings
 
 # Файл для хранения дней рождения
@@ -247,7 +250,6 @@ async def check_birthdays_and_send_greetings(bot):
                                     chat_id=chat_id_int
                                 )
 
-                            
                             user_tag = f"[{user_name}](tg://user?id={user_id})"
                             final_greeting = f"{user_tag}\n\n{greeting}"
                             

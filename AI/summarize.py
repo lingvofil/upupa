@@ -9,8 +9,10 @@ from aiogram import types
 import random
 
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.state import chat_settings
+from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import _empty_response_details
-from config import LOG_FILE, model, gigachat_model, groq_ai, chat_settings
 from prompts import actions
 from features.chat_settings import save_chat_settings
 

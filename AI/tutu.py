@@ -9,8 +9,8 @@ from typing import List, Dict, Optional, Tuple
 import httpx
 from aiogram import types
 
-# Импортируем Groq wrapper из config
-from config import groq_ai, ADMIN_ID
+from core.settings import ADMIN_ID
+from infrastructure.ai.clients import groq_ai
 logger = logging.getLogger(__name__)
 
 # =============================================================================

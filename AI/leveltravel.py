@@ -9,8 +9,8 @@ from aiogram.types import FSInputFile, InputMediaPhoto
 import json
 import os
 
-# Импортируем Groq wrapper из config
-from config import groq_ai, ADMIN_ID
+from core.settings import ADMIN_ID
+from infrastructure.ai.clients import groq_ai
 
 # =============================================================================
 # КОНСТАНТЫ
@@ -1072,6 +1072,7 @@ async def analyze_tours_with_ai(
             tour['value_score'] = rating / (tour['price'] / 10000)
         else:
             tour['value_score'] = 0
+    
     
     good_tours.sort(key=lambda x: x.get('value_score', 0), reverse=True)
     

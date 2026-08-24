@@ -5,7 +5,8 @@ import random
 import re
 from aiogram import Router, F, Bot
 from aiogram.types import Message, PollAnswer
-from config import model, gigachat_model, groq_ai, chat_settings  # Импорт моделей и настроек
+from core.state import chat_settings
+from infrastructure.ai.clients import model, gigachat_model, groq_ai
 
 dnd_router = Router()
 

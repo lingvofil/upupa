@@ -22,18 +22,28 @@ from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from transliterate import translit
 
-import config
-from config import bot, model, gigachat_model, groq_ai, chat_settings, chat_list, KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY, API_TOKEN, POLLINATIONS_API_KEY, GROQ_VISION_MODEL
+from core.loader import bot
+from core.settings import (
+    API_TOKEN,
+    CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_API_TOKEN,
+    GROQ_VISION_MODEL,
+    HUGGINGFACE_TOKEN,
+    KANDINSKY_API_KEY,
+    KANDINSKY_SECRET_KEY,
+    POLLINATIONS_API_KEY,
+)
+from core.state import chat_list, chat_settings
+from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from prompts import actions
 from AI.adddescribe import download_telegram_image
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Безопасное получение ключей из конфига
-CF_ACCOUNT_ID = getattr(config, 'CLOUDFLARE_ACCOUNT_ID', None)
-CF_API_TOKEN = getattr(config, 'CLOUDFLARE_API_TOKEN', None)
-HF_TOKEN = getattr(config, 'HUGGINGFACE_TOKEN', None)
+CF_ACCOUNT_ID = CLOUDFLARE_ACCOUNT_ID
+CF_API_TOKEN = CLOUDFLARE_API_TOKEN
+HF_TOKEN = HUGGINGFACE_TOKEN
 
 # =============================================================================
 # RATE LIMITER ДЛЯ NVIDIA (HF GPU QUOTA)
