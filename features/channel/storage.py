@@ -1,4 +1,4 @@
-"""Персистентная история канала и состояние ежедневного расписания."""
+"""Персистентная история канала, расписание и внутреннее настроение."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any
 
 POSTS_FILE = Path("channel_posts.json")
 SCHEDULE_FILE = Path("channel_schedule.json")
+MOOD_FILE = Path("channel_mood.json")
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -49,3 +50,12 @@ def load_schedule() -> dict:
 
 def save_schedule(state: dict) -> None:
     _atomic_write_json(SCHEDULE_FILE, state)
+
+
+def load_mood() -> dict:
+    data = _read_json(MOOD_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_mood(state: dict) -> None:
+    _atomic_write_json(MOOD_FILE, state)
