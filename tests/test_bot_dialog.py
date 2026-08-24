@@ -19,18 +19,18 @@ def _message(text: str | None, *, sender_is_bot: bool = False, content_type=Cont
 
 
 def test_empty_human_trigger_keeps_short_reply():
-    from AI.talking import handle_bot_conversation
+    from AI.dialog.generation import handle_bot_conversation
 
     response = asyncio.run(handle_bot_conversation(_message("упупа"), "Human"))
 
     assert response == "Хули?"
 
 
-def test_empty_bot_trigger_uses_full_dialog_generation(monkeypatch):
-    from AI import talking
+def test_empty_bot_trigger_uses_full_dialog_generation():
+    from AI.dialog import generation
 
-    talking.conversation_history.clear()
-    talking.chat_settings["12345"] = {
+    generation.conversation_history.clear()
+    generation.chat_settings["12345"] = {
         "dialog_enabled": True,
         "prompt": "base prompt",
         "prompt_name": "упупа",
@@ -46,15 +46,19 @@ def test_empty_bot_trigger_uses_full_dialog_generation(monkeypatch):
         captured["user_input"] = user_input
         return "generated dialog reply"
 
-    monkeypatch.setattr(talking, "needs_web_search", lambda _: False)
-    monkeypatch.setattr(talking, "generate_response", fake_generate_response)
-
-    response = asyncio.run(talking.handle_bot_conversation(_message("упупа", sender_is_bot=True), "OtherBot"))
+    response = asyncio.run(
+        generation.handle_bot_conversation(
+            _message("упупа", sender_is_bot=True),
+            "OtherBot",
+            generate_response_func=fake_generate_response,
+            needs_web_search_func=lambda _: False,
+        )
+    )
 
     assert response == "generated dialog reply"
     assert captured["user_input"] == "упупа"
     assert "Не упоминай процент уверенности" in captured["prompt"]
-    assert talking.conversation_history["12345"][-1] == {
+    assert generation.conversation_history["12345"][-1] == {
         "role": "user",
         "name": "OtherBot",
         "content": "упупа",
@@ -73,38 +77,31 @@ def test_confidence_percentage_sanitizer_removes_common_forms():
     assert strip_confidence_percentages(text) == "это роутер.\nПроверь питание и кабель."
 
 
-def test_unknown_bot_message_uses_full_dialog_generation(monkeypatch):
-    from AI import talking
+def test_unknown_bot_message_uses_full_dialog_generation():
+    from AI.dialog import generation
 
-    talking.conversation_history.clear()
-    talking.chat_settings["12345"] = {
+    generation.conversation_history.clear()
+    generation.chat_settings["12345"] = {
         "dialog_enabled": True,
         "prompt": "base prompt",
         "prompt_name": "упупа",
         "active_model": "gemini",
     }
 
-    replies = []
     captured = {}
-
-    async def fake_send_chat_action(chat_id, action):
-        captured["chat_action"] = (chat_id, action)
 
     async def fake_generate_response(prompt, chat_id, bot_name, user_input=""):
         captured["user_input"] = user_input
         return "generated dialog reply"
 
-    async def fake_reply(text):
-        replies.append(text)
+    response = asyncio.run(
+        generation.handle_bot_conversation(
+            _message(None, sender_is_bot=True, content_type=ContentType.UNKNOWN),
+            "OtherBot",
+            generate_response_func=fake_generate_response,
+            needs_web_search_func=lambda _: False,
+        )
+    )
 
-    message = _message(None, sender_is_bot=True, content_type=ContentType.UNKNOWN)
-    message.reply = fake_reply
-
-    monkeypatch.setattr(talking, "bot", SimpleNamespace(id=999, send_chat_action=fake_send_chat_action))
-    monkeypatch.setattr(talking, "needs_web_search", lambda _: False)
-    monkeypatch.setattr(talking, "generate_response", fake_generate_response)
-
-    asyncio.run(talking.process_general_message(message))
-
-    assert replies == ["generated dialog reply"]
+    assert response == "generated dialog reply"
     assert captured["user_input"] == "[сообщение другого бота без доступного текста]"

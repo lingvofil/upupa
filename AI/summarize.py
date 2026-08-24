@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from aiogram import types
 import random
 
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
+from infrastructure.ai.gemini import _empty_response_details
 from config import LOG_FILE, model, gigachat_model, groq_ai, chat_settings
 from prompts import actions
 from features.chat_settings import save_chat_settings
@@ -160,7 +162,6 @@ async def _generate_with_active_model(
                     )
                     if not (response.text or ""):
                         try:
-                            from AI.wrapper import _empty_response_details
                             logging.warning("Gemini empty summary details: %s", _empty_response_details(response))
                         except Exception:
                             logging.warning("Gemini empty summary response without details")
@@ -230,7 +231,6 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 
     Суммаризация:
     """
-    from AI.talking import build_prompt_with_current_chat_prompt
 
     summary_prompt = build_prompt_with_current_chat_prompt(
         chat_id,

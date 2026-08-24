@@ -15,6 +15,8 @@ from aiogram import Bot
 from aiogram import types
 from bs4 import BeautifulSoup
 
+from AI.dialog.generation import generate_simple_response
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from config import chat_settings
 
 CALEND_BASE_URL = "https://www.calend.ru"
@@ -118,8 +120,6 @@ def _build_digest_prompt(holidays: list[Holiday]) -> str:
 
 
 async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -> dict[str, str]:
-    from AI.talking import build_prompt_with_current_chat_prompt, generate_simple_response
-
     if not holidays:
         return {}
 

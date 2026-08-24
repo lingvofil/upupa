@@ -14,12 +14,6 @@ def _response(model_name: str, text: str = "ok"):
     )
 
 
-def test_legacy_gigachat_facade_reexports_infrastructure_adapter():
-    from AI.gigachat_client import GigaChatConversationWrapper as LegacyWrapper
-
-    assert LegacyWrapper is gc.GigaChatConversationWrapper
-
-
 def test_request_uses_new_endpoint_and_chat_payload(monkeypatch):
     captured = {}
 

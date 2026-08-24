@@ -1,9 +1,9 @@
 """Explicit catch-all dialogue pipeline.
 
 This module owns the production order of random reactions and direct dialogue.
-Legacy ``AI.talking.process_general_message`` and
-``AI.random_reactions.process_random_reactions`` remain available for
-compatibility, but production composes focused dialogue modules explicitly.
+Dialogue helpers come from focused ``AI.dialog`` modules; the legacy
+``AI.random_reactions.process_random_reactions`` entrypoint remains available
+for compatibility but production composes the reaction flow explicitly here.
 """
 
 import logging

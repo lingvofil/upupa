@@ -63,14 +63,20 @@ HANDLER_MODULES = [
     "handlers.ai_prompts", "handlers.video", "handlers.channel", "handlers.dialog",
 ]
 AI_MODULES = [
-    "AI.wrapper", "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
+    "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",
+    "AI.dialog.generation", "AI.dialog.model_commands", "AI.dialog.prompt_commands",
+    "AI.dialog.serious_mode", "AI.dialog.settings", "AI.dialog.style",
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
-    "AI.random_reactions", "AI.summarize", "AI.talking", "AI.translate",
+    "AI.random_reactions", "AI.summarize", "AI.translate",
     "AI.tutu", "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
     "AI.chat_recall", "AI.comic",
 ]
+INFRASTRUCTURE_MODULES = [
+    "infrastructure.ai.clients", "infrastructure.ai.gemini", "infrastructure.ai.gigachat",
+    "infrastructure.ai.groq", "infrastructure.ai.openai_compatible",
+]
 
-@pytest.mark.parametrize("module_name", ROOT_MODULES + APP_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES)
+@pytest.mark.parametrize("module_name", ROOT_MODULES + APP_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES + INFRASTRUCTURE_MODULES)
 def test_module_imports(module_name):
     importlib.import_module(module_name)
 

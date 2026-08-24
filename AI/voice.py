@@ -11,10 +11,11 @@ from config import (
     model, gigachat_model, groq_ai, chat_settings, conversation_history, 
     MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
 )
-from AI.talking import update_chat_settings, get_current_chat_prompt, update_conversation_history, format_chat_history
+from AI.dialog.generation import format_chat_history, update_conversation_history
+from AI.dialog.settings import get_current_chat_prompt, update_chat_settings
 from services.distortion import apply_ffmpeg_audio_distortion
-from AI.wrapper import GeminiModel
-from core.ai_clients import gemini_client
+from infrastructure.ai.gemini import GeminiModel
+from infrastructure.ai.clients import gemini_client
 import io
 from pydub import AudioSegment
 

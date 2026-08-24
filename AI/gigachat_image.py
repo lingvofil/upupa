@@ -11,7 +11,7 @@ from uuid import uuid4
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 
-from AI.gigachat_client import GIGACHAT_BASE_URL
+from infrastructure.ai.gigachat import GIGACHAT_BASE_URL
 from core.settings import GIGACHAT_API_KEY
 
 
