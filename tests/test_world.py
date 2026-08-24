@@ -153,6 +153,19 @@ def test_disabled_state_cannot_receive_new_requests_and_cancels_pending(tmp_path
     assert source_result.status == "source_disabled"
 
 
+def test_repository_rechecks_disabled_state_when_creating_request(tmp_path):
+    repo, service = _service(tmp_path)
+    alpha = _run(service.enable_state(-1001, "Alpha"))
+    beta = _run(service.enable_state(-1002, "Beta"))
+
+    repo.disable_state(-1002)
+    status, request = repo.create_request(alpha.world_id, beta.world_id)
+
+    assert status == "target_disabled"
+    assert request is None
+    assert repo.get_pending_request_between(alpha.world_id, beta.world_id) is None
+
+
 def test_world_persistence_survives_repository_recreation(tmp_path):
     db_path = tmp_path / "world.db"
     repo = SQLiteWorldRepository(db_path)
