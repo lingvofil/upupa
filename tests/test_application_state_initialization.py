@@ -13,6 +13,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
     import features.chat_settings as chat_settings_feature
     import features.content_filter as content_filter_feature
     import features.sms_settings as sms_settings_feature
+    import features.social_graph as social_graph_feature
     import features.stat_rank_settings as stat_rank_feature
     import features.statistics as statistics_feature
     import features.world.service as world_service_feature
@@ -24,6 +25,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
     monkeypatch.setattr(sms_settings_feature, "load_sms_disabled_chats", lambda: calls.append("sms"))
     monkeypatch.setattr(stat_rank_feature, "load_stat_rank_state", lambda: calls.append("rank-state"))
     monkeypatch.setattr(statistics_feature, "init_db", lambda: calls.append("statistics"))
+    monkeypatch.setattr(social_graph_feature, "init_db", lambda: calls.append("social-graph"))
 
     class FakeWorldRepository:
         def __init__(self, path):
@@ -53,6 +55,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
         "sms",
         "rank-state",
         "statistics",
+        "social-graph",
         "world-schema",
         "world-config",
     ]

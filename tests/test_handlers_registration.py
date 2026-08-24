@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 108  # + World of Upupa: 5 message handlers + diplomacy callback
+EXPECTED_TOTAL_HANDLERS = 112  # соцграф + Мир Упупы
 
 
 def _count_handlers(router):
@@ -34,7 +34,7 @@ def test_world_router_is_registered_before_dialog():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 17
+    assert len(ROUTERS) == 18
 
 
 def test_whatisthere_guard_does_not_match_pun_command():

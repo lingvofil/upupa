@@ -1,4 +1,4 @@
-#interactive_settings.py
+# interactive_settings.py
 
 import logging
 from aiogram import types
@@ -9,14 +9,13 @@ from core.settings import ADMIN_ID
 from core.state import chat_settings, sms_disabled_chats
 from features.chat_settings import save_chat_settings
 from features.sms_settings import save_sms_disabled_chats
-# Добавляем HELP_DICT в импорт
 from prompts import PROMPTS_DICT, HELP_DICT
 from features.content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
 from features.stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
 from features.world.permissions import is_chat_admin
 from features.world.service import get_world_service, is_world_enabled
 
-# --- КОНСТАНТЫ ДЛЯ МЕНЮ ВЕРОЯТНОСТЕЙ ---
+
 PROBABILITY_OPTIONS = [0, 0.001, 0.005, 0.008, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
 
 PROBABILITY_LABELS = {
@@ -26,7 +25,7 @@ PROBABILITY_LABELS = {
 
 REACTION_TYPES = {
     "ai_prob": "🤖 Ремарки (AI)",
-    "random_word_prob": "🗣️ Я %слово%", # НОВОЕ
+    "random_word_prob": "🗣️ Я %слово%",
     "emoji_prob": "😎 Эмодзи",
     "meme_prob": "🖼 Случайные мемы",
     "voice_prob": "🗣 Голосовые",
@@ -36,7 +35,7 @@ REACTION_TYPES = {
 
 DEFAULT_PROBS = {
     "ai_prob": 0.01,
-    "random_word_prob": 0.005, # НОВОЕ: Default 0.5%
+    "random_word_prob": 0.005,
     "emoji_prob": 0.01,
     "meme_prob": 0.01,
     "voice_prob": 0.0001,
@@ -45,20 +44,21 @@ DEFAULT_PROBS = {
 }
 
 YTP_PRESETS = {
-    "soft":   "🟢 Мягко",
+    "soft": "🟢 Мягко",
     "normal": "🟡 Нормально",
-    "chaos":  "🔴 Угар",
-    "hell":   "💀 Пиздец",
+    "chaos": "🔴 Угар",
+    "hell": "💀 Пиздец",
 }
 
 YTP_PRESET_DESC = {
-    "soft":   "зеркало, зум, стоп-кадр, замедление",
+    "soft": "зеркало, зум, стоп-кадр, замедление",
     "normal": "всё понемногу",
-    "chaos":  "заикание, earrape, строб, вспышки",
-    "hell":   "всё сразу на максималках",
+    "chaos": "заикание, earrape, строб, вспышки",
+    "hell": "всё сразу на максималках",
 }
 
 YTP_DURATION_OPTIONS = [5, 7, 10, 15, 20, 30]
+
 
 async def has_settings_permission(chat_id: int, user_id: int) -> bool:
     """Проверка прав: только админы или создатель могут менять настройки."""
@@ -71,18 +71,18 @@ async def has_settings_permission(chat_id: int, user_id: int) -> bool:
         logging.error(f"Permission check error: {e}")
         return False
 
-# ========================= ЛОГИКА НАСТРОЕК =========================
 
 async def get_main_settings_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
-    
+
     dialog_enabled = settings.get("dialog_enabled", True)
     reactions_enabled = settings.get("reactions_enabled", True)
     emoji_enabled = settings.get("emoji_enabled", True)
     random_memes_enabled = settings.get("random_memes_enabled", False)
     proactive_enabled = settings.get("proactive_enabled", True)
     holidays_enabled = settings.get("holidays_enabled", False)
-    
+    social_graph_enabled = settings.get("social_graph_enabled", True)
+
     sms_enabled = chat_id not in sms_disabled_chats
     world_enabled = await is_world_enabled(chat_id)
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
@@ -100,6 +100,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"🏅 *Уведомления о рангах:* {'Вкл. ✅' if rank_notifications_enabled else 'Выкл. ❌'}\n"
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
     text += f"📅 *Празднеки:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
+    text += f"🕸 *Соцграф:* {'Вкл. ✅' if social_graph_enabled else 'Выкл. ❌'}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
@@ -114,22 +115,24 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if rank_notifications_enabled else 'Вкл.'} ранги", callback_data="settings:toggle:rank_notifications")
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
     builder.button(text=f"{'Выкл.' if holidays_enabled else 'Вкл.'} празднеки", callback_data="settings:toggle:holidays")
+    builder.button(text=f"{'Выкл.' if social_graph_enabled else 'Вкл.'} соцграф", callback_data="settings:toggle:social_graph")
 
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
     builder.button(text="🎬 Настройки YTP", callback_data="settings:view:ytp_menu")
-    
-    builder.adjust(2) 
+
+    builder.adjust(2)
     return text, builder.as_markup()
+
 
 async def get_probs_menu_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
     text = "📊 *Настройка вероятностей*\nВыберите тип реакции, чтобы изменить шанс срабатывания:\n\n"
-    
+
     builder = InlineKeyboardBuilder()
-    
+
     for key, label in REACTION_TYPES.items():
-        current_val = settings.get(key, DEFAULT_PROBS.get(key, 0.01)) 
+        current_val = settings.get(key, DEFAULT_PROBS.get(key, 0.01))
         percent_str = f"{current_val * 100:.3f}".rstrip('0').rstrip('.') + "%"
         text += f"{label}: `{percent_str}`\n"
         builder.button(text=f"{label} ({percent_str})", callback_data=f"settings:prob_type:{key}")
@@ -138,18 +141,20 @@ async def get_probs_menu_markup(chat_id: str):
     builder.adjust(1)
     return text, builder.as_markup()
 
+
 async def get_prob_value_markup(chat_id: str, prob_type: str):
     label = REACTION_TYPES.get(prob_type, "Реакция")
     text = f"🎯 *Настройка: {label}*\nВыберите новый шанс срабатывания:"
-    
+
     builder = InlineKeyboardBuilder()
     for val in PROBABILITY_OPTIONS:
         label_btn = PROBABILITY_LABELS.get(val, f"{val*100}%")
         builder.button(text=label_btn, callback_data=f"settings:set_prob:{prob_type}:{val}")
-    
+
     builder.button(text="⬅️ Назад", callback_data="settings:view:probs_menu")
     builder.adjust(3)
     return text, builder.as_markup()
+
 
 async def get_prompts_markup():
     text = "🎭 *Выберите персонажа для бота*"
@@ -159,6 +164,7 @@ async def get_prompts_markup():
     builder.button(text="⬅️ Назад", callback_data="settings:view:main")
     builder.adjust(2)
     return text, builder.as_markup()
+
 
 async def get_ytp_menu_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
@@ -180,6 +186,7 @@ async def get_ytp_menu_markup(chat_id: str):
     builder.adjust(2, 1, 1)
     return text, builder.as_markup()
 
+
 async def get_ytp_duration_markup(chat_id: str):
     settings = chat_settings.get(chat_id, {})
     current = settings.get("ytp_duration", 10)
@@ -195,14 +202,16 @@ async def get_ytp_duration_markup(chat_id: str):
     builder.adjust(3)
     return text, builder.as_markup()
 
+
 async def send_settings_menu(message: types.Message):
     if not await has_settings_permission(message.chat.id, message.from_user.id):
         await message.reply("Настройки могут менять только админы.")
         return
-    
+
     chat_id = str(message.chat.id)
     text, markup = await get_main_settings_markup(chat_id)
     await message.answer(text, reply_markup=markup, parse_mode="Markdown")
+
 
 async def handle_settings_callback(query: types.CallbackQuery):
     if not await has_settings_permission(query.message.chat.id, query.from_user.id):
@@ -213,7 +222,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
     try:
         parts = query.data.split(":")
         action = parts[1]
-    except (AttributeError, IndexError, ValueError):
+    except (ValueError, IndexError):
         return
 
     if action == "view":
@@ -224,9 +233,9 @@ async def handle_settings_callback(query: types.CallbackQuery):
             text, markup = await get_probs_menu_markup(chat_id)
         elif target == "ytp_menu":
             text, markup = await get_ytp_menu_markup(chat_id)
-        else: # main
+        else:
             text, markup = await get_main_settings_markup(chat_id)
-        
+
         await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         await query.answer()
 
@@ -239,12 +248,12 @@ async def handle_settings_callback(query: types.CallbackQuery):
     elif action == "set_prob":
         prob_key = parts[2]
         prob_val = float(parts[3])
-        
+
         chat_settings.setdefault(chat_id, {})
         chat_settings[chat_id][prob_key] = prob_val
         save_chat_settings()
-        
-        await query.answer(f"Сохранено!")
+
+        await query.answer("Сохранено!")
         text, markup = await get_probs_menu_markup(chat_id)
         await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
 
@@ -299,7 +308,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
         value = parts[2]
         chat_settings.setdefault(chat_id, {})
         answer_text = "Настройка сохранена"
-        
+
         if value == "dialog":
             chat_settings[chat_id]["dialog_enabled"] = not chat_settings[chat_id].get("dialog_enabled", True)
         elif value == "reactions":
@@ -309,8 +318,10 @@ async def handle_settings_callback(query: types.CallbackQuery):
         elif value == "random_memes":
             chat_settings[chat_id]["random_memes_enabled"] = not chat_settings[chat_id].get("random_memes_enabled", False)
         elif value == "sms":
-            if chat_id in sms_disabled_chats: sms_disabled_chats.remove(chat_id)
-            else: sms_disabled_chats.add(chat_id)
+            if chat_id in sms_disabled_chats:
+                sms_disabled_chats.remove(chat_id)
+            else:
+                sms_disabled_chats.add(chat_id)
             save_sms_disabled_chats()
         elif value == "world":
             if getattr(query.message.chat, "type", None) not in {"group", "supergroup"}:
@@ -331,56 +342,59 @@ async def handle_settings_callback(query: types.CallbackQuery):
                 answer_text = f"Государство №{state.world_id} включено"
         elif value == "antispam":
             cid = int(chat_id)
-            if cid in ANTISPAM_ENABLED_CHATS: ANTISPAM_ENABLED_CHATS.remove(cid)
-            else: ANTISPAM_ENABLED_CHATS.add(cid)
+            if cid in ANTISPAM_ENABLED_CHATS:
+                ANTISPAM_ENABLED_CHATS.remove(cid)
+            else:
+                ANTISPAM_ENABLED_CHATS.add(cid)
             save_antispam_settings()
         elif value == "rank_notifications":
-            if chat_id in rank_notifications_disabled_chats: rank_notifications_disabled_chats.remove(chat_id)
-            else: rank_notifications_disabled_chats.add(chat_id)
+            if chat_id in rank_notifications_disabled_chats:
+                rank_notifications_disabled_chats.remove(chat_id)
+            else:
+                rank_notifications_disabled_chats.add(chat_id)
             save_rank_notifications_settings()
         elif value == "proactive":
             chat_settings[chat_id]["proactive_enabled"] = not chat_settings[chat_id].get("proactive_enabled", True)
         elif value == "holidays":
             chat_settings[chat_id]["holidays_enabled"] = not chat_settings[chat_id].get("holidays_enabled", False)
-        
+        elif value == "social_graph":
+            chat_settings[chat_id]["social_graph_enabled"] = not chat_settings[chat_id].get("social_graph_enabled", True)
+
         save_chat_settings()
         text, markup = await get_main_settings_markup(chat_id)
         try:
             await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         except Exception:
-            pass 
+            pass
         await query.answer(answer_text)
 
-# ========================= ЛОГИКА СПРАВКИ (HELP MENU) =========================
 
 def get_help_keyboard(current_section="main"):
     """Генерация клавиатуры для навигации по справке."""
     builder = InlineKeyboardBuilder()
-    
-    # Кнопки разделов
+
     builder.row(
         types.InlineKeyboardButton(text="🗣 Говорилка", callback_data="help:talking"),
         types.InlineKeyboardButton(text="📊 Стотистика и оналез", callback_data="help:stats")
     )
     builder.row(
-        types.InlineKeyboardButton(text="🎮 Векторины и игры", callback_data="help:creative"),
-        types.InlineKeyboardButton(text="🎨 Медиа", callback_data="help:media")
+        types.InlineKeyboardButton(text="🕸 Соцграф", callback_data="help:social"),
+        types.InlineKeyboardButton(text="🎮 Векторины и игры", callback_data="help:creative")
     )
     builder.row(
-        types.InlineKeyboardButton(text="📺 Коналы", callback_data="help:content"),
-        types.InlineKeyboardButton(text="🖼 Всякая хуйня", callback_data="help:utils")
+        types.InlineKeyboardButton(text="🎨 Медиа", callback_data="help:media"),
+        types.InlineKeyboardButton(text="📺 Коналы", callback_data="help:content")
     )
     builder.row(
+        types.InlineKeyboardButton(text="🖼 Всякая хуйня", callback_data="help:utils"),
         types.InlineKeyboardButton(text="🌍 Мир Упупы", callback_data="help:world")
     )
-    
-    # Кнопка "В ночало", если мы не в главном меню
+
     if current_section != "main":
-        builder.row(
-            types.InlineKeyboardButton(text="🔙 В ночало", callback_data="help:main")
-        )
-        
+        builder.row(types.InlineKeyboardButton(text="🔙 В ночало", callback_data="help:main"))
+
     return builder.as_markup()
+
 
 async def send_help_menu(message: types.Message):
     """Отправка главного меню справки."""
@@ -391,31 +405,27 @@ async def send_help_menu(message: types.Message):
             parse_mode="HTML"
         )
     except Exception as e:
-        # Fallback если словарь не прогрузился или ошибка
         await message.reply("Справка недоступна (ошибка словаря).")
         logging.error(f"Help menu error: {e}")
 
+
 async def handle_help_callback(query: types.CallbackQuery):
     """Обработка нажатий на кнопки справки."""
-    # Парсим callback data "help:section_name"
     try:
         section = query.data.split(":")[1]
     except IndexError:
         section = "main"
-    
-    # Получаем текст из словаря
+
     text = HELP_DICT.get(section, HELP_DICT["main"])
     keyboard = get_help_keyboard(section)
-    
+
     try:
-        # Проверяем, изменился ли текст, чтобы не словить ошибку Telegram
-        if query.message.text != text and query.message.caption != text: 
+        if query.message.text != text and query.message.caption != text:
             await query.message.edit_text(
                 text=text,
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
     except Exception:
-        pass # Игнорируем, если контент тот же
-    
+        pass
     await query.answer()
