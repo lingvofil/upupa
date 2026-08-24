@@ -25,7 +25,11 @@ class WorldRepository(Protocol):
     def list_allied_states(self, world_id: int, *, active_only: bool) -> list[WorldState]: ...
     def has_alliance(self, state_a: int, state_b: int) -> bool: ...
     def get_pending_request_between(self, state_a: int, state_b: int) -> DiplomaticRequest | None: ...
-    def create_request(self, source_state: int, target_state: int) -> tuple[DiplomaticRequest, bool]: ...
+    def create_request(
+        self,
+        source_state: int,
+        target_state: int,
+    ) -> tuple[str, DiplomaticRequest | None]: ...
     def cancel_request(self, request_id: int) -> bool: ...
     def resolve_request(
         self,
@@ -129,33 +133,14 @@ class WorldService:
             return ProposalResult("target_disabled", source=source, target=target)
         if source.world_id == target.world_id:
             return ProposalResult("self", source=source, target=target)
-        if await asyncio.to_thread(
-            self.repository.has_alliance,
-            source.world_id,
-            target.world_id,
-        ):
-            return ProposalResult("already_allied", source=source, target=target)
 
-        pending = await asyncio.to_thread(
-            self.repository.get_pending_request_between,
-            source.world_id,
-            target.world_id,
-        )
-        if pending is not None:
-            return ProposalResult(
-                "duplicate",
-                source=source,
-                target=target,
-                request=pending,
-            )
-
-        request, created = await asyncio.to_thread(
+        creation_status, request = await asyncio.to_thread(
             self.repository.create_request,
             source.world_id,
             target.world_id,
         )
         return ProposalResult(
-            "created" if created else "duplicate",
+            creation_status,
             source=source,
             target=target,
             request=request,
