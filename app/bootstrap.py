@@ -29,6 +29,7 @@ def get_main_router() -> Router:
 
     from core.middlewares import IncomingMessageLogMiddleware
     from features.content_filter import ContentFilterMiddleware
+    from features.social_graph import SocialInteractionMiddleware
     from features.statistics import PrivateRateLimitMiddleware
     from handlers import ROUTERS
 
@@ -36,6 +37,7 @@ def get_main_router() -> Router:
     router.message.middleware(IncomingMessageLogMiddleware())
     router.message.middleware(ContentFilterMiddleware())
     router.message.middleware(PrivateRateLimitMiddleware())
+    router.message.middleware(SocialInteractionMiddleware())
 
     for child_router in ROUTERS:
         router.include_router(child_router)
@@ -57,9 +59,16 @@ class UpupaApplication:
         from features.chat_settings import load_chat_state
         from features.content_filter import load_antispam_settings
         from features.sms_settings import load_sms_disabled_chats
+        from features.social_graph import (
+            configure_social_graph_repository,
+            init_db as init_social_graph_db,
+        )
         from features.stat_rank_settings import load_stat_rank_state
         import features.statistics as bot_statistics
-        from infrastructure.persistence import SQLiteStatisticsRepository
+        from infrastructure.persistence import (
+            SQLiteSocialGraphRepository,
+            SQLiteStatisticsRepository,
+        )
 
         load_chat_state()
         load_antispam_settings()
@@ -69,6 +78,8 @@ class UpupaApplication:
             SQLiteStatisticsRepository(STATISTICS_DB_PATH)
         )
         bot_statistics.init_db()
+        configure_social_graph_repository(SQLiteSocialGraphRepository(STATISTICS_DB_PATH))
+        init_social_graph_db()
 
     def start_background_tasks(self) -> None:
         if self._background_tasks_started:
