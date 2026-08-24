@@ -269,9 +269,8 @@ async def declare_war(message: types.Message):
     try:
         await bot.send_message(
             result.target.chat_id,
-            "⚔️ ВОЙНА\n\n"
-            f"Государство №{result.source.world_id} — {result.source.title}\n"
-            "объявило вам войну.",
+            "⚔️ Сэр, эти пидорасы объявили нам войну!\n\n"
+            f"Государство №{result.source.world_id} — {result.source.title}.",
         )
     except Exception as exc:
         logging.warning(
