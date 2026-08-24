@@ -11,7 +11,7 @@ import importlib
 import types
 import pytest
 
-# --- фейковые секреты, чтобы config.py не упал на импорте ---
+# --- фейковые секреты, чтобы canonical settings/providers импортировались без реальных ключей ---
 FAKE_ENV = {
     "API_TOKEN": "123456789:AAFakeTokenForSmokeTestsOnly_abcdefg",
     **{f"GENERIC_API_KEY{i if i else ''}": "fake" for i in ["", 2, 3, 4, 5, 6, 8, 9, 10]},
@@ -37,7 +37,7 @@ for lib in HEAVY_LIBS:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT_MODULES = [
-    "config", "prompts", "prompts.help_texts", "prompts.ai_prompts", "prompts.personas", "prompts.chat_data",
+    "prompts", "prompts.help_texts", "prompts.ai_prompts", "prompts.personas", "prompts.chat_data",
     "prompts.channel",
 ]
 APP_MODULES = ["app.lifecycle", "app.bootstrap"]

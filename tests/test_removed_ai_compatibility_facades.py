@@ -41,7 +41,6 @@ def _imports(path: Path) -> set[str]:
 
 
 def _source_files():
-    yield ROOT / "config.py"
     for directory in SOURCE_DIRS:
         yield from (ROOT / directory).rglob("*.py")
 
@@ -59,9 +58,3 @@ def test_production_code_cannot_import_retired_facades():
                 violations.append(f"{path.relative_to(ROOT)} -> {module}")
 
     assert not violations, "Retired compatibility imports returned:\n" + "\n".join(violations)
-
-
-def test_config_facade_sources_provider_clients_from_infrastructure():
-    imports = _imports(ROOT / "config.py")
-    assert "infrastructure.ai.clients" in imports
-    assert "core.ai_clients" not in imports
