@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = ROOT / "core"
 INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
+DIALOG_DIR = ROOT / "AI" / "dialog"
 BOOTSTRAP_FILE = ROOT / "app" / "bootstrap.py"
 CHAT_SETTINGS_FILE = ROOT / "features" / "chat_settings.py"
 
@@ -101,6 +102,15 @@ def test_ai_infrastructure_does_not_depend_on_application_layer():
     assert not violations, (
         "infrastructure.ai должен быть нижним provider-слоем. "
         "Найдены обратные зависимости:\n" + "\n".join(violations)
+    )
+
+
+def test_dialog_modules_do_not_depend_on_config_facade():
+    violations = _collect_import_violations(DIALOG_DIR, ("config",))
+
+    assert not violations, (
+        "AI.dialog должен использовать canonical modules напрямую, без config.py. "
+        "Найдены legacy-зависимости:\n" + "\n".join(violations)
     )
 
 

@@ -4,10 +4,10 @@ import random
 
 from aiogram import types
 
-from config import (
-    ADMIN_ID,
-    bot,
-    chat_settings,
+from core.loader import bot
+from core.settings import ADMIN_ID
+from core.state import chat_settings
+from infrastructure.ai.clients import (
     gigachat_model,
     groq_ai,
     model,

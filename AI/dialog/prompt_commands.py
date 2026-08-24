@@ -5,7 +5,8 @@ import random
 
 from aiogram import types
 
-from config import bot, chat_settings
+from core.loader import bot
+from core.state import chat_settings
 from features.chat_settings import save_chat_settings
 from features.lexicon_settings import (
     extract_messages_by_full_name,
