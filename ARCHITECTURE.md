@@ -97,6 +97,17 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
 - На R7 синхронный provider routing в `AI.dialog.generation` сохраняет прежний `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
 
+## Security и deploy
+
+- Crocodile Mini App отправляет на Socket.IO сервер raw `Telegram.WebApp.initData`; сервер проверяет Telegram HMAC и свежесть `auth_date` до принятия соединения.
+- Client-controlled `room` не является авторизацией: после проверки Telegram user id сервер связывает socket с активной игровой сессией и разрешает `draw_step`, `snapshot`, `skip_turn` и `final_frame` только текущему `drawer_id`.
+- Wildcard Socket.IO CORS на R8 удалён; используется same-origin policy библиотеки.
+- `IncomingMessageLogMiddleware` по умолчанию пишет только идентификаторы/тип/длину, без имени пользователя, текста сообщения и полного UNKNOWN payload. Короткий текстовый preview допускается только через явный `LOG_MESSAGE_CONTENT=true`.
+- Production deploy сериализован через GitHub Actions concurrency и разворачивает точный `${{ github.sha }}`, а не плавающий `origin/main`; перед рестартом обновляются Python dependencies из `requirements.txt`.
+- После рестарта deploy проверяет `systemctl is-active`; при ошибке код и Python dependencies откатываются на предыдущий commit и сервис перезапускается повторно.
+- Оставшийся инфраструктурный hardening: SSH workflow пока сохраняет legacy `root` + `StrictHostKeyChecking=no` до provisioning доверенного VPS host key и отдельного deploy-user.
+- GigaChat wrappers пока сохраняют `verify_ssl_certs=False`: включение проверки требует сначала установить на VPS доверенный российский CA bundle и прокинуть его в SDK. Отключать текущий рабочий путь без этого prerequisite нельзя.
+
 ## Прочее
 
 - Секреты: `config_private.py` (локально, в .gitignore) или env-переменные.
