@@ -261,29 +261,69 @@ class SQLiteWorldRepository:
             ).fetchone()
         return self._request(row)
 
-    def create_request(self, source_state: int, target_state: int) -> tuple[DiplomaticRequest, bool]:
+    def create_request(
+        self,
+        source_state: int,
+        target_state: int,
+    ) -> tuple[str, DiplomaticRequest | None]:
+        """Atomically validate both states/relation and create at most one pending request."""
         now = self._now()
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                cursor = conn.execute(
-                    """
-                    INSERT INTO diplomatic_requests(source_state, target_state, status, created_at)
-                    VALUES (?, ?, 'pending', ?)
-                    """,
-                    (source_state, target_state, now),
-                )
-                request_id = int(cursor.lastrowid)
-                row = conn.execute(
-                    "SELECT * FROM diplomatic_requests WHERE id = ?",
-                    (request_id,),
-                ).fetchone()
-            return self._request(row), True  # type: ignore[return-value]
-        except sqlite3.IntegrityError:
-            existing = self.get_pending_request_between(source_state, target_state)
-            if existing is None:
-                raise
-            return existing, False
+        first, second = sorted((source_state, target_state))
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            source_row = conn.execute(
+                "SELECT enabled FROM world_states WHERE world_id = ?",
+                (source_state,),
+            ).fetchone()
+            if source_row is None or not bool(source_row["enabled"]):
+                return "source_disabled", None
+
+            target_row = conn.execute(
+                "SELECT enabled FROM world_states WHERE world_id = ?",
+                (target_state,),
+            ).fetchone()
+            if target_row is None or not bool(target_row["enabled"]):
+                return "target_disabled", None
+
+            alliance = conn.execute(
+                """
+                SELECT 1 FROM diplomatic_relations
+                WHERE state_a = ? AND state_b = ? AND relation = 'allied'
+                """,
+                (first, second),
+            ).fetchone()
+            if alliance is not None:
+                return "already_allied", None
+
+            existing_row = conn.execute(
+                """
+                SELECT * FROM diplomatic_requests
+                WHERE status = 'pending'
+                  AND MIN(source_state, target_state) = ?
+                  AND MAX(source_state, target_state) = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (first, second),
+            ).fetchone()
+            if existing_row is not None:
+                return "duplicate", self._request(existing_row)
+
+            cursor = conn.execute(
+                """
+                INSERT INTO diplomatic_requests(source_state, target_state, status, created_at)
+                VALUES (?, ?, 'pending', ?)
+                """,
+                (source_state, target_state, now),
+            )
+            request_id = int(cursor.lastrowid)
+            row = conn.execute(
+                "SELECT * FROM diplomatic_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
+            return "created", self._request(row)
 
     def cancel_request(self, request_id: int) -> bool:
         now = self._now()
