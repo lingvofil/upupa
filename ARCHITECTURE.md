@@ -15,7 +15,8 @@ upupa/
 ├── features/          # функциональные блоки бота, включая явный dialog pipeline
 ├── services/          # внешние сервисы и обработка медиа (поиск, погода, ytp, мемы)
 ├── games/             # игры (крокодил, егра)
-├── AI/                # AI-функции; старые provider import paths оставлены фасадами
+├── AI/                # AI-функции и compatibility-фасады
+│   └── dialog/        # settings/generation/commands/serious-mode/style диалога
 └── tests/             # regression, architecture guardrails и smoke-тесты
 ```
 
@@ -28,6 +29,7 @@ upupa/
 - Durable-storage adapters находятся в `infrastructure.persistence`; feature-модули не должны содержать SQL.
 - `core.ai_clients` временно остаётся compatibility-фасадом, но импортирует только `infrastructure.ai.clients`; обратная зависимость `core.ai_clients -> AI.*` устранена на R4.
 - `AI.wrapper` и `AI.gigachat_client` — compatibility-фасады для старых import paths. Новые provider-зависимости должны идти через `infrastructure.ai`.
+- `AI.talking` после R7 — compatibility-фасад для старых dialogue import paths; production pipeline и dialogue handlers должны импортировать `AI.dialog.*` напрямую.
 - `config.py` — только compatibility-фасад; новые зависимости на него добавлять не следует.
 
 ## AI providers
@@ -47,9 +49,14 @@ upupa/
 - Канонический порядок внутри pipeline: один проход random reactions/accounting, затем serious/direct dialogue.
 - `handlers.dialog` больше не вызывает `AI.situational_summary.install_into_random_reactions` и не присваивает функции в `AI.talking` во время импорта.
 - Живой буфер ситуативной реакции и защита от повторного `message_id` используются явно из `AI.situational_summary`; ситуативный текст генерируется через `generate_absurd_situational_reaction` без замены функций другого модуля.
-- Legacy `AI.talking.process_general_message` и `AI.random_reactions.process_random_reactions` пока сохранены для совместимости и прямых тестов, но production handler их не компонует. Их дальнейшее разделение относится к более глубокому split `AI/talking.py`.
+- На R7 dialogue feature разделён на `AI.dialog.settings`, `AI.dialog.generation`, `AI.dialog.model_commands`, `AI.dialog.prompt_commands`, `AI.dialog.serious_mode` и `AI.dialog.style`.
+- `features.dialog_pipeline` напрямую зависит от focused dialogue modules и больше не импортирует `AI.talking`.
+- `handlers.ai_modes` и `handlers.ai_prompts` также используют `AI.dialog.*` напрямую; model/prompt/serious-mode команды больше не живут в god-module.
+- `AI.talking` сохранён как compatibility-фасад для старых потребителей и legacy `process_general_message`; новые production-зависимости на него запрещены architecture guardrail'ами. Удаление фасада относится к R9.
+- `AI.random_reactions.process_random_reactions` также пока сохранён для совместимости, но production handler его не компонует.
 - Случайная реакция по-прежнему прерывает catch-all handler, а serious/direct dialogue не пропускает финальную запись `features.statistics.log_message`.
-- Architecture regression-тест запрещает возвращать runtime monkeypatch в `handlers.dialog` и запрещает каноническому pipeline вызывать legacy composed entrypoints.
+- Compatibility wrapper `AI.talking.handle_bot_conversation` передаёт тестируемые зависимости в focused generation module явно, вместо runtime mutation другого модуля.
+- Architecture regression-тесты запрещают возвращать runtime monkeypatch в `handlers.dialog`, импортировать `AI.talking` из canonical pipeline/dialog handlers и вызывать legacy composed entrypoints из production pipeline.
 
 ## Lifecycle
 
@@ -88,6 +95,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через `asyncio.to_thread`.
 - Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.: скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
+- На R7 синхронный provider routing в `AI.dialog.generation` сохраняет прежний `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
 
 ## Прочее
 

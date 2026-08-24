@@ -181,9 +181,9 @@ def test_general_dialog_stage_handles_unknown_bot_message(monkeypatch):
         captured["user_first_name"] = user_first_name
         return "generated"
 
-    monkeypatch.setattr(pipeline.talking, "handle_serious_mode_reply", fake_serious)
-    monkeypatch.setattr(pipeline.talking, "update_chat_settings", lambda _: None)
-    monkeypatch.setattr(pipeline.talking, "handle_bot_conversation", fake_conversation)
+    monkeypatch.setattr(pipeline, "handle_serious_mode_reply", fake_serious)
+    monkeypatch.setattr(pipeline, "update_chat_settings", lambda _: None)
+    monkeypatch.setattr(pipeline, "handle_bot_conversation", fake_conversation)
     monkeypatch.setattr(
         pipeline,
         "bot",
