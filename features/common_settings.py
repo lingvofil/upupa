@@ -1,7 +1,8 @@
 import base64
 import logging
 from aiogram import types
-from config import chat_list, bot
+from core.loader import bot
+from core.state import chat_list
 from features.chat_settings import remove_chat
 
 # Функция для обрезки истории разговора

@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = ROOT / "core"
 INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
 DIALOG_DIR = ROOT / "AI" / "dialog"
+HANDLERS_DIR = ROOT / "handlers"
+FEATURES_DIR = ROOT / "features"
 BOOTSTRAP_FILE = ROOT / "app" / "bootstrap.py"
 CHAT_SETTINGS_FILE = ROOT / "features" / "chat_settings.py"
 
@@ -74,9 +76,15 @@ def _matches_prefix(module_name: str, prefix: str) -> bool:
     return module_name == prefix or module_name.startswith(prefix + ".")
 
 
-def _collect_import_violations(directory: Path, forbidden_prefixes: tuple[str, ...]):
+def _collect_import_violations(
+    directory: Path,
+    forbidden_prefixes: tuple[str, ...],
+    *,
+    recursive: bool = False,
+):
     violations = []
-    for path in sorted(directory.glob("*.py")):
+    paths = directory.rglob("*.py") if recursive else directory.glob("*.py")
+    for path in sorted(paths):
         for module_name in _imports(path):
             for prefix in forbidden_prefixes:
                 if _matches_prefix(module_name, prefix):
@@ -110,6 +118,19 @@ def test_dialog_modules_do_not_depend_on_config_facade():
 
     assert not violations, (
         "AI.dialog должен использовать canonical modules напрямую, без config.py. "
+        "Найдены legacy-зависимости:\n" + "\n".join(violations)
+    )
+
+
+def test_handlers_and_features_do_not_depend_on_config_facade():
+    violations = []
+    for directory in (HANDLERS_DIR, FEATURES_DIR):
+        violations.extend(
+            _collect_import_violations(directory, ("config",), recursive=True)
+        )
+
+    assert not violations, (
+        "handlers и features должны использовать canonical modules напрямую, без config.py. "
         "Найдены legacy-зависимости:\n" + "\n".join(violations)
     )
 

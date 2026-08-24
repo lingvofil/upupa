@@ -7,10 +7,10 @@ from aiogram import Router
 
 import random
 from aiogram import F, types
-from config import (
-    ADMIN_ID, BLOCKED_USERS, model, LOG_FILE
-)
+from core.paths import USER_MESSAGES_LOG_PATH
+from core.settings import ADMIN_ID, BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
+from infrastructure.ai.clients import model
 from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
@@ -55,7 +55,7 @@ async def handle_comic(message: types.Message):
 @router.message(F.text.lower() == "чобыло")
 async def handle_chobylo(message: types.Message):
     random_action = random.choice(actions)
-    await summarize_chat_history(message, model, LOG_FILE, actions)
+    await summarize_chat_history(message, model, USER_MESSAGES_LOG_PATH, actions)
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) in (
     "праздники", "упупа праздники"
@@ -84,7 +84,7 @@ async def handle_tv_news(message: types.Message):
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
     random_action = random.choice(actions)
-    await summarize_year(message, model, LOG_FILE, actions)
+    await summarize_year(message, model, USER_MESSAGES_LOG_PATH, actions)
 
 # ================== БЛОК 6.9: LEVEL TRAVEL  ==================
 

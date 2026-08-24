@@ -8,9 +8,8 @@ from aiogram import Router
 import logging
 import random
 from aiogram import types
-from config import (
-    bot, BLOCKED_USERS
-)
+from core.loader import bot
+from core.settings import BLOCKED_USERS
 from prompts import actions
 from AI.adddescribe import (
     process_image_description

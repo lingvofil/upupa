@@ -8,9 +8,9 @@ from aiogram import Router
 import logging
 from aiogram import F, types
 from aiogram.filters import CommandStart
-from config import (
-    bot, ADMIN_ID, BLOCKED_USERS, conversation_history
-)
+from core.loader import bot
+from core.settings import ADMIN_ID, BLOCKED_USERS
+from core.state import conversation_history
 from core.upupa_utils import normalize_upupa_command
 from features.common_settings import process_leave_chat, process_leave_empty_chats
 from features.chat_settings import (

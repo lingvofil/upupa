@@ -6,9 +6,7 @@
 from aiogram import Router
 
 from aiogram import types
-from config import (
-    BLOCKED_USERS
-)
+from core.settings import BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
 from AI.birthday_calendar import (
     handle_birthday_command,

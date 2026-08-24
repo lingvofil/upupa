@@ -3,7 +3,8 @@ import logging
 from datetime import datetime
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from config import ADMIN_ID, LOG_FILE
+from core.paths import USER_MESSAGES_LOG_PATH
+from core.settings import ADMIN_ID
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -13,7 +14,7 @@ def log_message(message: str):
     """Логирование сообщений рассылки"""
     timestamp = datetime.now().isoformat()
     # Используем 'a' для добавления записи, encoding='utf-8' для корректной работы с кириллицей
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+    with open(USER_MESSAGES_LOG_PATH, 'a', encoding='utf-8') as f:
         f.write(f"{timestamp} - BROADCAST - {message}\n")
 
 async def get_all_chats_from_log():
@@ -23,7 +24,7 @@ async def get_all_chats_from_log():
     """
     chats = set()
     try:
-        with open(LOG_FILE, 'r', encoding='utf-8') as f:
+        with open(USER_MESSAGES_LOG_PATH, 'r', encoding='utf-8') as f:
             for line in f:
                 if " - Chat " in line:
                     # Извлекаем ID чата из строки лога
@@ -40,7 +41,7 @@ async def get_all_chats_from_log():
                     except (ValueError, IndexError):
                         continue
     except FileNotFoundError:
-        logger.warning(f"Лог-файл {LOG_FILE} не найден")
+        logger.warning(f"Лог-файл {USER_MESSAGES_LOG_PATH} не найден")
     
     return list(chats)
 

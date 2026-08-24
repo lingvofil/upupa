@@ -14,7 +14,8 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from config import DB_FILE, chat_settings
+from core.paths import STATISTICS_DB_PATH
+from core.state import chat_settings
 from features.chat_settings import save_chat_settings
 
 CHECK_INTERVAL = 30 * 60            # проверка раз в полчаса
@@ -37,7 +38,7 @@ def _get_group_chat_activity() -> dict[int, datetime]:
     """chat_id -> время последнего сообщения (только группы с активностью за месяц)."""
     result: dict[int, datetime] = {}
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(STATISTICS_DB_PATH)
         rows = conn.execute(
             """SELECT chat_id, MAX(message_timestamp) FROM message_stats
                WHERE is_private = 0 GROUP BY chat_id"""

@@ -4,7 +4,9 @@ import logging
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import chat_settings, sms_disabled_chats, bot, ADMIN_ID
+from core.loader import bot
+from core.settings import ADMIN_ID
+from core.state import chat_settings, sms_disabled_chats
 from features.chat_settings import save_chat_settings
 from features.sms_settings import save_sms_disabled_chats
 # Добавляем HELP_DICT в импорт
