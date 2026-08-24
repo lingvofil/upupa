@@ -1,6 +1,6 @@
 """Chat-level dialogue settings and prompt composition."""
 
-from config import chat_settings
+from core.state import chat_settings
 from prompts import PROMPTS_DICT
 
 

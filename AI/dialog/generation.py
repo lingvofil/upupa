@@ -8,10 +8,8 @@ from collections.abc import Awaitable, Callable
 from aiogram import types
 from aiogram.enums import ContentType
 
-from config import (
-    MAX_HISTORY_LENGTH,
-    chat_settings,
-    conversation_history,
+from core.state import MAX_HISTORY_LENGTH, chat_settings, conversation_history
+from infrastructure.ai.clients import (
     gigachat_model,
     groq_ai,
     model,

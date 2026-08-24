@@ -5,7 +5,8 @@ from datetime import datetime
 
 from aiogram import types
 
-from config import bot, cleanup_old_serious_messages, serious_mode_messages
+from core.loader import bot
+from core.state import cleanup_old_serious_messages, serious_mode_messages
 from prompts import PROMPT_SERIOUS_MODE
 from services.web_context import get_web_context, needs_web_search
 
