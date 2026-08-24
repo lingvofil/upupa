@@ -1,8 +1,8 @@
 """Явная сборка и запуск Telegram-приложения Упупы.
 
-На этом этапе сохраняются legacy-синглтоны bot/dp из core.loader: многие модули
-ещё импортируют bot через config.py. Прикладные модули загружаются только на startup,
-чтобы простой import composition root не запускал их import-time side effects.
+Legacy-синглтоны bot/dp из core.loader пока сохраняются, но compatibility-фасад config.py
+удалён. Прикладные модули загружаются только на startup, чтобы простой import composition
+root не запускал их import-time side effects.
 """
 
 from dataclasses import dataclass, field

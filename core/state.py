@@ -17,8 +17,8 @@ from core.paths import (
 # =========================
 # === FILES / STATE ===
 # =========================
-# Legacy-имена оставлены строками, чтобы существующие импорты через config.py
-# не меняли тип. Источник истины для путей теперь core.paths.
+# Legacy-имена путей оставлены строками для прямых потребителей старого API.
+# Источник истины для путей теперь core.paths.
 CHAT_SETTINGS_FILE = str(CHAT_SETTINGS_PATH)
 LOG_FILE = str(USER_MESSAGES_LOG_PATH)
 STATS_FILE = str(MESSAGE_STATS_PATH)

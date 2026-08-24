@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 CHECKED = (
-    ["main.py", "config.py"]
+    ["main.py"]
     + glob.glob("handlers/*.py")
     + glob.glob("core/*.py")
     + glob.glob("features/*.py")

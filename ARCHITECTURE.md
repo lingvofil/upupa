@@ -6,7 +6,6 @@ upupa/
 ├── app/               # composition root и lifecycle приложения
 │   ├── bootstrap.py   # сборка router'ов, startup и запуск polling
 │   └── lifecycle.py   # владелец фоновых asyncio-задач
-├── config.py          # legacy-фасад обратной совместимости
 ├── prompts/           # промпты и текстовые данные
 ├── core/              # shared settings/state/paths/storage/loader
 ├── infrastructure/    # адаптеры внешних систем
@@ -24,12 +23,13 @@ upupa/
 
 - `main.py` делегирует запуск в `app/` и не содержит бизнес-логики.
 - `app/` — composition root: ему разрешено знать про handlers/features/services/games/AI/core/infrastructure.
-- `core/` не должен зависеть от `config.py`, `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
+- `core/` не должен зависеть от `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
 - Provider-реализации находятся в `infrastructure.ai` и не зависят от `AI/` или других прикладных слоёв.
 - Durable-storage adapters находятся в `infrastructure.persistence`; feature-модули не должны содержать SQL.
 - На R9 удалены промежуточные import-path фасады `core.ai_clients`, `AI.wrapper`, `AI.gigachat_client` и `AI.talking`. Provider-зависимости идут через `infrastructure.ai`, dialogue-зависимости — через `AI.dialog.*`.
-- Architecture guard запрещает возвращать удалённые import paths в production-код.
-- `config.py` пока остаётся широким compatibility-фасадом; AI-клиенты он переэкспортирует напрямую из `infrastructure.ai.clients`. Новые зависимости на `config.py` добавлять не следует.
+- На R10 удалён общий compatibility-фасад `config.py`; production-код импортирует canonical modules напрямую.
+- Repository-wide architecture guard запрещает импорт `config` в production-коде и повторное появление файла `config.py`.
+- Architecture guard также запрещает возвращать удалённые import paths в production-код.
 
 ## AI providers
 
@@ -38,7 +38,7 @@ upupa/
 - Groq adapter находится в `infrastructure.ai.groq`.
 - OpenRouter/SiliconFlow совместимый HTTP adapter находится в `infrastructure.ai.openai_compatible`.
 - Настроенные объекты `model`, `groq_ai`, `gigachat_model`, `gemini_client`, `openrouter_ai` и `siliconflow_ai` экспортируются через `infrastructure.ai.clients` как `LazyResource`.
-- Импорт `infrastructure.ai.clients` или временного `config.py` не создаёт SDK-клиенты: реальный объект создаётся потокобезопасно при первом обращении и затем переиспользуется.
+- Импорт `infrastructure.ai.clients` не создаёт SDK-клиенты: реальный объект создаётся потокобезопасно при первом обращении и затем переиспользуется.
 - Старые provider-фасады `AI.wrapper`, `AI.gigachat_client` и `core.ai_clients` удалены на R9; их публичные типы/ресурсы импортируются из соответствующих `infrastructure.ai.*` модулей.
 - Provider wrappers пока синхронные. Async call-sites должны продолжать выносить их в `asyncio.to_thread`; переход на native async transport в этот этап не входит.
 
@@ -59,8 +59,8 @@ upupa/
 
 Фоновые планировщики запускаются через `TaskSupervisor`, который хранит ссылки на задачи,
 логирует необработанные исключения и отменяет оставшиеся задачи при завершении polling.
-Создание глобальных `bot`/`dp` в `core.loader` пока сохранено для обратной совместимости:
-многие существующие модули всё ещё импортируют `bot` через `config.py`.
+Создание глобальных `bot`/`dp` в `core.loader` пока сохранено как отдельный legacy-механизм;
+потребители импортируют эти объекты напрямую из canonical-модуля `core.loader`.
 
 Постоянное состояние, которое необходимо приложению на старте, загружается из
 `UpupaApplication.initialize_state()`, а не как побочный эффект импорта feature-модуля.
@@ -72,7 +72,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 
 - Канонические пути к рабочим данным определяются в `core.paths` через абсолютный `PROJECT_ROOT`.
 - Физически JSON/DB/log-файлы пока остаются в корне репозитория; R6 не требует миграции production-данных и не меняет их форматы.
-- `core.state` временно переэкспортирует старые `*_FILE` имена как строки для `config.py` и legacy-кода.
+- `core.state` временно сохраняет старые `*_FILE` имена как строки для прямых legacy-потребителей; источник истины для путей — `core.paths`.
 - Для JSON используется граница `JsonRepository` и файловая реализация `JsonFileRepository`.
 - `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи не оставляла частично перезаписанный JSON.
 - `features.chat_settings`, `features.stat_rank_settings`, `features.sms_settings` и `features.content_filter` не используют `json.load/json.dump` для своего durable state; загрузка принимает repository и обновляет shared `dict/set/list` на месте, сохраняя identity.

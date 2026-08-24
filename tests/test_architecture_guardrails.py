@@ -5,16 +5,32 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = ROOT / "app"
 CORE_DIR = ROOT / "core"
-INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
+INFRA_DIR = ROOT / "infrastructure"
+INFRA_AI_DIR = INFRA_DIR / "ai"
 AI_DIR = ROOT / "AI"
 DIALOG_DIR = ROOT / "AI" / "dialog"
 HANDLERS_DIR = ROOT / "handlers"
 FEATURES_DIR = ROOT / "features"
 SERVICES_DIR = ROOT / "services"
 GAMES_DIR = ROOT / "games"
+PROMPTS_DIR = ROOT / "prompts"
 BOOTSTRAP_FILE = ROOT / "app" / "bootstrap.py"
 CHAT_SETTINGS_FILE = ROOT / "features" / "chat_settings.py"
+
+PRODUCTION_DIRS = (
+    AI_DIR,
+    APP_DIR,
+    CORE_DIR,
+    FEATURES_DIR,
+    GAMES_DIR,
+    HANDLERS_DIR,
+    INFRA_DIR,
+    PROMPTS_DIR,
+    SERVICES_DIR,
+)
+PRODUCTION_ROOT_FILES = (ROOT / "main.py",)
 
 FORBIDDEN_CORE_PREFIXES = (
     "config",
@@ -93,6 +109,30 @@ def _collect_import_violations(
                 if _matches_prefix(module_name, prefix):
                     violations.append(f"{path.relative_to(ROOT)} -> {module_name}")
     return violations
+
+
+def _production_python_files():
+    for path in PRODUCTION_ROOT_FILES:
+        if path.exists():
+            yield path
+    for directory in PRODUCTION_DIRS:
+        yield from sorted(directory.rglob("*.py"))
+
+
+def test_config_facade_is_removed_and_not_imported_by_production():
+    config_path = ROOT / "config.py"
+    assert not config_path.exists(), "config.py compatibility facade не должен возвращаться"
+
+    violations = []
+    for path in _production_python_files():
+        for module_name in _imports(path):
+            if _matches_prefix(module_name, "config"):
+                violations.append(f"{path.relative_to(ROOT)} -> {module_name}")
+
+    assert not violations, (
+        "Production-код должен использовать canonical modules напрямую, без config.py. "
+        "Найдены legacy-зависимости:\n" + "\n".join(violations)
+    )
 
 
 def test_core_does_not_depend_on_legacy_or_upper_layers():
