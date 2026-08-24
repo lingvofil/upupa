@@ -3,8 +3,7 @@
 This module owns the production order of random reactions and direct dialogue.
 Legacy ``AI.talking.process_general_message`` and
 ``AI.random_reactions.process_random_reactions`` remain available for
-compatibility, but the Telegram handler no longer composes them through
-runtime monkeypatching.
+compatibility, but production composes focused dialogue modules explicitly.
 """
 
 import logging
@@ -14,7 +13,9 @@ from aiogram.types import Message
 
 import AI.random_reactions as random_reactions
 import AI.situational_summary as situational_summary
-import AI.talking as talking
+from AI.dialog.generation import handle_bot_conversation
+from AI.dialog.serious_mode import handle_serious_mode_reply
+from AI.dialog.settings import update_chat_settings
 from core.loader import bot
 from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
@@ -38,16 +39,10 @@ async def _generate_live_situational_reaction(chat_id: int) -> str | None:
 
 
 async def process_random_reactions_once(message: Message) -> bool:
-    """Run accounting and random reactions exactly once for one Telegram message.
-
-    The message-id idempotency guard and live situational context are explicit
-    parts of this function instead of being installed by mutating another
-    module at import time.
-    """
+    """Run accounting and random reactions exactly once for one Telegram message."""
     if not situational_summary._register_incoming_message(message):
         return False
 
-    # Never react to bot messages, matching the legacy reaction pipeline.
     if not message.from_user or message.from_user.is_bot:
         return False
 
@@ -137,10 +132,10 @@ async def process_general_dialog_message(message: Message) -> None:
     """Handle serious/direct dialogue without launching reactions again."""
     chat_id = str(message.chat.id)
 
-    if await talking.handle_serious_mode_reply(message):
+    if await handle_serious_mode_reply(message):
         return
 
-    talking.update_chat_settings(chat_id)
+    update_chat_settings(chat_id)
     current_settings = chat_settings.get(chat_id, {})
 
     is_direct_appeal = False
@@ -186,7 +181,7 @@ async def process_general_dialog_message(message: Message) -> None:
     ) and current_settings.get("dialog_enabled", True):
         user_first_name = message.from_user.first_name or "Пользователь"
         await bot.send_chat_action(chat_id=chat_id, action="typing")
-        response = await talking.handle_bot_conversation(message, user_first_name)
+        response = await handle_bot_conversation(message, user_first_name)
         await message.reply(response)
         return
 
@@ -199,12 +194,7 @@ async def process_general_dialog_message(message: Message) -> None:
 
 
 async def process_dialog_pipeline(message: Message) -> bool:
-    """Run the canonical reaction -> direct-dialog sequence.
-
-    Returns ``True`` only when a random reaction consumed the message. This
-    preserves the handler's legacy behavior: direct dialogue and serious-mode
-    replies are still followed by the final statistics write.
-    """
+    """Run the canonical reaction -> direct-dialog sequence."""
     if await process_random_reactions_once(message):
         return True
 
