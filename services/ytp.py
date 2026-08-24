@@ -11,7 +11,7 @@ from aiogram.types import FSInputFile
 from moviepy.editor import AudioFileClip, VideoFileClip, concatenate_audioclips, concatenate_videoclips
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
-from config import chat_settings
+from core.state import chat_settings
 
 
 TARGET_DURATION = 10

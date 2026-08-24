@@ -12,7 +12,7 @@ import random
 from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import bot
+from core.loader import bot
 from games.crocodile import _load_words, _normalize_guess, add_point, format_leaderboard
 from AI.picgeneration import pollinations_generate, translate_to_en
 

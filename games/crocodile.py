@@ -21,8 +21,7 @@ from aiogram.types import (
     InputMediaPhoto,
 )
 
-# Импорт вашего бота из конфига
-from config import bot
+from core.loader import bot
 from core.settings import API_TOKEN
 from games.webapp_auth import (
     WebAppAuthError,

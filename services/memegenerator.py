@@ -4,8 +4,8 @@ import os
 import re
 import httpx
 from aiogram.types import BufferedInputFile, Message
-from config import chat_settings
-import config
+from core.paths import USER_MESSAGES_LOG_PATH
+from core.state import chat_settings
 
 # Кэш шаблонов для производительности
 _templates_cache = []
@@ -47,7 +47,7 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
     if reply_text:
         return reply_text
 
-    log_path = config.LOG_FILE
+    log_path = USER_MESSAGES_LOG_PATH
     if not os.path.exists(log_path):
         return "Когда логи пусты, как мой кошелек"
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from aiogram import types
 
 # Убедитесь, что все зависимости импортированы
-from config import bot
+from core.loader import bot
 from prompts import actions
 
 # Настройка логирования для отладки
@@ -183,4 +183,3 @@ async def get_weather_with_fallback() -> str:
         return weather_report
     except Exception as e:
         return await get_mock_weather() + f"\n\n(Ошибка API: {str(e)})"
-
