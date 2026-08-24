@@ -89,6 +89,14 @@ def _participant_stats(messages: list[dict], limit: int = 8) -> str:
     return ", ".join(f"{name} — {count}" for name, count in counter.most_common(limit))
 
 
+def _source_size(messages: list[dict]) -> int:
+    return sum(
+        len(_message_line(message)) + 1
+        for message in messages
+        if (message.get("text") or "").strip()
+    )
+
+
 def sanitize_radio_script(text: str, max_words: int = RADIO_MAX_WORDS) -> str:
     """Make model output safe to speak and enforce the hard word limit."""
     result = (text or "").strip()
@@ -103,7 +111,7 @@ def sanitize_radio_script(text: str, max_words: int = RADIO_MAX_WORDS) -> str:
         return result
 
     limited = " ".join(words[:max_words])
-    # Prefer a complete sentence near the limit.  If the model produced one
+    # Prefer a complete sentence near the limit. If the model produced one
     # gigantic sentence, the hard limit still wins.
     sentence_end = max(limited.rfind(". "), limited.rfind("! "), limited.rfind("? "), limited.rfind("… "))
     if sentence_end >= int(len(limited) * 0.75):
@@ -145,8 +153,8 @@ async def generate_radio_script(
     period_hours: int,
 ) -> RadioScript:
     title = chat_name or f"чат {chat_id}"
-    raw_context = _join_messages(messages, RADIO_CONTEXT_CHARS + 1)
-    use_summary = len(raw_context) > RADIO_CONTEXT_CHARS
+    total_context_chars = _source_size(messages)
+    use_summary = total_context_chars > RADIO_CONTEXT_CHARS
 
     if use_summary:
         structured_summary = await _make_structured_summary(chat_id, title, messages, period_hours)
@@ -181,8 +189,9 @@ async def generate_radio_script(
 """
 
     logging.info(
-        "[radio][script] messages=%s context_chars=%s structured_summary=%s",
+        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s",
         len(messages),
+        total_context_chars,
         len(source_block),
         use_summary,
     )
