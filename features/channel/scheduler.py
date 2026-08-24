@@ -17,11 +17,11 @@ MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAY_START = time(10, 0)
 DAY_END = time(23, 30)
 
-# Nominal average only. The actual target is selected from the active mood.
-POSTS_PER_DAY = 7
-# Compatibility aliases: no minimum gap is enforced anymore.
-PREFERRED_GAP_MINUTES = 0
-MIN_GAP_MINUTES = 0
+# Deprecated compatibility target for old direct helper callers. Production uses NOMINAL_POSTS_PER_DAY and mood ranges.
+POSTS_PER_DAY = 5
+NOMINAL_POSTS_PER_DAY = 7
+PREFERRED_GAP_MINUTES = 120
+MIN_GAP_MINUTES = 45
 STARTUP_LEAD_MINUTES = 5
 MISSED_GRACE_MINUTES = 20
 RETRY_MINUTES = 30
@@ -33,15 +33,40 @@ def _local_dt(day: date, clock: time) -> datetime:
     return MOSCOW_TZ.localize(datetime.combine(day, clock))
 
 
+def _pick_legacy_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> list[datetime]:
+    """Compatibility path for old direct callers; production does not use this gap policy."""
+    start = _local_dt(day, DAY_START)
+    end = _local_dt(day, DAY_END)
+    if now is not None and now.date() == day:
+        start = max(start, now.astimezone(MOSCOW_TZ) + timedelta(minutes=STARTUP_LEAD_MINUTES))
+
+    span_minutes = int((end - start).total_seconds() // 60)
+    if span_minutes < 0:
+        return []
+    if span_minutes == 0:
+        return [start]
+
+    count = min(POSTS_PER_DAY, span_minutes // MIN_GAP_MINUTES + 1)
+    if count <= 1:
+        return [start + timedelta(minutes=rng.randint(0, span_minutes))]
+    effective_gap = min(PREFERRED_GAP_MINUTES, span_minutes // (count - 1))
+    slack = span_minutes - effective_gap * (count - 1)
+    jitter = sorted(rng.randint(0, slack) for _ in range(count)) if slack > 0 else [0] * count
+    offsets = [jitter[index] + index * effective_gap for index in range(count)]
+    return [start + timedelta(minutes=offset) for offset in offsets]
+
+
 def _pick_daily_slots(
     day: date,
     *,
-    count: int = POSTS_PER_DAY,
+    count: int | None = None,
     now: datetime | None = None,
     burst_chance: float = 0.0,
     rng=random,
 ) -> list[datetime]:
-    """Picks slots without a minimum gap; moods may deliberately create bursts."""
+    """Mood-aware production slots have no minimum gap and may deliberately form bursts."""
+    if count is None:
+        return _pick_legacy_daily_slots(day, now=now, rng=rng)
     if count <= 0:
         return []
 
@@ -71,7 +96,7 @@ def _pick_daily_slots(
 
 def _new_schedule(now: datetime, *, mood: dict | None = None, rng=random) -> dict:
     mood = mood or get_current_mood(rng=rng)
-    target = daily_post_target(mood, rng=rng, default=POSTS_PER_DAY)
+    target = daily_post_target(mood, rng=rng, default=NOMINAL_POSTS_PER_DAY)
     slots = _pick_daily_slots(
         now.date(),
         count=target,
@@ -150,12 +175,12 @@ def _reconcile_schedule_for_mood(state: dict, now: datetime, mood: dict, *, rng=
     mood_changed = state.get("mood_name") != mood_name
 
     if mood_changed or not isinstance(state.get("target_posts"), int):
-        selected = daily_post_target(mood, rng=rng, default=POSTS_PER_DAY)
+        selected = daily_post_target(mood, rng=rng, default=NOMINAL_POSTS_PER_DAY)
         state["target_posts"] = max(_published_count(state), selected)
         state["mood_name"] = mood_name
         changed = True
 
-    target = int(state.get("target_posts") or POSTS_PER_DAY)
+    target = int(state.get("target_posts") or NOMINAL_POSTS_PER_DAY)
     published = _published_count(state)
     required_pending = max(0, target - published)
     pending = sorted(_pending_slots(state), key=lambda slot: str(slot.get("at") or ""))
@@ -183,12 +208,29 @@ def _reconcile_schedule_for_mood(state: dict, now: datetime, mood: dict, *, rng=
 
 
 def _top_up_schedule_slots(state: dict, now: datetime, rng=random) -> bool:
-    """Compatibility wrapper for old callers: reconcile against nominal seven-post activity."""
-    neutral_mood = {"name": "neutral", "posts_left": 1}
-    if state.get("mood_name") is None:
-        state["mood_name"] = "neutral"
-    state["target_posts"] = max(int(state.get("target_posts") or 0), POSTS_PER_DAY)
-    return _reconcile_schedule_for_mood(state, now, neutral_mood, rng=rng)
+    """Compatibility migration for legacy five-slot schedules; production uses mood reconciliation."""
+    slots = state.setdefault("slots", [])
+    changed = False
+
+    if state.get("target_posts") != POSTS_PER_DAY:
+        state["target_posts"] = POSTS_PER_DAY
+        changed = True
+    if len(slots) >= POSTS_PER_DAY:
+        return changed
+
+    occupied = [parsed for slot in slots if (parsed := _parse_slot(slot.get("at"))) is not None]
+    candidates = _pick_daily_slots(now.date(), now=now, rng=rng)
+    for candidate in candidates:
+        if len(slots) >= POSTS_PER_DAY:
+            break
+        if any(abs((candidate - other).total_seconds()) < MIN_GAP_MINUTES * 60 for other in occupied):
+            continue
+        slots.append({"at": candidate.isoformat(), "done": False, "missed": False})
+        occupied.append(candidate)
+        changed = True
+
+    slots.sort(key=lambda slot: str(slot.get("at") or ""))
+    return changed
 
 
 def _get_schedule_for_now(now: datetime) -> dict:
