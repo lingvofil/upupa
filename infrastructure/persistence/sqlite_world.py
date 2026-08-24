@@ -48,12 +48,47 @@ class SQLiteWorldRepository:
             target_state=int(row["target_state"]),
             status=str(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
-            resolved_at=(
-                datetime.fromisoformat(row["resolved_at"])
-                if row["resolved_at"]
-                else None
-            ),
+            resolved_at=(datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None),
         )
+
+    @staticmethod
+    def _create_relations_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE diplomatic_relations (
+                state_a INTEGER NOT NULL,
+                state_b INTEGER NOT NULL,
+                relation TEXT NOT NULL CHECK(relation IN ('allied', 'war')),
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (state_a, state_b),
+                CHECK(state_a < state_b),
+                FOREIGN KEY(state_a) REFERENCES world_states(world_id),
+                FOREIGN KEY(state_b) REFERENCES world_states(world_id)
+            )
+            """
+        )
+
+    def _ensure_relations_schema(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'diplomatic_relations'"
+        ).fetchone()
+        if row is None:
+            self._create_relations_table(conn)
+            return
+        sql = str(row["sql"] or "")
+        if "'war'" in sql:
+            return
+
+        conn.execute("ALTER TABLE diplomatic_relations RENAME TO diplomatic_relations_legacy")
+        self._create_relations_table(conn)
+        conn.execute(
+            """
+            INSERT INTO diplomatic_relations(state_a, state_b, relation, updated_at)
+            SELECT state_a, state_b, relation, updated_at
+            FROM diplomatic_relations_legacy
+            """
+        )
+        conn.execute("DROP TABLE diplomatic_relations_legacy")
 
     def init_schema(self) -> None:
         with self._connect() as conn:
@@ -69,20 +104,7 @@ class SQLiteWorldRepository:
                 )
                 """
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS diplomatic_relations (
-                    state_a INTEGER NOT NULL,
-                    state_b INTEGER NOT NULL,
-                    relation TEXT NOT NULL CHECK(relation = 'allied'),
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (state_a, state_b),
-                    CHECK(state_a < state_b),
-                    FOREIGN KEY(state_a) REFERENCES world_states(world_id),
-                    FOREIGN KEY(state_b) REFERENCES world_states(world_id)
-                )
-                """
-            )
+            self._ensure_relations_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS diplomatic_requests (
@@ -101,10 +123,7 @@ class SQLiteWorldRepository:
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS ux_diplomatic_pending_pair
-                ON diplomatic_requests(
-                    MIN(source_state, target_state),
-                    MAX(source_state, target_state)
-                )
+                ON diplomatic_requests(MIN(source_state, target_state), MAX(source_state, target_state))
                 WHERE status = 'pending'
                 """
             )
@@ -116,10 +135,7 @@ class SQLiteWorldRepository:
         now = self._now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM world_states WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM world_states WHERE chat_id = ?", (chat_id,)).fetchone()
             if row is None:
                 cursor = conn.execute(
                     """
@@ -139,20 +155,14 @@ class SQLiteWorldRepository:
                     """,
                     (title, now, world_id),
                 )
-            state = conn.execute(
-                "SELECT * FROM world_states WHERE world_id = ?",
-                (world_id,),
-            ).fetchone()
+            state = conn.execute("SELECT * FROM world_states WHERE world_id = ?", (world_id,)).fetchone()
         return self._state(state)  # type: ignore[return-value]
 
     def disable_state(self, chat_id: int) -> WorldState | None:
         now = self._now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM world_states WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM world_states WHERE chat_id = ?", (chat_id,)).fetchone()
             if row is None:
                 return None
             world_id = int(row["world_id"])
@@ -168,10 +178,7 @@ class SQLiteWorldRepository:
                 """,
                 (now, world_id, world_id),
             )
-            updated = conn.execute(
-                "SELECT * FROM world_states WHERE world_id = ?",
-                (world_id,),
-            ).fetchone()
+            updated = conn.execute("SELECT * FROM world_states WHERE world_id = ?", (world_id,)).fetchone()
         return self._state(updated)
 
     def update_title(self, chat_id: int, title: str) -> None:
@@ -187,18 +194,12 @@ class SQLiteWorldRepository:
 
     def get_state_by_chat_id(self, chat_id: int) -> WorldState | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM world_states WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM world_states WHERE chat_id = ?", (chat_id,)).fetchone()
         return self._state(row)
 
     def get_state_by_world_id(self, world_id: int) -> WorldState | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM world_states WHERE world_id = ?",
-                (world_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM world_states WHERE world_id = ?", (world_id,)).fetchone()
         return self._state(row)
 
     def list_enabled_states(self, exclude_world_id: int | None = None) -> list[WorldState]:
@@ -212,7 +213,15 @@ class SQLiteWorldRepository:
             rows = conn.execute(sql, params).fetchall()
         return [self._state(row) for row in rows if row is not None]  # type: ignore[misc]
 
-    def list_allied_states(self, world_id: int, *, active_only: bool) -> list[WorldState]:
+    def list_relation_states(
+        self,
+        world_id: int,
+        relation: str,
+        *,
+        active_only: bool,
+    ) -> list[WorldState]:
+        if relation not in {"allied", "war"}:
+            raise ValueError(f"Unsupported relation: {relation}")
         enabled_filter = "AND ws.enabled = 1" if active_only else ""
         with self._connect() as conn:
             rows = conn.execute(
@@ -220,30 +229,30 @@ class SQLiteWorldRepository:
                 SELECT ws.*
                 FROM diplomatic_relations dr
                 JOIN world_states ws
-                  ON ws.world_id = CASE
-                      WHEN dr.state_a = ? THEN dr.state_b
-                      ELSE dr.state_a
-                  END
+                  ON ws.world_id = CASE WHEN dr.state_a = ? THEN dr.state_b ELSE dr.state_a END
                 WHERE (dr.state_a = ? OR dr.state_b = ?)
-                  AND dr.relation = 'allied'
+                  AND dr.relation = ?
                   {enabled_filter}
                 ORDER BY ws.world_id
                 """,
-                (world_id, world_id, world_id),
+                (world_id, world_id, world_id, relation),
             ).fetchall()
         return [self._state(row) for row in rows if row is not None]  # type: ignore[misc]
 
-    def has_alliance(self, state_a: int, state_b: int) -> bool:
+    def list_allied_states(self, world_id: int, *, active_only: bool) -> list[WorldState]:
+        return self.list_relation_states(world_id, "allied", active_only=active_only)
+
+    def get_relation(self, state_a: int, state_b: int) -> str | None:
         first, second = sorted((state_a, state_b))
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT 1 FROM diplomatic_relations
-                WHERE state_a = ? AND state_b = ? AND relation = 'allied'
-                """,
+                "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
                 (first, second),
             ).fetchone()
-        return row is not None
+        return str(row["relation"]) if row is not None else None
+
+    def has_alliance(self, state_a: int, state_b: int) -> bool:
+        return self.get_relation(state_a, state_b) == "allied"
 
     def get_pending_request_between(self, state_a: int, state_b: int) -> DiplomaticRequest | None:
         first, second = sorted((state_a, state_b))
@@ -254,8 +263,7 @@ class SQLiteWorldRepository:
                 WHERE status = 'pending'
                   AND MIN(source_state, target_state) = ?
                   AND MAX(source_state, target_state) = ?
-                ORDER BY id DESC
-                LIMIT 1
+                ORDER BY id DESC LIMIT 1
                 """,
                 (first, second),
             ).fetchone()
@@ -269,33 +277,29 @@ class SQLiteWorldRepository:
         """Atomically validate both states/relation and create at most one pending request."""
         now = self._now()
         first, second = sorted((source_state, target_state))
-
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-
             source_row = conn.execute(
-                "SELECT enabled FROM world_states WHERE world_id = ?",
-                (source_state,),
+                "SELECT enabled FROM world_states WHERE world_id = ?", (source_state,)
             ).fetchone()
             if source_row is None or not bool(source_row["enabled"]):
                 return "source_disabled", None
-
             target_row = conn.execute(
-                "SELECT enabled FROM world_states WHERE world_id = ?",
-                (target_state,),
+                "SELECT enabled FROM world_states WHERE world_id = ?", (target_state,)
             ).fetchone()
             if target_row is None or not bool(target_row["enabled"]):
                 return "target_disabled", None
 
-            alliance = conn.execute(
-                """
-                SELECT 1 FROM diplomatic_relations
-                WHERE state_a = ? AND state_b = ? AND relation = 'allied'
-                """,
+            relation_row = conn.execute(
+                "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
                 (first, second),
             ).fetchone()
-            if alliance is not None:
-                return "already_allied", None
+            if relation_row is not None:
+                relation = str(relation_row["relation"])
+                if relation == "allied":
+                    return "already_allied", None
+                if relation == "war":
+                    return "at_war", None
 
             existing_row = conn.execute(
                 """
@@ -303,8 +307,7 @@ class SQLiteWorldRepository:
                 WHERE status = 'pending'
                   AND MIN(source_state, target_state) = ?
                   AND MAX(source_state, target_state) = ?
-                ORDER BY id DESC
-                LIMIT 1
+                ORDER BY id DESC LIMIT 1
                 """,
                 (first, second),
             ).fetchone()
@@ -319,14 +322,10 @@ class SQLiteWorldRepository:
                 (source_state, target_state, now),
             )
             request_id = int(cursor.lastrowid)
-            row = conn.execute(
-                "SELECT * FROM diplomatic_requests WHERE id = ?",
-                (request_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)).fetchone()
             return "created", self._request(row)
 
     def cancel_request(self, request_id: int) -> bool:
-        now = self._now()
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -334,7 +333,7 @@ class SQLiteWorldRepository:
                 SET status = 'cancelled', resolved_at = ?
                 WHERE id = ? AND status = 'pending'
                 """,
-                (now, request_id),
+                (self._now(), request_id),
             )
         return cursor.rowcount > 0
 
@@ -350,21 +349,16 @@ class SQLiteWorldRepository:
         now = self._now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM diplomatic_requests WHERE id = ?",
-                (request_id,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)).fetchone()
             request = self._request(row)
             if request is None:
                 return "not_found", None, None, None
 
             source_row = conn.execute(
-                "SELECT * FROM world_states WHERE world_id = ?",
-                (request.source_state,),
+                "SELECT * FROM world_states WHERE world_id = ?", (request.source_state,)
             ).fetchone()
             target_row = conn.execute(
-                "SELECT * FROM world_states WHERE world_id = ?",
-                (request.target_state,),
+                "SELECT * FROM world_states WHERE world_id = ?", (request.target_state,)
             ).fetchone()
             source = self._state(source_row)
             target = self._state(target_row)
@@ -373,52 +367,51 @@ class SQLiteWorldRepository:
                 return "wrong_target", request, source, target
             if request.status != "pending":
                 return "already_resolved", request, source, target
-            if not target.enabled:
+            if not target.enabled or (decision == "accepted" and (source is None or not source.enabled)):
                 conn.execute(
                     """
-                    UPDATE diplomatic_requests
-                    SET status = 'cancelled', resolved_at = ?
+                    UPDATE diplomatic_requests SET status = 'cancelled', resolved_at = ?
                     WHERE id = ? AND status = 'pending'
                     """,
                     (now, request_id),
                 )
                 cancelled = conn.execute(
-                    "SELECT * FROM diplomatic_requests WHERE id = ?",
-                    (request_id,),
-                ).fetchone()
-                return "disabled", self._request(cancelled), source, target
-            if decision == "accepted" and (source is None or not source.enabled):
-                conn.execute(
-                    """
-                    UPDATE diplomatic_requests
-                    SET status = 'cancelled', resolved_at = ?
-                    WHERE id = ? AND status = 'pending'
-                    """,
-                    (now, request_id),
-                )
-                cancelled = conn.execute(
-                    "SELECT * FROM diplomatic_requests WHERE id = ?",
-                    (request_id,),
+                    "SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)
                 ).fetchone()
                 return "disabled", self._request(cancelled), source, target
 
+            first, second = sorted((request.source_state, request.target_state))
+            relation_row = conn.execute(
+                "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
+                (first, second),
+            ).fetchone()
+            if decision == "accepted" and relation_row is not None and relation_row["relation"] == "war":
+                conn.execute(
+                    """
+                    UPDATE diplomatic_requests SET status = 'cancelled', resolved_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (now, request_id),
+                )
+                cancelled = conn.execute(
+                    "SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)
+                ).fetchone()
+                return "at_war", self._request(cancelled), source, target
+
             cursor = conn.execute(
                 """
-                UPDATE diplomatic_requests
-                SET status = ?, resolved_at = ?
+                UPDATE diplomatic_requests SET status = ?, resolved_at = ?
                 WHERE id = ? AND status = 'pending'
                 """,
                 (decision, now, request_id),
             )
             if cursor.rowcount != 1:
                 latest = conn.execute(
-                    "SELECT * FROM diplomatic_requests WHERE id = ?",
-                    (request_id,),
+                    "SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)
                 ).fetchone()
                 return "already_resolved", self._request(latest), source, target
 
             if decision == "accepted":
-                first, second = sorted((request.source_state, request.target_state))
                 conn.execute(
                     """
                     INSERT INTO diplomatic_relations(state_a, state_b, relation, updated_at)
@@ -430,8 +423,7 @@ class SQLiteWorldRepository:
                 )
 
             resolved = conn.execute(
-                "SELECT * FROM diplomatic_requests WHERE id = ?",
-                (request_id,),
+                "SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)
             ).fetchone()
         return decision, self._request(resolved), source, target
 
@@ -439,7 +431,72 @@ class SQLiteWorldRepository:
         first, second = sorted((state_a, state_b))
         with self._connect() as conn:
             cursor = conn.execute(
-                "DELETE FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
+                """
+                DELETE FROM diplomatic_relations
+                WHERE state_a = ? AND state_b = ? AND relation = 'allied'
+                """,
+                (first, second),
+            )
+        return cursor.rowcount > 0
+
+    def declare_war(self, state_a: int, state_b: int) -> tuple[str, str | None]:
+        """Atomically replace any alliance/pending proposal with a symmetric war relation."""
+        first, second = sorted((state_a, state_b))
+        now = self._now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute(
+                "SELECT enabled FROM world_states WHERE world_id = ?", (state_a,)
+            ).fetchone()
+            target = conn.execute(
+                "SELECT enabled FROM world_states WHERE world_id = ?", (state_b,)
+            ).fetchone()
+            if source is None or not bool(source["enabled"]):
+                return "source_disabled", None
+            if target is None:
+                return "unknown_target", None
+            if not bool(target["enabled"]):
+                return "target_disabled", None
+            if state_a == state_b:
+                return "self", None
+
+            relation_row = conn.execute(
+                "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
+                (first, second),
+            ).fetchone()
+            previous = str(relation_row["relation"]) if relation_row is not None else None
+            if previous == "war":
+                return "already_at_war", previous
+
+            conn.execute(
+                """
+                UPDATE diplomatic_requests
+                SET status = 'cancelled', resolved_at = ?
+                WHERE status = 'pending'
+                  AND MIN(source_state, target_state) = ?
+                  AND MAX(source_state, target_state) = ?
+                """,
+                (now, first, second),
+            )
+            conn.execute(
+                """
+                INSERT INTO diplomatic_relations(state_a, state_b, relation, updated_at)
+                VALUES (?, ?, 'war', ?)
+                ON CONFLICT(state_a, state_b)
+                DO UPDATE SET relation = 'war', updated_at = excluded.updated_at
+                """,
+                (first, second, now),
+            )
+        return "declared", previous
+
+    def end_war(self, state_a: int, state_b: int) -> bool:
+        first, second = sorted((state_a, state_b))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM diplomatic_relations
+                WHERE state_a = ? AND state_b = ? AND relation = 'war'
+                """,
                 (first, second),
             )
         return cursor.rowcount > 0
