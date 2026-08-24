@@ -15,15 +15,9 @@ from aiogram.types import BufferedInputFile, Message
 from googleapiclient.discovery import build
 from PIL import Image, ImageDraw, ImageFont
 
-# Импортируем ключи и объекты из config
-from config import (
-    API_TOKEN,
-    GOOGLE_API_KEY,
-    SEARCH_ENGINE_ID,
-    bot,
-    giphy_api_key,
-    model,
-)
+from core.loader import bot
+from core.settings import API_TOKEN, GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
+from infrastructure.ai.clients import model
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 # Кэш последних показанных картинок (храним хеши URL)

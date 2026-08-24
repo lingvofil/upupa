@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 
 from AI.dialog.generation import generate_simple_response
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
-from config import chat_settings
+from core.state import chat_settings
 
 CALEND_BASE_URL = "https://www.calend.ru"
 MAX_HOLIDAYS = 5

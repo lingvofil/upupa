@@ -24,7 +24,8 @@ except ImportError:
     SEAM_CARVING_AVAILABLE = False
 
 # Импортируем общие функции из вашего проекта
-from config import bot as main_bot_instance
+from core.loader import bot as main_bot_instance
+from core.settings import BLOCKED_USERS
 from AI.whatisthere import download_file
 
 # Настройка логирования
@@ -436,7 +437,6 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
 
 def is_distortion_command(message: types.Message) -> bool:
     try:
-        from config import BLOCKED_USERS
         if message.from_user.id in BLOCKED_USERS: return False
         text_to_check = message.caption or message.text
         if text_to_check and "дисторшн" in text_to_check.lower():

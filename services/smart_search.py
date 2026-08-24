@@ -1,9 +1,8 @@
 import logging
 import numpy as np
 from infrastructure.ai.clients import gemini_client
-from config import model  # Используем настройку из конфига
 
-# Если в config.py нет переменной EMBEDDING_MODEL, используем дефолтную
+# Стабильное имя модели эмбеддингов.
 EMBEDDING_MODEL_NAME = 'models/text-embedding-004'
 
 def get_embedding(text: str):

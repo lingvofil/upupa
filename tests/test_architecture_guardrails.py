@@ -10,6 +10,8 @@ INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
 DIALOG_DIR = ROOT / "AI" / "dialog"
 HANDLERS_DIR = ROOT / "handlers"
 FEATURES_DIR = ROOT / "features"
+SERVICES_DIR = ROOT / "services"
+GAMES_DIR = ROOT / "games"
 BOOTSTRAP_FILE = ROOT / "app" / "bootstrap.py"
 CHAT_SETTINGS_FILE = ROOT / "features" / "chat_settings.py"
 
@@ -131,6 +133,19 @@ def test_handlers_and_features_do_not_depend_on_config_facade():
 
     assert not violations, (
         "handlers и features должны использовать canonical modules напрямую, без config.py. "
+        "Найдены legacy-зависимости:\n" + "\n".join(violations)
+    )
+
+
+def test_services_and_games_do_not_depend_on_config_facade():
+    violations = []
+    for directory in (SERVICES_DIR, GAMES_DIR):
+        violations.extend(
+            _collect_import_violations(directory, ("config",), recursive=True)
+        )
+
+    assert not violations, (
+        "services и games должны использовать canonical modules напрямую, без config.py. "
         "Найдены legacy-зависимости:\n" + "\n".join(violations)
     )
 

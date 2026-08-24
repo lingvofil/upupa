@@ -16,7 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 
-from config import GOOGLE_API_KEY, SEARCH_ENGINE_ID
+from core.settings import GOOGLE_API_KEY, SEARCH_ENGINE_ID
 
 MAX_RESULTS = 5
 
