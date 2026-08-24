@@ -13,14 +13,6 @@ from infrastructure.ai.gemini import (
 )
 
 
-def test_legacy_wrapper_facade_reexports_infrastructure_classes():
-    from AI.wrapper import GeminiModel as LegacyGeminiModel
-    from AI.wrapper import ModelFallbackWrapper as LegacyFallbackWrapper
-
-    assert LegacyGeminiModel is GeminiModel
-    assert LegacyFallbackWrapper is ModelFallbackWrapper
-
-
 def test_legacy_blob_becomes_part():
     out = _normalize_contents(
         ["опиши", {"mime_type": "image/jpeg", "data": b"\xff\xd8"}]

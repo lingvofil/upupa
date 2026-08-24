@@ -11,6 +11,7 @@ import re
 
 from aiogram import types
 
+from AI.dialog.generation import generate_simple_response
 from config import bot
 
 # Порог: если кириллицы больше, чем латиницы — считаем текст русским
@@ -59,9 +60,6 @@ def _looks_russian(text: str) -> bool:
 
 
 async def process_translate_command(message: types.Message) -> None:
-    # Ленивый импорт: избегаем цикла AI.translate <-> AI.talking
-    from AI.talking import generate_simple_response
-
     source_message = message.reply_to_message
     source_text = None
     if source_message:

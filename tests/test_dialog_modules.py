@@ -22,22 +22,7 @@ def _imported_modules(path: str) -> set[str]:
     return modules
 
 
-def test_talking_is_compatibility_facade_not_dialog_implementation():
-    source = _source("AI/talking.py")
-    tree = ast.parse(source)
-
-    function_names = {
-        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    assert function_names == {"handle_bot_conversation", "process_general_message"}
-    assert "AI.dialog.generation" in source
-    assert "AI.dialog.model_commands" in source
-    assert "AI.dialog.prompt_commands" in source
-    assert "AI.dialog.serious_mode" in source
-    assert "AI.dialog.settings" in source
-
-
-def test_focused_dialog_modules_never_import_talking_facade():
+def test_focused_dialog_modules_are_self_contained():
     for path in (
         "AI/dialog/generation.py",
         "AI/dialog/model_commands.py",
@@ -46,7 +31,8 @@ def test_focused_dialog_modules_never_import_talking_facade():
         "AI/dialog/settings.py",
         "AI/dialog/style.py",
     ):
-        assert "AI.talking" not in _imported_modules(path)
+        imports = _imported_modules(path)
+        assert "AI.talking" not in imports
 
 
 def test_dialog_settings_preserve_legacy_defaults():
@@ -63,21 +49,3 @@ def test_dialog_settings_preserve_legacy_defaults():
     assert settings.chat_settings[chat_id]["active_model"] == "gemini"
 
     settings.chat_settings.pop(chat_id, None)
-
-
-def test_talking_compatibility_exports_remain_available():
-    from AI import talking
-
-    expected = (
-        "generate_simple_response",
-        "generate_response",
-        "handle_bot_conversation",
-        "handle_serious_mode_reply",
-        "handle_switch_to_gemini",
-        "handle_set_prompt_command",
-        "update_chat_settings",
-        "get_current_chat_prompt",
-        "build_prompt_with_current_chat_prompt",
-    )
-    for name in expected:
-        assert callable(getattr(talking, name))

@@ -1,4 +1,4 @@
-"""Regression tests for the R4 AI provider boundary."""
+"""Regression tests for the AI provider infrastructure boundary."""
 
 import ast
 import threading
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tests import test_smoke_imports  # noqa: F401  (env + mocks)
 
-import core.ai_clients as core_clients
+import infrastructure.ai.clients as provider_clients
 from infrastructure.ai.clients import LazyResource
 
 
@@ -25,7 +25,7 @@ def _call_name(call: ast.Call) -> str:
     return ".".join(reversed(parts))
 
 
-def test_core_ai_client_exports_are_lazy_resources():
+def test_provider_client_exports_are_lazy_resources():
     for name in (
         "gemini_client",
         "groq_ai",
@@ -35,7 +35,7 @@ def test_core_ai_client_exports_are_lazy_resources():
         "openrouter_ai",
         "siliconflow_ai",
     ):
-        assert isinstance(getattr(core_clients, name), LazyResource)
+        assert isinstance(getattr(provider_clients, name), LazyResource)
 
 
 def test_lazy_resource_constructs_exactly_once_under_concurrency():

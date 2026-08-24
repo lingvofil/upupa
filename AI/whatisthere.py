@@ -9,7 +9,7 @@ import httpx
 from aiogram import types
 from bs4 import BeautifulSoup
 
-from AI.wrapper import GeminiModel
+from infrastructure.ai.gemini import GeminiModel
 from config import (
     API_TOKEN,
     ROBOTICS_MODEL,
@@ -19,7 +19,7 @@ from config import (
     groq_ai,
     model,
 )
-from core.ai_clients import gemini_client
+from infrastructure.ai.clients import gemini_client
 from prompts import PROMPTS_MEDIA
 
 

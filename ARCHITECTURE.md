@@ -8,14 +8,14 @@ upupa/
 │   └── lifecycle.py   # владелец фоновых asyncio-задач
 ├── config.py          # legacy-фасад обратной совместимости
 ├── prompts/           # промпты и текстовые данные
-├── core/              # shared settings/state/paths/storage/loader + compatibility exports
+├── core/              # shared settings/state/paths/storage/loader
 ├── infrastructure/    # адаптеры внешних систем
 │   ├── ai/            # Gemini/Groq/GigaChat/OpenAI-compatible providers и lazy resources
 │   └── persistence/   # SQLite и другие durable-storage adapters
 ├── features/          # функциональные блоки бота, включая явный dialog pipeline
 ├── services/          # внешние сервисы и обработка медиа (поиск, погода, ytp, мемы)
 ├── games/             # игры (крокодил, егра)
-├── AI/                # AI-функции и compatibility-фасады
+├── AI/                # AI-функции
 │   └── dialog/        # settings/generation/commands/serious-mode/style диалога
 └── tests/             # regression, architecture guardrails и smoke-тесты
 ```
@@ -27,10 +27,9 @@ upupa/
 - `core/` не должен зависеть от `config.py`, `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
 - Provider-реализации находятся в `infrastructure.ai` и не зависят от `AI/` или других прикладных слоёв.
 - Durable-storage adapters находятся в `infrastructure.persistence`; feature-модули не должны содержать SQL.
-- `core.ai_clients` временно остаётся compatibility-фасадом, но импортирует только `infrastructure.ai.clients`; обратная зависимость `core.ai_clients -> AI.*` устранена на R4.
-- `AI.wrapper` и `AI.gigachat_client` — compatibility-фасады для старых import paths. Новые provider-зависимости должны идти через `infrastructure.ai`.
-- `AI.talking` после R7 — compatibility-фасад для старых dialogue import paths; production pipeline и dialogue handlers должны импортировать `AI.dialog.*` напрямую.
-- `config.py` — только compatibility-фасад; новые зависимости на него добавлять не следует.
+- На R9 удалены промежуточные import-path фасады `core.ai_clients`, `AI.wrapper`, `AI.gigachat_client` и `AI.talking`. Provider-зависимости идут через `infrastructure.ai`, dialogue-зависимости — через `AI.dialog.*`.
+- Architecture guard запрещает возвращать удалённые import paths в production-код.
+- `config.py` пока остаётся широким compatibility-фасадом; AI-клиенты он переэкспортирует напрямую из `infrastructure.ai.clients`. Новые зависимости на `config.py` добавлять не следует.
 
 ## AI providers
 
@@ -38,25 +37,23 @@ upupa/
 - GigaChat conversation/fallback adapters находятся в `infrastructure.ai.gigachat`.
 - Groq adapter находится в `infrastructure.ai.groq`.
 - OpenRouter/SiliconFlow совместимый HTTP adapter находится в `infrastructure.ai.openai_compatible`.
-- Настроенные объекты `model`, `groq_ai`, `gigachat_model`, `gemini_client` и legacy provider-объекты экспортируются через `infrastructure.ai.clients` как `LazyResource`.
-- Импорт `core.ai_clients`/`config.py` больше не создаёт эти SDK-клиенты: реальный объект создаётся потокобезопасно при первом обращении и затем переиспользуется.
-- Публичные имена `model`, `groq_ai`, `gigachat_model`, `gemini_client`, `openrouter_ai`, `siliconflow_ai` сохранены, поэтому миграция потребителей может идти постепенно.
-- Provider wrappers пока синхронные. Async call-sites должны продолжать выносить их в `asyncio.to_thread`; переход на native async transport не входит в R4.
+- Настроенные объекты `model`, `groq_ai`, `gigachat_model`, `gemini_client`, `openrouter_ai` и `siliconflow_ai` экспортируются через `infrastructure.ai.clients` как `LazyResource`.
+- Импорт `infrastructure.ai.clients` или временного `config.py` не создаёт SDK-клиенты: реальный объект создаётся потокобезопасно при первом обращении и затем переиспользуется.
+- Старые provider-фасады `AI.wrapper`, `AI.gigachat_client` и `core.ai_clients` удалены на R9; их публичные типы/ресурсы импортируются из соответствующих `infrastructure.ai.*` модулей.
+- Provider wrappers пока синхронные. Async call-sites должны продолжать выносить их в `asyncio.to_thread`; переход на native async transport в этот этап не входит.
 
 ## Dialog pipeline
 
 - Production catch-all handler делегирует реакции и прямой диалог в `features.dialog_pipeline`.
 - Канонический порядок внутри pipeline: один проход random reactions/accounting, затем serious/direct dialogue.
-- `handlers.dialog` больше не вызывает `AI.situational_summary.install_into_random_reactions` и не присваивает функции в `AI.talking` во время импорта.
+- `handlers.dialog` больше не вызывает `AI.situational_summary.install_into_random_reactions` и не присваивает функции другим AI-модулям во время импорта.
 - Живой буфер ситуативной реакции и защита от повторного `message_id` используются явно из `AI.situational_summary`; ситуативный текст генерируется через `generate_absurd_situational_reaction` без замены функций другого модуля.
-- На R7 dialogue feature разделён на `AI.dialog.settings`, `AI.dialog.generation`, `AI.dialog.model_commands`, `AI.dialog.prompt_commands`, `AI.dialog.serious_mode` и `AI.dialog.style`.
-- `features.dialog_pipeline` напрямую зависит от focused dialogue modules и больше не импортирует `AI.talking`.
-- `handlers.ai_modes` и `handlers.ai_prompts` также используют `AI.dialog.*` напрямую; model/prompt/serious-mode команды больше не живут в god-module.
-- `AI.talking` сохранён как compatibility-фасад для старых потребителей и legacy `process_general_message`; новые production-зависимости на него запрещены architecture guardrail'ами. Удаление фасада относится к R9.
-- `AI.random_reactions.process_random_reactions` также пока сохранён для совместимости, но production handler его не компонует.
+- Dialogue feature разделён на `AI.dialog.settings`, `AI.dialog.generation`, `AI.dialog.model_commands`, `AI.dialog.prompt_commands`, `AI.dialog.serious_mode` и `AI.dialog.style`.
+- `features.dialog_pipeline`, `handlers.ai_modes`, `handlers.ai_prompts` и остальные потребители dialogue helpers используют focused `AI.dialog.*` модули напрямую.
+- `AI.talking` удалён на R9 после миграции оставшихся потребителей; legacy `process_general_message` больше не является доступным production API.
+- `AI.random_reactions.process_random_reactions` пока сохранён для совместимости, но production handler его не компонует.
 - Случайная реакция по-прежнему прерывает catch-all handler, а serious/direct dialogue не пропускает финальную запись `features.statistics.log_message`.
-- Compatibility wrapper `AI.talking.handle_bot_conversation` передаёт тестируемые зависимости в focused generation module явно, вместо runtime mutation другого модуля.
-- Architecture regression-тесты запрещают возвращать runtime monkeypatch в `handlers.dialog`, импортировать `AI.talking` из canonical pipeline/dialog handlers и вызывать legacy composed entrypoints из production pipeline.
+- Architecture regression-тесты запрещают возвращать runtime monkeypatch в `handlers.dialog`, импортировать удалённые compatibility-фасады и вызывать legacy composed entrypoints из production pipeline.
 
 ## Lifecycle
 
@@ -95,7 +92,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через `asyncio.to_thread`.
 - Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.: скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
-- На R7 синхронный provider routing в `AI.dialog.generation` сохраняет прежний `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
+- Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
 
 ## Security и deploy
 

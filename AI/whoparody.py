@@ -14,6 +14,7 @@ from config import (
     model, LOG_FILE, gigachat_model, groq_ai, chat_settings,
     openrouter_ai, siliconflow_ai
 )
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from prompts import actions, PARODY_PROMPT
 
 # --- ПРОМПТЫ ---
@@ -150,8 +151,6 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
     message_sample = random.sample(messages, sample_size)
 
     messages_text = "\n".join(message_sample)
-    from AI.talking import build_prompt_with_current_chat_prompt
-
     prompt = build_prompt_with_current_chat_prompt(
         str(chat_id),
         WHO_AM_I_PROMPT.format(messages=messages_text),
@@ -187,8 +186,6 @@ async def process_chat_profile(message: types.Message):
     sample_size = min(400, len(messages))
     message_sample = random.sample(messages, sample_size)
     messages_text = "\n".join(message_sample)
-
-    from AI.talking import build_prompt_with_current_chat_prompt
 
     prompt = build_prompt_with_current_chat_prompt(
         str(chat_id),

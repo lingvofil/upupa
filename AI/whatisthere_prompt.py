@@ -2,7 +2,7 @@
 
 import logging
 
-from AI.talking import build_prompt_with_current_chat_prompt
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from AI.whoparody import generate_with_active_model
 
 

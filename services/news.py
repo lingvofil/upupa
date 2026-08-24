@@ -12,6 +12,9 @@ import xml.etree.ElementTree as ET
 import requests
 from aiogram import types
 
+from AI.dialog.generation import generate_simple_response
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
+
 # Ленты пробуются по порядку, пока не наберётся MAX_ITEMS новостей
 NEWS_FEEDS = [
     "https://lenta.ru/rss/last24",
@@ -97,9 +100,6 @@ async def _process_news_review(
     exclude: re.Pattern | None = None,
     extra_rule: str = "",
 ) -> None:
-    # Ленивый импорт: избегаем цикла services.news <-> AI.talking
-    from AI.talking import build_prompt_with_current_chat_prompt, generate_simple_response
-
     status = await message.reply(status_text)
     try:
         news = await asyncio.to_thread(_fetch_news_sync, feeds, exclude)

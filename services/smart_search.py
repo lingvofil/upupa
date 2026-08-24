@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from core.ai_clients import gemini_client
+from infrastructure.ai.clients import gemini_client
 from config import model  # Используем настройку из конфига
 
 # Если в config.py нет переменной EMBEDDING_MODEL, используем дефолтную
