@@ -1,45 +1,35 @@
-#voice.py
-import os
-import random
+"""Text response + legacy distorted voice command."""
+
 import asyncio
 import logging
-import wave
-import time
-from aiogram import types, Bot
-from aiogram.types import FSInputFile
-from core.settings import TEXT_GENERATION_MODEL_LIGHT, TTS_MODELS_QUEUE
-from core.state import chat_settings
-from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
+import tempfile
+from pathlib import Path
+
+from aiogram import Bot, types
+from aiogram.types import BufferedInputFile
+
 from AI.dialog.generation import format_chat_history, update_conversation_history
 from AI.dialog.settings import get_current_chat_prompt, update_chat_settings
-from services.distortion import apply_ffmpeg_audio_distortion
+from core.settings import TEXT_GENERATION_MODEL_LIGHT
+from core.state import chat_settings
+from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import GeminiModel
-import io
-from pydub import AudioSegment
+from services.distortion import apply_ffmpeg_audio_distortion
+from services.speech import SpeechSynthesisError, synthesize_speech
 
-# Полный список доступных голосов
-AVAILABLE_VOICES = [
-    "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", 
-    "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", 
-    "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", 
-    "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", 
-    "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
-]
 
-DEFAULT_DISTORTION_INTENSITY = 60 
+DEFAULT_DISTORTION_INTENSITY = 60
+
 
 async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str:
-    """
-    Генерирует текстовый ответ от имени персонажа.
-    ИСПОЛЬЗУЕТ АКТИВНУЮ МОДЕЛЬ из настроек чата.
-    """
+    """Generate the short spoken answer using the chat's active model/persona."""
     update_chat_settings(chat_id)
     current_settings = chat_settings.get(chat_id, {})
     active_model = current_settings.get("active_model", "gemini")
-    
+
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
     chat_history_formatted = format_chat_history(chat_id)
-    
+
     full_prompt = (
         f"{selected_prompt}\n\n"
         f"Это голосовой ответ в чате. Твоя задача — ответить пользователю '{prompt_name}' голосом.\n"
@@ -49,240 +39,103 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
     )
 
     try:
-        # Режим истории не подходит для голоса (нужен текст от нейросети)
         if active_model == "history":
             logging.info("Voice: режим 'history' не поддерживается, переключаюсь на gemini")
             active_model = "gemini"
-        
-        logging.info(f"Voice text generation: используется модель {active_model}")
-        
+
+        logging.info("Voice text generation: используется модель %s", active_model)
+
         def sync_model_call():
             if active_model == "gigachat":
                 response = gigachat_model.generate_content(full_prompt, chat_id=int(chat_id))
                 return response.text
-            elif active_model == "groq":
+            if active_model == "groq":
                 return groq_ai.generate_text(full_prompt, max_tokens=500)
-            else:  # gemini
-                light_model = GeminiModel(gemini_client, TEXT_GENERATION_MODEL_LIGHT)
-                response = light_model.generate_content(full_prompt)
-                return response.text
-            
+
+            light_model = GeminiModel(gemini_client, TEXT_GENERATION_MODEL_LIGHT)
+            response = light_model.generate_content(full_prompt)
+            return response.text
+
         text_response = await asyncio.to_thread(sync_model_call)
-        
-        # Историю сохраняем как обычно
+
         update_conversation_history(chat_id, "User (Voice)", user_query, role="user")
         update_conversation_history(chat_id, prompt_name, text_response, role="assistant")
-        
         return text_response
-    except Exception as e:
-        logging.error(f"Voice Text Gen Error ({active_model}): {e}")
-        # Fallback на основную модель Gemini
+    except Exception as exc:
+        logging.error("Voice Text Gen Error (%s): %s", active_model, exc)
         try:
             logging.info("Fallback to main Gemini model for voice text...")
+
             def sync_fallback_call():
                 return model.generate_content(full_prompt, chat_id=int(chat_id)).text
+
             return await asyncio.to_thread(sync_fallback_call)
-        except Exception as e2:
-            logging.error(f"Fallback Voice Text Gen Error: {e2}")
+        except Exception as fallback_exc:
+            logging.error("Fallback Voice Text Gen Error: %s", fallback_exc)
             return "Кхе-кхе... Что-то горло першит, не могу говорить."
 
-async def generate_audio_from_text_groq(text: str, output_path: str) -> bool:
-    """
-    Groq TTS (canopylabs/orpheus-v1-english)
-    Возвращает WAV напрямую.
-    """
-    try:
-        if not groq_ai.client:
-            logging.error("Groq client not initialized")
-            return False
-
-        GROQ_TTS_VOICES = [
-            "autumn",
-            "diana",
-            "hannah",
-            "austin",
-            "daniel",
-            "troy",
-        ]
-
-        def sync_groq_tts():
-            try:
-                selected_voice = random.choice(GROQ_TTS_VOICES)
-                logging.info(f"🎙 Groq TTS voice selected: {selected_voice}")
-
-                response = groq_ai.client.audio.speech.create(
-                    model="canopylabs/orpheus-v1-english",
-                    input=text,
-                    voice=selected_voice,
-                    response_format="wav"
-                )
-
-                # ✅ ЕДИНСТВЕННО ПРАВИЛЬНЫЙ СПОСОБ
-                return response.read()
-
-            except Exception as e:
-                logging.error(f"Groq TTS API Error: {e}", exc_info=True)
-                return None
-
-        audio_bytes = await asyncio.to_thread(sync_groq_tts)
-
-        if not audio_bytes:
-            logging.error("Groq TTS returned empty audio")
-            return False
-
-        with open(output_path, "wb") as f:
-            f.write(audio_bytes)
-
-        logging.info(f"✅ Groq TTS WAV saved: {output_path}")
-        return True
-
-    except Exception as e:
-        logging.error(f"Groq TTS Fatal Error: {e}", exc_info=True)
-        return False
-
-async def generate_audio_from_text_gemini(text: str, output_path: str) -> bool:
-    """
-    Использует Gemini TTS для генерации аудио с Retry.
-    """
-    try:
-        voice_name = random.choice(AVAILABLE_VOICES)
-        
-        generation_config = {
-            "response_modalities": ["AUDIO"],
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {
-                        "voice_name": voice_name
-                    }
-                }
-            }
-        }
-
-        def sync_tts_call_with_retry():
-            max_retries = 3
-            base_delay = 15 
-            
-            for model_name in TTS_MODELS_QUEUE:
-                tts_model = GeminiModel(gemini_client, model_name)
-                
-                for attempt in range(max_retries):
-                    try:
-                        logging.info(f"🎤 Trying TTS model: {model_name} with voice {voice_name} (Attempt {attempt+1})")
-                        response = tts_model.generate_content(
-                            text,
-                            generation_config=generation_config
-                        )
-                        return response
-                        
-                    except Exception as e:
-                        err_text = str(e)
-                        code = getattr(e, "code", None)
-                        # квота: google-genai кидает APIError(code=429) / RESOURCE_EXHAUSTED
-                        if code == 429 or "429" in err_text or "RESOURCE_EXHAUSTED" in err_text.upper():
-                            if attempt < max_retries - 1:
-                                delay = base_delay * (attempt + 1) + random.uniform(1, 5)
-                                logging.warning(f"⚠️ Quota exceeded for {model_name}. Sleeping for {delay:.1f}s...")
-                                time.sleep(delay)
-                            else:
-                                logging.error(f"❌ Max retries reached for {model_name}.")
-                                break
-                        elif code == 404 or "404" in err_text:
-                            logging.error(f"❌ Model {model_name} not found (404). Skipping.")
-                            break
-                        else:
-                            logging.error(f"Error with model {model_name}: {e}")
-                            if attempt < max_retries - 1:
-                                time.sleep(5)
-                            else:
-                                break
-            return None
-
-        response = await asyncio.to_thread(sync_tts_call_with_retry)
-        
-        if not response or not response.candidates:
-            logging.error("Gemini TTS returned no candidates")
-            return False
-            
-        part = response.candidates[0].content.parts[0]
-        if not part.inline_data:
-            logging.error("Gemini TTS returned no inline_data")
-            return False
-
-        audio_data = part.inline_data.data
-        sample_rate = 24000 
-        
-        with wave.open(output_path, "wb") as wav_file:
-            wav_file.setnchannels(1) 
-            wav_file.setsampwidth(2) 
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(audio_data)
-            
-        return True
-
-    except Exception as e:
-        logging.error(f"Gemini TTS Final Error: {e}")
-        return False
 
 async def handle_voice_command(message: types.Message, bot: Bot):
+    """Legacy ``упупа скажи``: clean shared TTS followed by distortion."""
     chat_id = str(message.chat.id)
+    normalized_text = message.text or ""
     command_prefix = "упупа скажи"
-    user_query = message.text[len(command_prefix):].strip()
-    
+    user_query = normalized_text[len(command_prefix):].strip()
+
     if not user_query:
         await message.reply("А что сказать-то, епта?")
         return
 
-    # Определяем активную модель для выбора TTS
     update_chat_settings(chat_id)
     current_settings = chat_settings.get(chat_id, {})
     active_model = current_settings.get("active_model", "gemini")
-    
+
     await bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
     processing_msg = await message.reply("🎤 Записываю голосовое...")
-
-    rand_id = random.randint(10000, 99999)
-    temp_wav = f"temp_voice_{rand_id}.wav"
-    temp_mp3 = f"voice_out_{rand_id}.mp3" 
 
     try:
         text_response = await generate_text_response_for_voice(chat_id, user_query)
         if len(text_response) > 500:
             text_response = text_response[:500] + "..."
 
-        # Выбираем TTS движок в зависимости от активной модели
-        if active_model == "groq":
-            logging.info("🎤 Используем Groq TTS (Orpheus)")
-            tts_success = await generate_audio_from_text_groq(text_response, temp_wav)
-        else:
-            # Для Gemini, GigaChat и History используем Gemini TTS
-            logging.info("🎤 Используем Gemini TTS")
-            tts_success = await generate_audio_from_text_gemini(text_response, temp_wav)
-        
-        if not tts_success:
-            await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены, я подождал, но не вышло).")
+        provider_order = ("groq", "gemini") if active_model == "groq" else ("gemini", "groq")
+        try:
+            clean_audio = await synthesize_speech(
+                text_response,
+                provider_order=provider_order,
+                # Legacy voice has historically used Groq even for Russian
+                # text when Groq is selected in chat settings.
+                allow_groq_for_cyrillic=True,
+            )
+        except SpeechSynthesisError:
+            logging.exception("Voice clean TTS failed")
+            await processing_msg.edit_text("🤐 Голос сорвал (все модели перегружены).")
             return
 
-        distort_success = await apply_ffmpeg_audio_distortion(temp_wav, temp_mp3, DEFAULT_DISTORTION_INTENSITY)
-        
-        if not distort_success:
-            await processing_msg.edit_text("🤐 Микрофон зафонил (ошибка обработки).")
-            return
+        # Distortion still belongs exclusively to the legacy voice command.
+        # TemporaryDirectory guarantees unique paths and cleanup on every exit.
+        with tempfile.TemporaryDirectory(prefix="upupa_voice_") as temp_dir:
+            clean_path = Path(temp_dir) / "clean.mp3"
+            distorted_path = Path(temp_dir) / "distorted.mp3"
+            await asyncio.to_thread(clean_path.write_bytes, clean_audio.data)
 
-        audio_file = FSInputFile(temp_mp3)
-        await bot.send_voice(
-            chat_id=message.chat.id,
-            voice=audio_file,
-            reply_to_message_id=message.message_id
-        )
-        
+            distort_success = await apply_ffmpeg_audio_distortion(
+                str(clean_path),
+                str(distorted_path),
+                DEFAULT_DISTORTION_INTENSITY,
+            )
+            if not distort_success:
+                await processing_msg.edit_text("🤐 Микрофон зафонил (ошибка обработки).")
+                return
+
+            distorted_bytes = await asyncio.to_thread(distorted_path.read_bytes)
+            await bot.send_voice(
+                chat_id=message.chat.id,
+                voice=BufferedInputFile(distorted_bytes, filename="upupa-voice.mp3"),
+                reply_to_message_id=message.message_id,
+            )
+
         await processing_msg.delete()
-
-    except Exception as e:
-        logging.error(f"Global Voice Handler Error: {e}", exc_info=True)
+    except Exception as exc:
+        logging.error("Global Voice Handler Error: %s", exc, exc_info=True)
         await processing_msg.edit_text("Внутренняя ошибка голосового модуля.")
-        
-    finally:
-        if os.path.exists(temp_wav):
-            os.remove(temp_wav)
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
