@@ -7,7 +7,8 @@ import json
 from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
 from aiogram import Bot
 
-from config import model, groq_ai, gigachat_model, chat_settings, conversation_history
+from core.state import chat_settings, conversation_history
+from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
@@ -201,8 +202,6 @@ async def generate_random_word_reaction(chat_id: int):
     Использует контекстный анализ для естественного попадания в тему.
     Берет данные из актуальной истории диалога (conversation_history).
     """
-    from config import conversation_history
-    
     logging.info(f"Запуск генерации реакции 'я %слово%' для чата {chat_id}.")
     
     chat_key = str(chat_id)

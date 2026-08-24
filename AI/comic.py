@@ -17,7 +17,7 @@ from aiogram import types
 from aiogram.types import BufferedInputFile
 from PIL import Image, ImageDraw, ImageFont
 
-from config import LOG_FILE
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from AI.summarize import _get_chat_messages, _generate_with_active_model
 from AI.picgeneration import pollinations_generate
 

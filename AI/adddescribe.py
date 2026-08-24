@@ -12,7 +12,10 @@ from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
 from aiogram.types import FSInputFile
 
-from config import API_TOKEN, model, bot, gigachat_model, groq_ai, chat_settings
+from core.loader import bot
+from core.settings import API_TOKEN
+from core.state import chat_settings
+from infrastructure.ai.clients import model, gigachat_model, groq_ai
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 def get_active_model(chat_id: str) -> str:

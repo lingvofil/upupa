@@ -15,7 +15,7 @@ from datetime import datetime
 from aiogram import types
 from thefuzz import fuzz
 
-from config import LOG_FILE
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from prompts import PROMPTS_MEDIA
 from core.upupa_utils import normalize_upupa_command
 from AI.summarize import _generate_with_active_model

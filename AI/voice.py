@@ -7,30 +7,15 @@ import wave
 import time
 from aiogram import types, Bot
 from aiogram.types import FSInputFile
-from config import (
-    model, gigachat_model, groq_ai, chat_settings, conversation_history, 
-    MAX_HISTORY_LENGTH, TTS_MODELS_QUEUE, TEXT_GENERATION_MODEL_LIGHT
-)
+from core.settings import TEXT_GENERATION_MODEL_LIGHT, TTS_MODELS_QUEUE
+from core.state import chat_settings
+from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
 from AI.dialog.generation import format_chat_history, update_conversation_history
 from AI.dialog.settings import get_current_chat_prompt, update_chat_settings
 from services.distortion import apply_ffmpeg_audio_distortion
 from infrastructure.ai.gemini import GeminiModel
-from infrastructure.ai.clients import gemini_client
 import io
 from pydub import AudioSegment
-
-# Fallbacks
-if not 'TTS_MODELS_QUEUE' in locals() and not 'TTS_MODELS_QUEUE' in globals():
-    try:
-        from config import TTS_MODELS_QUEUE
-    except ImportError:
-        TTS_MODELS_QUEUE = ["gemini-2.5-flash-preview-tts"]
-
-if not 'TEXT_GENERATION_MODEL_LIGHT' in locals() and not 'TEXT_GENERATION_MODEL_LIGHT' in globals():
-    try:
-        from config import TEXT_GENERATION_MODEL_LIGHT
-    except ImportError:
-        TEXT_GENERATION_MODEL_LIGHT = 'gemini-2.0-flash-lite-preview-02-05'
 
 # Полный список доступных голосов
 AVAILABLE_VOICES = [

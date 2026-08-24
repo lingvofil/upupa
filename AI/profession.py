@@ -5,7 +5,8 @@ import codecs
 import re
 import random
 import asyncio
-from config import model, gigachat_model, groq_ai, chat_settings
+from core.state import chat_settings
+from infrastructure.ai.clients import model, gigachat_model, groq_ai
 from prompts import actions
 
 # URL для загрузки файла ОКВЭД

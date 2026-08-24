@@ -13,7 +13,9 @@ from aiogram.types import Message, PollAnswer
 from aiogram import Bot
 
 # Обновленные импорты для мультимодельности
-from config import LOG_FILE, quiz_questions, quiz_states, model, gigachat_model, groq_ai, chat_settings
+from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.state import chat_settings, quiz_questions, quiz_states
+from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from AI.dialog.settings import update_chat_settings
 
 

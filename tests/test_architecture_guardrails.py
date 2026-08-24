@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = ROOT / "core"
 INFRA_AI_DIR = ROOT / "infrastructure" / "ai"
+AI_DIR = ROOT / "AI"
 DIALOG_DIR = ROOT / "AI" / "dialog"
 HANDLERS_DIR = ROOT / "handlers"
 FEATURES_DIR = ROOT / "features"
@@ -120,6 +121,15 @@ def test_dialog_modules_do_not_depend_on_config_facade():
 
     assert not violations, (
         "AI.dialog должен использовать canonical modules напрямую, без config.py. "
+        "Найдены legacy-зависимости:\n" + "\n".join(violations)
+    )
+
+
+def test_ai_modules_do_not_depend_on_config_facade():
+    violations = _collect_import_violations(AI_DIR, ("config",), recursive=True)
+
+    assert not violations, (
+        "AI должен использовать canonical modules напрямую, без config.py. "
         "Найдены legacy-зависимости:\n" + "\n".join(violations)
     )
 

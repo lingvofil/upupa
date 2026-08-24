@@ -12,7 +12,7 @@ import re
 from aiogram import types
 
 from AI.dialog.generation import generate_simple_response
-from config import bot
+from core.loader import bot
 
 # Порог: если кириллицы больше, чем латиницы — считаем текст русским
 _CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)

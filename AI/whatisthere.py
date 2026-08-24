@@ -9,17 +9,11 @@ import httpx
 from aiogram import types
 from bs4 import BeautifulSoup
 
+from core.loader import bot
+from core.settings import API_TOKEN, ROBOTICS_MODEL
+from core.state import chat_settings
+from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import GeminiModel
-from config import (
-    API_TOKEN,
-    ROBOTICS_MODEL,
-    bot,
-    chat_settings,
-    gigachat_model,
-    groq_ai,
-    model,
-)
-from infrastructure.ai.clients import gemini_client
 from prompts import PROMPTS_MEDIA
 
 
@@ -397,7 +391,6 @@ async def process_gif_whatisthere(message: types.Message) -> tuple[bool, str]:
     except Exception as e:
         logging.error(f"Ошибка при обработке GIF 'чотам': {e}")
         return False, "Ошибка при анализе гифки."
-
 
 # ================== STICKER ==================
 def extract_sticker_info(message: types.Message) -> tuple[str | None, str, str | None]:
