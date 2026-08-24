@@ -1,4 +1,4 @@
-"""Пять автономных постов Упупы в случайное время каждого дня."""
+"""Autonomous channel scheduler with mood-dependent daily activity."""
 
 from __future__ import annotations
 
@@ -9,27 +9,32 @@ from datetime import date, datetime, time, timedelta
 
 import pytz
 
-from features.channel.service import publish_channel_post
+from features.channel.mood import burst_probability, daily_post_target, get_current_mood
+from features.channel.mood_service import publish_channel_post
 from features.channel.storage import load_schedule, save_schedule
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAY_START = time(10, 0)
 DAY_END = time(23, 30)
+
+# Deprecated compatibility target for old direct helper callers. Production uses NOMINAL_POSTS_PER_DAY and mood ranges.
 POSTS_PER_DAY = 5
+NOMINAL_POSTS_PER_DAY = 7
 PREFERRED_GAP_MINUTES = 120
 MIN_GAP_MINUTES = 45
 STARTUP_LEAD_MINUTES = 5
 MISSED_GRACE_MINUTES = 20
 RETRY_MINUTES = 30
 CHECK_INTERVAL_SECONDS = 30
+BURST_WINDOW_SECONDS = 180
 
 
 def _local_dt(day: date, clock: time) -> datetime:
     return MOSCOW_TZ.localize(datetime.combine(day, clock))
 
 
-def _pick_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> list[datetime]:
-    """Выбирает до пяти будущих слотов, стараясь не ставить публикации кучно."""
+def _pick_legacy_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> list[datetime]:
+    """Compatibility path for old direct callers; production does not use this gap policy."""
     start = _local_dt(day, DAY_START)
     end = _local_dt(day, DAY_END)
     if now is not None and now.date() == day:
@@ -41,27 +46,68 @@ def _pick_daily_slots(day: date, *, now: datetime | None = None, rng=random) -> 
     if span_minutes == 0:
         return [start]
 
-    # При обычном старте хватает места на все 5 постов с интервалом >= 2 часов.
-    # При позднем рестарте уменьшаем количество слотов, а не устраиваем очередь из постов.
     count = min(POSTS_PER_DAY, span_minutes // MIN_GAP_MINUTES + 1)
     if count <= 1:
         return [start + timedelta(minutes=rng.randint(0, span_minutes))]
-
     effective_gap = min(PREFERRED_GAP_MINUTES, span_minutes // (count - 1))
     slack = span_minutes - effective_gap * (count - 1)
-
-    # Если вычесть обязательные промежутки, остаётся slack. Случайно распределяем
-    # его между позициями; после возврата gap гарантирован математически.
     jitter = sorted(rng.randint(0, slack) for _ in range(count)) if slack > 0 else [0] * count
     offsets = [jitter[index] + index * effective_gap for index in range(count)]
     return [start + timedelta(minutes=offset) for offset in offsets]
 
 
-def _new_schedule(now: datetime) -> dict:
-    slots = _pick_daily_slots(now.date(), now=now)
+def _pick_daily_slots(
+    day: date,
+    *,
+    count: int | None = None,
+    now: datetime | None = None,
+    burst_chance: float = 0.0,
+    rng=random,
+) -> list[datetime]:
+    """Mood-aware production slots have no minimum gap and may deliberately form bursts."""
+    if count is None:
+        return _pick_legacy_daily_slots(day, now=now, rng=rng)
+    if count <= 0:
+        return []
+
+    start = _local_dt(day, DAY_START)
+    end = _local_dt(day, DAY_END)
+    if now is not None and now.date() == day:
+        start = max(start, now.astimezone(MOSCOW_TZ) + timedelta(minutes=STARTUP_LEAD_MINUTES))
+
+    span_seconds = int((end - start).total_seconds())
+    if span_seconds < 0:
+        return []
+    if span_seconds == 0:
+        return [start for _ in range(count)]
+
+    slots: list[datetime] = []
+    for _ in range(count):
+        if slots and rng.random() < burst_chance:
+            base = rng.choice(slots)
+            candidate = base + timedelta(seconds=rng.randint(0, BURST_WINDOW_SECONDS))
+            candidate = min(max(candidate, start), end)
+        else:
+            candidate = start + timedelta(seconds=rng.randint(0, span_seconds))
+        slots.append(candidate)
+
+    return sorted(slots)
+
+
+def _new_schedule(now: datetime, *, mood: dict | None = None, rng=random) -> dict:
+    mood = mood or get_current_mood(rng=rng)
+    target = daily_post_target(mood, rng=rng, default=NOMINAL_POSTS_PER_DAY)
+    slots = _pick_daily_slots(
+        now.date(),
+        count=target,
+        now=now,
+        burst_chance=burst_probability(mood),
+        rng=rng,
+    )
     return {
         "date": now.date().isoformat(),
-        "target_posts": POSTS_PER_DAY,
+        "target_posts": target,
+        "mood_name": mood.get("name"),
         "slots": [
             {"at": slot.isoformat(), "done": False, "missed": False}
             for slot in slots
@@ -82,14 +128,14 @@ def _parse_slot(raw: str) -> datetime | None:
 def _random_future_slot(now: datetime, rng=random) -> datetime | None:
     earliest = now + timedelta(minutes=STARTUP_LEAD_MINUTES)
     latest = _local_dt(now.date(), DAY_END)
-    span = int((latest - earliest).total_seconds() // 60)
+    span = int((latest - earliest).total_seconds())
     if span < 0:
         return None
-    return earliest + timedelta(minutes=rng.randint(0, span))
+    return earliest + timedelta(seconds=rng.randint(0, span))
 
 
 def _repair_missed_slots(state: dict, now: datetime, rng=random) -> bool:
-    """После долгого рестарта переносит просроченные слоты вперёд вместо burst-публикации."""
+    """After a long restart, move stale slots forward instead of dumping them immediately."""
     changed = False
     for slot in state.get("slots", []):
         if slot.get("done"):
@@ -114,21 +160,66 @@ def _repair_missed_slots(state: dict, now: datetime, rng=random) -> bool:
     return changed
 
 
+def _published_count(state: dict) -> int:
+    return sum(1 for slot in state.get("slots", []) if slot.get("done") and not slot.get("missed"))
+
+
+def _pending_slots(state: dict) -> list[dict]:
+    return [slot for slot in state.get("slots", []) if not slot.get("done")]
+
+
+def _reconcile_schedule_for_mood(state: dict, now: datetime, mood: dict, *, rng=random) -> bool:
+    """Adjusts the remaining daily activity whenever Upupa's mood changes."""
+    changed = False
+    mood_name = mood.get("name")
+    mood_changed = state.get("mood_name") != mood_name
+
+    if mood_changed or not isinstance(state.get("target_posts"), int):
+        selected = daily_post_target(mood, rng=rng, default=NOMINAL_POSTS_PER_DAY)
+        state["target_posts"] = max(_published_count(state), selected)
+        state["mood_name"] = mood_name
+        changed = True
+
+    target = int(state.get("target_posts") or NOMINAL_POSTS_PER_DAY)
+    published = _published_count(state)
+    required_pending = max(0, target - published)
+    pending = sorted(_pending_slots(state), key=lambda slot: str(slot.get("at") or ""))
+
+    if len(pending) > required_pending:
+        remove_ids = {id(slot) for slot in pending[required_pending:]}
+        state["slots"] = [slot for slot in state.get("slots", []) if id(slot) not in remove_ids]
+        changed = True
+    elif len(pending) < required_pending:
+        missing = required_pending - len(pending)
+        new_slots = _pick_daily_slots(
+            now.date(),
+            count=missing,
+            now=now,
+            burst_chance=burst_probability(mood),
+            rng=rng,
+        )
+        for slot in new_slots:
+            state.setdefault("slots", []).append({"at": slot.isoformat(), "done": False, "missed": False})
+        if new_slots:
+            changed = True
+
+    state.setdefault("slots", []).sort(key=lambda slot: str(slot.get("at") or ""))
+    return changed
+
+
 def _top_up_schedule_slots(state: dict, now: datetime, rng=random) -> bool:
-    """Миграция старого дневного расписания: добавляет будущие слоты до нового лимита 5."""
+    """Compatibility migration for legacy five-slot schedules; production uses mood reconciliation."""
     slots = state.setdefault("slots", [])
     changed = False
 
     if state.get("target_posts") != POSTS_PER_DAY:
         state["target_posts"] = POSTS_PER_DAY
         changed = True
-
     if len(slots) >= POSTS_PER_DAY:
         return changed
 
     occupied = [parsed for slot in slots if (parsed := _parse_slot(slot.get("at"))) is not None]
     candidates = _pick_daily_slots(now.date(), now=now, rng=rng)
-
     for candidate in candidates:
         if len(slots) >= POSTS_PER_DAY:
             break
@@ -143,23 +234,34 @@ def _top_up_schedule_slots(state: dict, now: datetime, rng=random) -> bool:
 
 
 def _get_schedule_for_now(now: datetime) -> dict:
+    mood = get_current_mood()
     state = load_schedule()
     if state.get("date") != now.date().isoformat():
-        state = _new_schedule(now)
+        state = _new_schedule(now, mood=mood)
         save_schedule(state)
-        logging.info("[channel] daily slots: %s", [slot["at"] for slot in state["slots"]])
+        logging.info(
+            "[channel] daily slots mood=%s target=%s slots=%s",
+            mood.get("name"),
+            state.get("target_posts"),
+            [slot["at"] for slot in state["slots"]],
+        )
         return state
 
     changed = _repair_missed_slots(state, now)
-    changed = _top_up_schedule_slots(state, now) or changed
+    changed = _reconcile_schedule_for_mood(state, now, mood) or changed
     if changed:
         save_schedule(state)
-        logging.info("[channel] adjusted daily slots: %s", [slot["at"] for slot in state["slots"]])
+        logging.info(
+            "[channel] adjusted daily slots mood=%s target=%s slots=%s",
+            mood.get("name"),
+            state.get("target_posts"),
+            [slot["at"] for slot in state["slots"]],
+        )
     return state
 
 
 async def channel_scheduler_loop(bot) -> None:
-    """Фоновый цикл: публикует до пяти случайно запланированных постов в сутки."""
+    """Background loop with mood-dependent activity and no enforced inter-post cooldown."""
     await asyncio.sleep(60)
     while True:
         try:

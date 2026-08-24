@@ -6,7 +6,8 @@ def test_imperfect_language_mode_is_rare_and_requests_one_natural_error():
 
     weights = {mode["name"]: mode["weight"] for mode in POST_CONTENT_MODES}
     assert sum(weights.values()) == 100
-    assert weights["absurd"] == 18
+    assert weights["absurd"] == 8
+    assert weights["philosophy"] == 10
     assert weights["imperfect"] == 5
 
     imperfect = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "imperfect")

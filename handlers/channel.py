@@ -5,7 +5,7 @@ import logging
 from aiogram import Router, types
 
 from core.settings import ADMIN_ID
-from features.channel.service import CHANNEL_TARGET, publish_channel_post
+from features.channel.mood_service import CHANNEL_TARGET, publish_channel_post
 
 router = Router(name="channel")
 

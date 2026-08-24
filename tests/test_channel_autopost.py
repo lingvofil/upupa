@@ -103,17 +103,32 @@ def test_all_normal_length_modes_are_bounded():
     assert sum(mode["weight"] for mode in POST_LENGTH_MODES) == 100
 
 
-def test_content_distribution_is_mostly_absurd_and_domestic():
+def test_content_distribution_includes_philosophy_mode():
     from prompts.channel import POST_CONTENT_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_CONTENT_MODES}
     assert sum(weights.values()) == 100
-    assert weights["absurd"] == 18
+    assert weights["absurd"] == 8
+    assert weights["philosophy"] == 10
     assert weights["domestic"] == 45
     assert weights["chat"] == 17
     assert weights["functionality"] == 15
     assert weights["imperfect"] == 5
-    assert weights["absurd"] + weights["domestic"] == 63
+
+
+def test_philosophy_mode_is_ironic_sarcastic_and_can_swear():
+    from prompts.channel import POST_CONTENT_MODES
+
+    philosophy = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "philosophy")
+    instruction = philosophy["instruction"].casefold()
+
+    assert "философ" in instruction
+    assert "ирони" in instruction
+    assert "сарказ" in instruction
+    assert "мат" in instruction
+    assert "без пафоса" in instruction
+    assert philosophy["include_capabilities"] is False
+    assert philosophy["use_chat_context"] is False
 
 
 def test_functionality_mode_knows_upupa_is_new_to_running_a_channel():
