@@ -5,7 +5,7 @@ aiogram матчит сообщение по роутерам последова
 from handlers import (
     basic, sms, world, stats_lexicon, media_search, games, media_tools,
     ai_modes, ai_profiles, ai_vision, ai_generation, birthdays,
-    ai_summary, ai_prompts, video, channel, social_graph, dialog,
+    ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
 
 ROUTERS = [
@@ -26,5 +26,6 @@ ROUTERS = [
     video.router,   # видеогенерация — до catch-all
     channel.router, # админская команда канала — до catch-all
     social_graph.router, # соцграф + message_reaction — до catch-all
+    radio.router,   # Радио Упупы — до catch-all
     dialog.router,
 ]
