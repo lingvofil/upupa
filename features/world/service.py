@@ -10,6 +10,7 @@ from features.world.models import (
     DiplomaticRequest,
     ProposalResult,
     ResolutionResult,
+    WarResult,
     WorldProfile,
     WorldState,
 )
@@ -22,7 +23,13 @@ class WorldRepository(Protocol):
     def get_state_by_chat_id(self, chat_id: int) -> WorldState | None: ...
     def get_state_by_world_id(self, world_id: int) -> WorldState | None: ...
     def list_enabled_states(self, exclude_world_id: int | None = None) -> list[WorldState]: ...
-    def list_allied_states(self, world_id: int, *, active_only: bool) -> list[WorldState]: ...
+    def list_relation_states(
+        self,
+        world_id: int,
+        relation: str,
+        *,
+        active_only: bool,
+    ) -> list[WorldState]: ...
     def has_alliance(self, state_a: int, state_b: int) -> bool: ...
     def get_pending_request_between(self, state_a: int, state_b: int) -> DiplomaticRequest | None: ...
     def create_request(
@@ -38,6 +45,8 @@ class WorldRepository(Protocol):
         decision: str,
     ) -> tuple[str, DiplomaticRequest | None, WorldState | None, WorldState | None]: ...
     def break_alliance(self, state_a: int, state_b: int) -> bool: ...
+    def declare_war(self, state_a: int, state_b: int) -> tuple[str, str | None]: ...
+    def end_war(self, state_a: int, state_b: int) -> bool: ...
 
 
 class WorldService:
@@ -71,10 +80,7 @@ class WorldService:
         state = await self.get_state(chat_id, current_title)
         if state is None or not state.enabled:
             return None
-        states = await asyncio.to_thread(
-            self.repository.list_enabled_states,
-            state.world_id,
-        )
+        states = await asyncio.to_thread(self.repository.list_enabled_states, state.world_id)
         return tuple(states)
 
     async def get_profile(
@@ -86,31 +92,46 @@ class WorldService:
         if state is None or not state.enabled:
             return None
 
-        enabled_states, active_allies, all_allies = await asyncio.gather(
+        enabled_states, active_allies, all_allies, active_wars, all_wars = await asyncio.gather(
             asyncio.to_thread(self.repository.list_enabled_states, state.world_id),
             asyncio.to_thread(
-                self.repository.list_allied_states,
+                self.repository.list_relation_states,
                 state.world_id,
+                "allied",
                 active_only=True,
             ),
             asyncio.to_thread(
-                self.repository.list_allied_states,
+                self.repository.list_relation_states,
                 state.world_id,
+                "allied",
+                active_only=False,
+            ),
+            asyncio.to_thread(
+                self.repository.list_relation_states,
+                state.world_id,
+                "war",
+                active_only=True,
+            ),
+            asyncio.to_thread(
+                self.repository.list_relation_states,
+                state.world_id,
+                "war",
                 active_only=False,
             ),
         )
-        active_ally_ids = {ally.world_id for ally in active_allies}
+        non_neutral_ids = {item.world_id for item in (*active_allies, *active_wars)}
         neutral = tuple(
-            candidate
-            for candidate in enabled_states
-            if candidate.world_id not in active_ally_ids
+            candidate for candidate in enabled_states if candidate.world_id not in non_neutral_ids
         )
-        inactive_allies = tuple(ally for ally in all_allies if not ally.enabled)
+        inactive_allies = tuple(item for item in all_allies if not item.enabled)
+        inactive_wars = tuple(item for item in all_wars if not item.enabled)
         return WorldProfile(
             state=state,
             allies=tuple(active_allies),
+            wars=tuple(active_wars),
             neutral=neutral,
             inactive_allies=inactive_allies,
+            inactive_wars=inactive_wars,
         )
 
     async def propose_alliance(
@@ -123,10 +144,7 @@ class WorldService:
         if source is None or not source.enabled:
             return ProposalResult("source_disabled", source=source)
 
-        target = await asyncio.to_thread(
-            self.repository.get_state_by_world_id,
-            target_world_id,
-        )
+        target = await asyncio.to_thread(self.repository.get_state_by_world_id, target_world_id)
         if target is None:
             return ProposalResult("unknown_target", source=source)
         if not target.enabled:
@@ -173,10 +191,7 @@ class WorldService:
         if source is None or not source.enabled:
             return BreakAllianceResult("source_disabled", source=source)
 
-        target = await asyncio.to_thread(
-            self.repository.get_state_by_world_id,
-            target_world_id,
-        )
+        target = await asyncio.to_thread(self.repository.get_state_by_world_id, target_world_id)
         if target is None:
             return BreakAllianceResult("unknown_target", source=source)
         if source.world_id == target.world_id:
@@ -191,6 +206,64 @@ class WorldService:
             "broken" if removed else "not_allied",
             source=source,
             target=target,
+        )
+
+    async def declare_war(
+        self,
+        source_chat_id: int,
+        source_title: str,
+        target_world_id: int,
+    ) -> WarResult:
+        source = await self.get_state(source_chat_id, source_title)
+        if source is None or not source.enabled:
+            return WarResult("source_disabled", source=source)
+
+        target = await asyncio.to_thread(self.repository.get_state_by_world_id, target_world_id)
+        if target is None:
+            return WarResult("unknown_target", source=source)
+        if source.world_id == target.world_id:
+            return WarResult("self", source=source, target=target)
+        if not target.enabled:
+            return WarResult("target_disabled", source=source, target=target)
+
+        status, previous_relation = await asyncio.to_thread(
+            self.repository.declare_war,
+            source.world_id,
+            target.world_id,
+        )
+        return WarResult(
+            status,
+            source=source,
+            target=target,
+            previous_relation=previous_relation,
+        )
+
+    async def end_war(
+        self,
+        source_chat_id: int,
+        source_title: str,
+        target_world_id: int,
+    ) -> WarResult:
+        source = await self.get_state(source_chat_id, source_title)
+        if source is None or not source.enabled:
+            return WarResult("source_disabled", source=source)
+
+        target = await asyncio.to_thread(self.repository.get_state_by_world_id, target_world_id)
+        if target is None:
+            return WarResult("unknown_target", source=source)
+        if source.world_id == target.world_id:
+            return WarResult("self", source=source, target=target)
+
+        ended = await asyncio.to_thread(
+            self.repository.end_war,
+            source.world_id,
+            target.world_id,
+        )
+        return WarResult(
+            "ended" if ended else "not_at_war",
+            source=source,
+            target=target,
+            previous_relation="war" if ended else None,
         )
 
 
@@ -215,21 +288,27 @@ async def is_world_enabled(chat_id: int | str) -> bool:
     return await _world_service.is_enabled(int(chat_id))
 
 
-def format_world_profile(profile: WorldProfile) -> str:
-    allies = ", ".join(f"№{state.world_id}" for state in profile.allies) or "—"
-    neutral = ", ".join(f"№{state.world_id}" for state in profile.neutral) or "—"
+def _ids(states: tuple[WorldState, ...]) -> str:
+    return ", ".join(f"№{state.world_id}" for state in states) or "—"
+
+
+def format_world_profile(profile: WorldProfile, population: int | None = None) -> str:
+    population_text = str(population) if population is not None else "неизвестно"
     lines = [
         f"🏳 Государство №{profile.state.world_id}",
         profile.state.title,
+        f"👥 Долбоебов: {population_text}",
         f"Создано: {profile.state.created_at.strftime('%d.%m.%Y')}",
         "",
         "Дипломатические отношения:",
-        f"🤝 Союзники: {allies}",
-        f"😐 Нейтральные: {neutral}",
+        f"🤝 Союзники: {_ids(profile.allies)}",
+        f"⚔️ Война: {_ids(profile.wars)}",
+        f"😐 Нейтральные: {_ids(profile.neutral)}",
     ]
     if profile.inactive_allies:
-        inactive = ", ".join(f"№{state.world_id}" for state in profile.inactive_allies)
-        lines.append(f"⏸ Союзы вне мира: {inactive}")
+        lines.append(f"⏸ Союзы вне мира: {_ids(profile.inactive_allies)}")
+    if profile.inactive_wars:
+        lines.append(f"⏸ Войны вне мира: {_ids(profile.inactive_wars)}")
     return "\n".join(lines)
 
 
@@ -249,10 +328,19 @@ def format_diplomacy(profile: WorldProfile) -> str:
     else:
         lines.append("\n🤝 Союзников пока нет.")
 
+    if profile.wars:
+        lines.append("\n⚔️ Война:")
+        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.wars)
+    else:
+        lines.append("\n⚔️ Ни с кем не воюем.")
+
     if profile.neutral:
         lines.append("\n😐 Нейтральные:")
         lines.extend(f"№{state.world_id} — {state.title}" for state in profile.neutral)
     if profile.inactive_allies:
         lines.append("\n⏸ Сохранённые союзы с выключенными государствами:")
         lines.extend(f"№{state.world_id} — {state.title}" for state in profile.inactive_allies)
+    if profile.inactive_wars:
+        lines.append("\n⏸ Сохранённые войны с выключенными государствами:")
+        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.inactive_wars)
     return "\n".join(lines)
