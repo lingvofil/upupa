@@ -82,6 +82,7 @@ async def get_main_settings_markup(chat_id: str):
     proactive_enabled = settings.get("proactive_enabled", True)
     holidays_enabled = settings.get("holidays_enabled", False)
     social_graph_enabled = settings.get("social_graph_enabled", True)
+    radio_enabled = settings.get("radio_enabled", True)
 
     sms_enabled = chat_id not in sms_disabled_chats
     world_enabled = await is_world_enabled(chat_id)
@@ -101,6 +102,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
     text += f"📅 *Празднеки:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
     text += f"🕸 *Соцграф:* {'Вкл. ✅' if social_graph_enabled else 'Выкл. ❌'}\n"
+    text += f"📻 *Радио Упупы:* {'Вкл. ✅' if radio_enabled else 'Выкл. ❌'}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
@@ -116,6 +118,7 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
     builder.button(text=f"{'Выкл.' if holidays_enabled else 'Вкл.'} празднеки", callback_data="settings:toggle:holidays")
     builder.button(text=f"{'Выкл.' if social_graph_enabled else 'Вкл.'} соцграф", callback_data="settings:toggle:social_graph")
+    builder.button(text=f"{'Выкл.' if radio_enabled else 'Вкл.'} радио", callback_data="settings:toggle:radio")
 
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
@@ -359,6 +362,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             chat_settings[chat_id]["holidays_enabled"] = not chat_settings[chat_id].get("holidays_enabled", False)
         elif value == "social_graph":
             chat_settings[chat_id]["social_graph_enabled"] = not chat_settings[chat_id].get("social_graph_enabled", True)
+        elif value == "radio":
+            chat_settings[chat_id]["radio_enabled"] = not chat_settings[chat_id].get("radio_enabled", True)
 
         save_chat_settings()
         text, markup = await get_main_settings_markup(chat_id)
