@@ -17,6 +17,7 @@ from features.chat_settings import (
     process_update_all_chats, get_chats_list, add_chat, remove_chat
 )
 from features.interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
+from features.world.service import get_world_service
 
 router = Router(name="basic")
 
@@ -92,8 +93,13 @@ async def handle_my_chat_member_update(update: types.ChatMemberUpdated):
 
     if new_status in ["left", "kicked"]:
         removed = remove_chat(chat.id)
+        try:
+            await get_world_service().disable_state(chat.id)
+        except RuntimeError:
+            # Startup tests/imports can observe the handler before composition root wiring.
+            pass
         if removed:
-            logging.info(f"Bot removed from chat {chat.title or chat.id} ({chat.id}); chat was pruned from ???????.")
+            logging.info(f"Bot removed from chat {chat.title or chat.id} ({chat.id}); chat was pruned from lists.")
     elif new_status in ["member", "administrator", "creator"]:
         add_chat(chat.id, chat.title, chat.username)
 

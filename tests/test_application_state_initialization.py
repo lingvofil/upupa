@@ -16,6 +16,8 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
     import features.social_graph as social_graph_feature
     import features.stat_rank_settings as stat_rank_feature
     import features.statistics as statistics_feature
+    import features.world.service as world_service_feature
+    import infrastructure.persistence as persistence
 
     calls = []
     monkeypatch.setattr(chat_settings_feature, "load_chat_state", lambda: calls.append("chat-state"))
@@ -25,6 +27,20 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
     monkeypatch.setattr(statistics_feature, "init_db", lambda: calls.append("statistics"))
     monkeypatch.setattr(social_graph_feature, "init_db", lambda: calls.append("social-graph"))
 
+    class FakeWorldRepository:
+        def __init__(self, path):
+            self.path = path
+
+        def init_schema(self):
+            calls.append("world-schema")
+
+    monkeypatch.setattr(persistence, "SQLiteWorldRepository", FakeWorldRepository)
+    monkeypatch.setattr(
+        world_service_feature,
+        "configure_world_service",
+        lambda service: calls.append("world-config"),
+    )
+
     application = UpupaApplication(
         bot=object(),
         dispatcher=object(),
@@ -33,4 +49,13 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
 
     application.initialize_state()
 
-    assert calls == ["chat-state", "antispam", "sms", "rank-state", "statistics", "social-graph"]
+    assert calls == [
+        "chat-state",
+        "antispam",
+        "sms",
+        "rank-state",
+        "statistics",
+        "social-graph",
+        "world-schema",
+        "world-config",
+    ]

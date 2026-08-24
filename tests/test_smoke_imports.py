@@ -48,6 +48,7 @@ FEATURE_MODULES = [
     "features.channel.batya_source", "features.channel.service", "features.channel.scheduler",
     "features.social_graph", "features.social_graph.analysis", "features.social_graph.ai",
     "features.social_graph.rendering", "features.social_graph.service",
+    "features.world", "features.world.models", "features.world.permissions", "features.world.service",
 ]
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
@@ -56,7 +57,7 @@ SERVICE_MODULES = [
 ]
 GAME_MODULES = ["games.crocodile", "games.egra", "games.reverse_crocodile"]
 HANDLER_MODULES = [
-    "handlers", "handlers.basic", "handlers.sms", "handlers.stats_lexicon",
+    "handlers", "handlers.basic", "handlers.sms", "handlers.world", "handlers.stats_lexicon",
     "handlers.media_search", "handlers.games", "handlers.media_tools",
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
@@ -75,6 +76,7 @@ INFRASTRUCTURE_MODULES = [
     "infrastructure.ai.clients", "infrastructure.ai.gemini", "infrastructure.ai.gigachat",
     "infrastructure.ai.groq", "infrastructure.ai.openai_compatible",
     "infrastructure.persistence.sqlite_social_graph",
+    "infrastructure.persistence.sqlite_world",
 ]
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES + APP_MODULES + CORE_MODULES + FEATURE_MODULES + SERVICE_MODULES + GAME_MODULES + HANDLER_MODULES + AI_MODULES + INFRASTRUCTURE_MODULES)
