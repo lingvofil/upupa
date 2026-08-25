@@ -326,8 +326,9 @@ def test_radio_telegram_send_error_is_user_facing(monkeypatch):
 
     asyncio.run(radio_handler.handle_radio_command(message))
 
-    status.edit_text.assert_awaited_once()
-    assert "Telegram отказался" in status.edit_text.await_args.args[0]
+    assert status.edit_text.await_count == 2
+    assert status.edit_text.await_args_list[0].args[0] == "включаю мекрофон"
+    assert "Telegram отказался" in status.edit_text.await_args_list[1].args[0]
 
 
 def test_radio_setting_toggle_is_persisted(monkeypatch):
