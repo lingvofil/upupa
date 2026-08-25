@@ -223,3 +223,14 @@ def test_chat_settings_does_not_load_persistent_state_at_import_time():
         "features.chat_settings не должен читать файлы при импорте; "
         "загрузка состояния принадлежит application startup: " + ", ".join(violations)
     )
+
+
+def test_architecture_documentation_matches_r13_composition_root():
+    source = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert "\\n" not in source
+    assert "Создание глобальных `bot`/`dp`" not in source
+    assert (
+        "реальные `Bot` и `Dispatcher` стали ресурсами "
+        "`UpupaApplication`"
+    ) in source
