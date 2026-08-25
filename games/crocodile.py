@@ -586,7 +586,10 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
         "bump_task": None,
     }
     if BUMP_INTERVAL and BUMP_INTERVAL > 0:
-        game_sessions[cid]["bump_task"] = _start_background_task(\n            _bump_loop(cid),\n            name=f"crocodile-bump:{cid}",\n        )
+        game_sessions[cid]["bump_task"] = _start_background_task(
+            _bump_loop(cid),
+            name=f"crocodile-bump:{cid}",
+        )
 
 
 async def handle_start_game(message: types.Message):
