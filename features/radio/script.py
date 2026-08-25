@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from AI.summarize import _generate_with_active_model
 
 
@@ -44,7 +45,6 @@ def _join_messages(messages: list[dict], max_chars: int) -> str:
     if len(all_text) <= max_chars:
         return all_text
 
-    # Preserve the whole timeline instead of taking only the newest tail.
     target_lines = max(20, min(len(lines), max_chars // 90))
     if target_lines >= len(lines):
         selected = lines
@@ -111,8 +111,6 @@ def sanitize_radio_script(text: str, max_words: int = RADIO_MAX_WORDS) -> str:
         return result
 
     limited = " ".join(words[:max_words])
-    # Prefer a complete sentence near the limit. If the model produced one
-    # gigantic sentence, the hard limit still wins.
     sentence_end = max(limited.rfind(". "), limited.rfind("! "), limited.rfind("? "), limited.rfind("… "))
     if sentence_end >= int(len(limited) * 0.75):
         limited = limited[: sentence_end + 1]
@@ -168,14 +166,15 @@ async def generate_radio_script(
     else:
         source_block = _join_messages(messages, RADIO_CONTEXT_CHARS)
 
-    prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
+    task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
 - Используй только факты, темы, участников и детали из предоставленного материала. Ничего не выдумывай.
 - Это разговорный радиотекст для произнесения вслух, а не письменный отчёт.
 - Никакого Markdown, списков, заголовков, URL, служебных меток и сложных конструкций.
-- Короткие естественные русские предложения. Ирония уместна, можно ругаться, но не превращай всё в одну повторяющуюся шутку.
-- Не используй активную пользовательскую персону чата. Ведущий именно Упупа.
+- Короткие естественные русские предложения.
+- Используй характер, тон, лексику и манеру текущего промпта чата, как в команде «чобыло», но не позволяй персоне менять факты или формат радиовыпуска.
+- Не используй активную пользовательскую персону как источник фактов или новых событий; она задаёт только стиль подачи. Ведущий остаётся Упупой.
 - Начни с короткого вступления, затем расскажи главные темы и заметные эпизоды, упомяни самых активных участников, добавь одну-две характерные или смешные детали и коротко закончи.
 - Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
 - Никогда не превышай 520 слов.
@@ -187,9 +186,14 @@ async def generate_radio_script(
 
 Верни только текст, который должен произнести ведущий.
 """
+    prompt = build_prompt_with_current_chat_prompt(
+        chat_id,
+        task_prompt,
+        task_name="сценарий Радио Упупы",
+    )
 
     logging.info(
-        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s",
+        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s current_prompt=true",
         len(messages),
         total_context_chars,
         len(source_block),
