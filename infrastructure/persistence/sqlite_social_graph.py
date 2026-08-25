@@ -29,7 +29,9 @@ class SQLiteSocialGraphRepository:
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(self.path, timeout=30)
+        conn = sqlite3.connect(self.path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
 
     @staticmethod
     def _timestamp(value: datetime) -> str:
