@@ -1,8 +1,7 @@
 """Явная сборка и запуск Telegram-приложения Упупы.
 
-Legacy-синглтоны bot/dp из core.loader пока сохраняются, но compatibility-фасад config.py
-удалён. Прикладные модули загружаются только на startup, чтобы простой import composition
-root не запускал их import-time side effects.
+Bot и Dispatcher создаются только в composition root. Прикладные модули
+загружаются на startup, чтобы импорт bootstrap не запускал их side effects.
 """
 
 from dataclasses import dataclass, field
@@ -11,9 +10,9 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
 from app.lifecycle import TaskSupervisor
-from core.loader import bot as legacy_bot
-from core.loader import dp as legacy_dispatcher
+from core.loader import configure_aiogram_components
 from core.logging_setup import logger
+from core.settings import API_TOKEN, validate_required_settings
 
 
 QUIZ_CHAT_IDS = (-1001707530786, -1001781970364)
@@ -148,16 +147,12 @@ class UpupaApplication:
 
         self._dispatcher_configured = True
 
-    def configure_bot_session(self) -> None:
-        self.bot.session = AiohttpSession(timeout=60)
-
     async def run(self) -> None:
         self.initialize_state()
 
         try:
             self.start_background_tasks()
             self.configure_dispatcher()
-            self.configure_bot_session()
 
             await self.bot.delete_webhook(drop_pending_updates=True)
             logger.info("Starting polling bot_id=%s", id(self.bot))
@@ -172,10 +167,24 @@ def create_application(
     dispatcher: Dispatcher | None = None,
     supervisor: TaskSupervisor | None = None,
 ) -> UpupaApplication:
-    """Создать объект приложения; параметры позволяют подменять инфраструктуру в тестах."""
+    """Создать и связать aiogram-ресурсы; тесты могут подменить инфраструктуру."""
+    resolved_bot = bot_instance
+    if resolved_bot is None:
+        validate_required_settings()
+        resolved_bot = Bot(
+            token=API_TOKEN,
+            session=AiohttpSession(timeout=60),
+        )
+
+    resolved_dispatcher = dispatcher if dispatcher is not None else Dispatcher()
+    configure_aiogram_components(
+        bot_instance=resolved_bot,
+        dispatcher=resolved_dispatcher,
+    )
+
     return UpupaApplication(
-        bot=legacy_bot if bot_instance is None else bot_instance,
-        dispatcher=legacy_dispatcher if dispatcher is None else dispatcher,
+        bot=resolved_bot,
+        dispatcher=resolved_dispatcher,
         supervisor=TaskSupervisor() if supervisor is None else supervisor,
     )
 
