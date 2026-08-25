@@ -43,7 +43,7 @@ def test_incoming_message_logs_do_not_dump_message_content_by_default():
     assert "длина_текста=%s" in source
 
 
-def test_deploy_targets_exact_sha_and_has_healthcheck_and_rollback():
+def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     source = _source(".github/workflows/deploy.yml")
 
     assert "DEPLOY_SHA: ${{ github.sha }}" in source
@@ -51,6 +51,12 @@ def test_deploy_targets_exact_sha_and_has_healthcheck_and_rollback():
     assert 'PREVIOUS_SHA="$(git rev-parse HEAD)"' in source
     assert 'git reset --hard "$TARGET_SHA"' in source
     assert 'git reset --hard "$PREVIOUS_SHA"' in source
-    assert "install --disable-pip-version-check -r requirements.txt" in source
-    assert 'systemctl is-active --quiet "$SERVICE"' in source
+    assert '"$VENV_PYTHON" -m pip install' in source
+    assert 'service_ctl is-active --quiet "$SERVICE"' in source
+    assert "production_healthcheck.py" in source
+    assert "backup_runtime_state.py" in source
+    assert '[[ -f "$BACKUP_DIR/manifest.json" ]]' in source
+    assert source.index('BACKUP_DIR="$(') < source.index('git reset --hard "$TARGET_SHA"')
+    assert "StrictHostKeyChecking=yes" in source
+    assert "SSH_KNOWN_HOSTS is not configured" in source
     assert "trap rollback ERR" in source
