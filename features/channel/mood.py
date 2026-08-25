@@ -6,9 +6,12 @@ import random
 from datetime import datetime
 from typing import Iterable
 
+import pytz
+
 from features.channel.storage import load_mood, save_mood
 
 DEFAULT_MOOD = "neutral"
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 MOODS = {
     "neutral": {
@@ -133,6 +136,25 @@ MOODS = {
     },
 }
 
+DAYPART_PROMPTS = {
+    "night": (
+        "Сейчас ночь по Москве. Это может слегка делать тебя более тихим, странным, сонным, интимным или "
+        "рефлексивным; ночная мысль может быть неожиданно честной или совсем нелепой. Не обязан упоминать ночь."
+    ),
+    "morning": (
+        "Сейчас утро по Москве. Ты можешь ощущать запуск дня: просыпаться, тупить, раздражаться, строить странные "
+        "планы или внезапно быть бодрым. Не обязан упоминать утро."
+    ),
+    "day": (
+        "Сейчас день по Москве. Время суток не должно перетягивать внимание на себя: можешь быть деятельным, "
+        "наблюдательным или отвлекаться на любую ерунду. Не обязан упоминать день."
+    ),
+    "evening": (
+        "Сейчас вечер по Москве. Можно чуть чаще подводить внутренние микроитоги, уставать, оживать, беситься "
+        "или хотеть чего-нибудь бессмысленного. Не обязан упоминать вечер."
+    ),
+}
+
 
 def _is_valid_state(state: object) -> bool:
     if not isinstance(state, dict):
@@ -188,10 +210,30 @@ def mood_config(mood: dict | None) -> dict:
     return MOODS.get(name, MOODS[DEFAULT_MOOD])
 
 
-def mood_prompt(mood: dict | None) -> str:
+def _daypart_name(now: datetime | None = None) -> str:
+    current = now or datetime.now(MOSCOW_TZ)
+    if current.tzinfo is None:
+        current = MOSCOW_TZ.localize(current)
+    else:
+        current = current.astimezone(MOSCOW_TZ)
+    hour = current.hour
+    if hour < 6:
+        return "night"
+    if hour < 11:
+        return "morning"
+    if hour < 18:
+        return "day"
+    return "evening"
+
+
+def daypart_prompt(now: datetime | None = None) -> str:
+    return DAYPART_PROMPTS[_daypart_name(now)]
+
+
+def mood_prompt(mood: dict | None, *, now: datetime | None = None) -> str:
     if not mood:
         return ""
-    return str(mood_config(mood)["prompt"])
+    return f"{mood_config(mood)['prompt']}\n{daypart_prompt(now)}"
 
 
 def adjusted_weights(items: Iterable[dict], mood: dict | None, multiplier_key: str) -> list[float]:
