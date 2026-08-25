@@ -133,20 +133,58 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
         "configure_dispatcher",
         lambda: events.append(("dispatcher",)),
     )
-    monkeypatch.setattr(
-        application,
-        "configure_bot_session",
-        lambda: events.append(("session",)),
-    )
-
     asyncio.run(application.run())
 
     assert events == [
         ("state",),
         ("background",),
         ("dispatcher",),
-        ("session",),
         ("delete_webhook", True),
         ("start_polling", bot, True),
         ("stop",),
+    ]
+
+
+
+def test_create_application_builds_and_configures_default_resources(monkeypatch):
+    import app.bootstrap as bootstrap
+    import core.loader as loader
+
+    events = []
+    fake_bot = object()
+    fake_dispatcher = object()
+
+    class FakeBotFactory:
+        def __new__(cls, *, token, session):
+            events.append(("bot", token, session))
+            return fake_bot
+
+    class FakeDispatcherFactory:
+        def __new__(cls):
+            events.append(("dispatcher",))
+            return fake_dispatcher
+
+    monkeypatch.setattr(bootstrap, "Bot", FakeBotFactory)
+    monkeypatch.setattr(bootstrap, "Dispatcher", FakeDispatcherFactory)
+    monkeypatch.setattr(
+        bootstrap,
+        "AiohttpSession",
+        lambda *, timeout: ("session", timeout),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "validate_required_settings",
+        lambda: events.append(("validate",)),
+    )
+
+    application = create_application()
+
+    assert application.bot is fake_bot
+    assert application.dispatcher is fake_dispatcher
+    assert loader.get_bot() is fake_bot
+    assert loader.get_dispatcher() is fake_dispatcher
+    assert events == [
+        ("validate",),
+        ("bot", bootstrap.API_TOKEN, ("session", 60)),
+        ("dispatcher",),
     ]
