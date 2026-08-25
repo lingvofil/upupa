@@ -24,6 +24,7 @@ jobs:
             infrastructure \
             tests/test_application_bootstrap.py \
             tests/test_application_lifecycle.py \
+            tests/test_configuration_composition.py \
             tests/test_dependency_versions.py \
             tests/test_dynamic_task_ownership.py \
             tests/test_architecture_guardrails.py
