@@ -55,6 +55,16 @@ upupa/
 - Случайная реакция по-прежнему прерывает catch-all handler, а serious/direct dialogue не пропускает финальную запись `features.statistics.log_message`.
 - Architecture regression-тесты запрещают возвращать runtime monkeypatch в `handlers.dialog`, импортировать удалённые compatibility-фасады и вызывать legacy composed entrypoints из production pipeline.
 
+## Radio Upupa и speech
+
+- `handlers.radio` — тонкий transport-слой для команд `радио упупы` / `упупа радио`; router зарегистрирован до catch-all `handlers.dialog`.
+- `features.radio.service` отвечает за сбор материала текущего чата и orchestration выпуска, а `features.radio.script` — за отдельный разговорный prompt и hard limit сценария.
+- Радио переиспользует существующий parser `user_messages.log` из summarization pipeline и сначала смотрит 24 часа; при недостатке материала расширяет окно до 72 и 168 часов.
+- При большом объёме сообщений сначала строится фактическая редакторская выжимка, а уже из неё и свежего контекста — финальный сценарий.
+- `services.speech` — канонический reusable слой `text -> clean TTS -> merged MP3`: синхронные SDK и pydub/ffmpeg export offload'ятся через `asyncio.to_thread`, длинный текст режется на безопасные чанки.
+- `services.speech` принципиально не импортирует `services.distortion`. `AI.voice` (`упупа скажи`) использует clean speech backend, а затем отдельно применяет legacy `apply_ffmpeg_audio_distortion`; Radio Upupa получает результат speech backend напрямую, без distortion.
+- Радио не запускает фоновые задачи и ничего не делает пассивно: per-chat настройка `radio_enabled` только разрешает или запрещает команду.
+
 ## Lifecycle
 
 Фоновые планировщики запускаются через `TaskSupervisor`, который хранит ссылки на задачи,
