@@ -27,7 +27,7 @@ HEAVY_LIBS = ["moviepy", "moviepy.editor",
               "moviepy.audio", "moviepy.audio.fx", "moviepy.audio.fx.all",
               "playwright", "playwright.async_api",
               "pydub", "pydub.AudioSegment",
-              "seam_carving", "gradio_client"]
+              "gradio_client"]
 for lib in HEAVY_LIBS:
     if lib not in sys.modules:
         sys.modules[lib] = MagicMock()
@@ -59,8 +59,8 @@ SERVICE_MODULES = [
 ]
 GAME_MODULES = ["games.crocodile", "games.egra", "games.reverse_crocodile"]
 HANDLER_MODULES = [
-    "handlers", "handlers.basic", "handlers.sms", "handlers.world", "handlers.stats_lexicon",
-    "handlers.media_search", "handlers.games", "handlers.media_tools",
+    "handlers", "handlers.basic", "handlers.sms", "handlers.world", "handlers.world_listing",
+    "handlers.stats_lexicon", "handlers.media_search", "handlers.games", "handlers.media_tools",
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
     "handlers.ai_prompts", "handlers.video", "handlers.channel", "handlers.social_graph",
