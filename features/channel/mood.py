@@ -17,7 +17,7 @@ MOODS = {
     "neutral": {
         "weight": 30,
         "duration_posts": (3, 7),
-        "daily_posts": (6, 8),
+        "daily_posts": (8, 11),
         "burst_probability": 0.10,
         "image_probability": 0.15,
         "external_probability": 0.10,
@@ -31,7 +31,7 @@ MOODS = {
     "irritated": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (7, 9),
+        "daily_posts": (10, 13),
         "burst_probability": 0.18,
         "image_probability": 0.10,
         "external_probability": 0.18,
@@ -53,7 +53,7 @@ MOODS = {
     "sleepy": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (3, 5),
+        "daily_posts": (5, 7),
         "burst_probability": 0.04,
         "image_probability": 0.05,
         "external_probability": 0.04,
@@ -74,7 +74,7 @@ MOODS = {
     "thoughtful": {
         "weight": 15,
         "duration_posts": (3, 7),
-        "daily_posts": (5, 7),
+        "daily_posts": (7, 10),
         "burst_probability": 0.08,
         "image_probability": 0.08,
         "external_probability": 0.14,
@@ -95,7 +95,7 @@ MOODS = {
     "chaotic": {
         "weight": 10,
         "duration_posts": (2, 4),
-        "daily_posts": (8, 11),
+        "daily_posts": (11, 15),
         "burst_probability": 0.38,
         "image_probability": 0.25,
         "external_probability": 0.10,
@@ -116,7 +116,7 @@ MOODS = {
     "social": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (8, 10),
+        "daily_posts": (11, 14),
         "burst_probability": 0.30,
         "image_probability": 0.12,
         "external_probability": 0.22,
@@ -261,7 +261,7 @@ def external_probability(mood: dict | None, default: float = 0.10) -> float:
     return float(mood_config(mood).get("external_probability", default)) if mood else default
 
 
-def daily_post_target(mood: dict | None, *, rng=random, default: int = 7) -> int:
+def daily_post_target(mood: dict | None, *, rng=random, default: int = 10) -> int:
     if not mood:
         return default
     low, high = mood_config(mood).get("daily_posts", (default, default))
