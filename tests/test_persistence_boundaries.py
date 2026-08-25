@@ -2,6 +2,7 @@ import ast
 import asyncio
 import time
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -256,3 +257,42 @@ def test_async_statistics_facade_delegates_to_repository(monkeypatch):
     assert ("activity", 48) in calls
     assert ("group-activity", active_since) in calls
     assert activity == {-100: active_since}
+
+
+
+def test_sqlite_statistics_accepts_concurrent_writers(tmp_path):
+    from infrastructure.persistence.sqlite_statistics import SQLiteStatisticsRepository
+
+    repo = SQLiteStatisticsRepository(tmp_path / "concurrent-statistics.db")
+    repo.init_schema()
+
+    def write_message(user_id):
+        repo.log_message(
+            -100,
+            user_id,
+            "text",
+            False,
+            "Concurrent Group",
+            f"User {user_id}",
+            None,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write_message, range(40)))
+
+    assert repo.get_stats()["groups"] == {"Concurrent Group": 40}
+
+
+def test_all_sqlite_adapters_configure_busy_timeout(tmp_path):
+    from infrastructure.persistence.sqlite_social_graph import (
+        SQLiteSocialGraphRepository,
+    )
+    from infrastructure.persistence.sqlite_world import SQLiteWorldRepository
+
+    social = SQLiteSocialGraphRepository(tmp_path / "shared.db")
+    world = SQLiteWorldRepository(tmp_path / "world.db")
+
+    with social._connect() as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    with world._connect() as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
