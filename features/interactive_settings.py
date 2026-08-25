@@ -118,7 +118,6 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
     builder.button(text=f"{'Выкл.' if holidays_enabled else 'Вкл.'} празднеки", callback_data="settings:toggle:holidays")
     builder.button(text=f"{'Выкл.' if social_graph_enabled else 'Вкл.'} соцграф", callback_data="settings:toggle:social_graph")
-    builder.button(text=f"{'Выкл.' if radio_enabled else 'Вкл.'} радио", callback_data="settings:toggle:radio")
 
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
