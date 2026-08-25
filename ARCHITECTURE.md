@@ -94,8 +94,8 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи не оставляла частично записанный JSON.
 - `features.chat_settings`, `features.stat_rank_settings`, `features.sms_settings` и `features.content_filter` не используют `json.load/json.dump` для своего durable state; загрузка принимает repository и обновляет shared `dict/set/list` на месте, сохраняя identity.
 - `message_stats.json`, `rank_notifications_settings.json`, `sms_disabled_chats.json` и `antispam_enabled.json` сохраняют прежний JSON-контракт.
-- SQL для `statistics.db` сосредоточен в `infrastructure.persistence.sqlite_statistics.SQLiteStatisticsRepository`; `features.statistics` является facade/application API и не открывает SQLite-соединения самостоятельно.
-- Схемы таблиц `message_stats` и `model_stats` на R6 не меняются.
+- SQL для `statistics.db` сосредоточен в `infrastructure.persistence.sqlite_statistics.SQLiteStatisticsRepository`; `features.statistics` является facade/application API и не открывает SQLite-соединения самостоятельно. На R14 это правило распространено на `features.proactive`: выборка последней активности чатов также проходит через repository.
+- Схемы таблиц `message_stats` и `model_stats` не меняются. R14 добавляет только служебную таблицу `persistence_migrations` и идемпотентные индексы для выборок по приватности, времени, чату и пользователю.\n- SQLite adapters используют WAL и `busy_timeout=30s`; синхронные методы по-прежнему вызываются из async-кода через `asyncio.to_thread`. Версия миграции фиксируется как `statistics:001-query-indexes`, поэтому повторный startup безопасен.
 
 ## Async I/O
 
