@@ -41,6 +41,11 @@ class StatisticsRepository(Protocol):
 
     def get_activity_by_hour(self, period_hours: int | None = None) -> dict[int, int]: ...
 
+    def get_group_chat_activity(
+        self,
+        active_since: datetime,
+    ) -> dict[int, datetime]: ...
+
 
 _statistics_repository: StatisticsRepository | None = None
 
@@ -125,3 +130,13 @@ async def get_messages_last_hour():
 
 async def get_activity_by_hour(period_hours: Optional[int] = None) -> Dict[int, int]:
     return await asyncio.to_thread(_repository().get_activity_by_hour, period_hours)
+
+
+
+async def get_group_chat_activity(
+    active_since: datetime,
+) -> dict[int, datetime]:
+    return await asyncio.to_thread(
+        _repository().get_group_chat_activity,
+        active_since,
+    )

@@ -1,6 +1,8 @@
 import ast
 import asyncio
 import time
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -155,20 +157,24 @@ def test_persistent_feature_modules_do_not_load_state_at_import_time():
         assert called.isdisjoint(forbidden), f"import-time persistence in {relative_path}: {called & forbidden}"
 
 
-def test_statistics_feature_contains_no_sqlite_calls():
+def test_features_contain_no_sqlite_calls():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "features/statistics.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    for relative_path in ("features/statistics.py", "features/proactive.py"):
+        source = (root / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
 
-    imported_modules = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.add(node.module)
+        imported_modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module)
 
-    assert "sqlite3" not in imported_modules
-    assert "asyncio.to_thread" in source
+        assert "sqlite3" not in imported_modules, relative_path
+        assert "STATISTICS_DB_PATH" not in source, relative_path
+
+    statistics_source = (root / "features/statistics.py").read_text(encoding="utf-8")
+    assert "asyncio.to_thread" in statistics_source
 
 
 def test_sqlite_statistics_repository_preserves_schema_and_aggregations(tmp_path):
@@ -176,6 +182,7 @@ def test_sqlite_statistics_repository_preserves_schema_and_aggregations(tmp_path
 
     repo = SQLiteStatisticsRepository(tmp_path / "statistics.db")
     repo.init_schema()
+    repo.init_schema()  # migrations are idempotent
 
     repo.log_message(-100, 1, "text", False, "Group A", "Alice", "alice")
     repo.log_message(-100, 2, "photo", False, "Group A", "Bob", None)
@@ -187,6 +194,33 @@ def test_sqlite_statistics_repository_preserves_schema_and_aggregations(tmp_path
     assert stats["private"] == {"Carol (@carol)": 1}
     assert stats["model_usage"] == {"Group A": 1}
     assert sum(repo.get_activity_by_hour().values()) == 3
+
+    recent = repo.get_group_chat_activity(datetime.now() - timedelta(days=1))
+    assert set(recent) == {-100}
+
+    with repo._connect() as conn:
+        migration_count = conn.execute(
+            "SELECT COUNT(*) FROM persistence_migrations "
+            "WHERE migration_id = 'statistics:001-query-indexes'"
+        ).fetchone()[0]
+        index_names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert migration_count == 1
+    assert {
+        "idx_message_stats_private_time",
+        "idx_message_stats_chat_time",
+        "idx_message_stats_user_time",
+        "idx_model_stats_time_chat",
+    }.issubset(index_names)
+    assert journal_mode.lower() == "wal"
+    assert busy_timeout == 30_000
 
 
 def test_async_statistics_facade_delegates_to_repository(monkeypatch):
@@ -206,12 +240,59 @@ def test_async_statistics_facade_delegates_to_repository(monkeypatch):
             calls.append(("activity", period_hours))
             return {hour: 0 for hour in range(24)}
 
+        def get_group_chat_activity(self, active_since):
+            calls.append(("group-activity", active_since))
+            return {-100: active_since}
+
     monkeypatch.setattr(statistics, "_statistics_repository", FakeStatisticsRepository())
 
     asyncio.run(statistics.log_message(1, 2, "text", False, "chat", "user", None))
     asyncio.run(statistics.get_messages_last_24_hours())
     asyncio.run(statistics.get_activity_by_hour(48))
+    active_since = datetime.now() - timedelta(days=30)
+    activity = asyncio.run(statistics.get_group_chat_activity(active_since))
 
     assert calls[0][0] == "log"
     assert ("stats", 24) in calls
     assert ("activity", 48) in calls
+    assert ("group-activity", active_since) in calls
+    assert activity == {-100: active_since}
+
+
+
+def test_sqlite_statistics_accepts_concurrent_writers(tmp_path):
+    from infrastructure.persistence.sqlite_statistics import SQLiteStatisticsRepository
+
+    repo = SQLiteStatisticsRepository(tmp_path / "concurrent-statistics.db")
+    repo.init_schema()
+
+    def write_message(user_id):
+        repo.log_message(
+            -100,
+            user_id,
+            "text",
+            False,
+            "Concurrent Group",
+            f"User {user_id}",
+            None,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write_message, range(40)))
+
+    assert repo.get_stats()["groups"] == {"Concurrent Group": 40}
+
+
+def test_all_sqlite_adapters_configure_busy_timeout(tmp_path):
+    from infrastructure.persistence.sqlite_social_graph import (
+        SQLiteSocialGraphRepository,
+    )
+    from infrastructure.persistence.sqlite_world import SQLiteWorldRepository
+
+    social = SQLiteSocialGraphRepository(tmp_path / "shared.db")
+    world = SQLiteWorldRepository(tmp_path / "world.db")
+
+    with social._connect() as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    with world._connect() as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000

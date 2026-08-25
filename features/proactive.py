@@ -9,14 +9,13 @@
 import asyncio
 import logging
 import random
-import sqlite3
 from datetime import datetime, timedelta
 
 import pytz
 
-from core.paths import STATISTICS_DB_PATH
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
+from features.statistics import get_group_chat_activity
 
 CHECK_INTERVAL = 30 * 60            # проверка раз в полчаса
 SILENCE_MIN_HOURS = 18              # молчание меньше — рано лезть
@@ -32,33 +31,6 @@ MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 def is_proactive_enabled(chat_id: str) -> bool:
     return chat_settings.get(str(chat_id), {}).get("proactive_enabled", True)
-
-
-def _get_group_chat_activity() -> dict[int, datetime]:
-    """chat_id -> время последнего сообщения (только группы с активностью за месяц)."""
-    result: dict[int, datetime] = {}
-    try:
-        conn = sqlite3.connect(STATISTICS_DB_PATH)
-        rows = conn.execute(
-            """SELECT chat_id, MAX(message_timestamp) FROM message_stats
-               WHERE is_private = 0 GROUP BY chat_id"""
-        ).fetchall()
-        conn.close()
-    except Exception as e:
-        logging.error(f"[proactive] не смог прочитать БД статистики: {e}")
-        return result
-
-    cutoff = datetime.now() - timedelta(days=ACTIVE_CHAT_WINDOW_DAYS)
-    for chat_id, ts in rows:
-        if not ts:
-            continue
-        try:
-            last = datetime.fromisoformat(str(ts))
-        except ValueError:
-            continue
-        if last >= cutoff:
-            result[int(chat_id)] = last
-    return result
 
 
 def _get_last_proactive(chat_id: str) -> datetime | None:
@@ -139,7 +111,9 @@ async def proactive_loop(bot):
         try:
             now_msk = datetime.now(MOSCOW_TZ)
             if now_msk.hour not in NIGHT_HOURS:
-                activity = await asyncio.to_thread(_get_group_chat_activity)
+                activity = await get_group_chat_activity(
+                    datetime.now() - timedelta(days=ACTIVE_CHAT_WINDOW_DAYS)
+                )
                 for chat_id, last_activity in activity.items():
                     cid = str(chat_id)
                     if not is_proactive_enabled(cid):
