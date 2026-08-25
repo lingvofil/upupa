@@ -85,3 +85,19 @@ def test_sms_to_supergroup_still_uses_existing_pipeline(monkeypatch):
 
     send_sms.assert_awaited_once_with(message, chat_list, fake_bot)
     message.reply.assert_not_awaited()
+
+
+def test_sms_is_not_sent_when_target_type_cannot_be_verified(monkeypatch):
+    _set_chats()
+    message = _message("смс 2 привет")
+    fake_bot = SimpleNamespace(get_chat=AsyncMock(side_effect=RuntimeError("telegram unavailable")))
+    send_sms = AsyncMock()
+    monkeypatch.setattr(sms_handler, "bot", fake_bot)
+    monkeypatch.setattr(sms_handler, "process_send_sms", send_sms)
+
+    asyncio.run(sms_handler.handle_send_sms(message))
+
+    send_sms.assert_not_awaited()
+    message.reply.assert_awaited_once_with(
+        "Не могу проверить тип адресата, поэтому СМС/ММС не отправляю."
+    )
