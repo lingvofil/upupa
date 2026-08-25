@@ -55,6 +55,21 @@ BLANK_PNG_B64 = (
 
 # chat_id(str) -> session dict
 game_sessions: dict[str, dict] = {}
+_task_supervisor = None
+
+
+def configure_task_supervisor(supervisor):
+    """Передать владельца динамических задач игры из composition root."""
+    global _task_supervisor
+    _task_supervisor = supervisor
+
+
+def _start_background_task(coro, *, name: str):
+    if _task_supervisor is None:
+        coro.close()
+        raise RuntimeError("Crocodile task supervisor is not configured")
+    return _task_supervisor.start(coro, name=name)
+
 
 # chat_id(str) -> { user_id(str): {"pts": int, "name": str} }
 _scores: Dict[str, Dict[str, dict]] = {}
@@ -571,7 +586,10 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
         "bump_task": None,
     }
     if BUMP_INTERVAL and BUMP_INTERVAL > 0:
-        game_sessions[cid]["bump_task"] = asyncio.create_task(_bump_loop(cid))
+        game_sessions[cid]["bump_task"] = _start_background_task(
+            _bump_loop(cid),
+            name=f"crocodile-bump:{cid}",
+        )
 
 
 async def handle_start_game(message: types.Message):

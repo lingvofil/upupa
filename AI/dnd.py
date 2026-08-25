@@ -1,6 +1,7 @@
 #dnd.py
 
 import asyncio
+import logging
 import random
 import re
 from aiogram import Router, F, Bot
@@ -14,6 +15,23 @@ dnd_router = Router()
 dnd_sessions = {}
 # Хранилище связи опроса с чатом: poll_id -> chat_id (нужно для PollAnswer)
 poll_map = {}
+
+DND_MODEL_TIMEOUT_SECONDS = 90
+_task_supervisor = None
+
+
+def configure_task_supervisor(supervisor):
+    """Передать владельца динамических DnD-задач из composition root."""
+    global _task_supervisor
+    _task_supervisor = supervisor
+
+
+def _start_background_task(coro, *, name: str):
+    if _task_supervisor is None:
+        coro.close()
+        raise RuntimeError("DnD task supervisor is not configured")
+    return _task_supervisor.start(coro, name=name)
+
 
 DND_SYSTEM_PROMPT = """
 Ты — Мастер Подземелий (Dungeon Master) в текстовой RPG.
@@ -108,6 +126,22 @@ class GameSession:
             self.manual_history.append({"role": "assistant", "content": result})
             return result
 
+async def create_game_session(chat_id: int, starter_name: str):
+    """Создать provider-backed сессию вне event loop с ограничением времени."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(GameSession, chat_id, starter_name),
+        timeout=DND_MODEL_TIMEOUT_SECONDS,
+    )
+
+
+async def generate_session_response(session: GameSession, prompt: str) -> str:
+    """Вызвать синхронный provider wrapper без блокировки event loop."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(session.send_message, prompt),
+        timeout=DND_MODEL_TIMEOUT_SECONDS,
+    )
+
+
 async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     session = dnd_sessions.get(chat_id)
     if not session:
@@ -150,10 +184,21 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             session.current_poll_id = str(poll_msg.poll.id)
             poll_map[str(poll_msg.poll.id)] = chat_id
             
-            asyncio.create_task(wait_for_poll_timeout(bot, chat_id, poll_msg.chat.id, poll_msg.message_id, options, str(poll_msg.poll.id)))
+            _start_background_task(
+                wait_for_poll_timeout(
+                    bot,
+                    chat_id,
+                    poll_msg.chat.id,
+                    poll_msg.message_id,
+                    options,
+                    str(poll_msg.poll.id),
+                ),
+                name=f"dnd-poll:{chat_id}:{poll_msg.poll.id}",
+            )
             
-        except Exception as e:
-            await bot.send_message(chat_id, f"(Ошибка опроса. Пишите текстом).")
+        except Exception:
+            logging.exception("DnD poll setup failed chat_id=%s", chat_id)
+            await bot.send_message(chat_id, "(Ошибка опроса. Пишите текстом).")
             session.state = "WAITING_ACTION"
 
     elif command_str.startswith("ROLL"):
@@ -207,12 +252,12 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
             del poll_map[session.current_poll_id]
         session.current_poll_id = None
 
-        response_text = session.send_message(f"Результат: {outcome}. Продолжай (до 100 слов).")
+        response_text = await generate_session_response(session, f"Результат: {outcome}. Продолжай (до 100 слов).")
         await parse_and_execute_turn(bot, chat_id, response_text)
             
-    except Exception as e:
-        print(f"Poll Error: {e}")
-        response_text = session.send_message("Опрос завершен. Продолжай.")
+    except Exception:
+        logging.exception("DnD poll finalization failed chat_id=%s", chat_id)
+        response_text = await generate_session_response(session, "Опрос завершен. Продолжай.")
         await parse_and_execute_turn(bot, chat_id, response_text)
 
 async def wait_for_poll_timeout(bot: Bot, chat_id: int, poll_chat_id: int, message_id: int, options: list, poll_id: str):
@@ -253,7 +298,18 @@ async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
 async def cmd_start_dnd(message: Message):
     user_name = message.from_user.first_name
     cleanup_session(message.chat.id)
-    dnd_sessions[message.chat.id] = GameSession(message.chat.id, user_name)
+    try:
+        dnd_sessions[message.chat.id] = await create_game_session(
+            message.chat.id,
+            user_name,
+        )
+    except asyncio.TimeoutError:
+        await message.answer("Мастер завис в астрале. Попробуй начать историю ещё раз.")
+        return
+    except Exception:
+        logging.exception("DnD session creation failed chat_id=%s", message.chat.id)
+        await message.answer("Не удалось разбудить мастера историй.")
+        return
     
     # Показываем какая модель используется
     active_model = dnd_sessions[message.chat.id].active_model
@@ -272,7 +328,7 @@ async def cmd_stop_dnd(message: Message):
         return
     
     try:
-        response_text = session.send_message("Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]")
+        response_text = await generate_session_response(session, "Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]")
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except:
         cleanup_session(message.chat.id)
@@ -285,7 +341,7 @@ async def handle_backstory(message: Message):
     msg = await message.answer("Генерирую...")
     
     try:
-        response_text = session.send_message(f"Предыстория: {backstory}. Начинай.")
+        response_text = await generate_session_response(session, f"Предыстория: {backstory}. Начинай.")
         try: await message.bot.delete_message(message.chat.id, msg.message_id)
         except: pass
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
@@ -303,7 +359,7 @@ async def handle_roll(message: Message):
     
     await message.answer(f"🎲 {message.from_user.first_name}: {stat} -> **{roll_result}**", parse_mode="Markdown")
     
-    response_text = session.send_message(f"Игрок кинул на {stat}: {roll_result}. Продолжай.")
+    response_text = await generate_session_response(session, f"Игрок кинул на {stat}: {roll_result}. Продолжай.")
     await parse_and_execute_turn(message.bot, message.chat.id, response_text)
 
 @dnd_router.message(lambda m: dnd_sessions.get(m.chat.id) and dnd_sessions[m.chat.id].state == "WAITING_ACTION")
@@ -314,5 +370,5 @@ async def handle_free_action(message: Message):
     user_action = message.text
     user_name = message.from_user.first_name
     
-    response_text = session.send_message(f"{user_name}: {user_action}. Продолжай.")
+    response_text = await generate_session_response(session, f"{user_name}: {user_action}. Продолжай.")
     await parse_and_execute_turn(message.bot, message.chat.id, response_text)
