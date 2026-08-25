@@ -21,7 +21,8 @@ upupa/
 
 ## Направление зависимостей
 
-- `main.py` делегирует запуск в `app/` и не содержит бизнес-логики.\n- На R13 `Bot` и `Dispatcher` создаются только в `app.bootstrap.create_application`; импорт `core.loader` оставляет лишь стабильные compatibility-proxy без токена, сессии и сетевых ресурсов.
+- `main.py` делегирует запуск в `app/` и не содержит бизнес-логики.
+- На R13 `Bot` и `Dispatcher` создаются только в `app.bootstrap.create_application`; импорт `core.loader` оставляет лишь стабильные compatibility-proxy без токена, сессии и сетевых ресурсов.
 - `app/` — composition root: ему разрешено знать про handlers/features/services/games/AI/core/infrastructure.
 - `core/` не должен зависеть от `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
 - Provider-реализации находятся в `infrastructure.ai` и не зависят от `AI/` или других прикладных слоёв.
@@ -76,8 +77,8 @@ upupa/
 
 Фоновые планировщики запускаются через `TaskSupervisor`, который хранит ссылки на задачи,
 логирует необработанные исключения и отменяет оставшиеся задачи при завершении polling.
-Динамические задачи DnD-опросов и Crocodile bump-loop также регистрируются в том же supervisor через явную конфигурацию из composition root; прямой `asyncio.create_task` в этих модулях запрещён regression-тестом.\nСоздание глобальных `bot`/`dp` в `core.loader` пока сохранено как отдельный legacy-механизм;
-потребители импортируют эти объекты напрямую из canonical-модуля `core.loader`.
+Динамические задачи DnD-опросов и Crocodile bump-loop также регистрируются в том же supervisor через явную конфигурацию из composition root; прямой `asyncio.create_task` в этих модулях запрещён regression-тестом.
+На R13 реальные `Bot` и `Dispatcher` стали ресурсами `UpupaApplication` и создаются только в `app.bootstrap.create_application`. Стабильные compatibility-proxy из `core.loader` делегируют им обращения после связывания и сами не создают токен, сессию или сетевые ресурсы при импорте.
 
 Постоянное состояние, которое необходимо приложению на старте, загружается из
 `UpupaApplication.initialize_state()`, а не как побочный эффект импорта feature-модуля.
@@ -95,7 +96,8 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - `features.chat_settings`, `features.stat_rank_settings`, `features.sms_settings` и `features.content_filter` не используют `json.load/json.dump` для своего durable state; загрузка принимает repository и обновляет shared `dict/set/list` на месте, сохраняя identity.
 - `message_stats.json`, `rank_notifications_settings.json`, `sms_disabled_chats.json` и `antispam_enabled.json` сохраняют прежний JSON-контракт.
 - SQL для `statistics.db` сосредоточен в `infrastructure.persistence.sqlite_statistics.SQLiteStatisticsRepository`; `features.statistics` является facade/application API и не открывает SQLite-соединения самостоятельно. На R14 это правило распространено на `features.proactive`: выборка последней активности чатов также проходит через repository.
-- Схемы таблиц `message_stats` и `model_stats` не меняются. R14 добавляет только служебную таблицу `persistence_migrations` и идемпотентные индексы для выборок по приватности, времени, чату и пользователю.\n- SQLite adapters используют WAL и `busy_timeout=30s`; синхронные методы по-прежнему вызываются из async-кода через `asyncio.to_thread`. Версия миграции фиксируется как `statistics:001-query-indexes`, поэтому повторный startup безопасен.
+- Схемы таблиц `message_stats` и `model_stats` не меняются. R14 добавляет только служебную таблицу `persistence_migrations` и идемпотентные индексы для выборок по приватности, времени, чату и пользователю.
+- SQLite adapters используют WAL и `busy_timeout=30s`; синхронные методы по-прежнему вызываются из async-кода через `asyncio.to_thread`. Версия миграции фиксируется как `statistics:001-query-indexes`, поэтому повторный startup безопасен.
 
 ## Async I/O
 
@@ -109,7 +111,8 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через `asyncio.to_thread`.
 - Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.: скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
-- Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.\n- На R12 создание DnD-сессии и все её синхронные provider-вызовы вынесены через `asyncio.to_thread` и ограничены timeout; Telegram event loop больше не ждёт SDK синхронно.
+- Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
+- На R12 создание DnD-сессии и все её синхронные provider-вызовы вынесены через `asyncio.to_thread` и ограничены timeout; Telegram event loop больше не ждёт SDK синхронно.
 
 ## Security и deploy
 
