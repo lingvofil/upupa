@@ -14,8 +14,8 @@ from features.channel.mood_service import publish_channel_post
 from features.channel.storage import load_schedule, save_schedule
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
-DAY_START = time(10, 0)
-DAY_END = time(23, 30)
+DAY_START = time(0, 0)
+DAY_END = time(23, 59, 59)
 
 # Deprecated compatibility target for old direct helper callers. Production uses NOMINAL_POSTS_PER_DAY and mood ranges.
 POSTS_PER_DAY = 5
@@ -64,7 +64,7 @@ def _pick_daily_slots(
     burst_chance: float = 0.0,
     rng=random,
 ) -> list[datetime]:
-    """Mood-aware production slots have no minimum gap and may deliberately form bursts."""
+    """Mood-aware production slots may land anywhere in the Moscow calendar day."""
     if count is None:
         return _pick_legacy_daily_slots(day, now=now, rng=rng)
     if count <= 0:
@@ -261,7 +261,7 @@ def _get_schedule_for_now(now: datetime) -> dict:
 
 
 async def channel_scheduler_loop(bot) -> None:
-    """Background loop with mood-dependent activity and no enforced inter-post cooldown."""
+    """Background loop with mood-dependent activity and no enforced quiet hours or inter-post cooldown."""
     await asyncio.sleep(60)
     while True:
         try:
