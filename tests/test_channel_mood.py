@@ -3,7 +3,7 @@ import random
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
 
-def test_mood_catalog_has_inertia_and_activity_centered_near_seven_posts():
+def test_mood_catalog_has_inertia_and_activity_centered_near_ten_posts():
     from features.channel.mood import MOODS
 
     assert set(MOODS) == {"neutral", "irritated", "sleepy", "thoughtful", "chaotic", "social"}
@@ -14,7 +14,7 @@ def test_mood_catalog_has_inertia_and_activity_centered_near_seven_posts():
         config["weight"] * sum(config["daily_posts"]) / 2
         for config in MOODS.values()
     ) / 100
-    assert 6.5 <= expected_daily <= 7.5
+    assert 9.5 <= expected_daily <= 10.5
 
 
 def test_mood_state_persists_and_transitions_after_its_post_budget(tmp_path, monkeypatch):
@@ -79,7 +79,7 @@ def test_mood_prompt_is_injected_without_exposing_state_name():
     assert "thoughtful" not in prompt
 
 
-def test_production_scheduler_targets_about_seven_but_mood_can_raise_or_lower_it():
+def test_production_scheduler_targets_about_ten_but_mood_can_raise_or_lower_it():
     from features.channel.scheduler import MOSCOW_TZ, NOMINAL_POSTS_PER_DAY, _new_schedule
     from datetime import datetime
 
@@ -87,9 +87,9 @@ def test_production_scheduler_targets_about_seven_but_mood_can_raise_or_lower_it
     sleepy = _new_schedule(now, mood={"name": "sleepy", "posts_left": 3}, rng=random.Random(1))
     chaotic = _new_schedule(now, mood={"name": "chaotic", "posts_left": 3}, rng=random.Random(1))
 
-    assert NOMINAL_POSTS_PER_DAY == 7
-    assert 3 <= sleepy["target_posts"] <= 5
-    assert 8 <= chaotic["target_posts"] <= 11
+    assert NOMINAL_POSTS_PER_DAY == 10
+    assert 5 <= sleepy["target_posts"] <= 7
+    assert 11 <= chaotic["target_posts"] <= 15
     assert len(sleepy["slots"]) == sleepy["target_posts"]
     assert len(chaotic["slots"]) == chaotic["target_posts"]
 
