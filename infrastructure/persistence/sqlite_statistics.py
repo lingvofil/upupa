@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
+SQLITE_TIMEOUT_SECONDS = 30
+SQLITE_BUSY_TIMEOUT_MS = 30_000
+STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
+
+
 class SQLiteStatisticsRepository:
     """Own all SQL and connections for ``statistics.db``.
 
@@ -21,10 +26,52 @@ class SQLiteStatisticsRepository:
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=SQLITE_TIMEOUT_SECONDS)
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        return conn
+
+    @staticmethod
+    def _apply_migrations(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persistence_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        applied = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (STATISTICS_INDEX_MIGRATION,),
+        ).fetchone()
+        if applied:
+            return
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_stats_private_time "
+            "ON message_stats(is_private, message_timestamp)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_stats_chat_time "
+            "ON message_stats(chat_id, message_timestamp DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_stats_user_time "
+            "ON message_stats(user_id, message_timestamp DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_stats_time_chat "
+            "ON model_stats(timestamp, chat_id)"
+        )
+        conn.execute(
+            "INSERT INTO persistence_migrations(migration_id, applied_at) "
+            "VALUES (?, ?)",
+            (STATISTICS_INDEX_MIGRATION, datetime.now().isoformat()),
+        )
 
     def init_schema(self) -> None:
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS message_stats (
@@ -52,6 +99,7 @@ class SQLiteStatisticsRepository:
                 )
                 """
             )
+            self._apply_migrations(conn)
 
     def log_model_request(
         self,
@@ -98,6 +146,37 @@ class SQLiteStatisticsRepository:
                     user_username,
                 ),
             )
+
+    def get_group_chat_activity(
+        self,
+        active_since: datetime,
+    ) -> dict[int, datetime]:
+        """Return the latest group-message timestamp for recently active chats."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT chat_id, MAX(message_timestamp)
+                FROM message_stats
+                WHERE is_private = 0 AND message_timestamp >= ?
+                GROUP BY chat_id
+                """,
+                (active_since,),
+            ).fetchall()
+
+        activity: dict[int, datetime] = {}
+        for chat_id, timestamp in rows:
+            if not timestamp:
+                continue
+            try:
+                parsed = (
+                    timestamp
+                    if isinstance(timestamp, datetime)
+                    else datetime.fromisoformat(str(timestamp))
+                )
+            except (TypeError, ValueError):
+                continue
+            activity[int(chat_id)] = parsed
+        return activity
 
     @staticmethod
     def _last_known_user_display(conn: sqlite3.Connection, user_id: int) -> str:
