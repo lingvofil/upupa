@@ -84,7 +84,7 @@ pip install -r requirements-test.txt
 python -m pytest tests/ -q
 ```
 
-CI запускается для pull request и push в `main`/`refactor`, собирает coverage для основных пакетов и запускает `pyflakes` и держит минимальный coverage floor **30%**.
+CI запускается для pull request и push в `main`/`refactor`, собирает coverage для основных пакетов и запускает `pyflakes` для архитектурного ядра (`main.py`, `app`, `core`, `infrastructure`) и держит минимальный coverage floor **30%**.
 
 Кроме обычных regression-тестов есть architecture guardrails. Они, среди прочего, проверяют направление зависимостей и запрещают возвращать удалённые compatibility imports. То есть `config.py` теперь нельзя просто тихо положить обратно и сделать вид, что так и было.
 
