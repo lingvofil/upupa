@@ -50,7 +50,9 @@ def check_telegram(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         raise HealthCheckError("Telegram getMe returned an invalid response") from None
 
-    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise HealthCheckError("Telegram getMe returned an invalid response")
+    result = payload.get("result")
     if payload.get("ok") is not True or not isinstance(result, dict):
         raise HealthCheckError("Telegram getMe reported an unhealthy bot")
     if not result.get("id"):
