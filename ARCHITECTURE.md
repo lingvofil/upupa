@@ -65,6 +65,13 @@ upupa/
 - `services.speech` принципиально не импортирует `services.distortion`. `AI.voice` (`упупа скажи`) использует clean speech backend, а затем отдельно применяет legacy `apply_ffmpeg_audio_distortion`; Radio Upupa получает результат speech backend напрямую, без distortion.
 - Радио не запускает фоновые задачи и ничего не делает пассивно: per-chat настройка `radio_enabled` только разрешает или запрещает команду.
 
+## Автономный канал
+
+- `features.channel.scheduler` распределяет mood-зависимое число публикаций по всей московской календарной дате без quiet hours; production-диапазон — `00:00:00–23:59:59`.
+- Базовый ориентир активности — около 10 постов в сутки, но фактический диапазон зависит от текущего mood: сонный режим пишет заметно реже, chaotic/social — чаще.
+- Время суток не блокирует публикацию, а передаётся в mood prompt как мягкий контекст: ночь/утро/день/вечер могут влиять на тон, не заставляя Упупу механически называть время.
+- Mood по-прежнему управляет длиной, типом контента, частотой картинок/внешних комментариев и вероятностью burst-публикаций.
+
 ## Lifecycle
 
 Фоновые планировщики запускаются через `TaskSupervisor`, который хранит ссылки на задачи,
@@ -84,7 +91,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Физически JSON/DB/log-файлы пока остаются в корне репозитория; R6 не требует миграции production-данных и не меняет их форматы.
 - `core.state` временно сохраняет старые `*_FILE` имена как строки для прямых legacy-потребителей; источник истины для путей — `core.paths`.
 - Для JSON используется граница `JsonRepository` и файловая реализация `JsonFileRepository`.
-- `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи не оставляла частично перезаписанный JSON.
+- `JsonFileRepository` пишет через временный файл и атомарный `os.replace`, чтобы авария записи не оставляла частично записанный JSON.
 - `features.chat_settings`, `features.stat_rank_settings`, `features.sms_settings` и `features.content_filter` не используют `json.load/json.dump` для своего durable state; загрузка принимает repository и обновляет shared `dict/set/list` на месте, сохраняя identity.
 - `message_stats.json`, `rank_notifications_settings.json`, `sms_disabled_chats.json` и `antispam_enabled.json` сохраняют прежний JSON-контракт.
 - SQL для `statistics.db` сосредоточен в `infrastructure.persistence.sqlite_statistics.SQLiteStatisticsRepository`; `features.statistics` является facade/application API и не открывает SQLite-соединения самостоятельно.
