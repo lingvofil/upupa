@@ -15,9 +15,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       DEPLOY_SHA: ${{ github.sha }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || '88.218.122.208' }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+      DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
+      DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE || 'upupa_bot.service' }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
 
     steps:
       - name: Set up SSH
@@ -25,63 +30,142 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Deploy exact commit with rollback
+      - name: Deploy exact commit with backup, healthcheck and rollback
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "Deploying ${DEPLOY_SHA} to production server..."
 
-          # R8 keeps the existing host-key behavior until the VPS host key is
-          # provisioned as a trusted GitHub secret/known_hosts entry.
-          ssh -o StrictHostKeyChecking=no root@88.218.122.208 \
-            "bash -s -- '${DEPLOY_SHA}'" <<'REMOTE'
+          [[ "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9._:-]+$ ]]
+          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${DEPLOY_APP_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "${DEPLOY_SERVICE}" =~ ^[A-Za-z0-9_.@-]+$ ]]
+
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
+          if [[ -n "${SSH_KNOWN_HOSTS}" ]]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+            chmod 600 "${HOME}/.ssh/known_hosts"
+            SSH_OPTIONS+=(
+              -o StrictHostKeyChecking=yes
+              -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+            )
+            echo "SSH host verification: strict"
+          else
+            SSH_OPTIONS+=(-o StrictHostKeyChecking=no)
+            echo "::warning::SSH_KNOWN_HOSTS is not configured; using legacy host-key behavior"
+          fi
+
+          echo "Deploying ${DEPLOY_SHA} to ${DEPLOY_USER}@${DEPLOY_HOST}..."
+          ssh "${SSH_OPTIONS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "bash -s -- '${DEPLOY_SHA}' '${DEPLOY_APP_DIR}' '${DEPLOY_SERVICE}'" <<'REMOTE'
           set -Eeuo pipefail
 
           TARGET_SHA="$1"
-          APP_DIR="/root/upupa"
-          VENV_PIP="$APP_DIR/venv/bin/pip"
-          SERVICE="upupa_bot.service"
-
-          cd "$APP_DIR"
-          PREVIOUS_SHA="$(git rev-parse HEAD)"
+          APP_DIR="$2"
+          SERVICE="$3"
+          VENV_PYTHON="$APP_DIR/venv/bin/python"
+          BACKUP_ROOT="$(dirname "$APP_DIR")/upupa-backups"
+          PREVIOUS_SHA=""
+          BACKUP_DIR=""
+          CODE_SWITCHED=0
           DEPLOY_SUCCEEDED=0
 
+          service_ctl() {
+            if [[ "$(id -u)" -eq 0 ]]; then
+              systemctl "$@"
+            else
+              sudo -n systemctl "$@"
+            fi
+          }
+
+          run_healthcheck() {
+            local script="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              if service_ctl is-active --quiet "$SERVICE" &&
+                 "$VENV_PYTHON" "$script" --app-dir "$APP_DIR" --timeout 10; then
+                return 0
+              fi
+              echo "Healthcheck attempt ${attempt}/3 failed" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           rollback() {
-            status=$?
-            if [ "$DEPLOY_SUCCEEDED" -eq 1 ]; then
+            local status=$?
+            trap - ERR
+            if [[ "$DEPLOY_SUCCEEDED" -eq 1 ]]; then
               return "$status"
+            fi
+            if [[ "$CODE_SWITCHED" -eq 0 ]]; then
+              echo "Deploy preflight failed before code switch; production was not changed." >&2
+              exit "$status"
             fi
 
             echo "Deployment failed; rolling back to ${PREVIOUS_SHA}..." >&2
+            if [[ -n "$BACKUP_DIR" ]]; then
+              echo "Pre-deploy backup retained at ${BACKUP_DIR}" >&2
+            fi
+
             set +e
             git reset --hard "$PREVIOUS_SHA"
-            "$VENV_PIP" install --disable-pip-version-check -r requirements.txt
-            systemctl restart "$SERVICE"
-            sleep 3
-            systemctl is-active --quiet "$SERVICE"
-            rollback_status=$?
+            "$VENV_PYTHON" -m pip install \
+              --disable-pip-version-check -r requirements.txt
+            service_ctl restart "$SERVICE"
+            sleep 5
+            run_healthcheck "$HEALTHCHECK_SCRIPT"
+            local rollback_status=$?
             set -e
 
-            if [ "$rollback_status" -ne 0 ]; then
-              echo "Rollback completed but ${SERVICE} is not active." >&2
+            if [[ "$rollback_status" -ne 0 ]]; then
+              echo "Rollback completed but functional healthcheck failed." >&2
             else
-              echo "Rollback succeeded; ${SERVICE} is active." >&2
+              echo "Rollback succeeded; service and Telegram getMe are healthy." >&2
             fi
             exit "$status"
           }
           trap rollback ERR
 
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APP_DIR" == /* ]]
+          [[ -d "$APP_DIR/.git" ]]
+          [[ -x "$VENV_PYTHON" ]]
+
+          cd "$APP_DIR"
+          PREVIOUS_SHA="$(git rev-parse HEAD)"
           git remote set-url origin git@github.com:lingvofil/upupa.git
           git fetch --prune origin main
           git cat-file -e "${TARGET_SHA}^{commit}"
-          git reset --hard "$TARGET_SHA"
 
-          "$VENV_PIP" install --disable-pip-version-check -r requirements.txt
-          systemctl restart "$SERVICE"
-          sleep 3
-          systemctl is-active --quiet "$SERVICE"
+          DEPLOY_TMP_DIR="$(mktemp -d /tmp/upupa-deploy.XXXXXX)"
+          BACKUP_SCRIPT="$DEPLOY_TMP_DIR/backup_runtime_state.py"
+          HEALTHCHECK_SCRIPT="$DEPLOY_TMP_DIR/production_healthcheck.py"
+          git show "${TARGET_SHA}:scripts/backup_runtime_state.py" > "$BACKUP_SCRIPT"
+          git show "${TARGET_SHA}:scripts/production_healthcheck.py" > "$HEALTHCHECK_SCRIPT"
+
+          BACKUP_DIR="$(
+            "$VENV_PYTHON" "$BACKUP_SCRIPT" \
+              --source "$APP_DIR" \
+              --destination "$BACKUP_ROOT" \
+              --label "$TARGET_SHA"
+          )"
+          [[ -d "$BACKUP_DIR" ]]
+          [[ -f "$BACKUP_DIR/manifest.json" ]]
+          echo "Runtime backup created at ${BACKUP_DIR}"
+
+          git reset --hard "$TARGET_SHA"
+          CODE_SWITCHED=1
+
+          "$VENV_PYTHON" -m pip install \
+            --disable-pip-version-check -r requirements.txt
+          service_ctl restart "$SERVICE"
+          sleep 5
+          run_healthcheck "$HEALTHCHECK_SCRIPT"
 
           DEPLOY_SUCCEEDED=1
           trap - ERR
-          echo "Deployment ${TARGET_SHA} succeeded; ${SERVICE} is active."
+          echo "Deployment ${TARGET_SHA} succeeded; service and Telegram getMe are healthy."
           REMOTE

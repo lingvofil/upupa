@@ -117,9 +117,11 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Client-controlled `room` не является авторизацией: после проверки Telegram user id сервер связывает socket с активной игровой сессией и разрешает `draw_step`, `snapshot`, `skip_turn` и `final_frame` только текущему `drawer_id`.
 - Wildcard Socket.IO CORS на R8 удалён; используется same-origin policy библиотеки.
 - `IncomingMessageLogMiddleware` по умолчанию пишет только идентификаторы/тип/длину, без имени пользователя, текста сообщения и полного UNKNOWN payload. Короткий текстовый preview допускается только через явный `LOG_MESSAGE_CONTENT=true`.
-- Production deploy сериализован через GitHub Actions concurrency и разворачивает точный `${{ github.sha }}`, а не плавающий `origin/main`; перед рестартом обновляются Python dependencies из `requirements.txt`.
-- После рестарта deploy проверяет `systemctl is-active`; при ошибке код и Python dependencies откатываются на предыдущий commit и сервис перезапускается повторно.
-- Оставшийся инфраструктурный hardening: SSH workflow пока сохраняет legacy `root` + `StrictHostKeyChecking=no` до provisioning доверенного VPS host key и отдельного deploy-user.
+- Production deploy сериализован через GitHub Actions concurrency и разворачивает точный `${{ github.sha }}`, а не плавающий `origin/main`.
+- До переключения кода R15 создаёт append-only backup корневых `*.db`, `*.json` и `user_messages.log`: SQLite копируется online backup API, а manifest фиксирует размер и SHA-256 каждого файла.
+- После установки dependencies и рестарта workflow проверяет и systemd-сервис, и Telegram `getMe` с тремя попытками. При ошибке код и Python dependencies откатываются на предыдущий commit; pre-deploy backup сохраняется для ручного восстановления данных.
+- SSH host key проверяется строго, когда задан secret `SSH_KNOWN_HOSTS`. `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_APP_DIR` и `DEPLOY_SERVICE` также вынесены в optional secrets.
+- Legacy fallback на текущий root-host и `StrictHostKeyChecking=no` временно сохранён, чтобы R15 не сломал production до ручного provisioning deploy-user и доверенного host key. Порядок перехода описан в `docs/DEPLOY_HARDENING.md`.
 - GigaChat wrappers пока сохраняют `verify_ssl_certs=False`: включение проверки требует сначала установить на VPS доверенный российский CA bundle и прокинуть его в SDK. Отключать текущий рабочий путь без этого prerequisite нельзя.
 
 ## Прочее

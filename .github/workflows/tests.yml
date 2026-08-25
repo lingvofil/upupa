@@ -22,12 +22,15 @@ jobs:
             app \
             core \
             infrastructure \
+            scripts/backup_runtime_state.py \
+            scripts/production_healthcheck.py \
             tests/test_application_bootstrap.py \
             tests/test_application_lifecycle.py \
             tests/test_configuration_composition.py \
             tests/test_dependency_versions.py \
             tests/test_dynamic_task_ownership.py \
-            tests/test_architecture_guardrails.py
+            tests/test_architecture_guardrails.py \
+            tests/test_production_hardening.py
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
