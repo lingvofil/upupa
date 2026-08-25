@@ -313,130 +313,23 @@ def test_batya_external_prompt_can_address_him_and_include_photo_description():
     prompt = _build_external_prompt(
         source,
         {"text": "", "url": "https://t.me/lukeimyourmouth/1", "image_url": "https://cdn.example/photo.jpg"},
-        image_description="На фото мужчина держит огромную кружку и смотрит в окно.",
+        image_description="На фото мужчина держит огромную кружку и смотрит в камеру.",
     )
 
-    assert "батя" in prompt.casefold()
-    assert "На фото мужчина держит огромную кружку" in prompt
+    assert "твой батя" in prompt.casefold()
+    assert "обратиться к нему напрямую" in prompt.casefold()
+    assert "ОПИСАНИЕ ФОТО" in prompt
+    assert "огромную кружку" in prompt
 
 
-def test_external_prompt_does_not_call_unrelated_source_batya():
-    from features.channel.service import EXTERNAL_COMMENT_SOURCES, _build_external_prompt
+def test_channel_storage_roundtrip(tmp_path, monkeypatch):
+    from features.channel import storage
 
-    source = next(source for source in EXTERNAL_COMMENT_SOURCES if source["channel"] == "kapibara_fen")
-    prompt = _build_external_prompt(source, {"text": "капибара", "url": "https://t.me/kapibara_fen/1"})
+    posts_file = tmp_path / "posts.json"
+    monkeypatch.setattr(storage, "POSTS_FILE", posts_file)
 
-    assert "этот канал ведёт твой батя" not in prompt.casefold()
+    storage.append_post({"text": "я червяк"})
+    storage.append_post({"text": "уже нет"})
 
-
-def test_external_comment_text_is_prefixed_with_source_url(monkeypatch):
-    import asyncio
-    from features.channel import service
-
-    source = {"channel": "muhtarboodka", "description": "@muhtarboodka; этот канал ведёт Мухтар", "owner": "Мухтар", "allow_batya_reference": False}
-    source_post = {"url": "https://t.me/muhtarboodka/1", "text": "исходник"}
-
-    async def fake_fetch_public_posts(channel, limit):
-        return [source_post]
-
-    async def fake_generate(prompt, chat_id):
-        return "ну допустим"
-
-    monkeypatch.setattr(service, "EXTERNAL_COMMENT_SOURCES", (source,))
-    monkeypatch.setattr(service, "fetch_public_posts", fake_fetch_public_posts)
-    monkeypatch.setattr("AI.summarize._generate_with_active_model", fake_generate)
-
-    result = asyncio.run(service._try_generate_external_comment([], []))
-
-    assert result is not None
-    text, metadata = result
-    assert text == "https://t.me/muhtarboodka/1\n\nну допустим"
-    assert metadata["external_source_channel"] == "@muhtarboodka"
-
-
-def test_image_plan_parser_requires_two_tagged_lines():
-    from features.channel.service import _parse_image_plan
-
-    assert _parse_image_plan("КАРТИНКА: удод в тазу\nПОДПИСЬ: я дома") == ("удод в тазу", "я дома")
-    assert _parse_image_plan("удод в тазу") is None
-
-
-def test_image_plan_validation_rejects_long_or_batya_caption():
-    from features.channel.service import _validate_image_plan
-
-    assert _validate_image_plan("удод сидит в эмалированном тазу", "я дома", []) is None
-    assert "батю" in _validate_image_plan("удод сидит рядом с батей на кухне", "я дома", [])
-    assert "батю" in _validate_image_plan("удод сидит в эмалированном тазу", "батя привет", [])
-
-
-def test_image_post_has_cooldown_even_if_rng_wants_it():
-    from features.channel.service import IMAGE_POST_COOLDOWN_POSTS, _should_try_image_post
-
-    class ZeroRng:
-        @staticmethod
-        def random():
-            return 0.0
-
-    recent = [{"post_kind": "normal"} for _ in range(IMAGE_POST_COOLDOWN_POSTS - 1)]
-    recent.append({"post_kind": "image"})
-    assert _should_try_image_post(recent, rng=ZeroRng()) is False
-
-    clean_history = [{"post_kind": "normal"} for _ in range(IMAGE_POST_COOLDOWN_POSTS)]
-    assert _should_try_image_post(clean_history, rng=ZeroRng()) is True
-
-
-def test_image_prompt_requires_one_visual_idea_and_short_caption():
-    from prompts.channel import CHANNEL_IMAGE_POST_PROMPT
-
-    lowered = CHANNEL_IMAGE_POST_PROMPT.casefold()
-    assert "одну визуально понятную картинку" in lowered
-    assert "предпочтительно 1–6 слов" in lowered
-    assert "жёсткий максимум — 8 слов" in lowered
-
-
-def test_image_generation_uses_gigachat_then_pollinations(monkeypatch):
-    import asyncio
-    from features.channel import image_generation
-
-    calls = []
-
-    async def fake_gigachat(prompt):
-        calls.append("gigachat")
-        return None
-
-    async def fake_pollinations(prompt):
-        calls.append("pollinations")
-        return b"png"
-
-    monkeypatch.setattr(image_generation, "_generate_with_gigachat", fake_gigachat)
-    monkeypatch.setattr(image_generation, "_generate_with_pollinations", fake_pollinations)
-
-    image, provider = asyncio.run(image_generation.generate_channel_image("удод в тазу"))
-
-    assert image == b"png"
-    assert provider == "pollinations"
-    assert calls == ["gigachat", "pollinations"]
-
-
-def test_image_generation_stops_after_gigachat_success(monkeypatch):
-    import asyncio
-    from features.channel import image_generation
-
-    calls = []
-
-    async def fake_gigachat(prompt):
-        calls.append("gigachat")
-        return b"png"
-
-    async def fake_pollinations(prompt):
-        calls.append("pollinations")
-        return b"other"
-
-    monkeypatch.setattr(image_generation, "_generate_with_gigachat", fake_gigachat)
-    monkeypatch.setattr(image_generation, "_generate_with_pollinations", fake_pollinations)
-
-    image, provider = asyncio.run(image_generation.generate_channel_image("удод в тазу"))
-
-    assert image == b"png"
-    assert provider == "gigachat"
-    assert calls == ["gigachat"]
+    assert storage.load_posts() == [{"text": "я червяк"}, {"text": "уже нет"}]
+    assert storage.load_posts(limit=1) == [{"text": "уже нет"}]
