@@ -6,15 +6,18 @@ import random
 from datetime import datetime
 from typing import Iterable
 
+import pytz
+
 from features.channel.storage import load_mood, save_mood
 
 DEFAULT_MOOD = "neutral"
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 MOODS = {
     "neutral": {
         "weight": 30,
         "duration_posts": (3, 7),
-        "daily_posts": (6, 8),
+        "daily_posts": (8, 11),
         "burst_probability": 0.10,
         "image_probability": 0.15,
         "external_probability": 0.10,
@@ -28,7 +31,7 @@ MOODS = {
     "irritated": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (7, 9),
+        "daily_posts": (10, 13),
         "burst_probability": 0.18,
         "image_probability": 0.10,
         "external_probability": 0.18,
@@ -50,7 +53,7 @@ MOODS = {
     "sleepy": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (3, 5),
+        "daily_posts": (5, 7),
         "burst_probability": 0.04,
         "image_probability": 0.05,
         "external_probability": 0.04,
@@ -71,7 +74,7 @@ MOODS = {
     "thoughtful": {
         "weight": 15,
         "duration_posts": (3, 7),
-        "daily_posts": (5, 7),
+        "daily_posts": (7, 10),
         "burst_probability": 0.08,
         "image_probability": 0.08,
         "external_probability": 0.14,
@@ -92,7 +95,7 @@ MOODS = {
     "chaotic": {
         "weight": 10,
         "duration_posts": (2, 4),
-        "daily_posts": (8, 11),
+        "daily_posts": (11, 15),
         "burst_probability": 0.38,
         "image_probability": 0.25,
         "external_probability": 0.10,
@@ -113,7 +116,7 @@ MOODS = {
     "social": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (8, 10),
+        "daily_posts": (11, 14),
         "burst_probability": 0.30,
         "image_probability": 0.12,
         "external_probability": 0.22,
@@ -131,6 +134,25 @@ MOODS = {
         },
         "length_multipliers": {"micro": 0.8, "short": 1.3, "medium": 1.2},
     },
+}
+
+DAYPART_PROMPTS = {
+    "night": (
+        "Сейчас ночь по Москве. Это может слегка делать тебя более тихим, странным, сонным, интимным или "
+        "рефлексивным; ночная мысль может быть неожиданно честной или совсем нелепой. Не обязан упоминать ночь."
+    ),
+    "morning": (
+        "Сейчас утро по Москве. Ты можешь ощущать запуск дня: просыпаться, тупить, раздражаться, строить странные "
+        "планы или внезапно быть бодрым. Не обязан упоминать утро."
+    ),
+    "day": (
+        "Сейчас день по Москве. Время суток не должно перетягивать внимание на себя: можешь быть деятельным, "
+        "наблюдательным или отвлекаться на любую ерунду. Не обязан упоминать день."
+    ),
+    "evening": (
+        "Сейчас вечер по Москве. Можно чуть чаще подводить внутренние микроитоги, уставать, оживать, беситься "
+        "или хотеть чего-нибудь бессмысленного. Не обязан упоминать вечер."
+    ),
 }
 
 
@@ -188,10 +210,30 @@ def mood_config(mood: dict | None) -> dict:
     return MOODS.get(name, MOODS[DEFAULT_MOOD])
 
 
-def mood_prompt(mood: dict | None) -> str:
+def _daypart_name(now: datetime | None = None) -> str:
+    current = now or datetime.now(MOSCOW_TZ)
+    if current.tzinfo is None:
+        current = MOSCOW_TZ.localize(current)
+    else:
+        current = current.astimezone(MOSCOW_TZ)
+    hour = current.hour
+    if hour < 6:
+        return "night"
+    if hour < 11:
+        return "morning"
+    if hour < 18:
+        return "day"
+    return "evening"
+
+
+def daypart_prompt(now: datetime | None = None) -> str:
+    return DAYPART_PROMPTS[_daypart_name(now)]
+
+
+def mood_prompt(mood: dict | None, *, now: datetime | None = None) -> str:
     if not mood:
         return ""
-    return str(mood_config(mood)["prompt"])
+    return f"{mood_config(mood)['prompt']}\n{daypart_prompt(now)}"
 
 
 def adjusted_weights(items: Iterable[dict], mood: dict | None, multiplier_key: str) -> list[float]:
@@ -219,7 +261,7 @@ def external_probability(mood: dict | None, default: float = 0.10) -> float:
     return float(mood_config(mood).get("external_probability", default)) if mood else default
 
 
-def daily_post_target(mood: dict | None, *, rng=random, default: int = 7) -> int:
+def daily_post_target(mood: dict | None, *, rng=random, default: int = 10) -> int:
     if not mood:
         return default
     low, high = mood_config(mood).get("daily_posts", (default, default))
