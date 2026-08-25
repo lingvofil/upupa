@@ -78,10 +78,19 @@ GEMINI_KEYS_POOL = [
     if key
 ]
 
-if not GEMINI_KEYS_POOL:
-    raise RuntimeError("⚠ Gemini API keys not found")
+PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0] if GEMINI_KEYS_POOL else None
 
-PRIMARY_GEMINI_KEY = GEMINI_KEYS_POOL[0]
+
+class SettingsValidationError(RuntimeError):
+    """Required application settings are missing or invalid."""
+
+
+def validate_required_settings() -> None:
+    """Validate only resources required to start the Telegram application."""
+    if not API_TOKEN or not str(API_TOKEN).strip():
+        raise SettingsValidationError(
+            "API_TOKEN is required to start the Telegram bot"
+        )
 
 # =========================
 # === ПРОЧИЕ КОНСТАНТЫ ===

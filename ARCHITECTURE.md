@@ -21,7 +21,7 @@ upupa/
 
 ## Направление зависимостей
 
-- `main.py` делегирует запуск в `app/` и не содержит бизнес-логики.
+- `main.py` делегирует запуск в `app/` и не содержит бизнес-логики.\n- На R13 `Bot` и `Dispatcher` создаются только в `app.bootstrap.create_application`; импорт `core.loader` оставляет лишь стабильные compatibility-proxy без токена, сессии и сетевых ресурсов.
 - `app/` — composition root: ему разрешено знать про handlers/features/services/games/AI/core/infrastructure.
 - `core/` не должен зависеть от `AI/`, `features/`, `services/`, `games/` или `handlers/`; это контролируется тестом архитектуры.
 - Provider-реализации находятся в `infrastructure.ai` и не зависят от `AI/` или других прикладных слоёв.
@@ -124,5 +124,5 @@ message/rank counters и rank-notification settings; SQLite schema также и
 
 ## Прочее
 
-- Секреты: `config_private.py` (локально, в .gitignore) или env-переменные.
+- Секреты: `config_private.py` (локально, в `.gitignore`) или env-переменные. На startup обязателен только `API_TOKEN`; ключи AI-провайдеров опциональны и проверяются лениво при первом обращении к конкретному провайдеру.
 - Каждый рефакторинговый цикл оформляется отдельным PR и должен проходить CI.
