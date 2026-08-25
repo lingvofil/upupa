@@ -76,7 +76,7 @@ upupa/
 
 Фоновые планировщики запускаются через `TaskSupervisor`, который хранит ссылки на задачи,
 логирует необработанные исключения и отменяет оставшиеся задачи при завершении polling.
-Создание глобальных `bot`/`dp` в `core.loader` пока сохранено как отдельный legacy-механизм;
+Динамические задачи DnD-опросов и Crocodile bump-loop также регистрируются в том же supervisor через явную конфигурацию из composition root; прямой `asyncio.create_task` в этих модулях запрещён regression-тестом.\nСоздание глобальных `bot`/`dp` в `core.loader` пока сохранено как отдельный legacy-механизм;
 потребители импортируют эти объекты напрямую из canonical-модуля `core.loader`.
 
 Постоянное состояние, которое необходимо приложению на старте, загружается из
@@ -109,7 +109,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - Синхронные Groq/GigaChat/Gemini/Robotics wrappers в `AI.whatisthere` offload'ятся через `asyncio.to_thread`.
 - Медиа-пайплайн `чотам` больше не создаёт общие файлы `photo_<file_id>`, `video_<file_id>` и т. п.: скачанные байты передаются в анализ напрямую. `download_file()` сохранён как compatibility API для distortion.
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение message/rank counters и SMS-disable из async handlers также не блокирует event loop.
-- Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
+- Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.\n- На R12 создание DnD-сессии и все её синхронные provider-вызовы вынесены через `asyncio.to_thread` и ограничены timeout; Telegram event loop больше не ждёт SDK синхронно.
 
 ## Security и deploy
 
