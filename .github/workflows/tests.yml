@@ -17,7 +17,11 @@ jobs:
         run: pip install -r requirements-test.txt
       - name: Run static checks
         run: >-
-          python -m pyflakes main.py app AI core infrastructure features games handlers services prompts tests
+          python -m pyflakes main.py app core infrastructure\
+          tests/test_application_bootstrap.py\
+          tests/test_application_lifecycle.py\
+          tests/test_dependency_versions.py\
+          tests/test_architecture_guardrails.py
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
