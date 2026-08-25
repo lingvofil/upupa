@@ -96,6 +96,7 @@ jobs:
 
           rollback() {
             local status=$?
+            trap - ERR
             if [[ "$DEPLOY_SUCCEEDED" -eq 1 ]]; then
               return "$status"
             fi
