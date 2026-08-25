@@ -19,7 +19,7 @@ DAY_END = time(23, 59, 59)
 
 # Deprecated compatibility target for old direct helper callers. Production uses NOMINAL_POSTS_PER_DAY and mood ranges.
 POSTS_PER_DAY = 5
-NOMINAL_POSTS_PER_DAY = 7
+NOMINAL_POSTS_PER_DAY = 10
 PREFERRED_GAP_MINUTES = 120
 MIN_GAP_MINUTES = 45
 STARTUP_LEAD_MINUTES = 5
