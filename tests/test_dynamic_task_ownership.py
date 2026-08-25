@@ -27,7 +27,9 @@ class RecordingSupervisor:
         return name
 
 
-def test_dynamic_game_tasks_use_configured_supervisor():
+def test_dynamic_game_tasks_use_configured_supervisor(monkeypatch):
+    monkeypatch.setattr(dnd, "_task_supervisor", None)
+    monkeypatch.setattr(crocodile, "_task_supervisor", None)
     supervisor = RecordingSupervisor()
     dnd.configure_task_supervisor(supervisor)
     crocodile.configure_task_supervisor(supervisor)
