@@ -40,6 +40,18 @@ from infrastructure.ai.openai_compatible import OpenAICompatibleWrapper
 _UNSET = object()
 
 
+class ProviderConfigurationError(RuntimeError):
+    """A provider was requested without its optional credentials."""
+
+
+def _require_credential(value: str | None, setting_name: str) -> str:
+    if value and value.strip():
+        return value
+    raise ProviderConfigurationError(
+        f"{setting_name} is required to use this AI provider"
+    )
+
+
 class LazyResource:
     """Thread-safe proxy that constructs one configured resource on first use."""
 
@@ -93,12 +105,12 @@ class LazyResource:
 
 
 def _build_gemini_client():
-    return genai.Client(api_key=PRIMARY_GEMINI_KEY)
+    return genai.Client(api_key=_require_credential(PRIMARY_GEMINI_KEY, "GENERIC_API_KEY"))
 
 
 def _build_groq():
     return GroqWrapper(
-        GROQ_API_KEY,
+        _require_credential(GROQ_API_KEY, "GROQ_API_KEY"),
         vision_model=GROQ_VISION_MODEL,
         text_model=GROQ_TEXT_MODEL,
         audio_model=GROQ_AUDIO_MODEL,
@@ -117,7 +129,7 @@ def _build_gemini_fallback():
 
 def _build_gigachat_conversation():
     return GigaChatConversationWrapper(
-        GIGACHAT_API_KEY,
+        _require_credential(GIGACHAT_API_KEY, "GIGACHAT_API_KEY"),
         GIGACHAT_MODEL_QUEUE_DEFAULT,
         GIGACHAT_MODEL_QUEUE_SPECIAL,
     )
@@ -125,7 +137,7 @@ def _build_gigachat_conversation():
 
 def _build_legacy_gigachat():
     return GigaChat(
-        credentials=GIGACHAT_API_KEY,
+        credentials=_require_credential(GIGACHAT_API_KEY, "GIGACHAT_API_KEY"),
         base_url=GIGACHAT_BASE_URL,
         model="GigaChat-2",
         verify_ssl_certs=False,
@@ -134,7 +146,7 @@ def _build_legacy_gigachat():
 
 def _build_openrouter():
     return OpenAICompatibleWrapper(
-        api_key=OPENROUTER_API_KEY,
+        api_key=_require_credential(OPENROUTER_API_KEY, "OPENROUTER_API_KEY"),
         base_url="https://openrouter.ai/api/v1",
         model_name="openrouter/elephant-alpha",
     )
@@ -142,7 +154,7 @@ def _build_openrouter():
 
 def _build_siliconflow():
     return OpenAICompatibleWrapper(
-        api_key=SILICONFLOW_API_KEY,
+        api_key=_require_credential(SILICONFLOW_API_KEY, "SILICONFLOW_API_KEY"),
         base_url="https://api.siliconflow.com/v1",
         model_name="deepseek-ai/DeepSeek-V3.2",
     )
@@ -159,6 +171,7 @@ siliconflow_ai = LazyResource("siliconflow_ai", _build_siliconflow)
 
 __all__ = [
     "LazyResource",
+    "ProviderConfigurationError",
     "gemini_client",
     "groq_ai",
     "model",
