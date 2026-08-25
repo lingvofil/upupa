@@ -40,7 +40,8 @@ async def _reject_channel_target(message: types.Message) -> bool:
         target_chat = await bot.get_chat(target_chat_id)
     except Exception as e:
         logging.warning("Не удалось проверить тип чата %s перед СМС/ММС: %s", target_chat_id, e)
-        return False
+        await message.reply("Не могу проверить тип адресата, поэтому СМС/ММС не отправляю.")
+        return True
 
     if getattr(target_chat, "type", None) != "channel":
         return False
