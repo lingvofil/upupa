@@ -15,10 +15,21 @@ jobs:
           python-version: "3.11"
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
+      - name: Run static checks
+        run: |
+          python -m pyflakes \
+            main.py \
+            app \
+            core \
+            infrastructure \
+            tests/test_application_bootstrap.py \
+            tests/test_application_lifecycle.py \
+            tests/test_dependency_versions.py \
+            tests/test_architecture_guardrails.py
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
           --cov=app --cov=AI --cov=core --cov=infrastructure
           --cov=features --cov=games --cov=handlers --cov=services --cov=prompts
           --cov-report=term-missing
-          --cov-fail-under=26
+          --cov-fail-under=30

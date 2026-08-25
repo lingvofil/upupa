@@ -1,7 +1,10 @@
 import asyncio
 
 # Настраивает fake env и моки тяжёлых библиотек до импорта app.bootstrap.
-from tests import test_smoke_imports  # noqa: F401
+from tests import test_smoke_imports
+
+# Импорт нужен ради настройки fake env и тяжёлых SDK-моков.
+del test_smoke_imports
 
 from app.bootstrap import QUIZ_CHAT_IDS, UpupaApplication, create_application
 
@@ -95,3 +98,55 @@ def test_main_delegates_to_application_runner(monkeypatch):
     asyncio.run(main.main())
 
     assert calls == ["run"]
+
+
+
+def test_application_run_executes_startup_and_shutdown(monkeypatch):
+    events = []
+
+    class FakeBot:
+        async def delete_webhook(self, *, drop_pending_updates):
+            events.append(("delete_webhook", drop_pending_updates))
+
+    class FakeDispatcher:
+        async def start_polling(self, bot, *, skip_updates):
+            events.append(("start_polling", bot, skip_updates))
+
+    class FakeSupervisor:
+        async def stop(self):
+            events.append(("stop",))
+
+    bot = FakeBot()
+    application = UpupaApplication(
+        bot=bot,
+        dispatcher=FakeDispatcher(),
+        supervisor=FakeSupervisor(),
+    )
+    monkeypatch.setattr(application, "initialize_state", lambda: events.append(("state",)))
+    monkeypatch.setattr(
+        application,
+        "start_background_tasks",
+        lambda: events.append(("background",)),
+    )
+    monkeypatch.setattr(
+        application,
+        "configure_dispatcher",
+        lambda: events.append(("dispatcher",)),
+    )
+    monkeypatch.setattr(
+        application,
+        "configure_bot_session",
+        lambda: events.append(("session",)),
+    )
+
+    asyncio.run(application.run())
+
+    assert events == [
+        ("state",),
+        ("background",),
+        ("dispatcher",),
+        ("session",),
+        ("delete_webhook", True),
+        ("start_polling", bot, True),
+        ("stop",),
+    ]

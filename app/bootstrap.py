@@ -157,7 +157,6 @@ class UpupaApplication:
 
             await self.bot.delete_webhook(drop_pending_updates=True)
             logger.info("Starting polling bot_id=%s", id(self.bot))
-            print("MAIN BOT ID:", id(self.bot))
             await self.dispatcher.start_polling(self.bot, skip_updates=True)
         finally:
             await self.supervisor.stop()
