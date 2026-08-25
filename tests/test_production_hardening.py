@@ -107,6 +107,18 @@ def test_production_healthcheck_calls_get_me_without_exposing_token():
     ]
 
 
+def test_production_healthcheck_rejects_non_object_json():
+    with pytest.raises(health.HealthCheckError) as caught:
+        health.check_telegram(
+            "secret-token",
+            timeout=3,
+            opener=lambda request, *, timeout: FakeResponse([]),
+        )
+
+    assert "invalid response" in str(caught.value)
+    assert "secret-token" not in str(caught.value)
+
+
 def test_production_healthcheck_sanitizes_http_errors():
     def opener(request, *, timeout):
         raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
