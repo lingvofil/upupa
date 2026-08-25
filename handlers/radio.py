@@ -38,7 +38,7 @@ async def handle_radio_command(message: types.Message):
         return
 
     await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
-    status = await message.reply("📻 Собираю, что вы тут натворили...")
+    status = await message.reply("захажу в радиорубку")
 
     try:
         episode = await build_radio_episode(chat_id)
@@ -54,6 +54,7 @@ async def handle_radio_command(message: types.Message):
         return
 
     try:
+        await status.edit_text("включаю мекрофон")
         logging.info(
             "[radio][telegram_send] chat=%s messages=%s words=%s provider=%s chunks=%s",
             chat_id,
