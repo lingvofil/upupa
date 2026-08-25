@@ -1,7 +1,10 @@
 import asyncio
 
 # Настраивает fake env и моки тяжёлых библиотек до импорта app.bootstrap.
-from tests import test_smoke_imports  # noqa: F401
+from tests import test_smoke_imports
+
+# Импорт нужен ради настройки fake env и тяжёлых SDK-моков.
+del test_smoke_imports
 
 from app.bootstrap import QUIZ_CHAT_IDS, UpupaApplication, create_application
 
