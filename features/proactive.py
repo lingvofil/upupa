@@ -111,7 +111,9 @@ async def proactive_loop(bot):
         try:
             now_msk = datetime.now(MOSCOW_TZ)
             if now_msk.hour not in NIGHT_HOURS:
-                activity = await get_group_chat_activity(\n                    datetime.now() - timedelta(days=ACTIVE_CHAT_WINDOW_DAYS)\n                )
+                activity = await get_group_chat_activity(
+                    datetime.now() - timedelta(days=ACTIVE_CHAT_WINDOW_DAYS)
+                )
                 for chat_id, last_activity in activity.items():
                     cid = str(chat_id)
                     if not is_proactive_enabled(cid):
