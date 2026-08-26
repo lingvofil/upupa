@@ -42,6 +42,7 @@ def test_moods_change_content_length_and_top_level_probabilities():
     from prompts.channel import POST_CONTENT_MODES, POST_LENGTH_MODES
 
     thoughtful = {"name": "thoughtful", "posts_left": 4}
+    sleepy = {"name": "sleepy", "posts_left": 3}
     chaotic = {"name": "chaotic", "posts_left": 3}
     social = {"name": "social", "posts_left": 3}
 
@@ -49,6 +50,10 @@ def test_moods_change_content_length_and_top_level_probabilities():
     thoughtful_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, thoughtful)))
     assert thoughtful_weights["philosophy"] > 10
     assert thoughtful_weights["philosophy"] > thoughtful_weights["absurd"]
+
+    sleepy_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, sleepy)))
+    assert sleepy_weights["mischief"] > sleepy_weights["domestic"]
+    assert sleepy_weights["mischief"] > sleepy_weights["philosophy"]
 
     length_names = [mode["name"] for mode in POST_LENGTH_MODES]
     thoughtful_lengths = dict(zip(length_names, length_weights(POST_LENGTH_MODES, thoughtful)))
@@ -77,6 +82,17 @@ def test_mood_prompt_is_injected_without_exposing_state_name():
     assert "задумчив" in prompt
     assert "не называй это состояние" in prompt
     assert "thoughtful" not in prompt
+
+
+def test_sleepy_mood_keeps_lazy_tone_without_defaulting_to_gloom():
+    from features.channel.mood import mood_prompt
+
+    prompt = mood_prompt({"name": "sleepy", "posts_left": 3}).casefold()
+
+    assert "не унылый" in prompt
+    assert "схалтурить" in prompt
+    assert "бытовую победу" in prompt
+    assert "сохраняя действие" in prompt
 
 
 def test_production_scheduler_targets_about_ten_but_mood_can_raise_or_lower_it():
