@@ -6,7 +6,7 @@
 from aiogram import Router
 
 import random
-from aiogram import Bot, F, types
+from aiogram import Bot, types
 from aiogram.types import Message
 from core.loader import bot
 from core.settings import BLOCKED_USERS
@@ -22,6 +22,27 @@ from AI.profession import get_random_okved_and_commentary
 from AI.voice import handle_voice_command
 
 router = Router(name="ai_profiles")
+
+
+def _is_reply_to_upupa(message: Message) -> bool:
+    replied = message.reply_to_message
+    return bool(replied and replied.from_user and replied.from_user.id == bot.id)
+
+
+def _should_start_participant_quiz(message: Message) -> bool:
+    return bool(
+        message.text
+        and message.text.lower() == "викторина участники"
+        and not _is_reply_to_upupa(message)
+    )
+
+
+def _should_start_quiz(message: Message) -> bool:
+    return bool(
+        message.text
+        and "викторина" in message.text.lower()
+        and not _is_reply_to_upupa(message)
+    )
 
 
 @router.message(lambda message: message.text and message.text.lower() == "что за чат")
@@ -45,7 +66,7 @@ async def handle_parody(message: types.Message):
 
 # ================== БЛОК 6.3: ВИКТОРИНЫ И ПРОФЕССИИ ==================
 
-@router.message(F.text.lower() == "викторина участники")
+@router.message(_should_start_participant_quiz)
 async def start_participant_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
@@ -55,7 +76,7 @@ async def start_participant_quiz(message: Message, bot: Bot):
     if not success:
         await message.reply(error_message)
 
-@router.message(F.text.lower().contains("викторина"))
+@router.message(_should_start_quiz)
 async def start_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
@@ -65,7 +86,7 @@ async def start_quiz(message: Message, bot: Bot):
     if not success:
         await message.reply(error_message)
 
-@router.message(F.text.lower() == "кем стать") 
+@router.message(lambda message: message.text and message.text.lower() == "кем стать") 
 async def choose_profession_command(message: types.Message):
     await get_random_okved_and_commentary(message)
 
