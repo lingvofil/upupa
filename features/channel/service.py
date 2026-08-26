@@ -43,6 +43,8 @@ MAX_IMAGE_CAPTION_WORDS = 8
 MIN_IMAGE_PROMPT_LENGTH = 12
 MAX_IMAGE_PROMPT_LENGTH = 600
 MAX_GENERATION_ATTEMPTS = 3
+DESIRE_OPENING_COOLDOWN_POSTS = 5
+LOW_ENERGY_COOLDOWN_POSTS = 8
 
 # Упупа знает эти публичные каналы. Описание попадает в prompt только когда код
 # уже выбрал редкий режим внешнего комментария, чтобы не праймить обычные посты.
@@ -83,6 +85,17 @@ _PROVIDER_ERROR_MARKERS = (
 
 _BATYA_MENTION_RE = re.compile(
     r"\b(?:бат(?:я|и|е|ю|ей)|пап(?:а|ы|е|у|ой)|от(?:ец|ца|цу|цом|це))\b",
+    re.IGNORECASE,
+)
+_DESIRE_OPENING_RE = re.compile(r"^\s*хоч(?:у|ется)\b", re.IGNORECASE)
+_LOW_ENERGY_RE = re.compile(
+    r"\b(?:"
+    r"застр\w*|сгни\w*|гни(?:ть|ю|ёт|ем|ете|ют)\w*|исчез\w*|"
+    r"пропа(?:сть|ду|дёшь|дёт|дём|дёте|дут|дал|дала|дало|дали)\w*|"
+    r"не\s+шевел\w*|ничего\s+не\s+делать|"
+    r"остав(?:ь|ьте|или|ит|ят)\s+(?:меня\s+)?в\s+покое|"
+    r"не\s+трог(?:ай|айте|али)\s+меня"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -173,6 +186,14 @@ def _normalize_for_duplicate_check(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+def _starts_with_desire(text: str) -> bool:
+    return bool(_DESIRE_OPENING_RE.search(text or ""))
+
+
+def _contains_low_energy_motif(text: str) -> bool:
+    return bool(_LOW_ENERGY_RE.search(text or ""))
+
+
 def _word_count(text: str) -> int:
     return len(re.findall(r"\S+", text.strip()))
 
@@ -205,6 +226,17 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     }
     if normalized in recent_normalized:
         return "точный дубль недавнего поста"
+
+    if _starts_with_desire(clean):
+        recent_openings = recent_posts[-DESIRE_OPENING_COOLDOWN_POSTS:]
+        if any(_starts_with_desire(str(post.get("text") or "")) for post in recent_openings):
+            return "недавний пост уже начинался с «хочу/хочется»; нужен другой зачин"
+
+    if _contains_low_energy_motif(clean):
+        recent_tone = recent_posts[-LOW_ENERGY_COOLDOWN_POSTS:]
+        if any(_contains_low_energy_motif(str(post.get("text") or "")) for post in recent_tone):
+            return "недавно уже был пассивно-унылый мотив; нужен деятельный и другой импульс"
+
     return None
 
 
