@@ -33,6 +33,23 @@ def test_quiz_words_in_reply_to_upupa_do_not_restart_quiz():
         ai_profiles.bot = original_bot
 
 
+def test_participant_quiz_words_in_reply_to_upupa_do_not_restart_quiz():
+    from handlers import ai_profiles
+
+    original_bot = ai_profiles.bot
+    ai_profiles.bot = SimpleNamespace(id=999)
+    try:
+        message = SimpleNamespace(
+            text="викторина участники",
+            reply_to_message=_reply(author_id=999, text="Кто из этих долбоёбов это сказал?"),
+        )
+
+        assert ai_profiles._should_start_participant_quiz(message) is False
+        assert ai_profiles._should_start_quiz(message) is False
+    finally:
+        ai_profiles.bot = original_bot
+
+
 def test_quiz_command_without_reply_still_starts_quiz():
     from handlers import ai_profiles
 
