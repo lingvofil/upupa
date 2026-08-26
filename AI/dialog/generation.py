@@ -34,6 +34,7 @@ from AI.dialog.settings import (
 GenerateResponseCallable = Callable[[str, str, str, str], Awaitable[str]]
 NeedsWebSearchCallable = Callable[[str], bool]
 GetWebContextCallable = Callable[[str], Awaitable[str]]
+MAX_REPLY_CONTEXT_LENGTH = 6000
 
 
 def get_error_reply_text() -> str:
@@ -107,6 +108,87 @@ def format_chat_history(chat_id: str) -> str:
     if chat_id not in conversation_history or not conversation_history[chat_id]:
         return "Диалог только начинается."
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
+
+
+def _format_reply_author(message: types.Message) -> str:
+    author = getattr(message, "from_user", None)
+    if author:
+        return (
+            getattr(author, "full_name", None)
+            or getattr(author, "first_name", None)
+            or getattr(author, "username", None)
+            or "неизвестный автор"
+        )
+
+    sender_chat = getattr(message, "sender_chat", None)
+    if sender_chat:
+        return getattr(sender_chat, "title", None) or getattr(sender_chat, "username", None) or "чат"
+
+    return "неизвестный автор"
+
+
+def _format_poll_reply_context(poll) -> str:
+    question = (getattr(poll, "question", None) or "").strip()
+    options = list(getattr(poll, "options", None) or [])
+    option_texts = [str(getattr(option, "text", "")).strip() for option in options]
+
+    lines = ["Тип сообщения: викторина/опрос."]
+    if question:
+        lines.append(f"Вопрос: {question}")
+    if option_texts:
+        lines.append(
+            "Варианты: "
+            + "; ".join(f"{index}. {text}" for index, text in enumerate(option_texts, 1) if text)
+        )
+
+    correct_option_id = getattr(poll, "correct_option_id", None)
+    if isinstance(correct_option_id, int) and 0 <= correct_option_id < len(option_texts):
+        lines.append(
+            f"Правильный вариант: {correct_option_id + 1}. {option_texts[correct_option_id]}"
+        )
+
+    explanation = (getattr(poll, "explanation", None) or "").strip()
+    if explanation:
+        lines.append(f"Пояснение: {explanation}")
+
+    return "\n".join(lines)
+
+
+def format_reply_context(message: types.Message) -> str:
+    """Format the Telegram message being replied to as immediate LLM context."""
+    replied = getattr(message, "reply_to_message", None)
+    if not replied:
+        return ""
+
+    parts = [f"Автор сообщения: {_format_reply_author(replied)}"]
+
+    text = (getattr(replied, "text", None) or getattr(replied, "caption", None) or "").strip()
+    if text:
+        parts.append(f"Текст сообщения:\n{text}")
+
+    poll = getattr(replied, "poll", None)
+    if poll:
+        parts.append(_format_poll_reply_context(poll))
+
+    media_labels = []
+    for attr, label in (
+        ("photo", "фото"),
+        ("video", "видео"),
+        ("animation", "анимация/GIF"),
+        ("audio", "аудио"),
+        ("voice", "голосовое сообщение"),
+        ("document", "файл"),
+        ("sticker", "стикер"),
+    ):
+        if getattr(replied, attr, None):
+            media_labels.append(label)
+    if media_labels:
+        parts.append(f"В сообщении также было: {', '.join(media_labels)}.")
+
+    context = "\n".join(parts).strip()
+    if len(context) > MAX_REPLY_CONTEXT_LENGTH:
+        context = context[:MAX_REPLY_CONTEXT_LENGTH].rstrip() + "…"
+    return context
 
 
 async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input: str = "") -> str:
@@ -190,8 +272,8 @@ async def handle_bot_conversation(
 ) -> str:
     """Handle one direct dialogue message.
 
-    Optional callables keep the legacy ``AI.talking`` facade testable without
-    mutating this module at runtime. Production callers use the defaults.
+    Optional callables keep the dialogue layer testable without mutating this
+    module at runtime. Production callers use the defaults.
     """
     chat_id = str(message.chat.id)
 
@@ -254,12 +336,23 @@ async def handle_bot_conversation(
         except Exception as exc:
             logging.warning("Web Search failed: %s", exc)
 
+    reply_context = format_reply_context(message)
+    reply_context_block = ""
+    if reply_context:
+        reply_context_block = (
+            "\nНепосредственный контекст реплая:\n"
+            f"{reply_context}\n"
+            "Пользователь отвечает именно на это сообщение. Считай его главным локальным контекстом "
+            "текущего вопроса, даже если общая история чата содержит другие темы.\n"
+        )
+
     chat_history_formatted = format_chat_history(chat_id)
     full_prompt = (
         f"{selected_prompt}\n"
         f"{NO_CONFIDENCE_PERCENTAGES_INSTRUCTION}\n"
         f"{additional_context}"
         f"{web_context}\n"
+        f"{reply_context_block}"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
         f"{prompt_name}:"
