@@ -13,6 +13,18 @@ def test_channel_persona_prefers_one_readable_thought_over_random_noise():
     assert "второе должно продолжать" in persona
 
 
+def test_channel_persona_prefers_active_absurdity_and_treats_gloom_as_rare():
+    from prompts.channel import CHANNEL_PERSONA
+
+    persona = CHANNEL_PERSONA.casefold()
+
+    assert "деятельный" in persona
+    assert "нужна энергия" in persona
+    assert "редкое исключение" in persona
+    assert "недавние посты" in persona
+    assert "первых слов" in persona
+
+
 def test_length_modes_keep_short_posts_but_request_coherence():
     from prompts.channel import POST_LENGTH_MODES
 
