@@ -29,29 +29,55 @@ def _contains_whatisthere_command(message: types.Message) -> bool:
     return "чотам" in text
 
 
-@router.message(lambda message: 
-    (
+def _is_reply_to_upupa_text(message: types.Message) -> bool:
+    replied = message.reply_to_message
+    if not replied or not replied.from_user or replied.from_user.id != bot.id:
+        return False
+
+    has_media = any(
         (
-            (message.audio or message.voice or message.video or message.photo or 
-             message.animation or message.sticker) and 
+            replied.audio,
+            replied.voice,
+            replied.video,
+            replied.photo,
+            replied.animation,
+            replied.sticker,
+            replied.document,
+        )
+    )
+    return bool(replied.text and not has_media)
+
+
+def _should_handle_whatisthere(message: types.Message) -> bool:
+    if not message.from_user or message.from_user.id in BLOCKED_USERS:
+        return False
+    if _is_reply_to_upupa_text(message):
+        return False
+
+    return bool(
+        (
+            (message.audio or message.voice or message.video or message.photo or
+             message.animation or message.sticker) and
             message.caption and "чотам" in message.caption.lower()
         )
         or
         (
-            message.text and "чотам" in message.text.lower() and 
-            message.reply_to_message and 
-            (message.reply_to_message.audio or message.reply_to_message.voice or 
-             message.reply_to_message.video or message.reply_to_message.photo or 
+            message.text and "чотам" in message.text.lower() and
+            message.reply_to_message and
+            (message.reply_to_message.audio or message.reply_to_message.voice or
+             message.reply_to_message.video or message.reply_to_message.photo or
              message.reply_to_message.animation or message.reply_to_message.sticker or
              message.reply_to_message.text)
         )
         or
         (
-            message.text and "чотам" in message.text.lower() and 
+            message.text and "чотам" in message.text.lower() and
             not message.reply_to_message
         )
-    ) and message.from_user.id not in BLOCKED_USERS
-)
+    )
+
+
+@router.message(_should_handle_whatisthere)
 async def handle_whatisthere_unified(message: types.Message):
     if not _contains_whatisthere_command(message):
         logging.warning(
