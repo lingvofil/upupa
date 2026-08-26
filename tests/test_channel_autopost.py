@@ -74,6 +74,36 @@ def test_nonsense_is_a_valid_channel_post_but_exact_duplicate_is_not():
     assert _validate_post("я червяк", [{"text": "я червяк"}]) == "точный дубль недавнего поста"
 
 
+def test_repeated_desire_openings_are_rejected_within_cooldown():
+    from features.channel.service import DESIRE_OPENING_COOLDOWN_POSTS, _validate_post
+
+    recent = [{"text": "обычный пост"} for _ in range(DESIRE_OPENING_COOLDOWN_POSTS - 1)]
+    recent.append({"text": "Хочется стать тумбочкой"})
+
+    reason = _validate_post("Хочу объявить войну табурету", recent)
+    assert "другой зачин" in reason
+
+    expired = [{"text": "Хочу стать тумбочкой"}]
+    expired.extend({"text": f"другой пост {index}"} for index in range(DESIRE_OPENING_COOLDOWN_POSTS))
+    assert _validate_post("Хочу объявить войну табурету", expired) is None
+
+
+def test_low_energy_motifs_are_rare_but_not_completely_banned():
+    from features.channel.service import LOW_ENERGY_COOLDOWN_POSTS, _validate_post
+
+    assert _validate_post("Пойду гнить в коробке", []) is None
+
+    recent = [{"text": "обычный пост"} for _ in range(LOW_ENERGY_COOLDOWN_POSTS - 1)]
+    recent.append({"text": "Хочу исчезнуть"})
+
+    reason = _validate_post("Пойду гнить в коробке", recent)
+    assert "пассивно-унылый мотив" in reason
+
+    expired = [{"text": "Хочу исчезнуть"}]
+    expired.extend({"text": f"другой пост {index}"} for index in range(LOW_ENERGY_COOLDOWN_POSTS))
+    assert _validate_post("Пойду гнить в коробке", expired) is None
+
+
 def test_channel_length_distribution_is_50_40_10():
     from prompts.channel import POST_LENGTH_MODES
 
@@ -103,17 +133,32 @@ def test_all_normal_length_modes_are_bounded():
     assert sum(mode["weight"] for mode in POST_LENGTH_MODES) == 100
 
 
-def test_content_distribution_includes_philosophy_mode():
+def test_content_distribution_includes_philosophy_and_mischief_modes():
     from prompts.channel import POST_CONTENT_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_CONTENT_MODES}
     assert sum(weights.values()) == 100
     assert weights["absurd"] == 8
     assert weights["philosophy"] == 10
-    assert weights["domestic"] == 45
+    assert weights["domestic"] == 25
+    assert weights["mischief"] == 20
     assert weights["chat"] == 17
     assert weights["functionality"] == 15
     assert weights["imperfect"] == 5
+
+
+def test_mischief_mode_requires_action_without_motivational_tone():
+    from prompts.channel import POST_CONTENT_MODES
+
+    mischief = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "mischief")
+    instruction = mischief["instruction"].casefold()
+
+    assert "деятельный" in instruction
+    assert "движение" in instruction
+    assert "конкретный глагол" in instruction
+    assert "мотивац" in instruction
+    assert mischief["include_capabilities"] is False
+    assert mischief["use_chat_context"] is False
 
 
 def test_philosophy_mode_is_ironic_sarcastic_and_can_swear():
