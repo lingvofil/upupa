@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import json
 from pathlib import Path
 import threading
 import time
@@ -67,6 +68,8 @@ def test_dnd_provider_call_runs_outside_event_loop_thread():
     provider_threads = []
 
     class Session:
+        chat_id = -1001
+
         def send_message(self, prompt):
             provider_threads.append(threading.get_ident())
             return f"reply:{prompt}"
@@ -80,6 +83,8 @@ def test_dnd_provider_call_runs_outside_event_loop_thread():
 
 def test_dnd_provider_call_has_timeout(monkeypatch):
     class SlowSession:
+        chat_id = -1002
+
         def send_message(self, prompt):
             time.sleep(0.05)
             return prompt
@@ -98,7 +103,6 @@ def test_dnd_poll_timeout_finalizes_even_without_poll_answer(monkeypatch):
 
     class Session:
         current_poll_id = poll_id
-        poll_has_votes = False
 
     async def fake_sleep(delay):
         calls.append(("sleep", delay))
@@ -164,3 +168,107 @@ def test_dnd_poll_timeout_ignores_stale_poll(monkeypatch):
         dnd.dnd_sessions.pop(chat_id, None)
 
     assert calls == []
+
+
+def test_dnd_state_is_persisted_atomically(monkeypatch, tmp_path):
+    state_path = tmp_path / "dnd_sessions.json"
+    monkeypatch.setattr(dnd, "DND_STATE_PATH", state_path)
+
+    class Session:
+        def to_record(self):
+            return {
+                "chat_id": -100200,
+                "active_model": "gemini",
+                "conversation": [{"role": "user", "content": "контекст"}],
+                "state": "WAITING_ACTION",
+                "last_roll_stat": None,
+                "current_poll_id": None,
+                "pending_poll": None,
+            }
+
+    dnd.dnd_sessions[-100200] = Session()
+    try:
+        dnd.persist_dnd_sessions()
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    finally:
+        dnd.dnd_sessions.pop(-100200, None)
+
+    assert payload["version"] == 1
+    assert payload["sessions"][0]["chat_id"] == -100200
+    assert payload["sessions"][0]["conversation"][0]["content"] == "контекст"
+    assert not state_path.with_suffix(".json.tmp").exists()
+
+
+def test_dnd_restore_rebuilds_poll_mapping_and_timer(monkeypatch, tmp_path):
+    chat_id = -100201
+    poll_id = "restored-poll"
+    state_path = tmp_path / "dnd_sessions.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sessions": [
+                    {
+                        "chat_id": chat_id,
+                        "active_model": "gemini",
+                        "conversation": [],
+                        "state": "WAITING_POLL",
+                        "last_roll_stat": None,
+                        "current_poll_id": poll_id,
+                        "pending_poll": {
+                            "poll_id": poll_id,
+                            "poll_chat_id": chat_id,
+                            "message_id": 99,
+                            "options": ["A", "B"],
+                            "deadline": 1050.0,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dnd, "DND_STATE_PATH", state_path)
+    monkeypatch.setattr(dnd.time, "time", lambda: 1000.0)
+
+    class RestoredSession:
+        def __init__(self):
+            self.chat_id = chat_id
+            self.state = "WAITING_POLL"
+            self.current_poll_id = poll_id
+            self.pending_poll = {
+                "poll_id": poll_id,
+                "poll_chat_id": chat_id,
+                "message_id": 99,
+                "options": ["A", "B"],
+                "deadline": 1050.0,
+            }
+
+        def to_record(self):
+            return {
+                "chat_id": self.chat_id,
+                "active_model": "gemini",
+                "conversation": [],
+                "state": self.state,
+                "last_roll_stat": None,
+                "current_poll_id": self.current_poll_id,
+                "pending_poll": self.pending_poll,
+            }
+
+    monkeypatch.setattr(
+        dnd.GameSession,
+        "from_record",
+        classmethod(lambda cls, record: RestoredSession()),
+    )
+    supervisor = RecordingSupervisor()
+    monkeypatch.setattr(dnd, "_task_supervisor", supervisor)
+
+    try:
+        restored = dnd.restore_dnd_sessions(object())
+        assert restored == 1
+        assert dnd.dnd_sessions[chat_id].current_poll_id == poll_id
+        assert dnd.poll_map[poll_id] == chat_id
+        assert supervisor.names == [f"dnd-poll:{chat_id}:{poll_id}:restored"]
+    finally:
+        dnd.dnd_sessions.clear()
+        dnd.poll_map.clear()
