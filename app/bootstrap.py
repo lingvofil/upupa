@@ -91,7 +91,10 @@ class UpupaApplication:
             return
 
         from AI.birthday_calendar import birthday_scheduler
-        from AI.dnd import configure_task_supervisor as configure_dnd_tasks
+        from AI.dnd import (
+            configure_task_supervisor as configure_dnd_tasks,
+            restore_dnd_sessions,
+        )
         from AI.quiz import schedule_daily_quiz
         from features.channel.scheduler import channel_scheduler_loop
         from features.proactive import proactive_loop
@@ -99,6 +102,7 @@ class UpupaApplication:
         from services.holidays import schedule_daily_holidays
 
         configure_dnd_tasks(self.supervisor)
+        restore_dnd_sessions(self.bot)
         crocodile.configure_task_supervisor(self.supervisor)
 
         for chat_id in QUIZ_CHAT_IDS:
