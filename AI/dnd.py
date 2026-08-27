@@ -17,6 +17,7 @@ dnd_sessions = {}
 poll_map = {}
 
 DND_MODEL_TIMEOUT_SECONDS = 90
+DND_POLL_TIMEOUT_SECONDS = 600
 _task_supervisor = None
 
 
@@ -261,19 +262,16 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
         await parse_and_execute_turn(bot, chat_id, response_text)
 
 async def wait_for_poll_timeout(bot: Bot, chat_id: int, poll_chat_id: int, message_id: int, options: list, poll_id: str):
-    """Ждет 10 минут. Если голосов нет — ждет первого героя."""
-    await asyncio.sleep(600)
+    """Ждет 10 минут, затем завершает текущий опрос и продолжает историю."""
+    await asyncio.sleep(DND_POLL_TIMEOUT_SECONDS)
     
     session = dnd_sessions.get(chat_id)
     if not session or session.current_poll_id != poll_id:
         return
 
-    if session.poll_has_votes:
-        await finalize_poll(bot, chat_id, message_id, options)
-    else:
-        session.waiting_for_first_vote = True
-        session.pending_poll_data = {'message_id': message_id, 'options': options}
-        await bot.send_message(chat_id, "⏳ 10 минут прошло, а вы молчите. Сюжет на паузе, пока кто-нибудь не нажмет кнопку.")
+    # Не полагаемся на PollAnswer: stop_poll() возвращает фактические счетчики
+    # голосов из Telegram и остается источником истины для результата.
+    await finalize_poll(bot, chat_id, message_id, options)
 
 # ================== ХЭНДЛЕРЫ ==================
 
