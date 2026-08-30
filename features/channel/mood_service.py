@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 
+from features.channel import polls
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -316,10 +317,55 @@ async def _consume_after_publish(mood: dict, message_id: int | None) -> None:
 
 
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
-    """Publish one post under a persistent mood and advance mood only after success."""
+    """Publish one mood-aware text, image or poll and advance mood only after success."""
     async with base._publish_lock:
         published_posts = await asyncio.to_thread(base.load_posts)
         mood = await asyncio.to_thread(get_current_mood)
+
+        try:
+            poll_plan = await polls.prepare_poll(published_posts, mood)
+        except Exception as exc:
+            logging.warning("[channel] poll mode failed, fallback to regular post: %s", exc, exc_info=True)
+            poll_plan = None
+
+        if poll_plan is not None:
+            sent = await bot.send_poll(
+                CHANNEL_TARGET,
+                question=poll_plan["question"],
+                options=poll_plan["options"],
+                is_anonymous=True,
+                allows_multiple_answers=False,
+            )
+            metadata = {
+                "post_kind": "poll",
+                "chat_context_used": False,
+                "poll_question": poll_plan["question"],
+                "poll_options": poll_plan["options"],
+                "poll_anonymous": True,
+                **_mood_metadata(mood),
+            }
+            await base._store_published_post(
+                sent,
+                source=source,
+                text=poll_plan["question"],
+                metadata=metadata,
+            )
+            try:
+                await polls.register_published_poll(
+                    sent,
+                    plan=poll_plan,
+                    source=source,
+                    published_count_before=len(published_posts),
+                )
+            except Exception as exc:
+                logging.error(
+                    "[channel] poll published but lifecycle state was not saved message_id=%s: %s",
+                    getattr(sent, "message_id", None),
+                    exc,
+                    exc_info=True,
+                )
+            await _consume_after_publish(mood, getattr(sent, "message_id", None))
+            return sent, poll_plan["question"]
 
         if _should_try_image_post(published_posts, mood):
             try:
