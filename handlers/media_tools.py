@@ -37,6 +37,14 @@ def is_ogg_document(msg: types.Message) -> bool:
         return ext == ".ogg"
     return False
 
+
+def is_reverse_command(message: types.Message) -> bool:
+    return bool(
+        (message.text and message.text.lower().strip() == "наоборот")
+        or (message.caption and message.caption.lower().strip() == "наоборот")
+    )
+
+
 router = Router(name="media_tools")
 
 
@@ -99,10 +107,8 @@ async def handle_slower_media_command(message: types.Message):
 
 
 @router.message(
-    lambda message: (
-        (message.text and "наоборот" in message.text.lower())
-        or (message.caption and "наоборот" in message.caption.lower())
-    ) and message.from_user.id not in BLOCKED_USERS
+    lambda message: is_reverse_command(message)
+    and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_reverse_media_command(message: types.Message):
     await handle_reverse_command(message, bot)
