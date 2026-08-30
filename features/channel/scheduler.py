@@ -11,6 +11,7 @@ import pytz
 
 from features.channel.mood import burst_probability, daily_post_target, get_current_mood
 from features.channel.mood_service import publish_channel_post
+from features.channel.polls import process_due_polls
 from features.channel.storage import load_schedule, save_schedule
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
@@ -261,11 +262,12 @@ def _get_schedule_for_now(now: datetime) -> dict:
 
 
 async def channel_scheduler_loop(bot) -> None:
-    """Background loop with mood-dependent activity and no enforced quiet hours or inter-post cooldown."""
+    """Background loop with mood-dependent activity plus persistent poll lifecycle processing."""
     await asyncio.sleep(60)
     while True:
         try:
             now = datetime.now(MOSCOW_TZ)
+            await process_due_polls(bot, channel_target=CHANNEL_TARGET)
             state = await asyncio.to_thread(_get_schedule_for_now, now)
             changed = False
 
