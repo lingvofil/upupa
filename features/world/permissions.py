@@ -25,3 +25,21 @@ async def is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
         )
         return False
     return member.status in {"administrator", "creator"}
+
+
+async def is_world_diplomat(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """Admins/owner and the appointed ambassador may make diplomatic decisions."""
+    if await is_chat_admin(bot, chat_id, user_id):
+        return True
+    try:
+        from features.world.service import get_world_service
+
+        return await get_world_service().is_ambassador(chat_id, user_id)
+    except Exception as exc:
+        logging.warning(
+            "World ambassador permission check failed chat_id=%s user_id=%s: %s",
+            chat_id,
+            user_id,
+            exc,
+        )
+        return False
