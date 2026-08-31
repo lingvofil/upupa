@@ -149,6 +149,8 @@ async def generate_radio_script(
     chat_name: str | None,
     messages: list[dict],
     period_hours: int,
+    *,
+    world_context: str | None = None,
 ) -> RadioScript:
     title = chat_name or f"чат {chat_id}"
     total_context_chars = _source_size(messages)
@@ -166,6 +168,17 @@ async def generate_radio_script(
     else:
         source_block = _join_messages(messages, RADIO_CONTEXT_CHARS)
 
+    if world_context:
+        international_rule = (
+            "- После основных событий чата добавь короткий блок международных новостей Мира Упупы: "
+            "2–4 предложения. Используй только факты из блока «Международная обстановка». "
+            "Не выдумывай причин, реакций или последствий.\n"
+        )
+        world_block = f"\nМеждународная обстановка:\n{world_context}\n"
+    else:
+        international_rule = "- Не упоминай Мир Упупы или международные новости: для этого выпуска данных нет.\n"
+        world_block = ""
+
     task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
@@ -176,14 +189,14 @@ async def generate_radio_script(
 - Используй характер, тон, лексику и манеру текущего промпта чата, как в команде «чобыло», но не позволяй персоне менять факты или формат радиовыпуска.
 - Не используй активную пользовательскую персону как источник фактов или новых событий; она задаёт только стиль подачи. Ведущий остаётся Упупой.
 - Начни с короткого вступления, затем расскажи главные темы и заметные эпизоды, упомяни самых активных участников, добавь одну-две характерные или смешные детали и коротко закончи.
-- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
+{international_rule}- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
 - Никогда не превышай 520 слов.
 
 Активность участников по числу сообщений: {_participant_stats(messages)}
 
 Материал чата:
 {source_block}
-
+{world_block}
 Верни только текст, который должен произнести ведущий.
 """
     prompt = build_prompt_with_current_chat_prompt(
@@ -193,11 +206,12 @@ async def generate_radio_script(
     )
 
     logging.info(
-        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s current_prompt=true",
+        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s world_context=%s current_prompt=true",
         len(messages),
         total_context_chars,
         len(source_block),
         use_summary,
+        bool(world_context),
     )
     raw_script = await _generate_with_active_model(prompt, chat_id, is_summarization=True)
     script = sanitize_radio_script(raw_script)
