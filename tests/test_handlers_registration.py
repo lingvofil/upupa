@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 126  # + интерактивный Мир Упупы v2
+EXPECTED_TOTAL_HANDLERS = 127  # + интерактивный Мир Упупы v2
 
 
 def _count_handlers(router):
