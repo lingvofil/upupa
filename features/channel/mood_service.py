@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 
-from features.channel import polls
+from features.channel import chat_context, polls
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -27,6 +27,14 @@ from prompts.channel import (
 
 CHANNEL_TARGET = base.CHANNEL_TARGET
 
+_GROUNDED_CHAT_INSTRUCTION = (
+    "Ниже дан свежий фрагмент реальной переписки из одного из чатов. ОБЯЗАТЕЛЬНО зацепись за одну "
+    "конкретную деталь, тему, настроение или повторяющийся паттерн из него и отреагируй коротко от себя. "
+    "Связь с перепиской должна угадываться читателем даже после обезличивания. Не пересказывай весь диалог, "
+    "не цитируй дословно длинные куски и не называй участников. Нельзя игнорировать фрагмент и писать "
+    "независимый случайный импульс: этот пост существует именно из-за увиденной переписки."
+)
+
 
 def _mood_metadata(mood: dict) -> dict:
     return {
@@ -46,6 +54,16 @@ def _mood_block(mood: dict) -> str:
 def _choose_content_mode(mood: dict, *, rng=random) -> dict:
     modes = list(POST_CONTENT_MODES)
     return rng.choices(modes, weights=content_weights(modes, mood), k=1)[0]
+
+
+def _choose_non_chat_content_mode(mood: dict, *, rng=random) -> dict:
+    modes = [mode for mode in POST_CONTENT_MODES if not mode.get("use_chat_context")]
+    return rng.choices(modes, weights=content_weights(modes, mood), k=1)[0]
+
+
+def _grounded_chat_mode() -> dict:
+    mode = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "chat")
+    return {**mode, "instruction": _GROUNDED_CHAT_INSTRUCTION}
 
 
 def _choose_length_mode(mood: dict, *, rng=random) -> dict:
@@ -78,7 +96,28 @@ def _build_prompt(
         retry_note,
     )
     marker = "ТИП ИМПУЛЬСА ДЛЯ ЭТОГО ПОСТА:"
-    return prompt.replace(marker, f"{_mood_block(mood)}\n\n{marker}", 1)
+    prompt = prompt.replace(marker, f"{_mood_block(mood)}\n\n{marker}", 1)
+
+    if chat_fragment:
+        prompt = prompt.replace(
+            "Если тебе дали фрагмент чужой переписки, можешь его проигнорировать.",
+            "Если тебе дан фрагмент чужой переписки, ты обязан использовать его как основу текущего поста.",
+            1,
+        )
+        prompt = prompt.replace(
+            "СЛУЧАЙНЫЙ ФРАГМЕНТ ОДНОГО ИЗ ЧАТОВ (необязательный материал):",
+            "СВЕЖИЙ ФРАГМЕНТ ОДНОГО ИЗ ЧАТОВ (ОБЯЗАТЕЛЬНАЯ ОПОРА ДЛЯ ПОСТА):",
+            1,
+        )
+        grounding_block = (
+            "\n\nПРОВЕРКА ПРИВЯЗКИ К ЧАТУ — ОБЯЗАТЕЛЬНО:\n"
+            "Перед ответом мысленно выбери одну конкретную деталь из фрагмента. Текущий пост должен быть "
+            "реакцией именно на неё. Если эту деталь убрать из переписки, идея поста должна потерять причину "
+            "своего появления. Независимую фразу вместо реакции писать нельзя."
+        )
+        prompt = prompt.replace("\n\nТЕКУЩИЙ ПОСТ:", f"{grounding_block}\n\nТЕКУЩИЙ ПОСТ:", 1)
+
+    return prompt
 
 
 def _external_source_material(source_post: dict, image_description: str | None) -> str:
@@ -238,13 +277,20 @@ async def _try_generate_image_post(
     }
 
 
-async def generate_channel_post(mood: dict) -> tuple[str, dict]:
+async def generate_channel_post(
+    mood: dict,
+    *,
+    forced_chat_episode: dict | None = None,
+) -> tuple[str, dict]:
     from AI.summarize import _generate_with_active_model
 
     published_posts = await asyncio.to_thread(base.load_posts)
     recent_posts = published_posts[-base.RECENT_POSTS_LIMIT:]
 
-    if random.random() < external_probability(mood, default=base.EXTERNAL_COMMENT_PROBABILITY):
+    if forced_chat_episode is None and random.random() < external_probability(
+        mood,
+        default=base.EXTERNAL_COMMENT_PROBABILITY,
+    ):
         try:
             external_post = await _try_generate_external_comment(published_posts, recent_posts, mood)
         except Exception as exc:
@@ -253,11 +299,19 @@ async def generate_channel_post(mood: dict) -> tuple[str, dict]:
         if external_post is not None:
             return external_post
 
-    content_mode = _choose_content_mode(mood)
-    chat_fragment = None
-    if content_mode.get("use_chat_context"):
-        chat_fragment = await asyncio.to_thread(base._pick_chat_fragment)
+    chat_episode = forced_chat_episode
+    if chat_episode is not None:
+        content_mode = _grounded_chat_mode()
+    else:
+        content_mode = _choose_content_mode(mood)
+        if content_mode.get("use_chat_context"):
+            chat_episode = await asyncio.to_thread(chat_context.pick_chat_episode, published_posts)
+            if chat_episode is None:
+                content_mode = _choose_non_chat_content_mode(mood)
+            else:
+                content_mode = _grounded_chat_mode()
 
+    chat_fragment = str(chat_episode.get("fragment") or "") if chat_episode else None
     length_mode = _choose_length_mode(mood)
     allow_batya_mention = base._should_allow_batya_mention(published_posts)
     retry_note = ""
@@ -282,14 +336,25 @@ async def generate_channel_post(mood: dict) -> tuple[str, dict]:
                 allow_batya_mention=allow_batya_mention,
             )
         if not reason:
-            return text.strip(), {
+            metadata = {
                 "post_kind": "normal",
-                "chat_context_used": bool(chat_fragment),
+                "chat_context_used": bool(chat_episode),
                 "length_mode": length_mode["name"],
                 "content_mode": content_mode["name"],
                 "batya_mention_allowed": allow_batya_mention,
                 **_mood_metadata(mood),
             }
+            if chat_episode:
+                metadata.update(
+                    {
+                        "chat_context_key": chat_episode.get("key"),
+                        "chat_context_latest_at": chat_episode.get("latest_at"),
+                        "chat_context_messages": chat_episode.get("message_count"),
+                        "chat_context_participants": chat_episode.get("participant_count"),
+                        "chat_context_forced": forced_chat_episode is not None,
+                    }
+                )
+            return text.strip(), metadata
         logging.warning("[channel] generation attempt %s rejected: %s", attempt, reason)
         retry_note = reason
 
@@ -322,69 +387,87 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
         published_posts = await asyncio.to_thread(base.load_posts)
         mood = await asyncio.to_thread(get_current_mood)
 
-        try:
-            poll_plan = await polls.prepare_poll(published_posts, mood)
-        except Exception as exc:
-            logging.warning("[channel] poll mode failed, fallback to regular post: %s", exc, exc_info=True)
-            poll_plan = None
+        forced_chat_episode = None
+        if chat_context.should_force_chat_post(published_posts):
+            forced_chat_episode = await asyncio.to_thread(
+                chat_context.pick_chat_episode,
+                published_posts,
+            )
+            if forced_chat_episode is not None:
+                logging.info(
+                    "[channel] reserving publication for daily chat context key=%s messages=%s participants=%s",
+                    forced_chat_episode.get("key"),
+                    forced_chat_episode.get("message_count"),
+                    forced_chat_episode.get("participant_count"),
+                )
 
-        if poll_plan is not None:
-            sent = await bot.send_poll(
-                CHANNEL_TARGET,
-                question=poll_plan["question"],
-                options=poll_plan["options"],
-                is_anonymous=True,
-                allows_multiple_answers=False,
-            )
-            metadata = {
-                "post_kind": "poll",
-                "chat_context_used": False,
-                "poll_question": poll_plan["question"],
-                "poll_options": poll_plan["options"],
-                "poll_anonymous": True,
-                **_mood_metadata(mood),
-            }
-            await base._store_published_post(
-                sent,
-                source=source,
-                text=poll_plan["question"],
-                metadata=metadata,
-            )
+        if forced_chat_episode is None:
             try:
-                await polls.register_published_poll(
+                poll_plan = await polls.prepare_poll(published_posts, mood)
+            except Exception as exc:
+                logging.warning("[channel] poll mode failed, fallback to regular post: %s", exc, exc_info=True)
+                poll_plan = None
+
+            if poll_plan is not None:
+                sent = await bot.send_poll(
+                    CHANNEL_TARGET,
+                    question=poll_plan["question"],
+                    options=poll_plan["options"],
+                    is_anonymous=True,
+                    allows_multiple_answers=False,
+                )
+                metadata = {
+                    "post_kind": "poll",
+                    "chat_context_used": False,
+                    "poll_question": poll_plan["question"],
+                    "poll_options": poll_plan["options"],
+                    "poll_anonymous": True,
+                    **_mood_metadata(mood),
+                }
+                await base._store_published_post(
                     sent,
-                    plan=poll_plan,
                     source=source,
-                    published_count_before=len(published_posts),
+                    text=poll_plan["question"],
+                    metadata=metadata,
                 )
-            except Exception as exc:
-                logging.error(
-                    "[channel] poll published but lifecycle state was not saved message_id=%s: %s",
-                    getattr(sent, "message_id", None),
-                    exc,
-                    exc_info=True,
-                )
-            await _consume_after_publish(mood, getattr(sent, "message_id", None))
-            return sent, poll_plan["question"]
-
-        if _should_try_image_post(published_posts, mood):
-            try:
-                image_post = await _try_generate_image_post(published_posts, mood)
-            except Exception as exc:
-                logging.warning("[channel] image mode failed, fallback to text: %s", exc, exc_info=True)
-                image_post = None
-
-            if image_post is not None:
-                from aiogram import types
-
-                image_bytes, caption, metadata = image_post
-                photo = types.BufferedInputFile(image_bytes, filename="upupa-channel.png")
-                sent = await bot.send_photo(CHANNEL_TARGET, photo, caption=caption)
-                await base._store_published_post(sent, source=source, text=caption, metadata=metadata)
+                try:
+                    await polls.register_published_poll(
+                        sent,
+                        plan=poll_plan,
+                        source=source,
+                        published_count_before=len(published_posts),
+                    )
+                except Exception as exc:
+                    logging.error(
+                        "[channel] poll published but lifecycle state was not saved message_id=%s: %s",
+                        getattr(sent, "message_id", None),
+                        exc,
+                        exc_info=True,
+                    )
                 await _consume_after_publish(mood, getattr(sent, "message_id", None))
-                return sent, caption
+                return sent, poll_plan["question"]
 
-        text, metadata = await generate_channel_post(mood)
+            if _should_try_image_post(published_posts, mood):
+                try:
+                    image_post = await _try_generate_image_post(published_posts, mood)
+                except Exception as exc:
+                    logging.warning("[channel] image mode failed, fallback to text: %s", exc, exc_info=True)
+                    image_post = None
+
+                if image_post is not None:
+                    from aiogram import types
+
+                    image_bytes, caption, metadata = image_post
+                    photo = types.BufferedInputFile(image_bytes, filename="upupa-channel.png")
+                    sent = await bot.send_photo(CHANNEL_TARGET, photo, caption=caption)
+                    await base._store_published_post(sent, source=source, text=caption, metadata=metadata)
+                    await _consume_after_publish(mood, getattr(sent, "message_id", None))
+                    return sent, caption
+
+        text, metadata = await generate_channel_post(
+            mood,
+            forced_chat_episode=forced_chat_episode,
+        )
         sent = await bot.send_message(CHANNEL_TARGET, text)
         await base._store_published_post(sent, source=source, text=text, metadata=metadata)
         await _consume_after_publish(mood, getattr(sent, "message_id", None))
