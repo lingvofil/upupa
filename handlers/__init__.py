@@ -3,7 +3,7 @@
 aiogram матчит сообщение по роутерам последовательно, catch-all (dialog) — последний.
 """
 from handlers import (
-    basic, sms, world, world_listing, stats_lexicon, media_search, games, media_tools,
+    basic, sms, world, world_hub, world_listing, stats_lexicon, media_search, games, media_tools,
     ai_modes, ai_profiles, ai_vision, ai_generation, birthdays,
     ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
@@ -11,6 +11,7 @@ from handlers import (
 ROUTERS = [
     basic.router,
     sms.router,
+    world_hub.router,  # интерактивный Мир Упупы должен перехватывать его новые/расширенные команды первым
     world_listing.router,
     world.router,
     stats_lexicon.router,
