@@ -90,6 +90,21 @@ async def collect_radio_history(
     return latest_messages, latest_chat_name, HISTORY_WINDOWS_HOURS[-1]
 
 
+async def _world_radio_context(chat_id: str) -> str | None:
+    """Attach world facts only for chats participating in the World of Upupa."""
+    try:
+        from features.world.news import build_world_radio_context
+        from features.world.service import get_world_service
+
+        service = get_world_service()
+        if not await service.is_enabled(int(chat_id)):
+            return None
+        return await build_world_radio_context(service)
+    except Exception:
+        logging.exception("[radio][world] failed to build world context chat=%s", chat_id)
+        return None
+
+
 async def build_radio_episode(
     chat_id: str,
     *,
@@ -101,6 +116,7 @@ async def build_radio_episode(
         log_file_path=log_file_path,
         now=now,
     )
+    world_context = await _world_radio_context(chat_id)
 
     try:
         script_result: RadioScript = await generate_radio_script(
@@ -108,6 +124,7 @@ async def build_radio_episode(
             chat_name,
             messages,
             period_hours,
+            world_context=world_context,
         )
     except Exception:
         logging.exception("[radio][script] generation failed chat=%s", chat_id)
