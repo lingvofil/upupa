@@ -13,7 +13,7 @@ from core.loader import bot
 from core.upupa_utils import normalize_upupa_command
 from features.world.activity import get_top_active_citizen
 from features.world.news import SIGNIFICANT_EVENT_TYPES, format_event_fact, generate_world_news
-from features.world.permissions import is_chat_admin
+from features.world.permissions import is_chat_admin, is_strict_chat_admin
 from features.world.rendering import render_world_map_png_async
 from features.world.service import (
     calculate_authority,
@@ -196,9 +196,7 @@ async def _send_map(message: types.Message) -> None:
 
 
 async def _is_diplomat(chat_id: int, user_id: int) -> bool:
-    if await is_chat_admin(bot, chat_id, user_id):
-        return True
-    return await get_world_service().is_ambassador(chat_id, user_id)
+    return await is_chat_admin(bot, chat_id, user_id)
 
 
 @router.message(_is_hub_command)
@@ -240,6 +238,15 @@ async def enhanced_states_list(message: types.Message):
     await message.reply(text, reply_markup=_state_list_markup(states))
 
 
+@router.message(lambda message: _is_exact(message, "дипломатия"))
+async def enhanced_diplomacy(message: types.Message):
+    if await _require_world(message) is None:
+        return
+    text = await _diplomacy_text(message.chat.id, _title(message))
+    if text:
+        await message.reply(text, reply_markup=_back_markup())
+
+
 @router.message(lambda message: _is_exact(message, "карта мира", "упупа карта мира"))
 async def world_map_command(message: types.Message):
     if await _require_world(message) is None:
@@ -251,7 +258,7 @@ async def world_map_command(message: types.Message):
 async def world_news_command(message: types.Message):
     if await _require_world(message) is None:
         return
-    await message.bot.send_chat_action(message.chat.id, "typing")
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     text = await generate_world_news(str(message.chat.id))
     await message.reply(f"📰 {text}", reply_markup=_back_markup())
 
@@ -271,7 +278,7 @@ async def appoint_ambassador(message: types.Message):
     service = await _require_world(message)
     if service is None or message.from_user is None:
         return
-    if not await is_chat_admin(bot, message.chat.id, message.from_user.id):
+    if not await is_strict_chat_admin(bot, message.chat.id, message.from_user.id):
         await message.reply("🎩 Назначать посла могут только администраторы государства.")
         return
     replied = message.reply_to_message
@@ -298,7 +305,7 @@ async def remove_ambassador(message: types.Message):
     service = await _require_world(message)
     if service is None or message.from_user is None:
         return
-    if not await is_chat_admin(bot, message.chat.id, message.from_user.id):
+    if not await is_strict_chat_admin(bot, message.chat.id, message.from_user.id):
         await message.reply("🎩 Снимать посла могут только администраторы государства.")
         return
     state = await service.get_state(message.chat.id, _title(message))
@@ -331,7 +338,7 @@ async def name_alliance(message: types.Message):
     except ValueError:
         await message.reply("Не понял номер государства. Формат: упупа назови союз 7 Пивной пакт")
         return
-    status, _source, target, clean = await service.name_alliance(
+    status, source, target, clean = await service.name_alliance(
         message.chat.id,
         _title(message),
         target_world_id,
@@ -345,13 +352,13 @@ async def name_alliance(message: types.Message):
         await message.reply("Сначала заключите союз с этим государством.")
     elif status == "empty":
         await message.reply("Название должно содержать хотя бы что-нибудь, кроме воздуха.")
-    elif status == "named" and target and clean:
+    elif status == "named" and source and target and clean:
         await message.reply(f"🤝 Союз с государством №{target.world_id} теперь называется «{clean}».")
         if target.enabled:
             try:
                 await bot.send_message(
                     target.chat_id,
-                    f"🤝 Ваш союз с государством №{_source.world_id if _source else '?'} получил название «{clean}».",
+                    f"🤝 Ваш союз с государством №{source.world_id} получил название «{clean}».",
                 )
             except Exception:
                 logging.exception("World alliance name notification failed target=%s", target.world_id)
