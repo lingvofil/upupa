@@ -20,6 +20,11 @@ SIGNIFICANT_EVENT_TYPES = {
     "war_ended",
     "ambassador_set",
     "ambassador_removed",
+    "state_visit_invited",
+    "state_visit_accepted",
+    "state_visit_rejected",
+    "state_visit_showcase",
+    "state_insult",
 }
 
 
@@ -61,6 +66,19 @@ def format_event_fact(event: WorldEvent, states: dict[int, WorldState]) -> str:
         return f"{actor} предложило союз государству {target}."
     if event.event_type == "alliance_rejected":
         return f"{actor} отклонило предложение союза от {target}."
+    if event.event_type == "state_visit_invited":
+        return f"{actor} пригласило государство {target} с государственным визитом."
+    if event.event_type == "state_visit_accepted":
+        return f"{actor} приняло приглашение на государственный визит от {target}."
+    if event.event_type == "state_visit_rejected":
+        return f"{actor} отказалось от государственного визита в {target}."
+    if event.event_type == "state_visit_showcase":
+        name = str(payload.get("user_name") or "неизвестный экскурсовод")
+        text = str(payload.get("text") or "что-то чрезвычайно государственное")
+        return f"Во время визита в {actor} гражданин {name} показал гостям из {target}: {text}"
+    if event.event_type == "state_insult":
+        text = str(payload.get("text") or "дипломатически оскорбительное заявление")
+        return f"{actor} официально оскорбило государство {target}: {text}"
     return f"{actor}: событие {event.event_type}."
 
 
