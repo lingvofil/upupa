@@ -9,6 +9,7 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont
 
+from features.world.authority import authority_from_counts
 from features.world.ledger import WorldRelation
 from features.world.models import WorldState
 
@@ -58,7 +59,7 @@ def _authority(states: tuple[WorldState, ...], relations: tuple[WorldRelation, .
         target[relation.state_a] += 1
         target[relation.state_b] += 1
     return {
-        state.world_id: max(0, min(100, 50 + 8 * allies[state.world_id] - 5 * wars[state.world_id]))
+        state.world_id: authority_from_counts(allies[state.world_id], wars[state.world_id])
         for state in states
     }
 
@@ -121,7 +122,9 @@ def render_world_map_png(
     for state in states:
         x, y = positions[state.world_id]
         score = authority[state.world_id]
-        radius = 42 + score * 0.16
+        # Authority is unbounded, but node geometry is intentionally bounded so
+        # a diplomatic superpower does not eat the whole map.
+        radius = 42 + min(score, 180) * 0.11
         draw.ellipse(
             (x - radius, y - radius, x + radius, y + radius),
             fill=(238, 184, 77, 250),
