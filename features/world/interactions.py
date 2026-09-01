@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from features.world.service import WorldService, get_world_service
+from features.world.visit_feedback import expire_due_feedback_windows, open_feedback_window
 from features.world.visit_report import build_visit_report
 
 
 INSULT_COOLDOWN = timedelta(minutes=30)
 VISIT_DURATION = timedelta(hours=24)
-VISIT_EXPIRATION_POLL_SECONDS = 300
+VISIT_EXPIRATION_POLL_SECONDS = 60
 _VISIT_EVENT_TYPES = {"state_visit_accepted", "state_visit_finished"}
 
 
@@ -201,6 +202,7 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
         host_title=host.title,
         guest_title=guest.title,
     )
+    report_display = report.text.replace("Экскурс", "Екскурс").replace("экскурс", "екскурс")
     await record_interaction_event(
         service,
         "state_visit_report",
@@ -210,7 +212,7 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
             "accepted_event_id": visit.accepted_event_id,
             "showcase_count": report.showcase_count,
             "contributor_count": report.contributor_count,
-            "summary": report.text,
+            "summary": report_display,
         },
         dedupe_key=f"visit_report:{visit.accepted_event_id}",
     )
@@ -218,8 +220,8 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
     auto = " Прошло 24 часа." if reason == "timeout" else ""
     report_text = (
         "\n\n📋 Что удалось показать:\n"
-        f"{report.text}\n\n"
-        f"Показано: {report.showcase_count} · экскурсоводов: {report.contributor_count}"
+        f"{report_display}\n\n"
+        f"Показано: {report.showcase_count} · екскурсоводов: {report.contributor_count}"
     )
     host_text = (
         f"🛫 Государственный визит завершён.{auto}\n\n"
@@ -246,6 +248,16 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
                 visit.guest_state,
             )
 
+    await open_feedback_window(
+        bot,
+        service,
+        accepted_event_id=visit.accepted_event_id,
+        host_state=host.world_id,
+        guest_state=guest.world_id,
+        host_title=host.title,
+        guest_chat_id=guest.chat_id,
+    )
+
 
 async def expire_due_visits(bot, service: WorldService | None = None) -> int:
     """Close and notify all visits whose 24-hour window has elapsed."""
@@ -267,7 +279,7 @@ async def expire_due_visits(bot, service: WorldService | None = None) -> int:
 
 
 async def visit_expiration_loop(bot) -> None:
-    """Periodically close state visits after 24 hours."""
+    """Periodically close state visits and expired one-hour feedback windows."""
     while True:
         try:
             await expire_due_visits(bot)
@@ -275,4 +287,10 @@ async def visit_expiration_loop(bot) -> None:
             raise
         except Exception:
             logging.exception("World visit expiration loop failed")
+        try:
+            await expire_due_feedback_windows(bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("World visit feedback expiration loop failed")
         await asyncio.sleep(VISIT_EXPIRATION_POLL_SECONDS)
