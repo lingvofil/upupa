@@ -24,6 +24,7 @@ SIGNIFICANT_EVENT_TYPES = {
     "state_visit_accepted",
     "state_visit_rejected",
     "state_visit_showcase",
+    "state_visit_finished",
     "state_insult",
 }
 
@@ -76,6 +77,10 @@ def format_event_fact(event: WorldEvent, states: dict[int, WorldState]) -> str:
         name = str(payload.get("user_name") or "неизвестный экскурсовод")
         text = str(payload.get("text") or "что-то чрезвычайно государственное")
         return f"Во время визита в {actor} гражданин {name} показал гостям из {target}: {text}"
+    if event.event_type == "state_visit_finished":
+        if str(payload.get("reason") or "") == "timeout":
+            return f"Государственный визит {target} в {actor} завершился по истечении 24 часов."
+        return f"Государственный визит {target} в {actor} завершён досрочно."
     if event.event_type == "state_insult":
         text = str(payload.get("text") or "дипломатически оскорбительное заявление")
         return f"{actor} официально оскорбило государство {target}: {text}"
