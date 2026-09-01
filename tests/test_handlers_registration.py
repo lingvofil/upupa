@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 136  # + lifecycle визита: решение, финиш, екскурсионные реплаи и отзывы
+EXPECTED_TOTAL_HANDLERS = 137  # + lifecycle визита: решение, финиш, текст/медиа-показы и отзывы
 
 
 def _count_handlers(router):
@@ -35,14 +35,17 @@ def test_world_router_is_registered_before_dialog():
         world_listing,
         world_visit_decisions,
         world_visit_lifecycle,
+        world_visit_media,
     )
 
+    assert world_visit_media.router in ROUTERS
     assert world_visit_lifecycle.router in ROUTERS
     assert world_visit_decisions.router in ROUTERS
     assert world_interactions.router in ROUTERS
     assert world_hub.router in ROUTERS
     assert world_listing.router in ROUTERS
     assert world.router in ROUTERS
+    assert ROUTERS.index(world_visit_media.router) < ROUTERS.index(world_visit_lifecycle.router)
     assert ROUTERS.index(world_visit_lifecycle.router) < ROUTERS.index(world_visit_decisions.router)
     assert ROUTERS.index(world_visit_decisions.router) < ROUTERS.index(world_interactions.router)
     assert ROUTERS.index(world_interactions.router) < ROUTERS.index(world_hub.router)
@@ -53,7 +56,7 @@ def test_world_router_is_registered_before_dialog():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 24
+    assert len(ROUTERS) == 25
 
 
 def test_whatisthere_guard_does_not_match_pun_command():
