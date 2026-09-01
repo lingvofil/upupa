@@ -14,9 +14,10 @@ from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from AI.summarize import _generate_with_active_model
 from core.loader import bot
 from core.upupa_utils import normalize_upupa_command
+from features.world.authority import calculate_authority
 from features.world.interactions import insult_cooldown_remaining, record_interaction_event
 from features.world.permissions import is_chat_admin, is_strict_chat_admin
-from features.world.service import calculate_authority, format_diplomacy, get_world_service
+from features.world.service import format_diplomacy, get_world_service
 from handlers.world import _require_world, _title
 
 
@@ -127,7 +128,7 @@ async def _main_text(chat_id: int, title: str) -> str | None:
     return (
         "🌍 Мир Упупы\n\n"
         f"Вы — государство №{state.world_id} «{state.title}».\n"
-        f"Международный авторитет: {calculate_authority(profile)}/100.\n\n"
+        f"Международный авторитет: {calculate_authority(profile)}.\n\n"
         "Куда полезем?"
     )
 
