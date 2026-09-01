@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from features.world.interactions import (
     INSULT_COOLDOWN,
@@ -152,17 +153,24 @@ def test_expired_visit_is_closed_and_both_states_are_notified(tmp_path):
     class FakeBot:
         def __init__(self):
             self.sent = []
+            self.next_message_id = 100
 
         async def send_message(self, chat_id, text):
             self.sent.append((chat_id, text))
+            self.next_message_id += 1
+            return SimpleNamespace(message_id=self.next_message_id)
 
     bot = FakeBot()
     closed = _run(expire_due_visits(bot, service))
 
     assert closed == 1
     assert _run(get_open_visit(service, host.world_id, guest.world_id)) is None
-    assert {chat_id for chat_id, _text in bot.sent} == {host.chat_id, guest.chat_id}
-    assert all("24 часа" in text for _chat_id, text in bot.sent)
+    assert len(bot.sent) == 3
+    finish_messages = bot.sent[:2]
+    assert {chat_id for chat_id, _text in finish_messages} == {host.chat_id, guest.chat_id}
+    assert all("24 часа" in text for _chat_id, text in finish_messages)
+    assert bot.sent[2][0] == guest.chat_id
+    assert bot.sent[2][1].startswith("📝 Отзывы об екскурсии")
 
     event = _run(
         service.list_events(

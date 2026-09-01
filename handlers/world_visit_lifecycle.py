@@ -19,11 +19,17 @@ from features.world.interactions import (
 )
 from features.world.permissions import is_chat_admin
 from features.world.service import get_world_service
+from features.world.visit_feedback import (
+    close_feedback_window,
+    get_feedback_window_for_prompt,
+    record_visit_feedback,
+)
 from handlers.world import _require_world, _title
 
 
 router = Router(name="world_visit_lifecycle")
 VISIT_PROMPT_PREFIX = "🛬 Государственный визит"
+FEEDBACK_PROMPT_PREFIX = "📝 Отзывы об екскурсии"
 _VISIT_TARGET_RE = re.compile(r"Гости: государство №(\d+)")
 
 
@@ -34,6 +40,15 @@ def _is_visit_showcase_reply(message: types.Message) -> bool:
     content = (message.text or message.caption or "").strip()
     replied_text = (replied.text or replied.caption or "").strip()
     return bool(content and replied_text.startswith(VISIT_PROMPT_PREFIX))
+
+
+def _is_visit_feedback_reply(message: types.Message) -> bool:
+    replied = message.reply_to_message
+    if replied is None or message.from_user is None:
+        return False
+    content = (message.text or message.caption or "").strip()
+    replied_text = (replied.text or replied.caption or "").strip()
+    return bool(content and replied_text.startswith(FEEDBACK_PROMPT_PREFIX))
 
 
 def _visit_markup(guest_world_id: int) -> types.InlineKeyboardMarkup:
@@ -153,7 +168,7 @@ async def world_visit_decision_callback(query: types.CallbackQuery):
             host.chat_id,
             f"{VISIT_PROMPT_PREFIX}\n\n"
             f"Гости: государство №{guest.world_id} — {guest.title}.\n"
-            "Они приехали смотреть, чем вы тут вообще живёте. Экскурсия продлится максимум 24 часа.\n\n"
+            "Они приехали смотреть, чем вы тут вообще живёте. Екскурсия продлится максимум 24 часа.\n\n"
             "Любой участник чата может ответить на это сообщение текстом и рассказать, что именно показывает гостям. "
             "Упупа подпишет автора и передаст это делегации.",
             reply_markup=_visit_markup(guest.world_id),
@@ -215,6 +230,54 @@ async def finish_world_visit_callback(query: types.CallbackQuery):
     await query.answer("Визит завершён")
 
 
+@router.message(_is_visit_feedback_reply)
+async def visit_feedback_reply(message: types.Message):
+    """Accept guest-state feedback for one hour after a completed екскурсия."""
+    service = await _require_world(message)
+    if service is None or message.from_user is None or message.reply_to_message is None:
+        return
+
+    guest = await service.get_state(message.chat.id, _title(message))
+    if guest is None:
+        return
+    window = await get_feedback_window_for_prompt(
+        service,
+        guest_state=guest.world_id,
+        prompt_message_id=message.reply_to_message.message_id,
+    )
+    if window is None:
+        await message.reply("📝 Не нашёл это окно отзывов. Возможно, дипломатическая бумажка потерялась.")
+        return
+    if window.closed:
+        await message.reply("📝 Отзывы уже собраны и отправлены. Поздняк метаться.")
+        return
+
+    now = datetime.now(timezone.utc)
+    if now >= window.closes_at:
+        await close_feedback_window(bot, service, window, now=now)
+        await message.reply("📝 Час на отзывы уже закончился. Этот отзыв в протокол не попал.")
+        return
+
+    content = " ".join((message.text or message.caption or "").split()).strip()[:1000]
+    if not content:
+        return
+    name = message.from_user.full_name or (
+        f"@{message.from_user.username}" if message.from_user.username else str(message.from_user.id)
+    )
+    recorded = await record_visit_feedback(
+        service,
+        window,
+        message_id=message.message_id,
+        user_id=message.from_user.id,
+        user_name=name,
+        text=content,
+    )
+    if recorded:
+        await message.reply("📝 Отзыв принят. Через час Упупа отнесёт его принимающей стороне.")
+    else:
+        await message.reply("📝 Этот отзыв уже записан.")
+
+
 @router.message(_is_visit_showcase_reply)
 async def visit_showcase(message: types.Message):
     """Accept showcase replies only while the corresponding visit is active."""
@@ -234,7 +297,7 @@ async def visit_showcase(message: types.Message):
 
     visit = await _close_expired_if_needed(service, host.world_id, guest.world_id)
     if visit is None:
-        await message.reply("🎒 Экскурсия уже закончилась. Делегация уехала, поздно показывать достопримечательности.")
+        await message.reply("🎒 Екскурсия уже закончилась. Делегация уехала, поздно показывать достопримечательности.")
         try:
             await bot.edit_message_reply_markup(
                 chat_id=message.chat.id,
@@ -266,7 +329,7 @@ async def visit_showcase(message: types.Message):
     try:
         await bot.send_message(
             guest.chat_id,
-            f"🎒 Экскурсия по государству №{host.world_id} — {host.title}.\n\n"
+            f"🎒 Екскурсия по государству №{host.world_id} — {host.title}.\n\n"
             f"{name} показал вам: {content}",
         )
     except Exception:

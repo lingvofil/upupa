@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from features.world.interactions import (
     finish_visit,
@@ -75,7 +76,7 @@ def test_visit_report_reads_every_showcase_without_generic_event_cap(tmp_path):
     assert showcases[-1].text == "объект №229"
 
 
-def test_finished_visit_sends_factual_report_to_both_states_and_journals_it(tmp_path):
+def test_finished_visit_sends_factual_report_and_opens_feedback_window(tmp_path):
     service = _service(tmp_path / "world.db")
     host = _run(service.enable_state(-1001, "Host"))
     guest = _run(service.enable_state(-1002, "Guest"))
@@ -105,9 +106,12 @@ def test_finished_visit_sends_factual_report_to_both_states_and_journals_it(tmp_
     class FakeBot:
         def __init__(self):
             self.sent = []
+            self.next_message_id = 100
 
         async def send_message(self, chat_id, text):
             self.sent.append((chat_id, text))
+            self.next_message_id += 1
+            return SimpleNamespace(message_id=self.next_message_id)
 
     visit = _run(
         finish_visit(
@@ -123,12 +127,16 @@ def test_finished_visit_sends_factual_report_to_both_states_and_journals_it(tmp_
     bot = FakeBot()
     _run(notify_visit_finished(bot, service, visit, reason="manual"))
 
-    assert {chat_id for chat_id, _text in bot.sent} == {host.chat_id, guest.chat_id}
-    for _chat_id, text in bot.sent:
+    assert len(bot.sent) == 3
+    finish_messages = bot.sent[:2]
+    assert {chat_id for chat_id, _text in finish_messages} == {host.chat_id, guest.chat_id}
+    for _chat_id, text in finish_messages:
         assert "📋 Что удалось показать:" in text
         assert "Вася: главный гараж республики" in text
         assert "Петя: местный памятник бардаку" in text
-        assert "Показано: 2 · экскурсоводов: 2" in text
+        assert "Показано: 2 · екскурсоводов: 2" in text
+    assert bot.sent[2][0] == guest.chat_id
+    assert bot.sent[2][1].startswith("📝 Отзывы об екскурсии")
 
     reports = _run(
         service.list_events(
@@ -141,6 +149,16 @@ def test_finished_visit_sends_factual_report_to_both_states_and_journals_it(tmp_
     assert reports[0].payload["showcase_count"] == 2
     assert reports[0].payload["contributor_count"] == 2
     assert "главный гараж" in reports[0].payload["summary"]
+
+    opened = _run(
+        service.list_events(
+            limit=10,
+            world_id=guest.world_id,
+            event_types={"state_visit_feedback_opened"},
+        )
+    )
+    assert len(opened) == 1
+    assert opened[0].payload["accepted_event_id"] == visit.accepted_event_id
 
 
 def test_exact_report_excludes_showcases_from_before_this_visit(tmp_path):
