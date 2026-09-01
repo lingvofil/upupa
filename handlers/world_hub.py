@@ -12,15 +12,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from core.loader import bot
 from core.upupa_utils import normalize_upupa_command
 from features.world.activity import get_top_active_citizen
+from features.world.authority import authority_from_counts, calculate_authority
+from features.world.identity import ensure_state_identities, ensure_state_identity
 from features.world.news import SIGNIFICANT_EVENT_TYPES, format_event_fact, generate_world_news
 from features.world.permissions import is_chat_admin, is_strict_chat_admin
+from features.world.presentation import format_world_profile
 from features.world.rendering import render_world_map_png_async
-from features.world.service import (
-    calculate_authority,
-    format_diplomacy,
-    format_world_profile,
-    get_world_service,
-)
+from features.world.service import format_diplomacy, get_world_service
 from handlers.world import _require_world, _title
 
 
@@ -94,11 +92,12 @@ async def _state_card(world_id: int) -> str | None:
     profile = await service.get_profile_by_world_id(world_id)
     if profile is None:
         return None
-    details, top_active, alliance_names = await asyncio.gather(
-        service.get_details(world_id),
+    identity, top_active, alliance_names = await asyncio.gather(
+        ensure_state_identity(service, profile.state),
         get_top_active_citizen(profile.state.chat_id),
         _alliance_names(service, profile),
     )
+    details = identity.details if identity is not None else await service.get_details(world_id)
     population = None
     try:
         population = await bot.get_chat_member_count(profile.state.chat_id)
@@ -133,15 +132,21 @@ async def _states_overview() -> tuple[str, tuple]:
         target[relation.state_a] = target.get(relation.state_a, 0) + 1
         target[relation.state_b] = target.get(relation.state_b, 0) + 1
 
-    details = await asyncio.gather(*(service.get_details(state.world_id) for state in states))
+    identities = await ensure_state_identities(service, states)
     lines = ["🌐 Государства Мира Упупы", ""]
-    for state, item in zip(states, details):
-        authority = max(0, min(100, 50 + 8 * allies.get(state.world_id, 0) - 5 * wars.get(state.world_id, 0)))
+    for state, identity in zip(states, identities):
+        authority = authority_from_counts(
+            allies.get(state.world_id, 0),
+            wars.get(state.world_id, 0),
+        )
         lines.append(f"№{state.world_id} — {state.title}")
-        if item is not None:
-            lines.append(f"🏛 {item.government_form}")
+        if identity is not None:
+            lines.append(f"🏛 {identity.details.government_form}")
+            lines.append(f"🎩 Посол: {identity.details.ambassador_name or 'не назначен'}")
+        else:
+            lines.append("🎩 Посол: не назначен")
         lines.append(
-            f"🌐 авторитет {authority}/100 · 🤝 {allies.get(state.world_id, 0)} · ⚔️ {wars.get(state.world_id, 0)}"
+            f"🌐 авторитет {authority} · 🤝 {allies.get(state.world_id, 0)} · ⚔️ {wars.get(state.world_id, 0)}"
         )
         lines.append("")
     if not states:
@@ -211,7 +216,7 @@ async def world_hub(message: types.Message):
     text = (
         "🌍 Мир Упупы\n\n"
         f"Вы — государство №{state.world_id} «{state.title}».\n"
-        f"Международный авторитет: {calculate_authority(profile)}/100.\n\n"
+        f"Международный авторитет: {calculate_authority(profile)}.\n\n"
         "Куда полезем?"
     )
     await message.reply(text, reply_markup=_main_markup())
@@ -385,7 +390,7 @@ async def world_hub_callback(query: types.CallbackQuery):
         text = (
             "🌍 Мир Упупы\n\n"
             f"Вы — государство №{state.world_id} «{state.title}».\n"
-            f"Международный авторитет: {authority}/100.\n\n"
+            f"Международный авторитет: {authority}.\n\n"
             "Куда полезем?"
         )
         await query.message.edit_text(text, reply_markup=_main_markup())
