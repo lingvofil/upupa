@@ -3,7 +3,7 @@
 aiogram матчит сообщение по роутерам последовательно, catch-all (dialog) — последний.
 """
 from handlers import (
-    basic, sms, world, world_visit_decisions, world_interactions, world_hub, world_listing, stats_lexicon, media_search, games, media_tools,
+    basic, sms, world, world_visit_lifecycle, world_visit_decisions, world_interactions, world_hub, world_listing, stats_lexicon, media_search, games, media_tools,
     ai_modes, ai_profiles, ai_vision, ai_generation, birthdays,
     ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
@@ -11,7 +11,8 @@ from handlers import (
 ROUTERS = [
     basic.router,
     sms.router,
-    world_visit_decisions.router,  # принять/отклонить визит могут только админы или посол
+    world_visit_lifecycle.router,  # 24-часовой жизненный цикл визита, экскурсия и ручное завершение
+    world_visit_decisions.router,  # legacy guard входящих приглашений; lifecycle перехватывает новые решения первым
     world_interactions.router,  # дипломатические действия перехватывают main/diplomacy callbacks хаба
     world_hub.router,  # интерактивный Мир Упупы должен перехватывать его новые/расширенные команды первым
     world_listing.router,
