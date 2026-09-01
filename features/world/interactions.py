@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from features.world.service import WorldService, get_world_service
+from features.world.visit_report import build_visit_report
 
 
 INSULT_COOLDOWN = timedelta(minutes=30)
@@ -190,15 +191,46 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
     )
     if host is None or guest is None:
         return
+
+    report = await build_visit_report(
+        service,
+        host_state=visit.host_state,
+        guest_state=visit.guest_state,
+        accepted_at=visit.accepted_at,
+        host_chat_id=host.chat_id,
+        host_title=host.title,
+        guest_title=guest.title,
+    )
+    await record_interaction_event(
+        service,
+        "state_visit_report",
+        actor_state=visit.host_state,
+        target_state=visit.guest_state,
+        payload={
+            "accepted_event_id": visit.accepted_event_id,
+            "showcase_count": report.showcase_count,
+            "contributor_count": report.contributor_count,
+            "summary": report.text,
+        },
+        dedupe_key=f"visit_report:{visit.accepted_event_id}",
+    )
+
     auto = " Прошло 24 часа." if reason == "timeout" else ""
+    report_text = (
+        "\n\n📋 Что удалось показать:\n"
+        f"{report.text}\n\n"
+        f"Показано: {report.showcase_count} · экскурсоводов: {report.contributor_count}"
+    )
     host_text = (
         f"🛫 Государственный визит завершён.{auto}\n\n"
         f"Делегация государства №{guest.world_id} — {guest.title} отбыла. "
         "Унесли с собой противоречивые впечатления и один пакет."
+        f"{report_text}"
     )
     guest_text = (
         f"🛫 Визит в государство №{host.world_id} — {host.title} завершён.{auto}\n\n"
         "Делегация вернулась домой. Впечатления противоречивые, пакет при них."
+        f"{report_text}"
     )
     for chat_id, text, label in (
         (host.chat_id, host_text, "host"),
