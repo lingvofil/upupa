@@ -3,7 +3,7 @@
 """
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 135  # + lifecycle визита: решение, ручной финиш и экскурсионные реплаи
+EXPECTED_TOTAL_HANDLERS = 136  # + lifecycle визита: решение, финиш, екскурсионные реплаи и отзывы
 
 
 def _count_handlers(router):
