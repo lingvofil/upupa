@@ -18,6 +18,7 @@ def format_world_profile(
     authority: int | None = None,
     most_active: str | None = None,
     alliance_names: dict[int, str] | None = None,
+    identity_rationale: str | None = None,
 ) -> str:
     population_text = str(population) if population is not None else "неизвестно"
     lines = [
@@ -34,6 +35,8 @@ def format_world_profile(
                 f"☠️ Главная угроза: {details.main_threat}",
             ]
         )
+        if identity_rationale:
+            lines.append(f"🔎 Основание: {identity_rationale}")
         if details.ambassador_name:
             lines.append(f"🎩 Посол: {details.ambassador_name}")
     if most_active:
