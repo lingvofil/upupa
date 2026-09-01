@@ -118,6 +118,7 @@ async def _state_card(world_id: int) -> str | None:
         authority=calculate_authority(profile),
         most_active=most_active,
         alliance_names=alliance_names,
+        identity_rationale=(identity.rationale if identity is not None else None),
     )
 
 
