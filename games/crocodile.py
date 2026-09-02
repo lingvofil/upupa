@@ -7,6 +7,7 @@ import os
 import random
 import time
 import json
+import html
 import re
 from typing import Dict, Optional, Union
 
@@ -220,7 +221,8 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
     for i, (_uid, data) in enumerate(items, start=1):
         pts = int((data or {}).get("pts", 0))
         name = ((data or {}).get("name") or "").strip() or "игрок"
-        lines.append(f"{i}. {name} — <b>{pts}</b>")
+        safe_name = html.escape(name.replace("@", "@\u200b"))
+        lines.append(f"{i}. {safe_name} — <b>{pts}</b>")
     return "\n".join(lines)
 
 
@@ -514,6 +516,7 @@ async def snapshot(sid, data, callback=None):
     if callback:
         await callback(result)
     return result
+
 
 @sio.event
 async def skip_turn(sid, data):
