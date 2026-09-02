@@ -19,6 +19,10 @@ MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
 COMMAND_TIMEOUT_SEC = 60
 YTP_RENDER_TIMEOUT_SEC = 180
+YTP_NORMALIZE_TIMEOUT_SEC = 90
+YTP_NORMALIZE_MIN_FILE_SIZE_MB = 12
+YTP_NORMALIZE_MIN_DURATION_SEC = 30
+YTP_NORMALIZE_MAX_EDGE = 1280
 TELEGRAM_FILE_TIMEOUT_SEC = 90
 TELEGRAM_UPLOAD_TIMEOUT_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
@@ -364,6 +368,15 @@ def _has_supported_ytp_media(message: types.Message) -> bool:
     )
 
 
+def _should_normalize_video(file_obj) -> bool:
+    file_size = getattr(file_obj, "file_size", 0) or 0
+    duration = getattr(file_obj, "duration", 0) or 0
+    return bool(
+        file_size >= YTP_NORMALIZE_MIN_FILE_SIZE_MB * 1024 * 1024
+        or duration >= YTP_NORMALIZE_MIN_DURATION_SEC
+    )
+
+
 async def run_command(command: list[str], timeout: float = COMMAND_TIMEOUT_SEC) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -383,6 +396,42 @@ async def run_command(command: list[str], timeout: float = COMMAND_TIMEOUT_SEC) 
     if proc.returncode != 0:
         return False, stderr.decode(errors="ignore")
     return True, stdout.decode(errors="ignore")
+
+
+async def normalize_video_for_ytp(input_video: str, output_mp4: str) -> bool:
+    scale_filter = (
+        f"scale='min({YTP_NORMALIZE_MAX_EDGE},iw)':'min({YTP_NORMALIZE_MAX_EDGE},ih)':"
+        "force_original_aspect_ratio=decrease,fps=30"
+    )
+    cmd = [
+        "ffmpeg",
+        "-i",
+        input_video,
+        "-vf",
+        scale_filter,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "26",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+        "-threads",
+        "2",
+        "-y",
+        output_mp4,
+    ]
+    success, output = await run_command(cmd, timeout=YTP_NORMALIZE_TIMEOUT_SEC)
+    if not success:
+        logging.warning("[ytp] Не удалось нормализовать входное видео: %s", output)
+    return success
 
 
 def _ytp_worker_entry(result_queue, func_name: str, args: tuple) -> None:
@@ -571,6 +620,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     processing_msg = await message.reply("⚙️ Пупизирую. пу пу пу...")
     input_path = None
     converted_input_path = None
+    normalized_input_path = None
     output_path = None
     mp4_path = None
 
@@ -628,6 +678,18 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                     return
                 real_input_path = converted_input_path
 
+            if not is_audio_input and _should_normalize_video(file_obj):
+                normalized_input_path = input_path + "_normalized.mp4"
+                normalized = await normalize_video_for_ytp(real_input_path, normalized_input_path)
+                if normalized and os.path.exists(normalized_input_path):
+                    logging.info(
+                        "[ytp] Нормализовано тяжёлое входное видео перед рендером: %s",
+                        normalized_input_path,
+                    )
+                    real_input_path = normalized_input_path
+                else:
+                    logging.warning("[ytp] Продолжаю с исходным видео без нормализации")
+
             chat_id_str = str(message.chat.id)
             chat_cfg = chat_settings.get(chat_id_str, {})
             target_dur = chat_cfg.get("ytp_duration", TARGET_DURATION)
@@ -673,7 +735,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await processing_msg.delete()
         await message.reply("❌ Что-то пошло не так при пупизации.")
     finally:
-        for path in (input_path, converted_input_path, output_path, mp4_path):
+        for path in (input_path, converted_input_path, normalized_input_path, output_path, mp4_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
