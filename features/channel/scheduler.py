@@ -9,8 +9,8 @@ from datetime import date, datetime, time, timedelta
 
 import pytz
 
+from features.channel.cringedep_service import CHANNEL_TARGET, publish_channel_post
 from features.channel.mood import burst_probability, daily_post_target, get_current_mood
-from features.channel.mood_service import CHANNEL_TARGET, publish_channel_post
 from features.channel.polls import process_due_polls
 from features.channel.storage import load_schedule, save_schedule
 
