@@ -19,6 +19,8 @@ MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 120
 COMMAND_TIMEOUT_SEC = 60
 YTP_RENDER_TIMEOUT_SEC = 180
+YTP_TERMINATE_GRACE_SEC = 5
+YTP_KILL_GRACE_SEC = 2
 TELEGRAM_FILE_TIMEOUT_SEC = 90
 TELEGRAM_UPLOAD_TIMEOUT_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
@@ -393,46 +395,78 @@ def _ytp_worker_entry(result_queue, func_name: str, args: tuple) -> None:
         result_queue.put((False, exc.__class__.__name__, str(exc)))
 
 
+async def _wait_for_process_exit(process, timeout: float) -> bool:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout)
+
+    while process.is_alive():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.1, remaining))
+
+    return True
+
+
 async def _run_blocking_ytp(func_name: str, *args, timeout: int = YTP_RENDER_TIMEOUT_SEC) -> None:
-    start_methods = multiprocessing.get_all_start_methods()
-    ctx = multiprocessing.get_context("fork" if "fork" in start_methods else "spawn")
+    # fork небезопасен для уже многопоточного процесса бота: дочерний процесс может
+    # унаследовать захваченные lock'и MoviePy/ffmpeg и зависнуть до таймаута.
+    ctx = multiprocessing.get_context("spawn")
     result_queue = ctx.Queue()
     process = ctx.Process(target=_ytp_worker_entry, args=(result_queue, func_name, args))
     process.start()
 
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while process.is_alive() and loop.time() < deadline:
-        await asyncio.sleep(0.25)
-
-    timed_out = process.is_alive()
-    if timed_out:
-        process.terminate()
-        for _ in range(20):
-            process.join(0)
-            if not process.is_alive():
-                break
-            await asyncio.sleep(0.25)
-
-        if process.is_alive():
-            process.kill()
-            process.join()
-        raise asyncio.TimeoutError
-
-    process.join()
-
     try:
-        ok, error_type, error_message = await loop.run_in_executor(None, result_queue.get, True, 1)
-    except queue.Empty:
-        if process.exitcode == 0:
-            return
-        raise RuntimeError(f"YTP worker exited with code {process.exitcode}")
+        exited = await _wait_for_process_exit(process, timeout)
+        if not exited:
+            logging.warning("[ytp] Worker pid=%s exceeded render timeout", process.pid)
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
 
-    if ok:
-        return
-    if error_type == "ValueError":
-        raise ValueError(error_message)
-    raise RuntimeError(error_message)
+            exited = await _wait_for_process_exit(process, YTP_TERMINATE_GRACE_SEC)
+            if not exited:
+                logging.warning("[ytp] Worker pid=%s ignored terminate; killing", process.pid)
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                exited = await _wait_for_process_exit(process, YTP_KILL_GRACE_SEC)
+
+            if exited:
+                process.join(0)
+            else:
+                logging.error("[ytp] Worker pid=%s did not exit after kill", process.pid)
+            raise asyncio.TimeoutError
+
+        # Процесс уже завершён; join(0) только собирает его статус и никогда не ждёт.
+        process.join(0)
+
+        try:
+            ok, error_type, error_message = await loop.run_in_executor(None, result_queue.get, True, 1)
+        except queue.Empty:
+            if process.exitcode == 0:
+                return
+            raise RuntimeError(f"YTP worker exited with code {process.exitcode}")
+
+        if ok:
+            return
+        if error_type == "ValueError":
+            raise ValueError(error_message)
+        raise RuntimeError(error_message)
+    finally:
+        try:
+            result_queue.close()
+        except Exception:
+            pass
+
+        if not process.is_alive():
+            try:
+                process.close()
+            except Exception:
+                pass
 
 
 async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
