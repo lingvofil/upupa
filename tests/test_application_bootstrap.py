@@ -56,6 +56,7 @@ def test_background_task_set_is_explicit_and_idempotent():
         "proactive-loop",
         "channel-scheduler",
         "world-visit-expiration",
+        "crocodile-session-persistence",
         "crocodile-socket-server",
     ]
 
