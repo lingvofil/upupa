@@ -100,11 +100,16 @@ class UpupaApplication:
         from features.proactive import proactive_loop
         from features.world.interactions import visit_expiration_loop
         from games import crocodile
+        from games.crocodile_persistence import (
+            crocodile_session_persistence_loop,
+            restore_crocodile_sessions,
+        )
         from services.holidays import schedule_daily_holidays
 
         configure_dnd_tasks(self.supervisor)
-        restore_dnd_sessions(self.bot)
         crocodile.configure_task_supervisor(self.supervisor)
+        restore_dnd_sessions(self.bot)
+        restore_crocodile_sessions()
 
         for chat_id in QUIZ_CHAT_IDS:
             self.supervisor.start(
@@ -131,6 +136,10 @@ class UpupaApplication:
         self.supervisor.start(
             visit_expiration_loop(self.bot),
             name="world-visit-expiration",
+        )
+        self.supervisor.start(
+            crocodile_session_persistence_loop(),
+            name="crocodile-session-persistence",
         )
         self.supervisor.start(
             crocodile.start_socket_server(),

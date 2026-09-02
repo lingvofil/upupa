@@ -218,11 +218,11 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
         reverse=True,
     )[:LEADERBOARD_TOP]
     lines = [title]
-    for i, (uid, data) in enumerate(items, start=1):
+    for i, (_uid, data) in enumerate(items, start=1):
         pts = int((data or {}).get("pts", 0))
         name = ((data or {}).get("name") or "").strip() or "игрок"
-        safe_name = html.escape(name)
-        lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
+        safe_name = html.escape(name.replace("@", "@\u200b"))
+        lines.append(f"{i}. {safe_name} — <b>{pts}</b>")
     return "\n".join(lines)
 
 
