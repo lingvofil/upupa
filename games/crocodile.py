@@ -222,7 +222,7 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
         pts = int((data or {}).get("pts", 0))
         name = ((data or {}).get("name") or "").strip() or "игрок"
         safe_name = html.escape(name)
-        lines.append(f'<a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>') if False else lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
+        lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
     return "\n".join(lines)
 
 
