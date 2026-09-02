@@ -58,6 +58,60 @@ class DummyBot:
             file.write(b"fake video")
 
 
+class DummyResultQueue:
+    def __init__(self, result=(True, None, None)):
+        self.result = result
+        self.closed = False
+
+    def get(self, block, timeout):
+        return self.result
+
+    def close(self):
+        self.closed = True
+
+
+class DummyProcess:
+    def __init__(self, *, alive=False, exitcode=0):
+        self.alive = alive
+        self.exitcode = exitcode
+        self.pid = 4242
+        self.started = False
+        self.terminated = False
+        self.killed = False
+        self.closed = False
+        self.join_calls = []
+
+    def start(self):
+        self.started = True
+
+    def is_alive(self):
+        return self.alive
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+
+    def close(self):
+        self.closed = True
+
+
+class DummyContext:
+    def __init__(self, process, result_queue):
+        self.process = process
+        self.result_queue = result_queue
+
+    def Queue(self):
+        return self.result_queue
+
+    def Process(self, **kwargs):
+        return self.process
+
+
 def test_run_command_times_out():
     async def run():
         ok, output = await ytp.run_command(
@@ -68,6 +122,51 @@ def test_run_command_times_out():
         assert "timed out" in output
 
     asyncio.run(run())
+
+
+def test_ytp_worker_uses_spawn_and_nonblocking_join(monkeypatch):
+    process = DummyProcess(alive=False)
+    result_queue = DummyResultQueue()
+    context = DummyContext(process, result_queue)
+    requested_methods = []
+
+    def get_context(method):
+        requested_methods.append(method)
+        return context
+
+    monkeypatch.setattr(ytp.multiprocessing, "get_context", get_context)
+
+    asyncio.run(ytp._run_blocking_ytp("_make_ytp_sync", "in", "out", timeout=0))
+
+    assert requested_methods == ["spawn"]
+    assert process.started
+    assert process.join_calls == [0]
+    assert process.closed
+    assert result_queue.closed
+
+
+def test_ytp_timeout_does_not_use_unbounded_join(monkeypatch):
+    process = DummyProcess(alive=True)
+    result_queue = DummyResultQueue()
+    context = DummyContext(process, result_queue)
+
+    monkeypatch.setattr(ytp.multiprocessing, "get_context", lambda method: context)
+    monkeypatch.setattr(ytp, "YTP_TERMINATE_GRACE_SEC", 0)
+    monkeypatch.setattr(ytp, "YTP_KILL_GRACE_SEC", 0)
+
+    async def run():
+        try:
+            await ytp._run_blocking_ytp("_make_ytp_sync", "in", "out", timeout=0)
+        except asyncio.TimeoutError:
+            return
+        raise AssertionError("YTP worker timeout was not raised")
+
+    asyncio.run(run())
+
+    assert process.terminated
+    assert process.killed
+    assert process.join_calls == []
+    assert result_queue.closed
 
 
 def test_ytp_timeout_releases_semaphore(monkeypatch):
