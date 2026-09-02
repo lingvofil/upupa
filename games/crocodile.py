@@ -20,6 +20,7 @@ from aiogram.types import (
     BufferedInputFile,
     InputMediaPhoto,
 )
+from thefuzz import fuzz
 
 from core.loader import bot
 from core.settings import API_TOKEN
@@ -44,6 +45,12 @@ BUMP_INTERVAL = 90  # сек
 
 # Сколько лидеров показывать после игры
 LEADERBOARD_TOP = 10
+
+# Реакции на догадки
+CORRECT_GUESS_REACTION = "💋"
+CLOSE_GUESS_REACTION = "👀"
+CLOSE_GUESS_MIN_RATIO = 80
+CLOSE_GUESS_MIN_LENGTH = 4
 
 # Файлы данных
 WORDS_FILE = os.path.join(os.path.dirname(__file__), "crocowords.txt")
@@ -122,7 +129,34 @@ def _pick_word() -> str:
 
 
 def _normalize_guess(s: str) -> str:
-    return " ".join(s.strip().lower().split())
+    return " ".join(s.strip().lower().replace("ё", "е").split())
+
+
+def _is_close_guess(guess: str, word: str) -> bool:
+    """Похожая по написанию догадка, но не точное совпадение."""
+    if not guess or not word or guess == word:
+        return False
+    if min(len(guess), len(word)) < CLOSE_GUESS_MIN_LENGTH:
+        return False
+    return fuzz.ratio(guess, word) >= CLOSE_GUESS_MIN_RATIO
+
+
+async def _safe_react_to_guess(msg: types.Message, emoji: str) -> None:
+    """Ставит реакцию, не ломая игру, если реакция запрещена в чате."""
+    try:
+        await bot.set_message_reaction(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            reaction=[types.ReactionTypeEmoji(emoji=emoji)],
+        )
+    except Exception as e:
+        logging.warning(
+            "[crocodile] failed to react chat=%s message=%s emoji=%s: %s",
+            msg.chat.id,
+            msg.message_id,
+            emoji,
+            e,
+        )
 
 
 def _scores_load():
@@ -188,7 +222,7 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
         pts = int((data or {}).get("pts", 0))
         name = ((data or {}).get("name") or "").strip() or "игрок"
         safe_name = html.escape(name)
-        lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
+        lines.append(f'<a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>') if False else lines.append(f'{i}. <a href="tg://user?id={uid}">{safe_name}</a> — <b>{pts}</b>')
     return "\n".join(lines)
 
 
@@ -698,6 +732,7 @@ async def check_answer(msg: types.Message) -> bool:
         return True
 
     if guess == word:
+        await _safe_react_to_guess(msg, CORRECT_GUESS_REACTION)
         if msg.from_user:
             add_point(cid, msg.from_user.id, msg.from_user.full_name)
         final_img = sess.get("last_preview_bytes")
@@ -725,4 +760,8 @@ async def check_answer(msg: types.Message) -> bool:
             disable_web_page_preview=True,
         )
         return True
+
+    if not (msg.from_user and msg.from_user.id == sess["drawer_id"]) and _is_close_guess(guess, word):
+        await _safe_react_to_guess(msg, CLOSE_GUESS_REACTION)
+
     return False
