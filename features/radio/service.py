@@ -17,6 +17,8 @@ from services.speech import SpeechAudio, SpeechSynthesisError, synthesize_speech
 HISTORY_WINDOWS_HOURS = (24, 72, 168)
 MIN_MESSAGES = 6
 MIN_TEXT_CHARS = 240
+RADIO_HISTORY_SAMPLE_MESSAGES = 5000
+RADIO_HISTORY_RECENT_MESSAGES = 1000
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,8 @@ async def collect_radio_history(
                 log_file_path,
                 chat_id,
                 threshold,
+                RADIO_HISTORY_SAMPLE_MESSAGES,
+                RADIO_HISTORY_RECENT_MESSAGES,
             )
         except Exception:
             logging.exception(
@@ -140,9 +144,6 @@ async def build_radio_episode(
         speech: SpeechAudio = await synthesize_speech(
             script_result.text,
             provider_order=("gemini", "groq"),
-            # The configured Groq Orpheus model is English-only. It remains a
-            # formal provider fallback, but Russian radio must never degrade
-            # into an English model trying to pronounce Cyrillic gibberish.
             allow_groq_for_cyrillic=False,
         )
     except SpeechSynthesisError:
