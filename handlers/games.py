@@ -46,7 +46,9 @@ async def start_croc(message: types.Message):
     print("CROC BOT ID:", id(bot))
     await crocodile.handle_start_game(message)
 
-@router.callback_query(F.data.startswith("cr_"))
+@router.callback_query(
+    F.data.startswith("cr_") | F.data.in_(("btn_like", "btn_want_draw"))
+)
 async def croc_callback(callback: types.CallbackQuery):
     if callback.data == "cr_restart":
         await crocodile.handle_start_game(callback.message)
