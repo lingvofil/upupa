@@ -25,8 +25,8 @@ COMIC_HOURS = 12
 MIN_MESSAGES = 5
 MAX_SCRIPT_CHARS = 8000
 
-PANEL = 512      # сторона панели
-CAP_H = 100      # высота полосы подписи
+PANEL = 512
+CAP_H = 100
 MARGIN = 10
 FONT_PATH = "assets/fonts/BerlinSansFBCyrillic-Regular.ttf"
 
@@ -76,6 +76,22 @@ def _load_font(size: int):
         return ImageFont.load_default()
 
 
+def _build_recent_dialog_text(messages: list[dict], max_chars: int = MAX_SCRIPT_CHARS) -> str:
+    """Собрать хвост диалога без промежуточной гигантской строки."""
+    selected_reversed: list[str] = []
+    used = 0
+    for message in reversed(messages):
+        line = f"{message['display_name']}: {message['text']}"
+        if not selected_reversed and len(line) > max_chars:
+            return line[-max_chars:]
+        extra = len(line) + (1 if selected_reversed else 0)
+        if used + extra > max_chars:
+            break
+        selected_reversed.append(line)
+        used += extra
+    return "\n".join(reversed(selected_reversed))
+
+
 def _compose_comic(images: list, captions: list[str]) -> bytes:
     """Склеивает 4 панели в лист 2x2 с подписями под каждой."""
     width = 2 * PANEL + 3 * MARGIN
@@ -92,8 +108,10 @@ def _compose_comic(images: list, captions: list[str]) -> bytes:
 
         img_bytes = images[idx] if idx < len(images) else None
         if img_bytes:
-            panel = Image.open(BytesIO(img_bytes)).convert("RGB").resize((PANEL, PANEL))
+            with Image.open(BytesIO(img_bytes)) as source:
+                panel = source.convert("RGB").resize((PANEL, PANEL))
             sheet.paste(panel, (x, y))
+            panel.close()
         else:
             draw.rectangle([x, y, x + PANEL, y + PANEL], fill="#dddddd")
             draw.text((x + PANEL // 2 - 30, y + PANEL // 2 - 70), "?", font=placeholder_font, fill="black")
@@ -110,6 +128,7 @@ def _compose_comic(images: list, captions: list[str]) -> bytes:
 
     buf = BytesIO()
     sheet.save(buf, "PNG")
+    sheet.close()
     return buf.getvalue()
 
 
@@ -125,8 +144,7 @@ async def process_comic_command(message: types.Message):
         await status.edit_text(f"За последние {COMIC_HOURS} часов нихуя не произошло. Комикс про пустоту рисовать не буду.")
         return
 
-    dialog_text = "\n".join(f"{m['display_name']}: {m['text']}" for m in messages)
-    dialog_text = dialog_text[-MAX_SCRIPT_CHARS:]
+    dialog_text = _build_recent_dialog_text(messages)
 
     try:
         raw_script = await _generate_with_active_model(
