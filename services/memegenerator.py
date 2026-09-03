@@ -1,3 +1,4 @@
+from collections import deque
 import random
 import logging
 import os
@@ -54,13 +55,12 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
     try:
         messages = []
         chat_id_str = str(chat_id)
-        
+
         with open(log_path, "r", encoding="utf-8") as f:
-            # Читаем хвост файла, но обрабатываем аккуратно
-            lines = f.readlines()
-            # Берем последние 1000 строк для большего выбора
-            target_lines = lines[-1000:] if len(lines) > 1000 else lines
-            
+            # Нужны только последние 1000 строк. deque не материализует весь
+            # многосотмегабайтный user_messages.log в список Python-строк.
+            target_lines = deque(f, maxlen=1000)
+
             for line in reversed(target_lines):
                 # Проверяем наличие Chat ID в строке
                 if chat_id_str in line:
@@ -74,14 +74,14 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
                             # Убираем сообщения, где упоминается сам мем
                             if not any(x in txt.lower() for x in ["мем", "meme"]):
                                 messages.append(txt)
-                
-                if len(messages) >= 50: 
+
+                if len(messages) >= 50:
                     break
-        
+
         if messages:
             return random.choice(messages)
         return "Где все?"
-        
+
     except Exception as e:
         logging.error(f"Meme context error: {e}")
         return "Ошибка 404: Юмор не найден"
@@ -92,7 +92,7 @@ async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInp
     templates = await get_all_templates()
     template = random.choice(templates)
     tid = template.get("id", "drake")
-    
+
     # Логика разделения текста на верх/низ
     words = source_text.split()
     if len(words) > 2:
@@ -123,7 +123,7 @@ async def check_and_send_random_meme(message: Message):
 
     chat_id_str = str(message.chat.id)
     settings = chat_settings.get(chat_id_str, {})
-    
+
     if not settings.get("random_memes_enabled", False):
         return
 
