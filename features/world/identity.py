@@ -114,6 +114,7 @@ async def _latest_identity_event(service: WorldService, world_id: int) -> WorldE
 
 
 def _message_sample(messages: list[dict]) -> tuple[str, int]:
+    # _collect_messages уже ограничивает историю MAX_MESSAGES свежими сообщениями.
     selected = messages[-MAX_MESSAGES:]
     lines: list[str] = []
     total = 0
@@ -151,6 +152,8 @@ async def _collect_messages(
         str(log_file_path),
         str(state.chat_id),
         start,
+        MAX_MESSAGES,
+        MAX_MESSAGES,
     )
     return messages
 

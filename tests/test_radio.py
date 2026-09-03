@@ -83,7 +83,7 @@ def test_collect_radio_history_expands_window_then_rejects_sparse_history(monkey
 
     calls = []
 
-    def fake_get_chat_messages(_path, _chat_id, threshold):
+    def fake_get_chat_messages(_path, _chat_id, threshold, *_sampling):
         calls.append(threshold)
         return [_message("ок") for _ in range(2)], {}, "Тестовый чат"
 
@@ -109,7 +109,7 @@ def test_collect_radio_history_uses_24_hours_when_enough(monkeypatch):
     calls = []
     messages = [_message("Это достаточно содержательное сообщение про жизнь чата номер один.") for _ in range(8)]
 
-    def fake_get_chat_messages(_path, _chat_id, threshold):
+    def fake_get_chat_messages(_path, _chat_id, threshold, *_sampling):
         calls.append(threshold)
         return messages, {}, "Тестовый чат"
 
@@ -385,8 +385,6 @@ def test_radio_async_pipeline_has_no_direct_blocking_io_calls():
                 elif isinstance(func, ast.Attribute):
                     name = func.attr
                 if name in forbidden_names:
-                    # Callables handed to asyncio.to_thread are Name/Attribute
-                    # nodes rather than direct Call nodes, so they do not match.
                     violations.append((module.__name__, node.name, name))
 
     assert violations == []

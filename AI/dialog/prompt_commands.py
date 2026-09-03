@@ -137,10 +137,23 @@ async def handle_set_participant_prompt_command(message: types.Message):
         return
 
     display_name = command_part.lstrip("@")
-    messages = await extract_messages_by_username(display_name, chat_id)
+    # Для имитации нужны десятки примеров, а не вся многолетняя история.
+    # Оставляем репрезентативную выборку и гарантируем большой свежий хвост,
+    # чтобы build_hybrid_style_sample по-прежнему видел актуальный стиль.
+    messages = await extract_messages_by_username(
+        display_name,
+        chat_id,
+        sample_size=500,
+        recent_size=100,
+    )
     found_by = "username"
     if not messages:
-        messages = await extract_messages_by_full_name(display_name, chat_id)
+        messages = await extract_messages_by_full_name(
+            display_name,
+            chat_id,
+            sample_size=500,
+            recent_size=100,
+        )
         found_by = "full_name"
 
     if not messages:
