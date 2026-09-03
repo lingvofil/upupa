@@ -37,26 +37,30 @@ def _message_line(message: dict) -> str:
 
 def _join_messages(messages: list[dict], max_chars: int) -> str:
     """Take a deterministic, timeline-wide sample capped by characters."""
-    lines = [_message_line(message) for message in messages if (message.get("text") or "").strip()]
-    if not lines:
+    valid_messages = [message for message in messages if (message.get("text") or "").strip()]
+    if not valid_messages:
         return ""
 
-    all_text = "\n".join(lines)
-    if len(all_text) <= max_chars:
-        return all_text
+    # Не создаём одновременно список всех отформатированных строк и ещё одну
+    # гигантскую строку all_text. Сначала считаем размер, затем строим только
+    # действительно нужный результат.
+    total_chars = sum(len(_message_line(message)) for message in valid_messages)
+    total_chars += max(0, len(valid_messages) - 1)
+    if total_chars <= max_chars:
+        return "\n".join(_message_line(message) for message in valid_messages)
 
-    target_lines = max(20, min(len(lines), max_chars // 90))
-    if target_lines >= len(lines):
-        selected = lines
+    target_lines = max(20, min(len(valid_messages), max_chars // 90))
+    if target_lines >= len(valid_messages):
+        selected_messages = valid_messages
     else:
-        step = (len(lines) - 1) / (target_lines - 1)
+        step = (len(valid_messages) - 1) / (target_lines - 1)
         indices = sorted({round(i * step) for i in range(target_lines)})
-        selected = [lines[index] for index in indices]
+        selected_messages = [valid_messages[index] for index in indices]
 
     result: list[str] = []
     used = 0
-    for line in selected:
-        line = line[:700]
+    for message in selected_messages:
+        line = _message_line(message)[:700]
         extra = len(line) + (1 if result else 0)
         if used + extra > max_chars:
             break
