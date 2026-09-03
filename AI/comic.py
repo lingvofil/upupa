@@ -24,6 +24,8 @@ from AI.picgeneration import pollinations_generate
 COMIC_HOURS = 12
 MIN_MESSAGES = 5
 MAX_SCRIPT_CHARS = 8000
+COMIC_HISTORY_SAMPLE_MESSAGES = 3000
+COMIC_HISTORY_RECENT_MESSAGES = 1000
 
 PANEL = 512
 CAP_H = 100
@@ -138,7 +140,12 @@ async def process_comic_command(message: types.Message):
 
     time_threshold = datetime.now() - timedelta(hours=COMIC_HOURS)
     messages, _users, chat_name = await asyncio.to_thread(
-        _get_chat_messages, LOG_FILE, chat_id, time_threshold
+        _get_chat_messages,
+        LOG_FILE,
+        chat_id,
+        time_threshold,
+        COMIC_HISTORY_SAMPLE_MESSAGES,
+        COMIC_HISTORY_RECENT_MESSAGES,
     )
     if not messages or len(messages) < MIN_MESSAGES:
         await status.edit_text(f"За последние {COMIC_HOURS} часов нихуя не произошло. Комикс про пустоту рисовать не буду.")
