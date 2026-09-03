@@ -59,15 +59,12 @@ async def send_long_message(message: types.Message, text: str):
     if len(text) <= MAX_LENGTH:
         await message.reply(text)
     else:
-        # Разбиваем текст на куски
         chunks = [text[i:i + MAX_LENGTH] for i in range(0, len(text), MAX_LENGTH)]
         for i, chunk in enumerate(chunks):
             if i == 0:
                 await message.reply(chunk)
             else:
-                # Последующие части отправляем обычным сообщением, чтобы не спамить реплаями
                 await message.answer(chunk)
-            # Небольшая пауза, чтобы не поймать Flood Limit от Telegram
             await asyncio.sleep(0.5)
 
 
@@ -77,7 +74,6 @@ async def generate_with_active_model(prompt: str, chat_id: int) -> str:
     current_settings = chat_settings.get(chat_key, {})
     active_model = current_settings.get("active_model", "gemini")
 
-    # Режим истории не подходит для анализа
     if active_model == "history":
         active_model = "gemini"
 
@@ -101,8 +97,6 @@ async def generate_with_active_model(prompt: str, chat_id: int) -> str:
         if model_name == "siliconflow":
             return siliconflow_ai.generate_text(prompt) or ""
 
-        # Gemini: как у "чобыло", отключаем safety-блокировку. require_text
-        # превращает пустой успешный ответ в явную ошибку вместо молчания.
         response = model.generate_content(
             prompt,
             chat_id=chat_id,
@@ -123,8 +117,6 @@ async def generate_with_active_model(prompt: str, chat_id: int) -> str:
             primary_error,
         )
 
-        # Поведение по образцу "чобыло": если основная модель молчит/блокируется,
-        # пробуем запасную текстовую модель вместо сообщения "Модель промолчала".
         if active_model != "groq":
             try:
                 fallback = await asyncio.to_thread(sync_generate, "groq")
@@ -146,15 +138,13 @@ async def process_user_profile(user_id, chat_id, message: types.Message):
     """Генерирует характеристику пользователя на основе его сообщений в стиле текущего промпта."""
     processing_msg = await message.reply("щас посмотрим, что ты за фрукт")
 
-    messages = await extract_user_messages(user_id, chat_id)
+    messages = await extract_user_messages(user_id, chat_id, sample_size=400)
     if not messages:
         await processing_msg.delete()
         await message.reply("Я тебя не знаю, иди нахуй.")
         return
 
-    sample_size = min(400, len(messages))
-    message_sample = random.sample(messages, sample_size)
-
+    message_sample = random.sample(messages, len(messages))
     messages_text = "\n".join(message_sample)
     prompt = build_prompt_with_current_chat_prompt(
         str(chat_id),
@@ -180,16 +170,15 @@ async def process_chat_profile(message: types.Message):
     chat_id = message.chat.id
     processing_msg = await message.reply("Анализирую этот гадюшник...")
 
-    messages = await extract_chat_messages(chat_id)
-    logging.info(f"Извлечено {len(messages)} сообщений для чата: {chat_id}")
+    messages = await extract_chat_messages(chat_id, sample_size=400)
+    logging.info(f"Извлечено до {len(messages)} сообщений выборки для чата: {chat_id}")
 
     if not messages:
         await processing_msg.delete()
         await message.reply("В этом чате такая тишина, что даже мухи дохнут со скуки. Нечего анализировать.")
         return
 
-    sample_size = min(400, len(messages))
-    message_sample = random.sample(messages, sample_size)
+    message_sample = random.sample(messages, len(messages))
     messages_text = "\n".join(message_sample)
 
     prompt = build_prompt_with_current_chat_prompt(
@@ -223,16 +212,16 @@ async def process_parody(message: types.Message, chat_id: int):
 
    if query.startswith("@"):
        username = query[1:]
-       messages = await extract_messages_by_username(username, chat_id)
+       messages = await extract_messages_by_username(username, chat_id, sample_size=20)
    else:
        full_name = query
-       messages = await extract_messages_by_full_name(full_name, chat_id)
+       messages = await extract_messages_by_full_name(full_name, chat_id, sample_size=20)
 
    if not messages:
        await message.reply(f"Этот хуй еще не достоин")
        return
 
-   parody_lines = random.sample(messages, min(20, len(messages)))
+   parody_lines = random.sample(messages, len(messages))
    prompt = PARODY_PROMPT.format(phrases="\n".join(parody_lines))
 
    try:
