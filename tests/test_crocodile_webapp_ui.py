@@ -11,7 +11,8 @@ def _source() -> str:
 
 def test_crocodile_palette_is_rendered_without_javascript_bootstrap():
     source = _source()
-    toolbar = source.split('<div id="toolbar" class="toolbar">', 1)[1].split("<script>", 1)[0]
+    toolbar = source.split('<div id="toolbar" class="toolbar">', 1)[1]
+    toolbar = toolbar.split("<script>", 1)[0]
 
     assert toolbar.count('class="swatch') == 14
     assert 'id="colorPicker"' in toolbar
