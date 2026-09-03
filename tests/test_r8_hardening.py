@@ -17,7 +17,8 @@ def test_crocodile_socket_requires_signed_telegram_init_data():
     assert "authorize_crocodile_drawer(" in source
     assert "telegram_user_id" in source
     assert "socket attempted to switch rooms" in source
-    assert "const telegramInitData = tg.initData;" in html
+    assert 'getHashParam("tgWebAppData")' in html
+    assert "(tg && tg.initData)" in html
     assert "auth: { initData: telegramInitData }" in html
 
 
