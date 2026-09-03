@@ -66,6 +66,8 @@
       gap: 8px;
       align-items: center;
       flex-wrap: wrap;
+      flex: 1 1 360px;
+      min-width: 0;
     }
     .swatch {
       width: 28px;
@@ -75,6 +77,7 @@
       box-sizing: border-box;
       padding: 0;
       touch-action: auto;
+      flex: 0 0 auto;
     }
     .swatch.active {
       border: 2px solid #fff;
@@ -88,6 +91,23 @@
       padding: 0;
       background: transparent;
       touch-action: auto;
+      flex: 0 0 auto;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+    @media (max-width: 520px) {
+      .palette {
+        flex-basis: 100%;
+      }
+      .actions {
+        width: 100%;
+        justify-content: flex-end;
+      }
     }
   </style>
 </head>
@@ -96,9 +116,25 @@
 <canvas id="canvas"></canvas>
 
 <div id="toolbar" class="toolbar">
-  <div class="palette" id="palette"></div>
+  <div class="palette" id="palette">
+    <button class="swatch active" type="button" data-c="#000000" style="background:#000000" aria-label="Чёрный"></button>
+    <button class="swatch" type="button" data-c="#ffffff" style="background:#ffffff" aria-label="Белый"></button>
+    <button class="swatch" type="button" data-c="#ff3b30" style="background:#ff3b30" aria-label="Красный"></button>
+    <button class="swatch" type="button" data-c="#ff9500" style="background:#ff9500" aria-label="Оранжевый"></button>
+    <button class="swatch" type="button" data-c="#ffcc00" style="background:#ffcc00" aria-label="Жёлтый"></button>
+    <button class="swatch" type="button" data-c="#34c759" style="background:#34c759" aria-label="Зелёный"></button>
+    <button class="swatch" type="button" data-c="#007aff" style="background:#007aff" aria-label="Синий"></button>
+    <button class="swatch" type="button" data-c="#5856d6" style="background:#5856d6" aria-label="Индиго"></button>
+    <button class="swatch" type="button" data-c="#af52de" style="background:#af52de" aria-label="Фиолетовый"></button>
+    <button class="swatch" type="button" data-c="#00c7be" style="background:#00c7be" aria-label="Бирюзовый"></button>
+    <button class="swatch" type="button" data-c="#64d2ff" style="background:#64d2ff" aria-label="Голубой"></button>
+    <button class="swatch" type="button" data-c="#8e8e93" style="background:#8e8e93" aria-label="Серый"></button>
+    <button class="swatch" type="button" data-c="#a2845e" style="background:#a2845e" aria-label="Коричневый"></button>
+    <button class="swatch" type="button" data-c="#ff2d55" style="background:#ff2d55" aria-label="Розовый"></button>
+    <input id="colorPicker" type="color" class="picker" value="#000000" aria-label="Другой цвет" />
+  </div>
 
-  <div style="display:flex; gap:10px; align-items:center;">
+  <div class="actions">
     <button class="btn btn-gray" onclick="clearC()">🧹</button>
     <button class="btn btn-blue" onclick="skip()">🔄</button>
     <button class="btn btn-red" onclick="finish()">🏁</button>
@@ -106,52 +142,95 @@
 </div>
 
 <script>
-  const tg = window.Telegram.WebApp;
-  tg.expand();
-  tg.ready();
-
-  const roomId = tg.initDataUnsafe.start_param;
-  const telegramInitData = tg.initData;
-
   // --- COLORS ---
-  const paletteEl = document.getElementById("palette");
-  const COLORS = [
-    "#000000", "#ffffff",
-    "#ff3b30", "#ff9500", "#ffcc00", "#34c759",
-    "#007aff", "#5856d6", "#af52de",
-    "#00c7be", "#64d2ff",
-    "#8e8e93", "#a2845e", "#ff2d55"
-  ];
+  // Палитра уже присутствует в HTML: она остаётся видимой даже если конкретный
+  // Telegram WebView не загрузил telegram-web-app.js или имеет неполный WebApp API.
   let currentColor = "#000000";
 
   function setColor(c) {
     currentColor = c;
-    document.querySelectorAll(".swatch").forEach(el => el.classList.remove("active"));
+    const swatches = document.querySelectorAll(".swatch");
+    for (let i = 0; i < swatches.length; i++) {
+      swatches[i].classList.remove("active");
+    }
     const active = document.querySelector(`.swatch[data-c="${c}"]`);
     if (active) active.classList.add("active");
   }
 
-  function buildPalette() {
-    paletteEl.innerHTML = "";
-    COLORS.forEach((c, idx) => {
-      const b = document.createElement("button");
-      b.className = "swatch" + (idx === 0 ? " active" : "");
-      b.style.background = c;
-      b.dataset.c = c;
-      b.onclick = () => setColor(c);
-      paletteEl.appendChild(b);
+  const paletteButtons = document.querySelectorAll(".swatch");
+  for (let i = 0; i < paletteButtons.length; i++) {
+    paletteButtons[i].addEventListener("click", function() {
+      setColor(this.dataset.c);
     });
-
-    const picker = document.createElement("input");
-    picker.type = "color";
-    picker.className = "picker";
-    picker.value = currentColor;
-    picker.oninput = () => setColor(picker.value);
-    paletteEl.appendChild(picker);
   }
 
-  buildPalette();
+  const colorPicker = document.getElementById("colorPicker");
+  colorPicker.addEventListener("input", function() {
+    setColor(this.value);
+  });
   setColor("#000000");
+
+  // --- TELEGRAM WEBAPP ---
+  function getHashParam(name) {
+    const hash = window.location.hash && window.location.hash.charAt(0) === "#"
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    if (!hash) return "";
+    try {
+      return new URLSearchParams(hash).get(name) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  const tg = window.Telegram && window.Telegram.WebApp
+    ? window.Telegram.WebApp
+    : null;
+
+  if (tg) {
+    if (typeof tg.expand === "function") tg.expand();
+    if (typeof tg.ready === "function") tg.ready();
+  }
+
+  const telegramInitData = (tg && tg.initData) || getHashParam("tgWebAppData") || "";
+  let fallbackStartParam = "";
+  if (telegramInitData) {
+    try {
+      fallbackStartParam = new URLSearchParams(telegramInitData).get("start_param") || "";
+    } catch (e) {
+      fallbackStartParam = "";
+    }
+  }
+  const roomId = (
+    tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param
+      ? tg.initDataUnsafe.start_param
+      : fallbackStartParam
+  );
+
+  function showTelegramAlert(message) {
+    if (tg && typeof tg.showAlert === "function") {
+      tg.showAlert(message);
+    } else {
+      window.alert(message);
+    }
+  }
+
+  function showWordPopup(word) {
+    const message = String(word || "").toUpperCase();
+    if (tg && typeof tg.showPopup === "function") {
+      tg.showPopup({ title: "Слово", message: message });
+    } else {
+      window.alert("Слово: " + message);
+    }
+  }
+
+  function closeWebApp() {
+    if (tg && typeof tg.close === "function") {
+      tg.close();
+    } else {
+      window.close();
+    }
+  }
 
   // --- CANVAS ---
   const canvas = document.getElementById('canvas');
@@ -222,7 +301,7 @@
     socket.emit('join_room', { room: roomId }, (response) => {
       if (!response || !response.ok) {
         console.error('Room authorization failed');
-        tg.showAlert('Этот холст доступен только текущему художнику.');
+        showTelegramAlert('Этот холст доступен только текущему художнику.');
         socket.disconnect();
         return;
       }
@@ -248,7 +327,7 @@
   });
 
   socket.on('new_word_data', (d) => {
-    tg.showPopup({ title: 'Слово', message: String(d.word || "").toUpperCase() });
+    showWordPopup(d.word);
     clearC();
   });
 
@@ -346,9 +425,9 @@
     socket.emit('draw_step', { 
       room: roomId, 
       px: last.x, 
-      py: last.y, 
-      x: p.x, 
-      y: p.y, 
+      py: last.y,
+      x: p.x,
+      y: p.y,
       color: currentColor 
     });
 
@@ -385,9 +464,9 @@
 
     socket.emit('draw_step', { 
       room: roomId, 
-      px: last.x, 
-      py: last.y, 
-      x: p.x, 
+      px: last.x,
+      py: last.y,
+      x: p.x,
       y: p.y,
       color: currentColor 
     });
@@ -418,7 +497,7 @@
   window.finish = () => {
     const img = canvas.toDataURL('image/jpeg', 0.85);
     socket.emit('final_frame', { room: roomId, image: img });
-    setTimeout(() => tg.close(), 500);
+    setTimeout(closeWebApp, 500);
   };
 
   // авто-снап раз в 2.5 сек
