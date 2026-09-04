@@ -8,11 +8,6 @@ from aiogram import types
 from core.loader import bot
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
-from features.lexicon_settings import (
-    extract_messages_by_full_name,
-    extract_messages_by_username,
-    is_style_sample_message,
-)
 from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
@@ -26,8 +21,14 @@ from prompts import (
 )
 
 from AI.dialog.generation import generate_simple_response
+from AI.dialog.participant_imitation import initialize_participant_profile
 from AI.dialog.settings import update_chat_settings
-from AI.dialog.style import create_user_style_prompt
+
+
+def _clear_participant_metadata(settings: dict) -> None:
+    settings.pop("imitated_user", None)
+    settings.pop("style_profile_message_count", None)
+    settings.pop("style_profile_updated_at", None)
 
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -122,7 +123,7 @@ async def handle_set_prompt_command(message: types.Message):
         reply_message = "Пошел нахуй! Ладно, принято"
 
     current_settings["prompt_source"] = "user"
-    current_settings.pop("imitated_user", None)
+    _clear_participant_metadata(current_settings)
     save_chat_settings()
     await message.reply(reply_message)
 
@@ -136,52 +137,19 @@ async def handle_set_participant_prompt_command(message: types.Message):
         await message.reply("Нужно указать имя или никнейм участника после команды.")
         return
 
-    display_name = command_part.lstrip("@")
-    # Для имитации нужны десятки примеров, а не вся многолетняя история.
-    # Оставляем репрезентативную выборку и гарантируем большой свежий хвост,
-    # чтобы build_hybrid_style_sample по-прежнему видел актуальный стиль.
-    messages = await extract_messages_by_username(
-        display_name,
-        chat_id,
-        sample_size=500,
-        recent_size=100,
-    )
-    found_by = "username"
-    if not messages:
-        messages = await extract_messages_by_full_name(
-            display_name,
-            chat_id,
-            sample_size=500,
-            recent_size=100,
-        )
-        found_by = "full_name"
-
-    if not messages:
-        await message.reply(
-            f"Не могу найти сообщения от пользователя '{display_name}', чтобы ему подражать."
-        )
-        return
-
-    if not any(is_style_sample_message(msg) for msg in messages):
-        await message.reply(
-            f"Нашёл сообщения от '{display_name}', но после очистки там нет достаточно длинных живых фраз для имитации."
-        )
-        return
-
-    user_prompt = create_user_style_prompt(messages, display_name)
-
     update_chat_settings(chat_id)
     current_settings = chat_settings[chat_id]
-    current_settings["prompt"] = user_prompt
-    current_settings["prompt_name"] = display_name
-    current_settings["prompt_source"] = "user_imitation"
-    current_settings["prompt_type"] = "user_style"
-    current_settings["imitated_user"] = {
-        "username": display_name if found_by == "username" else None,
-        "full_name": display_name if found_by == "full_name" else None,
-        "display_name": display_name,
-    }
+    identity = await initialize_participant_profile(chat_id, command_part, current_settings)
+
+    if not identity:
+        requested_name = command_part.lstrip("@")
+        await message.reply(
+            f"Не могу найти достаточно сообщений от пользователя '{requested_name}', чтобы ему подражать."
+        )
+        return
+
     save_chat_settings()
+    display_name = identity["display_name"]
     await message.reply(
         f"Теперь я буду разговаривать как {display_name}! Буду подстраиваться под контекст."
     )
@@ -210,7 +178,7 @@ async def handle_change_prompt_randomly_command(message: types.Message):
     current_settings["prompt_name"] = new_prompt_name
     current_settings["prompt_source"] = "user"
     current_settings["prompt_type"] = "standard"
-    current_settings.pop("imitated_user", None)
+    _clear_participant_metadata(current_settings)
 
     save_chat_settings()
     await message.reply(f"Теперь я {new_prompt_name} нахуй!")
