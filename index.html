@@ -59,6 +59,10 @@
       white-space: nowrap;
       touch-action: auto;
     }
+    .btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
     .btn-red { background: #ff3b30; }
     .btn-gray { background: #555; }
     .btn.active {
@@ -129,7 +133,7 @@
       touch-action: auto;
     }
     .size-value {
-      min-width: 24px;
+      min-width: 38px;
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
@@ -179,9 +183,16 @@
       <input id="brushSize" type="range" min="2" max="28" step="1" value="6" aria-label="Толщина кисти" />
       <span id="brushSizeValue" class="size-value">6</span>
     </label>
+    <label class="size-control" for="brushOpacity">
+      Инт.
+      <input id="brushOpacity" type="range" min="10" max="100" step="5" value="100" aria-label="Интенсивность кисти" />
+      <span id="brushOpacityValue" class="size-value">100%</span>
+    </label>
   </div>
 
   <div class="actions">
+    <button id="undoButton" class="btn btn-gray" type="button" onclick="undo()" aria-label="Отменить последнее действие" disabled>↶</button>
+    <button id="redoButton" class="btn btn-gray" type="button" onclick="redo()" aria-label="Повторить отменённое действие" disabled>↷</button>
     <button class="btn btn-gray" type="button" onclick="clearC()" aria-label="Очистить холст">🧹</button>
     <button class="btn btn-red" type="button" onclick="finish()" aria-label="Завершить рисунок">🏁</button>
   </div>
@@ -192,10 +203,13 @@
   let currentColor = "#000000";
   let erasing = false;
   let brushSize = 6;
+  let brushOpacity = 1;
 
   const eraserButton = document.getElementById("eraserButton");
   const brushSizeInput = document.getElementById("brushSize");
   const brushSizeValue = document.getElementById("brushSizeValue");
+  const brushOpacityInput = document.getElementById("brushOpacity");
+  const brushOpacityValue = document.getElementById("brushOpacityValue");
 
   function setEraser(active) {
     erasing = Boolean(active);
@@ -218,6 +232,12 @@
     return erasing ? "#ffffff" : currentColor;
   }
 
+  function normalizeOpacity(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1;
+    return Math.max(0.1, Math.min(1, numeric));
+  }
+
   const paletteButtons = document.querySelectorAll(".swatch");
   for (let i = 0; i < paletteButtons.length; i++) {
     paletteButtons[i].addEventListener("click", function() {
@@ -238,6 +258,13 @@
     const nextSize = Number(this.value);
     brushSize = Number.isFinite(nextSize) ? nextSize : 6;
     brushSizeValue.textContent = String(brushSize);
+  });
+
+  brushOpacityInput.addEventListener("input", function() {
+    const percent = Number(this.value);
+    const safePercent = Number.isFinite(percent) ? Math.max(10, Math.min(100, percent)) : 100;
+    brushOpacity = safePercent / 100;
+    brushOpacityValue.textContent = String(safePercent) + "%";
   });
 
   setColor("#000000");
@@ -307,12 +334,66 @@
   // --- CANVAS ---
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  const undoButton = document.getElementById("undoButton");
+  const redoButton = document.getElementById("redoButton");
+  const HISTORY_LIMIT = 20;
+  let undoStack = [];
+  let redoStack = [];
   let isDirty = false;
 
   function applyStrokeStyle(width = brushSize) {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = width;
+  }
+
+  function updateHistoryButtons() {
+    undoButton.disabled = undoStack.length === 0;
+    redoButton.disabled = redoStack.length === 0;
+  }
+
+  function captureCanvasState() {
+    if (canvas.width < 1 || canvas.height < 1) return null;
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      imageData: ctx.getImageData(0, 0, canvas.width, canvas.height)
+    };
+  }
+
+  function trimHistory(stack) {
+    if (stack.length > HISTORY_LIMIT) {
+      stack.splice(0, stack.length - HISTORY_LIMIT);
+    }
+  }
+
+  function pushUndoState() {
+    const state = captureCanvasState();
+    if (!state) return;
+    undoStack.push(state);
+    trimHistory(undoStack);
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  function resetHistory() {
+    undoStack = [];
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  function restoreCanvasState(state) {
+    if (!state || state.width !== canvas.width || state.height !== canvas.height) {
+      resetHistory();
+      return false;
+    }
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.putImageData(state.imageData, 0, 0);
+    ctx.restore();
+    isDirty = true;
+    sendSnap(true);
+    return true;
   }
 
   function resize() {
@@ -338,6 +419,7 @@
     if (tmp.width > 0) {
       ctx.drawImage(tmp, 0, 0);
     }
+    resetHistory();
   }
 
   window.addEventListener("resize", resize);
@@ -406,13 +488,16 @@
     console.error("Socket error:", err.message);
   });
 
-  function drawLine(from, to, color, width) {
+  function drawLine(from, to, color, width, opacity = 1) {
+    ctx.save();
     ctx.strokeStyle = color;
+    ctx.globalAlpha = normalizeOpacity(opacity);
     applyStrokeStyle(width);
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
+    ctx.restore();
   }
 
   socket.on("draw_data", (d) => {
@@ -420,13 +505,15 @@
       { x: d.px, y: d.py },
       { x: d.x, y: d.y },
       d.color || "#000000",
-      Number(d.width) || 6
+      Number(d.width) || 6,
+      normalizeOpacity(d.opacity)
     );
   });
 
   socket.on("new_word_data", (d) => {
     showWordPopup(d.word);
-    clearC();
+    clearCanvas(false);
+    resetHistory();
   });
 
   // --- SNAPSHOT ---
@@ -479,6 +566,7 @@
   // --- DRAWING ---
   let drawing = false;
   let activePointerId = null;
+  let strokeChanged = false;
   let last = { x: 0, y: 0 };
 
   function getPosFromClient(clientX, clientY) {
@@ -494,6 +582,7 @@
 
   function beginStroke(clientX, clientY) {
     drawing = true;
+    strokeChanged = false;
     last = getPosFromClient(clientX, clientY);
   }
 
@@ -501,9 +590,13 @@
     if (!drawing) return;
     const p = getPosFromClient(clientX, clientY);
     const color = getStrokeColor();
-    drawLine(last, p, color, brushSize);
+    if (!strokeChanged) {
+      pushUndoState();
+      strokeChanged = true;
+    }
+    drawLine(last, p, color, brushSize, brushOpacity);
     if (socket.connected) {
-      emitDrawStep(last, p, color, brushSize);
+      emitDrawStep(last, p, color, brushSize, brushOpacity);
     }
     isDirty = true;
     last = p;
@@ -512,11 +605,12 @@
   function endStroke() {
     if (!drawing) return;
     drawing = false;
+    strokeChanged = false;
     activePointerId = null;
     sendSnap(false);
   }
 
-  function emitDrawStep(from, to, color, width) {
+  function emitDrawStep(from, to, color, width, opacity) {
     socket.emit("draw_step", {
       room: roomId,
       px: from.x,
@@ -524,7 +618,8 @@
       x: to.x,
       y: to.y,
       color: color,
-      width: width
+      width: width,
+      opacity: opacity
     });
   }
 
@@ -604,11 +699,43 @@
   }
 
   // --- BUTTONS ---
-  window.clearC = () => {
+  function clearCanvas(recordHistory = true) {
+    if (recordHistory) pushUndoState();
+    ctx.save();
+    ctx.globalAlpha = 1;
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
     isDirty = true;
     sendSnap(true);
+  }
+
+  window.undo = () => {
+    if (drawing || undoStack.length === 0) return;
+    const current = captureCanvasState();
+    const previous = undoStack.pop();
+    if (current) {
+      redoStack.push(current);
+      trimHistory(redoStack);
+    }
+    if (!restoreCanvasState(previous)) return;
+    updateHistoryButtons();
+  };
+
+  window.redo = () => {
+    if (drawing || redoStack.length === 0) return;
+    const current = captureCanvasState();
+    const next = redoStack.pop();
+    if (current) {
+      undoStack.push(current);
+      trimHistory(undoStack);
+    }
+    if (!restoreCanvasState(next)) return;
+    updateHistoryButtons();
+  };
+
+  window.clearC = () => {
+    clearCanvas(true);
   };
 
   window.finish = () => {
@@ -617,6 +744,7 @@
     setTimeout(closeWebApp, 500);
   };
 
+  updateHistoryButtons();
   setInterval(() => sendSnap(false), 2500);
 
   document.addEventListener("gesturestart", e => e.preventDefault());
