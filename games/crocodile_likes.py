@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from core.loader import bot
+from core.paths import CROCODILE_STATE_PATH
 
 
-LIKES_FILE = Path(__file__).with_name("crocodile_likes.json")
+LIKES_FILE = Path(CROCODILE_STATE_PATH).with_name("crocodile_likes.json")
 MAX_LIKE_RECORDS = 2000
 
 _like_registry: dict[str, dict[str, Any]] | None = None
@@ -112,10 +113,7 @@ def _register_like(
     users.append(user_id)
     registry[key] = record
     while len(registry) > MAX_LIKE_RECORDS:
-        oldest_key = next(iter(registry))
-        if oldest_key == key and len(registry) == 1:
-            break
-        registry.pop(oldest_key, None)
+        registry.pop(next(iter(registry)), None)
 
     return True, int(record.get("base_count", 0)) + len(users)
 
