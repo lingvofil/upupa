@@ -20,6 +20,7 @@ PARTICIPANT_TURN_SAMPLE_SIZE = 200
 PARTICIPANT_TURN_RECENT_SIZE = 100
 PARTICIPANT_HISTORY_CACHE_MAX_ENTRIES = 16
 PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
+SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
 
@@ -458,7 +459,19 @@ async def prepare_participant_turn(chat_id: int | str, settings: dict, query_tex
         semantic_messages.pop()
 
     semantic_started = time.perf_counter()
-    relevant_messages = await find_relevant_context(query_text, semantic_messages, top_k=3)
+    try:
+        relevant_messages = await asyncio.wait_for(
+            find_relevant_context(query_text, semantic_messages, top_k=3),
+            timeout=SEMANTIC_MEMORY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        relevant_messages = []
+        logging.warning(
+            "Participant semantic memory timed out chat=%s user_id=%s after %.1fs; answering style-only",
+            chat_id,
+            user_id,
+            SEMANTIC_MEMORY_TIMEOUT_SECONDS,
+        )
     semantic_elapsed = time.perf_counter() - semantic_started
     logging.info(
         "Participant context timing chat=%s user_id=%s cache_state=%s candidates=%s cache=%.3fs semantic=%.3fs total=%.3fs",
