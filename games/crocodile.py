@@ -505,7 +505,7 @@ async def draw_step(sid, data):
 
     safe_data = {
         key: data.get(key)
-        for key in ("px", "py", "x", "y", "color")
+        for key in ("px", "py", "x", "y", "color", "width")
         if key in data
     }
     await sio.emit("draw_data", safe_data, room=room, skip_sid=sid)
