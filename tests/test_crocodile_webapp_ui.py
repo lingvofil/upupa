@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "index.html"
+CROCODILE_PY = ROOT / "games" / "crocodile.py"
 
 
 def _source() -> str:
@@ -69,6 +70,8 @@ def test_crocodile_eraser_uses_white_without_forgetting_selected_color():
 
 def test_crocodile_draw_steps_include_brush_width():
     source = _source()
+    server_source = CROCODILE_PY.read_text(encoding="utf-8")
 
     assert "width: width" in source
     assert "Number(d.width) || 6" in source
+    assert '("px", "py", "x", "y", "color", "width")' in server_source
