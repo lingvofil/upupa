@@ -191,8 +191,15 @@ def test_word_picker_uses_every_word_before_repeating(monkeypatch, tmp_path):
     monkeypatch.setattr(crocodile, "_load_words", lambda: ["Кот", "Дом", "Лес"])
     monkeypatch.setattr(persistence.random, "choice", lambda values: values[0])
 
-    first_cycle = [persistence.pick_crocodile_word() for _ in range(3)]
+    first = persistence.pick_crocodile_word()
+    persisted_after_first = json.loads(history_path.read_text(encoding="utf-8"))
+    assert first == "Кот"
+    assert persisted_after_first["used"] == ["кот"]
 
+    # picker перечитывает файл на каждом выборе, поэтому это же состояние
+    # переживает рестарт процесса и не зависит от in-memory cache.
+    remaining_cycle = [persistence.pick_crocodile_word() for _ in range(2)]
+    first_cycle = [first, *remaining_cycle]
     assert first_cycle == ["Кот", "Дом", "Лес"]
     assert len(set(first_cycle)) == 3
 
