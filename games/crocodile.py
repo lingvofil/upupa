@@ -132,6 +132,16 @@ def _normalize_guess(s: str) -> str:
     return " ".join(s.strip().lower().replace("ё", "е").split())
 
 
+def _contains_answer(text: str, word: str) -> bool:
+    """Проверяет, встречается ли ответ в сообщении как отдельное слово/фраза."""
+    normalized_text = _normalize_guess(text)
+    normalized_word = _normalize_guess(word)
+    if not normalized_text or not normalized_word:
+        return False
+    pattern = rf"(?<!\w){re.escape(normalized_word)}(?!\w)"
+    return re.search(pattern, normalized_text) is not None
+
+
 def _is_close_guess(guess: str, word: str) -> bool:
     """Похожая по написанию догадка, но не точное совпадение."""
     if not guess or not word or guess == word:
@@ -495,7 +505,7 @@ async def draw_step(sid, data):
 
     safe_data = {
         key: data.get(key)
-        for key in ("px", "py", "x", "y", "color")
+        for key in ("px", "py", "x", "y", "color", "width")
         if key in data
     }
     await sio.emit("draw_data", safe_data, room=room, skip_sid=sid)
@@ -727,11 +737,12 @@ async def check_answer(msg: types.Message) -> bool:
 
     guess = _normalize_guess(msg.text)
     word = _normalize_guess(sess["word"])
+    contains_answer = _contains_answer(msg.text, sess["word"])
 
-    if msg.from_user and msg.from_user.id == sess["drawer_id"] and guess == word:
+    if msg.from_user and msg.from_user.id == sess["drawer_id"] and contains_answer:
         return True
 
-    if guess == word:
+    if contains_answer:
         await _safe_react_to_guess(msg, CORRECT_GUESS_REACTION)
         if msg.from_user:
             add_point(cid, msg.from_user.id, msg.from_user.full_name)

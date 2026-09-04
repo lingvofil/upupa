@@ -363,16 +363,22 @@
   }
 
   // --- SOCKET ---
+  // Start with HTTP polling and upgrade to WebSocket when the Telegram WebView/network
+  // supports it. WebSocket-only mode was flaky on some mobile launches.
   const socket = io({
     auth: { initData: telegramInitData },
-    transports: ["websocket"],
-    upgrade: false,
+    transports: ["polling", "websocket"],
+    upgrade: true,
+    rememberUpgrade: false,
     reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 3000,
     timeout: 10000
   });
 
   socket.on("connect", () => {
-    console.log("Socket connected");
+    console.log("Socket connected via", socket.io.engine.transport.name);
     socket.emit("join_room", { room: roomId }, (response) => {
       if (!response || !response.ok) {
         console.error("Room authorization failed");
@@ -380,6 +386,8 @@
         socket.disconnect();
         return;
       }
+      // Publish the actual local canvas after every reconnect. This also repairs
+      // a preview that stayed blank while the connection was unavailable.
       isDirty = true;
       sendSnap(true);
     });
@@ -387,6 +395,11 @@
 
   socket.on("disconnect", () => {
     console.log("Socket disconnected");
+    if (snapTimeout) clearTimeout(snapTimeout);
+    snapTimeout = null;
+    snapInFlight = false;
+    // Never lose a pending drawing because the transport disappeared mid-snapshot.
+    isDirty = true;
   });
 
   socket.on("connect_error", (err) => {
@@ -439,19 +452,28 @@
     snapCount++;
     console.log("Sending snap #" + snapCount);
 
+    // Mark only this exact bitmap as submitted. New strokes made while the
+    // request is in flight set isDirty=true again and are preserved.
+    isDirty = false;
+
     if (snapTimeout) clearTimeout(snapTimeout);
     snapTimeout = setTimeout(() => {
-      console.warn("Snap timeout - forcing unlock");
+      console.warn("Snap timeout - forcing retry");
       snapInFlight = false;
+      isDirty = true;
     }, 5000);
 
     socket.emit("snapshot", { room: roomId, image: data }, (response) => {
       clearTimeout(snapTimeout);
+      snapTimeout = null;
       snapInFlight = false;
       console.log("Snap response:", response);
+      if (response !== "OK") {
+        // Throttling, a temporary transport failure or a server-side error must
+        // not permanently mark the latest drawing as already published.
+        isDirty = true;
+      }
     });
-
-    isDirty = false;
   }
 
   // --- DRAWING ---
@@ -459,15 +481,39 @@
   let activePointerId = null;
   let last = { x: 0, y: 0 };
 
-  function getPos(e) {
+  function getPosFromClient(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
     const scaleX = r.width > 0 ? canvas.width / r.width : 1;
     const scaleY = r.height > 0 ? canvas.height / r.height : 1;
 
     return {
-      x: (e.clientX - r.left) * scaleX,
-      y: (e.clientY - r.top) * scaleY
+      x: (clientX - r.left) * scaleX,
+      y: (clientY - r.top) * scaleY
     };
+  }
+
+  function beginStroke(clientX, clientY) {
+    drawing = true;
+    last = getPosFromClient(clientX, clientY);
+  }
+
+  function continueStroke(clientX, clientY) {
+    if (!drawing) return;
+    const p = getPosFromClient(clientX, clientY);
+    const color = getStrokeColor();
+    drawLine(last, p, color, brushSize);
+    if (socket.connected) {
+      emitDrawStep(last, p, color, brushSize);
+    }
+    isDirty = true;
+    last = p;
+  }
+
+  function endStroke() {
+    if (!drawing) return;
+    drawing = false;
+    activePointerId = null;
+    sendSnap(false);
   }
 
   function emitDrawStep(from, to, color, width) {
@@ -482,44 +528,80 @@
     });
   }
 
-  canvas.addEventListener("pointerdown", function(e) {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    e.preventDefault();
-    drawing = true;
-    activePointerId = e.pointerId;
-    last = getPos(e);
-    if (typeof canvas.setPointerCapture === "function") {
-      try {
-        canvas.setPointerCapture(e.pointerId);
-      } catch (_err) {
-        // Старые WebView могут не поддерживать pointer capture полностью.
+  if (typeof window.PointerEvent === "function") {
+    canvas.addEventListener("pointerdown", function(e) {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      e.preventDefault();
+      activePointerId = e.pointerId;
+      beginStroke(e.clientX, e.clientY);
+      if (typeof canvas.setPointerCapture === "function") {
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (_err) {
+          // Some Telegram WebViews expose Pointer Events but only partial capture.
+        }
       }
+    });
+
+    canvas.addEventListener("pointermove", function(e) {
+      if (!drawing || e.pointerId !== activePointerId) return;
+      e.preventDefault();
+      continueStroke(e.clientX, e.clientY);
+    });
+
+    function finishPointerStroke(e) {
+      if (!drawing || e.pointerId !== activePointerId) return;
+      e.preventDefault();
+      endStroke();
     }
-  });
 
-  canvas.addEventListener("pointermove", function(e) {
-    if (!drawing || e.pointerId !== activePointerId) return;
-    e.preventDefault();
+    canvas.addEventListener("pointerup", finishPointerStroke);
+    canvas.addEventListener("pointercancel", finishPointerStroke);
+    canvas.addEventListener("lostpointercapture", function(e) {
+      if (drawing && e.pointerId === activePointerId) endStroke();
+    });
+    // If pointer capture is unavailable, releasing a finger/mouse outside the
+    // canvas still has to finish the current stroke.
+    window.addEventListener("pointerup", finishPointerStroke);
+    window.addEventListener("pointercancel", finishPointerStroke);
+  } else {
+    // Fallback for older/embedded Telegram WebViews without reliable Pointer Events.
+    canvas.addEventListener("touchstart", function(e) {
+      if (!e.touches.length) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      beginStroke(t.clientX, t.clientY);
+    }, { passive: false });
 
-    const p = getPos(e);
-    const color = getStrokeColor();
-    drawLine(last, p, color, brushSize);
-    emitDrawStep(last, p, color, brushSize);
+    canvas.addEventListener("touchmove", function(e) {
+      if (!drawing || !e.touches.length) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      continueStroke(t.clientX, t.clientY);
+    }, { passive: false });
 
-    isDirty = true;
-    last = p;
-  });
+    canvas.addEventListener("touchend", function(e) {
+      e.preventDefault();
+      endStroke();
+    }, { passive: false });
+    canvas.addEventListener("touchcancel", function(e) {
+      e.preventDefault();
+      endStroke();
+    }, { passive: false });
 
-  function finishStroke(e) {
-    if (!drawing || e.pointerId !== activePointerId) return;
-    e.preventDefault();
-    drawing = false;
-    activePointerId = null;
-    sendSnap(false);
+    canvas.addEventListener("mousedown", function(e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      beginStroke(e.clientX, e.clientY);
+    });
+    window.addEventListener("mousemove", function(e) {
+      if (!drawing) return;
+      continueStroke(e.clientX, e.clientY);
+    });
+    window.addEventListener("mouseup", function() {
+      endStroke();
+    });
   }
-
-  canvas.addEventListener("pointerup", finishStroke);
-  canvas.addEventListener("pointercancel", finishStroke);
 
   // --- BUTTONS ---
   window.clearC = () => {

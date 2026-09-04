@@ -13,7 +13,8 @@ from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 from core.loader import bot
-from games.crocodile import _load_words, _normalize_guess, add_point, format_leaderboard
+from games import crocodile as crocodile_game
+from games.crocodile import _contains_answer, _normalize_guess, add_point, format_leaderboard
 from AI.picgeneration import pollinations_generate, translate_to_en
 
 # Стиль генерации: без текста на картинке, иначе слово палится
@@ -71,7 +72,9 @@ def _make_hint(word: str, hint_number: int) -> str:
 
 async def start_game(message: types.Message):
     chat_id = str(message.chat.id)
-    word = random.choice(_load_words())
+    # После bootstrap обычный и обратный режим используют один persistent
+    # word-cycle, поэтому слова не начинают повторяться независимо друг от друга.
+    word = crocodile_game._pick_word()
 
     status = await message.answer("🦎 КРАКАДИЛ НАОБОРОТ\nЗагадал слово, рисую свой шедевр...")
     image = await _generate_word_image(word)
@@ -157,14 +160,8 @@ async def check_answer(msg: types.Message) -> bool:
     if not session or not msg.text:
         return False
 
-    guess = _normalize_guess(msg.text)
     word = _normalize_guess(session["word"])
-    if not guess:
-        return False
-
-    # точное совпадение или слово внутри короткой фразы ("это кот?")
-    guessed = guess == word or (len(guess.split()) <= 5 and word in guess.split())
-    if not guessed:
+    if not _contains_answer(msg.text, session["word"]):
         return False
 
     if msg.from_user:
