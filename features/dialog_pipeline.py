@@ -14,6 +14,7 @@ from aiogram.types import Message
 import AI.random_reactions as random_reactions
 import AI.situational_summary as situational_summary
 from AI.dialog.generation import handle_bot_conversation
+from AI.dialog.participant_imitation import record_participant_message
 from AI.dialog.serious_mode import handle_serious_mode_reply
 from AI.dialog.settings import update_chat_settings
 from core.loader import bot
@@ -47,6 +48,7 @@ async def process_random_reactions_once(message: Message) -> bool:
         return False
 
     await save_user_message(message)
+    record_participant_message(message)
     await track_message_statistics(message)
     add_chat(message.chat.id, message.chat.title, message.chat.username)
 
