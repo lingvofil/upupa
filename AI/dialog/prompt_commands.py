@@ -165,7 +165,7 @@ async def handle_change_prompt_randomly_command(message: types.Message):
         return
 
     current_prompt_name = chat_settings.get(chat_id, {}).get("prompt_name")
-    possible_prompts = list(available_prompts.keys())
+    possible_prompts = [name for name in available_prompts if name != "участник"]
     if len(possible_prompts) > 1 and current_prompt_name in possible_prompts:
         possible_prompts.remove(current_prompt_name)
 
