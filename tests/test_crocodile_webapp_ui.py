@@ -9,10 +9,14 @@ def _source() -> str:
     return INDEX_HTML.read_text(encoding="utf-8")
 
 
+def _toolbar(source: str) -> str:
+    toolbar = source.split('<div id="toolbar" class="toolbar">', 1)[1]
+    return toolbar.split("<script>", 1)[0]
+
+
 def test_crocodile_palette_is_rendered_without_javascript_bootstrap():
     source = _source()
-    toolbar = source.split('<div id="toolbar" class="toolbar">', 1)[1]
-    toolbar = toolbar.split("<script>", 1)[0]
+    toolbar = _toolbar(source)
 
     assert toolbar.count('class="swatch') == 14
     assert 'id="colorPicker"' in toolbar
@@ -30,3 +34,34 @@ def test_crocodile_webapp_tolerates_partial_telegram_api():
     assert "showTelegramAlert" in source
     assert "showWordPopup" in source
     assert "closeWebApp" in source
+
+
+def test_crocodile_canvas_has_eraser_and_brush_size_control_without_skip_button():
+    source = _source()
+    toolbar = _toolbar(source)
+
+    assert 'id="eraserButton"' in toolbar
+    assert '>⌫ Ластик</button>' in toolbar
+    assert 'id="brushSize"' in toolbar
+    assert 'type="range"' in toolbar
+    assert 'min="2"' in toolbar
+    assert 'max="28"' in toolbar
+    assert 'onclick="skip()"' not in toolbar
+
+
+def test_crocodile_pointer_coordinates_are_scaled_to_canvas_bitmap():
+    source = _source()
+
+    assert "canvas.getBoundingClientRect()" in source
+    assert "canvas.width / r.width" in source
+    assert "canvas.height / r.height" in source
+    assert "(e.clientX - r.left) * scaleX" in source
+    assert "(e.clientY - r.top) * scaleY" in source
+
+
+def test_crocodile_eraser_uses_white_without_forgetting_selected_color():
+    source = _source()
+
+    assert 'return erasing ? "#ffffff" : currentColor;' in source
+    assert "setEraser(false);" in source
+    assert 'eraserButton.addEventListener("click"' in source
