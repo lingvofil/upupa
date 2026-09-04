@@ -18,12 +18,12 @@ from infrastructure.ai.clients import (
 )
 from core.history_engine import load_and_find_answer
 from core.upupa_utils import normalize_upupa_command
-from features.lexicon_settings import extract_messages_by_full_name, extract_messages_by_username
+from features.chat_settings import save_chat_settings
 from prompts import DIALOG_TRIGGER_KEYWORDS
-from services.smart_search import find_relevant_context
 from services.web_context import get_web_context, needs_web_search
 
 from AI.response_sanitizer import strip_confidence_percentages
+from AI.dialog.participant_imitation import prepare_participant_turn
 from AI.dialog.settings import (
     NO_CONFIDENCE_PERCENTAGES_INSTRUCTION,
     get_current_chat_prompt,
@@ -301,29 +301,28 @@ async def handle_bot_conversation(
         return "Хули?"
 
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
-    selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
 
     current_settings = chat_settings.get(chat_id, {})
     additional_context = ""
     if current_settings.get("prompt_type") == "user_style":
-        imitated_user_data = current_settings.get("imitated_user", {})
-        target_name = imitated_user_data.get("username") or imitated_user_data.get("full_name")
+        try:
+            additional_context, profile_changed = await prepare_participant_turn(
+                chat_id,
+                current_settings,
+                user_input,
+            )
+            if profile_changed:
+                save_chat_settings()
+        except Exception as exc:
+            logging.warning("Participant imitation context failed: %s", exc, exc_info=True)
+            additional_context = (
+                "\n\n[SEMANTIC MEMORY]\nПамять участника временно недоступна. "
+                "Имитируй только стиль и не выдумывай его реальные взгляды или опыт.\n[/SEMANTIC MEMORY]"
+            )
 
-        if target_name:
-            if imitated_user_data.get("username"):
-                messages = await extract_messages_by_username(imitated_user_data["username"], chat_id)
-            else:
-                messages = await extract_messages_by_full_name(imitated_user_data["full_name"], chat_id)
-
-            if messages:
-                relevant_msgs = await find_relevant_context(user_input, messages, top_k=3)
-                if relevant_msgs:
-                    additional_context = (
-                        f"\n\nВАЖНО! Вот что {prompt_name} говорил(а) на похожие темы или в похожем контексте ранее:\n"
-                        f"{' | '.join(relevant_msgs)}\n"
-                        f"Используй эти фразы или мысли, чтобы ответ был максимально похож на него/неё."
-                    )
-                    logging.info("Smart Search added context for %s: %s", prompt_name, relevant_msgs)
+    # Read the selected prompt only after participant preparation: a stale
+    # profile may have been automatically rebuilt on this very turn.
+    selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
 
     should_search = needs_web_search_func or needs_web_search
     fetch_web_context = get_web_context_func or get_web_context
