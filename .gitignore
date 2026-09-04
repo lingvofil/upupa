@@ -45,4 +45,5 @@ channel_polls.json
 dnd_sessions.json
 crocodile_sessions.json
 crocodile_scores.json
+crocodile_word_history.json
 games/crocodile_scores*.json
