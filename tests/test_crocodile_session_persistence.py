@@ -3,6 +3,8 @@ import contextlib
 import json
 from pathlib import Path
 
+import pytest
+
 from tests import test_smoke_imports  # noqa: F401
 from games import crocodile
 from games import crocodile_persistence as persistence
@@ -27,9 +29,11 @@ def _active_session(*, word="капибара", preview=b"jpeg-preview"):
 def _configure_temp_state(monkeypatch, tmp_path):
     state_path = tmp_path / "crocodile_sessions.json"
     scores_path = tmp_path / "crocodile_scores.json"
+    word_history_path = tmp_path / "crocodile_word_history.json"
     legacy_scores_path = tmp_path / "games" / "crocodile_scores.json"
     monkeypatch.setattr(persistence, "CROCODILE_STATE_PATH", state_path)
     monkeypatch.setattr(persistence, "CROCODILE_SCORES_PATH", scores_path)
+    monkeypatch.setattr(persistence, "CROCODILE_WORD_HISTORY_PATH", word_history_path)
     monkeypatch.setattr(
         persistence,
         "LEGACY_CROCODILE_SCORES_PATH",
@@ -57,6 +61,7 @@ def test_active_session_roundtrips_with_preview_and_auth_fields(monkeypatch, tmp
     assert raw["sessions"][0]["chat_id"] == CHAT_ID
     assert raw["sessions"][0]["word"] == "капибара"
     assert "bump_task" not in raw["sessions"][0]
+    assert "_runtime_session_token" not in raw["sessions"][0]
 
     crocodile.game_sessions.clear()
     persistence._last_payload = None
@@ -130,6 +135,7 @@ def test_runtime_configuration_sets_one_minute_bump_and_root_score_path(
 
     assert crocodile.BUMP_INTERVAL == 60
     assert Path(crocodile.SCORES_FILE) == scores_path
+    assert crocodile._pick_word is persistence.pick_crocodile_word
 
 
 def test_score_migration_merges_root_and_misplaced_score_eras_once(
@@ -177,3 +183,93 @@ def test_score_migration_merges_root_and_misplaced_score_eras_once(
 
     assert persistence.migrate_crocodile_scores() is False
     assert json.loads(canonical.read_text(encoding="utf-8")) == merged
+
+
+def test_word_picker_uses_every_word_before_repeating(monkeypatch, tmp_path):
+    history_path = tmp_path / "crocodile_word_history.json"
+    monkeypatch.setattr(persistence, "CROCODILE_WORD_HISTORY_PATH", history_path)
+    monkeypatch.setattr(crocodile, "_load_words", lambda: ["Кот", "Дом", "Лес"])
+    monkeypatch.setattr(persistence.random, "choice", lambda values: values[0])
+
+    first_cycle = [persistence.pick_crocodile_word() for _ in range(3)]
+
+    assert first_cycle == ["Кот", "Дом", "Лес"]
+    assert len(set(first_cycle)) == 3
+
+    # Новый цикл сохраняет последние слова заблокированными, поэтому граница
+    # цикла не может немедленно повторить только что выпавший ответ.
+    fourth = persistence.pick_crocodile_word()
+    assert fourth == "Кот"
+    assert fourth != first_cycle[-1]
+
+    payload = json.loads(history_path.read_text(encoding="utf-8"))
+    assert payload["version"] == persistence.WORD_HISTORY_VERSION
+    assert payload["used"] == ["дом", "лес", "кот"]
+
+
+def test_stopping_round_closes_old_canvas_room_first(monkeypatch):
+    calls = []
+
+    class FakeSio:
+        async def close_room(self, room):
+            calls.append(("close", room))
+
+    async def fake_original_stop(chat_id, reason=""):
+        calls.append(("stop", str(chat_id), reason))
+
+    monkeypatch.setattr(crocodile, "sio", FakeSio())
+    monkeypatch.setattr(persistence, "_original_stop_session", fake_original_stop)
+
+    asyncio.run(
+        persistence._stop_session_and_close_canvas_room(CHAT_ID, reason="guessed")
+    )
+
+    assert calls == [
+        ("close", "m1001707530786"),
+        ("stop", CHAT_ID, "guessed"),
+    ]
+
+
+def test_round_token_rejects_canvas_from_previous_round(monkeypatch):
+    socket_state = {}
+    current = {"session": {}}
+
+    class FakeSio:
+        async def get_session(self, _sid):
+            return dict(socket_state)
+
+        async def save_session(self, _sid, data):
+            socket_state.clear()
+            socket_state.update(data)
+
+    async def fake_original_authorize(_sid, _data, *, bind_room=False):
+        return "m100", "-100", current["session"]
+
+    monkeypatch.setattr(crocodile, "sio", FakeSio())
+    monkeypatch.setattr(
+        persistence,
+        "_original_authorize_socket_room",
+        fake_original_authorize,
+    )
+
+    asyncio.run(
+        persistence._authorize_socket_room_for_current_round(
+            "socket-1",
+            {"room": "m100"},
+            bind_room=True,
+        )
+    )
+    old_token = socket_state["crocodile_round_token"]
+    assert old_token
+
+    # Та же вкладка и тот же пользователь могли бы пройти старую проверку по
+    # chat_id/drawer_id, но новый раунд получает другой runtime token.
+    current["session"] = {}
+    with pytest.raises(crocodile.WebAppAuthError):
+        asyncio.run(
+            persistence._authorize_socket_room_for_current_round(
+                "socket-1",
+                {"room": "m100"},
+                bind_room=False,
+            )
+        )
