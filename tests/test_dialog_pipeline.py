@@ -100,6 +100,9 @@ def test_reaction_stage_uses_live_context_without_runtime_patch(monkeypatch):
     async def fake_save(message):
         accounting.append("save")
 
+    def fake_participant_cache(message):
+        accounting.append("participant-cache")
+
     async def fake_track(message):
         accounting.append("stats")
 
@@ -111,6 +114,7 @@ def test_reaction_stage_uses_live_context_without_runtime_patch(monkeypatch):
         return "*происходит голубь*"
 
     monkeypatch.setattr(pipeline, "save_user_message", fake_save)
+    monkeypatch.setattr(pipeline, "record_participant_message", fake_participant_cache)
     monkeypatch.setattr(pipeline, "track_message_statistics", fake_track)
     monkeypatch.setattr(pipeline, "add_chat", fake_add_chat)
     monkeypatch.setattr(pipeline, "_generate_live_situational_reaction", fake_live_reaction)
@@ -120,7 +124,7 @@ def test_reaction_stage_uses_live_context_without_runtime_patch(monkeypatch):
     consumed = asyncio.run(pipeline.process_random_reactions_once(message))
 
     assert consumed is True
-    assert accounting == ["save", "stats", "chat"]
+    assert accounting == ["save", "participant-cache", "stats", "chat"]
     assert captured["history"][-1]["content"] == "в чат прилетел голубь"
     assert sent == [(77, "*происходит голубь*", {"parse_mode": "Markdown"})]
 
@@ -141,6 +145,9 @@ def test_reaction_stage_is_idempotent_by_message_id(monkeypatch):
     async def fake_save(message):
         calls.append("save")
 
+    def fake_participant_cache(message):
+        calls.append("participant-cache")
+
     async def fake_track(message):
         calls.append("stats")
 
@@ -148,6 +155,7 @@ def test_reaction_stage_is_idempotent_by_message_id(monkeypatch):
         calls.append("chat")
 
     monkeypatch.setattr(pipeline, "save_user_message", fake_save)
+    monkeypatch.setattr(pipeline, "record_participant_message", fake_participant_cache)
     monkeypatch.setattr(pipeline, "track_message_statistics", fake_track)
     monkeypatch.setattr(pipeline, "add_chat", fake_add_chat)
 
@@ -157,7 +165,7 @@ def test_reaction_stage_is_idempotent_by_message_id(monkeypatch):
 
     assert first is False
     assert second is False
-    assert calls == ["save", "stats", "chat"]
+    assert calls == ["save", "participant-cache", "stats", "chat"]
 
 
 def test_general_dialog_stage_handles_unknown_bot_message(monkeypatch):
