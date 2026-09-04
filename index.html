@@ -13,6 +13,7 @@
       -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
+      box-sizing: border-box;
     }
     body {
       margin: 0;
@@ -29,6 +30,7 @@
     }
     canvas {
       flex: 1;
+      min-height: 0;
       background: #fff;
       display: block;
       touch-action: none;
@@ -57,9 +59,13 @@
       white-space: nowrap;
       touch-action: auto;
     }
-    .btn-blue { background: #007aff; }
     .btn-red { background: #ff3b30; }
     .btn-gray { background: #555; }
+    .btn.active {
+      background: #fff;
+      color: #222;
+      outline: 2px solid rgba(255,255,255,0.4);
+    }
 
     .palette {
       display: flex;
@@ -74,7 +80,6 @@
       height: 28px;
       border-radius: 10px;
       border: 2px solid rgba(255,255,255,0.6);
-      box-sizing: border-box;
       padding: 0;
       touch-action: auto;
       flex: 0 0 auto;
@@ -93,20 +98,53 @@
       touch-action: auto;
       flex: 0 0 auto;
     }
+    .tools,
     .actions {
       display: flex;
       gap: 10px;
       align-items: center;
-      margin-left: auto;
       flex: 0 0 auto;
+    }
+    .tools {
+      flex-wrap: wrap;
+    }
+    .actions {
+      margin-left: auto;
+    }
+    .size-control {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 40px;
+      padding: 6px 9px;
+      border-radius: 10px;
+      background: #444;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      touch-action: auto;
+    }
+    .size-control input[type="range"] {
+      width: 110px;
+      touch-action: auto;
+    }
+    .size-value {
+      min-width: 24px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
     }
     @media (max-width: 520px) {
       .palette {
         flex-basis: 100%;
       }
+      .tools {
+        flex: 1 1 auto;
+      }
+      .size-control input[type="range"] {
+        width: min(30vw, 110px);
+      }
       .actions {
-        width: 100%;
-        justify-content: flex-end;
+        margin-left: 0;
       }
     }
   </style>
@@ -134,27 +172,50 @@
     <input id="colorPicker" type="color" class="picker" value="#000000" aria-label="Другой цвет" />
   </div>
 
+  <div class="tools">
+    <button id="eraserButton" class="btn btn-gray" type="button" aria-pressed="false">⌫ Ластик</button>
+    <label class="size-control" for="brushSize">
+      Кисть
+      <input id="brushSize" type="range" min="2" max="28" step="1" value="6" aria-label="Толщина кисти" />
+      <span id="brushSizeValue" class="size-value">6</span>
+    </label>
+  </div>
+
   <div class="actions">
-    <button class="btn btn-gray" onclick="clearC()">🧹</button>
-    <button class="btn btn-blue" onclick="skip()">🔄</button>
-    <button class="btn btn-red" onclick="finish()">🏁</button>
+    <button class="btn btn-gray" type="button" onclick="clearC()" aria-label="Очистить холст">🧹</button>
+    <button class="btn btn-red" type="button" onclick="finish()" aria-label="Завершить рисунок">🏁</button>
   </div>
 </div>
 
 <script>
-  // --- COLORS ---
-  // Палитра уже присутствует в HTML: она остаётся видимой даже если конкретный
-  // Telegram WebView не загрузил telegram-web-app.js или имеет неполный WebApp API.
+  // --- COLORS & TOOLS ---
   let currentColor = "#000000";
+  let erasing = false;
+  let brushSize = 6;
+
+  const eraserButton = document.getElementById("eraserButton");
+  const brushSizeInput = document.getElementById("brushSize");
+  const brushSizeValue = document.getElementById("brushSizeValue");
+
+  function setEraser(active) {
+    erasing = Boolean(active);
+    eraserButton.classList.toggle("active", erasing);
+    eraserButton.setAttribute("aria-pressed", erasing ? "true" : "false");
+  }
 
   function setColor(c) {
     currentColor = c;
+    setEraser(false);
     const swatches = document.querySelectorAll(".swatch");
     for (let i = 0; i < swatches.length; i++) {
       swatches[i].classList.remove("active");
     }
     const active = document.querySelector(`.swatch[data-c="${c}"]`);
     if (active) active.classList.add("active");
+  }
+
+  function getStrokeColor() {
+    return erasing ? "#ffffff" : currentColor;
   }
 
   const paletteButtons = document.querySelectorAll(".swatch");
@@ -168,6 +229,17 @@
   colorPicker.addEventListener("input", function() {
     setColor(this.value);
   });
+
+  eraserButton.addEventListener("click", function() {
+    setEraser(!erasing);
+  });
+
+  brushSizeInput.addEventListener("input", function() {
+    const nextSize = Number(this.value);
+    brushSize = Number.isFinite(nextSize) ? nextSize : 6;
+    brushSizeValue.textContent = String(brushSize);
+  });
+
   setColor("#000000");
 
   // --- TELEGRAM WEBAPP ---
@@ -233,31 +305,34 @@
   }
 
   // --- CANVAS ---
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   let isDirty = false;
 
-  function resize() {
-    const toolbarH = document.querySelector('.toolbar').offsetHeight;
+  function applyStrokeStyle(width = brushSize) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = width;
+  }
 
-    const tmp = document.createElement('canvas');
+  function resize() {
+    const toolbarH = document.querySelector(".toolbar").offsetHeight;
+
+    const tmp = document.createElement("canvas");
     tmp.width = canvas.width;
     tmp.height = canvas.height;
     if (canvas.width > 0) {
-      const tmpCtx = tmp.getContext('2d');
+      const tmpCtx = tmp.getContext("2d");
       tmpCtx.drawImage(canvas, 0, 0);
     }
 
     canvas.width = window.innerWidth;
     const targetH = Math.floor(canvas.width * 1.25);
     const maxH = window.innerHeight - toolbarH;
-    canvas.height = Math.min(targetH, maxH);
+    canvas.height = Math.max(1, Math.min(targetH, maxH));
 
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 6;
-
-    ctx.fillStyle = '#fff';
+    applyStrokeStyle();
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (tmp.width > 0) {
@@ -265,13 +340,13 @@
     }
   }
 
-  window.addEventListener('resize', resize);
-  window.addEventListener('orientationchange', () => setTimeout(resize, 100));
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", () => setTimeout(resize, 100));
   setTimeout(resize, 100);
 
   // --- PREVIEW COMPRESSION ---
-  const pCanvas = document.createElement('canvas');
-  const pCtx = pCanvas.getContext('2d', { alpha: false });
+  const pCanvas = document.createElement("canvas");
+  const pCtx = pCanvas.getContext("2d", { alpha: false });
 
   function getCompressedJpeg() {
     const TARGET_W = 420;
@@ -280,28 +355,28 @@
     pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
     pCanvas.height = Math.max(1, Math.floor(canvas.height * scale));
 
-    pCtx.fillStyle = '#fff';
+    pCtx.fillStyle = "#fff";
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    return pCanvas.toDataURL('image/jpeg', 0.65);
+    return pCanvas.toDataURL("image/jpeg", 0.65);
   }
 
   // --- SOCKET ---
   const socket = io({
     auth: { initData: telegramInitData },
-    transports: ['websocket'],
+    transports: ["websocket"],
     upgrade: false,
     reconnection: true,
     timeout: 10000
   });
 
-  socket.on('connect', () => {
-    console.log('Socket connected');
-    socket.emit('join_room', { room: roomId }, (response) => {
+  socket.on("connect", () => {
+    console.log("Socket connected");
+    socket.emit("join_room", { room: roomId }, (response) => {
       if (!response || !response.ok) {
-        console.error('Room authorization failed');
-        showTelegramAlert('Этот холст доступен только текущему художнику.');
+        console.error("Room authorization failed");
+        showTelegramAlert("Этот холст доступен только текущему художнику.");
         socket.disconnect();
         return;
       }
@@ -310,39 +385,49 @@
     });
   });
 
-  socket.on('disconnect', () => {
-    console.log('Socket disconnected');
+  socket.on("disconnect", () => {
+    console.log("Socket disconnected");
   });
 
-  socket.on('connect_error', (err) => {
-    console.error('Socket error:', err.message);
+  socket.on("connect_error", (err) => {
+    console.error("Socket error:", err.message);
   });
 
-  socket.on('draw_data', (d) => {
-    ctx.strokeStyle = d.color;
+  function drawLine(from, to, color, width) {
+    ctx.strokeStyle = color;
+    applyStrokeStyle(width);
     ctx.beginPath();
-    ctx.moveTo(d.px, d.py);
-    ctx.lineTo(d.x, d.y);
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
     ctx.stroke();
+  }
+
+  socket.on("draw_data", (d) => {
+    drawLine(
+      { x: d.px, y: d.py },
+      { x: d.x, y: d.y },
+      d.color || "#000000",
+      Number(d.width) || 6
+    );
   });
 
-  socket.on('new_word_data', (d) => {
+  socket.on("new_word_data", (d) => {
     showWordPopup(d.word);
     clearC();
   });
 
-  // --- SNAPSHOT (ИСПРАВЛЕНО) ---
+  // --- SNAPSHOT ---
   let snapInFlight = false;
   let snapCount = 0;
   let snapTimeout = null;
 
   function sendSnap(force = false) {
     if (!socket.connected) {
-      console.log('Skip snap: no socket');
+      console.log("Skip snap: no socket");
       return;
     }
     if (snapInFlight) {
-      console.log('Skip snap: in flight');
+      console.log("Skip snap: in flight");
       return;
     }
     if (!force && !isDirty) {
@@ -352,21 +437,18 @@
     snapInFlight = true;
     const data = getCompressedJpeg();
     snapCount++;
+    console.log("Sending snap #" + snapCount);
 
-    console.log('Sending snap #' + snapCount);
-
-    // Таймаут на случай, если сервер не ответит
     if (snapTimeout) clearTimeout(snapTimeout);
     snapTimeout = setTimeout(() => {
-      console.warn('Snap timeout - forcing unlock');
+      console.warn("Snap timeout - forcing unlock");
       snapInFlight = false;
     }, 5000);
 
-    // ИСПРАВЛЕНО: используем правильный формат callback для socket.io
-    socket.emit('snapshot', { room: roomId, image: data }, (response) => {
+    socket.emit("snapshot", { room: roomId, image: data }, (response) => {
       clearTimeout(snapTimeout);
       snapInFlight = false;
-      console.log('Snap response:', response);
+      console.log("Snap response:", response);
     });
 
     isDirty = false;
@@ -374,139 +456,90 @@
 
   // --- DRAWING ---
   let drawing = false;
+  let activePointerId = null;
   let last = { x: 0, y: 0 };
-  let strokeCount = 0;
 
   function getPos(e) {
     const r = canvas.getBoundingClientRect();
-    let clientX, clientY;
-    
-    if (e.touches && e.touches.length > 0) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else if (e.changedTouches && e.changedTouches.length > 0) {
-      clientX = e.changedTouches[0].clientX;
-      clientY = e.changedTouches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-    
+    const scaleX = r.width > 0 ? canvas.width / r.width : 1;
+    const scaleY = r.height > 0 ? canvas.height / r.height : 1;
+
     return {
-      x: clientX - r.left,
-      y: clientY - r.top
+      x: (e.clientX - r.left) * scaleX,
+      y: (e.clientY - r.top) * scaleY
     };
   }
 
-  function drawLine(from, to, color) {
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
+  function emitDrawStep(from, to, color, width) {
+    socket.emit("draw_step", {
+      room: roomId,
+      px: from.x,
+      py: from.y,
+      x: to.x,
+      y: to.y,
+      color: color,
+      width: width
+    });
   }
 
-  // Touch события для мобильных
-  canvas.addEventListener('touchstart', function(e) {
+  canvas.addEventListener("pointerdown", function(e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
     drawing = true;
+    activePointerId = e.pointerId;
     last = getPos(e);
-  }, { passive: false });
-
-  canvas.addEventListener('touchmove', function(e) {
-    e.preventDefault();
-    if (!drawing) return;
-
-    const p = getPos(e);
-    drawLine(last, p, currentColor);
-
-    strokeCount++;
-    
-    socket.emit('draw_step', { 
-      room: roomId, 
-      px: last.x, 
-      py: last.y,
-      x: p.x,
-      y: p.y,
-      color: currentColor 
-    });
-
-    isDirty = true;
-    last = p;
-  }, { passive: false });
-
-  canvas.addEventListener('touchend', function(e) {
-    e.preventDefault();
-    if (!drawing) return;
-    drawing = false;
-    sendSnap(false);
-  }, { passive: false });
-
-  canvas.addEventListener('touchcancel', function(e) {
-    e.preventDefault();
-    drawing = false;
-  }, { passive: false });
-
-  // Mouse события для десктопа
-  canvas.addEventListener('mousedown', function(e) {
-    if (e.pointerType === 'touch') return;
-    drawing = true;
-    last = getPos(e);
+    if (typeof canvas.setPointerCapture === "function") {
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch (_err) {
+        // Старые WebView могут не поддерживать pointer capture полностью.
+      }
+    }
   });
 
-  canvas.addEventListener('mousemove', function(e) {
-    if (e.pointerType === 'touch') return;
-    if (!drawing) return;
+  canvas.addEventListener("pointermove", function(e) {
+    if (!drawing || e.pointerId !== activePointerId) return;
     e.preventDefault();
 
     const p = getPos(e);
-    drawLine(last, p, currentColor);
-
-    socket.emit('draw_step', { 
-      room: roomId, 
-      px: last.x,
-      py: last.y,
-      x: p.x,
-      y: p.y,
-      color: currentColor 
-    });
+    const color = getStrokeColor();
+    drawLine(last, p, color, brushSize);
+    emitDrawStep(last, p, color, brushSize);
 
     isDirty = true;
     last = p;
   });
 
-  canvas.addEventListener('mouseup', function(e) {
-    if (e.pointerType === 'touch') return;
-    if (!drawing) return;
+  function finishStroke(e) {
+    if (!drawing || e.pointerId !== activePointerId) return;
+    e.preventDefault();
     drawing = false;
+    activePointerId = null;
     sendSnap(false);
-  });
+  }
+
+  canvas.addEventListener("pointerup", finishStroke);
+  canvas.addEventListener("pointercancel", finishStroke);
 
   // --- BUTTONS ---
   window.clearC = () => {
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     isDirty = true;
     sendSnap(true);
   };
 
-  window.skip = () => {
-    socket.emit('skip_turn', { room: roomId });
-  };
-
   window.finish = () => {
-    const img = canvas.toDataURL('image/jpeg', 0.85);
-    socket.emit('final_frame', { room: roomId, image: img });
+    const img = canvas.toDataURL("image/jpeg", 0.85);
+    socket.emit("final_frame", { room: roomId, image: img });
     setTimeout(closeWebApp, 500);
   };
 
-  // авто-снап раз в 2.5 сек
   setInterval(() => sendSnap(false), 2500);
 
-  // Предотвращаем зум и прокрутку
-  document.addEventListener('gesturestart', e => e.preventDefault());
-  document.addEventListener('gesturechange', e => e.preventDefault());
-  document.addEventListener('gestureend', e => e.preventDefault());
+  document.addEventListener("gesturestart", e => e.preventDefault());
+  document.addEventListener("gesturechange", e => e.preventDefault());
+  document.addEventListener("gestureend", e => e.preventDefault());
 </script>
 
 </body>
