@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+from pathlib import Path
 
 from tests import test_smoke_imports  # noqa: F401
 from games import crocodile
@@ -25,8 +26,19 @@ def _active_session(*, word="капибара", preview=b"jpeg-preview"):
 
 def _configure_temp_state(monkeypatch, tmp_path):
     state_path = tmp_path / "crocodile_sessions.json"
+    scores_path = tmp_path / "crocodile_scores.json"
+    legacy_scores_path = tmp_path / "games" / "crocodile_scores.json"
     monkeypatch.setattr(persistence, "CROCODILE_STATE_PATH", state_path)
+    monkeypatch.setattr(persistence, "CROCODILE_SCORES_PATH", scores_path)
+    monkeypatch.setattr(
+        persistence,
+        "LEGACY_CROCODILE_SCORES_PATH",
+        legacy_scores_path,
+    )
+    monkeypatch.setattr(persistence, "CROCODILE_BUMP_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(crocodile, "BUMP_INTERVAL", 0)
+    monkeypatch.setattr(crocodile, "SCORES_FILE", str(scores_path))
+    monkeypatch.setattr(crocodile, "_scores", {})
     persistence._last_payload = None
     crocodile.game_sessions.clear()
     return state_path
@@ -102,3 +114,66 @@ def test_persistence_loop_flushes_latest_state_when_cancelled(monkeypatch, tmp_p
 
     raw = json.loads(state_path.read_text(encoding="utf-8"))
     assert raw["sessions"][0]["word"] == "новое"
+
+
+def test_runtime_configuration_sets_one_minute_bump_and_root_score_path(
+    monkeypatch,
+    tmp_path,
+):
+    scores_path = tmp_path / "crocodile_scores.json"
+    monkeypatch.setattr(persistence, "CROCODILE_SCORES_PATH", scores_path)
+    monkeypatch.setattr(persistence, "CROCODILE_BUMP_INTERVAL_SECONDS", 60)
+    monkeypatch.setattr(crocodile, "BUMP_INTERVAL", 90)
+    monkeypatch.setattr(crocodile, "SCORES_FILE", "old-location.json")
+
+    persistence.configure_crocodile_runtime()
+
+    assert crocodile.BUMP_INTERVAL == 60
+    assert Path(crocodile.SCORES_FILE) == scores_path
+
+
+def test_score_migration_merges_root_and_misplaced_score_eras_once(
+    monkeypatch,
+    tmp_path,
+):
+    _configure_temp_state(monkeypatch, tmp_path)
+    canonical = Path(persistence.CROCODILE_SCORES_PATH)
+    legacy = Path(persistence.LEGACY_CROCODILE_SCORES_PATH)
+    legacy.parent.mkdir(parents=True)
+
+    canonical.write_text(
+        json.dumps(
+            {
+                CHAT_ID: {
+                    "42": {"pts": 5, "name": "Старый игрок"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    legacy.write_text(
+        json.dumps(
+            {
+                CHAT_ID: {
+                    "42": {"pts": 2, "name": "Новый ник"},
+                    "77": {"pts": 3, "name": "Новый игрок"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert persistence.migrate_crocodile_scores() is True
+
+    merged = json.loads(canonical.read_text(encoding="utf-8"))
+    assert merged[CHAT_ID]["42"] == {"pts": 7, "name": "Новый ник"}
+    assert merged[CHAT_ID]["77"] == {"pts": 3, "name": "Новый игрок"}
+    assert crocodile._scores == merged
+    assert not legacy.exists()
+    archives = list(legacy.parent.glob("crocodile_scores.migrated-*.json"))
+    assert len(archives) == 1
+
+    assert persistence.migrate_crocodile_scores() is False
+    assert json.loads(canonical.read_text(encoding="utf-8")) == merged
