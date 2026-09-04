@@ -17,6 +17,10 @@ def test_answer_does_not_match_inside_larger_word():
     assert _contains_answer("Это какая-то котлета", "кот") is False
 
 
+def test_answer_matches_next_to_punctuation():
+    assert _contains_answer("Да это же (капибара).", "капибара") is True
+
+
 def test_close_guess_accepts_minor_typo():
     assert _is_close_guess("вентилятр", "вентилятор") is True
 
