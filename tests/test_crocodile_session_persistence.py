@@ -207,6 +207,15 @@ def test_word_picker_uses_every_word_before_repeating(monkeypatch, tmp_path):
     assert payload["used"] == ["дом", "лес", "кот"]
 
 
+def test_reverse_crocodile_uses_shared_runtime_word_picker():
+    source = (
+        Path(__file__).resolve().parents[1] / "games" / "reverse_crocodile.py"
+    ).read_text(encoding="utf-8")
+
+    assert "word = crocodile_game._pick_word()" in source
+    assert "random.choice(_load_words())" not in source
+
+
 def test_stopping_round_closes_old_canvas_room_first(monkeypatch):
     calls = []
 
