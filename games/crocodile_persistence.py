@@ -1,10 +1,10 @@
-"""Persistence for active Crocodile drawing sessions and runtime compatibility.
+"""Persistence and runtime guards for Crocodile.
 
 The game itself keeps hot state in memory for fast Socket.IO access. This module
-periodically snapshots only the durable session fields to a root-level runtime
-JSON file and restores them on startup. It also owns compatibility migration for
+periodically snapshots the durable session fields to a root-level runtime JSON
+file and restores them on startup. It also owns compatibility migration for
 Crocodile runtime files that accidentally moved under ``games/`` during the
-package-layout refactor.
+package-layout refactor, plus small runtime guards that must survive restarts.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import base64
 import json
 import logging
 from pathlib import Path
+import random
+import secrets
 import time
 
 from core.paths import CROCODILE_STATE_PATH
@@ -21,23 +23,176 @@ from games import crocodile
 
 
 STATE_VERSION = 1
+WORD_HISTORY_VERSION = 1
 PERSIST_INTERVAL_SECONDS = 0.5
 CROCODILE_BUMP_INTERVAL_SECONDS = 60
+WORD_HISTORY_CARRYOVER = 20
 CROCODILE_SCORES_PATH = Path(CROCODILE_STATE_PATH).with_name("crocodile_scores.json")
+CROCODILE_WORD_HISTORY_PATH = Path(CROCODILE_STATE_PATH).with_name(
+    "crocodile_word_history.json"
+)
 LEGACY_CROCODILE_SCORES_PATH = Path(crocodile.__file__).with_name(
     "crocodile_scores.json"
 )
 _last_payload: str | None = None
+
+_original_pick_word = crocodile._pick_word
+_original_stop_session = crocodile._stop_session
+_original_authorize_socket_room = crocodile._authorize_socket_room
+_runtime_guards_configured = False
 
 
 def _state_path() -> Path:
     return Path(CROCODILE_STATE_PATH)
 
 
+def _canvas_room_for_chat(chat_id: str | int) -> str:
+    cid = str(chat_id)
+    return f"m{cid[1:]}" if cid.startswith("-") else cid
+
+
+def _ensure_runtime_session_token(session: dict) -> str:
+    token = str(session.get("_runtime_session_token") or "")
+    if not token:
+        token = secrets.token_urlsafe(18)
+        session["_runtime_session_token"] = token
+    return token
+
+
+async def _authorize_socket_room_for_current_round(sid, data, *, bind_room: bool = False):
+    """Bind a socket to one concrete round, not just to a Telegram chat.
+
+    The original authorization verifies the Telegram user and room. The extra
+    token prevents a canvas left open from a previous round from becoming valid
+    again when the same user happens to draw the next round in the same chat.
+    """
+    room, chat_id, session = await _original_authorize_socket_room(
+        sid,
+        data,
+        bind_room=bind_room,
+    )
+    round_token = _ensure_runtime_session_token(session)
+    socket_session = await crocodile.sio.get_session(sid)
+
+    if bind_room:
+        socket_session["crocodile_round_token"] = round_token
+        await crocodile.sio.save_session(sid, socket_session)
+    elif socket_session.get("crocodile_round_token") != round_token:
+        raise crocodile.WebAppAuthError("socket belongs to an expired Crocodile round")
+
+    return room, chat_id, session
+
+
+async def _stop_session_and_close_canvas_room(chat_id: str, reason: str = ""):
+    """Remove old canvas sockets from the chat room before ending the round."""
+    room = _canvas_room_for_chat(chat_id)
+    try:
+        await crocodile.sio.close_room(room)
+    except Exception:
+        logging.exception(
+            "[crocodile] failed to close stale canvas room=%s reason=%s",
+            room,
+            reason,
+        )
+    await _original_stop_session(chat_id, reason=reason)
+
+
+def _load_word_history() -> list[str]:
+    path = Path(CROCODILE_WORD_HISTORY_PATH)
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("word history must be an object")
+        if payload.get("version") != WORD_HISTORY_VERSION:
+            return []
+        used = payload.get("used", [])
+        if not isinstance(used, list):
+            raise ValueError("word history used must be a list")
+        return [str(item) for item in used if str(item).strip()]
+    except Exception:
+        logging.exception("[crocodile] failed to load word history path=%s", path)
+        return []
+
+
+def _write_word_history(used: list[str]) -> None:
+    path = Path(CROCODILE_WORD_HISTORY_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(
+        json.dumps(
+            {"version": WORD_HISTORY_VERSION, "used": used},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
+def pick_crocodile_word() -> str:
+    """Pick from a persistent shuffle-like cycle instead of ``random.choice``.
+
+    Every unique normalized word is used once before the cycle can repeat. When
+    the dictionary is exhausted, a new cycle starts while keeping the most recent
+    words blocked, so the boundary between cycles cannot immediately repeat them.
+    The history is global for the bot and persisted in the repository root, which
+    also means the regular deploy backup captures it automatically.
+    """
+    words = crocodile._load_words()
+    unique_words: dict[str, str] = {}
+    for raw_word in words:
+        key = crocodile._normalize_guess(str(raw_word))
+        if key and key not in unique_words:
+            unique_words[key] = str(raw_word)
+
+    if not unique_words:
+        return _original_pick_word()
+
+    used = _load_word_history()
+    cleaned_used: list[str] = []
+    seen: set[str] = set()
+    for key in used:
+        if key in unique_words and key not in seen:
+            cleaned_used.append(key)
+            seen.add(key)
+    used = cleaned_used
+
+    available = [key for key in unique_words if key not in seen]
+    if not available:
+        carry_count = min(
+            WORD_HISTORY_CARRYOVER,
+            max(0, len(unique_words) - 1),
+        )
+        used = used[-carry_count:] if carry_count else []
+        seen = set(used)
+        available = [key for key in unique_words if key not in seen]
+
+    chosen_key = random.choice(available)
+    used.append(chosen_key)
+    try:
+        _write_word_history(used)
+    except Exception:
+        logging.exception(
+            "[crocodile] failed to persist word history path=%s",
+            CROCODILE_WORD_HISTORY_PATH,
+        )
+    return unique_words[chosen_key]
+
+
 def configure_crocodile_runtime() -> None:
     """Apply production runtime paths/settings before handlers can run."""
+    global _runtime_guards_configured
+
     crocodile.BUMP_INTERVAL = CROCODILE_BUMP_INTERVAL_SECONDS
     crocodile.SCORES_FILE = str(CROCODILE_SCORES_PATH)
+    crocodile._pick_word = pick_crocodile_word
+
+    if not _runtime_guards_configured:
+        crocodile._stop_session = _stop_session_and_close_canvas_room
+        crocodile._authorize_socket_room = _authorize_socket_room_for_current_round
+        _runtime_guards_configured = True
 
 
 def _normalize_scores_payload(raw: object) -> dict[str, dict[str, dict]]:
