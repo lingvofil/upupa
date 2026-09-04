@@ -50,6 +50,27 @@ def test_crocodile_canvas_has_eraser_and_brush_size_control_without_skip_button(
     assert 'onclick="skip()"' not in toolbar
 
 
+def test_crocodile_canvas_has_undo_redo_and_brush_intensity_controls():
+    source = _source()
+    toolbar = _toolbar(source)
+
+    assert 'id="undoButton"' in toolbar
+    assert 'onclick="undo()"' in toolbar
+    assert 'id="redoButton"' in toolbar
+    assert 'onclick="redo()"' in toolbar
+    assert 'id="brushOpacity"' in toolbar
+    assert 'min="10"' in toolbar
+    assert 'max="100"' in toolbar
+    assert 'aria-label="Интенсивность кисти"' in toolbar
+    assert "const HISTORY_LIMIT = 20;" in source
+    assert "let undoStack = [];" in source
+    assert "let redoStack = [];" in source
+    assert "pushUndoState();" in source
+    assert "window.undo = () =>" in source
+    assert "window.redo = () =>" in source
+    assert "ctx.putImageData(state.imageData, 0, 0);" in source
+
+
 def test_crocodile_pointer_coordinates_are_scaled_to_canvas_bitmap():
     source = _source()
 
@@ -66,6 +87,16 @@ def test_crocodile_eraser_uses_white_without_forgetting_selected_color():
     assert 'return erasing ? "#ffffff" : currentColor;' in source
     assert "setEraser(false);" in source
     assert 'eraserButton.addEventListener("click"' in source
+
+
+def test_crocodile_brush_intensity_is_applied_to_local_strokes():
+    source = _source()
+
+    assert "let brushOpacity = 1;" in source
+    assert "brushOpacity = safePercent / 100;" in source
+    assert "ctx.globalAlpha = normalizeOpacity(opacity);" in source
+    assert "drawLine(last, p, color, brushSize, brushOpacity);" in source
+    assert "opacity: opacity" in source
 
 
 def test_crocodile_draw_steps_include_brush_width():

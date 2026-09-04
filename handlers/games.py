@@ -10,7 +10,7 @@ from aiogram.types import Message, PollAnswer
 from core.loader import bot
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
-from games import crocodile, reverse_crocodile
+from games import crocodile, crocodile_likes, reverse_crocodile
 from AI.quiz import process_poll_answer
 
 
@@ -50,7 +50,9 @@ async def start_croc(message: types.Message):
     F.data.startswith("cr_") | F.data.in_(("btn_like", "btn_want_draw"))
 )
 async def croc_callback(callback: types.CallbackQuery):
-    if callback.data == "cr_restart":
+    if callback.data == "btn_like":
+        await crocodile_likes.handle_like_callback(callback)
+    elif callback.data == "cr_restart":
         await crocodile.handle_start_game(callback.message)
         await callback.answer()
     else:
