@@ -1,9 +1,8 @@
-"""Абсурдные ситуативные вставки для случайных реакций чата.
+"""Короткие ситуативные вставки для случайных реакций чата.
 
-Вместо длинной «кинематографичной» ремарки бот выдаёт микросводку:
-``происходит <слово>`` или ``произошёл <слово>``.
-Часть ответов осмысленно резюмирует ситуацию через LLM, часть намеренно
-подхватывает одно содержательное слово из последних реплик.
+Реакция должна быть короткой, но синтаксически законченной микросводкой
+последних реплик в прошедшем времени: например ``произошёл внезапный срач``
+или ``произошла смена темы``.
 
 Для этой реакции используется отдельный короткий буфер живых сообщений чата.
 Он не зависит от ``conversation_history`` диалогового режима, куда обычная
@@ -12,18 +11,20 @@
 
 from collections import deque
 import logging
-import random
 import re
-from typing import Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import Awaitable, Callable, Mapping, Sequence
 
 
-_WORD_RE = re.compile(r"\b[а-яёa-z][а-яёa-z0-9-]{2,31}\b", re.IGNORECASE)
 _RESULT_RE = re.compile(
-    r"^(происходит|произош[её]л)\s+([а-яёa-z][а-яёa-z0-9-]{1,31})[.!?]?$",
+    r"^(произош[её]л|произошла|произошло)\s+(.+?)[.!?]?$",
+    re.IGNORECASE,
+)
+_TOKEN_RE = re.compile(r"^[а-яёa-z0-9-]+$", re.IGNORECASE)
+_DANGLING_MODIFIER_RE = re.compile(
+    r"(?:ый|ий|ой|ая|яя|ого|его|ому|ему|ым|им|ую|юю|ых|их)$",
     re.IGNORECASE,
 )
 
-# Не даём алгоритмическому режиму превращаться в «произошёл который».
 _STOP_WORDS = {
     "ага", "без", "блин", "блядь", "будет", "была", "были", "было", "быть",
     "вам", "вас", "весь", "вот", "вроде", "где", "давай", "даже", "для", "его",
@@ -36,7 +37,7 @@ _STOP_WORDS = {
     "хоть", "чего", "чем", "что", "чтобы", "эта", "эти", "это", "этот", "ещe",
 }
 
-# Последние слова именно этой реакции — защита от локального зацикливания модели.
+# Последние формулировки именно этой реакции — защита от локального зацикливания модели.
 _recent_event_words: dict[str, deque[str]] = {}
 # Отдельный живой контекст для ситуативной реакции.
 _recent_chat_messages: dict[str, deque[dict]] = {}
@@ -46,7 +47,7 @@ _seen_message_ids: dict[str, deque[int]] = {}
 _RECENT_LIMIT = 20
 _CONTEXT_LIMIT = 12
 _SEEN_MESSAGE_LIMIT = 100
-_DIRECT_WORD_PROBABILITY = 0.42
+_MAX_EVENT_WORDS = 4
 
 
 def _recent_for_chat(chat_id: int | str) -> deque[str]:
@@ -127,23 +128,8 @@ def _usable_messages(history: Sequence[Mapping]) -> list[Mapping]:
     return [msg for msg in history if str(msg.get("content", "")).strip()]
 
 
-def _extract_candidate_words(messages: Iterable[Mapping]) -> list[str]:
-    """Берёт содержательные слова из человеческих реплик, сохраняя свежесть."""
-    words: list[str] = []
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            continue
-        text = str(msg.get("content", "")).lower()
-        for word in _WORD_RE.findall(text):
-            word = word.strip("-")
-            if len(word) < 3 or word in _STOP_WORDS or word.isdigit():
-                continue
-            words.append(word)
-    return words
-
-
 def _normalize_model_result(text: str | None) -> tuple[str, str] | None:
-    """Проверяет строгий двухсловный контракт и возвращает (фраза, слово)."""
+    """Проверяет короткий законченный контракт и возвращает (фраза, ключ повтора)."""
     if not text:
         return None
 
@@ -153,38 +139,35 @@ def _normalize_model_result(text: str | None) -> tuple[str, str] | None:
         return None
 
     prefix = match.group(1).lower().replace("произошел", "произошёл")
-    word = match.group(2).lower()
-    if word in _STOP_WORDS:
+    payload = " ".join(match.group(2).strip().split()).lower()
+    words = payload.split()
+
+    if not 1 <= len(words) <= _MAX_EVENT_WORDS:
         return None
-    return f"{prefix} {word}", word
+    if any(not _TOKEN_RE.fullmatch(word) for word in words):
+        return None
+    if words[0] in _STOP_WORDS:
+        return None
+
+    # Главная защита от ответов вида «произошёл странный».
+    # Не проверяем неоднозначные окончания -ое/-ее/-ые/-ие: ими заканчиваются
+    # и нормальные существительные вроде «примирение».
+    if len(words) == 1 and _DANGLING_MODIFIER_RE.search(words[0]):
+        return None
+
+    phrase = f"{prefix} {payload}"
+    return phrase, phrase
 
 
-def _format_event(prefix: str, word: str) -> str:
+def _format_event(phrase: str) -> str:
     # Сохраняем прежний Markdown-курсив ситуативной вставки.
-    return f"*{prefix} {word}*"
+    return f"*{phrase}*"
 
 
-def _pick_direct_word(
-    chat_id: int,
+def _build_prompt(
     focus_messages: Sequence[Mapping],
-    rng=random,
-) -> tuple[str, str] | None:
-    candidates = _extract_candidate_words(focus_messages)
-    if not candidates:
-        return None
-
-    # Не повторяем недавние события, пока есть свежие слова.
-    recent = set(_recent_for_chat(chat_id))
-    fresh = [word for word in candidates if word not in recent]
-    pool = fresh or candidates
-
-    # Ограничиваемся последними словами: абсурд должен всё же цепляться за текущий чат.
-    word = rng.choice(pool[-25:])
-    prefix = rng.choice(("происходит", "произошёл"))
-    return f"{prefix} {word}", word
-
-
-def _build_prompt(focus_messages: Sequence[Mapping]) -> str:
+    recent_summaries: Sequence[str] = (),
+) -> str:
     lines = []
     for msg in focus_messages:
         author = msg.get("name") or ("Бот" if msg.get("role") == "assistant" else "Участник")
@@ -192,27 +175,36 @@ def _build_prompt(focus_messages: Sequence[Mapping]) -> str:
         lines.append(f"{author}: {text}")
 
     context = "\n".join(lines)
+    recent_block = "\n".join(f"- {item}" for item in recent_summaries[-5:]) or "- нет"
     return f"""
-Ты делаешь абсурдную микросводку происходящего в групповом чате.
+Ты делаешь короткую абсурдную, но ОСМЫСЛЕННУЮ микросводку того, что только что произошло в групповом чате.
 
-Ответ должен состоять РОВНО из двух слов и соответствовать одному шаблону:
-происходит СЛОВО
-произошёл СЛОВО
+Формат ответа — одна фраза без кавычек и без Markdown, от 2 до 5 слов целиком.
+Используй ТОЛЬКО прошедшее время и начни её одним из вариантов:
+- произошёл ...
+- произошла ...
+- произошло ...
 
-Правила для СЛОВО:
-- ровно одно слово, без пояснений и продолжения;
-- чаще кратко назови происходящее: действие, явление, тип ситуации или социальный жест;
-- иногда намеренно возьми буквально одно заметное слово из последних реплик, даже если результат абсурден;
-- допускаются разговорные, грубые и нелепые слова, если они органичны этому чату;
-- не пиши имена авторов как пояснение и не добавляй знаки оформления;
-- не повторяй формулировки из инструкции.
+Правила:
+- не используй настоящее время и не начинай ответ со слова «происходит»;
+- после первого слова дай законченную формулировку события из 1–4 слов;
+- формулировка должна реально вытекать из последних реплик, а не быть случайным словом из них;
+- если используешь прилагательное, обязательно допиши существительное: нельзя «произошёл странный», можно «произошёл странный спор»;
+- согласуй род: «произошёл спор», «произошла ссора», «произошло примирение»;
+- предпочитай конкретное действие, конфликт, смену темы, социальный жест или абсурдный итог разговора;
+- можно быть грубым, нелепым и циничным, если это органично контексту;
+- не объясняй ответ, не задавай вопросов, не называй автора без необходимости;
+- не повторяй недавние микросводки.
 
 Последние реплики:
 ---
 {context}
 ---
 
-Два слова:
+Недавние микросводки, которых надо избегать:
+{recent_block}
+
+Микросводка:
 """.strip()
 
 
@@ -221,45 +213,47 @@ async def generate_absurd_situational_reaction(
     history: Sequence[Mapping],
     generate_with_model: Callable[..., Awaitable[str]],
     *,
-    rng=random,
+    rng=None,
 ) -> str | None:
-    """Сгенерировать короткое ``происходит/произошёл + одно слово``."""
+    """Сгенерировать короткую осмысленную ситуативную микросводку в прошедшем времени."""
+    del rng  # оставлено в сигнатуре для совместимости со старыми тестами/вызовами
+
     usable = _usable_messages(history)
     if not usable:
         logging.info("[situational-summary] Нет текстового контекста для чата %s", chat_id)
         return None
 
-    # Одной свежей реплики уже достаточно: абсурдная вставка не требует полноценного диалога.
+    # Одной свежей реплики уже достаточно, но модель всегда видит до пяти последних сообщений.
     focus_messages = usable[-5:]
     recent = _recent_for_chat(chat_id)
+    prompt = _build_prompt(focus_messages, list(recent))
 
-    # Значимая доля вставок вообще не требует LLM: берём слово прямо из живой речи.
-    if rng.random() < _DIRECT_WORD_PROBABILITY:
-        direct = _pick_direct_word(chat_id, focus_messages, rng=rng)
-        if direct:
-            phrase, word = direct
-            recent.append(word)
-            logging.info("[situational-summary] Прямое слово для чата %s: %s", chat_id, phrase)
-            prefix, _ = phrase.split(maxsplit=1)
-            return _format_event(prefix, word)
-
-    prompt = _build_prompt(focus_messages)
     try:
         raw = await generate_with_model(
             prompt,
             chat_id,
-            temperature=1.05,
-            max_tokens=12,
+            temperature=0.9,
+            max_tokens=24,
         )
         logging.info("[situational-summary] Ответ модели для чата %s: %r", chat_id, raw)
         normalized = _normalize_model_result(raw)
-        if normalized:
-            phrase, word = normalized
-            if word not in recent:
-                recent.append(word)
-                prefix, _ = phrase.split(maxsplit=1)
-                return _format_event(prefix, word)
-            logging.info("[situational-summary] Модель повторила недавнее слово %r", word)
+        if not normalized:
+            logging.info(
+                "[situational-summary] Модель нарушила контракт для чата %s; реакция пропущена",
+                chat_id,
+            )
+            return None
+
+        phrase, repeat_key = normalized
+        if repeat_key in recent:
+            logging.info(
+                "[situational-summary] Модель повторила недавнюю микросводку %r",
+                repeat_key,
+            )
+            return None
+
+        recent.append(repeat_key)
+        return _format_event(phrase)
     except Exception as exc:
         logging.error(
             "[situational-summary] Ошибка генерации для чата %s: %s",
@@ -267,15 +261,7 @@ async def generate_absurd_situational_reaction(
             exc,
             exc_info=True,
         )
-
-    # Модель нарушила формат / повторилась / упала — всё равно выдаём локальный абсурд.
-    direct = _pick_direct_word(chat_id, focus_messages, rng=rng)
-    if not direct:
         return None
-    phrase, word = direct
-    recent.append(word)
-    prefix, _ = phrase.split(maxsplit=1)
-    return _format_event(prefix, word)
 
 
 def install_into_random_reactions(random_reactions_module) -> None:
@@ -286,7 +272,7 @@ def install_into_random_reactions(random_reactions_module) -> None:
     original_process_random_reactions = random_reactions_module.process_random_reactions
 
     async def patched_process_random_reactions(message, *args, **kwargs):
-        # handlers/dialog.py и process_general_message исторически вызывают этот пайплайн дважды.
+        # handlers/dialog.py и process_general_message исторически вызывали этот пайплайн дважды.
         # Первым вызовом сохраняем реплику и выполняем реакции, второй для того же message_id пропускаем.
         if not _register_incoming_message(message):
             return False

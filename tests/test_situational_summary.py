@@ -10,119 +10,141 @@ def setup_function():
     ss._seen_message_ids.clear()
 
 
-def test_normalize_model_result_accepts_strict_two_word_contract():
-    assert ss._normalize_model_result("*происходит комментирование*") == (
-        "происходит комментирование",
-        "комментирование",
+def test_normalize_model_result_accepts_short_complete_summary():
+    assert ss._normalize_model_result("*произошёл спор о кальяне*") == (
+        "произошёл спор о кальяне",
+        "произошёл спор о кальяне",
     )
-    assert ss._normalize_model_result("произошел подъеб.") == (
-        "произошёл подъеб",
-        "подъеб",
+    assert ss._normalize_model_result("произошел внезапный подъеб.") == (
+        "произошёл внезапный подъеб",
+        "произошёл внезапный подъеб",
+    )
+    assert ss._normalize_model_result("произошла смена темы") == (
+        "произошла смена темы",
+        "произошла смена темы",
+    )
+    assert ss._normalize_model_result("произошло примирение") == (
+        "произошло примирение",
+        "произошло примирение",
     )
 
 
-def test_normalize_model_result_rejects_extra_words():
-    assert ss._normalize_model_result("происходит очень смешной голубь") is None
-    assert ss._normalize_model_result("это происходит голубь") is None
+def test_normalize_model_result_rejects_present_tense():
+    assert ss._normalize_model_result("происходит спор о кальяне") is None
+    assert ss._normalize_model_result("происходит голубиный захват") is None
 
 
-def test_extract_candidate_words_uses_human_chat_and_filters_noise():
-    messages = [
-        {"role": "user", "content": "А потом прилетел голубь и сел на сервер"},
-        {"role": "assistant", "content": "происходит объяснение"},
-        {"role": "user", "content": "сервер теперь священный"},
-    ]
-    words = ss._extract_candidate_words(messages)
-
-    assert "голубь" in words
-    assert "сервер" in words
-    assert "объяснение" not in words
-    assert "потом" not in words
+def test_normalize_model_result_rejects_dangling_adjective():
+    assert ss._normalize_model_result("произошёл странный") is None
+    assert ss._normalize_model_result("произошла весёлая") is None
 
 
-def test_direct_mode_can_make_absurd_event_from_chat_word():
-    class FakeRng:
-        def random(self):
-            return 0.0  # always direct mode
+def test_normalize_model_result_rejects_wrong_or_too_long_format():
+    assert ss._normalize_model_result("это произошёл спор") is None
+    assert ss._normalize_model_result("произошёл очень смешной голубь на сервере") is None
+    assert ss._normalize_model_result("произошёл спор, но недолго") is None
 
-        def choice(self, seq):
-            if "голубь" in seq:
-                return "голубь"
-            return seq[0]  # prefix -> "происходит"
 
-    history = [
-        {"role": "user", "name": "А", "content": "ну вот обсуждаем работу"},
-        {"role": "user", "name": "Б", "content": "в окно прилетел голубь"},
-        {"role": "user", "name": "А", "content": "и все замолчали"},
-    ]
+def test_prompt_requires_contextual_complete_phrase_and_past_tense():
+    prompt = ss._build_prompt(
+        [
+            {"role": "user", "name": "А", "content": "давайте кальян"},
+            {"role": "user", "name": "Б", "content": "опять спорим куда идти"},
+        ],
+        ["произошёл спор о пиве"],
+    )
 
-    async def model_must_not_be_called(*args, **kwargs):
-        raise AssertionError("direct mode should not call the model")
+    assert "ОСМЫСЛЕННУЮ" in prompt
+    assert "ТОЛЬКО прошедшее время" in prompt
+    assert "не начинай ответ со слова «происходит»" in prompt
+    assert "нельзя «произошёл странный»" in prompt
+    assert "А: давайте кальян" in prompt
+    assert "произошёл спор о пиве" in prompt
+
+
+def test_generator_always_uses_model_and_returns_complete_summary():
+    calls = []
+
+    async def fake_model(prompt, chat_id, **kwargs):
+        calls.append((prompt, chat_id, kwargs))
+        return "произошёл внезапный срач"
 
     result = asyncio.run(
         ss.generate_absurd_situational_reaction(
             123,
-            history,
-            model_must_not_be_called,
-            rng=FakeRng(),
+            [
+                {"role": "user", "name": "А", "content": "куда идём"},
+                {"role": "user", "name": "Б", "content": "ты опять всё усложнил"},
+            ],
+            fake_model,
         )
     )
-    assert result == "*происходит голубь*"
+
+    assert result == "*произошёл внезапный срач*"
+    assert len(calls) == 1
+    assert calls[0][1] == 123
+    assert calls[0][2]["max_tokens"] == 24
 
 
-def test_one_message_is_enough_for_absurd_summary():
-    class FakeRng:
-        def random(self):
-            return 0.0
-
-        def choice(self, seq):
-            if "голубь" in seq:
-                return "голубь"
-            return seq[0]
-
-    async def model_must_not_be_called(*args, **kwargs):
-        raise AssertionError("direct mode should not call the model")
+def test_one_message_is_enough_but_still_goes_through_model():
+    async def fake_model(*args, **kwargs):
+        return "произошло голубиное вторжение"
 
     result = asyncio.run(
         ss.generate_absurd_situational_reaction(
             123,
-            [{"role": "user", "name": "А", "content": "голубь"}],
-            model_must_not_be_called,
-            rng=FakeRng(),
+            [{"role": "user", "name": "А", "content": "голубь залетел в окно"}],
+            fake_model,
         )
     )
 
-    assert result == "*происходит голубь*"
+    assert result == "*произошло голубиное вторжение*"
 
 
-def test_invalid_model_answer_falls_back_to_word_from_chat():
-    class FakeRng:
-        def random(self):
-            return 0.99  # model mode first
-
-        def choice(self, seq):
-            if "подъеб" in seq:
-                return "подъеб"
-            return seq[-1]  # prefix -> "произошёл"
-
-    history = [
-        {"role": "user", "name": "А", "content": "вопрос был простой"},
-        {"role": "user", "name": "Б", "content": "это был подъеб"},
-        {"role": "user", "name": "А", "content": "понял принято"},
-    ]
-
+def test_present_tense_model_answer_is_skipped():
     async def bad_model(*args, **kwargs):
-        return "Сейчас происходит какой-то веселый подъеб"
+        return "происходит странный спор"
 
     result = asyncio.run(
         ss.generate_absurd_situational_reaction(
             321,
-            history,
+            [{"role": "user", "name": "А", "content": "что-то странное происходит"}],
             bad_model,
-            rng=FakeRng(),
         )
     )
-    assert result == "*произошёл подъеб*"
+
+    assert result is None
+
+
+def test_invalid_model_answer_is_skipped_instead_of_random_word_fallback():
+    async def bad_model(*args, **kwargs):
+        return "произошёл странный"
+
+    result = asyncio.run(
+        ss.generate_absurd_situational_reaction(
+            321,
+            [{"role": "user", "name": "А", "content": "что-то странное происходит"}],
+            bad_model,
+        )
+    )
+
+    assert result is None
+
+
+def test_duplicate_summary_is_skipped_and_recent_context_is_passed_to_prompt():
+    prompts = []
+
+    async def same_model(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return "произошла смена темы"
+
+    history = [{"role": "user", "name": "А", "content": "давайте о другом"}]
+    first = asyncio.run(ss.generate_absurd_situational_reaction(444, history, same_model))
+    second = asyncio.run(ss.generate_absurd_situational_reaction(444, history, same_model))
+
+    assert first == "*произошла смена темы*"
+    assert second is None
+    assert "произошла смена темы" in prompts[1]
 
 
 def _message(message_id: int, text: str = "голубь"):
@@ -156,11 +178,11 @@ def test_register_incoming_message_builds_context_and_rejects_duplicate_message_
     ]
 
 
-def test_installer_uses_live_context_and_makes_random_pipeline_idempotent(monkeypatch):
+def test_installer_uses_live_context_and_makes_random_pipeline_idempotent():
     calls = []
 
     async def fake_generate(*args, **kwargs):
-        return "происходит наблюдение"
+        return "произошёл голубиный захват"
 
     async def original_process(message, *args, **kwargs):
         calls.append(message.message_id)
@@ -184,15 +206,13 @@ def test_installer_uses_live_context_and_makes_random_pipeline_idempotent(monkey
     assert calls == [555]
     assert list(ss._context_for_chat(77))[-1]["content"] == "в чат прилетел голубь"
 
-    # Генератор теперь берёт именно живой контекст, даже если conversation_history пуст.
-    monkeypatch.setattr(ss, "_DIRECT_WORD_PROBABILITY", 0.0)
     result = asyncio.run(module.generate_situational_reaction(77))
-    assert result == "*происходит наблюдение*"
+    assert result == "*произошёл голубиный захват*"
 
 
 def test_installer_is_idempotent():
     async def fake_generate(*args, **kwargs):
-        return "происходит тест"
+        return "произошёл обычный тест"
 
     async def original_process(message, *args, **kwargs):
         return False
