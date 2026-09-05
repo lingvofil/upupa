@@ -16,6 +16,7 @@ from core.settings import GIGACHAT_API_KEY
 
 
 _IMAGE_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
+_CENSORED_IMAGE_RE = re.compile(r'<img[^>]+censored="true"', re.IGNORECASE)
 _SYNC_LOCK = threading.Lock()
 
 
@@ -80,10 +81,13 @@ def _generate_gigachat_image_sync(prompt: str) -> Optional[bytes]:
         content = response.choices[0].message.content or ""
         match = _IMAGE_SRC_RE.search(content)
         if not match:
-            logging.warning(
-                "GigaChat image response did not contain <img src=...>: %s",
-                content[:500],
-            )
+            if _CENSORED_IMAGE_RE.search(content):
+                logging.warning("GigaChat image was censored by provider: %s", content[:500])
+            else:
+                logging.warning(
+                    "GigaChat image response did not contain <img src=...>: %s",
+                    content[:500],
+                )
             return None
 
         file_id = match.group(1)
@@ -149,11 +153,19 @@ def install_into_picgeneration(picgeneration_module) -> None:
     picgeneration_module.kandinsky_api = GigaChatImageCompatAPI()
     picgeneration_module.PIPELINE_ID = None
 
-    async def robust_image_generation(message, prompt_ru, processing_msg, skip_translate=False):
+    async def robust_image_generation(
+        message,
+        prompt_ru,
+        processing_msg,
+        skip_translate=False,
+        gigachat_prompt=None,
+    ):
         # 1. GigaChat-2 text2image. It understands Russian directly, so do not
         # spend time/tokens translating the prompt until the first provider fails.
+        # Some commands need provider-specific wording because GigaChat moderation
+        # is stricter than the downstream image providers.
         await processing_msg.edit_text("Использую ебучий GigaChat...")
-        img = await generate_gigachat_image(prompt_ru)
+        img = await generate_gigachat_image(gigachat_prompt or prompt_ru)
         if img:
             await processing_msg.delete()
             return await picgeneration_module.send_generated_photo(message, img, "gigachat.png")
