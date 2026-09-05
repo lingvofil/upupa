@@ -103,9 +103,9 @@ jobs:
             --scores-file "$APP_DIR/crocodile_scores.json" \
             --chat-id=-1001707530786 \
             --marker "$BACKUP_ROOT/.crocodile-score-recovery-20260905.done" \
-            --expected 'Чудо в Стране Алис 🍀=20' \
+            --expected 'Чудо в Стране Алис 🍀=19' \
             --expected 'Alina=16' \
-            --expected 'Детектор=9' \
+            --expected 'Детектор=8' \
             --expected 'М&M=8' \
             --expected 'Six7ape=7' \
             --expected 'cotka Ara=6' \
