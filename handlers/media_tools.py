@@ -38,6 +38,13 @@ def is_ogg_document(msg: types.Message) -> bool:
     return False
 
 
+def is_media_speed_command(message: types.Message, command: str) -> bool:
+    return bool(
+        (message.text and message.text.lower().strip() == command)
+        or (message.caption and message.caption.lower().strip() == command)
+    )
+
+
 def is_reverse_command(message: types.Message) -> bool:
     return bool(
         (message.text and message.text.lower().strip() == "наоборот")
@@ -87,20 +94,16 @@ async def handle_pup_command(message: types.Message):
 
 
 @router.message(
-    lambda message: (
-        (message.text and "быстрее" in message.text.lower())
-        or (message.caption and "быстрее" in message.caption.lower())
-    ) and message.from_user.id not in BLOCKED_USERS
+    lambda message: is_media_speed_command(message, "быстрее")
+    and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_faster_media_command(message: types.Message):
     await handle_fast_command(message, bot)
 
 
 @router.message(
-    lambda message: (
-        (message.text and "медленнее" in message.text.lower())
-        or (message.caption and "медленнее" in message.caption.lower())
-    ) and message.from_user.id not in BLOCKED_USERS
+    lambda message: is_media_speed_command(message, "медленнее")
+    and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_slower_media_command(message: types.Message):
     await handle_slow_command(message, bot)
