@@ -1,8 +1,11 @@
 """Strict child-drawing mode for the ``перерисуй`` command.
 
 The legacy redraw prompt put the scene description first, while Pollinations
-truncated prompts to 200 characters.  As a result Flux often never saw the
+truncated prompts to 200 characters. As a result Flux often never saw the
 child-drawing style instructions and produced a normal polished illustration.
+GigaChat gets a separate, moderation-friendly wording because combining an
+explicit young-child reference with phrases such as ``wrong anatomy`` can cause
+false-positive image censorship even for ordinary source photos.
 """
 
 from __future__ import annotations
@@ -32,11 +35,28 @@ _CHILD_DRAWING_STYLE = (
     "NO realistic shading, NO cinematic lighting, NO detailed digital painting, NO beautiful naive art. "
 )
 
+_GIGACHAT_DRAWING_STYLE = (
+    "ROUGH CRAYON DOODLE. Recreate the scene as a deliberately simple, clumsy kindergarten-style "
+    "drawing made with cheap wax crayons and felt-tip markers on plain white paper. "
+    "Use wobbly thick outlines, primitive geometric shapes, lopsided proportions, simplified faces "
+    "and hands, uneven circles, flat crude colors, coloring outside the lines, scribbles, accidental "
+    "overlaps and small smudges. Keep the people and objects recognizable, but make the result look "
+    "plainly amateur rather than polished. No text or captions. "
+)
+
+
+def _normalize_scene(description: str) -> str:
+    return " ".join((description or "the original scene").split())
+
 
 def build_childlike_redraw_prompt(description: str) -> str:
-    """Put the non-negotiable style before the scene so truncation cannot hide it."""
-    scene = " ".join((description or "the original scene").split())
-    return f"{_CHILD_DRAWING_STYLE}SCENE TO COPY: {scene}"
+    """Put the strict style first so downstream prompt truncation cannot hide it."""
+    return f"{_CHILD_DRAWING_STYLE}SCENE TO COPY: {_normalize_scene(description)}"
+
+
+def build_gigachat_redraw_prompt(description: str) -> str:
+    """Build a childlike prompt without wording that trips GigaChat moderation."""
+    return f"{_GIGACHAT_DRAWING_STYLE}SCENE TO COPY: {_normalize_scene(description)}"
 
 
 def _prepare_pollinations_prompt(prompt: str) -> str:
@@ -121,15 +141,20 @@ async def handle_redraw_command(message):
             chat_id,
         )
         final_prompt = build_childlike_redraw_prompt(description)
+        gigachat_prompt = build_gigachat_redraw_prompt(description)
         logging.info("Redraw childlike prompt: %s", final_prompt[:300])
+        logging.info("Redraw GigaChat prompt: %s", gigachat_prompt[:300])
 
-        # Prompt is already English.  Do not pass it through translate_to_en(),
-        # which intentionally adds polished quality descriptors for normal image generation.
+        # The strict prompt is already English. Do not pass it through
+        # translate_to_en(), which adds polished quality descriptors for normal
+        # image generation. GigaChat gets a separate neutral wording to avoid
+        # false-positive moderation on the strict child-drawing vocabulary.
         return await pg.robust_image_generation(
             message,
             final_prompt,
             processing_msg,
             skip_translate=True,
+            gigachat_prompt=gigachat_prompt,
         )
     except Exception as exc:
         logging.error("Redraw error: %s", exc, exc_info=True)
