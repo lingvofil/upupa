@@ -12,7 +12,7 @@ from games import crocodile
 from games import crocodile_persistence as persistence
 
 
-STOP_UNLOCK_SECONDS = 20 * 60
+STOP_UNLOCK_SECONDS = 5 * 60
 WORD_BACK_HISTORY_LIMIT = 30
 
 _original_start_new_game = crocodile.start_new_game
@@ -42,7 +42,7 @@ def stop_lock_remaining_seconds(
 
     started_at = _session_started_at(session)
     # Legacy/restored sessions created before this guard have no reliable start
-    # timestamp. Do not lock them for a fresh 20 minutes after deployment.
+    # timestamp. Do not lock them for a fresh 5 minutes after deployment.
     if started_at <= 0:
         return 0.0
 
