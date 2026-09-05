@@ -15,6 +15,21 @@ from AI.quiz import process_poll_answer
 
 
 router = Router(name="games")
+_quiz_poll_answers_in_progress: set[str] = set()
+
+
+async def _process_quiz_poll_answer_once(poll_answer: PollAnswer, bot: Bot) -> bool:
+    """Не даёт параллельным ответам на один poll несколько раз двинуть викторину."""
+    poll_id = poll_answer.poll_id
+    if poll_id in _quiz_poll_answers_in_progress:
+        return False
+
+    _quiz_poll_answers_in_progress.add(poll_id)
+    try:
+        await process_poll_answer(poll_answer, bot)
+        return True
+    finally:
+        _quiz_poll_answers_in_progress.discard(poll_id)
 
 
 @router.message(F.text.lower() == "егра")
@@ -25,7 +40,7 @@ async def egra_command_handler(message: types.Message):
 async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     is_egra_handled = await handle_egra_answer(poll_answer, bot)
     if not is_egra_handled:
-        await process_poll_answer(poll_answer, bot)
+        await _process_quiz_poll_answer_once(poll_answer, bot)
 
 @router.callback_query(F.data == "egra_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
