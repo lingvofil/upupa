@@ -110,6 +110,7 @@ class UpupaApplication:
         crocodile.configure_task_supervisor(self.supervisor)
         restore_dnd_sessions(self.bot)
         restore_crocodile_sessions()
+        crocodile._scores_load()
 
         for chat_id in QUIZ_CHAT_IDS:
             self.supervisor.start(

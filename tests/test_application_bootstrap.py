@@ -61,6 +61,30 @@ def test_background_task_set_is_explicit_and_idempotent():
     ]
 
 
+def test_background_tasks_reload_crocodile_scores_after_session_restore(monkeypatch):
+    from AI import dnd
+    from games import crocodile
+    from games import crocodile_persistence as persistence
+
+    events = []
+    monkeypatch.setattr(dnd, "restore_dnd_sessions", lambda _bot: events.append("dnd"))
+    monkeypatch.setattr(
+        persistence,
+        "restore_crocodile_sessions",
+        lambda: events.append("sessions"),
+    )
+    monkeypatch.setattr(crocodile, "_scores_load", lambda: events.append("scores"))
+
+    application = UpupaApplication(
+        bot=object(),
+        dispatcher=object(),
+        supervisor=RecordingSupervisor(),
+    )
+    application.start_background_tasks()
+
+    assert events == ["dnd", "sessions", "scores"]
+
+
 def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
     import app.bootstrap as bootstrap
     from AI.dnd import dnd_router
@@ -100,7 +124,6 @@ def test_main_delegates_to_application_runner(monkeypatch):
     asyncio.run(main.main())
 
     assert calls == ["run"]
-
 
 
 def test_application_run_executes_startup_and_shutdown(monkeypatch):
@@ -145,7 +168,6 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
         ("start_polling", bot, True),
         ("stop",),
     ]
-
 
 
 def test_create_application_builds_and_configures_default_resources(monkeypatch):
