@@ -27,6 +27,19 @@ def test_childlike_prompt_puts_bad_drawing_style_first():
     assert description in prompt
 
 
+def test_gigachat_redraw_prompt_keeps_style_without_trigger_wording():
+    description = "A smiling person holds a yellow umbrella beside a small dog on a street."
+
+    prompt = redraw.build_gigachat_redraw_prompt(description)
+
+    assert prompt.startswith("ROUGH CRAYON DOODLE.")
+    assert "kindergarten-style" in prompt
+    assert "wobbly thick outlines" in prompt
+    assert description in prompt
+    assert "4-6 year old child" not in prompt
+    assert "wrong anatomy" not in prompt
+
+
 def test_pollinations_prompt_budget_is_not_legacy_200_chars():
     prompt = "BAD CHILD DRAWING. " + ("crooked crayons " * 35) + "SCENE_END_MARKER"
     prepared = redraw._prepare_pollinations_prompt(prompt)
@@ -63,7 +76,7 @@ async def test_pollinations_url_contains_text_beyond_200_chars(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_redraw_handler_sends_style_first_prompt_without_enhancer(monkeypatch):
+async def test_redraw_handler_sends_provider_specific_prompts_without_enhancer(monkeypatch):
     captured = {}
     photo = object()
 
@@ -91,8 +104,15 @@ async def test_redraw_handler_sends_style_first_prompt_without_enhancer(monkeypa
         assert "20-40 words" in analysis_prompt
         return "A smiling person holds a yellow umbrella beside a small dog on a street."
 
-    async def fake_generate(message, prompt, processing_msg, skip_translate=False):
+    async def fake_generate(
+        message,
+        prompt,
+        processing_msg,
+        skip_translate=False,
+        gigachat_prompt=None,
+    ):
         captured["prompt"] = prompt
+        captured["gigachat_prompt"] = gigachat_prompt
         captured["skip_translate"] = skip_translate
         return "ok"
 
@@ -109,6 +129,10 @@ async def test_redraw_handler_sends_style_first_prompt_without_enhancer(monkeypa
     assert captured["prompt"].startswith("BAD CHILD DRAWING.")
     assert "SCENE TO COPY: A smiling person" in captured["prompt"]
     assert "professional children's-book illustration" in captured["prompt"]
+    assert captured["gigachat_prompt"].startswith("ROUGH CRAYON DOODLE.")
+    assert "SCENE TO COPY: A smiling person" in captured["gigachat_prompt"]
+    assert "4-6 year old child" not in captured["gigachat_prompt"]
+    assert "wrong anatomy" not in captured["gigachat_prompt"]
 
 
 def test_install_replaces_redraw_and_pollinations_handlers():
