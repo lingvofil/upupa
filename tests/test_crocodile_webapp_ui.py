@@ -81,6 +81,22 @@ def test_crocodile_pointer_coordinates_are_scaled_to_canvas_bitmap():
     assert "(clientY - r.top) * scaleY" in source
 
 
+def test_crocodile_canvas_supports_two_finger_pinch_zoom_and_pan():
+    source = _source()
+
+    assert "const MIN_CANVAS_ZOOM = 1;" in source
+    assert "const MAX_CANVAS_ZOOM = 4;" in source
+    assert "const touchPointers = new Map();" in source
+    assert "function beginPinch(first, second)" in source
+    assert "function updatePinch(first, second)" in source
+    assert "Math.hypot(dx, dy)" in source
+    assert "touchPointers.size >= 2" in source
+    assert "e.touches.length >= 2" in source
+    assert "if (!touchGestureActive && drawing) endStroke();" in source
+    assert "canvas.style.transform" in source
+    assert "transform-origin: 0 0;" in source
+
+
 def test_crocodile_eraser_uses_white_without_forgetting_selected_color():
     source = _source()
 
