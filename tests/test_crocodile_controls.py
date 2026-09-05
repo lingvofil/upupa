@@ -29,9 +29,10 @@ def _session(*, started_at=1_000.0):
 def test_crocodile_stop_is_immediate_for_drawer_and_delayed_for_others():
     session = _session(started_at=1_000.0)
 
+    assert controls.STOP_UNLOCK_SECONDS == 5 * 60
     assert controls.can_stop_round(session, DRAWER_ID, now=1_001.0) is True
-    assert controls.can_stop_round(session, OTHER_ID, now=2_199.9) is False
-    assert controls.can_stop_round(session, OTHER_ID, now=2_200.0) is True
+    assert controls.can_stop_round(session, OTHER_ID, now=1_299.9) is False
+    assert controls.can_stop_round(session, OTHER_ID, now=1_300.0) is True
 
 
 def test_legacy_round_without_started_at_is_not_relocked_after_restart():
@@ -59,7 +60,7 @@ def test_starting_another_crocodile_cannot_bypass_stop_lock(monkeypatch):
         crocodile.game_sessions.clear()
 
 
-def test_text_stop_is_rejected_for_other_user_before_twenty_minutes(monkeypatch):
+def test_text_stop_is_rejected_for_other_user_before_five_minutes(monkeypatch):
     crocodile.game_sessions[CHAT_ID] = _session(started_at=1_000.0)
     monkeypatch.setattr(controls.time, "time", lambda: 1_100.0)
 
@@ -77,11 +78,12 @@ def test_text_stop_is_rejected_for_other_user_before_twenty_minutes(monkeypatch)
         assert crocodile.game_sessions[CHAT_ID]["drawer_id"] == DRAWER_ID
         assert message.replies
         assert "только Художник" in message.replies[0]
+        assert "через 4 мин." in message.replies[0]
     finally:
         crocodile.game_sessions.clear()
 
 
-def test_stop_button_is_rejected_for_other_user_before_twenty_minutes(monkeypatch):
+def test_stop_button_is_rejected_for_other_user_before_five_minutes(monkeypatch):
     crocodile.game_sessions[CHAT_ID] = _session(started_at=1_000.0)
     monkeypatch.setattr(controls.time, "time", lambda: 1_100.0)
 
