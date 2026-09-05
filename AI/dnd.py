@@ -18,9 +18,7 @@ from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 dnd_router = Router()
 
-# Хранилище активных сессий: chat_id -> GameSession
 dnd_sessions = {}
-# Хранилище связи опроса с чатом: poll_id -> chat_id (нужно для PollAnswer)
 poll_map = {}
 
 DND_MODEL_TIMEOUT_SECONDS = 90
@@ -74,7 +72,6 @@ DND_SYSTEM_PROMPT = """
 
 
 def configure_task_supervisor(supervisor):
-    """Передать владельца динамических DnD-задач из composition root."""
     global _task_supervisor
     _task_supervisor = supervisor
 
@@ -87,7 +84,6 @@ def _start_background_task(coro, *, name: str):
 
 
 def get_active_model(chat_id):
-    """Возвращает активную модель для DND на основе настроек чата."""
     settings = chat_settings.get(str(chat_id), {})
     active_model = settings.get("active_model", "gemini")
     if active_model == "history":
@@ -110,7 +106,6 @@ class GameSession:
         self.last_roll_stat = None
         self.current_poll_id = None
         self.pending_poll = None
-
         self.action_prompt_message_id = None
         self.pending_actions = {}
         self.action_deadline = None
@@ -144,7 +139,6 @@ class GameSession:
             self.chat_session = model.start_chat(chat_id=chat_id, history=history)
 
     def send_message(self, message_text):
-        """Отправить сообщение провайдеру и сохранить переносимый контекст."""
         if self.active_model == "gemini":
             response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
             result = response.text
@@ -208,7 +202,6 @@ def _state_path() -> Path:
 
 
 def persist_dnd_sessions() -> None:
-    """Атомарно сохранить активные DnD-сессии на диск."""
     path = _state_path()
     payload = {
         "version": 1,
@@ -224,7 +217,6 @@ def persist_dnd_sessions() -> None:
 
 
 def choose_next_scene_type(session: GameSession) -> str:
-    """Выбрать следующий тип сцены, исключив несколько последних."""
     recent = set(session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:])
     candidates = [scene for scene in DND_SCENE_TYPES if scene not in recent]
     if not candidates:
@@ -265,11 +257,6 @@ async def open_action_window(bot: Bot, chat_id: int):
     prompt_message = await bot.send_message(chat_id, _action_prompt_text())
     session.action_prompt_message_id = prompt_message.message_id
     persist_dnd_sessions()
-    logging.info(
-        "DnD action window opened chat_id=%s prompt_message_id=%s",
-        chat_id,
-        prompt_message.message_id,
-    )
     return prompt_message
 
 
@@ -322,6 +309,12 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 session.state = "WAITING_ACTION"
                 session.current_poll_id = None
                 session.pending_poll = None
+
+            if session.state == "RESOLVING":
+                session.state = "WAITING_ACTION"
+                session.action_prompt_message_id = None
+                session.pending_actions = {}
+                session.action_deadline = None
 
             if session.state == "WAITING_ACTION":
                 prompt_id = getattr(session, "action_prompt_message_id", None)
@@ -691,6 +684,9 @@ def _is_group_action_reply(message: Message) -> bool:
         return False
     prompt_message_id = session.action_prompt_message_id
     if not prompt_message_id or not message.reply_to_message:
+        return False
+    user_action = message.text or message.caption
+    if not user_action or user_action.lower().startswith("упупа"):
         return False
     return int(message.reply_to_message.message_id) == int(prompt_message_id)
 
