@@ -11,9 +11,9 @@ def setup_function():
 
 
 def test_normalize_model_result_accepts_short_complete_summary():
-    assert ss._normalize_model_result("*происходит спор о кальяне*") == (
-        "происходит спор о кальяне",
-        "происходит спор о кальяне",
+    assert ss._normalize_model_result("*произошёл спор о кальяне*") == (
+        "произошёл спор о кальяне",
+        "произошёл спор о кальяне",
     )
     assert ss._normalize_model_result("произошел внезапный подъеб.") == (
         "произошёл внезапный подъеб",
@@ -29,18 +29,23 @@ def test_normalize_model_result_accepts_short_complete_summary():
     )
 
 
+def test_normalize_model_result_rejects_present_tense():
+    assert ss._normalize_model_result("происходит спор о кальяне") is None
+    assert ss._normalize_model_result("происходит голубиный захват") is None
+
+
 def test_normalize_model_result_rejects_dangling_adjective():
     assert ss._normalize_model_result("произошёл странный") is None
-    assert ss._normalize_model_result("происходит весёлый") is None
+    assert ss._normalize_model_result("произошла весёлая") is None
 
 
 def test_normalize_model_result_rejects_wrong_or_too_long_format():
-    assert ss._normalize_model_result("это происходит спор") is None
-    assert ss._normalize_model_result("происходит очень смешной голубь на сервере") is None
-    assert ss._normalize_model_result("происходит спор, но недолго") is None
+    assert ss._normalize_model_result("это произошёл спор") is None
+    assert ss._normalize_model_result("произошёл очень смешной голубь на сервере") is None
+    assert ss._normalize_model_result("произошёл спор, но недолго") is None
 
 
-def test_prompt_requires_contextual_complete_phrase():
+def test_prompt_requires_contextual_complete_phrase_and_past_tense():
     prompt = ss._build_prompt(
         [
             {"role": "user", "name": "А", "content": "давайте кальян"},
@@ -50,6 +55,8 @@ def test_prompt_requires_contextual_complete_phrase():
     )
 
     assert "ОСМЫСЛЕННУЮ" in prompt
+    assert "ТОЛЬКО прошедшее время" in prompt
+    assert "не начинай ответ со слова «происходит»" in prompt
     assert "нельзя «произошёл странный»" in prompt
     assert "А: давайте кальян" in prompt
     assert "произошёл спор о пиве" in prompt
@@ -92,6 +99,21 @@ def test_one_message_is_enough_but_still_goes_through_model():
     )
 
     assert result == "*произошло голубиное вторжение*"
+
+
+def test_present_tense_model_answer_is_skipped():
+    async def bad_model(*args, **kwargs):
+        return "происходит странный спор"
+
+    result = asyncio.run(
+        ss.generate_absurd_situational_reaction(
+            321,
+            [{"role": "user", "name": "А", "content": "что-то странное происходит"}],
+            bad_model,
+        )
+    )
+
+    assert result is None
 
 
 def test_invalid_model_answer_is_skipped_instead_of_random_word_fallback():
@@ -160,7 +182,7 @@ def test_installer_uses_live_context_and_makes_random_pipeline_idempotent():
     calls = []
 
     async def fake_generate(*args, **kwargs):
-        return "происходит голубиный захват"
+        return "произошёл голубиный захват"
 
     async def original_process(message, *args, **kwargs):
         calls.append(message.message_id)
@@ -185,12 +207,12 @@ def test_installer_uses_live_context_and_makes_random_pipeline_idempotent():
     assert list(ss._context_for_chat(77))[-1]["content"] == "в чат прилетел голубь"
 
     result = asyncio.run(module.generate_situational_reaction(77))
-    assert result == "*происходит голубиный захват*"
+    assert result == "*произошёл голубиный захват*"
 
 
 def test_installer_is_idempotent():
     async def fake_generate(*args, **kwargs):
-        return "происходит обычный тест"
+        return "произошёл обычный тест"
 
     async def original_process(message, *args, **kwargs):
         return False
