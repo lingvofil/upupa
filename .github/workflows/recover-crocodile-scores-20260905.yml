@@ -1,0 +1,126 @@
+name: Recover Crocodile scores 2026-09-05
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/recover_crocodile_scores.py
+      - .github/workflows/recover-crocodile-scores-20260905.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upupa-production
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || '88.218.122.208' }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+      DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
+      DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE || 'upupa_bot.service' }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Restore matching Crocodile scoreboard backup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9._:-]+$ ]]
+          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${DEPLOY_APP_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "${DEPLOY_SERVICE}" =~ ^[A-Za-z0-9_.@-]+$ ]]
+
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
+          if [[ -n "${SSH_KNOWN_HOSTS}" ]]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+            chmod 600 "${HOME}/.ssh/known_hosts"
+            SSH_OPTIONS+=(
+              -o StrictHostKeyChecking=yes
+              -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+            )
+          else
+            SSH_OPTIONS+=(-o StrictHostKeyChecking=no)
+            echo "::warning::SSH_KNOWN_HOSTS is not configured; using legacy host-key behavior"
+          fi
+
+          ssh "${SSH_OPTIONS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "bash -s -- '${GITHUB_SHA}' '${DEPLOY_APP_DIR}' '${DEPLOY_SERVICE}'" <<'REMOTE'
+          set -Eeuo pipefail
+
+          TARGET_SHA="$1"
+          APP_DIR="$2"
+          SERVICE="$3"
+          VENV_PYTHON="$APP_DIR/venv/bin/python"
+          BACKUP_ROOT="$(dirname "$APP_DIR")/upupa-backups"
+          RECOVERY_SCRIPT="$(mktemp /tmp/upupa-crocodile-recovery.XXXXXX.py)"
+          HEALTHCHECK_SCRIPT="$(mktemp /tmp/upupa-healthcheck.XXXXXX.py)"
+          SERVICE_STOPPED=0
+
+          service_ctl() {
+            if [[ "$(id -u)" -eq 0 ]]; then
+              systemctl "$@"
+            else
+              sudo -n systemctl "$@"
+            fi
+          }
+
+          cleanup() {
+            local status=$?
+            rm -f "$RECOVERY_SCRIPT" "$HEALTHCHECK_SCRIPT"
+            if [[ "$SERVICE_STOPPED" -eq 1 ]]; then
+              service_ctl start "$SERVICE" || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          cd "$APP_DIR"
+          git fetch --prune origin main
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git show "${TARGET_SHA}:scripts/recover_crocodile_scores.py" > "$RECOVERY_SCRIPT"
+          git show "${TARGET_SHA}:scripts/production_healthcheck.py" > "$HEALTHCHECK_SCRIPT"
+
+          service_ctl stop "$SERVICE"
+          SERVICE_STOPPED=1
+
+          "$VENV_PYTHON" "$RECOVERY_SCRIPT" \
+            --backup-root "$BACKUP_ROOT" \
+            --scores-file "$APP_DIR/crocodile_scores.json" \
+            --chat-id=-1001707530786 \
+            --marker "$BACKUP_ROOT/.crocodile-score-recovery-20260905.done" \
+            --expected 'Чудо в Стране Алис 🍀=20' \
+            --expected 'Alina=16' \
+            --expected 'Детектор=9' \
+            --expected 'М&M=8' \
+            --expected 'Six7ape=7' \
+            --expected 'cotka Ara=6' \
+            --expected 'Владимир=6' \
+            --expected '𝐒𝐎𝐍𝐍𝐄=2' \
+            --expected 'Никита=1' \
+            --expected 'Ola=1' \
+            --apply
+
+          service_ctl start "$SERVICE"
+          SERVICE_STOPPED=0
+          sleep 5
+          "$VENV_PYTHON" "$HEALTHCHECK_SCRIPT" --app-dir "$APP_DIR" --timeout 10
+          echo "Crocodile scoreboard recovery completed successfully."
+
+          trap - EXIT
+          rm -f "$RECOVERY_SCRIPT" "$HEALTHCHECK_SCRIPT"
+          REMOTE
