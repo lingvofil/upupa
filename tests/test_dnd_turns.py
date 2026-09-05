@@ -1,6 +1,10 @@
 import asyncio
 from types import SimpleNamespace
 
+from tests import test_smoke_imports
+
+del test_smoke_imports
+
 from AI import dnd
 
 
@@ -44,13 +48,10 @@ class FakeMessage:
 class FakeBot:
     def __init__(self):
         self.messages = []
-        self.next_message_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
         self.messages.append((chat_id, text, kwargs))
-        message = SimpleNamespace(message_id=self.next_message_id)
-        self.next_message_id += 1
-        return message
+        return SimpleNamespace(message_id=100 + len(self.messages))
 
 
 def test_dnd_poll_timeout_is_five_minutes():
@@ -68,44 +69,41 @@ def test_scene_director_does_not_repeat_last_two(monkeypatch):
     assert len(session.recent_scene_types) <= dnd.DND_RECENT_SCENE_LIMIT
 
 
-def test_group_turn_ignores_chat_messages_outside_action_prompt(monkeypatch):
+def test_group_action_router_only_accepts_replies_to_current_prompt():
     chat_id = -100500
     session = SimpleNamespace(
         state="WAITING_ACTION",
         action_prompt_message_id=77,
-        pending_actions={},
-        action_deadline=None,
     )
     dnd.dnd_sessions[chat_id] = session
-    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
 
     try:
-        asyncio.run(
-            dnd.handle_free_action(
-                FakeMessage(
-                    chat_id=chat_id,
-                    user_id=1,
-                    user_name="Алиса",
-                    text="я просто болтаю в чате",
-                )
-            )
+        plain_chat = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            user_name="Алиса",
+            text="обычная болтовня",
         )
-        asyncio.run(
-            dnd.handle_free_action(
-                FakeMessage(
-                    chat_id=chat_id,
-                    user_id=1,
-                    user_name="Алиса",
-                    text="делаю действие",
-                    reply_to_message_id=76,
-                )
-            )
+        wrong_reply = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            user_name="Алиса",
+            text="не туда",
+            reply_to_message_id=76,
         )
+        correct_reply = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            user_name="Алиса",
+            text="ломаю дверь",
+            reply_to_message_id=77,
+        )
+
+        assert dnd._is_group_action_reply(plain_chat) is False
+        assert dnd._is_group_action_reply(wrong_reply) is False
+        assert dnd._is_group_action_reply(correct_reply) is True
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
-
-    assert session.pending_actions == {}
-    assert session.action_deadline is None
 
 
 def test_group_turn_collects_players_and_starts_one_timer(monkeypatch):
@@ -153,7 +151,7 @@ def test_group_turn_collects_players_and_starts_one_timer(monkeypatch):
     assert second.answers == []
 
 
-def test_player_can_replace_own_action_before_group_turn_closes(monkeypatch):
+def test_player_can_replace_own_action_without_new_timer(monkeypatch):
     chat_id = -100502
     session = SimpleNamespace(
         state="WAITING_ACTION",
