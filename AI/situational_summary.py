@@ -21,7 +21,7 @@ _RESULT_RE = re.compile(
 )
 _TOKEN_RE = re.compile(r"^[а-яёa-z0-9-]+$", re.IGNORECASE)
 _DANGLING_MODIFIER_RE = re.compile(
-    r"(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ым|им|ую|юю|ых|их)$",
+    r"(?:ый|ий|ой|ая|яя|ого|его|ому|ему|ым|им|ую|юю|ых|их)$",
     re.IGNORECASE,
 )
 
@@ -150,6 +150,8 @@ def _normalize_model_result(text: str | None) -> tuple[str, str] | None:
         return None
 
     # Главная защита от ответов вида «произошёл странный».
+    # Не проверяем неоднозначные окончания -ое/-ее/-ые/-ие: ими заканчиваются
+    # и нормальные существительные вроде «примирение».
     if len(words) == 1 and _DANGLING_MODIFIER_RE.search(words[0]):
         return None
 
