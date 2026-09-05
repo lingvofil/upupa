@@ -111,12 +111,9 @@ class GameSession:
         self.current_poll_id = None
         self.pending_poll = None
 
-        # Групповой ход: игроки отвечают реплаями на action_prompt_message_id.
         self.action_prompt_message_id = None
         self.pending_actions = {}
         self.action_deadline = None
-
-        # Последние типы сцен нужны, чтобы режиссёр не повторялся подряд.
         self.recent_scene_types = []
 
         if conversation is None:
@@ -232,7 +229,6 @@ def choose_next_scene_type(session: GameSession) -> str:
     candidates = [scene for scene in DND_SCENE_TYPES if scene not in recent]
     if not candidates:
         candidates = list(DND_SCENE_TYPES)
-
     scene_type = random.choice(candidates)
     session.recent_scene_types.append(scene_type)
     session.recent_scene_types = session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:]
@@ -240,7 +236,6 @@ def choose_next_scene_type(session: GameSession) -> str:
 
 
 def with_scene_direction(session: GameSession, prompt: str) -> str:
-    """Добавить модели мягкое режиссёрское ограничение для разнообразия сцен."""
     scene_type = choose_next_scene_type(session)
     return (
         f"{prompt}\n\n"
@@ -259,17 +254,14 @@ def _action_prompt_text() -> str:
 
 
 async def open_action_window(bot: Bot, chat_id: int):
-    """Открыть новый групповой ход без таймера до первого действия."""
     session = dnd_sessions.get(chat_id)
     if not session:
         return None
-
     session.state = "WAITING_ACTION"
     session.pending_actions = {}
     session.action_deadline = None
     session.action_prompt_message_id = None
     persist_dnd_sessions()
-
     prompt_message = await bot.send_message(chat_id, _action_prompt_text())
     session.action_prompt_message_id = prompt_message.message_id
     persist_dnd_sessions()
@@ -282,7 +274,6 @@ async def open_action_window(bot: Bot, chat_id: int):
 
 
 async def _restore_action_prompt(bot: Bot, chat_id: int):
-    """Для старого persisted state создать отсутствующий prompt группового хода."""
     session = dnd_sessions.get(chat_id)
     if not session or session.state != "WAITING_ACTION":
         return
@@ -292,11 +283,9 @@ async def _restore_action_prompt(bot: Bot, chat_id: int):
 
 
 def restore_dnd_sessions(bot: Bot) -> int:
-    """Восстановить сессии и таймеры после рестарта процесса."""
     path = _state_path()
     if not path.exists():
         return 0
-
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -306,13 +295,11 @@ def restore_dnd_sessions(bot: Bot) -> int:
     restored = 0
     dnd_sessions.clear()
     poll_map.clear()
-
     for record in payload.get("sessions", []):
         try:
             session = GameSession.from_record(record)
             dnd_sessions[session.chat_id] = session
             restored += 1
-
             poll = session.pending_poll
             if session.state == "WAITING_POLL" and session.current_poll_id and poll:
                 poll_id = str(session.current_poll_id)
@@ -330,12 +317,6 @@ def restore_dnd_sessions(bot: Bot) -> int:
                         delay_seconds=delay,
                     ),
                     name=f"dnd-poll:{session.chat_id}:{poll_id}:restored",
-                )
-                logging.info(
-                    "DnD poll restored chat_id=%s poll_id=%s remaining=%.1fs",
-                    session.chat_id,
-                    poll_id,
-                    delay,
                 )
             elif session.state == "WAITING_POLL":
                 session.state = "WAITING_ACTION"
@@ -357,12 +338,6 @@ def restore_dnd_sessions(bot: Bot) -> int:
                         ),
                         name=f"dnd-actions:{session.chat_id}:{prompt_id}:restored",
                     )
-                    logging.info(
-                        "DnD action timer restored chat_id=%s prompt_message_id=%s remaining=%.1fs",
-                        session.chat_id,
-                        prompt_id,
-                        delay,
-                    )
                 elif not prompt_id:
                     _start_background_task(
                         _restore_action_prompt(bot, session.chat_id),
@@ -378,7 +353,6 @@ def restore_dnd_sessions(bot: Bot) -> int:
 
 
 async def create_game_session(chat_id: int, starter_name: str):
-    """Создать provider-backed сессию вне event loop с ограничением времени."""
     return await asyncio.wait_for(
         asyncio.to_thread(GameSession, chat_id, starter_name),
         timeout=DND_MODEL_TIMEOUT_SECONDS,
@@ -386,7 +360,6 @@ async def create_game_session(chat_id: int, starter_name: str):
 
 
 async def generate_session_response(session: GameSession, prompt: str) -> str:
-    """Вызвать provider wrapper вне event loop и сохранить обновлённый контекст."""
     result = await asyncio.wait_for(
         asyncio.to_thread(session.send_message, prompt),
         timeout=DND_MODEL_TIMEOUT_SECONDS,
@@ -400,19 +373,15 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     session = dnd_sessions.get(chat_id)
     if not session:
         return
-
     action_match = re.search(r"\[ACTION:(.*?)\]", text_response)
     clean_text = re.sub(r"\[ACTION:.*?\]", "", text_response).strip()
-
     if clean_text:
         await bot.send_message(chat_id, clean_text)
-
     if not action_match:
         await open_action_window(bot, chat_id)
         return
 
     command_str = action_match.group(1)
-
     if command_str.startswith("POLL"):
         try:
             options_part = command_str.split("OPTIONS:", 1)[1]
@@ -420,7 +389,6 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             options = [option for option in options if option][:4]
             if len(options) < 2:
                 raise ValueError("DnD poll needs at least two options")
-
             session.state = "WAITING_POLL"
             session.action_prompt_message_id = None
             session.pending_actions = {}
@@ -431,7 +399,6 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
                 options=options,
                 is_anonymous=False,
             )
-
             poll_id = str(poll_msg.poll.id)
             deadline = time.time() + DND_POLL_TIMEOUT_SECONDS
             session.current_poll_id = poll_id
@@ -444,7 +411,6 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             }
             poll_map[poll_id] = chat_id
             persist_dnd_sessions()
-
             _start_background_task(
                 wait_for_poll_timeout(
                     bot,
@@ -455,12 +421,6 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
                     poll_id,
                 ),
                 name=f"dnd-poll:{chat_id}:{poll_id}",
-            )
-            logging.info(
-                "DnD poll started chat_id=%s poll_id=%s deadline=%s",
-                chat_id,
-                poll_id,
-                deadline,
             )
         except Exception:
             logging.exception("DnD poll setup failed chat_id=%s", chat_id)
@@ -482,17 +442,14 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             f"🎲 Проверка: *{stat}*. Пиши *кидаю*.",
             parse_mode="Markdown",
         )
-
     elif command_str.startswith("INPUT"):
         await open_action_window(bot, chat_id)
-
     elif command_str.startswith("END"):
         cleanup_session(chat_id)
         await bot.send_message(chat_id, "☠️ Игра окончена.")
 
 
 def cleanup_session(chat_id):
-    """Удалить сессию и её poll mapping, затем сохранить состояние."""
     session = dnd_sessions.pop(chat_id, None)
     if session and session.current_poll_id:
         poll_map.pop(str(session.current_poll_id), None)
@@ -501,15 +458,12 @@ def cleanup_session(chat_id):
 
 
 async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
-    """Остановить опрос, посчитать голоса и продолжить историю."""
     session = dnd_sessions.get(chat_id)
     if not session:
         return
-
     poll_id = str(session.current_poll_id or "")
     if not poll_id or poll_id in _finalizing_polls:
         return
-
     _finalizing_polls.add(poll_id)
     try:
         try:
@@ -522,17 +476,12 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
                     winners = [option.text]
                 elif option.voter_count == max_votes and max_votes > 0:
                     winners.append(option.text)
-
             if winners:
                 outcome = f"Выбор сделан: {random.choice(winners)}"
             else:
                 outcome = f"Тишина... Случайность выбрала: {random.choice(options)}"
         except Exception:
-            logging.exception(
-                "DnD stop_poll failed chat_id=%s poll_id=%s; using fallback",
-                chat_id,
-                poll_id,
-            )
+            logging.exception("DnD stop_poll failed chat_id=%s poll_id=%s", chat_id, poll_id)
             outcome = f"Опрос потерялся, судьба выбрала: {random.choice(options)}"
 
         poll_map.pop(poll_id, None)
@@ -540,15 +489,7 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
         session.pending_poll = None
         session.state = "RESOLVING"
         persist_dnd_sessions()
-
         await bot.send_message(chat_id, f"✅ {outcome}")
-        logging.info(
-            "DnD poll finalized chat_id=%s poll_id=%s outcome=%s",
-            chat_id,
-            poll_id,
-            outcome,
-        )
-
         try:
             response_text = await generate_session_response(
                 session,
@@ -560,10 +501,7 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
             await parse_and_execute_turn(bot, chat_id, response_text)
         except Exception:
             logging.exception("DnD continuation failed chat_id=%s", chat_id)
-            await bot.send_message(
-                chat_id,
-                "Мастер на секунду выпал из реальности. История сохранена.",
-            )
+            await bot.send_message(chat_id, "Мастер на секунду выпал из реальности. История сохранена.")
             await open_action_window(bot, chat_id)
     finally:
         _finalizing_polls.discard(poll_id)
@@ -579,49 +517,38 @@ async def wait_for_poll_timeout(
     *,
     delay_seconds: float | None = None,
 ):
-    """Дождаться дедлайна текущего poll и продолжить историю."""
-    del poll_chat_id  # chat_id остаётся каноническим идентификатором сессии.
+    del poll_chat_id
     delay = DND_POLL_TIMEOUT_SECONDS if delay_seconds is None else max(0.0, delay_seconds)
     await asyncio.sleep(delay)
-
     session = dnd_sessions.get(chat_id)
     if not session or str(session.current_poll_id) != str(poll_id):
         return
-
     await finalize_poll(bot, chat_id, message_id, options)
 
 
 def _format_group_actions(actions: list[dict]) -> str:
-    lines = []
-    for item in actions:
-        name = item.get("name") or "Игрок"
-        action = item.get("action") or ""
-        lines.append(f"- {name}: {action}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"- {item.get('name') or 'Игрок'}: {item.get('action') or ''}" for item in actions
+    )
 
 
 async def finalize_group_actions(bot: Bot, chat_id: int, prompt_message_id: int):
-    """Заморозить собранные действия и разрешить их одним ходом Мастера."""
     session = dnd_sessions.get(chat_id)
     if not session or session.state != "WAITING_ACTION":
         return
     if int(session.action_prompt_message_id or 0) != int(prompt_message_id):
         return
-
     actions = list((session.pending_actions or {}).values())
     session.action_deadline = None
     if not actions:
         persist_dnd_sessions()
         return
-
     session.state = "RESOLVING"
     session.action_prompt_message_id = None
     session.pending_actions = {}
     persist_dnd_sessions()
-
     actions_text = _format_group_actions(actions)
     await bot.send_message(chat_id, f"🎭 Ход партии:\n{actions_text}")
-
     try:
         response_text = await generate_session_response(
             session,
@@ -638,10 +565,7 @@ async def finalize_group_actions(bot: Bot, chat_id: int, prompt_message_id: int)
         await parse_and_execute_turn(bot, chat_id, response_text)
     except Exception:
         logging.exception("DnD group action continuation failed chat_id=%s", chat_id)
-        await bot.send_message(
-            chat_id,
-            "Мастер завис на коллективном безумии. Повторите действия.",
-        )
+        await bot.send_message(chat_id, "Мастер завис на коллективном безумии. Повторите действия.")
         await open_action_window(bot, chat_id)
 
 
@@ -652,16 +576,13 @@ async def wait_for_action_timeout(
     *,
     delay_seconds: float | None = None,
 ):
-    """После первого действия дать остальным короткое окно и закрыть групповой ход."""
     delay = DND_ACTION_WINDOW_SECONDS if delay_seconds is None else max(0.0, delay_seconds)
     await asyncio.sleep(delay)
-
     session = dnd_sessions.get(chat_id)
     if not session or session.state != "WAITING_ACTION":
         return
     if int(session.action_prompt_message_id or 0) != int(prompt_message_id):
         return
-
     await finalize_group_actions(bot, chat_id, prompt_message_id)
 
 
@@ -693,12 +614,6 @@ async def cmd_start_dnd(message: Message):
         logging.exception("DnD session creation failed chat_id=%s", message.chat.id)
         await message.answer("Не удалось разбудить мастера историй.")
         return
-
-    logging.info(
-        "DnD session started chat_id=%s model=%s",
-        message.chat.id,
-        session.active_model,
-    )
     await message.answer(f"Ладно, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
 
 
@@ -708,7 +623,6 @@ async def cmd_stop_dnd(message: Message):
     if not session:
         await message.answer("Мы и не играем.")
         return
-
     try:
         response_text = await generate_session_response(
             session,
@@ -732,15 +646,11 @@ async def handle_backstory(message: Message):
     if not backstory:
         await message.answer("Предысторию лучше прислать текстом.")
         return
-
     msg = await message.answer("Генерирую...")
     try:
         response_text = await generate_session_response(
             session,
-            with_scene_direction(
-                session,
-                f"Предыстория: {backstory}. Начинай.",
-            ),
+            with_scene_direction(session, f"Предыстория: {backstory}. Начинай."),
         )
         try:
             await message.bot.delete_message(message.chat.id, msg.message_id)
@@ -757,21 +667,16 @@ async def handle_roll(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session or session.state != "WAITING_ROLL":
         return
-
     roll_result = random.randint(1, 20)
     stat = session.last_roll_stat
     await message.answer(
         f"🎲 {message.from_user.first_name}: {stat} -> **{roll_result}**",
         parse_mode="Markdown",
     )
-
     try:
         response_text = await generate_session_response(
             session,
-            with_scene_direction(
-                session,
-                f"Игрок кинул на {stat}: {roll_result}. Продолжай.",
-            ),
+            with_scene_direction(session, f"Игрок кинул на {stat}: {roll_result}. Продолжай."),
         )
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
@@ -780,23 +685,23 @@ async def handle_roll(message: Message):
         await open_action_window(message.bot, message.chat.id)
 
 
-@dnd_router.message(
-    lambda m: dnd_sessions.get(m.chat.id)
-    and dnd_sessions[m.chat.id].state == "WAITING_ACTION"
-)
-async def handle_free_action(message: Message):
-    """Собирать только реплаи на текущий prompt и разрешать их одним общим ходом."""
-    session = dnd_sessions[message.chat.id]
+def _is_group_action_reply(message: Message) -> bool:
+    session = dnd_sessions.get(message.chat.id)
+    if not session or session.state != "WAITING_ACTION":
+        return False
     prompt_message_id = session.action_prompt_message_id
     if not prompt_message_id or not message.reply_to_message:
-        return
-    if int(message.reply_to_message.message_id) != int(prompt_message_id):
-        return
+        return False
+    return int(message.reply_to_message.message_id) == int(prompt_message_id)
 
+
+@dnd_router.message(_is_group_action_reply)
+async def handle_free_action(message: Message):
+    session = dnd_sessions[message.chat.id]
+    prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
     if not user_action or user_action.lower().startswith("упупа"):
         return
-
     user_id = int(message.from_user.id)
     user_name = message.from_user.first_name
     session.pending_actions[str(user_id)] = {
@@ -804,19 +709,13 @@ async def handle_free_action(message: Message):
         "name": user_name,
         "action": user_action,
     }
-
     first_action = session.action_deadline is None
     if first_action:
         session.action_deadline = time.time() + DND_ACTION_WINDOW_SECONDS
     persist_dnd_sessions()
-
     if first_action:
         _start_background_task(
-            wait_for_action_timeout(
-                message.bot,
-                message.chat.id,
-                int(prompt_message_id),
-            ),
+            wait_for_action_timeout(message.bot, message.chat.id, int(prompt_message_id)),
             name=f"dnd-actions:{message.chat.id}:{prompt_message_id}",
         )
         await message.answer(
