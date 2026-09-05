@@ -40,7 +40,7 @@ def _should_start_participant_quiz(message: Message) -> bool:
 def _should_start_quiz(message: Message) -> bool:
     return bool(
         message.text
-        and "викторина" in message.text.lower()
+        and message.text.lower().strip() == "викторина"
         and not _is_reply_to_upupa(message)
     )
 
