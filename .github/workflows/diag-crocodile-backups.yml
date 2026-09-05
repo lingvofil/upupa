@@ -1,0 +1,98 @@
+name: Diagnose Crocodile backups
+
+on:
+  push:
+    branches:
+      - diag/crocodile-backups
+    paths:
+      - .github/workflows/diag-crocodile-backups.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || '88.218.122.208' }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+      DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Inspect Crocodile score files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=15)
+          if [[ -n "${SSH_KNOWN_HOSTS}" ]]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+            chmod 600 "${HOME}/.ssh/known_hosts"
+            SSH_OPTIONS+=(
+              -o StrictHostKeyChecking=yes
+              -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+            )
+          else
+            SSH_OPTIONS+=(-o StrictHostKeyChecking=no)
+          fi
+
+          ssh "${SSH_OPTIONS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "python3 - '${DEPLOY_APP_DIR}'" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          app = Path(sys.argv[1])
+          roots = [app, app.parent / 'upupa-backups']
+          chat_id = '-1001707530786'
+          seen = set()
+
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in sorted(root.rglob('crocodile_scores*.json')):
+                  if path in seen or not path.is_file():
+                      continue
+                  seen.add(path)
+                  print(f'FILE {path}')
+                  try:
+                      payload = json.loads(path.read_text(encoding='utf-8'))
+                  except Exception as exc:
+                      print(f'  ERROR {type(exc).__name__}: {exc}')
+                      continue
+                  if not isinstance(payload, dict):
+                      print(f'  ROOT_TYPE {type(payload).__name__}')
+                      continue
+                  print(f'  ROOT_KEYS {list(payload)[:8]} total={len(payload)}')
+                  table = payload.get(chat_id)
+                  if table is None:
+                      print('  TARGET_CHAT missing')
+                      continue
+                  print(f'  TARGET_TYPE {type(table).__name__}')
+                  if isinstance(table, dict):
+                      rows = []
+                      for user_id, value in table.items():
+                          if isinstance(value, dict):
+                              name = value.get('name')
+                              pts = value.get('pts')
+                              rows.append((str(user_id), name, pts, value))
+                          else:
+                              rows.append((str(user_id), None, value, value))
+                      def score(row):
+                          try:
+                              return int(row[2] or 0)
+                          except Exception:
+                              return 0
+                      rows.sort(key=lambda r: (-score(r), r[0]))
+                      for row in rows[:20]:
+                          print(f'    {row[0]} | {row[1]!r} | {row[2]!r} | {row[3]!r}')
+                  else:
+                      print(f'  TARGET_VALUE {table!r}')
+          PY
