@@ -78,6 +78,7 @@ def test_text_stop_is_rejected_for_other_user_before_five_minutes(monkeypatch):
         assert crocodile.game_sessions[CHAT_ID]["drawer_id"] == DRAWER_ID
         assert message.replies
         assert "только Художник" in message.replies[0]
+        assert "через 4 мин." in message.replies[0]
     finally:
         crocodile.game_sessions.clear()
 
