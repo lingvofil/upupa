@@ -33,6 +33,17 @@ def test_quiz_words_in_reply_to_upupa_do_not_restart_quiz():
         ai_profiles.bot = original_bot
 
 
+def test_quiz_word_inside_regular_text_does_not_start_quiz():
+    from handlers import ai_profiles
+
+    message = SimpleNamespace(
+        text="может викторина завтра будет",
+        reply_to_message=None,
+    )
+
+    assert ai_profiles._should_start_quiz(message) is False
+
+
 def test_participant_quiz_words_in_reply_to_upupa_do_not_restart_quiz():
     from handlers import ai_profiles
 
@@ -50,10 +61,27 @@ def test_participant_quiz_words_in_reply_to_upupa_do_not_restart_quiz():
         ai_profiles.bot = original_bot
 
 
+def test_participant_quiz_remains_separate_command():
+    from handlers import ai_profiles
+
+    message = SimpleNamespace(text="викторина участники", reply_to_message=None)
+
+    assert ai_profiles._should_start_participant_quiz(message) is True
+    assert ai_profiles._should_start_quiz(message) is False
+
+
 def test_quiz_command_without_reply_still_starts_quiz():
     from handlers import ai_profiles
 
     message = SimpleNamespace(text="викторина", reply_to_message=None)
+
+    assert ai_profiles._should_start_quiz(message) is True
+
+
+def test_quiz_command_ignores_case_and_outer_whitespace():
+    from handlers import ai_profiles
+
+    message = SimpleNamespace(text="  ВиКтОрИнА  ", reply_to_message=None)
 
     assert ai_profiles._should_start_quiz(message) is True
 
