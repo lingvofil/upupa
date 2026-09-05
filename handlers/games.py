@@ -42,7 +42,7 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     if not is_egra_handled:
         await _process_quiz_poll_answer_once(poll_answer, bot)
 
-@router.callback_query(F.data == "egра_final_choice")
+@router.callback_query(F.data == "egra_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
     await handle_final_button_press(callback_query, bot)
 
