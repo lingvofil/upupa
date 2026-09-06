@@ -71,29 +71,38 @@ def pick_reverse_crocodile_word(difficulty: str) -> str:
     pool = WORD_POOLS[difficulty]
     unique_words = {crocodile._normalize_guess(word): word for word in pool}
 
-    used = persistence._load_word_history()
-    cleaned_used: list[str] = []
-    seen: set[str] = set()
-    for key in used:
-        if key in unique_words and key not in seen:
-            cleaned_used.append(key)
-            seen.add(key)
-    used = cleaned_used
+    # History is shared with regular Crocodile so a word used there is not
+    # immediately recycled here. Never filter away entries from another level:
+    # switching difficulty must not reset either mode's no-repeat cycle.
+    history = persistence._load_word_history()
+    pool_history: list[str] = []
+    pool_seen: set[str] = set()
+    for key in history:
+        if key in unique_words and key not in pool_seen:
+            pool_history.append(key)
+            pool_seen.add(key)
 
-    available = [key for key in unique_words if key not in seen]
+    available = [key for key in unique_words if key not in pool_seen]
     if not available:
         carry_count = min(
             persistence.WORD_HISTORY_CARRYOVER,
             max(0, len(unique_words) - 1),
         )
-        used = used[-carry_count:] if carry_count else []
-        seen = set(used)
-        available = [key for key in unique_words if key not in seen]
+        carry = pool_history[-carry_count:] if carry_count else []
+        carry_set = set(carry)
+        # Start a new cycle only for the exhausted difficulty. Keep history for
+        # all other levels and for regular Crocodile intact.
+        history = [
+            key for key in history
+            if key not in unique_words or key in carry_set
+        ]
+        pool_seen = carry_set
+        available = [key for key in unique_words if key not in pool_seen]
 
     chosen_key = random.choice(available)
-    used.append(chosen_key)
+    history.append(chosen_key)
     try:
-        persistence._write_word_history(used)
+        persistence._write_word_history(history)
     except Exception:
         logging.exception(
             "[rcroc] failed to persist word history difficulty=%s path=%s",
