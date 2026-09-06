@@ -7,6 +7,25 @@ import os
 # Loopback only; use the same value for the service and the healthcheck CLI.
 HEALTHCHECK_PORT = int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766"))
 
+# Shared guard for synchronous AI SDK calls. Background work gets its own
+# smaller lane while all provider calls share the same process-wide ceiling.
+AI_MAX_CONCURRENCY = max(1, int(os.getenv("UPUPA_AI_MAX_CONCURRENCY", "3")))
+AI_BACKGROUND_MAX_CONCURRENCY = max(
+    1,
+    min(
+        AI_MAX_CONCURRENCY,
+        int(os.getenv("UPUPA_AI_BACKGROUND_MAX_CONCURRENCY", "1")),
+    ),
+)
+AI_QUEUE_TIMEOUT_SECONDS = max(
+    1.0,
+    float(os.getenv("UPUPA_AI_QUEUE_TIMEOUT_SECONDS", "20")),
+)
+AI_REQUEST_TIMEOUT_SECONDS = max(
+    AI_QUEUE_TIMEOUT_SECONDS,
+    float(os.getenv("UPUPA_AI_REQUEST_TIMEOUT_SECONDS", "120")),
+)
+
 # =========================
 # === ИМПОРТ СЕКРЕТОВ ===
 # =========================
