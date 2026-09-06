@@ -134,6 +134,7 @@ class UpupaApplication:
             restore_crocodile_sessions,
         )
         from games.crocodile_single_words import configure_crocodile_single_words
+        from games.crocodile_socket_server import crocodile_socket_server_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
 
@@ -187,7 +188,7 @@ class UpupaApplication:
             name="resource-snapshot",
         )
         self.supervisor.start_resilient(
-            lambda: crocodile.start_socket_server(),
+            crocodile_socket_server_loop,
             name="crocodile-socket-server",
         )
         self._background_tasks_started = True
