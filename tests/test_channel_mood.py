@@ -41,6 +41,7 @@ def test_moods_change_content_length_and_top_level_probabilities():
     from features.channel.mood import content_weights, external_probability, image_probability, length_weights
     from prompts.channel import POST_CONTENT_MODES, POST_LENGTH_MODES
 
+    neutral = {"name": "neutral", "posts_left": 4}
     thoughtful = {"name": "thoughtful", "posts_left": 4}
     sleepy = {"name": "sleepy", "posts_left": 3}
     chaotic = {"name": "chaotic", "posts_left": 3}
@@ -60,7 +61,8 @@ def test_moods_change_content_length_and_top_level_probabilities():
     assert thoughtful_lengths["medium"] == 30
 
     assert image_probability(chaotic) == 0.25
-    assert external_probability(social) == 0.22
+    assert external_probability(neutral) == 0.15
+    assert external_probability(social) == 0.30
 
 
 def test_mood_prompt_is_injected_without_exposing_state_name():

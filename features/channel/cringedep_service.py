@@ -14,7 +14,7 @@ from features.channel.mood import get_current_mood, mood_prompt
 
 CHANNEL_TARGET = mood_service.CHANNEL_TARGET
 CRINGEDEP_CHANNEL = "cringedep"
-CRINGEDEP_PUN_PROBABILITY = 0.05
+CRINGEDEP_PUN_PROBABILITY = 0.08
 CRINGEDEP_POSTS_LIMIT = 20
 
 CRINGEDEP_PUN_PROMPT = """

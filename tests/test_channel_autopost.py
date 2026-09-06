@@ -140,9 +140,9 @@ def test_content_distribution_includes_philosophy_and_mischief_modes():
     assert sum(weights.values()) == 100
     assert weights["absurd"] == 8
     assert weights["philosophy"] == 10
-    assert weights["domestic"] == 25
-    assert weights["mischief"] == 20
-    assert weights["chat"] == 17
+    assert weights["domestic"] == 20
+    assert weights["mischief"] == 17
+    assert weights["chat"] == 25
     assert weights["functionality"] == 15
     assert weights["imperfect"] == 5
 
