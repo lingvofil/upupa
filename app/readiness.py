@@ -1,4 +1,4 @@
-"""Loopback readiness served by the same event loop as Telegram polling."""
+"""Loopback readiness and diagnostics served by the Telegram event loop."""
 
 import asyncio
 from dataclasses import dataclass
@@ -33,11 +33,21 @@ class PollingHealth:
 
 
 class ReadinessServer:
-    def __init__(self, polling, supervisor, database_probe, required_tasks, *, port=8766):
+    def __init__(
+        self,
+        polling,
+        supervisor,
+        database_probe,
+        required_tasks,
+        *,
+        diagnostics_probe=None,
+        port=8766,
+    ):
         self.polling = polling
         self.supervisor = supervisor
         self.database_probe = database_probe
         self.required_tasks = set(required_tasks)
+        self.diagnostics_probe = diagnostics_probe
         self.port = port
         self.runner = None
 
@@ -69,9 +79,20 @@ class ReadinessServer:
             status=200 if ok else 503,
         )
 
+    async def handle_diagnostics(self, request):
+        if self.diagnostics_probe is None:
+            raise web.HTTPNotFound()
+        try:
+            payload = self.diagnostics_probe()
+        except Exception:
+            raise web.HTTPServiceUnavailable() from None
+        return web.json_response(payload)
+
     async def start(self):
         app = web.Application()
         app.router.add_get("/ready", self.handle)
+        if self.diagnostics_probe is not None:
+            app.router.add_get("/diagnostics", self.handle_diagnostics)
         self.runner = web.AppRunner(app, access_log=None)
         await self.runner.setup()
         try:

@@ -22,6 +22,8 @@ def test_task_supervisor_cancels_running_tasks_on_stop():
 
         assert supervisor.task_count == 1
         assert supervisor.task_names == ("worker",)
+        assert supervisor.restart_count == 0
+        assert supervisor.restart_counts == {}
 
         await supervisor.stop()
 
@@ -49,6 +51,7 @@ def test_task_supervisor_logs_failed_task(caplog):
         # done-callback выполняется следующим тиком event loop.
         await asyncio.sleep(0)
         assert supervisor.task_count == 0
+        assert supervisor.restart_count == 0
 
     with caplog.at_level(logging.ERROR, logger="tests.task-supervisor"):
         asyncio.run(scenario())
@@ -82,11 +85,14 @@ def test_resilient_task_restarts_after_crash_and_marks_recovery(caplog):
         await first_crash.wait()
         await asyncio.sleep(0)
         assert supervisor.recovering_task_names == ("scheduler",)
+        assert supervisor.restart_count == 1
+        assert supervisor.restart_counts == {"scheduler": 1}
 
         await asyncio.wait_for(restarted.wait(), timeout=1)
         assert attempts == 2
         assert supervisor.task_names == ("scheduler",)
         assert supervisor.recovering_task_names == ()
+        assert supervisor.restart_count == 1
 
         await supervisor.stop()
         assert task.cancelled()
@@ -96,6 +102,7 @@ def test_resilient_task_restarts_after_crash_and_marks_recovery(caplog):
         asyncio.run(scenario())
 
     assert "Background task scheduler crashed; restarting" in caplog.text
+    assert "total_restarts=1" in caplog.text
 
 
 def test_resilient_task_restarts_after_unexpected_clean_exit(caplog):
@@ -121,6 +128,8 @@ def test_resilient_task_restarts_after_unexpected_clean_exit(caplog):
         )
         await asyncio.wait_for(restarted.wait(), timeout=1)
         assert attempts == 2
+        assert supervisor.restart_count == 1
+        assert supervisor.restart_counts == {"scheduler": 1}
         await supervisor.stop()
 
     with caplog.at_level(logging.WARNING, logger="tests.resilient-clean-exit"):
@@ -150,6 +159,7 @@ def test_stopping_supervisor_cancels_pending_restart():
         await crashed.wait()
         await asyncio.sleep(0)
         assert supervisor.recovering_task_names == ("scheduler",)
+        assert supervisor.restart_count == 1
 
         await supervisor.stop()
         await asyncio.sleep(0.22)
@@ -157,5 +167,6 @@ def test_stopping_supervisor_cancels_pending_restart():
         assert attempts == 1
         assert supervisor.task_count == 0
         assert supervisor.recovering_task_names == ()
+        assert supervisor.restart_count == 1
 
     asyncio.run(scenario())
