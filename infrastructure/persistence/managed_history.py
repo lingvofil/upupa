@@ -62,6 +62,15 @@ class ManagedHistoryRepository:
                 deleted_count INTEGER NOT NULL
             )"""
         )
+        # FTS5 external-content indexes do not automatically remove terms when
+        # their content row is deleted. Keep deletes incremental so automatic
+        # retention does not need to rebuild the entire FTS index every day.
+        conn.execute(
+            """CREATE TRIGGER IF NOT EXISTS history_delete AFTER DELETE ON history_messages BEGIN
+                INSERT INTO history_fts(history_fts, rowid, text)
+                VALUES('delete', old.id, old.text);
+            END"""
+        )
 
     @staticmethod
     def _validate_event(event: dict) -> dict:
@@ -138,7 +147,6 @@ class ManagedHistoryRepository:
                 row[0]
                 for row in conn.execute("SELECT event_id FROM history_deletion_events")
             }
-            rebuild_fts = False
             for event in events:
                 event = self._validate_event(event)
                 if event["event_id"] in applied:
@@ -149,7 +157,6 @@ class ManagedHistoryRepository:
                 ).fetchone()[0]
                 if deleted:
                     conn.execute(f"DELETE FROM history_messages WHERE {where}", args)
-                    rebuild_fts = True
                 conn.execute(
                     "INSERT INTO history_deletion_events VALUES (?, ?, ?, ?)",
                     (
@@ -161,10 +168,6 @@ class ManagedHistoryRepository:
                 )
                 applied.add(event["event_id"])
                 total_deleted += int(deleted)
-            if rebuild_fts:
-                # history_fts is an external-content table and the legacy schema
-                # only has an INSERT trigger. Rebuild after rare admin deletions.
-                conn.execute("INSERT INTO history_fts(history_fts) VALUES('rebuild')")
         return total_deleted
 
     def apply_deletion_ledger(self) -> int:

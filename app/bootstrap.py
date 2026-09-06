@@ -23,7 +23,7 @@ QUIZ_CHAT_IDS = (-1001707530786, -1001781970364)
 REQUIRED_BACKGROUND_TASKS = (
     *(f"daily-quiz:{chat_id}" for chat_id in QUIZ_CHAT_IDS),
     "birthday-scheduler", "holiday-scheduler", "proactive-loop", "channel-scheduler",
-    "world-visit-expiration", "crocodile-session-persistence",
+    "world-visit-expiration", "crocodile-session-persistence", "history-maintenance",
 )
 
 _main_router: Router | None = None
@@ -133,6 +133,7 @@ class UpupaApplication:
             restore_crocodile_sessions,
         )
         from games.crocodile_single_words import configure_crocodile_single_words
+        from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
 
         configure_dnd_tasks(self.supervisor)
@@ -175,6 +176,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             crocodile_session_persistence_loop,
             name="crocodile-session-persistence",
+        )
+        self.supervisor.start_resilient(
+            history_maintenance_loop,
+            name="history-maintenance",
         )
         self.supervisor.start_resilient(
             lambda: crocodile.start_socket_server(),
