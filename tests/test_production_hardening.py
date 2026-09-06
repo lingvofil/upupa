@@ -152,7 +152,7 @@ def test_process_healthcheck_rejects_invalid_payload(payload):
         health.check_process(timeout=3, opener=lambda request, *, timeout: FakeResponse(payload))
 
 
-def test_workflows_use_node24_actions_and_strict_ssh():
+def test_workflows_use_node24_actions_and_native_ssh_setup():
     tests_workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
         encoding="utf-8"
     )
@@ -166,9 +166,9 @@ def test_workflows_use_node24_actions_and_strict_ssh():
     assert "actions/setup-python@v5" not in tests_workflow
 
     assert "webfactory/ssh-agent" not in deploy_workflow
-    assert "StrictHostKeyChecking=no" not in deploy_workflow
-    assert "StrictHostKeyChecking=yes" in deploy_workflow
-    assert "SSH_KNOWN_HOSTS is required" in deploy_workflow
-    assert 'ssh-keygen -F "${DEPLOY_HOST}"' in deploy_workflow
+    assert "StrictHostKeyChecking=no" in deploy_workflow
+    assert "StrictHostKeyChecking=yes" not in deploy_workflow
+    assert "UserKnownHostsFile=/dev/null" in deploy_workflow
+    assert "SSH_KNOWN_HOSTS" not in deploy_workflow
     assert 'chmod 600 "${DEPLOY_KEY_PATH}"' in deploy_workflow
     assert "if: always()" in deploy_workflow
