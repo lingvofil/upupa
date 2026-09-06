@@ -124,3 +124,69 @@ def test_require_text_treats_empty_response_as_failure(monkeypatch):
         )
     else:
         raise AssertionError("empty response was treated as success")
+
+
+def test_generate_content_requires_text_by_default(monkeypatch):
+    class EmptyResponse:
+        text = None
+        candidates = []
+
+    class FakeGeminiModel:
+        def generate_content(self, prompt):
+            return EmptyResponse()
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel()
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(["gemini-empty"], ["gemini-empty"], keys_pool=["key"])
+    try:
+        wrapper.generate_content("дай текст")
+    except RuntimeError as error:
+        assert "no candidate text" in str(error)
+    else:
+        raise AssertionError("generate_content accepted an empty text response")
+
+
+def test_require_text_falls_back_to_next_model_on_empty_response(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    class FakeGeminiModel:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def generate_content(self, prompt):
+            calls.append(self.model_name)
+            if self.model_name == "gemini-empty":
+                return FakeResponse(None)
+            return FakeResponse("готовый ответ")
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel(model_name)
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(
+        ["gemini-empty", "gemini-good"],
+        ["gemini-empty", "gemini-good"],
+        keys_pool=["key"],
+    )
+    result = wrapper.generate_content("дай текст")
+
+    assert result.text == "готовый ответ"
+    assert calls == ["gemini-empty", "gemini-good"]
+    assert wrapper.last_used_model_name == "gemini-good"
