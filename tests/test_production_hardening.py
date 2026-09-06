@@ -183,3 +183,18 @@ def test_workflows_use_node24_actions_and_native_ssh_setup():
         "DEPLOY_KEY_PATH: /tmp/upupa_deploy_key_${{ github.run_id }}_"
         "${{ github.run_attempt }}" in deploy_workflow
     )
+
+    # A production disk can be too full even to create .git/config.lock. The
+    # deploy must reclaim stale backup space before the first write-heavy Git
+    # operation and must not mutate .git/config just to fetch main.
+    assert "bootstrap_prune_backups" in deploy_workflow
+    assert "MIN_BOOTSTRAP_FREE_KB=$((512 * 1024))" in deploy_workflow
+    assert "git remote set-url origin" not in deploy_workflow
+    direct_fetch = "git fetch --prune git@github.com:lingvofil/upupa.git main"
+    assert direct_fetch in deploy_workflow
+    assert (
+        'PREVIOUS_SHA="$(git rev-parse HEAD)"\n'
+        "          bootstrap_prune_backups\n"
+        "          # Do not mutate .git/config" in deploy_workflow
+    )
+    assert "preserving the last known-good backup" in deploy_workflow
