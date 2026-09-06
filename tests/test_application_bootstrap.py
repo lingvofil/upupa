@@ -65,6 +65,7 @@ def test_background_task_set_is_explicit_idempotent_and_resilient():
         "channel-scheduler",
         "world-visit-expiration",
         "crocodile-session-persistence",
+        "history-maintenance",
         "crocodile-socket-server",
     ]
     assert supervisor.names == expected
