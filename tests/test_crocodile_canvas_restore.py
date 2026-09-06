@@ -73,6 +73,6 @@ def test_bootstrap_installs_restore_before_session_restore_and_socket_start():
 
     configure_pos = source.index("configure_crocodile_canvas_restore()")
     restore_pos = source.index("restore_crocodile_sessions()")
-    socket_pos = source.index("crocodile.start_socket_server()")
+    socket_pos = source.index("crocodile_socket_server_loop")
 
     assert configure_pos < restore_pos < socket_pos
