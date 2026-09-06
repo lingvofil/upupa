@@ -99,9 +99,9 @@ def test_roll_d20_uses_lowest_for_disadvantage(monkeypatch):
     assert result == 6
 
 
-def test_roll_outcome_uses_dc_without_auto_critical_rules():
-    assert dnd._roll_outcome(20, 25) == "провал"
-    assert dnd._roll_outcome(1, 1) == "успех"
+def test_roll_outcome_uses_dc_without_modifiers():
+    assert dnd._roll_outcome(14, 14) == "успех"
+    assert dnd._roll_outcome(13, 14) == "провал"
     assert dnd._natural_roll_note(20) == "натуральная 20"
     assert dnd._natural_roll_note(1) == "натуральная 1"
 
