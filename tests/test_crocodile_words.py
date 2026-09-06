@@ -30,3 +30,14 @@ def test_crocodile_dictionary_has_large_complex_phrase_pool():
         "экспедиция на марс",
     }
     assert expected_hard_words <= normalized
+
+
+def test_crocodile_dictionary_has_large_single_word_pool():
+    words = _words()
+    single_words = {
+        word.lower().replace("ё", "е")
+        for word in words
+        if len(word.split()) == 1
+    }
+
+    assert len(single_words) >= 700
