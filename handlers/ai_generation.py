@@ -12,12 +12,15 @@ from AI.adddescribe import (
 )
 import AI.picgeneration as picgeneration
 from AI.gigachat_image import install_into_picgeneration
+from AI.media_execution import install_into_picgeneration as install_media_execution
 from AI.pun_generation import install_into_picgeneration as install_pun_generation
 from AI.redraw_childlike import install_into_picgeneration as install_redraw_childlike
 
 # Заменяем недоступную Kandinsky/FusionBrain-ступень на GigaChat-2 text2image.
 # Сохраняем остальной waterfall и публичные имена функций для совместимости.
 install_into_picgeneration(picgeneration)
+# Все дорогие image provider calls теперь проходят через общий AI governor.
+install_media_execution(picgeneration)
 # Заменяем старый single-shot `скаламбурь` на генерацию пачки кандидатов
 # с проверкой пересечения слов и долговременной защитой от повторов.
 install_pun_generation(picgeneration)
