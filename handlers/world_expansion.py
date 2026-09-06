@@ -13,6 +13,7 @@ from features.world.expansion import (
     build_expanded_state_card,
     format_international_cases,
     format_sanctions,
+    get_state_characteristics,
     impose_sanctions,
     international_court,
     lift_sanctions,
@@ -34,6 +35,20 @@ def _normalized(message: types.Message) -> str:
 def _back_markup() -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ В Мир Упупы", callback_data="worldhub:main")
+    return builder.as_markup()
+
+
+def _main_markup() -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏳 Моё государство", callback_data="worldhub:mine")
+    builder.button(text="🌐 Государства", callback_data="worldhub:states")
+    builder.button(text="🤝 Дипломатия", callback_data="worldhub:diplomacy")
+    builder.button(text="🚫 Санкции", callback_data="worldhub:sanctions")
+    builder.button(text="⚖️ Международный суд", callback_data="worldhub:court")
+    builder.button(text="🗺 Карта мира", callback_data="worldhub:map")
+    builder.button(text="📰 Мировые новости", callback_data="worldhub:news")
+    builder.button(text="📜 Хроника", callback_data="worldhub:chronicle")
+    builder.adjust(2)
     return builder.as_markup()
 
 
@@ -64,6 +79,31 @@ def _parse_target_tail(normalized: str, prefix: str) -> tuple[int | None, str]:
 async def _state_names() -> dict[int, str]:
     states = await get_world_service().list_all_states()
     return {state.world_id: state.title for state in states}
+
+
+async def _hub_text(service, state, title: str) -> str:
+    profile = await service.get_profile(state.chat_id, title)
+    if profile is None:
+        authority = 50
+    else:
+        authority = (await get_state_characteristics(profile)).effective_authority
+    return (
+        "🌍 Мир Упупы\n\n"
+        f"Вы — государство №{state.world_id} «{state.title}».\n"
+        f"Международный авторитет: {authority}.\n\n"
+        "Куда полезем?"
+    )
+
+
+@router.message(lambda message: bool(message.text) and _normalized(message) == "упупа миры")
+async def expanded_world_hub(message: types.Message):
+    service, state = await _current_state(message)
+    if service is None or state is None:
+        return
+    await message.reply(
+        await _hub_text(service, state, _title(message)),
+        reply_markup=_main_markup(),
+    )
 
 
 @router.message(lambda message: bool(message.text) and _normalized(message) == "государство")
@@ -197,7 +237,15 @@ async def international_case(message: types.Message):
                 logging.exception("World court notification failed target=%s", target_id)
 
 
-@router.callback_query(F.data.in_({"worldhub:mine", "worldhub:diplomacy"}))
+@router.callback_query(
+    F.data.in_({
+        "worldhub:main",
+        "worldhub:mine",
+        "worldhub:diplomacy",
+        "worldhub:sanctions",
+        "worldhub:court",
+    })
+)
 async def expanded_hub_sections(query: types.CallbackQuery):
     if query.message is None:
         return
@@ -206,8 +254,30 @@ async def expanded_hub_sections(query: types.CallbackQuery):
     if state is None or not state.enabled:
         await query.answer("Этот чат сейчас вне Мира Упупы.", show_alert=True)
         return
+
+    if query.data == "worldhub:main":
+        await query.message.edit_text(
+            await _hub_text(service, state, query.message.chat.title or "Безымянное государство"),
+            reply_markup=_main_markup(),
+        )
+        await query.answer()
+        return
+
     if query.data == "worldhub:mine":
         text = await build_expanded_state_card(state.world_id, query.message.bot)
+    elif query.data == "worldhub:sanctions":
+        sanctions = await list_state_sanctions(state.world_id)
+        text = (
+            format_sanctions(sanctions, state.world_id, await _state_names())
+            + "\n\nВвести: «упупа санкции <№> [причина]»."
+            + "\nСнять: «упупа снять санкции <№>»."
+        )
+    elif query.data == "worldhub:court":
+        cases = await list_international_cases()
+        text = (
+            format_international_cases(cases, await _state_names())
+            + "\n\nПодать иск: «упупа международный суд <№> <претензия>»."
+        )
     else:
         profile = await service.get_profile(query.message.chat.id, query.message.chat.title)
         if profile is None:
@@ -218,7 +288,7 @@ async def expanded_hub_sections(query: types.CallbackQuery):
                 format_diplomacy(profile)
                 + "\n\n"
                 + format_sanctions(sanctions, state.world_id, await _state_names())
-                + "\n\n⚖️ Международный суд: «упупа международный суд <№> <претензия>»."
+                + "\n\n⚖️ Международный суд доступен отдельной кнопкой в главном меню."
             )
     if text:
         await query.message.edit_text(text, reply_markup=_back_markup())
