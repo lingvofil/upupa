@@ -31,6 +31,7 @@ from core.settings import (
     PRIMARY_GEMINI_KEY,
     SILICONFLOW_API_KEY,
 )
+from infrastructure.ai.execution import run_ai_provider_call
 from infrastructure.ai.gemini import ModelFallbackWrapper
 from infrastructure.ai.gigachat import GIGACHAT_BASE_URL, GigaChatConversationWrapper
 from infrastructure.ai.groq import GroqWrapper
@@ -38,6 +39,17 @@ from infrastructure.ai.openai_compatible import OpenAICompatibleWrapper
 
 
 _UNSET = object()
+_GOVERNED_METHODS = {
+    "analyze_image",
+    "generate_content",
+    "generate_custom",
+    "generate_text",
+    "transcribe_audio",
+}
+_GOVERNED_MODELS_METHODS = {
+    "embed_content",
+    "generate_content",
+}
 
 
 class ProviderConfigurationError(RuntimeError):
@@ -52,6 +64,54 @@ def _require_credential(value: str | None, setting_name: str) -> str:
     )
 
 
+class _GovernedModelsProxy:
+    """Guard direct ``genai.Client.models`` calls used outside fallback wrappers."""
+
+    def __init__(self, resource_name: str, target: Any):
+        self._resource_name = resource_name
+        self._target = target
+        self._method_cache: dict[str, Callable[..., Any]] = {}
+
+    def __getattr__(self, name: str):
+        value = getattr(self._target, name)
+        if not callable(value) or name not in _GOVERNED_MODELS_METHODS:
+            return value
+        cached = self._method_cache.get(name)
+        if cached is None:
+            operation = f"{self._resource_name}.models.{name}"
+
+            def governed(*args, _value=value, _operation=operation, **kwargs):
+                return run_ai_provider_call(_operation, _value, *args, **kwargs)
+
+            cached = governed
+            self._method_cache[name] = cached
+        return cached
+
+
+class _GovernedChatSession:
+    """Keep chat-session sends under the same provider limit as one-shot calls."""
+
+    def __init__(self, resource_name: str, target: Any):
+        self._resource_name = resource_name
+        self._target = target
+        self._method_cache: dict[str, Callable[..., Any]] = {}
+
+    def __getattr__(self, name: str):
+        value = getattr(self._target, name)
+        if name != "send_message" or not callable(value):
+            return value
+        cached = self._method_cache.get(name)
+        if cached is None:
+            operation = f"{self._resource_name}.chat.send_message"
+
+            def governed(*args, _value=value, _operation=operation, **kwargs):
+                return run_ai_provider_call(_operation, _value, *args, **kwargs)
+
+            cached = governed
+            self._method_cache[name] = cached
+        return cached
+
+
 class LazyResource:
     """Thread-safe proxy that constructs one configured resource on first use."""
 
@@ -60,6 +120,7 @@ class LazyResource:
         object.__setattr__(self, "_factory", factory)
         object.__setattr__(self, "_value", _UNSET)
         object.__setattr__(self, "_lock", threading.Lock())
+        object.__setattr__(self, "_proxy_cache", {})
 
     @property
     def initialized(self) -> bool:
@@ -78,7 +139,42 @@ class LazyResource:
         return value
 
     def __getattr__(self, name: str):
-        return getattr(self.unwrap(), name)
+        target = self.unwrap()
+        value = getattr(target, name)
+        resource_name = object.__getattribute__(self, "_name")
+        cache: dict[str, Any] = object.__getattribute__(self, "_proxy_cache")
+
+        if name == "models":
+            cached = cache.get(name)
+            if cached is None:
+                cached = _GovernedModelsProxy(resource_name, value)
+                cache[name] = cached
+            return cached
+
+        if name == "start_chat" and callable(value):
+            cached = cache.get(name)
+            if cached is None:
+                def governed_start_chat(*args, _value=value, **kwargs):
+                    session = _value(*args, **kwargs)
+                    return _GovernedChatSession(resource_name, session)
+
+                cached = governed_start_chat
+                cache[name] = cached
+            return cached
+
+        if callable(value) and name in _GOVERNED_METHODS:
+            cached = cache.get(name)
+            if cached is None:
+                operation = f"{resource_name}.{name}"
+
+                def governed(*args, _value=value, _operation=operation, **kwargs):
+                    return run_ai_provider_call(_operation, _value, *args, **kwargs)
+
+                cached = governed
+                cache[name] = cached
+            return cached
+
+        return value
 
     def __setattr__(self, name: str, value) -> None:
         if name.startswith("_"):
