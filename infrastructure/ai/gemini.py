@@ -219,6 +219,7 @@ class FallbackChatSession:
                 content,
                 **kwargs,
             ),
+            require_text=True,
         )
 
     def _send_with_model(self, model_obj, content, **kwargs):
@@ -258,7 +259,7 @@ class ModelFallbackWrapper:
         prompt,
         *,
         chat_id=None,
-        require_text: bool = False,
+        require_text: bool = True,
         **kwargs,
     ):
         return self._run_with_fallback(
@@ -330,6 +331,7 @@ class ModelFallbackWrapper:
         temporary_failure_only = True
 
         for model_name in model_queue:
+            skip_model = False
             for key_idx in key_indices:
                 api_key = self.keys_pool[key_idx]
                 for attempt in range(1, self._max_retries_per_pair + 1):
@@ -367,9 +369,13 @@ class ModelFallbackWrapper:
                         if error_type == "EmptyModelResponseError":
                             temporary_failure_only = False
                             hard_failures.append(error)
-                            raise RuntimeError(
-                                f"Gemini returned empty text response: {error}"
+                            logging.warning(
+                                "Gemini empty text action=%s model=%s; trying next model",
+                                action_name,
+                                model_name,
                             )
+                            skip_model = True
+                            break
                         if retryable and attempt < self._max_retries_per_pair:
                             time.sleep(2 ** (attempt - 1))
                             continue
@@ -377,6 +383,10 @@ class ModelFallbackWrapper:
                             temporary_failure_only = False
                             hard_failures.append(error)
                         break
+                if skip_model:
+                    break
+            if skip_model:
+                continue
 
         if temporary_failure_only:
             raise RuntimeError(self.GEMINI_LIMIT_EXHAUSTED_MESSAGE)
