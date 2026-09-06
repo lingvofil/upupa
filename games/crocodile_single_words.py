@@ -1,8 +1,9 @@
-"""Single-word picker for Crocodile modes.
+"""Single-word picker for regular Crocodile.
 
-The source dictionary intentionally keeps phrases for possible future modes, but
-regular Crocodile and reverse Crocodile share one persistent picker that exposes
-only single-token words.
+The source dictionary intentionally keeps phrases for possible future modes.
+Regular Crocodile uses this persistent picker to expose only single-token words;
+reverse Crocodile has difficulty-specific pools while keeping the same durable
+word-history store.
 """
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ def pick_single_crocodile_word() -> str:
 
 
 def configure_crocodile_single_words() -> None:
-    """Install the shared single-word picker for both Crocodile modes."""
+    """Install the single-word picker for regular Crocodile."""
     global _configured
     if _configured:
         return

@@ -14,7 +14,11 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboar
 
 from core.loader import bot
 from games.crocodile import _contains_answer, _normalize_guess, add_point, format_leaderboard
-from games.crocodile_single_words import pick_single_crocodile_word
+from games.reverse_crocodile_words import (
+    difficulty_label,
+    normalize_difficulty,
+    pick_reverse_crocodile_word,
+)
 
 # Намеренно не делаем «красивую нейросетевую картинку»: это должна быть
 # смешная рисовалка, которую интересно разгадывать.
@@ -31,7 +35,7 @@ IMAGE_STYLE = (
 MAX_HINTS = 3
 SURRENDER_DELAY_SECONDS = 5 * 60
 
-# chat_id(str) -> {"word": str, "hints": int, "image": bytes, "started_at": float}
+# chat_id(str) -> {"word": str, "difficulty": str, "hints": int, "image": bytes, "started_at": float}
 games: dict[str, dict] = {}
 
 
@@ -44,9 +48,39 @@ def _keyboard(chat_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def _again_keyboard() -> InlineKeyboardMarkup:
+def _difficulty_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🔁 Ещё раз", callback_data="rcroc_again_0")]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 Легко", callback_data="rcroc_level_easy"),
+                InlineKeyboardButton(text="🟡 Средне", callback_data="rcroc_level_medium"),
+                InlineKeyboardButton(text="🔴 Сложно", callback_data="rcroc_level_hard"),
+            ]
+        ]
+    )
+
+
+def _again_keyboard(difficulty: str) -> InlineKeyboardMarkup:
+    difficulty = normalize_difficulty(difficulty)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔁 Ещё раз", callback_data=f"rcroc_again_{difficulty}")],
+            [InlineKeyboardButton(text="🎚 Сменить сложность", callback_data="rcroc_choose_level")],
+        ]
+    )
+
+
+def callback_difficulty(data: str | None) -> str:
+    """Extract difficulty from level/restart callbacks; old buttons fall back to medium."""
+    value = (data or "").rsplit("_", 1)[-1]
+    return normalize_difficulty(value)
+
+
+async def ask_difficulty(message: types.Message) -> None:
+    await message.answer(
+        "🦎 <b>КРАКАДИЛ НАОБОРОТ</b>\nВыбирайте, насколько сильно хотите страдать:",
+        parse_mode="HTML",
+        reply_markup=_difficulty_keyboard(),
     )
 
 
@@ -191,11 +225,15 @@ def _format_surrender_wait(seconds: int) -> str:
     return f"{minutes}:{rest:02d}"
 
 
-async def start_game(message: types.Message):
+async def start_game(message: types.Message, difficulty: str = "medium"):
     chat_id = str(message.chat.id)
-    word = pick_single_crocodile_word()
+    difficulty = normalize_difficulty(difficulty)
+    word = pick_reverse_crocodile_word(difficulty)
+    label = difficulty_label(difficulty)
 
-    status = await message.answer("🦎 КРАКАДИЛ НАОБОРОТ\nЗагадал слово, рисую свой шедевр...")
+    status = await message.answer(
+        f"🦎 КРАКАДИЛ НАОБОРОТ\nСложность: {label}. Загадал слово, рисую свой шедевр..."
+    )
     image = await _generate_word_image(word, chat_id)
     if not image:
         await status.edit_text("Не смог нарисовать, у меня лапки. Попробуй ещё раз.")
@@ -203,6 +241,7 @@ async def start_game(message: types.Message):
 
     games[chat_id] = {
         "word": word,
+        "difficulty": difficulty,
         "hints": 0,
         "image": image,
         # Пять минут считаются с готовности раунда, а не со старта AI-генерации.
@@ -212,17 +251,22 @@ async def start_game(message: types.Message):
     await bot.send_photo(
         chat_id=int(chat_id),
         photo=BufferedInputFile(image, "rcroc.png"),
-        caption="🦎 <b>КРАКАДИЛ НАОБОРОТ</b>\nТеперь рисую я, а вы угадываете. Пишите варианты в чат!",
+        caption=(
+            "🦎 <b>КРАКАДИЛ НАОБОРОТ</b>\n"
+            f"Сложность: <b>{label}</b>\n"
+            "Теперь рисую я, а вы угадываете. Пишите варианты в чат!"
+        ),
         parse_mode="HTML",
         reply_markup=_keyboard(chat_id),
     )
-    logging.info("[rcroc] start chat=%s word=%s", chat_id, word)
+    logging.info("[rcroc] start chat=%s difficulty=%s word=%s", chat_id, difficulty, word)
 
 
 async def _finish_game(chat_id: str, text: str):
-    games.pop(chat_id, None)
+    session = games.pop(chat_id, None) or {}
+    difficulty = normalize_difficulty(session.get("difficulty"))
     await bot.send_message(
-        int(chat_id), text, parse_mode="HTML", reply_markup=_again_keyboard()
+        int(chat_id), text, parse_mode="HTML", reply_markup=_again_keyboard(difficulty)
     )
     await bot.send_message(
         int(chat_id),
@@ -235,9 +279,15 @@ async def _finish_game(chat_id: str, text: str):
 async def handle_callback(cb: types.CallbackQuery):
     data = cb.data or ""
 
-    if data.startswith("rcroc_again"):
+    if data == "rcroc_choose_level":
+        await cb.answer()
+        await ask_difficulty(cb.message)
+        return
+
+    if data.startswith("rcroc_again_") or data.startswith("rcroc_level_"):
+        difficulty = callback_difficulty(data)
         await cb.answer("Рисую новое...")
-        await start_game(cb.message)
+        await start_game(cb.message, difficulty)
         return
 
     chat_id = data.split("_")[-1]

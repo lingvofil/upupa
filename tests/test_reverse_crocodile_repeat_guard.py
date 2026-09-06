@@ -36,10 +36,12 @@ def test_reverse_crocodile_multiple_again_taps_start_only_one_round(monkeypatch)
     started = asyncio.Event()
     release = asyncio.Event()
     calls = 0
+    difficulties = []
 
-    async def fake_start_game(_message):
+    async def fake_start_game(_message, difficulty="medium"):
         nonlocal calls
         calls += 1
+        difficulties.append(difficulty)
         started.set()
         await release.wait()
         reverse_crocodile.games[str(chat_id)] = {"word": "кот"}
@@ -47,12 +49,12 @@ def test_reverse_crocodile_multiple_again_taps_start_only_one_round(monkeypatch)
     monkeypatch.setattr(reverse_crocodile, "start_game", fake_start_game)
 
     cb1 = SimpleNamespace(
-        data="rcroc_again_0",
+        data="rcroc_again_hard",
         message=SimpleNamespace(chat=SimpleNamespace(id=chat_id)),
         answer=AsyncMock(),
     )
     cb2 = SimpleNamespace(
-        data="rcroc_again_0",
+        data="rcroc_again_hard",
         message=SimpleNamespace(chat=SimpleNamespace(id=chat_id)),
         answer=AsyncMock(),
     )
@@ -75,6 +77,7 @@ def test_reverse_crocodile_multiple_again_taps_start_only_one_round(monkeypatch)
     try:
         asyncio.run(scenario())
         assert calls == 1
+        assert difficulties == ["hard"]
         cb1.answer.assert_awaited_once_with("Рисую новое...")
     finally:
         games._release_reverse_croc_start(chat_id)

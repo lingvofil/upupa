@@ -214,13 +214,18 @@ def test_word_picker_uses_every_word_before_repeating(monkeypatch, tmp_path):
     assert payload["used"] == ["дом", "лес", "кот"]
 
 
-def test_reverse_crocodile_uses_shared_single_word_picker():
-    source = (
+def test_reverse_crocodile_uses_difficulty_picker_with_shared_history():
+    reverse_source = (
         Path(__file__).resolve().parents[1] / "games" / "reverse_crocodile.py"
     ).read_text(encoding="utf-8")
+    picker_source = (
+        Path(__file__).resolve().parents[1] / "games" / "reverse_crocodile_words.py"
+    ).read_text(encoding="utf-8")
 
-    assert "word = pick_single_crocodile_word()" in source
-    assert "random.choice(_load_words())" not in source
+    assert "word = pick_reverse_crocodile_word(difficulty)" in reverse_source
+    assert "persistence._load_word_history()" in picker_source
+    assert "persistence._write_word_history(history)" in picker_source
+    assert "random.choice(_load_words())" not in reverse_source
 
 
 def test_stopping_round_closes_old_canvas_room_first(monkeypatch):
