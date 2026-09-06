@@ -56,6 +56,9 @@ DND_SYSTEM_PROMPT = """
 5. Используй броски только когда исход действительно неопределён и важен. Выбирай разумную
    сложность DC от 5 до 30. Преимущество или помеху назначай только когда это следует из ситуации,
    подготовки, позиции, помощи, состояния или окружения; не раздавай их каждому броску.
+6. Не используй характеристики, навыки, модификаторы, бонусы персонажей или листы персонажей.
+   Бросок описывается только тем, что происходит в сюжете: например «перепрыгнуть провал» или
+   «не отравиться дымом».
 
 ФОРМАТ ТЕХНИЧЕСКИХ ТЕГОВ (В конце сообщения):
 
@@ -63,17 +66,17 @@ DND_SYSTEM_PROMPT = """
 [ACTION:POLL;OPTIONS:Вариант 1;Вариант 2;Вариант 3]
 (Максимум 4 варианта).
 
-Если нужна обычная проверка навыка/характеристики:
-[ACTION:ROLL;TYPE:CHECK;STAT:Название проверки;DC:12;MODE:NORMAL]
+Если нужен обычный сюжетный бросок:
+[ACTION:ROLL;TYPE:CHECK;REASON:перепрыгнуть провал;DC:12;MODE:NORMAL]
 
 Если персонаж сопротивляется опасности, эффекту, яду, падению, заклинанию и т.п. — спасбросок:
-[ACTION:ROLL;TYPE:SAVE;STAT:Телосложение;DC:14;MODE:DISADVANTAGE]
+[ACTION:ROLL;TYPE:SAVE;REASON:не отравиться дымом;DC:14;MODE:DISADVANTAGE]
 
 TYPE: CHECK или SAVE.
 MODE: NORMAL, ADVANTAGE или DISADVANTAGE.
+REASON: коротко опиши, что именно сейчас пытается сделать или пережить персонаж, без характеристик.
 При ADVANTAGE бросаются два d20 и берётся больший, при DISADVANTAGE — меньший.
-Если преимущество/помеха не нужны, ставь NORMAL. Не придумывай числовые бонусы персонажа:
-пока их нет, результат сравнивается с DC как чистый d20.
+Если преимущество/помеха не нужны, ставь NORMAL. Результат сравнивается с DC как чистый d20.
 
 Если нужен свободный групповой ход игроков:
 [ACTION:INPUT]
@@ -200,15 +203,18 @@ class GameSession:
         )
         session.state = record.get("state") or "WAITING_ACTION"
         session.last_roll_stat = record.get("last_roll_stat")
-        session.pending_roll = record.get("pending_roll")
-        if (
-            session.state == "WAITING_ROLL"
-            and not session.pending_roll
-            and session.last_roll_stat
-        ):
+        raw_roll = record.get("pending_roll") or None
+        if raw_roll:
+            session.pending_roll = {
+                "type": raw_roll.get("type", "CHECK"),
+                "reason": raw_roll.get("reason") or "проверка по ситуации",
+                "dc": raw_roll.get("dc"),
+                "mode": raw_roll.get("mode", "NORMAL"),
+            }
+        elif session.state == "WAITING_ROLL":
             session.pending_roll = {
                 "type": "CHECK",
-                "stat": session.last_roll_stat,
+                "reason": "проверка по ситуации",
                 "dc": None,
                 "mode": "NORMAL",
             }
@@ -421,7 +427,7 @@ def _parse_roll_command(command_str: str) -> dict:
 
     return {
         "type": roll_type,
-        "stat": fields.get("STAT") or "Проверка",
+        "reason": fields.get("REASON") or "проверка по ситуации",
         "dc": dc,
         "mode": mode,
     }
@@ -441,7 +447,7 @@ def _roll_d20(mode: str) -> tuple[list[int], int]:
 
 
 def _roll_type_label(roll_type: str) -> str:
-    return "Спасбросок" if roll_type == "SAVE" else "Проверка"
+    return "Спасбросок" if roll_type == "SAVE" else "Бросок"
 
 
 def _roll_mode_label(mode: str) -> str:
@@ -536,13 +542,13 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     elif command_str.startswith("ROLL"):
         roll = _parse_roll_command(command_str)
         session.pending_roll = roll
-        session.last_roll_stat = roll["stat"]
+        session.last_roll_stat = None
         session.state = "WAITING_ROLL"
         session.action_prompt_message_id = None
         session.pending_actions = {}
         session.action_deadline = None
         persist_dnd_sessions()
-        details = [f"🎲 {_roll_type_label(roll['type'])}: {roll['stat']}"]
+        details = [f"🎲 {_roll_type_label(roll['type'])}: {roll['reason']}"]
         if roll["dc"] is not None:
             details.append(f"DC {roll['dc']}")
         if roll["mode"] != "NORMAL":
@@ -776,13 +782,13 @@ async def handle_roll(message: Message):
 
     roll = session.pending_roll or {
         "type": "CHECK",
-        "stat": session.last_roll_stat or "Проверка",
+        "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
     }
     rolls, result = _roll_d20(roll.get("mode", "NORMAL"))
     roll_type = roll.get("type", "CHECK")
-    stat = roll.get("stat") or "Проверка"
+    reason = roll.get("reason") or "проверка по ситуации"
     dc = roll.get("dc")
     mode = roll.get("mode", "NORMAL")
     outcome = _roll_outcome(result, dc)
@@ -793,7 +799,7 @@ async def handle_roll(message: Message):
     persist_dnd_sessions()
 
     result_parts = [
-        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {stat}",
+        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {reason}",
         f"d20: {_format_roll_dice(rolls, result)}",
     ]
     if mode != "NORMAL":
@@ -807,7 +813,7 @@ async def handle_roll(message: Message):
     await message.answer(" | ".join(result_parts))
 
     prompt_parts = [
-        f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()} на {stat}.",
+        f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()}: {reason}.",
         f"Режим: {_roll_mode_label(mode)}.",
         f"Броски d20: {rolls}; итог: {result}.",
     ]
