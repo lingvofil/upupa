@@ -20,7 +20,7 @@ MOODS = {
         "daily_posts": (8, 11),
         "burst_probability": 0.10,
         "image_probability": 0.15,
-        "external_probability": 0.10,
+        "external_probability": 0.15,
         "prompt": (
             "У тебя сейчас ровное настроение. Не изображай специальную эмоцию: реагируй естественно, "
             "как обычно, и не сообщай аудитории название своего состояния."
@@ -34,7 +34,7 @@ MOODS = {
         "daily_posts": (10, 13),
         "burst_probability": 0.18,
         "image_probability": 0.10,
-        "external_probability": 0.18,
+        "external_probability": 0.24,
         "prompt": (
             "Тебя сегодня слегка всё заебало. Ты быстрее замечаешь нелепость происходящего, суше реагируешь "
             "и чаще язвишь. Мат допустим чуть чаще обычного, но не вставляй его механически и не объявляй, "
@@ -56,7 +56,7 @@ MOODS = {
         "daily_posts": (5, 7),
         "burst_probability": 0.04,
         "image_probability": 0.05,
-        "external_probability": 0.04,
+        "external_probability": 0.08,
         "prompt": (
             "Ты сонный, но не унылый. Тебе лень делать что-либо нормальным способом, поэтому ты изобретаешь "
             "нелепые способы схалтурить, добыть еду и комфорт, делегировать работу предметам или объявить мелкую "
@@ -80,7 +80,7 @@ MOODS = {
         "daily_posts": (7, 10),
         "burst_probability": 0.08,
         "image_probability": 0.08,
-        "external_probability": 0.14,
+        "external_probability": 0.20,
         "prompt": (
             "Ты сегодня задумчивый. Случайные вещи чаще вызывают у тебя связные наблюдения и цепочки мыслей. "
             "Будь ироничным и находи неожиданный поворот, но не превращай состояние в жалость к себе, мудрость, "
@@ -102,7 +102,7 @@ MOODS = {
         "daily_posts": (11, 15),
         "burst_probability": 0.38,
         "image_probability": 0.25,
-        "external_probability": 0.10,
+        "external_probability": 0.15,
         "prompt": (
             "Тебя несёт. Мысли скачут быстрее обычного, решения импульсивнее, абсурд и внезапные формулировки "
             "возникают чаще. Можно резко сменить направление и написать несколько вещей подряд. Не объясняй хаос."
@@ -124,7 +124,7 @@ MOODS = {
         "daily_posts": (11, 14),
         "burst_probability": 0.30,
         "image_probability": 0.12,
-        "external_probability": 0.22,
+        "external_probability": 0.30,
         "prompt": (
             "Тебе сегодня интереснее смотреть наружу, чем копаться в себе: чаты, чужие посты, странное поведение "
             "людей и происходящее вокруг цепляют сильнее. Реагируй охотнее, но не становись ведущим ток-шоу."
@@ -263,7 +263,7 @@ def image_probability(mood: dict | None, default: float = 0.15) -> float:
     return float(mood_config(mood).get("image_probability", default)) if mood else default
 
 
-def external_probability(mood: dict | None, default: float = 0.10) -> float:
+def external_probability(mood: dict | None, default: float = 0.15) -> float:
     return float(mood_config(mood).get("external_probability", default)) if mood else default
 
 
