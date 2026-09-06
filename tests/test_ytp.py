@@ -1,4 +1,4 @@
-"""Tests for YTP timeout handling and input normalization."""
+"""Tests for YTP timeout handling, rendering, and input normalization."""
 import asyncio
 import sys
 from types import SimpleNamespace
@@ -103,6 +103,51 @@ def test_normalize_video_uses_bounded_profile(monkeypatch):
     asyncio.run(run())
 
 
+def test_video_render_uses_h264_mp4_profile(monkeypatch):
+    captured = {}
+
+    class FakeSnippet:
+        def __init__(self, duration):
+            self.duration = duration
+
+        def close(self):
+            pass
+
+    class FakeSource:
+        duration = 5.0
+
+        def subclip(self, start, end):
+            return FakeSnippet(end - start)
+
+        def close(self):
+            pass
+
+    class FakeFinal:
+        def write_videofile(self, output_path, **kwargs):
+            captured["output_path"] = output_path
+            captured["kwargs"] = kwargs
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ytp, "VideoFileClip", lambda _path: FakeSource())
+    monkeypatch.setattr(ytp, "concatenate_videoclips", lambda _clips: FakeFinal())
+    monkeypatch.setattr(ytp.random, "uniform", lambda low, _high: low)
+    monkeypatch.setattr(ytp.random, "choices", lambda *_args, **_kwargs: ["normal"])
+
+    ytp._make_ytp_sync("input.mp4", "output.mp4", target_duration=0.3, preset="normal")
+
+    kwargs = captured["kwargs"]
+    assert captured["output_path"] == "output.mp4"
+    assert kwargs["codec"] == "libx264"
+    assert kwargs["audio_codec"] == "aac"
+    assert kwargs["bitrate"] == "2500k"
+    assert kwargs["audio_bitrate"] == "128k"
+    assert kwargs["preset"] == "ultrafast"
+    assert kwargs["temp_audiofile"].endswith(".m4a")
+    assert kwargs["ffmpeg_params"] == ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+
+
 def test_ytp_timeout_releases_semaphore(monkeypatch):
     async def timeout_render(*args, **kwargs):
         raise asyncio.TimeoutError
@@ -122,19 +167,16 @@ def test_ytp_timeout_releases_semaphore(monkeypatch):
 
 
 def test_ytp_accepts_video_note_reply(monkeypatch):
-    async def fake_render(_func_name, _input_path, output_path, *_args, **_kwargs):
-        with open(output_path, "wb") as file:
-            file.write(b"fake ytp")
+    render_outputs = []
 
-    async def fake_convert(_input_webm, output_mp4):
-        with open(output_mp4, "wb") as file:
+    async def fake_render(_func_name, _input_path, output_path, *_args, **_kwargs):
+        render_outputs.append(output_path)
+        with open(output_path, "wb") as file:
             file.write(b"fake mp4")
-        return True
 
     async def run():
         monkeypatch.setattr(ytp, "_ytp_semaphore", asyncio.Semaphore(1))
         monkeypatch.setattr(ytp, "_run_blocking_ytp", fake_render)
-        monkeypatch.setattr(ytp, "convert_webm_to_mp4", fake_convert)
 
         video_note = SimpleNamespace(file_id="video-note-file-id", file_size=1024, duration=5)
         source = DummyMessage(video=None, video_note=video_note)
@@ -142,6 +184,7 @@ def test_ytp_accepts_video_note_reply(monkeypatch):
 
         await ytp.handle_ytp_command(message, DummyBot())
 
+        assert render_outputs and render_outputs[0].endswith(".mp4")
         assert any(reply[0] == "video" for reply in message.replies if isinstance(reply, tuple))
         assert message.processing_messages[0].deleted
 
@@ -150,6 +193,7 @@ def test_ytp_accepts_video_note_reply(monkeypatch):
 
 def test_long_video_is_normalized_before_render(monkeypatch):
     render_inputs = []
+    render_outputs = []
     normalize_calls = []
 
     async def fake_normalize(input_path, output_path):
@@ -160,19 +204,14 @@ def test_long_video_is_normalized_before_render(monkeypatch):
 
     async def fake_render(_func_name, input_path, output_path, *_args, **_kwargs):
         render_inputs.append(input_path)
+        render_outputs.append(output_path)
         with open(output_path, "wb") as file:
-            file.write(b"fake ytp")
-
-    async def fake_convert(_input_webm, output_mp4):
-        with open(output_mp4, "wb") as file:
             file.write(b"fake mp4")
-        return True
 
     async def run():
         monkeypatch.setattr(ytp, "_ytp_semaphore", asyncio.Semaphore(1))
         monkeypatch.setattr(ytp, "normalize_video_for_ytp", fake_normalize)
         monkeypatch.setattr(ytp, "_run_blocking_ytp", fake_render)
-        monkeypatch.setattr(ytp, "convert_webm_to_mp4", fake_convert)
 
         video = SimpleNamespace(
             file_id="long-video-file-id",
@@ -185,6 +224,7 @@ def test_long_video_is_normalized_before_render(monkeypatch):
         assert normalize_calls
         assert render_inputs
         assert render_inputs[0].endswith("_normalized.mp4")
+        assert render_outputs and render_outputs[0].endswith(".mp4")
         assert any(reply[0] == "video" for reply in message.replies if isinstance(reply, tuple))
         assert message.processing_messages[0].deleted
 
