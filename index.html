@@ -36,6 +36,10 @@
       touch-action: none;
       width: 100%;
       height: auto;
+      transform-origin: 0 0;
+      will-change: transform;
+      position: relative;
+      z-index: 1;
     }
     .toolbar {
       min-height: 78px;
@@ -48,6 +52,8 @@
       flex-shrink: 0;
       flex-wrap: wrap;
       touch-action: auto;
+      position: relative;
+      z-index: 2;
     }
     .btn {
       padding: 10px 12px;
@@ -337,14 +343,101 @@
   const undoButton = document.getElementById("undoButton");
   const redoButton = document.getElementById("redoButton");
   const HISTORY_LIMIT = 20;
+  const MIN_CANVAS_ZOOM = 1;
+  const MAX_CANVAS_ZOOM = 4;
   let undoStack = [];
   let redoStack = [];
   let isDirty = false;
+  let canvasZoom = MIN_CANVAS_ZOOM;
+  let canvasPanX = 0;
+  let canvasPanY = 0;
+  let pinchState = null;
+  let touchGestureActive = false;
+  const touchPointers = new Map();
 
   function applyStrokeStyle(width = brushSize) {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = width;
+  }
+
+  function clampCanvasPan(x, y, scale = canvasZoom) {
+    const width = canvas.offsetWidth || window.innerWidth || 1;
+    const height = canvas.offsetHeight || canvas.height || 1;
+    return {
+      x: Math.min(0, Math.max(width - width * scale, x)),
+      y: Math.min(0, Math.max(height - height * scale, y))
+    };
+  }
+
+  function applyCanvasViewportTransform() {
+    const clamped = clampCanvasPan(canvasPanX, canvasPanY, canvasZoom);
+    canvasPanX = clamped.x;
+    canvasPanY = clamped.y;
+    canvas.style.transform = `translate(${canvasPanX}px, ${canvasPanY}px) scale(${canvasZoom})`;
+  }
+
+  function resetCanvasViewportTransform() {
+    canvasZoom = MIN_CANVAS_ZOOM;
+    canvasPanX = 0;
+    canvasPanY = 0;
+    pinchState = null;
+    touchGestureActive = false;
+    touchPointers.clear();
+    applyCanvasViewportTransform();
+  }
+
+  function beginPinch(first, second) {
+    const dx = second.clientX - first.clientX;
+    const dy = second.clientY - first.clientY;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const centerX = (first.clientX + second.clientX) / 2;
+    const centerY = (first.clientY + second.clientY) / 2;
+    const rect = canvas.getBoundingClientRect();
+    const baseLeft = rect.left - canvasPanX;
+    const baseTop = rect.top - canvasPanY;
+
+    pinchState = {
+      startDistance: distance,
+      startScale: canvasZoom,
+      baseLeft: baseLeft,
+      baseTop: baseTop,
+      contentX: (centerX - rect.left) / canvasZoom,
+      contentY: (centerY - rect.top) / canvasZoom
+    };
+  }
+
+  function updatePinch(first, second) {
+    if (!pinchState) return;
+    const dx = second.clientX - first.clientX;
+    const dy = second.clientY - first.clientY;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const centerX = (first.clientX + second.clientX) / 2;
+    const centerY = (first.clientY + second.clientY) / 2;
+    const nextZoom = Math.max(
+      MIN_CANVAS_ZOOM,
+      Math.min(MAX_CANVAS_ZOOM, pinchState.startScale * distance / pinchState.startDistance)
+    );
+
+    canvasZoom = nextZoom;
+    canvasPanX = centerX - pinchState.baseLeft - pinchState.contentX * nextZoom;
+    canvasPanY = centerY - pinchState.baseTop - pinchState.contentY * nextZoom;
+    applyCanvasViewportTransform();
+  }
+
+  function beginPinchFromPointerMap() {
+    if (touchPointers.size < 2) {
+      pinchState = null;
+      return;
+    }
+    const points = Array.from(touchPointers.values());
+    beginPinch(points[0], points[1]);
+  }
+
+  function updatePinchFromPointerMap() {
+    if (touchPointers.size < 2) return;
+    const points = Array.from(touchPointers.values());
+    updatePinch(points[0], points[1]);
   }
 
   function updateHistoryButtons() {
@@ -419,6 +512,7 @@
     if (tmp.width > 0) {
       ctx.drawImage(tmp, 0, 0);
     }
+    resetCanvasViewportTransform();
     resetHistory();
   }
 
@@ -623,28 +717,66 @@
     });
   }
 
+  function capturePointerSafely(e) {
+    if (typeof canvas.setPointerCapture !== "function") return;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (_err) {
+      // Some Telegram WebViews expose Pointer Events but only partial capture.
+    }
+  }
+
   if (typeof window.PointerEvent === "function") {
     canvas.addEventListener("pointerdown", function(e) {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       e.preventDefault();
-      activePointerId = e.pointerId;
-      beginStroke(e.clientX, e.clientY);
-      if (typeof canvas.setPointerCapture === "function") {
-        try {
-          canvas.setPointerCapture(e.pointerId);
-        } catch (_err) {
-          // Some Telegram WebViews expose Pointer Events but only partial capture.
+
+      if (e.pointerType === "touch") {
+        touchPointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+        capturePointerSafely(e);
+
+        if (touchGestureActive || touchPointers.size >= 2) {
+          if (!touchGestureActive && drawing) endStroke();
+          touchGestureActive = true;
+          if (touchPointers.size === 2 || !pinchState) beginPinchFromPointerMap();
+          return;
         }
       }
+
+      activePointerId = e.pointerId;
+      beginStroke(e.clientX, e.clientY);
+      capturePointerSafely(e);
     });
 
     canvas.addEventListener("pointermove", function(e) {
+      if (e.pointerType === "touch" && touchPointers.has(e.pointerId)) {
+        touchPointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+        if (touchGestureActive) {
+          e.preventDefault();
+          updatePinchFromPointerMap();
+          return;
+        }
+      }
       if (!drawing || e.pointerId !== activePointerId) return;
       e.preventDefault();
       continueStroke(e.clientX, e.clientY);
     });
 
     function finishPointerStroke(e) {
+      if (e.pointerType === "touch" && touchPointers.has(e.pointerId)) {
+        const wasGesture = touchGestureActive;
+        touchPointers.delete(e.pointerId);
+        if (wasGesture) {
+          e.preventDefault();
+          if (touchPointers.size >= 2) {
+            beginPinchFromPointerMap();
+          } else {
+            pinchState = null;
+          }
+          if (touchPointers.size === 0) touchGestureActive = false;
+          return;
+        }
+      }
       if (!drawing || e.pointerId !== activePointerId) return;
       e.preventDefault();
       endStroke();
@@ -653,6 +785,18 @@
     canvas.addEventListener("pointerup", finishPointerStroke);
     canvas.addEventListener("pointercancel", finishPointerStroke);
     canvas.addEventListener("lostpointercapture", function(e) {
+      if (e.pointerType === "touch" && touchPointers.has(e.pointerId)) {
+        touchPointers.delete(e.pointerId);
+        if (touchGestureActive) {
+          if (touchPointers.size >= 2) {
+            beginPinchFromPointerMap();
+          } else {
+            pinchState = null;
+          }
+          if (touchPointers.size === 0) touchGestureActive = false;
+          return;
+        }
+      }
       if (drawing && e.pointerId === activePointerId) endStroke();
     });
     // If pointer capture is unavailable, releasing a finger/mouse outside the
@@ -664,25 +808,46 @@
     canvas.addEventListener("touchstart", function(e) {
       if (!e.touches.length) return;
       e.preventDefault();
+
+      if (touchGestureActive || e.touches.length >= 2) {
+        if (!touchGestureActive && drawing) endStroke();
+        touchGestureActive = true;
+        if (e.touches.length >= 2) beginPinch(e.touches[0], e.touches[1]);
+        return;
+      }
+
       const t = e.touches[0];
       beginStroke(t.clientX, t.clientY);
     }, { passive: false });
 
     canvas.addEventListener("touchmove", function(e) {
+      if (touchGestureActive) {
+        e.preventDefault();
+        if (e.touches.length >= 2) updatePinch(e.touches[0], e.touches[1]);
+        return;
+      }
       if (!drawing || !e.touches.length) return;
       e.preventDefault();
       const t = e.touches[0];
       continueStroke(t.clientX, t.clientY);
     }, { passive: false });
 
-    canvas.addEventListener("touchend", function(e) {
+    function finishFallbackTouch(e) {
       e.preventDefault();
+      if (touchGestureActive) {
+        if (e.touches.length >= 2) {
+          beginPinch(e.touches[0], e.touches[1]);
+        } else {
+          pinchState = null;
+        }
+        if (e.touches.length === 0) touchGestureActive = false;
+        return;
+      }
       endStroke();
-    }, { passive: false });
-    canvas.addEventListener("touchcancel", function(e) {
-      e.preventDefault();
-      endStroke();
-    }, { passive: false });
+    }
+
+    canvas.addEventListener("touchend", finishFallbackTouch, { passive: false });
+    canvas.addEventListener("touchcancel", finishFallbackTouch, { passive: false });
 
     canvas.addEventListener("mousedown", function(e) {
       if (e.button !== 0) return;
