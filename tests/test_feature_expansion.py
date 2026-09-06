@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
@@ -105,9 +104,10 @@ def test_world_news_knows_sanctions_and_international_court():
     from features.world.models import WorldState
     from features.world.news import SIGNIFICANT_EVENT_TYPES, format_event_fact
 
+    now = datetime.now()
     states = {
-        1: WorldState(1, -1, "Альфа", True, datetime.now()),
-        2: WorldState(2, -2, "Бета", True, datetime.now()),
+        1: WorldState(1, -1, "Альфа", now, True),
+        2: WorldState(2, -2, "Бета", now, True),
     }
     sanction = WorldEvent(
         event_id=1,
@@ -115,7 +115,7 @@ def test_world_news_knows_sanctions_and_international_court():
         actor_state=1,
         target_state=2,
         payload={"reason": "за табуретку"},
-        created_at=datetime.now(),
+        created_at=now,
     )
     assert "sanctions_imposed" in SIGNIFICANT_EVENT_TYPES
     assert "санкции" in format_event_fact(sanction, states).lower()
