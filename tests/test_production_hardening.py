@@ -166,6 +166,8 @@ def test_workflows_use_node24_actions_and_native_ssh_setup():
     assert "actions/setup-python@v5" not in tests_workflow
 
     assert "webfactory/ssh-agent" not in deploy_workflow
+    # User explicitly chose to keep host-key verification disabled so deploy
+    # remains zero-maintenance; ensure no SSH_KNOWN_HOSTS dependency returns.
     assert "StrictHostKeyChecking=no" in deploy_workflow
     assert "StrictHostKeyChecking=yes" not in deploy_workflow
     assert "UserKnownHostsFile=/dev/null" in deploy_workflow
