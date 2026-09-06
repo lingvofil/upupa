@@ -78,7 +78,6 @@ async def handle_gif_search(message: types.Message):
         await message.reply("Гиф чего? Пиши: гиф [запрос], например: гиф кот")
         return
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    await message.reply("Ща ща")
     success, error_message, gif_data = await process_gif_search(query)
     if success and gif_data:
         await save_and_send_gif(message, gif_data)
