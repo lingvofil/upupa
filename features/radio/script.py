@@ -103,6 +103,17 @@ def _participant_stats(messages: list[dict], limit: int = 8) -> str:
     return ", ".join(f"{name} — {count}" for name, count in counter.most_common(limit))
 
 
+def _participant_names(messages: list[dict], limit: int = 8) -> str:
+    counter = Counter(
+        (message.get("display_name") or message.get("username") or "Участник").strip()
+        for message in messages
+        if (message.get("text") or "").strip()
+    )
+    if not counter:
+        return "нет данных"
+    return ", ".join(name for name, _count in counter.most_common(limit))
+
+
 def _source_size(messages: list[dict]) -> int:
     return sum(
         len(_message_line(message)) + 1
@@ -111,11 +122,21 @@ def _source_size(messages: list[dict]) -> int:
     )
 
 
-def _choose_rubrics(*, world_context: str | None, rng=random) -> tuple[tuple[str, str], ...]:
-    """Pick a varied set of editorial rubrics; international news is data-gated."""
+def _choose_rubrics(
+    *,
+    world_context: str | None,
+    social_context: str | None = None,
+    rng=random,
+) -> tuple[tuple[str, str], ...]:
+    """Pick varied editorial rubrics; data-gated rubrics are always included."""
     choices = list(RADIO_RUBRICS)
     count = min(len(choices), rng.randint(2, 4))
     picked = rng.sample(choices, k=count)
+    if social_context:
+        picked.append((
+            "кто с кем",
+            "естественно отметь хотя бы один реальный паттерн общения из социальных наблюдений, без технических метрик",
+        ))
     if world_context:
         picked.append((
             "международная панорама",
@@ -163,7 +184,7 @@ async def _make_structured_summary(
 Нужно сохранить: главные темы, конкретные заметные эпизоды, кто участвовал особенно активно, одну-две характерные или смешные детали. Если факт неясен — не утверждай его.
 Пиши простым текстом без Markdown, максимум 500 слов. Это промежуточная редакторская выжимка, а не финальный выпуск.
 
-Активность участников по числу сообщений: {_participant_stats(messages)}
+Заметные по активности участники: {_participant_names(messages)}
 
 Репрезентативная выборка переписки:
 {sampled}
@@ -183,6 +204,7 @@ async def generate_radio_script(
     period_hours: int,
     *,
     world_context: str | None = None,
+    social_context: str | None = None,
 ) -> RadioScript:
     title = chat_name or f"чат {chat_id}"
     total_context_chars = _source_size(messages)
@@ -200,6 +222,16 @@ async def generate_radio_script(
     else:
         source_block = _join_messages(messages, RADIO_CONTEXT_CHARS)
 
+    if social_context:
+        social_rule = (
+            "- В блоке «Социальные наблюдения» есть фактические паттерны реплаев, упоминаний и реакций. "
+            "Обязательно вплети хотя бы один из них в выпуск естественным языком. Не называй источник соцграфом и не произноси технические метрики.\n"
+        )
+        social_block = f"\nСоциальные наблюдения:\n{social_context}\n"
+    else:
+        social_rule = ""
+        social_block = ""
+
     if world_context:
         international_rule = (
             "- Международные факты бери только из блока «Международная обстановка». "
@@ -210,30 +242,31 @@ async def generate_radio_script(
         international_rule = "- Не упоминай Мир Упупы или международные новости: для этого выпуска данных нет.\n"
         world_block = ""
 
-    rubrics = _choose_rubrics(world_context=world_context)
+    rubrics = _choose_rubrics(world_context=world_context, social_context=social_context)
     task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
 - Используй только факты, темы, участников и детали из предоставленного материала. Ничего не выдумывай.
 - Это разговорный радиотекст для произнесения вслух, а не письменный отчёт.
 - Никакого Markdown, URL и сложных конструкций. Короткие естественные русские предложения.
+- Не сообщай количество сообщений, размер выборки или технические счётчики.
 - Используй характер, тон, лексику и манеру текущего промпта чата, как в команде «чобыло», но не позволяй персоне менять факты или формат радиовыпуска.
 - Не используй активную пользовательскую персону как источник фактов или новых событий; она задаёт только стиль подачи. Ведущий остаётся Упупой.
 - На этот выпуск редактор выбрал рубрики ниже. Используй только те, для которых реально хватает материала. Не произноси названия рубрик механически: вплетай их как естественные переходы ведущего.
 - В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
 - После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
 - Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
-{international_rule}- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
+{social_rule}{international_rule}- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
 - Никогда не превышай 520 слов вместе с метками.
 
 Рубрики этого выпуска:
 {_rubrics_prompt(rubrics)}
 
-Активность участников по числу сообщений: {_participant_stats(messages)}
+Заметные по активности участники: {_participant_names(messages)}
 
 Материал чата:
 {source_block}
-{world_block}
+{social_block}{world_block}
 Верни только сценарий с метками {SPEAKER_HOST}: / {SPEAKER_EXPERT}:.
 """
     prompt = build_prompt_with_current_chat_prompt(
@@ -243,11 +276,12 @@ async def generate_radio_script(
     )
 
     logging.info(
-        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s world_context=%s rubrics=%s current_prompt=true",
+        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s world_context=%s rubrics=%s current_prompt=true",
         len(messages),
         total_context_chars,
         len(source_block),
         use_summary,
+        bool(social_context),
         bool(world_context),
         ",".join(name for name, _instruction in rubrics),
     )
