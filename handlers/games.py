@@ -4,7 +4,7 @@ from aiogram import Router
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
 from core.loader import bot
-from features.crocodile_scoring import format_artist_leaderboard, mark_round_started
+from features.crocodile_scoring import format_artist_leaderboard
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
 from games import crocodile, crocodile_likes, reverse_crocodile
@@ -55,7 +55,6 @@ async def meme_command_handler(message: Message):
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
     await crocodile.handle_start_game(message)
-    mark_round_started(message.chat.id)
 
 @router.message(lambda m: m.text and m.text.lower().strip() in {"кракадил художники", "кракадил хуйдожники"})
 async def croc_artist_stats(message: types.Message):
@@ -73,12 +72,9 @@ async def croc_callback(callback: types.CallbackQuery):
         await crocodile_likes.handle_like_callback(callback)
     elif callback.data == "cr_restart":
         await crocodile.handle_start_game(callback.message)
-        mark_round_started(callback.message.chat.id)
         await callback.answer()
     else:
         await crocodile.handle_callback(callback)
-        if callback.data == "btn_want_draw" and callback.message:
-            mark_round_started(callback.message.chat.id)
 
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
