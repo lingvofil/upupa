@@ -7,6 +7,7 @@
 import logging
 import random
 import re
+import time
 
 from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -28,18 +29,16 @@ IMAGE_STYLE = (
 )
 
 MAX_HINTS = 3
+SURRENDER_DELAY_SECONDS = 5 * 60
 
-# chat_id(str) -> {"word": str, "hints": int, "image": bytes}
+# chat_id(str) -> {"word": str, "hints": int, "image": bytes, "started_at": float}
 games: dict[str, dict] = {}
 
 
 def _keyboard(chat_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="💡 Подсказка", callback_data=f"rcroc_hint_{chat_id}"),
-                InlineKeyboardButton(text="🔄 Другая картинка", callback_data=f"rcroc_img_{chat_id}"),
-            ],
+            [InlineKeyboardButton(text="💡 Подсказка", callback_data=f"rcroc_hint_{chat_id}")],
             [InlineKeyboardButton(text="🏳️ Сдаёмся", callback_data=f"rcroc_stop_{chat_id}")],
         ]
     )
@@ -175,6 +174,23 @@ def _make_hint(word: str, hint_number: int) -> str:
     return f"💡 Ладно, держите: {masked}"
 
 
+def _surrender_remaining_seconds(session: dict, *, now: float | None = None) -> int:
+    """Return whole seconds left before surrender is allowed for this round."""
+    started_at = session.get("started_at")
+    if started_at is None:
+        return 0
+    current = time.monotonic() if now is None else now
+    remaining = SURRENDER_DELAY_SECONDS - (current - float(started_at))
+    if remaining <= 0:
+        return 0
+    return int(remaining + 0.999)
+
+
+def _format_surrender_wait(seconds: int) -> str:
+    minutes, rest = divmod(max(0, seconds), 60)
+    return f"{minutes}:{rest:02d}"
+
+
 async def start_game(message: types.Message):
     chat_id = str(message.chat.id)
     word = pick_single_crocodile_word()
@@ -189,6 +205,8 @@ async def start_game(message: types.Message):
         "word": word,
         "hints": 0,
         "image": image,
+        # Пять минут считаются с готовности раунда, а не со старта AI-генерации.
+        "started_at": time.monotonic(),
     }
     await status.delete()
     await bot.send_photo(
@@ -237,23 +255,14 @@ async def handle_callback(cb: types.CallbackQuery):
         await cb.answer()
         await bot.send_message(int(chat_id), hint)
 
-    elif data.startswith("rcroc_img_"):
-        await cb.answer("Рисую то же самое, но по-другому...")
-        image = await _generate_word_image(session["word"], chat_id)
-        if not games.get(chat_id) or games[chat_id]["word"] != session["word"]:
-            return
-        if not image:
-            await bot.send_message(int(chat_id), "Вторая попытка не удалась, смотрите первую.")
-            return
-        session["image"] = image
-        await bot.send_photo(
-            chat_id=int(chat_id),
-            photo=BufferedInputFile(image, "rcroc2.png"),
-            caption="🎨 Вот вам другой ракурс, слово то же.",
-            reply_markup=_keyboard(chat_id),
-        )
-
     elif data.startswith("rcroc_stop_"):
+        remaining = _surrender_remaining_seconds(session)
+        if remaining:
+            await cb.answer(
+                f"Сдаться можно через {_format_surrender_wait(remaining)}.",
+                show_alert=True,
+            )
+            return
         word = session["word"]
         await cb.answer("Слабаки")
         await _finish_game(chat_id, f"🏳️ Сдались? Это был(а) <b>{word.upper()}</b>. Позорище.")
