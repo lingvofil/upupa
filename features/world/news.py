@@ -26,6 +26,9 @@ SIGNIFICANT_EVENT_TYPES = {
     "state_visit_showcase",
     "state_visit_finished",
     "state_insult",
+    "sanctions_imposed",
+    "sanctions_lifted",
+    "international_court_verdict",
 }
 
 
@@ -84,6 +87,16 @@ def format_event_fact(event: WorldEvent, states: dict[int, WorldState]) -> str:
     if event.event_type == "state_insult":
         text = str(payload.get("text") or "дипломатически оскорбительное заявление")
         return f"{actor} официально оскорбило государство {target}: {text}"
+    if event.event_type == "sanctions_imposed":
+        reason = str(payload.get("reason") or "").strip()
+        suffix = f" Причина: {reason}" if reason else ""
+        return f"{actor} ввело санкции против государства {target}.{suffix}"
+    if event.event_type == "sanctions_lifted":
+        return f"{actor} сняло санкции с государства {target}."
+    if event.event_type == "international_court_verdict":
+        case_id = payload.get("case_id")
+        claim = str(payload.get("claim") or "межгосударственная претензия").strip()
+        return f"Международный суд вынес решение по делу №{case_id}: {actor} против {target}. Предмет иска: {claim}"
     return f"{actor}: событие {event.event_type}."
 
 

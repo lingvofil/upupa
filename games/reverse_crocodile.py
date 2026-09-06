@@ -1,13 +1,12 @@
 # === games/reverse_crocodile.py — "кракадил наоборот" ===
 #
-# Обратный кракадил: бот загадывает слово из crocowords.txt, сам генерирует
-# картинку (очередь Pollinations из picgeneration) и чат угадывает в сообщениях.
-# Очки и рейтинг общие с обычным кракадилом (crocodile_scores.json).
-#
-# Проверка угадываний вызывается из catch-all (handlers/dialog.py), как у кракадила.
+# Обратный кракадил: бот загадывает слово, сам рисует и чат угадывает.
+# Очки угадывающих общие с обычным кракадилом; рисование идёт через тот же
+# GigaChat-first waterfall, что и современные image-фичи.
 
 import logging
 import random
+import time
 
 from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,17 +14,17 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboar
 from core.loader import bot
 from games import crocodile as crocodile_game
 from games.crocodile import _contains_answer, _normalize_guess, add_point, format_leaderboard
-from AI.picgeneration import pollinations_generate, translate_to_en
+from features.crocodile_scoring import fast_guess_bonus
 
 # Стиль генерации: без текста на картинке, иначе слово палится
 IMAGE_STYLE = (
-    "simple colorful cartoon illustration, single clear subject, plain background, "
-    "no text, no letters, no words, no captions"
+    "Простая цветная мультяшная иллюстрация, один хорошо различимый главный объект, простой фон. "
+    "Не добавляй текст, буквы, слова, подписи, вывески или водяные знаки. "
 )
 
 MAX_HINTS = 3
 
-# chat_id(str) -> {"word": str, "hints": int, "image": bytes}
+# chat_id(str) -> {"word": str, "hints": int, "image": bytes, "started_at": float}
 games: dict[str, dict] = {}
 
 
@@ -48,8 +47,35 @@ def _again_keyboard() -> InlineKeyboardMarkup:
 
 
 async def _generate_word_image(word: str) -> bytes | None:
-    prompt_en = await translate_to_en(word)
-    return await pollinations_generate(f"{prompt_en}, {IMAGE_STYLE}")
+    """GigaChat first, then the same reserve providers used by image generation."""
+    from AI import picgeneration as pg
+    from AI.gigachat_image import generate_gigachat_image
+
+    prompt_ru = f"Нарисуй так, чтобы можно было угадать понятие «{word}». {IMAGE_STYLE}"
+    try:
+        image = await generate_gigachat_image(prompt_ru)
+        if image:
+            logging.info("[rcroc] image provider=gigachat word=%s", word)
+            return image
+
+        prompt_en = await pg.translate_to_en(prompt_ru)
+        image = await pg.pollinations_generate(prompt_en)
+        if image:
+            logging.info("[rcroc] image provider=pollinations word=%s", word)
+            return image
+
+        image = await pg.hf_generate(prompt_en, "black-forest-labs/FLUX.1-schnell")
+        if image:
+            logging.info("[rcroc] image provider=huggingface word=%s", word)
+            return image
+
+        image = await pg.cf_generate_t2i(prompt_en)
+        if image:
+            logging.info("[rcroc] image provider=cloudflare word=%s", word)
+            return image
+    except Exception as exc:
+        logging.warning("[rcroc] image waterfall failed word=%s: %s", word, exc, exc_info=True)
+    return None
 
 
 def _make_hint(word: str, hint_number: int) -> str:
@@ -58,7 +84,6 @@ def _make_hint(word: str, hint_number: int) -> str:
         return f"💡 В слове {len(word)} букв(ы)."
     if hint_number == 2:
         return f"💡 Начинается на «{word[0].upper()}»."
-    # раскрываем ~половину букв в случайных позициях (первая — всегда)
     letters = list(word)
     positions = [i for i in range(1, len(letters)) if letters[i] != " "]
     random.shuffle(positions)
@@ -72,8 +97,6 @@ def _make_hint(word: str, hint_number: int) -> str:
 
 async def start_game(message: types.Message):
     chat_id = str(message.chat.id)
-    # После bootstrap обычный и обратный режим используют один persistent
-    # word-cycle, поэтому слова не начинают повторяться независимо друг от друга.
     word = crocodile_game._pick_word()
 
     status = await message.answer("🦎 КРАКАДИЛ НАОБОРОТ\nЗагадал слово, рисую свой шедевр...")
@@ -82,7 +105,12 @@ async def start_game(message: types.Message):
         await status.edit_text("Не смог нарисовать, у меня лапки. Попробуй ещё раз.")
         return
 
-    games[chat_id] = {"word": word, "hints": 0, "image": image}
+    games[chat_id] = {
+        "word": word,
+        "hints": 0,
+        "image": image,
+        "started_at": time.monotonic(),
+    }
     await status.delete()
     await bot.send_photo(
         chat_id=int(chat_id),
@@ -91,7 +119,7 @@ async def start_game(message: types.Message):
         parse_mode="HTML",
         reply_markup=_keyboard(chat_id),
     )
-    logging.info(f"[rcroc] start chat={chat_id} word={word}")
+    logging.info("[rcroc] start chat=%s word=%s", chat_id, word)
 
 
 async def _finish_game(chat_id: str, text: str):
@@ -133,7 +161,6 @@ async def handle_callback(cb: types.CallbackQuery):
     elif data.startswith("rcroc_img_"):
         await cb.answer("Рисую то же самое, но по-другому...")
         image = await _generate_word_image(session["word"])
-        # за время генерации игру могли угадать/остановить
         if not games.get(chat_id) or games[chat_id]["word"] != session["word"]:
             return
         if not image:
@@ -164,11 +191,15 @@ async def check_answer(msg: types.Message) -> bool:
     if not _contains_answer(msg.text, session["word"]):
         return False
 
+    elapsed = time.monotonic() - float(session.get("started_at") or time.monotonic())
+    bonus = fast_guess_bonus(elapsed)
     if msg.from_user:
-        add_point(chat_id, msg.from_user.id, msg.from_user.full_name)
+        for _ in range(1 + bonus):
+            add_point(chat_id, msg.from_user.id, msg.from_user.full_name)
     winner = msg.from_user.full_name if msg.from_user else "Кто-то"
+    bonus_text = f"\n⚡ За {elapsed:.0f} сек.: +{bonus} бонусных очк." if bonus else ""
     await _finish_game(
         chat_id,
-        f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{word.upper()}</b>.\nА я неплохо рисую, да?",
+        f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{word.upper()}</b>.{bonus_text}\nА я неплохо рисую, да?",
     )
     return True

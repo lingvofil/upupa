@@ -1,13 +1,10 @@
-"""Хэндлеры: Егра, мемы, кракадил.
-
-Вырезано из main.py (этап 3). Порядок регистрации сохранён —
-см. handlers/__init__.py: порядок ROUTERS = порядок в старом main.py.
-"""
+"""Хэндлеры: Егра, мемы, кракадил."""
 from aiogram import Router
 
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
 from core.loader import bot
+from features.crocodile_scoring import format_artist_leaderboard, mark_round_started
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
 from games import crocodile, crocodile_likes, reverse_crocodile
@@ -23,7 +20,6 @@ async def _process_quiz_poll_answer_once(poll_answer: PollAnswer, bot: Bot) -> b
     poll_id = poll_answer.poll_id
     if poll_id in _quiz_poll_answers_in_progress:
         return False
-
     _quiz_poll_answers_in_progress.add(poll_id)
     try:
         await process_poll_answer(poll_answer, bot)
@@ -58,8 +54,16 @@ async def meme_command_handler(message: Message):
 
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
-    print("CROC BOT ID:", id(bot))
     await crocodile.handle_start_game(message)
+    mark_round_started(message.chat.id)
+
+@router.message(lambda m: m.text and m.text.lower().strip() in {"кракадил художники", "кракадил хуйдожники"})
+async def croc_artist_stats(message: types.Message):
+    await message.answer(
+        format_artist_leaderboard(message.chat.id),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 @router.callback_query(
     F.data.startswith("cr_") | F.data.in_(("btn_like", "btn_want_draw"))
@@ -69,9 +73,12 @@ async def croc_callback(callback: types.CallbackQuery):
         await crocodile_likes.handle_like_callback(callback)
     elif callback.data == "cr_restart":
         await crocodile.handle_start_game(callback.message)
+        mark_round_started(callback.message.chat.id)
         await callback.answer()
     else:
         await crocodile.handle_callback(callback)
+        if callback.data == "btn_want_draw" and callback.message:
+            mark_round_started(callback.message.chat.id)
 
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
