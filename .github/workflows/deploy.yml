@@ -80,6 +80,7 @@ jobs:
           BACKUP_DIR=""
           CODE_SWITCHED=0
           DEPLOY_SUCCEEDED=0
+          MIN_BOOTSTRAP_FREE_KB=$((512 * 1024))
 
           service_ctl() {
             if [[ "$(id -u)" -eq 0 ]]; then
@@ -87,6 +88,51 @@ jobs:
             else
               sudo -n systemctl "$@"
             fi
+          }
+
+          bootstrap_prune_backups() {
+            # This runs before any Git operation that may need to create lock
+            # files or fetch objects. It only touches deploy backup directories
+            # created by scripts/backup_runtime_state.py and always preserves
+            # the newest completed known-good snapshot.
+            [[ -d "$BACKUP_ROOT" ]] || return 0
+
+            local dir name available_kb index
+            local -a completed=()
+            for dir in "$BACKUP_ROOT"/*; do
+              [[ -d "$dir" ]] || continue
+              name="${dir##*/}"
+              [[ "$name" =~ ^[0-9]{8}T[0-9]{6}\.[0-9]{6}Z-[A-Za-z0-9._-]+$ ]] || continue
+              if [[ -f "$dir/manifest.json" ]]; then
+                completed+=("$dir")
+              else
+                echo "Removing incomplete deploy backup ${dir}" >&2
+                rm -rf -- "$dir"
+              fi
+            done
+
+            available_kb="$(df -Pk "$APP_DIR" | awk 'NR==2 {print $4}')"
+            [[ "$available_kb" =~ ^[0-9]+$ ]] || return 0
+            if (( available_kb >= MIN_BOOTSTRAP_FREE_KB )); then
+              return 0
+            fi
+
+            if (( ${#completed[@]} <= 1 )); then
+              echo "Low disk before deploy: ${available_kb} KiB free; preserving the last known-good backup" >&2
+              return 0
+            fi
+
+            mapfile -t completed < <(printf '%s\n' "${completed[@]}" | sort)
+            for ((index=0; index<${#completed[@]}-1; index++)); do
+              echo "Low disk before git fetch; removing old deploy backup ${completed[$index]}" >&2
+              rm -rf -- "${completed[$index]}"
+              available_kb="$(df -Pk "$APP_DIR" | awk 'NR==2 {print $4}')"
+              [[ "$available_kb" =~ ^[0-9]+$ ]] || break
+              if (( available_kb >= MIN_BOOTSTRAP_FREE_KB )); then
+                break
+              fi
+            done
+            echo "Deploy bootstrap disk free: ${available_kb} KiB" >&2
           }
 
           run_healthcheck() {
@@ -160,8 +206,10 @@ jobs:
 
           cd "$APP_DIR"
           PREVIOUS_SHA="$(git rev-parse HEAD)"
-          git remote set-url origin git@github.com:lingvofil/upupa.git
-          git fetch --prune origin main
+          bootstrap_prune_backups
+          # Do not mutate .git/config in a disk-full recovery path. Fetch from
+          # the canonical URL directly; the server already has GitHub SSH auth.
+          git fetch --prune git@github.com:lingvofil/upupa.git main
           git cat-file -e "${TARGET_SHA}^{commit}"
 
           DEPLOY_TMP_DIR="$(mktemp -d /tmp/upupa-deploy.XXXXXX)"
