@@ -72,7 +72,7 @@ def test_crocodile_has_no_speed_bonus_and_keeps_artist_stats():
 
     assert "fast_guess_bonus" not in inspect.getsource(scoring)
     assert "бонусных очк" not in inspect.getsource(reverse)
-    assert "pick_single_crocodile_word" in inspect.getsource(reverse)
+    assert "pick_reverse_crocodile_word" in inspect.getsource(reverse)
 
 
 def test_crocodile_artist_statistics_are_separate(tmp_path, monkeypatch):
