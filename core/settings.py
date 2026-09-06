@@ -7,6 +7,10 @@ import os
 # Loopback only; use the same value for the service and the healthcheck CLI.
 HEALTHCHECK_PORT = int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766"))
 
+# Historical Upupa scheduling/user-facing time is Moscow time. Keep one
+# explicit application timezone instead of depending on the VPS local timezone.
+APP_TIMEZONE_NAME = os.getenv("UPUPA_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
+
 # Shared guard for synchronous AI SDK calls. Background work gets its own
 # smaller lane while all provider calls share the same process-wide ceiling.
 AI_MAX_CONCURRENCY = max(1, int(os.getenv("UPUPA_AI_MAX_CONCURRENCY", "3")))
