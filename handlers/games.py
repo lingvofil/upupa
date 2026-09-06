@@ -13,6 +13,7 @@ from AI.quiz import process_poll_answer
 
 router = Router(name="games")
 _quiz_poll_answers_in_progress: set[str] = set()
+_reverse_croc_starts_in_progress: set[int] = set()
 
 
 async def _process_quiz_poll_answer_once(poll_answer: PollAnswer, bot: Bot) -> bool:
@@ -26,6 +27,20 @@ async def _process_quiz_poll_answer_once(poll_answer: PollAnswer, bot: Bot) -> b
         return True
     finally:
         _quiz_poll_answers_in_progress.discard(poll_id)
+
+
+def _claim_reverse_croc_start(chat_id: int) -> bool:
+    """Атомарно резервирует запуск reverse Crocodile до первого await."""
+    if chat_id in _reverse_croc_starts_in_progress:
+        return False
+    if str(chat_id) in reverse_crocodile.games:
+        return False
+    _reverse_croc_starts_in_progress.add(chat_id)
+    return True
+
+
+def _release_reverse_croc_start(chat_id: int) -> None:
+    _reverse_croc_starts_in_progress.discard(chat_id)
 
 
 @router.message(F.text.lower() == "егра")
@@ -82,8 +97,30 @@ async def stop_croc_text(message: types.Message):
 
 @router.message(F.text.lower() == "кракадил наоборот")
 async def start_reverse_croc(message: types.Message):
-    await reverse_crocodile.start_game(message)
+    chat_id = message.chat.id
+    if not _claim_reverse_croc_start(chat_id):
+        await message.answer("🦎 Раунд уже запускается или идёт.")
+        return
+    try:
+        await reverse_crocodile.start_game(message)
+    finally:
+        _release_reverse_croc_start(chat_id)
 
 @router.callback_query(F.data.startswith("rcroc_"))
 async def reverse_croc_callback(callback: types.CallbackQuery):
+    if callback.data and callback.data.startswith("rcroc_again"):
+        chat_id = callback.message.chat.id
+        if not _claim_reverse_croc_start(chat_id):
+            await callback.answer(
+                "Новый раунд уже запускается или идёт.",
+                show_alert=True,
+            )
+            return
+        await callback.answer("Рисую новое...")
+        try:
+            await reverse_crocodile.start_game(callback.message)
+        finally:
+            _release_reverse_croc_start(chat_id)
+        return
+
     await reverse_crocodile.handle_callback(callback)
