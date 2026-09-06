@@ -12,6 +12,7 @@ from core.history_store import get_history_repository
 from core.paths import USER_MESSAGES_LOG_PATH, WORLD_DB_PATH
 from features.social_graph.analysis import aggregate_edges
 from features.social_graph.service import get_graph_data, is_social_graph_enabled
+from features.world.identity import ensure_state_identity
 from features.world.news import format_event_fact
 from features.world.presentation import format_world_profile
 from features.world.service import calculate_authority, get_world_service
@@ -24,6 +25,20 @@ from infrastructure.persistence.sqlite_world_expansion import (
 
 SANCTION_AUTHORITY_PENALTY = 3
 MAX_SANCTION_AUTHORITY_PENALTY = 18
+LEGACY_TEMPLATE_THREATS = {
+    "понедельник",
+    "внезапный рабочий созвон",
+    "исчезновение последнего админа",
+    "голосовые по семь минут",
+    "фраза «есть минутка?»",
+    "слишком серьёзный разговор",
+    "массовый уход читать, но не отвечать",
+    "неожиданная трезвость населения",
+    "спор, начавшийся со слова «вообще-то»",
+    "человек, который решил всё организовать",
+    "дефицит мемов стратегического назначения",
+    "сообщение «доброе утро» в 06:12",
+}
 _repo = SQLiteWorldExpansionRepository(WORLD_DB_PATH)
 _schema_ready = False
 _schema_lock = asyncio.Lock()
@@ -120,12 +135,29 @@ def _characteristics_block(metrics: StateCharacteristics) -> str:
     ])
 
 
+async def _visible_identity(service, profile):
+    """Never expose the old deterministic identity templates in the state card."""
+    identity = await ensure_state_identity(service, profile.state)
+    if identity is None:
+        return None
+    threat = str(identity.details.main_threat or "").casefold().strip()
+    if threat in LEGACY_TEMPLATE_THREATS:
+        identity = await ensure_state_identity(service, profile.state, force=True)
+        if identity is None:
+            return None
+        threat = str(identity.details.main_threat or "").casefold().strip()
+        if threat in LEGACY_TEMPLATE_THREATS:
+            return None
+    return identity
+
+
 async def build_expanded_state_card(world_id: int, bot=None) -> str | None:
     service = get_world_service()
     profile = await service.get_profile_by_world_id(world_id)
     if profile is None:
         return None
-    details = await service.get_details(world_id)
+    identity = await _visible_identity(service, profile)
+    details = identity.details if identity is not None else None
     population = None
     if bot is not None:
         try:
@@ -138,6 +170,7 @@ async def build_expanded_state_card(world_id: int, bot=None) -> str | None:
         population,
         details=details,
         authority=metrics.effective_authority,
+        identity_rationale=(identity.rationale if identity is not None else None),
     )
     return base + _characteristics_block(metrics)
 
