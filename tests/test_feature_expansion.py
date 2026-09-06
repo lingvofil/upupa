@@ -1,4 +1,7 @@
 import asyncio
+import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
@@ -30,8 +33,13 @@ def test_radio_rubrics_and_two_speaker_parser():
         def sample(self, values, k):
             return list(values)[:k]
 
-    rubrics = _choose_rubrics(world_context="есть мир", rng=Rng())
-    assert len(rubrics) == 3
+    rubrics = _choose_rubrics(
+        world_context="есть мир",
+        social_context="Вася и Петя часто взаимодействовали",
+        rng=Rng(),
+    )
+    assert len(rubrics) == 4
+    assert any(name == "кто с кем" for name, _instruction in rubrics)
     assert rubrics[-1][0] == "международная панорама"
 
     script = "ВЕДУЩИЙ: Начинаем эфир. ЭКСПЕРТ: Я изучил ровно эти факты. ВЕДУЩИЙ: Спасибо, ужасно полезно."
@@ -41,15 +49,30 @@ def test_radio_rubrics_and_two_speaker_parser():
     assert "ЭКСПЕРТ:" not in strip_speaker_labels(script)
 
 
-def test_crocodile_fast_bonus_boundaries():
-    from features.crocodile_scoring import fast_guess_bonus
+def test_summary_status_hides_message_counters():
+    from handlers.ai_summary import _NaturalSummaryMessage
 
-    assert fast_guess_bonus(0) == 2
-    assert fast_guess_bonus(30) == 2
-    assert fast_guess_bonus(30.1) == 1
-    assert fast_guess_bonus(60) == 1
-    assert fast_guess_bonus(60.1) == 0
-    assert fast_guess_bonus(None) == 0
+    reply = AsyncMock(return_value="sent")
+    raw = SimpleNamespace(reply=reply)
+    proxy = _NaturalSummaryMessage(raw)
+    asyncio.run(
+        proxy.reply(
+            "Сводка за последние 12 часов. Сообщений: 843; в выборке: 500. Щас всех вас сдам..."
+        )
+    )
+    text = reply.await_args.args[0]
+    assert "Сообщений:" not in text
+    assert "в выборке" not in text
+    assert "Щас всех вас сдам" in text
+
+
+def test_crocodile_has_no_speed_bonus_and_keeps_artist_stats():
+    import features.crocodile_scoring as scoring
+    import games.reverse_crocodile as reverse
+
+    assert "fast_guess_bonus" not in inspect.getsource(scoring)
+    assert "бонусных очк" not in inspect.getsource(reverse)
+    assert "pick_single_crocodile_word" in inspect.getsource(reverse)
 
 
 def test_crocodile_artist_statistics_are_separate(tmp_path, monkeypatch):
@@ -95,6 +118,18 @@ def test_world_expansion_repository_persists_sanctions_and_court(tmp_path):
     case = repo.record_court_case(1, 2, "верните табуретку", "иск удовлетворить частично")
     assert case.case_id == 1
     assert repo.list_court_cases(limit=5)[0].claim == "верните табуретку"
+
+
+def test_world_hub_exposes_sanctions_and_court_buttons():
+    from handlers.world_expansion import _main_markup
+
+    markup = _main_markup()
+    texts = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "🚫 Санкции" in texts
+    assert "⚖️ Международный суд" in texts
+    assert "worldhub:sanctions" in callbacks
+    assert "worldhub:court" in callbacks
 
 
 def test_world_news_knows_sanctions_and_international_court():
