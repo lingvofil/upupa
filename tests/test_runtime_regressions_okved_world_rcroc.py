@@ -55,7 +55,7 @@ def test_reverse_crocodile_retries_visual_clue_that_leaks_answer(monkeypatch):
 
     responses = iter([
         'Нарисовать большого кота рядом с миской.',
-        'Пушистое домашнее животное с усами гоняется за клубком на полу.',
+        'Пушистое животное с усами гоняется за клубком на полу.',
     ])
 
     async def fake_generate(_prompt, _chat_id, **_kwargs):
@@ -64,7 +64,7 @@ def test_reverse_crocodile_retries_visual_clue_that_leaks_answer(monkeypatch):
     monkeypatch.setattr(summarize, '_generate_with_active_model', fake_generate)
     clue = asyncio.run(reverse._build_visual_clue('кот', '-100'))
 
-    assert clue == 'Пушистое домашнее животное с усами гоняется за клубком на полу.'
+    assert clue == 'Пушистое животное с усами гоняется за клубком на полу.'
     assert not reverse._clue_leaks_secret(clue, 'кот')
 
 
@@ -87,5 +87,13 @@ def test_reverse_crocodile_image_provider_never_sees_literal_answer(monkeypatch)
     result = asyncio.run(reverse._generate_word_image('кот', '-100'))
 
     assert result == b'image'
+    assert not reverse._prompt_contains_literal_secret(captured['prompt'], 'кот')
     assert 'кот' not in captured['prompt'].casefold()
     assert 'никакого читаемого текста' in captured['prompt'].casefold()
+
+
+def test_reverse_crocodile_prompt_guard_does_not_block_inflected_service_words():
+    import games.reverse_crocodile as reverse
+
+    prompt = reverse._image_prompt_from_clue('Белый лист с простыми кривыми фигурами.')
+    assert not reverse._prompt_contains_literal_secret(prompt, 'текст')
