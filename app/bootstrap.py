@@ -10,6 +10,7 @@ from functools import partial
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
+from app.diagnostics import build_runtime_diagnostics
 from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
@@ -204,9 +205,12 @@ class UpupaApplication:
         from infrastructure.persistence.health import check_databases
 
         return ReadinessServer(
-            self.polling_health, self.supervisor,
+            self.polling_health,
+            self.supervisor,
             partial(check_databases, STATISTICS_DB_PATH, WORLD_DB_PATH, HISTORY_DB_PATH),
-            REQUIRED_BACKGROUND_TASKS, port=HEALTHCHECK_PORT,
+            REQUIRED_BACKGROUND_TASKS,
+            diagnostics_probe=partial(build_runtime_diagnostics, self.supervisor),
+            port=HEALTHCHECK_PORT,
         )
 
     async def run(self) -> None:
