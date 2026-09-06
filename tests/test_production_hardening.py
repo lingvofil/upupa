@@ -150,3 +150,27 @@ def test_process_healthcheck_matches_systemd_pid():
 def test_process_healthcheck_rejects_invalid_payload(payload):
     with pytest.raises(health.HealthCheckError):
         health.check_process(timeout=3, opener=lambda request, *, timeout: FakeResponse(payload))
+
+
+def test_workflows_use_node24_actions_and_native_ssh_setup():
+    tests_workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        encoding="utf-8"
+    )
+    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "actions/checkout@v7" in tests_workflow
+    assert "actions/setup-python@v7" in tests_workflow
+    assert "actions/checkout@v4" not in tests_workflow
+    assert "actions/setup-python@v5" not in tests_workflow
+
+    assert "webfactory/ssh-agent" not in deploy_workflow
+    # User explicitly chose to keep host-key verification disabled so deploy
+    # remains zero-maintenance; ensure no SSH_KNOWN_HOSTS dependency returns.
+    assert "StrictHostKeyChecking=no" in deploy_workflow
+    assert "StrictHostKeyChecking=yes" not in deploy_workflow
+    assert "UserKnownHostsFile=/dev/null" in deploy_workflow
+    assert "SSH_KNOWN_HOSTS" not in deploy_workflow
+    assert 'chmod 600 "${DEPLOY_KEY_PATH}"' in deploy_workflow
+    assert "if: always()" in deploy_workflow
