@@ -26,7 +26,7 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
       DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
       DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE || 'upupa_bot.service' }}
-      DEPLOY_KEY_PATH: ${{ runner.temp }}/upupa_deploy_key
+      DEPLOY_KEY_PATH: /tmp/upupa_deploy_key_${{ github.run_id }}_${{ github.run_attempt }}
 
     steps:
       - name: Configure SSH credentials
