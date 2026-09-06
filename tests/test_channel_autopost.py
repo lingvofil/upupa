@@ -101,7 +101,7 @@ def test_low_energy_motifs_are_rare_but_not_completely_banned():
 
     expired = [{"text": "Хочу исчезнуть"}]
     expired.extend({"text": f"другой пост {index}"} for index in range(LOW_ENERGY_COOLDOWN_POSTS))
-    assert _validate_post("Пойду гнить в коробке", expired) is None
+    assert _validate_post("Хочу объявить войну табурету", expired) is None
 
 
 def test_channel_length_distribution_is_50_40_10():
@@ -140,9 +140,9 @@ def test_content_distribution_includes_philosophy_and_mischief_modes():
     assert sum(weights.values()) == 100
     assert weights["absurd"] == 8
     assert weights["philosophy"] == 10
-    assert weights["domestic"] == 25
-    assert weights["mischief"] == 20
-    assert weights["chat"] == 17
+    assert weights["domestic"] == 20
+    assert weights["mischief"] == 17
+    assert weights["chat"] == 25
     assert weights["functionality"] == 15
     assert weights["imperfect"] == 5
 
