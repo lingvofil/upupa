@@ -1,4 +1,4 @@
-"""Factual social-graph context for ``чобыло`` and personal catch-up summaries."""
+"""Natural social-graph context for summaries and Radio Upupa."""
 
 from __future__ import annotations
 
@@ -42,67 +42,87 @@ def _clean_name(names: dict[int, str], user_id: int) -> str:
     return name.replace("\n", " ")[:80]
 
 
-def _format_context(interactions, names: dict[int, str], since: datetime, now: datetime) -> str:
+def _pair_observation(edge, names: dict[int, str]) -> str:
+    a = _clean_name(names, edge.user_a)
+    b = _clean_name(names, edge.user_b)
+    total = max(float(edge.total_weight), 1.0)
+    imbalance = abs(float(edge.a_to_b) - float(edge.b_to_a)) / total
+    if imbalance >= 0.55:
+        if edge.a_to_b > edge.b_to_a:
+            return f"{a} особенно часто обращался к {b}."
+        return f"{b} особенно часто обращался к {a}."
+    return f"{a} и {b} заметно чаще других взаимодействовали друг с другом."
+
+
+def _format_context(interactions, names: dict[int, str], *, purpose: str) -> str:
     edges = aggregate_edges(interactions)
     if not edges:
-        return "Соцграф за период не зафиксировал реплаев, упоминаний или реакций между участниками."
+        return ""
 
     strongest = sorted(edges, key=lambda edge: (-edge.total_weight, edge.user_a, edge.user_b))[:MAX_PAIRS]
     central = rank_central_participants(edges, limit=MAX_CENTRAL)
-    hours = max(1, round((now - since).total_seconds() / 3600))
 
     lines = [
-        f"СОЦГРАФ ЗА ТОТ ЖЕ ПЕРИОД (примерно {hours} ч.):",
-        "Вес взаимодействий: реплай=3, упоминание=2, реакция=1. Это структура общения, а не оценка людей.",
-        "Самые сильные пары:",
+        "СОЦИАЛЬНЫЕ НАБЛЮДЕНИЯ ЗА ТОТ ЖЕ ПЕРИОД:",
+        "Это факты о реплаях, упоминаниях и реакциях. Не называй их дружбой, конфликтом, романом или враждой без подтверждения из сообщений.",
     ]
-    for edge in strongest:
-        a = _clean_name(names, edge.user_a)
-        b = _clean_name(names, edge.user_b)
-        lines.append(
-            f"- {a} ↔ {b}: сила {edge.total_weight:g}; направления {a}→{b} {edge.a_to_b:g}, {b}→{a} {edge.b_to_a:g}."
-        )
+    lines.extend(f"- {_pair_observation(edge, names)}" for edge in strongest)
 
     if central:
-        lines.append("Структурно заметные участники:")
-        for item in central:
-            lines.append(
-                f"- {_clean_name(names, item.user_id)}: сила связей {item.weighted_degree:g}, "
-                f"разных связей {item.unique_neighbors}, betweenness {item.betweenness:.2f}."
-            )
+        central_names = [_clean_name(names, item.user_id) for item in central]
+        if len(central_names) == 1:
+            lines.append(f"- В центре общения чаще оказывался {central_names[0]}.")
+        else:
+            lines.append(f"- В центре разных веток общения чаще оказывались {', '.join(central_names)}.")
 
-    asymmetric = [
-        edge for edge in edges
-        if edge.total_weight >= 3 and abs(edge.a_to_b - edge.b_to_a) / edge.total_weight >= 0.55
-    ]
-    if asymmetric:
-        edge = max(asymmetric, key=lambda item: abs(item.a_to_b - item.b_to_a))
-        a = _clean_name(names, edge.user_a)
-        b = _clean_name(names, edge.user_b)
-        direction = f"{a} чаще обращался к {b}" if edge.a_to_b > edge.b_to_a else f"{b} чаще обращался к {a}"
-        lines.append(f"Заметная асимметрия: {direction}.")
-
-    lines.append(
-        "В сводке можно коротко отметить эти реальные паттерны, если они помогают понять происходящее. "
-        "Не называй связь дружбой, конфликтом, романом или враждой без подтверждения из самих сообщений."
-    )
+    if purpose == "radio":
+        lines.append(
+            "В выпуске обязательно естественно упомяни хотя бы одно из этих наблюдений, если оно не дублирует уже рассказанный эпизод. "
+            "Не произноси слова «соцграф», «метрика», «вес связи», «betweenness» и не называй численные показатели."
+        )
+    else:
+        lines.append(
+            "В сводке обязательно естественно вплети одно-два этих наблюдения, чтобы было заметно, кто с кем реально взаимодействовал. "
+            "Не произноси слова «соцграф», «метрика», «вес связи», «betweenness» и не называй численные показатели или количество сообщений."
+        )
     return "\n".join(lines)
 
 
-async def build_summary_social_context(message, *, catchup: bool) -> str:
-    """Return social facts aligned to the same logical summary window."""
-    if not social_service.is_social_graph_enabled(message.chat.id):
+async def _build_window_social_context(
+    chat_id: int,
+    since: datetime,
+    *,
+    purpose: str,
+) -> str:
+    if not social_service.is_social_graph_enabled(chat_id):
         return ""
+    try:
+        interactions, names = await asyncio.to_thread(
+            social_service._repository().load_graph,
+            int(chat_id),
+            _utc(since),
+        )
+    except Exception:
+        return ""
+    return _format_context(interactions, names, purpose=purpose)
+
+
+async def build_summary_social_context(message, *, catchup: bool) -> str:
+    """Return natural social facts aligned to the same logical summary window."""
     user = getattr(message, "from_user", None)
     user_id = user.id if user and not getattr(message, "sender_chat", None) else None
     now = datetime.now(timezone.utc)
     since = _summary_since(str(message.chat.id), user_id, catchup=catchup, now=now)
-    try:
-        interactions, names = await asyncio.to_thread(
-            social_service._repository().load_graph,
-            int(message.chat.id),
-            since,
-        )
-    except Exception:
-        return ""
-    return _format_context(interactions, names, since, now)
+    return await _build_window_social_context(int(message.chat.id), since, purpose="summary")
+
+
+async def build_radio_social_context(
+    chat_id: int | str,
+    period_hours: int,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Return social observations for exactly the period used by a Radio episode."""
+    current = _utc(now or datetime.now(timezone.utc))
+    since = current - timedelta(hours=max(1, int(period_hours)))
+    return await _build_window_social_context(int(chat_id), since, purpose="radio")

@@ -1,42 +1,19 @@
-"""Extended Crocodile scoring: fast-guess bonus and separate artist statistics."""
+"""Separate Crocodile artist statistics and serialized answer handling."""
 
 from __future__ import annotations
 
 import asyncio
 import html
-import time
 
 from core.json_repository import JsonFileRepository
 from core.paths import CROCODILE_ARTIST_SCORES_PATH
 from games import crocodile
 
 
-FAST_BONUS_2_SECONDS = 30
-FAST_BONUS_1_SECONDS = 60
 ARTIST_LEADERBOARD_TOP = 10
-
-_round_started_at: dict[str, float] = {}
 _locks: dict[str, asyncio.Lock] = {}
 _artist_repository = JsonFileRepository(CROCODILE_ARTIST_SCORES_PATH)
 _artist_lock = asyncio.Lock()
-
-
-def mark_round_started(chat_id: int | str, *, started_at: float | None = None) -> None:
-    _round_started_at[str(chat_id)] = started_at if started_at is not None else time.monotonic()
-
-
-def clear_round_started(chat_id: int | str) -> None:
-    _round_started_at.pop(str(chat_id), None)
-
-
-def fast_guess_bonus(elapsed_seconds: float | None) -> int:
-    if elapsed_seconds is None or elapsed_seconds < 0:
-        return 0
-    if elapsed_seconds <= FAST_BONUS_2_SECONDS:
-        return 2
-    if elapsed_seconds <= FAST_BONUS_1_SECONDS:
-        return 1
-    return 0
 
 
 def _load_artist_scores_sync() -> dict[str, dict[str, dict]]:
@@ -99,7 +76,7 @@ def format_artist_leaderboard(chat_id: int | str) -> str:
 
 
 async def check_regular_answer(message) -> bool:
-    """Serialize correct guesses, pre-award speed bonus, then run legacy finish flow."""
+    """Serialize correct guesses, record the artist, then run the legacy finish flow."""
     chat_id = str(message.chat.id)
     lock = _locks.setdefault(chat_id, asyncio.Lock())
     async with lock:
@@ -113,21 +90,9 @@ async def check_regular_answer(message) -> bool:
         if not correct:
             return await crocodile.check_answer(message)
 
-        started = _round_started_at.get(chat_id)
-        elapsed = (time.monotonic() - started) if started is not None else None
-        bonus = fast_guess_bonus(elapsed)
-        if from_user:
-            for _ in range(bonus):
-                crocodile.add_point(chat_id, from_user.id, from_user.full_name)
-
         drawer_id = int(session.get("drawer_id") or 0)
         drawer_name = str(session.get("drawer_name") or "Художник")
         if drawer_id > 0:
             await record_artist_success(chat_id, drawer_id, drawer_name)
 
-        handled = await crocodile.check_answer(message)
-        clear_round_started(chat_id)
-        if handled and bonus:
-            seconds_text = f" за {elapsed:.0f} сек." if elapsed is not None else ""
-            await message.answer(f"⚡ Быстрое угадывание{seconds_text}: +{bonus} бонусных очк.")
-        return handled
+        return await crocodile.check_answer(message)
