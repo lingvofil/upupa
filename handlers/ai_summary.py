@@ -28,6 +28,25 @@ from services.news import process_tv_news_command, process_football_news_command
 router = Router(name="ai_summary")
 
 
+class _NaturalSummaryMessage:
+    """Message proxy that hides implementation counters from user-facing status text."""
+
+    def __init__(self, message: types.Message) -> None:
+        self._message = message
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+    async def reply(self, text, *args, **kwargs):
+        clean = str(text)
+        if "Сообщений:" in clean:
+            clean = clean.split("Сообщений:", 1)[0].rstrip()
+            if clean and not clean.endswith((".", "!", "?", "…")):
+                clean += "."
+            clean += " Щас всех вас сдам..."
+        return await self._message.reply(clean, *args, **kwargs)
+
+
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
     "упупа когда мы говорили"
 ) and message.from_user.id not in BLOCKED_USERS)
@@ -60,10 +79,15 @@ async def handle_comic(message: types.Message):
 async def handle_chobylo(message: types.Message):
     catchup = summary_mode(message.text) == "catchup"
     social_context = await build_summary_social_context(message, catchup=catchup)
-    token = set_prompt_context(social_context)
+    summary_rules = (
+        "ФОРМАТ СВОДКИ: не сообщай количество сообщений, размер выборки или другие технические счётчики. "
+        "Пиши так, будто сам наблюдал жизнь чата."
+    )
+    prompt_context = "\n\n".join(part for part in (social_context, summary_rules) if part)
+    token = set_prompt_context(prompt_context)
     try:
         await summarize_chat_history(
-            message,
+            _NaturalSummaryMessage(message),
             model,
             USER_MESSAGES_LOG_PATH,
             actions,
@@ -94,11 +118,10 @@ async def handle_football_news(message: types.Message):
 ) and message.from_user.id not in BLOCKED_USERS)
 async def handle_tv_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    await process_tv_news_command(message)
+    text = await process_tv_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
-    random_action = random.choice(actions)
     await summarize_year(message, model, USER_MESSAGES_LOG_PATH, actions)
 
 # ================== БЛОК 6.9: LEVEL TRAVEL  ==================
