@@ -3,9 +3,10 @@
 aiogram матчит сообщение по роутерам последовательно, catch-all (dialog) — последний.
 """
 from handlers import (
-    basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions, world_interactions, world_hub, world_listing, stats_lexicon, media_search, games, media_tools,
-    ai_modes, ai_profiles, ai_vision, ai_generation, birthdays,
-    ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
+    basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
+    world_interactions, world_expansion, world_hub, world_listing, stats_lexicon,
+    media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
+    birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
 
 ROUTERS = [
@@ -15,7 +16,8 @@ ROUTERS = [
     world_visit_lifecycle.router,  # 24-часовой жизненный цикл визита, екскурсия, отзывы и ручное завершение
     world_visit_decisions.router,  # legacy guard входящих приглашений; lifecycle перехватывает новые решения первым
     world_interactions.router,  # дипломатические действия перехватывают main/diplomacy callbacks хаба
-    world_hub.router,  # интерактивный Мир Упупы должен перехватывать его новые/расширенные команды первым
+    world_expansion.router,  # характеристики, санкции и международный суд — до старого hub
+    world_hub.router,  # интерактивный Мир Упупы
     world_listing.router,
     world.router,
     stats_lexicon.router,
@@ -27,6 +29,7 @@ ROUTERS = [
     ai_vision.router,
     ai_generation.router,
     birthdays.router,
+    court.router,  # персистентный Суд Упупы — до старого «рассуди»/catch-all
     ai_summary.router,
     ai_prompts.router,
     video.router,   # видеогенерация — до catch-all
