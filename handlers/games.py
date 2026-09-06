@@ -53,7 +53,7 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     if not is_egra_handled:
         await _process_quiz_poll_answer_once(poll_answer, bot)
 
-@router.callback_query(F.data == "egra_final_choice")
+@router.callback_query(F.data == "egра_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
     await handle_final_button_press(callback_query, bot)
 
@@ -98,17 +98,20 @@ async def stop_croc_text(message: types.Message):
 @router.message(F.text.lower() == "кракадил наоборот")
 async def start_reverse_croc(message: types.Message):
     chat_id = message.chat.id
-    if not _claim_reverse_croc_start(chat_id):
+    if chat_id in _reverse_croc_starts_in_progress or str(chat_id) in reverse_crocodile.games:
         await message.answer("🦎 Раунд уже запускается или идёт.")
         return
-    try:
-        await reverse_crocodile.start_game(message)
-    finally:
-        _release_reverse_croc_start(chat_id)
+    await reverse_crocodile.ask_difficulty(message)
 
 @router.callback_query(F.data.startswith("rcroc_"))
 async def reverse_croc_callback(callback: types.CallbackQuery):
-    if callback.data and callback.data.startswith("rcroc_again"):
+    data = callback.data or ""
+
+    if data == "rcroc_choose_level":
+        await reverse_crocodile.handle_callback(callback)
+        return
+
+    if data.startswith("rcroc_again_") or data.startswith("rcroc_level_"):
         chat_id = callback.message.chat.id
         if not _claim_reverse_croc_start(chat_id):
             await callback.answer(
@@ -116,9 +119,10 @@ async def reverse_croc_callback(callback: types.CallbackQuery):
                 show_alert=True,
             )
             return
+        difficulty = reverse_crocodile.callback_difficulty(data)
         await callback.answer("Рисую новое...")
         try:
-            await reverse_crocodile.start_game(callback.message)
+            await reverse_crocodile.start_game(callback.message, difficulty)
         finally:
             _release_reverse_croc_start(chat_id)
         return
