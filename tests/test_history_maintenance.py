@@ -49,10 +49,10 @@ def test_compaction_is_limited_to_first_sunday():
 
 
 class FakeRepository:
-    def __init__(self, log_path: Path, *, deleted=5, mutate_journal=False):
+    def __init__(self, log_path: Path, *, deleted=5, journal_action=None):
         self.log_path = log_path
         self.deleted = deleted
-        self.mutate_journal = mutate_journal
+        self.journal_action = journal_action
         self.prune_calls = []
         self.compact_calls = 0
 
@@ -62,8 +62,11 @@ class FakeRepository:
 
     def compact(self):
         self.compact_calls += 1
-        if self.mutate_journal:
+        if self.journal_action == "rewrite":
             self.log_path.write_text("changed", encoding="utf-8")
+        elif self.journal_action == "append":
+            with self.log_path.open("a", encoding="utf-8") as stream:
+                stream.write("\nconcurrent message")
 
 
 def test_maintenance_prunes_180_days_and_compacts_monthly(tmp_path):
@@ -81,10 +84,24 @@ def test_maintenance_prunes_180_days_and_compacts_monthly(tmp_path):
     assert journal.read_text(encoding="utf-8") == "immutable journal"
 
 
-def test_maintenance_refuses_journal_mutation(tmp_path):
+def test_maintenance_allows_concurrent_append_only_growth(tmp_path):
     journal = tmp_path / "user_messages.log"
     journal.write_text("immutable journal", encoding="utf-8")
-    repository = FakeRepository(journal, mutate_journal=True)
+    repository = FakeRepository(journal, journal_action="append")
+
+    result = run_history_maintenance_once(
+        repository,
+        now=_app_datetime(2026, 9, 6, 4, 15),
+    )
+
+    assert result["journal_bytes"] > len("immutable journal")
+    assert journal.read_text(encoding="utf-8").startswith("immutable journal")
+
+
+def test_maintenance_refuses_journal_rewrite(tmp_path):
+    journal = tmp_path / "user_messages.log"
+    journal.write_text("immutable journal", encoding="utf-8")
+    repository = FakeRepository(journal, journal_action="rewrite")
 
     with pytest.raises(RuntimeError, match="user_messages.log"):
         run_history_maintenance_once(
