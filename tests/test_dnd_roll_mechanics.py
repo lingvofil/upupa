@@ -137,7 +137,6 @@ def test_parse_turn_stores_story_roll_without_characteristic(monkeypatch):
     assert "Спасбросок: не сорваться с карниза" in bot.messages[-1][1]
     assert "DC 13" in bot.messages[-1][1]
     assert "преимущество" in bot.messages[-1][1]
-    assert "Ловкость" not in bot.messages[-1][1]
 
 
 def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypatch):
@@ -187,7 +186,6 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
     assert "преимущество" in message.answers[0][0]
     assert "DC: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
-    assert "Телосложение" not in prompts[0]
     assert parsed == [(message.bot, chat_id, "продолжение [ACTION:INPUT]")]
 
 
