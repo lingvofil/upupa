@@ -7,7 +7,7 @@ import logging
 import random
 import re
 
-from features.channel import chat_context
+from features.channel import chat_context, continuity
 from features.channel import mood_service
 from features.channel import service as base
 from features.channel.mood import get_current_mood, mood_prompt
@@ -184,8 +184,46 @@ async def _prepare_cringedep_pun(
     return image_bytes, final_caption, metadata
 
 
+async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | None:
+    """Give own-history continuity a chance without stealing the mandatory daily chat slot."""
+    published_posts = await asyncio.to_thread(base.load_posts)
+    if chat_context.should_force_chat_post(published_posts):
+        return None
+    if not continuity.should_try_continuity(published_posts):
+        return None
+
+    async with base._publish_lock:
+        # Re-check after acquiring the shared publisher lock.
+        published_posts = await asyncio.to_thread(base.load_posts)
+        if chat_context.should_force_chat_post(published_posts):
+            return None
+        mood = await asyncio.to_thread(get_current_mood)
+        try:
+            prepared = await continuity.prepare_continuity_post(published_posts, mood)
+        except Exception as exc:
+            logging.warning("[channel] continuity mode failed, fallback to normal: %s", exc, exc_info=True)
+            return None
+        if prepared is None:
+            return None
+        text, metadata = prepared
+        sent = await bot.send_message(CHANNEL_TARGET, text)
+        await base._store_published_post(sent, source=source, text=text, metadata=metadata)
+        await mood_service._consume_after_publish(mood, getattr(sent, "message_id", None))
+        logging.info(
+            "[channel] published continuity message_id=%s mode=%s arc=%s",
+            getattr(sent, "message_id", None),
+            metadata.get("continuity_mode"),
+            metadata.get("continuity_arc"),
+        )
+        return sent, text
+
+
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
-    """Occasionally publish a @cringedep-inspired pun, otherwise use normal mood service."""
+    """Publish continuity/pun modes when eligible, otherwise delegate to normal mood service."""
+    continuity_result = await _try_publish_continuity(bot, source=source)
+    if continuity_result is not None:
+        return continuity_result
+
     if random.random() >= CRINGEDEP_PUN_PROBABILITY:
         return await mood_service.publish_channel_post(bot, source=source)
 
@@ -225,5 +263,4 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
     if should_fallback:
         return await mood_service.publish_channel_post(bot, source=source)
 
-    # Defensive fallback: every branch above should already return.
     return await mood_service.publish_channel_post(bot, source=source)
