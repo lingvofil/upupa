@@ -101,7 +101,7 @@ def test_low_energy_motifs_are_rare_but_not_completely_banned():
 
     expired = [{"text": "Хочу исчезнуть"}]
     expired.extend({"text": f"другой пост {index}"} for index in range(LOW_ENERGY_COOLDOWN_POSTS))
-    assert _validate_post("Хочу объявить войну табурету", expired) is None
+    assert _validate_post("Пойду гнить в коробке", expired) is None
 
 
 def test_channel_length_distribution_is_50_40_10():
