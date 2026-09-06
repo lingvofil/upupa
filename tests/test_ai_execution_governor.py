@@ -95,6 +95,41 @@ def test_background_lane_has_own_limit_without_consuming_all_global_capacity():
         governor.shutdown(wait=True)
 
 
+def test_snapshot_tracks_bounded_rolling_latency_metrics():
+    governor = AIExecutionGovernor(
+        max_concurrency=1,
+        background_max_concurrency=1,
+        queue_timeout_seconds=0.1,
+        request_timeout_seconds=0.5,
+        latency_window_size=2,
+    )
+
+    def slow_call():
+        time.sleep(0.01)
+        return "ok"
+
+    try:
+        for index in range(3):
+            assert governor.run(f"slow-{index}", slow_call) == "ok"
+
+        deadline = time.monotonic() + 1
+        while governor.snapshot().provider_samples < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        snapshot = governor.snapshot()
+        assert snapshot.queue_samples == 2
+        assert snapshot.request_samples == 2
+        assert snapshot.provider_samples == 2
+        assert snapshot.queue_wait_avg_ms >= 0
+        assert snapshot.queue_wait_p95_ms >= snapshot.queue_wait_avg_ms
+        assert snapshot.request_latency_avg_ms > 0
+        assert snapshot.request_latency_p95_ms >= snapshot.request_latency_avg_ms
+        assert snapshot.provider_latency_avg_ms > 0
+        assert snapshot.provider_latency_p95_ms >= snapshot.provider_latency_avg_ms
+    finally:
+        governor.shutdown(wait=True)
+
+
 def test_lazy_resource_routes_provider_methods_through_governor(monkeypatch):
     calls = []
 
