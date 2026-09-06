@@ -11,6 +11,7 @@ from pathlib import Path
 from AI.summarize import _get_chat_messages
 from core.paths import USER_MESSAGES_LOG_PATH
 from features.radio.script import RadioScript, generate_radio_script
+from features.radio.voices import strip_speaker_labels, synthesize_two_voice_radio
 from services.speech import SpeechAudio, SpeechSynthesisError, synthesize_speech
 
 
@@ -109,6 +110,22 @@ async def _world_radio_context(chat_id: str) -> str | None:
         return None
 
 
+async def _synthesize_radio_script(script: str) -> SpeechAudio:
+    """Prefer separate host/expert voices, then fall back to ordinary clean speech."""
+    try:
+        dual = await synthesize_two_voice_radio(script)
+        if dual is not None:
+            return dual
+    except Exception:
+        logging.exception("[radio][tts] dual-voice synthesis failed; using single voice")
+
+    return await synthesize_speech(
+        strip_speaker_labels(script),
+        provider_order=("gemini", "groq"),
+        allow_groq_for_cyrillic=False,
+    )
+
+
 async def build_radio_episode(
     chat_id: str,
     *,
@@ -141,11 +158,7 @@ async def build_radio_episode(
         script_result.estimated_seconds,
     )
     try:
-        speech: SpeechAudio = await synthesize_speech(
-            script_result.text,
-            provider_order=("gemini", "groq"),
-            allow_groq_for_cyrillic=False,
-        )
+        speech: SpeechAudio = await _synthesize_radio_script(script_result.text)
     except SpeechSynthesisError:
         logging.exception("[radio][tts] all suitable TTS paths failed chat=%s", chat_id)
         raise
