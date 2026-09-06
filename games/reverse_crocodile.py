@@ -6,6 +6,7 @@
 
 import logging
 import random
+import re
 
 from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -20,9 +21,10 @@ IMAGE_STYLE = (
     "Нарисуй как неумелый человек фломастерами или восковыми мелками на белой бумаге: "
     "простые плоские формы, немного кривые линии, неровные контуры, минимум деталей, без реализма, "
     "без 3D, без глянца, без кинематографического света и без дизайнерской полировки. "
-    "Один главный визуальный гэг. Если для слова естественно получается визуальный каламбур, "
-    "буквальное смешное прочтение или игра значений — используй её, но картинка всё равно должна помогать угадать исходное слово. "
-    "Не добавляй текст, буквы, слова, подписи, вывески, логотипы или водяные знаки. "
+    "Один главный визуальный гэг. Если естественно получается визуальный каламбур, буквальное смешное прочтение "
+    "или игра значений — используй её. "
+    "На изображении не должно быть вообще никакого читаемого текста: никаких букв, слов, подписей, вывесок, "
+    "этикеток, логотипов или водяных знаков. Если предмет обычно содержит надпись, оставь это место пустым. "
 )
 
 MAX_HINTS = 3
@@ -49,15 +51,77 @@ def _again_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def _generate_word_image(word: str) -> bytes | None:
-    """GigaChat first, then the same reserve providers used by image generation."""
+def _compact_letters(text: str) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", "", (text or "").casefold())
+
+
+def _clue_leaks_secret(clue: str, word: str) -> bool:
+    """Reject a scene description if it still contains the answer or its obvious stem."""
+    secret = _compact_letters(word)
+    return bool(secret and secret in _compact_letters(clue))
+
+
+async def _build_visual_clue(word: str, chat_id: str) -> str | None:
+    """Turn the answer into a scene description before any image model sees it."""
+    from AI.summarize import _generate_with_active_model
+
+    task = f"""Ты придумываешь рисунок для игры «Крокодил наоборот».
+Секретное однословное русское слово: {word}
+
+Верни ТОЛЬКО описание визуальной сцены для художника, 1–2 коротких предложения.
+Критически важно:
+- не пиши секретное слово и не используй его как подпись, название или часть текста;
+- по возможности не используй однокоренные формы этого слова;
+- никаких букв, надписей, этикеток, вывесок, логотипов и письменных подсказок внутри сцены;
+- показывай смысл через предметы, действие, форму и ситуацию;
+- если можно придумать понятный визуальный каламбур или буквальное смешное прочтение — предпочти его;
+- рисунок должен оставаться угадываемым, но не выдавать ответ напрямую.
+
+Никаких пояснений, кавычек и Markdown — только то, что нужно нарисовать."""
+
+    for attempt in range(2):
+        retry = "\nПредыдущая версия выдала секрет. Перефразируй через другие предметы и действия." if attempt else ""
+        try:
+            clue = await _generate_with_active_model(task + retry, str(chat_id))
+        except Exception as exc:
+            logging.warning("[rcroc] visual clue generation failed word=%s: %s", word, exc)
+            continue
+        clean = " ".join((clue or "").split()).strip()
+        if not clean:
+            continue
+        if _clue_leaks_secret(clean, word):
+            logging.warning("[rcroc] rejected visual clue because it leaked answer word=%s", word)
+            continue
+        return clean[:1200]
+
+    return None
+
+
+def _image_prompt_from_clue(clue: str) -> str:
+    return (
+        "Это рисунок для игры в Крокодила. Изобрази только описанную сцену, без любого текста на изображении. "
+        f"{IMAGE_STYLE}"
+        f"Сцена: {clue}"
+    )
+
+
+async def _generate_word_image(word: str, chat_id: str) -> bytes | None:
+    """GigaChat first; image providers never receive the literal secret answer."""
     from AI import picgeneration as pg
     from AI.gigachat_image import generate_gigachat_image
 
-    prompt_ru = (
-        f"Это игра в Крокодила. Нужно изобразить ОДНО загадное слово «{word}», не печатая его на картинке. "
-        f"{IMAGE_STYLE}"
-    )
+    visual_clue = await _build_visual_clue(word, chat_id)
+    if not visual_clue:
+        logging.warning("[rcroc] no safe visual clue generated word=%s", word)
+        return None
+    prompt_ru = _image_prompt_from_clue(visual_clue)
+
+    # Дополнительный инвариант: даже после сборки prompt строка ответа не должна
+    # попасть ни в GigaChat image, ни в резервные генераторы.
+    if _clue_leaks_secret(prompt_ru, word):
+        logging.error("[rcroc] blocked unsafe image prompt that contains answer word=%s", word)
+        return None
+
     try:
         image = await generate_gigachat_image(prompt_ru)
         if image:
@@ -106,7 +170,7 @@ async def start_game(message: types.Message):
     word = pick_single_crocodile_word()
 
     status = await message.answer("🦎 КРАКАДИЛ НАОБОРОТ\nЗагадал слово, рисую свой шедевр...")
-    image = await _generate_word_image(word)
+    image = await _generate_word_image(word, chat_id)
     if not image:
         await status.edit_text("Не смог нарисовать, у меня лапки. Попробуй ещё раз.")
         return
@@ -165,7 +229,7 @@ async def handle_callback(cb: types.CallbackQuery):
 
     elif data.startswith("rcroc_img_"):
         await cb.answer("Рисую то же самое, но по-другому...")
-        image = await _generate_word_image(session["word"])
+        image = await _generate_word_image(session["word"], chat_id)
         if not games.get(chat_id) or games[chat_id]["word"] != session["word"]:
             return
         if not image:
