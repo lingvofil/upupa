@@ -199,12 +199,15 @@ def _make_ytp_sync(
         final_clip = concatenate_videoclips(clips)
         final_clip.write_videofile(
             output_path,
-            codec="libvpx-vp9",
-            audio_codec="libvorbis",
-            temp_audiofile=output_path + ".ogg",
+            codec="libx264",
+            audio_codec="aac",
+            bitrate="2500k",
+            audio_bitrate="128k",
+            temp_audiofile=output_path + ".m4a",
             fps=30,
             preset="ultrafast",
             threads=2,
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
             logger=None,
         )
     finally:
@@ -345,6 +348,7 @@ def _is_video_document(document: types.Document) -> bool:
         ext = os.path.splitext(document.file_name)[1].lower()
         return ext in SUPPORTED_EXTENSIONS
     return False
+
 
 def _is_audio_document(document: types.Document) -> bool:
     if document.mime_type == "audio/ogg":
@@ -500,33 +504,6 @@ async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
     success, _ = await run_command(cmd)
     return success
 
-async def convert_webm_to_mp4(input_webm: str, output_mp4: str) -> bool:
-    cmd = [
-        "ffmpeg",
-        "-i",
-        input_webm,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "28",
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-y",
-        output_mp4,
-    ]
-    success, _ = await run_command(cmd)
-    return success
-
-
-
 
 async def convert_audio_to_mp4(input_audio: str, output_mp4: str) -> bool:
     cmd = [
@@ -551,6 +528,8 @@ async def convert_audio_to_mp4(input_audio: str, output_mp4: str) -> bool:
     ]
     success, _ = await run_command(cmd)
     return success
+
+
 async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     video_source = None
 
@@ -622,7 +601,6 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     converted_input_path = None
     normalized_input_path = None
     output_path = None
-    mp4_path = None
 
     try:
         async with _ytp_semaphore:
@@ -647,7 +625,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ytp_in_") as in_file:
                 input_path = in_file.name
-            output_suffix = ".mp3" if is_audio_input else ".webm"
+            output_suffix = ".mp3" if is_audio_input else ".mp4"
             with tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix, prefix="ytp_out_") as out_file:
                 output_path = out_file.name
 
@@ -707,19 +685,10 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                 await _run_blocking_ytp(
                     "_make_ytp_sync", real_input_path, output_path, target_dur, preset
                 )
-
-                mp4_path = output_path.replace(".webm", ".mp4")
-                converted_to_mp4 = await convert_webm_to_mp4(output_path, mp4_path)
-                if converted_to_mp4 and os.path.exists(mp4_path):
-                    await asyncio.wait_for(
-                        message.reply_video(FSInputFile(mp4_path, filename="pup.mp4")),
-                        timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
-                    )
-                else:
-                    await asyncio.wait_for(
-                        message.reply_document(FSInputFile(output_path, filename="pup.webm")),
-                        timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
-                    )
+                await asyncio.wait_for(
+                    message.reply_video(FSInputFile(output_path, filename="pup.mp4")),
+                    timeout=TELEGRAM_UPLOAD_TIMEOUT_SEC,
+                )
 
         await processing_msg.delete()
 
@@ -735,7 +704,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await processing_msg.delete()
         await message.reply("❌ Что-то пошло не так при пупизации.")
     finally:
-        for path in (input_path, converted_input_path, normalized_input_path, output_path, mp4_path):
+        for path in (input_path, converted_input_path, normalized_input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
