@@ -12,7 +12,6 @@ from collections.abc import Callable
 from typing import Any
 
 from gigachat import GigaChat
-from google import genai
 
 from core.settings import (
     GEMINI_KEYS_POOL,
@@ -32,7 +31,7 @@ from core.settings import (
     SILICONFLOW_API_KEY,
 )
 from infrastructure.ai.execution import run_ai_provider_call
-from infrastructure.ai.gemini import ModelFallbackWrapper
+from infrastructure.ai.gemini import ModelFallbackWrapper, create_gemini_client
 from infrastructure.ai.gigachat import GIGACHAT_BASE_URL, GigaChatConversationWrapper
 from infrastructure.ai.groq import GroqWrapper
 from infrastructure.ai.openai_compatible import OpenAICompatibleWrapper
@@ -205,7 +204,9 @@ class LazyResource:
 
 
 def _build_gemini_client():
-    return genai.Client(api_key=_require_credential(PRIMARY_GEMINI_KEY, "GENERIC_API_KEY"))
+    return create_gemini_client(
+        _require_credential(PRIMARY_GEMINI_KEY, "GENERIC_API_KEY")
+    )
 
 
 def _build_groq():
