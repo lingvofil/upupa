@@ -61,6 +61,15 @@ def _clue_leaks_secret(clue: str, word: str) -> bool:
     return bool(secret and secret in _compact_letters(clue))
 
 
+def _prompt_contains_literal_secret(prompt: str, word: str) -> bool:
+    """Check the final image prompt for the literal answer as a standalone token."""
+    secret = (word or "").strip().casefold()
+    if not secret:
+        return False
+    pattern = rf"(?<![0-9a-zа-яё]){re.escape(secret)}(?![0-9a-zа-яё])"
+    return re.search(pattern, (prompt or "").casefold()) is not None
+
+
 async def _build_visual_clue(word: str, chat_id: str) -> str | None:
     """Turn the answer into a scene description before any image model sees it."""
     from AI.summarize import _generate_with_active_model
@@ -116,9 +125,10 @@ async def _generate_word_image(word: str, chat_id: str) -> bytes | None:
         return None
     prompt_ru = _image_prompt_from_clue(visual_clue)
 
-    # Дополнительный инвариант: даже после сборки prompt строка ответа не должна
-    # попасть ни в GigaChat image, ни в резервные генераторы.
-    if _clue_leaks_secret(prompt_ru, word):
+    # Даже после сборки prompt буквальная строка ответа не должна попасть ни в
+    # GigaChat image, ни в резервные генераторы. Морфологические совпадения в
+    # служебной фразе вроде «текста» для ответа «текст» здесь не считаем утечкой.
+    if _prompt_contains_literal_secret(prompt_ru, word):
         logging.error("[rcroc] blocked unsafe image prompt that contains answer word=%s", word)
         return None
 
