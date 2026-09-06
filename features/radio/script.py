@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -16,6 +17,18 @@ RADIO_CONTEXT_CHARS = 22000
 RADIO_SUMMARY_INPUT_CHARS = 15000
 RADIO_RECENT_CONTEXT_CHARS = 6500
 RADIO_WORDS_PER_MINUTE = 135
+
+RADIO_RUBRICS = (
+    ("главные новости", "коротко собери 1–2 главных события или темы выпуска"),
+    ("человек выпуска", "выдели одного реально заметного участника и объясни по материалу, чем он отметился"),
+    ("спорная территория", "если в материале есть спор или столкновение мнений, коротко разложи его; иначе пропусти"),
+    ("что это вообще было", "выбери один особенно странный, смешной или характерный эпизод и коротко прокомментируй"),
+    ("культурная страница", "заметь мем, шутку, бытовую тему, фильм, музыку, еду или другой культурный след, если он реально есть"),
+    ("прогноз Упупы", "сделай шуточный прогноз только как интерпретацию уже видимого паттерна; не выдавай его за факт"),
+)
+
+SPEAKER_HOST = "ВЕДУЩИЙ"
+SPEAKER_EXPERT = "ЭКСПЕРТ"
 
 
 @dataclass(frozen=True)
@@ -41,9 +54,6 @@ def _join_messages(messages: list[dict], max_chars: int) -> str:
     if not valid_messages:
         return ""
 
-    # Не создаём одновременно список всех отформатированных строк и ещё одну
-    # гигантскую строку all_text. Сначала считаем размер, затем строим только
-    # действительно нужный результат.
     total_chars = sum(len(_message_line(message)) for message in valid_messages)
     total_chars += max(0, len(valid_messages) - 1)
     if total_chars <= max_chars:
@@ -101,6 +111,23 @@ def _source_size(messages: list[dict]) -> int:
     )
 
 
+def _choose_rubrics(*, world_context: str | None, rng=random) -> tuple[tuple[str, str], ...]:
+    """Pick a varied set of editorial rubrics; international news is data-gated."""
+    choices = list(RADIO_RUBRICS)
+    count = min(len(choices), rng.randint(2, 4))
+    picked = rng.sample(choices, k=count)
+    if world_context:
+        picked.append((
+            "международная панорама",
+            "коротко упомяни 1–2 факта Мира Упупы только из блока международной обстановки",
+        ))
+    return tuple(picked)
+
+
+def _rubrics_prompt(rubrics: tuple[tuple[str, str], ...]) -> str:
+    return "\n".join(f"- «{name}»: {instruction}." for name, instruction in rubrics)
+
+
 def sanitize_radio_script(text: str, max_words: int = RADIO_MAX_WORDS) -> str:
     """Make model output safe to speak and enforce the hard word limit."""
     result = (text or "").strip()
@@ -108,6 +135,7 @@ def sanitize_radio_script(text: str, max_words: int = RADIO_MAX_WORDS) -> str:
     result = re.sub(r"https?://\S+|www\.\S+", "ссылка", result, flags=re.IGNORECASE)
     result = re.sub(r"(?m)^\s*[-*#>]+\s*", "", result)
     result = result.replace("**", "").replace("__", "").replace("`", "")
+    # Keep speaker labels because dual-voice synthesis parses them later.
     result = re.sub(r"\s+", " ", result).strip()
 
     words = result.split()
@@ -174,8 +202,7 @@ async def generate_radio_script(
 
     if world_context:
         international_rule = (
-            "- После основных событий чата добавь короткий блок международных новостей Мира Упупы: "
-            "2–4 предложения. Используй только факты из блока «Международная обстановка». "
+            "- Международные факты бери только из блока «Международная обстановка». "
             "Не выдумывай причин, реакций или последствий.\n"
         )
         world_block = f"\nМеждународная обстановка:\n{world_context}\n"
@@ -183,25 +210,31 @@ async def generate_radio_script(
         international_rule = "- Не упоминай Мир Упупы или международные новости: для этого выпуска данных нет.\n"
         world_block = ""
 
+    rubrics = _choose_rubrics(world_context=world_context)
     task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
 - Используй только факты, темы, участников и детали из предоставленного материала. Ничего не выдумывай.
 - Это разговорный радиотекст для произнесения вслух, а не письменный отчёт.
-- Никакого Markdown, списков, заголовков, URL, служебных меток и сложных конструкций.
-- Короткие естественные русские предложения.
+- Никакого Markdown, URL и сложных конструкций. Короткие естественные русские предложения.
 - Используй характер, тон, лексику и манеру текущего промпта чата, как в команде «чобыло», но не позволяй персоне менять факты или формат радиовыпуска.
 - Не используй активную пользовательскую персону как источник фактов или новых событий; она задаёт только стиль подачи. Ведущий остаётся Упупой.
-- Начни с короткого вступления, затем расскажи главные темы и заметные эпизоды, упомяни самых активных участников, добавь одну-две характерные или смешные детали и коротко закончи.
+- На этот выпуск редактор выбрал рубрики ниже. Используй только те, для которых реально хватает материала. Не произноси названия рубрик механически: вплетай их как естественные переходы ведущего.
+- В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
+- После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
+- Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
 {international_rule}- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
-- Никогда не превышай 520 слов.
+- Никогда не превышай 520 слов вместе с метками.
+
+Рубрики этого выпуска:
+{_rubrics_prompt(rubrics)}
 
 Активность участников по числу сообщений: {_participant_stats(messages)}
 
 Материал чата:
 {source_block}
 {world_block}
-Верни только текст, который должен произнести ведущий.
+Верни только сценарий с метками {SPEAKER_HOST}: / {SPEAKER_EXPERT}:.
 """
     prompt = build_prompt_with_current_chat_prompt(
         chat_id,
@@ -210,12 +243,13 @@ async def generate_radio_script(
     )
 
     logging.info(
-        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s world_context=%s current_prompt=true",
+        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s world_context=%s rubrics=%s current_prompt=true",
         len(messages),
         total_context_chars,
         len(source_block),
         use_summary,
         bool(world_context),
+        ",".join(name for name, _instruction in rubrics),
     )
     raw_script = await _generate_with_active_model(prompt, chat_id, is_summarization=True)
     script = sanitize_radio_script(raw_script)
