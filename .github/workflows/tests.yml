@@ -26,6 +26,7 @@ jobs:
             core \
             infrastructure \
             scripts/backup_runtime_state.py \
+            scripts/restore_history_journal.py \
             scripts/production_healthcheck.py \
             scripts/export_rank_counters.py \
             scripts/prepare_history_rollback.py \

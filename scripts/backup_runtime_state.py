@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import errno
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -19,6 +20,9 @@ BACKUP_DIR_RE = re.compile(
     r"^\d{8}T\d{6}\.\d{6}Z-[A-Za-z0-9._-]+$"
 )
 DEFAULT_BACKUPS_TO_KEEP = 3
+DEFAULT_JOURNAL_CHUNK_SIZE = 8 * 1024 * 1024
+JOURNAL_NAME = "user_messages.log"
+JOURNAL_PARTS_DIR = f"{JOURNAL_NAME}.parts"
 
 
 def _sha256(path: Path) -> str:
@@ -80,10 +84,158 @@ def _is_disk_full(exc: BaseException) -> bool:
     return "disk is full" in message or "no space left on device" in message
 
 
+def _safe_backup_member(backup_dir: Path, relative_name: str) -> Path | None:
+    relative = Path(relative_name)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    root = backup_dir.resolve()
+    candidate = (backup_dir / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _journal_reuse_index(
+    destination_root: Path,
+    *,
+    chunk_size: int,
+) -> dict[tuple[int, int, str], Path]:
+    """Index verified-looking chunks from retained backups for hard-link reuse."""
+    reusable: dict[tuple[int, int, str], Path] = {}
+    for backup_dir in reversed(_completed_backups(destination_root)):
+        try:
+            manifest = json.loads(
+                (backup_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        for metadata in manifest.get("files", []):
+            if (
+                metadata.get("name") != JOURNAL_NAME
+                or metadata.get("kind") != "chunked_file"
+                or metadata.get("chunk_size") != chunk_size
+            ):
+                continue
+            for chunk in metadata.get("chunks", []):
+                try:
+                    key = (
+                        int(chunk["offset"]),
+                        int(chunk["size"]),
+                        str(chunk["sha256"]),
+                    )
+                    member = _safe_backup_member(
+                        backup_dir,
+                        str(chunk["path"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if (
+                    member is not None
+                    and member.is_file()
+                    and member.stat().st_size == key[1]
+                ):
+                    reusable.setdefault(key, member)
+    return reusable
+
+
+def _read_exact(stream, size: int) -> bytes:
+    chunks = []
+    remaining = size
+    while remaining:
+        data = stream.read(remaining)
+        if not data:
+            raise RuntimeError("history journal changed while backup was running")
+        chunks.append(data)
+        remaining -= len(data)
+    return b"".join(chunks)
+
+
+def _backup_journal(
+    source: Path,
+    backup_dir: Path,
+    destination_root: Path,
+    *,
+    chunk_size: int,
+) -> dict:
+    """Snapshot append-only journal as deduplicated immutable hard-linked chunks."""
+    if chunk_size < 1:
+        raise ValueError("journal chunk size must be positive")
+
+    parts_dir = backup_dir / JOURNAL_PARTS_DIR
+    parts_dir.mkdir()
+    reusable = _journal_reuse_index(
+        destination_root,
+        chunk_size=chunk_size,
+    )
+    verified_reuse: dict[Path, bool] = {}
+
+    whole_digest = hashlib.sha256()
+    chunks = []
+    with source.open("rb") as stream:
+        snapshot_size = os.fstat(stream.fileno()).st_size
+        offset = 0
+        index = 0
+        while offset < snapshot_size:
+            size = min(chunk_size, snapshot_size - offset)
+            data = _read_exact(stream, size)
+            whole_digest.update(data)
+            digest = hashlib.sha256(data).hexdigest()
+            relative_name = (
+                f"{JOURNAL_PARTS_DIR}/{index:08d}-{size:08x}-{digest}.chunk"
+            )
+            target = backup_dir / relative_name
+            key = (offset, size, digest)
+            previous = reusable.get(key)
+            reused = False
+
+            if previous is not None:
+                valid = verified_reuse.get(previous)
+                if valid is None:
+                    valid = (
+                        previous.stat().st_size == size
+                        and _sha256(previous) == digest
+                    )
+                    verified_reuse[previous] = valid
+                if valid:
+                    os.link(previous, target)
+                    reused = True
+
+            if not reused:
+                with target.open("xb") as output:
+                    output.write(data)
+                    output.flush()
+                    os.fsync(output.fileno())
+                target.chmod(0o444)
+
+            chunks.append(
+                {
+                    "path": relative_name,
+                    "offset": offset,
+                    "size": size,
+                    "sha256": digest,
+                }
+            )
+            offset += size
+            index += 1
+
+    return {
+        "name": JOURNAL_NAME,
+        "kind": "chunked_file",
+        "size": snapshot_size,
+        "sha256": whole_digest.hexdigest(),
+        "chunk_size": chunk_size,
+        "chunks": chunks,
+    }
+
+
 def _create_backup_once(
     source_dir: Path,
     destination_root: Path,
     label: str,
+    *,
+    journal_chunk_size: int,
 ) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_dir = destination_root / f"{stamp}-{label}"
@@ -94,7 +246,7 @@ def _create_backup_once(
             {
                 *source_dir.glob("*.db"),
                 *source_dir.glob("*.json"),
-                source_dir / "user_messages.log",
+                source_dir / JOURNAL_NAME,
                 source_dir / "history_deletions.jsonl",
             }
         )
@@ -102,6 +254,17 @@ def _create_backup_once(
         for source in candidates:
             if not source.is_file():
                 continue
+            if source.name == JOURNAL_NAME:
+                manifest_files.append(
+                    _backup_journal(
+                        source,
+                        backup_dir,
+                        destination_root,
+                        chunk_size=journal_chunk_size,
+                    )
+                )
+                continue
+
             target = backup_dir / source.name
             if source.suffix == ".db":
                 _backup_sqlite(source, target)
@@ -141,6 +304,7 @@ def create_backup(
     label: str,
     *,
     keep: int = DEFAULT_BACKUPS_TO_KEEP,
+    journal_chunk_size: int = DEFAULT_JOURNAL_CHUNK_SIZE,
 ) -> Path:
     source_dir = source_dir.resolve()
     destination_root = destination_root.resolve()
@@ -148,6 +312,8 @@ def create_backup(
         raise ValueError("backup label contains unsupported characters")
     if keep < 1:
         raise ValueError("at least one completed backup must be retained")
+    if journal_chunk_size < 1:
+        raise ValueError("journal chunk size must be positive")
 
     # Keep room for the new snapshot. Never delete the last known-good backup
     # merely to make a new one; if one old backup is still too large, fail safe.
@@ -155,13 +321,23 @@ def create_backup(
     prune_backups(destination_root, keep_completed=retain_before)
 
     try:
-        backup_dir = _create_backup_once(source_dir, destination_root, label)
+        backup_dir = _create_backup_once(
+            source_dir,
+            destination_root,
+            label,
+            journal_chunk_size=journal_chunk_size,
+        )
     except BaseException as exc:
         completed = _completed_backups(destination_root)
         if not _is_disk_full(exc) or len(completed) <= 1:
             raise
         prune_backups(destination_root, keep_completed=1)
-        backup_dir = _create_backup_once(source_dir, destination_root, label)
+        backup_dir = _create_backup_once(
+            source_dir,
+            destination_root,
+            label,
+            journal_chunk_size=journal_chunk_size,
+        )
 
     prune_backups(destination_root, keep_completed=keep)
     return backup_dir
