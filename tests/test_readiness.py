@@ -55,7 +55,9 @@ def test_http_endpoint_reports_actual_process_and_missing_task():
             async with ClientSession() as client:
                 async with client.get(f"http://127.0.0.1:{port}/ready") as response:
                     assert response.status == 200
-                    assert (await response.json())["pid"] == os.getpid()
+                    payload = await response.json()
+                    assert payload["pid"] == os.getpid()
+                    assert payload["recovering_tasks"] == []
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
                 async with client.get(f"http://127.0.0.1:{port}/ready") as response:
@@ -67,6 +69,27 @@ def test_http_endpoint_reports_actual_process_and_missing_task():
         assert not state.ready()
 
     asyncio.run(scenario())
+
+
+def test_recovering_required_task_keeps_readiness_unhealthy():
+    supervisor = SimpleNamespace(
+        task_names=("worker",),
+        recovering_task_names=("worker",),
+    )
+    server = ReadinessServer(
+        PollingHealth(last_success=time.monotonic()),
+        supervisor,
+        lambda: None,
+        {"worker"},
+    )
+
+    response = asyncio.run(server.handle(None))
+    payload = json.loads(response.text)
+
+    assert response.status == 503
+    assert payload["checks"]["background_tasks"] is False
+    assert payload["missing_tasks"] == []
+    assert payload["recovering_tasks"] == ["worker"]
 
 
 def test_database_errors_make_readiness_unhealthy_without_exposing_details():

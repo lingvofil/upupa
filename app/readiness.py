@@ -48,12 +48,26 @@ class ReadinessServer:
             databases_ok = True
         except Exception:
             pass
-        missing = sorted(self.required_tasks - set(self.supervisor.task_names))
-        checks = {"polling": self.polling.ready(), "databases": databases_ok,
-                  "background_tasks": not missing}
+        active = set(self.supervisor.task_names)
+        recovering = set(getattr(self.supervisor, "recovering_task_names", ()))
+        missing = sorted(self.required_tasks - active)
+        recovering_required = sorted(self.required_tasks & recovering)
+        checks = {
+            "polling": self.polling.ready(),
+            "databases": databases_ok,
+            "background_tasks": not missing and not recovering_required,
+        }
         ok = all(checks.values())
-        return web.json_response({"ok": ok, "pid": os.getpid(), "checks": checks,
-                                  "missing_tasks": missing}, status=200 if ok else 503)
+        return web.json_response(
+            {
+                "ok": ok,
+                "pid": os.getpid(),
+                "checks": checks,
+                "missing_tasks": missing,
+                "recovering_tasks": recovering_required,
+            },
+            status=200 if ok else 503,
+        )
 
     async def start(self):
         app = web.Application()

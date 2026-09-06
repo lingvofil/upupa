@@ -12,10 +12,18 @@ from app.bootstrap import QUIZ_CHAT_IDS, UpupaApplication, create_application
 class RecordingSupervisor:
     def __init__(self):
         self.names = []
+        self.plain_names = []
+        self.resilient_names = []
 
     def start(self, coro, *, name):
         self.names.append(name)
+        self.plain_names.append(name)
         coro.close()
+        return None
+
+    def start_resilient(self, factory, *, name, **kwargs):
+        self.names.append(name)
+        self.resilient_names.append(name)
         return None
 
     async def stop(self):
@@ -38,7 +46,7 @@ def test_create_application_allows_dependency_injection():
     assert application.supervisor is supervisor
 
 
-def test_background_task_set_is_explicit_and_idempotent():
+def test_background_task_set_is_explicit_idempotent_and_resilient():
     supervisor = RecordingSupervisor()
     application = UpupaApplication(
         bot=object(),
@@ -49,7 +57,7 @@ def test_background_task_set_is_explicit_and_idempotent():
     application.start_background_tasks()
     application.start_background_tasks()
 
-    assert supervisor.names == [
+    expected = [
         *(f"daily-quiz:{chat_id}" for chat_id in QUIZ_CHAT_IDS),
         "birthday-scheduler",
         "holiday-scheduler",
@@ -59,6 +67,9 @@ def test_background_task_set_is_explicit_and_idempotent():
         "crocodile-session-persistence",
         "crocodile-socket-server",
     ]
+    assert supervisor.names == expected
+    assert supervisor.resilient_names == expected
+    assert supervisor.plain_names == []
 
 
 def test_background_tasks_reload_crocodile_scores_after_session_restore(monkeypatch):
