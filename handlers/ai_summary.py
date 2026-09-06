@@ -8,6 +8,7 @@ from aiogram import Router
 import random
 from aiogram import F, types
 from core.paths import USER_MESSAGES_LOG_PATH
+from core.prompt_context import reset_prompt_context, set_prompt_context
 from core.settings import ADMIN_ID, BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
 from core.summary_commands import summary_mode
@@ -20,6 +21,7 @@ from AI.chat_recall import (
     process_recall_command, process_verdict_command, process_factcheck_command
 )
 from AI.comic import process_comic_command
+from features.social_graph.summary_context import build_summary_social_context
 from services.holidays import process_holidays_command
 from services.news import process_tv_news_command, process_football_news_command
 
@@ -56,8 +58,19 @@ async def handle_comic(message: types.Message):
 @router.message(lambda message: summary_mode(message.text) is not None
                 and message.from_user and message.from_user.id not in BLOCKED_USERS)
 async def handle_chobylo(message: types.Message):
-    await summarize_chat_history(message, model, USER_MESSAGES_LOG_PATH, actions,
-                                 catchup=summary_mode(message.text) == "catchup")
+    catchup = summary_mode(message.text) == "catchup"
+    social_context = await build_summary_social_context(message, catchup=catchup)
+    token = set_prompt_context(social_context)
+    try:
+        await summarize_chat_history(
+            message,
+            model,
+            USER_MESSAGES_LOG_PATH,
+            actions,
+            catchup=catchup,
+        )
+    finally:
+        reset_prompt_context(token)
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) in (
     "праздники", "упупа праздники"
@@ -90,17 +103,17 @@ async def handle_year_results(message: types.Message):
 
 # ================== БЛОК 6.9: LEVEL TRAVEL  ==================
 
-@router.message(lambda message: 
-    message.text and 
-    message.text.lower().startswith("туры") and 
+@router.message(lambda message:
+    message.text and
+    message.text.lower().startswith("туры") and
     message.from_user.id not in BLOCKED_USERS
 )
 async def handle_tours_command(message: types.Message):
     await process_tours_command(message)
 
-@router.message(lambda message: 
-    message.text and 
-    message.text.lower().startswith("отели") and 
+@router.message(lambda message:
+    message.text and
+    message.text.lower().startswith("отели") and
     message.from_user.id not in BLOCKED_USERS
 )
 async def handle_hotels_command(message: types.Message):
@@ -111,5 +124,5 @@ async def handle_hotels_command(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith("билеты") and message.from_user.id not in BLOCKED_USERS)
 async def handle_tickets_search(message: types.Message):
     await process_tickets_command(message)
-       
+
 # ================== БЛОК 6.11: ГОВОРИЛКА (ПРОМПТЫ, ДИАЛОГИ, СТИХИ) ==================
