@@ -58,10 +58,10 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     assert "backup_runtime_state.py" in source
     assert '[[ -f "$BACKUP_DIR/manifest.json" ]]' in source
     assert source.index('BACKUP_DIR="$(') < source.index('git reset --hard "$TARGET_SHA"')
-    assert "StrictHostKeyChecking=yes" in source
-    assert "StrictHostKeyChecking=no" not in source
-    assert "SSH_KNOWN_HOSTS is required" in source
-    assert 'ssh-keygen -F "${DEPLOY_HOST}"' in source
+    assert "StrictHostKeyChecking=no" in source
+    assert "StrictHostKeyChecking=yes" not in source
+    assert "UserKnownHostsFile=/dev/null" in source
+    assert "SSH_KNOWN_HOSTS" not in source
     assert "trap rollback ERR" in source
 
 
