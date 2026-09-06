@@ -13,6 +13,11 @@ import json
 from pathlib import Path
 import sys
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from core.settings import APP_TIMEZONE_NAME
 from core.time_utils import configure_process_timezone, parse_history_datetime
 from infrastructure.persistence.managed_history import ManagedHistoryRepository
@@ -102,7 +107,7 @@ def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--app-dir", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--app-dir", type=Path, default=PROJECT_ROOT)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     export = subparsers.add_parser("export", help="export indexed history")
