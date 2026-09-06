@@ -74,14 +74,12 @@ class GroqWrapper:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         presence_penalty: float = 0.0,
-        model: str | None = None,
     ) -> str:
         if not self.client:
             return "Ключ Groq не настроен"
-        selected_model = model or self.text_model
         try:
             completion = self.client.chat.completions.create(
-                model=selected_model,
+                model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
                 presence_penalty=presence_penalty,
@@ -90,7 +88,7 @@ class GroqWrapper:
             result = completion.choices[0].message.content
             logging.info(
                 "Groq generate_text: модель=%s, результат_длина=%s",
-                selected_model,
+                self.text_model,
                 len(result) if result else 0,
             )
             return result or ""
