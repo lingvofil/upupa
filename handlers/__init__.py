@@ -8,6 +8,14 @@ from handlers import (
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
+from features.world.hub_ui import build_world_main_markup
+
+# Несколько исторических World-роутеров умеют рисовать главное меню и матчятся
+# в разном порядке. Подменяем их локальные builders одной канонической функцией,
+# чтобы более ранний world_interactions не мог снова спрятать новые разделы.
+world_interactions._main_markup = build_world_main_markup
+world_expansion._main_markup = build_world_main_markup
+world_hub._main_markup = build_world_main_markup
 
 ROUTERS = [
     basic.router,
