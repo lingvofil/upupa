@@ -118,7 +118,7 @@ async def handle_football_news(message: types.Message):
 ) and message.from_user.id not in BLOCKED_USERS)
 async def handle_tv_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
-    text = await process_tv_news_command(message)
+    await process_tv_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
 async def handle_year_results(message: types.Message):
