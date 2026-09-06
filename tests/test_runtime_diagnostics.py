@@ -80,8 +80,8 @@ def test_collect_resource_snapshot_reports_proc_memory_disk_and_state_sizes(
     second = backups / "second"
     first.mkdir(parents=True)
     second.mkdir()
-    (first / "manifest.json").write_text("{}", encoding="utf-8")
-    (second / "manifest.json").write_text("{}", encoding="utf-8")
+    (first / "manifest.json").write_text("", encoding="utf-8")
+    (second / "manifest.json").write_text("", encoding="utf-8")
     first_chunk = first / "chunk"
     second_chunk = second / "chunk"
     first_chunk.write_bytes(b"same")
