@@ -9,8 +9,9 @@ import logging
 from aiogram import Router, types
 
 import features.statistics as bot_statistics
+from features.crocodile_scoring import check_regular_answer
 from features.dialog_pipeline import process_dialog_pipeline
-from games import crocodile, reverse_crocodile
+from games import reverse_crocodile
 from services import memegenerator
 
 
@@ -20,7 +21,7 @@ router = Router(name="dialog")
 @router.message()
 async def process_message(message: types.Message):
     # 1) Крокодил (обычный и наоборот): перехватываем только правильное угадывание
-    if await crocodile.check_answer(message):
+    if await check_regular_answer(message):
         return
     if await reverse_crocodile.check_answer(message):
         return
