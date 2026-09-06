@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from games import crocodile
+from games import crocodile_socket_server
 
 
 def test_socket_server_stays_alive_until_cancelled_and_cleans_up(monkeypatch):
@@ -27,11 +28,13 @@ def test_socket_server_stays_alive_until_cancelled_and_cleans_up(monkeypatch):
         async def start(self):
             events.append("start")
 
-    monkeypatch.setattr(crocodile.web, "AppRunner", FakeRunner)
-    monkeypatch.setattr(crocodile.web, "TCPSite", FakeSite)
+    monkeypatch.setattr(crocodile_socket_server.web, "AppRunner", FakeRunner)
+    monkeypatch.setattr(crocodile_socket_server.web, "TCPSite", FakeSite)
 
     async def scenario():
-        task = asyncio.create_task(crocodile.start_socket_server())
+        task = asyncio.create_task(
+            crocodile_socket_server.crocodile_socket_server_loop()
+        )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert not task.done()
@@ -65,10 +68,10 @@ def test_socket_server_cleans_up_when_bind_fails(monkeypatch):
             events.append("start")
             raise OSError("address already in use")
 
-    monkeypatch.setattr(crocodile.web, "AppRunner", FakeRunner)
-    monkeypatch.setattr(crocodile.web, "TCPSite", BrokenSite)
+    monkeypatch.setattr(crocodile_socket_server.web, "AppRunner", FakeRunner)
+    monkeypatch.setattr(crocodile_socket_server.web, "TCPSite", BrokenSite)
 
     with pytest.raises(OSError, match="address already in use"):
-        asyncio.run(crocodile.start_socket_server())
+        asyncio.run(crocodile_socket_server.crocodile_socket_server_loop())
 
     assert events == ["setup", "start", "cleanup"]
