@@ -28,6 +28,13 @@ class FakeMessage:
         self.answers.append((text, kwargs))
 
 
+def test_system_prompt_uses_story_reasons_not_characteristics():
+    assert "REASON:перепрыгнуть провал" in dnd.DND_SYSTEM_PROMPT
+    assert "REASON:не отравиться дымом" in dnd.DND_SYSTEM_PROMPT
+    assert "STAT:Название" not in dnd.DND_SYSTEM_PROMPT
+    assert "STAT:Телосложение" not in dnd.DND_SYSTEM_PROMPT
+
+
 def test_parse_roll_command_supports_save_reason_dc_and_disadvantage():
     roll = dnd._parse_roll_command(
         "ROLL;TYPE:SAVE;REASON:не отравиться дымом;DC:14;MODE:DISADVANTAGE"
