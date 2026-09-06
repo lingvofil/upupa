@@ -11,12 +11,15 @@ from uuid import uuid4
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 
+from infrastructure.ai.execution import run_ai_provider_call
 from infrastructure.ai.gigachat import GIGACHAT_BASE_URL
 from core.settings import GIGACHAT_API_KEY
 
 
 _IMAGE_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
 _SYNC_LOCK = threading.Lock()
+GIGACHAT_IMAGE_TRANSPORT_TIMEOUT_SECONDS = 120
+GIGACHAT_IMAGE_REQUEST_TIMEOUT_SECONDS = 145
 
 
 gigachat_image_client = GigaChat(
@@ -24,7 +27,7 @@ gigachat_image_client = GigaChat(
     base_url=GIGACHAT_BASE_URL,
     model="GigaChat-2",
     verify_ssl_certs=False,
-    timeout=120,
+    timeout=GIGACHAT_IMAGE_TRANSPORT_TIMEOUT_SECONDS,
 )
 
 
@@ -58,48 +61,59 @@ def _generate_gigachat_image_sync(prompt: str) -> Optional[bytes]:
         f"Описание: {prompt.strip()}"
     )
 
+    response = gigachat_image_client.chat(
+        Chat(
+            messages=[
+                Messages(
+                    role=MessagesRole.USER,
+                    content=request_prompt,
+                )
+            ],
+            function_call="auto",
+        )
+    )
+
+    logging.info(
+        "GigaChat image response: model=%s %s",
+        getattr(response, "model", None),
+        _usage_to_log(getattr(response, "usage", None)),
+    )
+
+    content = response.choices[0].message.content or ""
+    match = _IMAGE_SRC_RE.search(content)
+    if not match:
+        logging.warning(
+            "GigaChat image response did not contain <img src=...>: %s",
+            content[:500],
+        )
+        return None
+
+    file_id = match.group(1)
+    image = gigachat_image_client.get_image(file_id)
+    image_bytes = _decode_image_content(image.content)
+    logging.info(
+        "GigaChat image downloaded: file_id=%s size=%s bytes",
+        file_id,
+        len(image_bytes),
+    )
+    return image_bytes
+
+
+def _generate_gigachat_image_governed(prompt: str) -> Optional[bytes]:
+    # Keep the SDK client serialized without consuming an AI governor slot while
+    # another GigaChat image request is merely waiting on this client lock.
     with _SYNC_LOCK:
-        response = gigachat_image_client.chat(
-            Chat(
-                messages=[
-                    Messages(
-                        role=MessagesRole.USER,
-                        content=request_prompt,
-                    )
-                ],
-                function_call="auto",
-            )
+        return run_ai_provider_call(
+            "gigachat-image.generate",
+            _generate_gigachat_image_sync,
+            prompt,
+            timeout_seconds=GIGACHAT_IMAGE_REQUEST_TIMEOUT_SECONDS,
         )
-
-        logging.info(
-            "GigaChat image response: model=%s %s",
-            getattr(response, "model", None),
-            _usage_to_log(getattr(response, "usage", None)),
-        )
-
-        content = response.choices[0].message.content or ""
-        match = _IMAGE_SRC_RE.search(content)
-        if not match:
-            logging.warning(
-                "GigaChat image response did not contain <img src=...>: %s",
-                content[:500],
-            )
-            return None
-
-        file_id = match.group(1)
-        image = gigachat_image_client.get_image(file_id)
-        image_bytes = _decode_image_content(image.content)
-        logging.info(
-            "GigaChat image downloaded: file_id=%s size=%s bytes",
-            file_id,
-            len(image_bytes),
-        )
-        return image_bytes
 
 
 async def generate_gigachat_image(prompt: str) -> Optional[bytes]:
     try:
-        return await asyncio.to_thread(_generate_gigachat_image_sync, prompt)
+        return await asyncio.to_thread(_generate_gigachat_image_governed, prompt)
     except Exception as exc:
         logging.warning("GigaChat image generation failed: %s", exc)
         return None
@@ -122,7 +136,7 @@ class GigaChatImageCompatAPI:
 
     def generate(self, prompt: str, pipeline_id: str) -> Tuple[Optional[str], Optional[str]]:
         try:
-            image_bytes = _generate_gigachat_image_sync(prompt)
+            image_bytes = _generate_gigachat_image_governed(prompt)
             if not image_bytes:
                 return None, "GigaChat returned no image"
             request_id = str(uuid4())
