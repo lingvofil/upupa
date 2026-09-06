@@ -45,6 +45,7 @@ def create_backup(source_dir: Path, destination_root: Path, label: str) -> Path:
             *source_dir.glob("*.db"),
             *source_dir.glob("*.json"),
             source_dir / "user_messages.log",
+            source_dir / "history_deletions.jsonl",
         }
     )
     manifest_files = []
