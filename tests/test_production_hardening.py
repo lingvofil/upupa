@@ -150,3 +150,25 @@ def test_process_healthcheck_matches_systemd_pid():
 def test_process_healthcheck_rejects_invalid_payload(payload):
     with pytest.raises(health.HealthCheckError):
         health.check_process(timeout=3, opener=lambda request, *, timeout: FakeResponse(payload))
+
+
+def test_workflows_use_node24_actions_and_strict_ssh():
+    tests_workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        encoding="utf-8"
+    )
+    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "actions/checkout@v7" in tests_workflow
+    assert "actions/setup-python@v7" in tests_workflow
+    assert "actions/checkout@v4" not in tests_workflow
+    assert "actions/setup-python@v5" not in tests_workflow
+
+    assert "webfactory/ssh-agent" not in deploy_workflow
+    assert "StrictHostKeyChecking=no" not in deploy_workflow
+    assert "StrictHostKeyChecking=yes" in deploy_workflow
+    assert "SSH_KNOWN_HOSTS is required" in deploy_workflow
+    assert 'ssh-keygen -F "${DEPLOY_HOST}"' in deploy_workflow
+    assert 'chmod 600 "${DEPLOY_KEY_PATH}"' in deploy_workflow
+    assert "if: always()" in deploy_workflow
