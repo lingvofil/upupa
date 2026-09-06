@@ -67,21 +67,25 @@ def _require_credential(value: str | None, setting_name: str) -> str:
 class _GovernedModelsProxy:
     """Guard direct ``genai.Client.models`` calls used outside fallback wrappers."""
 
-    def __init__(self, resource_name: str, target: Any):
+    def __init__(self, resource_name: str, resource: "LazyResource"):
         self._resource_name = resource_name
-        self._target = target
+        self._resource = resource
         self._method_cache: dict[str, Callable[..., Any]] = {}
 
+    def _models(self):
+        return getattr(self._resource.unwrap(), "models")
+
     def __getattr__(self, name: str):
-        value = getattr(self._target, name)
-        if not callable(value) or name not in _GOVERNED_MODELS_METHODS:
-            return value
+        if name not in _GOVERNED_MODELS_METHODS:
+            return getattr(self._models(), name)
+
         cached = self._method_cache.get(name)
         if cached is None:
             operation = f"{self._resource_name}.models.{name}"
 
-            def governed(*args, _value=value, _operation=operation, **kwargs):
-                return run_ai_provider_call(_operation, _value, *args, **kwargs)
+            def governed(*args, _name=name, _operation=operation, **kwargs):
+                value = getattr(self._models(), _name)
+                return run_ai_provider_call(_operation, value, *args, **kwargs)
 
             cached = governed
             self._method_cache[name] = cached
@@ -139,42 +143,42 @@ class LazyResource:
         return value
 
     def __getattr__(self, name: str):
-        target = self.unwrap()
-        value = getattr(target, name)
         resource_name = object.__getattribute__(self, "_name")
         cache: dict[str, Any] = object.__getattribute__(self, "_proxy_cache")
 
         if name == "models":
             cached = cache.get(name)
             if cached is None:
-                cached = _GovernedModelsProxy(resource_name, value)
+                cached = _GovernedModelsProxy(resource_name, self)
                 cache[name] = cached
             return cached
 
-        if name == "start_chat" and callable(value):
+        if name == "start_chat":
             cached = cache.get(name)
             if cached is None:
-                def governed_start_chat(*args, _value=value, **kwargs):
-                    session = _value(*args, **kwargs)
+                def governed_start_chat(*args, **kwargs):
+                    value = getattr(self.unwrap(), "start_chat")
+                    session = value(*args, **kwargs)
                     return _GovernedChatSession(resource_name, session)
 
                 cached = governed_start_chat
                 cache[name] = cached
             return cached
 
-        if callable(value) and name in _GOVERNED_METHODS:
+        if name in _GOVERNED_METHODS:
             cached = cache.get(name)
             if cached is None:
                 operation = f"{resource_name}.{name}"
 
-                def governed(*args, _value=value, _operation=operation, **kwargs):
-                    return run_ai_provider_call(_operation, _value, *args, **kwargs)
+                def governed(*args, _name=name, _operation=operation, **kwargs):
+                    value = getattr(self.unwrap(), _name)
+                    return run_ai_provider_call(_operation, value, *args, **kwargs)
 
                 cached = governed
                 cache[name] = cached
             return cached
 
-        return value
+        return getattr(self.unwrap(), name)
 
     def __setattr__(self, name: str, value) -> None:
         if name.startswith("_"):
