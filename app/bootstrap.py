@@ -28,10 +28,10 @@ REQUIRED_BACKGROUND_TASKS = (
 _main_router: Router | None = None
 
 
-async def _run_background_ai(coro):
+async def _run_background_ai(coro_factory):
     """Propagate the background AI lane through scheduler call chains/to_thread."""
     with ai_execution_lane("background"):
-        return await coro
+        return await coro_factory()
 
 
 def get_main_router() -> Router:
@@ -142,28 +142,30 @@ class UpupaApplication:
 
         for chat_id in QUIZ_CHAT_IDS:
             self.supervisor.start(
-                _run_background_ai(schedule_daily_quiz(self.bot, chat_id)),
+                _run_background_ai(
+                    lambda chat_id=chat_id: schedule_daily_quiz(self.bot, chat_id)
+                ),
                 name=f"daily-quiz:{chat_id}",
             )
 
         self.supervisor.start(
-            _run_background_ai(birthday_scheduler(self.bot)),
+            _run_background_ai(lambda: birthday_scheduler(self.bot)),
             name="birthday-scheduler",
         )
         self.supervisor.start(
-            _run_background_ai(schedule_daily_holidays(self.bot)),
+            _run_background_ai(lambda: schedule_daily_holidays(self.bot)),
             name="holiday-scheduler",
         )
         self.supervisor.start(
-            _run_background_ai(proactive_loop(self.bot)),
+            _run_background_ai(lambda: proactive_loop(self.bot)),
             name="proactive-loop",
         )
         self.supervisor.start(
-            _run_background_ai(channel_scheduler_loop(self.bot)),
+            _run_background_ai(lambda: channel_scheduler_loop(self.bot)),
             name="channel-scheduler",
         )
         self.supervisor.start(
-            _run_background_ai(visit_expiration_loop(self.bot)),
+            _run_background_ai(lambda: visit_expiration_loop(self.bot)),
             name="world-visit-expiration",
         )
         self.supervisor.start(
