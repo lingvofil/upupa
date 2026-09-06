@@ -16,11 +16,23 @@ from google.genai import types as genai_types
 
 
 PER_KEY_MIN_DELAY = 2.5
+# google-genai HttpOptions.timeout is expressed in milliseconds. Keep each
+# individual HTTP request below the process-wide 120s caller deadline so a
+# broken transport eventually releases its provider worker.
+GEMINI_HTTP_TIMEOUT_MS = 60_000
 
 _last_call_ts: dict[str, float] = {}
 _throttle_lock = threading.Lock()
 _genai_lock = threading.RLock()
 _client_cache: dict[str, genai.Client] = {}
+
+
+def create_gemini_client(api_key: str) -> genai.Client:
+    """Build one Gemini SDK client with an explicit transport timeout."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=genai_types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
+    )
 
 
 def _throttle_key(api_key: str) -> None:
@@ -99,7 +111,7 @@ def _get_client(api_key: str) -> genai.Client:
     with _genai_lock:
         client = _client_cache.get(api_key)
         if client is None:
-            client = genai.Client(api_key=api_key)
+            client = create_gemini_client(api_key)
             _client_cache[api_key] = client
         return client
 
@@ -395,3 +407,11 @@ class ModelFallbackWrapper:
                 f"All Gemini models failed. Last error: {hard_failures[-1]}"
             )
         raise RuntimeError("All Gemini models failed")
+
+
+__all__ = [
+    "GEMINI_HTTP_TIMEOUT_MS",
+    "GeminiModel",
+    "ModelFallbackWrapper",
+    "create_gemini_client",
+]

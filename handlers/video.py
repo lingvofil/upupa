@@ -5,6 +5,11 @@
 from aiogram import Router, types
 
 from core.loader import bot
+import AI.videogeneration as videogeneration
+from AI.media_execution import install_into_videogeneration
+
+install_into_videogeneration(videogeneration)
+
 from AI.videogeneration import process_video_generation, process_animate_photo
 
 router = Router(name="video")
