@@ -59,7 +59,9 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     assert '[[ -f "$BACKUP_DIR/manifest.json" ]]' in source
     assert source.index('BACKUP_DIR="$(') < source.index('git reset --hard "$TARGET_SHA"')
     assert "StrictHostKeyChecking=yes" in source
-    assert "SSH_KNOWN_HOSTS is not configured" in source
+    assert "StrictHostKeyChecking=no" not in source
+    assert "SSH_KNOWN_HOSTS is required" in source
+    assert 'ssh-keygen -F "${DEPLOY_HOST}"' in source
     assert "trap rollback ERR" in source
 
 
@@ -69,8 +71,10 @@ def test_deploy_requires_successful_checks_of_the_same_commit():
 
     assert "  test:\n    uses: ./.github/workflows/tests.yml\n" in source
     assert "  deploy:\n    needs: test\n" in source
-    # Keep GitHub's default success() gate: never deploy on failed/skipped CI.
-    assert "    if:" not in source
+    # Keep GitHub's default success() gate on the deploy job. Step-level
+    # cleanup may legitimately use if: always().
+    deploy_job_header = source[source.index("  deploy:\n"):source.index("    steps:\n")]
+    assert "\n    if:" not in deploy_job_header
     assert "continue-on-error:" not in source
     assert "continue-on-error:" not in checks
     assert "  workflow_call:\n" in checks
