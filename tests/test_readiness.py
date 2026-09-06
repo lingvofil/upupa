@@ -71,6 +71,47 @@ def test_http_endpoint_reports_actual_process_and_missing_task():
     asyncio.run(scenario())
 
 
+def test_loopback_diagnostics_endpoint_is_separate_from_readiness():
+    async def scenario():
+        state = PollingHealth(last_success=time.monotonic())
+        supervisor = TaskSupervisor()
+        expected = {
+            "pid": os.getpid(),
+            "ai": {"waiting": 2, "request_timeouts": 1},
+            "background_tasks": {
+                "active": ["worker"],
+                "recovering": [],
+                "restart_total": 3,
+                "restart_counts": {"worker": 3},
+            },
+        }
+        server = ReadinessServer(
+            state,
+            supervisor,
+            lambda: None,
+            (),
+            diagnostics_probe=lambda: expected,
+            port=0,
+        )
+        await server.start()
+        port = server.runner.addresses[0][1]
+        try:
+            async with ClientSession() as client:
+                async with client.get(f"http://127.0.0.1:{port}/diagnostics") as response:
+                    assert response.status == 200
+                    assert await response.json() == expected
+                async with client.get(f"http://127.0.0.1:{port}/ready") as response:
+                    assert response.status == 200
+                    payload = await response.json()
+                    assert "ai" not in payload
+                    assert "restart_counts" not in payload
+        finally:
+            await server.stop()
+            await supervisor.stop()
+
+    asyncio.run(scenario())
+
+
 def test_recovering_required_task_keeps_readiness_unhealthy():
     supervisor = SimpleNamespace(
         task_names=("worker",),
