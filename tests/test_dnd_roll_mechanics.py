@@ -28,44 +28,45 @@ class FakeMessage:
         self.answers.append((text, kwargs))
 
 
-def test_parse_roll_command_supports_save_dc_and_disadvantage():
+def test_parse_roll_command_supports_save_reason_dc_and_disadvantage():
     roll = dnd._parse_roll_command(
-        "ROLL;TYPE:SAVE;STAT:Телосложение;DC:14;MODE:DISADVANTAGE"
+        "ROLL;TYPE:SAVE;REASON:не отравиться дымом;DC:14;MODE:DISADVANTAGE"
     )
 
     assert roll == {
         "type": "SAVE",
-        "stat": "Телосложение",
+        "reason": "не отравиться дымом",
         "dc": 14,
         "mode": "DISADVANTAGE",
     }
 
 
-def test_parse_roll_command_keeps_legacy_roll_compatible():
+def test_parse_roll_command_does_not_use_legacy_characteristic():
     roll = dnd._parse_roll_command("ROLL;STAT:Ловкость")
 
     assert roll == {
         "type": "CHECK",
-        "stat": "Ловкость",
+        "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
     }
+    assert "stat" not in roll
 
 
 def test_parse_roll_command_clamps_dc_and_accepts_short_mode_aliases():
     assert dnd._parse_roll_command(
-        "ROLL;TYPE:CHECK;STAT:Скрытность;DC:99;MODE:ADV"
+        "ROLL;TYPE:CHECK;REASON:перепрыгнуть провал;DC:99;MODE:ADV"
     ) == {
         "type": "CHECK",
-        "stat": "Скрытность",
+        "reason": "перепрыгнуть провал",
         "dc": 30,
         "mode": "ADVANTAGE",
     }
     assert dnd._parse_roll_command(
-        "ROLL;TYPE:SAVE;STAT:Мудрость;DC:1;MODE:DIS"
+        "ROLL;TYPE:SAVE;REASON:не упасть;DC:1;MODE:DIS"
     ) == {
         "type": "SAVE",
-        "stat": "Мудрость",
+        "reason": "не упасть",
         "dc": 5,
         "mode": "DISADVANTAGE",
     }
@@ -98,12 +99,12 @@ def test_roll_outcome_uses_dc_without_auto_critical_rules():
     assert dnd._natural_roll_note(1) == "натуральная 1"
 
 
-def test_parse_turn_stores_rich_roll_context(monkeypatch):
+def test_parse_turn_stores_story_roll_without_characteristic(monkeypatch):
     chat_id = -100701
     session = SimpleNamespace(
         state="WAITING_ACTION",
         pending_roll=None,
-        last_roll_stat=None,
+        last_roll_stat="старое значение",
         action_prompt_message_id=55,
         pending_actions={"1": {"action": "что-то"}},
         action_deadline=123.0,
@@ -117,7 +118,7 @@ def test_parse_turn_stores_rich_roll_context(monkeypatch):
             dnd.parse_and_execute_turn(
                 bot,
                 chat_id,
-                "[ACTION:ROLL;TYPE:SAVE;STAT:Ловкость;DC:13;MODE:ADVANTAGE]",
+                "[ACTION:ROLL;TYPE:SAVE;REASON:не сорваться с карниза;DC:13;MODE:ADVANTAGE]",
             )
         )
     finally:
@@ -126,30 +127,31 @@ def test_parse_turn_stores_rich_roll_context(monkeypatch):
     assert session.state == "WAITING_ROLL"
     assert session.pending_roll == {
         "type": "SAVE",
-        "stat": "Ловкость",
+        "reason": "не сорваться с карниза",
         "dc": 13,
         "mode": "ADVANTAGE",
     }
-    assert session.last_roll_stat == "Ловкость"
+    assert session.last_roll_stat is None
     assert session.pending_actions == {}
     assert session.action_prompt_message_id is None
-    assert "Спасбросок: Ловкость" in bot.messages[-1][1]
+    assert "Спасбросок: не сорваться с карниза" in bot.messages[-1][1]
     assert "DC 13" in bot.messages[-1][1]
     assert "преимущество" in bot.messages[-1][1]
+    assert "Ловкость" not in bot.messages[-1][1]
 
 
-def test_handle_roll_reports_success_and_sends_context_to_master(monkeypatch):
+def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypatch):
     chat_id = -100702
     session = SimpleNamespace(
         chat_id=chat_id,
         state="WAITING_ROLL",
         pending_roll={
             "type": "SAVE",
-            "stat": "Телосложение",
+            "reason": "выдержать действие яда",
             "dc": 12,
             "mode": "ADVANTAGE",
         },
-        last_roll_stat="Телосложение",
+        last_roll_stat=None,
         recent_scene_types=[],
     )
     dnd.dnd_sessions[chat_id] = session
@@ -179,15 +181,17 @@ def test_handle_roll_reports_success_and_sends_context_to_master(monkeypatch):
 
     assert session.state == "RESOLVING"
     assert session.pending_roll is None
+    assert "выдержать действие яда" in message.answers[0][0]
     assert "5 и 18 → 18" in message.answers[0][0]
     assert "✅ успех" in message.answers[0][0]
     assert "преимущество" in message.answers[0][0]
     assert "DC: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
+    assert "Телосложение" not in prompts[0]
     assert parsed == [(message.bot, chat_id, "продолжение [ACTION:INPUT]")]
 
 
-def test_old_waiting_roll_state_restores_as_normal_check():
+def test_old_waiting_roll_state_restores_without_characteristic():
     session = dnd.GameSession.from_record(
         {
             "chat_id": -100703,
@@ -200,7 +204,33 @@ def test_old_waiting_roll_state_restores_as_normal_check():
 
     assert session.pending_roll == {
         "type": "CHECK",
-        "stat": "Ловкость",
+        "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
     }
+    assert "stat" not in session.pending_roll
+
+
+def test_old_pending_roll_with_stat_is_sanitized():
+    session = dnd.GameSession.from_record(
+        {
+            "chat_id": -100704,
+            "active_model": "groq",
+            "conversation": [{"role": "assistant", "content": "старый контекст"}],
+            "state": "WAITING_ROLL",
+            "pending_roll": {
+                "type": "SAVE",
+                "stat": "Телосложение",
+                "dc": 15,
+                "mode": "DISADVANTAGE",
+            },
+        }
+    )
+
+    assert session.pending_roll == {
+        "type": "SAVE",
+        "reason": "проверка по ситуации",
+        "dc": 15,
+        "mode": "DISADVANTAGE",
+    }
+    assert "stat" not in session.pending_roll
