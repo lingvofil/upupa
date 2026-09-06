@@ -58,6 +58,8 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     assert "backup_runtime_state.py" in source
     assert '[[ -f "$BACKUP_DIR/manifest.json" ]]' in source
     assert source.index('BACKUP_DIR="$(') < source.index('git reset --hard "$TARGET_SHA"')
+    # Host-key verification is intentionally disabled to preserve the current
+    # zero-maintenance deploy path; private-key handling is still hardened.
     assert "StrictHostKeyChecking=no" in source
     assert "StrictHostKeyChecking=yes" not in source
     assert "UserKnownHostsFile=/dev/null" in source
