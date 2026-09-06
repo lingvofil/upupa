@@ -53,6 +53,9 @@ DND_SYSTEM_PROMPT = """
    ради него: это творческое ограничение, а не команда резко телепортировать сюжет.
 4. Не зацикливайся на одинаковой структуре ходов: чередуй способы подачи, конфликты,
    взаимодействие с окружением и последствия действий игроков.
+5. Используй броски только когда исход действительно неопределён и важен. Выбирай разумную
+   сложность DC от 5 до 30. Преимущество или помеху назначай только когда это следует из ситуации,
+   подготовки, позиции, помощи, состояния или окружения; не раздавай их каждому броску.
 
 ФОРМАТ ТЕХНИЧЕСКИХ ТЕГОВ (В конце сообщения):
 
@@ -60,8 +63,17 @@ DND_SYSTEM_PROMPT = """
 [ACTION:POLL;OPTIONS:Вариант 1;Вариант 2;Вариант 3]
 (Максимум 4 варианта).
 
-Если нужна проверка навыка (Бросок кубика):
-[ACTION:ROLL;STAT:Название характеристики]
+Если нужна обычная проверка навыка/характеристики:
+[ACTION:ROLL;TYPE:CHECK;STAT:Название проверки;DC:12;MODE:NORMAL]
+
+Если персонаж сопротивляется опасности, эффекту, яду, падению, заклинанию и т.п. — спасбросок:
+[ACTION:ROLL;TYPE:SAVE;STAT:Телосложение;DC:14;MODE:DISADVANTAGE]
+
+TYPE: CHECK или SAVE.
+MODE: NORMAL, ADVANTAGE или DISADVANTAGE.
+При ADVANTAGE бросаются два d20 и берётся больший, при DISADVANTAGE — меньший.
+Если преимущество/помеха не нужны, ставь NORMAL. Не придумывай числовые бонусы персонажа:
+пока их нет, результат сравнивается с DC как чистый d20.
 
 Если нужен свободный групповой ход игроков:
 [ACTION:INPUT]
@@ -104,6 +116,7 @@ class GameSession:
         self.active_model = active_model or get_active_model(chat_id)
         self.state = "WAITING_BACKSTORY"
         self.last_roll_stat = None
+        self.pending_roll = None
         self.current_poll_id = None
         self.pending_poll = None
         self.action_prompt_message_id = None
@@ -169,6 +182,7 @@ class GameSession:
             "conversation": self.conversation,
             "state": self.state,
             "last_roll_stat": self.last_roll_stat,
+            "pending_roll": self.pending_roll,
             "current_poll_id": self.current_poll_id,
             "pending_poll": self.pending_poll,
             "action_prompt_message_id": self.action_prompt_message_id,
@@ -186,6 +200,18 @@ class GameSession:
         )
         session.state = record.get("state") or "WAITING_ACTION"
         session.last_roll_stat = record.get("last_roll_stat")
+        session.pending_roll = record.get("pending_roll")
+        if (
+            session.state == "WAITING_ROLL"
+            and not session.pending_roll
+            and session.last_roll_stat
+        ):
+            session.pending_roll = {
+                "type": "CHECK",
+                "stat": session.last_roll_stat,
+                "dc": None,
+                "mode": "NORMAL",
+            }
         session.current_poll_id = record.get("current_poll_id")
         session.pending_poll = record.get("pending_poll")
         session.action_prompt_message_id = record.get("action_prompt_message_id")
@@ -250,6 +276,7 @@ async def open_action_window(bot: Bot, chat_id: int):
     if not session:
         return None
     session.state = "WAITING_ACTION"
+    session.pending_roll = None
     session.pending_actions = {}
     session.action_deadline = None
     session.action_prompt_message_id = None
@@ -315,6 +342,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 session.action_prompt_message_id = None
                 session.pending_actions = {}
                 session.action_deadline = None
+                session.pending_roll = None
 
             if session.state == "WAITING_ACTION":
                 prompt_id = getattr(session, "action_prompt_message_id", None)
@@ -362,6 +390,88 @@ async def generate_session_response(session: GameSession, prompt: str) -> str:
     return result
 
 
+def _parse_roll_command(command_str: str) -> dict:
+    fields = {}
+    for part in command_str.split(";")[1:]:
+        key, separator, value = part.partition(":")
+        if separator and value.strip():
+            fields[key.strip().upper()] = value.strip()
+
+    roll_type = fields.get("TYPE", "CHECK").upper()
+    if roll_type not in {"CHECK", "SAVE"}:
+        roll_type = "CHECK"
+
+    mode = fields.get("MODE", "NORMAL").upper()
+    mode_aliases = {
+        "ADV": "ADVANTAGE",
+        "DIS": "DISADVANTAGE",
+        "ПРЕИМУЩЕСТВО": "ADVANTAGE",
+        "ПОМЕХА": "DISADVANTAGE",
+    }
+    mode = mode_aliases.get(mode, mode)
+    if mode not in {"NORMAL", "ADVANTAGE", "DISADVANTAGE"}:
+        mode = "NORMAL"
+
+    dc = None
+    if "DC" in fields:
+        try:
+            dc = max(5, min(30, int(fields["DC"])))
+        except (TypeError, ValueError):
+            dc = None
+
+    return {
+        "type": roll_type,
+        "stat": fields.get("STAT") or "Проверка",
+        "dc": dc,
+        "mode": mode,
+    }
+
+
+def _roll_d20(mode: str) -> tuple[list[int], int]:
+    first = random.randint(1, 20)
+    if mode == "NORMAL":
+        return [first], first
+    second = random.randint(1, 20)
+    rolls = [first, second]
+    if mode == "ADVANTAGE":
+        return rolls, max(rolls)
+    if mode == "DISADVANTAGE":
+        return rolls, min(rolls)
+    return [first], first
+
+
+def _roll_type_label(roll_type: str) -> str:
+    return "Спасбросок" if roll_type == "SAVE" else "Проверка"
+
+
+def _roll_mode_label(mode: str) -> str:
+    return {
+        "ADVANTAGE": "преимущество",
+        "DISADVANTAGE": "помеха",
+        "NORMAL": "обычный бросок",
+    }.get(mode, "обычный бросок")
+
+
+def _format_roll_dice(rolls: list[int], result: int) -> str:
+    if len(rolls) == 1:
+        return str(result)
+    return f"{rolls[0]} и {rolls[1]} → {result}"
+
+
+def _roll_outcome(result: int, dc: int | None) -> str | None:
+    if dc is None:
+        return None
+    return "успех" if result >= dc else "провал"
+
+
+def _natural_roll_note(result: int) -> str | None:
+    if result == 20:
+        return "натуральная 20"
+    if result == 1:
+        return "натуральная 1"
+    return None
+
+
 async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     session = dnd_sessions.get(chat_id)
     if not session:
@@ -383,6 +493,7 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             if len(options) < 2:
                 raise ValueError("DnD poll needs at least two options")
             session.state = "WAITING_POLL"
+            session.pending_roll = None
             session.action_prompt_message_id = None
             session.pending_actions = {}
             session.action_deadline = None
@@ -423,18 +534,20 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             await open_action_window(bot, chat_id)
 
     elif command_str.startswith("ROLL"):
-        stat = command_str.split("STAT:", 1)[1].strip()
-        session.last_roll_stat = stat
+        roll = _parse_roll_command(command_str)
+        session.pending_roll = roll
+        session.last_roll_stat = roll["stat"]
         session.state = "WAITING_ROLL"
         session.action_prompt_message_id = None
         session.pending_actions = {}
         session.action_deadline = None
         persist_dnd_sessions()
-        await bot.send_message(
-            chat_id,
-            f"🎲 Проверка: *{stat}*. Пиши *кидаю*.",
-            parse_mode="Markdown",
-        )
+        details = [f"🎲 {_roll_type_label(roll['type'])}: {roll['stat']}"]
+        if roll["dc"] is not None:
+            details.append(f"DC {roll['dc']}")
+        if roll["mode"] != "NORMAL":
+            details.append(_roll_mode_label(roll["mode"]))
+        await bot.send_message(chat_id, ", ".join(details) + ". Пиши «кидаю».")
     elif command_str.startswith("INPUT"):
         await open_action_window(bot, chat_id)
     elif command_str.startswith("END"):
@@ -660,16 +773,58 @@ async def handle_roll(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session or session.state != "WAITING_ROLL":
         return
-    roll_result = random.randint(1, 20)
-    stat = session.last_roll_stat
-    await message.answer(
-        f"🎲 {message.from_user.first_name}: {stat} -> **{roll_result}**",
-        parse_mode="Markdown",
-    )
+
+    roll = session.pending_roll or {
+        "type": "CHECK",
+        "stat": session.last_roll_stat or "Проверка",
+        "dc": None,
+        "mode": "NORMAL",
+    }
+    rolls, result = _roll_d20(roll.get("mode", "NORMAL"))
+    roll_type = roll.get("type", "CHECK")
+    stat = roll.get("stat") or "Проверка"
+    dc = roll.get("dc")
+    mode = roll.get("mode", "NORMAL")
+    outcome = _roll_outcome(result, dc)
+    natural_note = _natural_roll_note(result)
+
+    session.state = "RESOLVING"
+    session.pending_roll = None
+    persist_dnd_sessions()
+
+    result_parts = [
+        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {stat}",
+        f"d20: {_format_roll_dice(rolls, result)}",
+    ]
+    if mode != "NORMAL":
+        result_parts.append(_roll_mode_label(mode))
+    if dc is not None:
+        result_parts.append(f"DC {dc}")
+    if outcome:
+        result_parts.append("✅ успех" if outcome == "успех" else "❌ провал")
+    if natural_note:
+        result_parts.append(f"🎯 {natural_note}")
+    await message.answer(" | ".join(result_parts))
+
+    prompt_parts = [
+        f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()} на {stat}.",
+        f"Режим: {_roll_mode_label(mode)}.",
+        f"Броски d20: {rolls}; итог: {result}.",
+    ]
+    if dc is not None:
+        prompt_parts.append(f"DC: {dc}; результат: {outcome}.")
+    else:
+        prompt_parts.append("DC не был задан; трактуй число по ситуации.")
+    if natural_note:
+        prompt_parts.append(
+            f"Выпала {natural_note}; отметь это в описании, но не меняй автоматически исход против DC."
+        )
+    prompt_parts.append("Продолжай сюжет до 100 слов.")
+
     try:
         response_text = await generate_session_response(
             session,
-            with_scene_direction(session, f"Игрок кинул на {stat}: {roll_result}. Продолжай."),
+            with_scene_direction(session, " ".join(prompt_parts)),
         )
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
