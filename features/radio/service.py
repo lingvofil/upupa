@@ -12,6 +12,7 @@ from AI.summarize import _get_chat_messages
 from core.paths import USER_MESSAGES_LOG_PATH
 from features.radio.script import RadioScript, generate_radio_script
 from features.radio.voices import strip_speaker_labels, synthesize_two_voice_radio
+from features.social_graph.summary_context import build_radio_social_context
 from services.speech import SpeechAudio, SpeechSynthesisError, synthesize_speech
 
 
@@ -110,6 +111,15 @@ async def _world_radio_context(chat_id: str) -> str | None:
         return None
 
 
+async def _social_radio_context(chat_id: str, period_hours: int, now: datetime | None) -> str | None:
+    try:
+        context = await build_radio_social_context(chat_id, period_hours, now=now)
+        return context or None
+    except Exception:
+        logging.exception("[radio][social] failed to build social context chat=%s", chat_id)
+        return None
+
+
 async def _synthesize_radio_script(script: str) -> SpeechAudio:
     """Prefer separate host/expert voices, then fall back to ordinary clean speech."""
     try:
@@ -137,7 +147,10 @@ async def build_radio_episode(
         log_file_path=log_file_path,
         now=now,
     )
-    world_context = await _world_radio_context(chat_id)
+    world_context, social_context = await asyncio.gather(
+        _world_radio_context(chat_id),
+        _social_radio_context(chat_id, period_hours, now),
+    )
 
     try:
         script_result: RadioScript = await generate_radio_script(
@@ -146,6 +159,7 @@ async def build_radio_episode(
             messages,
             period_hours,
             world_context=world_context,
+            social_context=social_context,
         )
     except Exception:
         logging.exception("[radio][script] generation failed chat=%s", chat_id)
