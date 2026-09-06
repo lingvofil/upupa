@@ -10,7 +10,7 @@ from functools import partial
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
-from app.diagnostics import build_runtime_diagnostics
+from app.diagnostics import build_runtime_diagnostics, resource_snapshot_loop
 from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
@@ -24,6 +24,7 @@ REQUIRED_BACKGROUND_TASKS = (
     *(f"daily-quiz:{chat_id}" for chat_id in QUIZ_CHAT_IDS),
     "birthday-scheduler", "holiday-scheduler", "proactive-loop", "channel-scheduler",
     "world-visit-expiration", "crocodile-session-persistence", "history-maintenance",
+    "resource-snapshot",
 )
 
 _main_router: Router | None = None
@@ -180,6 +181,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             history_maintenance_loop,
             name="history-maintenance",
+        )
+        self.supervisor.start_resilient(
+            lambda: resource_snapshot_loop(self.supervisor),
+            name="resource-snapshot",
         )
         self.supervisor.start_resilient(
             lambda: crocodile.start_socket_server(),
