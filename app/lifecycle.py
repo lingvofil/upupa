@@ -17,6 +17,8 @@ class TaskSupervisor:
         self._logger = logger or logging.getLogger(__name__)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._recovering_names: set[str] = set()
+        self._restart_counts: dict[str, int] = {}
+        self._restart_total = 0
         self._stopping = False
 
     @property
@@ -30,6 +32,14 @@ class TaskSupervisor:
     @property
     def recovering_task_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._recovering_names))
+
+    @property
+    def restart_count(self) -> int:
+        return self._restart_total
+
+    @property
+    def restart_counts(self) -> dict[str, int]:
+        return dict(sorted(self._restart_counts.items()))
 
     def start(self, coro: Coroutine[Any, Any, Any], *, name: str) -> asyncio.Task[Any]:
         if self._stopping:
@@ -70,6 +80,10 @@ class TaskSupervisor:
             name=name,
         )
 
+    def _record_restart(self, name: str) -> None:
+        self._restart_total += 1
+        self._restart_counts[name] = self._restart_counts.get(name, 0) + 1
+
     async def _run_resilient(
         self,
         factory: TaskFactory,
@@ -98,11 +112,14 @@ class TaskSupervisor:
                     restart_delay_seconds * (2 ** min(failures - 1, 10)),
                 )
                 self._recovering_names.add(name)
+                self._record_restart(name)
                 self._logger.exception(
-                    "Background task %s crashed; restarting in %.1fs (failure=%d)",
+                    "Background task %s crashed; restarting in %.1fs "
+                    "(failure=%d total_restarts=%d)",
                     name,
                     delay,
                     failures,
+                    self._restart_counts[name],
                 )
             else:
                 if self._stopping:
@@ -116,12 +133,14 @@ class TaskSupervisor:
                     restart_delay_seconds * (2 ** min(failures - 1, 10)),
                 )
                 self._recovering_names.add(name)
+                self._record_restart(name)
                 self._logger.warning(
                     "Background task %s exited unexpectedly; restarting in %.1fs "
-                    "(failure=%d)",
+                    "(failure=%d total_restarts=%d)",
                     name,
                     delay,
                     failures,
+                    self._restart_counts[name],
                 )
 
             if self._stopping:
