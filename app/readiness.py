@@ -83,7 +83,10 @@ class ReadinessServer:
         if self.diagnostics_probe is None:
             raise web.HTTPNotFound()
         try:
-            payload = self.diagnostics_probe()
+            payload = await asyncio.wait_for(
+                asyncio.to_thread(self.diagnostics_probe),
+                timeout=5,
+            )
         except Exception:
             raise web.HTTPServiceUnavailable() from None
         return web.json_response(payload)

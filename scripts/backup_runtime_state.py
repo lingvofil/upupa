@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import sys
 
 
 LABEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -31,6 +32,14 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _allocated_bytes(path: Path) -> int:
+    stat_result = path.stat()
+    blocks = getattr(stat_result, "st_blocks", None)
+    if blocks is None:
+        return stat_result.st_size
+    return int(blocks) * 512
 
 
 def _backup_sqlite(source: Path, target: Path) -> None:
@@ -173,6 +182,9 @@ def _backup_journal(
 
     whole_digest = hashlib.sha256()
     chunks = []
+    chunks_created = 0
+    chunks_reused = 0
+    physical_bytes_added = 0
     with source.open("rb") as stream:
         snapshot_size = os.fstat(stream.fileno()).st_size
         offset = 0
@@ -201,6 +213,7 @@ def _backup_journal(
                 if valid:
                     os.link(previous, target)
                     reused = True
+                    chunks_reused += 1
 
             if not reused:
                 with target.open("xb") as output:
@@ -208,6 +221,8 @@ def _backup_journal(
                     output.flush()
                     os.fsync(output.fileno())
                 target.chmod(0o444)
+                chunks_created += 1
+                physical_bytes_added += _allocated_bytes(target)
 
             chunks.append(
                 {
@@ -227,6 +242,12 @@ def _backup_journal(
         "sha256": whole_digest.hexdigest(),
         "chunk_size": chunk_size,
         "chunks": chunks,
+        "chunk_count": len(chunks),
+        "chunks_created": chunks_created,
+        "chunks_reused": chunks_reused,
+        "logical_bytes": snapshot_size,
+        "physical_bytes_added": physical_bytes_added,
+        "physical_bytes_method": "st_blocks_created_chunks_only",
     }
 
 
@@ -343,6 +364,29 @@ def create_backup(
     return backup_dir
 
 
+def _journal_stats(backup_dir: Path) -> dict | None:
+    try:
+        manifest = json.loads(
+            (backup_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    for metadata in manifest.get("files", []):
+        if metadata.get("name") == JOURNAL_NAME:
+            return {
+                key: metadata.get(key, 0)
+                for key in (
+                    "size",
+                    "chunk_count",
+                    "chunks_created",
+                    "chunks_reused",
+                    "logical_bytes",
+                    "physical_bytes_added",
+                )
+            }
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True, type=Path)
@@ -357,6 +401,13 @@ def main() -> int:
         args.label,
         keep=args.keep,
     )
+    stats = _journal_stats(backup_dir)
+    if stats is not None:
+        print(
+            "Journal backup stats: " + json.dumps(stats, separators=(",", ":"), sort_keys=True),
+            file=sys.stderr,
+        )
+    # stdout remains machine-readable because deploy captures this exact path.
     print(backup_dir)
     return 0
 
