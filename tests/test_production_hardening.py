@@ -174,3 +174,12 @@ def test_workflows_use_node24_actions_and_native_ssh_setup():
     assert "SSH_KNOWN_HOSTS" not in deploy_workflow
     assert 'chmod 600 "${DEPLOY_KEY_PATH}"' in deploy_workflow
     assert "if: always()" in deploy_workflow
+
+    # `runner` is unavailable in jobs.<job_id>.env and would make the workflow
+    # invalid before any job starts. Use a path based only on allowed `github`
+    # context values at job-env evaluation time.
+    assert "runner.temp" not in deploy_workflow
+    assert (
+        "DEPLOY_KEY_PATH: /tmp/upupa_deploy_key_${{ github.run_id }}_"
+        "${{ github.run_attempt }}" in deploy_workflow
+    )
