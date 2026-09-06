@@ -22,6 +22,14 @@ def _load_script(name):
 
 backup = _load_script("backup_runtime_state.py")
 health = _load_script("production_healthcheck.py")
+restore = _load_script("restore_history_journal.py")
+
+
+def _manifest_file(backup_dir, name):
+    manifest = json.loads(
+        (backup_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    return next(item for item in manifest["files"] if item["name"] == name)
 
 
 def test_runtime_backup_uses_sqlite_online_backup_and_manifest(tmp_path):
@@ -39,7 +47,8 @@ def test_runtime_backup_uses_sqlite_online_backup_and_manifest(tmp_path):
         '{"enabled": true}',
         encoding="utf-8",
     )
-    (source / "user_messages.log").write_text("message\n", encoding="utf-8")
+    journal_bytes = b"message\n"
+    (source / "user_messages.log").write_bytes(journal_bytes)
     (source / "ignore.txt").write_text("not runtime state", encoding="utf-8")
 
     backup_dir = backup.create_backup(source, destination, "abc123")
@@ -58,9 +67,134 @@ def test_runtime_backup_uses_sqlite_online_backup_and_manifest(tmp_path):
         "chat_settings.json",
         "user_messages.log",
     }
-    for name, metadata in files.items():
+    assert files["user_messages.log"]["kind"] == "chunked_file"
+    assert not (backup_dir / "user_messages.log").exists()
+    assert (backup_dir / "user_messages.log.parts").is_dir()
+
+    for name in ("statistics.db", "chat_settings.json"):
+        metadata = files[name]
         digest = hashlib.sha256((backup_dir / name).read_bytes()).hexdigest()
         assert metadata["sha256"] == digest
+
+    restored = tmp_path / "restored-user_messages.log"
+    restore.restore_history_journal(backup_dir, restored)
+    assert restored.read_bytes() == journal_bytes
+
+
+def test_runtime_backup_reuses_unchanged_journal_chunks(tmp_path):
+    source = tmp_path / "app"
+    destination = tmp_path / "backups"
+    source.mkdir()
+    journal = source / "user_messages.log"
+    first_bytes = b"abcdefghTAIL"
+    journal.write_bytes(first_bytes)
+
+    first = backup.create_backup(
+        source,
+        destination,
+        "first",
+        journal_chunk_size=8,
+    )
+    journal.write_bytes(first_bytes + b"MORE")
+    second = backup.create_backup(
+        source,
+        destination,
+        "second",
+        journal_chunk_size=8,
+    )
+
+    first_meta = _manifest_file(first, "user_messages.log")
+    second_meta = _manifest_file(second, "user_messages.log")
+    first_head = first / first_meta["chunks"][0]["path"]
+    second_head = second / second_meta["chunks"][0]["path"]
+    first_tail = first / first_meta["chunks"][1]["path"]
+    second_tail = second / second_meta["chunks"][1]["path"]
+
+    assert first_head.stat().st_ino == second_head.stat().st_ino
+    assert first_head.stat().st_dev == second_head.stat().st_dev
+    assert first_head.stat().st_nlink >= 2
+    assert first_tail.stat().st_ino != second_tail.stat().st_ino
+
+    first_restored = tmp_path / "first.log"
+    second_restored = tmp_path / "second.log"
+    restore.restore_history_journal(first, first_restored)
+    restore.restore_history_journal(second, second_restored)
+    assert first_restored.read_bytes() == first_bytes
+    assert second_restored.read_bytes() == first_bytes + b"MORE"
+
+
+def test_chunked_backup_remains_restorable_after_old_snapshot_pruned(tmp_path):
+    source = tmp_path / "app"
+    destination = tmp_path / "backups"
+    source.mkdir()
+    journal = source / "user_messages.log"
+    journal.write_bytes(b"abcdefghTAIL")
+
+    backups = []
+    for index in range(4):
+        journal.write_bytes(journal.read_bytes() + bytes([65 + index]))
+        backups.append(
+            backup.create_backup(
+                source,
+                destination,
+                f"run-{index}",
+                keep=3,
+                journal_chunk_size=8,
+            )
+        )
+
+    assert not backups[0].exists()
+    newest = backups[-1]
+    restored = tmp_path / "newest.log"
+    restore.restore_history_journal(newest, restored)
+    assert restored.read_bytes() == journal.read_bytes()
+
+
+def test_restore_history_journal_supports_legacy_full_file_backup(tmp_path):
+    backup_dir = tmp_path / "legacy"
+    backup_dir.mkdir()
+    payload = b"legacy journal\n"
+    (backup_dir / "user_messages.log").write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    (backup_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "files": [
+                    {
+                        "name": "user_messages.log",
+                        "kind": "file",
+                        "size": len(payload),
+                        "sha256": digest,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "legacy-restored.log"
+    restore.restore_history_journal(backup_dir, output)
+    assert output.read_bytes() == payload
+
+
+def test_restore_history_journal_rejects_corrupt_chunk(tmp_path):
+    source = tmp_path / "app"
+    destination = tmp_path / "backups"
+    source.mkdir()
+    (source / "user_messages.log").write_bytes(b"abcdefghTAIL")
+    backup_dir = backup.create_backup(
+        source,
+        destination,
+        "corrupt",
+        journal_chunk_size=8,
+    )
+    metadata = _manifest_file(backup_dir, "user_messages.log")
+    chunk = backup_dir / metadata["chunks"][0]["path"]
+    chunk.chmod(0o644)
+    chunk.write_bytes(b"broken!!")
+
+    with pytest.raises(restore.BackupRestoreError, match="verification"):
+        restore.restore_history_journal(backup_dir, tmp_path / "broken.log")
 
 
 def test_runtime_backup_rejects_unsafe_label(tmp_path):
