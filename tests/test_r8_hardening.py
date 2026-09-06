@@ -61,3 +61,38 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     assert "StrictHostKeyChecking=yes" in source
     assert "SSH_KNOWN_HOSTS is not configured" in source
     assert "trap rollback ERR" in source
+
+
+def test_deploy_requires_successful_checks_of_the_same_commit():
+    source = _source(".github/workflows/deploy.yml")
+    checks = _source(".github/workflows/tests.yml")
+
+    assert "  test:\n    uses: ./.github/workflows/tests.yml\n" in source
+    assert "  deploy:\n    needs: test\n" in source
+    # Keep GitHub's default success() gate: never deploy on failed/skipped CI.
+    assert "    if:" not in source
+    assert "continue-on-error:" not in source
+    assert "continue-on-error:" not in checks
+    assert "  workflow_call:\n" in checks
+    assert "          ref: ${{ github.sha }}" in checks
+    assert "DEPLOY_SHA: ${{ github.sha }}" in source
+    assert "python -m pyflakes" in checks
+    assert "python -m pytest tests/ -q" in checks
+    assert "--cov-fail-under=30" in checks
+
+
+def test_checks_keep_pr_and_refactor_triggers_without_duplicate_main_run():
+    checks = _source(".github/workflows/tests.yml")
+
+    assert "    branches: [refactor]\n" in checks
+    assert "  pull_request:\n" in checks
+
+
+def test_legacy_rollback_exports_counters_before_switching_code():
+    source = _source(".github/workflows/deploy.yml")
+    rollback = source[source.index("          rollback() {"):source.index("          trap rollback ERR")]
+    assert rollback.index('service_ctl stop "$SERVICE"') < rollback.index("export_rank_counters.py")
+    assert rollback.index("export_rank_counters.py") < rollback.index('git reset --hard "$PREVIOUS_SHA"')
+    assert 'run_healthcheck "$APP_DIR/scripts/production_healthcheck.py"' in rollback
+    assert 'UPUPA_EXPECTED_PID="$service_pid"' in source
+    assert rollback.index("prepare_history_rollback.py") < rollback.index('git reset --hard "$PREVIOUS_SHA"')

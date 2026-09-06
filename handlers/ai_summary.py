@@ -10,6 +10,7 @@ from aiogram import F, types
 from core.paths import USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID, BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
+from core.summary_commands import summary_mode
 from infrastructure.ai.clients import model
 from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
@@ -52,10 +53,11 @@ async def handle_comic(message: types.Message):
     await process_comic_command(message)
 
 
-@router.message(F.text.lower() == "чобыло")
+@router.message(lambda message: summary_mode(message.text) is not None
+                and message.from_user and message.from_user.id not in BLOCKED_USERS)
 async def handle_chobylo(message: types.Message):
-    random_action = random.choice(actions)
-    await summarize_chat_history(message, model, USER_MESSAGES_LOG_PATH, actions)
+    await summarize_chat_history(message, model, USER_MESSAGES_LOG_PATH, actions,
+                                 catchup=summary_mode(message.text) == "catchup")
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) in (
     "праздники", "упупа праздники"

@@ -4,6 +4,7 @@ from datetime import datetime
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from core.paths import USER_MESSAGES_LOG_PATH
+from core.history_store import get_history_repository
 from core.settings import ADMIN_ID
 
 # Настройка логирования
@@ -22,6 +23,9 @@ async def get_all_chats_from_log():
     Получение уникальных чатов из лог-файла.
     Оставляет ТОЛЬКО ГРУППЫ (ID < 0), исключая личные сообщения.
     """
+    repository = get_history_repository(USER_MESSAGES_LOG_PATH)
+    if repository is not None:
+        return await asyncio.to_thread(repository.group_chat_ids)
     chats = set()
     try:
         with open(USER_MESSAGES_LOG_PATH, 'r', encoding='utf-8') as f:
@@ -120,7 +124,7 @@ async def handle_broadcast_command(message: types.Message):
     successful, failed = await send_broadcast_message(message.bot, broadcast_text)
     
     # Отчет
-    result_text = f"✅ Рассылка по группам завершена!\n\n"
+    result_text = "✅ Рассылка по группам завершена!\n\n"
     result_text += f"📤 Успешно отправлено: {successful}\n"
     result_text += f"❌ Неудачных отправок: {failed}\n"
     result_text += f"📊 Всего попыток: {successful + failed}"

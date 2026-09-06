@@ -10,12 +10,11 @@ from aiogram import types
 import random
 
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
-from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
+from core.summary_commands import ALL_SUMMARY_COMMANDS
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import _empty_response_details
-from prompts import actions
-from features.chat_settings import save_chat_settings
 
 
 _CHAT_LOG_RE = re.compile(
@@ -26,6 +25,7 @@ SUMMARY_HISTORY_SAMPLE_MESSAGES = 5000
 SUMMARY_HISTORY_RECENT_MESSAGES = 1000
 YEAR_HISTORY_SAMPLE_MESSAGES = 5000
 YEAR_HISTORY_RECENT_MESSAGES = 500
+_active_summaries = set()
 
 
 def _reservoir_add(
@@ -58,6 +58,20 @@ def _get_chat_messages(
     При sample_size память ограничена: более старая история семплируется
     равновероятно, а recent_size последних сообщений сохраняются полностью.
     """
+    repository = get_history_repository(log_file_path)
+    if repository is not None:
+        rows = repository.select(chat_id, start=start_time, nonempty=True,
+                                 sample_size=sample_size, recent_size=recent_size)
+        messages = [{"date": datetime.fromisoformat(row["timestamp"]).strftime("%d.%m"),
+                     "username": row["username"],
+                     "display_name": row["full_name"].strip() or row["username"],
+                     "text": row["text"].strip()} for row in rows]
+        users = {row["user_id"]: {"username": row["username"],
+                                  "display_name": row["full_name"].strip() or row["username"]}
+                 for row in repository.participants(chat_id, start=start_time, nonempty=True)
+                 if row["username"] and row["username"].lower() not in ("none", "null")}
+        return messages, users, repository.chat_name(chat_id)
+
     messages = []
     users_found = {}
     chat_name = None
@@ -269,18 +283,74 @@ async def _generate_with_active_model(
     return await asyncio.to_thread(sync_model_call_with_retry)
 
 
-async def summarize_chat_history(message: types.Message, chat_model, log_file_path: str, action_list: list):
-    """Обычная сводка за последние 12 часов."""
+async def summarize_chat_history(message: types.Message, chat_model, log_file_path: str,
+                                 action_list: list, *, catchup=False):
+    """Fixed 12-hour and personal catch-up modes share the exact same prompt."""
+    user = getattr(message, "from_user", None)
+    user_id = user.id if user and not getattr(message, "sender_chat", None) else None
+    key = (message.chat.id, user_id)
+    if key in _active_summaries:
+        await message.reply("Твоя сводка уже готовится. Дождись ответа.")
+        return
+    _active_summaries.add(key)
+    try:
+        return await _summarize_chat_window(message, log_file_path, action_list, user_id, catchup)
+    finally:
+        _active_summaries.discard(key)
+
+
+def _indexed_summary_window(repository, chat_id, user_id, now, catchup):
+    through_id, previous = repository.summary_boundary(chat_id, user_id)
+    filters = dict(through_id=through_id, nonempty=True, exclude_texts=ALL_SUMMARY_COMMANDS)
+    if catchup and previous:
+        filters["after_id"] = previous["through_id"]
+        since = datetime.fromisoformat(previous["requested_at"])
+        period = f"с {since:%d.%m.%Y %H:%M} по {now:%d.%m.%Y %H:%M}"
+    else:
+        filters["start"] = now - timedelta(hours=12)
+        period = "за последние 12 часов"
+    rows = repository.select(chat_id, sample_size=SUMMARY_HISTORY_SAMPLE_MESSAGES,
+                             recent_size=SUMMARY_HISTORY_RECENT_MESSAGES, **filters)
+    messages = [{"display_name": row["full_name"].strip() or row["username"],
+                 "username": row["username"], "text": row["text"].strip()} for row in rows]
+    users = {row["user_id"]: {"display_name": row["full_name"].strip() or row["username"]}
+             for row in repository.participants(chat_id, **filters)}
+    return (messages, users, repository.chat_name(chat_id) or chat_id, through_id,
+            period, previous is None, repository.count(chat_id, **filters))
+
+
+async def _summarize_chat_window(message, log_file_path, action_list, user_id, catchup):
     chat_id = str(message.chat.id)
-    time_threshold = datetime.now() - timedelta(hours=12)
+    now = datetime.now()
+    repository = get_history_repository(log_file_path)
+    if catchup and (repository is None or user_id is None):
+        await message.reply("Персональная сводка требует включённой истории и сообщения от твоего "
+                            "аккаунта. Можно запросить «чобыло» за 12 часов.")
+        return False
 
+    if repository is not None and user_id is not None:
+        messages, users, title, boundary, period, first, total = await asyncio.to_thread(
+            _indexed_summary_window, repository, chat_id, user_id, now, catchup)
+        if not messages:
+            await message.reply("С последней сводки новых сообщений нет." if catchup and not first
+                                else "За последние 12 часов сообщений для сводки нет.")
+            await asyncio.to_thread(repository.acknowledge_summary, chat_id, user_id, boundary, now)
+            return True
+        note = "Первый запрос: беру последние 12 часов. " if catchup and first else ""
+        await message.reply(f"{note}Сводка {period}. Сообщений: {total}; в выборке: {len(messages)}. "
+                            "Щас всех вас сдам...")
+        delivered = await _summarize_messages(message, chat_id, messages, users, title, action_list, period)
+        if delivered:
+            await asyncio.to_thread(repository.acknowledge_summary, chat_id, user_id, boundary, now)
+        return delivered
+
+    # Standalone legacy journal callers retain the fixed-period summary.
     await message.reply("Щас всех вас сдам...")
-
     messages_to_summarize, users_in_period, chat_name = await asyncio.to_thread(
         _get_chat_messages,
         log_file_path,
         chat_id,
-        time_threshold,
+        now - timedelta(hours=12),
         SUMMARY_HISTORY_SAMPLE_MESSAGES,
         SUMMARY_HISTORY_RECENT_MESSAGES,
     )
@@ -289,6 +359,13 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
         await message.reply(f"За последние 12 часов в чате {chat_name or chat_id} нихуя не было.")
         return
 
+    return await _summarize_messages(message, chat_id, messages_to_summarize, users_in_period,
+                                     chat_name, action_list, "за последние 12 часов")
+
+
+async def _summarize_messages(message, chat_id, messages_to_summarize, users_in_period,
+                              chat_name, action_list, period):
+    """One prompt and provider fallback chain for every chat-summary period."""
     active_model = _get_active_model(chat_id)
     compression_ratio = 1
 
@@ -298,7 +375,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
             await message.reply("пишу доклад")
 
     summary_input_text = (
-        f"Сообщения из чата {chat_name} за последние 12 часов "
+        f"Сообщения из чата {chat_name} {period} "
         f"(выборка {len(messages_to_summarize)} сообщений):\n\n"
         + _build_messages_text(messages_to_summarize)
     )
@@ -348,7 +425,7 @@ async def summarize_chat_history(message: types.Message, chat_model, log_file_pa
 """
     logging.info("Emergency Groq summary prompt length=%s chars, messages=%s", len(groq_fallback_prompt), groq_message_count)
 
-    await _generate_and_send_summary(
+    return await _generate_and_send_summary(
         message,
         chat_id,
         summary_prompt,
@@ -503,7 +580,9 @@ async def _generate_and_send_summary(
                         logging.error(f"Emergency Groq summarization failed: {e}", exc_info=True)
             if not summary_response:
                 logging.warning("Summarization emergency fallback returned empty response")
-                summary_response = "Не смог выжать из модели текст. Попробуй ещё раз."
+                await processing_msg.delete()
+                await message.reply("Не смог выжать из модели текст. Попробуй ещё раз.")
+                return False
 
         await processing_msg.delete()
 
@@ -541,6 +620,9 @@ async def _generate_and_send_summary(
                     else:
                         await message.answer(part)
 
+        return True
+
     except Exception as e:
         logging.error(f"Summarization Error: {e}")
         await message.reply(f"🤖 Ошибка: {str(e)[:100]}...")
+        return False

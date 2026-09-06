@@ -28,7 +28,6 @@ DB_FILE = str(STATISTICS_DB_PATH)
 
 chat_settings = {}
 conversation_history = {}
-message_stats = {}
 quiz_questions = {}
 quiz_states = {}
 chat_list = []

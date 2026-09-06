@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 
 from core.paths import USER_MESSAGES_LOG_PATH
+from core.history_store import get_history_repository
 
 
 _LOG_RE = re.compile(
@@ -26,6 +27,17 @@ def _top_active_sync(
 ) -> tuple[str, int] | None:
     threshold = (now or datetime.now()) - timedelta(days=days)
     counter: Counter[str] = Counter()
+    repository = get_history_repository(log_file_path)
+    if repository is not None:
+        def visit(row):
+            name = row["full_name"].strip()
+            if not name or name.lower() in {"none", "null"}:
+                name = row["username"].strip()
+            if not name or name.lower() in {"none", "null"}:
+                name = "Безымянный гражданин"
+            counter[name] += 1
+        repository.scan(chat_id, visit, start=threshold, nonempty=True)
+        return counter.most_common(1)[0] if counter else None
     path = Path(log_file_path)
     try:
         with path.open("r", encoding="utf-8") as handle:

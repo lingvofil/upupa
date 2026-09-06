@@ -1,12 +1,11 @@
 import ast
 import asyncio
-import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from types import SimpleNamespace
 
-from tests import test_smoke_imports  # noqa: F401
+from tests import test_smoke_imports
+del test_smoke_imports
 
 
 class MemoryRepository:
@@ -23,26 +22,15 @@ class MemoryRepository:
         self.saved = value
 
 
-def test_rank_json_state_preserves_shared_object_identity():
+def test_rank_notification_json_preserves_shared_object_identity():
     import features.stat_rank_settings as feature
 
-    stats_identity = id(feature.message_stats)
-    ranks_identity = id(feature.rank_notifications_disabled_chats)
-
-    feature.load_stats(MemoryRepository({"100": {"200": {"total": 7}}}))
+    original = feature.rank_notifications_disabled_chats
     feature.load_rank_notifications_settings(MemoryRepository({"disabled_chats": ["100", "300"]}))
-
-    assert id(feature.message_stats) == stats_identity
-    assert id(feature.rank_notifications_disabled_chats) == ranks_identity
-    assert feature.message_stats["100"]["200"]["total"] == 7
-    assert feature.rank_notifications_disabled_chats == {"100", "300"}
-
-    stats_repo = MemoryRepository()
+    assert feature.rank_notifications_disabled_chats is original
+    assert original == {"100", "300"}
     rank_repo = MemoryRepository()
-    feature.save_stats(stats_repo)
     feature.save_rank_notifications_settings(rank_repo)
-
-    assert stats_repo.saved is feature.message_stats
     assert set(rank_repo.saved["disabled_chats"]) == {"100", "300"}
 
 
@@ -73,7 +61,6 @@ def test_sms_and_antispam_json_state_preserve_shared_set_identity():
 def test_missing_or_invalid_json_clears_shared_state():
     import features.content_filter as content_filter
     import features.sms_settings as sms_settings
-    import features.stat_rank_settings as stat_rank
 
     sms_settings.sms_disabled_chats.add("stale")
     sms_settings.load_sms_disabled_chats(MemoryRepository(FileNotFoundError()))
@@ -82,51 +69,6 @@ def test_missing_or_invalid_json_clears_shared_state():
     content_filter.ANTISPAM_ENABLED_CHATS.add("stale")
     content_filter.load_antispam_settings(MemoryRepository({"not": "a list"}))
     assert not content_filter.ANTISPAM_ENABLED_CHATS
-
-    stat_rank.message_stats["stale"] = {}
-    stat_rank.load_stats(MemoryRepository([]))
-    assert not stat_rank.message_stats
-
-
-def test_message_stats_concurrent_updates_persist_in_order(monkeypatch):
-    import features.stat_rank_settings as feature
-
-    class DelayedRepository:
-        def __init__(self):
-            self.saved_totals = []
-
-        def save(self, value):
-            total = value["123"]["456"]["total"]
-            if total == 1:
-                time.sleep(0.03)
-            self.saved_totals.append(total)
-
-    repo = DelayedRepository()
-    monkeypatch.setattr(feature, "_stats_repository", lambda: repo)
-    feature.message_stats.clear()
-    feature.rank_notifications_disabled_chats.clear()
-
-    async def reply(_text):
-        return None
-
-    def message():
-        return SimpleNamespace(
-            chat=SimpleNamespace(id=123),
-            from_user=SimpleNamespace(id=456),
-            reply=reply,
-        )
-
-    async def run():
-        await asyncio.gather(
-            feature.track_message_statistics(message()),
-            feature.track_message_statistics(message()),
-        )
-
-    asyncio.run(run())
-
-    assert feature.message_stats["123"]["456"]["total"] == 2
-    assert repo.saved_totals == [1, 2]
-
 
 def _top_level_called_names(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

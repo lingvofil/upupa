@@ -15,6 +15,7 @@ DATA_DIR = PROJECT_ROOT
 
 CHAT_SETTINGS_PATH = DATA_DIR / "chat_settings.json"
 USER_MESSAGES_LOG_PATH = DATA_DIR / "user_messages.log"
+HISTORY_DB_PATH = DATA_DIR / "history.db"
 MESSAGE_STATS_PATH = DATA_DIR / "message_stats.json"
 CHAT_LIST_PATH = DATA_DIR / "chats.json"
 SMS_DISABLED_CHATS_PATH = DATA_DIR / "sms_disabled_chats.json"

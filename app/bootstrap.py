@@ -5,17 +5,24 @@ Bot и Dispatcher создаются только в composition root. Прик�
 """
 
 from dataclasses import dataclass, field
+from functools import partial
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
 from app.lifecycle import TaskSupervisor
+from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
 from core.logging_setup import logger
-from core.settings import API_TOKEN, validate_required_settings
+from core.settings import API_TOKEN, HEALTHCHECK_PORT, validate_required_settings
 
 
 QUIZ_CHAT_IDS = (-1001707530786, -1001781970364)
+REQUIRED_BACKGROUND_TASKS = (
+    *(f"daily-quiz:{chat_id}" for chat_id in QUIZ_CHAT_IDS),
+    "birthday-scheduler", "holiday-scheduler", "proactive-loop", "channel-scheduler",
+    "world-visit-expiration", "crocodile-session-persistence",
+)
 
 _main_router: Router | None = None
 
@@ -50,11 +57,14 @@ class UpupaApplication:
     bot: Bot
     dispatcher: Dispatcher
     supervisor: TaskSupervisor = field(default_factory=TaskSupervisor)
+    polling_health: PollingHealth = field(default_factory=PollingHealth)
     _dispatcher_configured: bool = field(default=False, init=False)
     _background_tasks_started: bool = field(default=False, init=False)
 
     def initialize_state(self) -> None:
-        from core.paths import STATISTICS_DB_PATH, WORLD_DB_PATH
+        from core.paths import HISTORY_DB_PATH, STATISTICS_DB_PATH, USER_MESSAGES_LOG_PATH, WORLD_DB_PATH
+        from core.history_store import configure_history_repository
+        from infrastructure.persistence.sqlite_history import SQLiteHistoryRepository
         from features.chat_settings import load_chat_state
         from features.content_filter import load_antispam_settings
         from features.sms_settings import load_sms_disabled_chats
@@ -62,7 +72,8 @@ class UpupaApplication:
             configure_social_graph_repository,
             init_db as init_social_graph_db,
         )
-        from features.stat_rank_settings import load_stat_rank_state
+        from features.stat_rank_settings import configure_counter_repository, load_stat_rank_state
+        from infrastructure.persistence.sqlite_rank_counters import SQLiteRankCountersRepository
         import features.statistics as bot_statistics
         from features.world.service import WorldService, configure_world_service
         from infrastructure.persistence import (
@@ -74,6 +85,7 @@ class UpupaApplication:
         load_chat_state()
         load_antispam_settings()
         load_sms_disabled_chats()
+        configure_counter_repository(SQLiteRankCountersRepository(STATISTICS_DB_PATH))
         load_stat_rank_state()
         bot_statistics.configure_statistics_repository(
             SQLiteStatisticsRepository(STATISTICS_DB_PATH)
@@ -85,6 +97,9 @@ class UpupaApplication:
         world_repository = SQLiteWorldRepository(WORLD_DB_PATH)
         world_repository.init_schema()
         configure_world_service(WorldService(world_repository))
+        history = SQLiteHistoryRepository(HISTORY_DB_PATH, USER_MESSAGES_LOG_PATH)
+        history.initialize()
+        configure_history_repository(history)
 
     def start_background_tasks(self) -> None:
         if self._background_tasks_started:
@@ -172,18 +187,38 @@ class UpupaApplication:
 
         self._dispatcher_configured = True
 
-    async def run(self) -> None:
-        self.initialize_state()
+    def create_readiness_server(self) -> ReadinessServer:
+        from core.paths import HISTORY_DB_PATH, STATISTICS_DB_PATH, WORLD_DB_PATH
+        from infrastructure.persistence.health import check_databases
 
+        return ReadinessServer(
+            self.polling_health, self.supervisor,
+            partial(check_databases, STATISTICS_DB_PATH, WORLD_DB_PATH, HISTORY_DB_PATH),
+            REQUIRED_BACKGROUND_TASKS, port=HEALTHCHECK_PORT,
+        )
+
+    async def run(self) -> None:
+        readiness = self.create_readiness_server()
+        self.bot.session.middleware(self.polling_health.observe)
         try:
+            self.initialize_state()
             self.start_background_tasks()
             self.configure_dispatcher()
 
             await self.bot.delete_webhook(drop_pending_updates=True)
+            await readiness.start()
             logger.info("Starting polling bot_id=%s", id(self.bot))
-            await self.dispatcher.start_polling(self.bot, skip_updates=True)
+            await self.dispatcher.start_polling(
+                self.bot, skip_updates=True, close_bot_session=False,
+            )
         finally:
-            await self.supervisor.stop()
+            try:
+                await readiness.stop()
+            finally:
+                try:
+                    await self.supervisor.stop()
+                finally:
+                    await self.bot.session.close()
 
 
 def create_application(

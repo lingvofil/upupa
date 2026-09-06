@@ -16,6 +16,7 @@ from aiogram import types
 from thefuzz import fuzz
 
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
 from prompts import PROMPTS_MEDIA
 from core.upupa_utils import normalize_upupa_command
 from AI.summarize import _generate_with_active_model
@@ -32,8 +33,12 @@ _LOG_RE = re.compile(
 )
 
 
-def _read_chat_log(chat_id: str) -> list[dict]:
+def _read_chat_log(chat_id: str, *, limit=None, start=None, end=None) -> list[dict]:
     """Все сообщения чата из лога: [{dt, name, text}], в хронологическом порядке."""
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        return [_indexed_message(row) for row in repository.select(
+            chat_id, limit=limit, start=start, end=end, nonempty=True)]
     out = []
     chat_id = str(chat_id)
     try:
@@ -57,7 +62,37 @@ def _read_chat_log(chat_id: str) -> list[dict]:
         pass
     except Exception as e:
         logging.error(f"[chat_recall] не смог прочитать лог: {e}")
-    return out
+    if start is not None:
+        out = [row for row in out if row["dt"] >= start]
+    if end is not None:
+        out = [row for row in out if row["dt"] <= end]
+    return out[-limit:] if limit else out
+
+
+def _indexed_message(row):
+    return {"dt": datetime.fromisoformat(row["timestamp"]),
+            "name": row["full_name"].strip() or row["username"], "text": row["text"].strip()}
+
+
+def _indexed_recall(repository, chat_id, topic):
+    count = repository.count(chat_id, nonempty=True)
+    candidates = repository.search(chat_id, topic, limit=100)
+    if not candidates:
+        # Keep approximate matching for typos, with a bounded recent fallback.
+        candidates = repository.select(chat_id, limit=2000, nonempty=True)
+    scored = sorted(((100 if topic.casefold() in row["text"].casefold() else
+                      fuzz.token_set_ratio(topic.casefold(), row["text"].casefold()), row)
+                     for row in candidates), key=lambda item: (item[0], item[1]["id"]), reverse=True)
+    episodes, used = [], set()
+    for score, row in scored:
+        if score < MATCH_THRESHOLD or row["id"] in used:
+            continue
+        context = repository.context(chat_id, row["id"], CONTEXT_WINDOW)
+        used.update(item["id"] for item in context)
+        episodes.append([_indexed_message(item) for item in context if item["text"].strip()])
+        if len(episodes) == MAX_EPISODES:
+            break
+    return count, sorted(episodes, key=lambda episode: episode[0]["dt"])
 
 
 # ================== "УПУПА КОГДА МЫ ГОВОРИЛИ ПРО" ==================
@@ -112,12 +147,17 @@ async def process_recall_command(message: types.Message):
     chat_id = str(message.chat.id)
     status = await message.reply("Копаюсь в ваших грязных архивах...")
 
-    messages = await asyncio.to_thread(_read_chat_log, chat_id)
-    if len(messages) < MIN_HISTORY:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        count, episodes = await asyncio.to_thread(_indexed_recall, repository, chat_id, topic)
+    else:
+        messages = await asyncio.to_thread(_read_chat_log, chat_id)
+        count = len(messages)
+        episodes = await asyncio.to_thread(_find_episodes, messages, topic)
+    if count < MIN_HISTORY:
         await status.edit_text("У меня еще слишком мало компромата на этот чат.")
         return
 
-    episodes = await asyncio.to_thread(_find_episodes, messages, topic)
     if not episodes:
         await status.edit_text(f"Хуй там. Про «{topic}» вы никогда не говорили. Или говорили так убого, что я не запомнил.")
         return
@@ -188,7 +228,7 @@ async def process_verdict_command(message: types.Message):
     if message.reply_to_message:
         target_text = message.reply_to_message.text or message.reply_to_message.caption or ""
 
-    messages = await asyncio.to_thread(_read_chat_log, chat_id)
+    messages = await asyncio.to_thread(_read_chat_log, chat_id, limit=500)
     context = _build_dispute_context(messages, target_text)
 
     if not context and target_text and message.reply_to_message.from_user:

@@ -172,7 +172,10 @@ def pick_chat_episode(
     if read_chat_log is None:
         from AI.chat_recall import _read_chat_log
 
-        read_chat_log = _read_chat_log
+        read_chat_log = lambda chat_id: _read_chat_log(
+            chat_id, limit=500, start=_now_naive(now) - timedelta(hours=CHAT_LOOKBACK_HOURS),
+            end=_now_naive(now),
+        )
     if rng is None:
         import random
 

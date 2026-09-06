@@ -19,6 +19,8 @@ FAKE_ENV = {
     "SILICONFLOW_API_KEY": "fake", "POLLINATIONS_API_KEY": "fake",
 }
 os.environ.update(FAKE_ENV)
+# A developer's local secrets must never override fake test credentials.
+sys.modules["config_private"] = None
 
 from unittest.mock import MagicMock
 

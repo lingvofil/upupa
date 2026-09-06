@@ -1,4 +1,5 @@
 from collections import defaultdict, deque
+import asyncio
 from datetime import datetime
 import collections
 import logging
@@ -10,6 +11,7 @@ from aiogram import types
 from nltk.util import ngrams
 
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
 from prompts import STOPWORDS
 
 
@@ -48,6 +50,19 @@ def build_hybrid_style_sample(messages: list, recent_count: int = RECENT_STYLE_S
 
 # Запись сообщений всех пользователей в файл
 async def save_user_message(message: types.Message):
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        if not message.from_user or not message.chat:
+            return
+        await asyncio.to_thread(repository.append, {
+            "timestamp": datetime.now().isoformat(timespec="microseconds"),
+            "chat_id": str(message.chat.id), "chat_title": message.chat.title or "ЛС",
+            "user_id": str(message.from_user.id),
+            "username": message.from_user.username or "NoUsername",
+            "full_name": message.from_user.full_name or "NoName",
+            "text": message.text or "",
+        }, getattr(message, "message_id", None))
+        return
     timestamp = datetime.now().isoformat()
     chat_id = message.chat.id if message.chat else "NoChat"
     chat_title = message.chat.title if message.chat and message.chat.title else "ЛС"
@@ -146,6 +161,11 @@ async def extract_user_messages(
     sample_size: int | None = None,
     recent_size: int = 0,
 ) -> list:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        rows = await asyncio.to_thread(repository.select, chat_id, user_id=user_id,
+                                       sample_size=sample_size, recent_size=recent_size)
+        return [row["text"].strip() for row in rows]
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User {user_id}\b.*: (.*)")
     return await _extract_messages(
         pattern,
@@ -162,6 +182,11 @@ async def extract_messages_by_username(
     sample_size: int | None = None,
     recent_size: int = 0,
 ) -> list:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        rows = await asyncio.to_thread(repository.select, chat_id, username=username,
+                                       sample_size=sample_size, recent_size=recent_size)
+        return [row["text"].strip() for row in rows]
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User \d+ \(({re.escape(username)})\) \[.*?\]: (.*)")
     return await _extract_messages(
         pattern,
@@ -178,6 +203,11 @@ async def extract_messages_by_full_name(
     sample_size: int | None = None,
     recent_size: int = 0,
 ) -> list:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        rows = await asyncio.to_thread(repository.select, chat_id, full_name=full_name,
+                                       sample_size=sample_size, recent_size=recent_size)
+        return [row["text"].strip() for row in rows]
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User \d+ \([^)]+\) \[(.+?)\]: (.*)")
     return await _extract_messages(
         pattern,
@@ -195,6 +225,11 @@ async def extract_chat_messages(
     sample_size: int | None = None,
     recent_size: int = 0,
 ) -> list:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        rows = await asyncio.to_thread(repository.select, chat_id,
+                                       sample_size=sample_size, recent_size=recent_size)
+        return [row["text"].strip() for row in rows]
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User .+?: (.*)")
     return await _extract_messages(
         pattern,
@@ -216,11 +251,33 @@ async def _stream_lexicon_stats(
     *,
     predicate=None,
     n_values: tuple[int, ...] = (1, 2),
+    index_chat_id=None,
+    index_filters=None,
 ) -> tuple[dict[int, collections.Counter], int]:
     """Считать n-граммы по логу без materialize всей истории/всех n-грамм."""
     counters = {n: collections.Counter() for n in n_values}
     tails = {n: [] for n in n_values if n > 1}
     matched_messages = 0
+
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None and index_chat_id is not None:
+        def collect():
+            def visit(row):
+                nonlocal matched_messages
+                matched_messages += 1
+                words = clean_text(row["text"])
+                if not words:
+                    return
+                for n in n_values:
+                    if n == 1:
+                        counters[n].update(words)
+                    else:
+                        combined = tails[n] + words
+                        counters[n].update(ngrams(combined, n))
+                        tails[n] = combined[-(n - 1):]
+            repository.scan(index_chat_id, visit, **(index_filters or {}))
+        await asyncio.to_thread(collect)
+        return counters, matched_messages
 
     async with aiofiles.open(LOG_FILE, mode="r", encoding="utf-8") as f:
         async for line in f:
@@ -279,13 +336,13 @@ def get_frequent_phrases_from_text(text: str, n: int = 2, top_n: int = 5) -> lis
 # Функции для подсчета частотности слов и фраз для чата
 async def get_chat_frequent_words(chat_id: int, top_n: int = 10):
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User .+?: (.*)")
-    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(1,))
+    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(1,), index_chat_id=chat_id)
     return counters[1].most_common(top_n)
 
 
 async def get_chat_frequent_phrases(chat_id: int, n: int = 2, top_n: int = 10):
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User .+?: (.*)")
-    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(n,))
+    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(n,), index_chat_id=chat_id)
     return [(" ".join(gram), count) for gram, count in counters[n].most_common(top_n)]
 
 
@@ -293,6 +350,14 @@ async def get_chat_frequent_phrases(chat_id: int, n: int = 2, top_n: int = 10):
 async def get_chat_active_users(chat_id, min_messages=10):
     """Получить список активных пользователей чата с минимальным количеством сообщений"""
     try:
+        repository = get_history_repository(LOG_FILE)
+        if repository is not None:
+            rows = await asyncio.to_thread(repository.participants, chat_id)
+            return [{"user_id": row["user_id"], "username": None if row["username"] == "NoUsername" else row["username"],
+                     "full_name": None if row["full_name"] == "NoName" else row["full_name"],
+                     "message_count": row["message_count"]} for row in rows
+                    if row["message_count"] >= min_messages
+                    and (row["username"] != "NoUsername" or row["full_name"] != "NoName")]
         user_stats = defaultdict(lambda: {'username': None, 'full_name': None, 'count': 0})
 
         # Паттерн для парсинга строк лога
@@ -333,14 +398,16 @@ async def get_chat_active_users(chat_id, min_messages=10):
 
 async def _user_lexicon_stats(user_id: int, chat_id: int):
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User {user_id}\b.*: (.*)")
-    return await _stream_lexicon_stats(pattern, 1, n_values=(1, 2))
+    return await _stream_lexicon_stats(pattern, 1, n_values=(1, 2), index_chat_id=chat_id,
+                                       index_filters={"user_id": user_id})
 
 
 async def _named_user_lexicon_stats(username_or_name: str, chat_id: int):
     username_pattern = re.compile(
         rf".* - Chat {chat_id}\b.*User \d+ \(({re.escape(username_or_name)})\) \[.*?\]: (.*)"
     )
-    counters, matched = await _stream_lexicon_stats(username_pattern, 2, n_values=(1, 2))
+    counters, matched = await _stream_lexicon_stats(username_pattern, 2, n_values=(1, 2),
+                                                 index_chat_id=chat_id, index_filters={"username": username_or_name})
     if matched:
         return counters, matched
 
@@ -350,6 +417,7 @@ async def _named_user_lexicon_stats(username_or_name: str, chat_id: int):
         2,
         predicate=lambda match: match.group(1).lower() == username_or_name.lower(),
         n_values=(1, 2),
+        index_chat_id=chat_id, index_filters={"full_name": username_or_name},
     )
 
 
@@ -377,7 +445,7 @@ async def process_my_lexicon(user_id, chat_id, message):
 async def process_chat_lexicon(message: types.Message) -> str:
     chat_id = message.chat.id
     pattern = re.compile(rf".* - Chat {chat_id}\b.*User .+?: (.*)")
-    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(1, 2))
+    counters, _matched = await _stream_lexicon_stats(pattern, 1, n_values=(1, 2), index_chat_id=chat_id)
     frequent_words = counters[1].most_common(10)
     frequent_phrases = [(" ".join(gram), count) for gram, count in counters[2].most_common(10)]
 

@@ -9,7 +9,9 @@ class NoopSupervisor:
         return None
 
 
-def test_application_initializes_file_state_explicitly(monkeypatch):
+def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
+    import core.paths as paths
+    import core.history_store as history_store
     import features.chat_settings as chat_settings_feature
     import features.content_filter as content_filter_feature
     import features.sms_settings as sms_settings_feature
@@ -20,6 +22,12 @@ def test_application_initializes_file_state_explicitly(monkeypatch):
     import infrastructure.persistence as persistence
 
     calls = []
+    monkeypatch.setattr(paths, "WORLD_DB_PATH", tmp_path / "world.db")
+    monkeypatch.setattr(paths, "STATISTICS_DB_PATH", tmp_path / "statistics.db")
+    monkeypatch.setattr(paths, "HISTORY_DB_PATH", tmp_path / "history.db")
+    monkeypatch.setattr(paths, "USER_MESSAGES_LOG_PATH", tmp_path / "user_messages.log")
+    monkeypatch.setattr(history_store, "_repository", None)
+    monkeypatch.setattr(stat_rank_feature, "_counter_repository", None)
     monkeypatch.setattr(chat_settings_feature, "load_chat_state", lambda: calls.append("chat-state"))
     monkeypatch.setattr(content_filter_feature, "load_antispam_settings", lambda: calls.append("antispam"))
     monkeypatch.setattr(sms_settings_feature, "load_sms_disabled_chats", lambda: calls.append("sms"))

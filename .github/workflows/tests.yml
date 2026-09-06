@@ -2,14 +2,17 @@ name: Tests
 
 on:
   push:
-    branches: [main, refactor]
+    branches: [refactor]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -24,6 +27,9 @@ jobs:
             infrastructure \
             scripts/backup_runtime_state.py \
             scripts/production_healthcheck.py \
+            scripts/export_rank_counters.py \
+            scripts/prepare_history_rollback.py \
+            scripts/index_history.py \
             tests/test_application_bootstrap.py \
             tests/test_application_lifecycle.py \
             tests/test_configuration_composition.py \

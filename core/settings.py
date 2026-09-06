@@ -4,6 +4,9 @@
 """
 import os
 
+# Loopback only; use the same value for the service and the healthcheck CLI.
+HEALTHCHECK_PORT = int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766"))
+
 # =========================
 # === ИМПОРТ СЕКРЕТОВ ===
 # =========================

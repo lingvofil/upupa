@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from AI.dialog.style import create_user_style_prompt, is_participant_style_message
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
 from services.smart_search import find_relevant_context
 
 
@@ -142,6 +143,19 @@ def _resolve_participant_identity_sync(query: str, chat_id: int | str) -> dict |
     if not target:
         return None
 
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        hits = repository.participants(chat_id, **({"user_id": target} if target.isdigit() else {"username": target}))
+        if not hits:
+            hits = repository.participants(chat_id, full_name=target)
+        if not hits:
+            return None
+        best = max(hits, key=lambda row: (row["message_count"], row["id"]))
+        username = _normalize_optional(best["username"], "NoUsername")
+        name = _normalize_optional(best["full_name"], "NoName")
+        return {"user_id": int(best["user_id"]), "username": username, "full_name": name,
+                "display_name": name or username or best["user_id"]}
+
     username_hits: dict[int, dict] = {}
     full_name_hits: dict[int, dict] = {}
     sequence = 0
@@ -217,6 +231,10 @@ def _scan_participant_history_sync(
         sample_size=sample_size,
         recent_size=recent_size,
     )
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        repository.scan(chat_id, lambda row: entry.add_logged_message(row["text"]), user_id=user_id)
+        return entry
     chat_marker = f" - Chat {chat_id}"
     user_marker = f"User {int(user_id)} "
     pattern = _log_pattern(chat_id)
