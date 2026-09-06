@@ -15,6 +15,7 @@ from aiogram import Bot
 
 # Обновленные импорты для мультимодельности
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
 from core.state import chat_settings, quiz_questions, quiz_states
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from AI.dialog.settings import update_chat_settings
@@ -40,6 +41,20 @@ async def extract_messages(log_file, chat_id=None, limit=100, days=1):
     # Историческое поведение limit <= 0 оставляет все подходящие сообщения.
     messages = deque(maxlen=limit) if limit > 0 else []
     start_time, end_time = get_time_range(days)
+
+    repository = get_history_repository(log_file)
+    if repository is not None:
+        # Preserve this command's historical UTC interpretation of naive logs.
+        rows = await asyncio.to_thread(repository.select, chat_id,
+            start=start_time.astimezone(pytz.utc).replace(tzinfo=None),
+            end=end_time.astimezone(pytz.utc).replace(tzinfo=None),
+            limit=limit if limit > 0 else None, nonempty=True, exclude_commands=True)
+        result = []
+        for row in rows:
+            name = row["full_name"] if row["full_name"] != "NoName" else row["username"]
+            if name != "NoUsername":
+                result.append({**row, "full_name": name})
+        return result
 
     try:
         async with aiofiles.open(log_file, mode="r", encoding="utf-8") as f:

@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import logging
 from datetime import date
 
@@ -8,34 +7,29 @@ from aiogram import types
 from core.json_repository import JsonFileRepository, JsonRepository
 from core.loader import bot
 from core.paths import MESSAGE_STATS_PATH, RANK_NOTIFICATIONS_PATH
-from core.state import message_stats
+from infrastructure.persistence.sqlite_rank_counters import SQLiteRankCountersRepository
 from prompts import RANKS
 
 # Множество чатов, где уведомления о рангах ОТКЛЮЧЕНЫ.
 # Identity сохраняем: другие модули могут держать ссылку на этот set.
 rank_notifications_disabled_chats = set()
 
-# Один update/save за раз в production event loop. Lock пересоздаётся, если модуль
-# используется из другого loop (например, в нескольких asyncio.run тестах).
-_stats_update_lock: asyncio.Lock | None = None
-_stats_update_loop = None
+_counter_repository: SQLiteRankCountersRepository | None = None
 
 
-def _get_stats_update_lock() -> asyncio.Lock:
-    global _stats_update_lock, _stats_update_loop
-    loop = asyncio.get_running_loop()
-    if _stats_update_lock is None or _stats_update_loop is not loop:
-        _stats_update_lock = asyncio.Lock()
-        _stats_update_loop = loop
-    return _stats_update_lock
+def configure_counter_repository(repository: SQLiteRankCountersRepository) -> None:
+    global _counter_repository
+    _counter_repository = repository
+
+
+def _counters() -> SQLiteRankCountersRepository:
+    if _counter_repository is None:
+        raise RuntimeError("Rank counters have not been initialized")
+    return _counter_repository
 
 
 def _rank_notifications_repository() -> JsonFileRepository:
     return JsonFileRepository(RANK_NOTIFICATIONS_PATH)
-
-
-def _stats_repository() -> JsonFileRepository:
-    return JsonFileRepository(MESSAGE_STATS_PATH)
 
 
 def load_rank_notifications_settings(repository: JsonRepository | None = None):
@@ -74,118 +68,34 @@ def save_rank_notifications_settings(repository: JsonRepository | None = None):
         logging.error(f"Ошибка при сохранении настроек уведомлений о рангах: {e}")
 
 
-def load_stats(repository: JsonRepository | None = None):
-    """Загрузить message_stats, сохраняя identity shared dict."""
-    repo = repository or _stats_repository()
-    try:
-        data = repo.load()
-    except FileNotFoundError:
-        message_stats.clear()
-        return
-    except Exception as e:
-        logging.error(f"Ошибка при загрузке статистики: {e}")
-        message_stats.clear()
-        return
-
-    if isinstance(data, dict):
-        message_stats.clear()
-        message_stats.update(data)
-        logging.info(f"📊 Загружено {len(message_stats)} чатов в статистику.")
-    else:
-        message_stats.clear()
-        logging.warning("Файл статистики повреждён; используется пустой словарь.")
-
-
-def save_stats(repository: JsonRepository | None = None, *, value=None):
-    """Атомарно сохранить message_stats или переданный immutable snapshot."""
-    repo = repository or _stats_repository()
-    payload = message_stats if value is None else value
-    try:
-        repo.save(payload)
-    except Exception as e:
-        logging.error(f"Ошибка при сохранении статистики: {e}")
-
-
 def load_stat_rank_state() -> None:
-    """Явно загрузить JSON-состояние рангов и счётчиков на startup."""
+    """Load notification settings and migrate counters before polling starts."""
     load_rank_notifications_settings()
-    load_stats()
+    _counters().initialize(MESSAGE_STATS_PATH)
 
 
 async def track_message_statistics(message: types.Message):
-    # В отличие от простого ``to_thread(save_stats)``, lock + snapshot не дают
-    # более старой записи завершиться после новой и затереть свежий счётчик.
-    async with _get_stats_update_lock():
-        chat_id = str(message.chat.id)
-        user_id = str(message.from_user.id)
-
-        current_date = date.today()
-        current_date_str = current_date.isoformat()
-
-        previous_total = 0
-        if chat_id in message_stats and user_id in message_stats[chat_id]:
-            previous_total = message_stats[chat_id][user_id].get("total", 0)
-
-        if chat_id not in message_stats:
-            message_stats[chat_id] = {}
-        if user_id not in message_stats[chat_id]:
-            message_stats[chat_id][user_id] = {
-                "total": previous_total,
-                "daily": 0,
-                "weekly": 0,
-                "last_daily_reset": current_date_str,
-                "last_weekly_reset": current_date_str,
-            }
-
-        user_stats = message_stats[chat_id][user_id]
-
-        if user_stats.get("total", 0) < previous_total:
-            user_stats["total"] = previous_total
-
+    if not message.from_user or message.from_user.is_bot:
+        return
+    chat_id = str(message.chat.id)
+    stats = await asyncio.to_thread(
+        _counters().increment, chat_id, str(message.from_user.id), date.today()
+    )
+    # The transaction is committed before Telegram I/O; a failed reply cannot
+    # lose the increment or block counters in other chats.
+    new_rank = RANKS.get(stats["total"])
+    if new_rank and chat_id not in rank_notifications_disabled_chats:
         try:
-            last_daily_reset = date.fromisoformat(user_stats.get("last_daily_reset", current_date_str))
-        except (TypeError, ValueError):
-            last_daily_reset = current_date
-            user_stats["last_daily_reset"] = current_date_str
-
-        try:
-            last_weekly_reset = date.fromisoformat(user_stats.get("last_weekly_reset", current_date_str))
-        except (TypeError, ValueError):
-            last_weekly_reset = current_date
-            user_stats["last_weekly_reset"] = current_date_str
-
-        if current_date > last_daily_reset:
-            user_stats["daily"] = 0
-            user_stats["last_daily_reset"] = current_date_str
-
-        days_since_reset = (current_date - last_weekly_reset).days
-        if days_since_reset >= 7:
-            user_stats["weekly"] = 0
-            user_stats["last_weekly_reset"] = current_date_str
-
-        user_stats["total"] = user_stats.get("total", 0) + 1
-        user_stats["daily"] = user_stats.get("daily", 0) + 1
-        user_stats["weekly"] = user_stats.get("weekly", 0) + 1
-
-        new_rank = None
-        for count, rank in sorted(RANKS.items()):
-            if user_stats["total"] == count:
-                new_rank = rank
-                break
-
-        if new_rank and chat_id not in rank_notifications_disabled_chats:
             await message.reply(f"🎉 Паздравляю, ты получил ранг **{new_rank}**!")
-
-        snapshot = copy.deepcopy(message_stats)
-        await asyncio.to_thread(save_stats, value=snapshot)
+        except Exception:
+            logging.exception("Failed to send rank notification")
 
 
 async def get_user_statistics(chat_id: str, user_id: str) -> tuple[str, bool]:
     """Получает статистику пользователя."""
-    if chat_id not in message_stats or user_id not in message_stats[chat_id]:
+    user_stats = await asyncio.to_thread(_counters().get_user, chat_id, user_id, date.today())
+    if user_stats is None:
         return "Ты пока ничего не написал, иди пиши.", False
-
-    user_stats = message_stats[chat_id][user_id]
 
     user_rank = "без ранга"
     for count, rank in sorted(RANKS.items(), reverse=True):
@@ -204,16 +114,14 @@ async def get_user_statistics(chat_id: str, user_id: str) -> tuple[str, bool]:
 
 
 async def get_valid_users(chat_id: str) -> dict:
+    users = await asyncio.to_thread(_counters().get_chat, chat_id, date.today())
     valid_users = {}
-    if chat_id in message_stats:
-        for user_id, stats in message_stats[chat_id].items():
-            try:
-                user_id_int = int(user_id)
-                if user_id_int > 0:
-                    valid_users[user_id] = stats
-            except (ValueError, TypeError):
-                logging.error(f"Некорректный user_id в статистике: {user_id}")
-                continue
+    for user_id, stats in users.items():
+        try:
+            if int(user_id) > 0:
+                valid_users[user_id] = stats
+        except (ValueError, TypeError):
+            logging.error("Некорректный user_id в статистике: %s", user_id)
     return valid_users
 
 

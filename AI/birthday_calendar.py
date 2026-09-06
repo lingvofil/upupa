@@ -4,17 +4,16 @@ import json
 import re
 import asyncio
 import random
-from datetime import datetime, time
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from aiogram import types
 from aiogram.types import Message
 import logging
 import traceback
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.history_store import get_history_repository
 from core.settings import ADMIN_ID
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
-from features.chat_settings import save_chat_settings
 
 # Файл для хранения дней рождения
 BIRTHDAY_FILE = "birthdays.json"
@@ -90,6 +89,10 @@ def parse_birthday_date(text: str) -> Optional[Tuple[int, int]]:
     return None
 
 def get_user_messages_from_log(user_id: int, chat_id: int, limit: int = 100) -> List[str]:
+    repository = get_history_repository(LOG_FILE)
+    if repository is not None:
+        return [row["text"].strip() for row in repository.select(
+            chat_id, user_id=user_id, sample_size=max(0, limit), min_chars=11)]
     """Получение случайных сообщений пользователя из лога конкретного чата."""
     if limit <= 0:
         return []
@@ -247,7 +250,7 @@ async def check_birthdays_and_send_greetings(bot):
 
                             logging.info(f"Поздравляем пользователя {user_id} в чате {chat_id}")
 
-                            user_messages = get_user_messages_from_log(int(user_id), chat_id_int)
+                            user_messages = await asyncio.to_thread(get_user_messages_from_log, int(user_id), chat_id_int)
                             user_name = user_data.get('name', 'Неизвестный')
 
                             if not user_messages:
@@ -411,7 +414,7 @@ async def handle_test_greeting_command(message: Message):
 
         user_id, user_data = user_info
 
-        user_messages = get_user_messages_from_log(
+        user_messages = await asyncio.to_thread(get_user_messages_from_log,
             int(user_id),
             message.chat.id
         )

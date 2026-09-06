@@ -132,3 +132,21 @@ def test_production_healthcheck_sanitizes_http_errors():
 
     assert "secret-token" not in str(caught.value)
     assert "HTTP 401" in str(caught.value)
+
+
+def test_process_healthcheck_matches_systemd_pid():
+    payload = {"ok": True, "pid": 123, "checks": {
+        "polling": True, "databases": True, "background_tasks": True}}
+    opener = lambda request, *, timeout: FakeResponse(payload)
+    assert health.check_process(timeout=3, expected_pid=123, opener=opener)["pid"] == 123
+    with pytest.raises(health.HealthCheckError, match="PID"):
+        health.check_process(timeout=3, expected_pid=456, opener=opener)
+    payload["checks"]["polling"] = False
+    with pytest.raises(health.HealthCheckError):
+        health.check_process(timeout=3, opener=opener)
+
+
+@pytest.mark.parametrize("payload", [[], {}, {"ok": True}, {"ok": False}])
+def test_process_healthcheck_rejects_invalid_payload(payload):
+    with pytest.raises(health.HealthCheckError):
+        health.check_process(timeout=3, opener=lambda request, *, timeout: FakeResponse(payload))

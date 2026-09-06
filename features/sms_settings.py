@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot, types
 
 from core.json_repository import JsonFileRepository, JsonRepository
+from core.history_store import get_history_repository
 from core.paths import SMS_DISABLED_CHATS_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import SPECIAL_CHAT_ID
 from core.state import sms_disabled_chats
@@ -151,31 +152,46 @@ async def process_what_they_say(message: types.Message, chat_list: list, bot: Bo
 
     recent_messages = deque(maxlen=10)
 
-    if not os.path.exists(LOG_FILE):
+    repository = get_history_repository(LOG_FILE)
+    if repository is None and not os.path.exists(LOG_FILE):
         await message.reply("Пока нечего рассказать: лог сообщений пуст.")
         return
 
     try:
-        with open(LOG_FILE, "r", encoding="utf-8") as file:
-            for record in _iter_user_log_records(file):
-                parsed = _parse_user_log_line(record)
-                if not parsed:
-                    logging.warning(f"Не удалось распарсить запись лога:\n{record}")
-                    continue
-                if parsed["chat_id"] != target_chat_id:
-                    continue
+        if repository is not None:
+            def collect():
+                latest = []
+                def visit(row):
+                    text = row["text"].strip().replace("\n", " / ")
+                    formatted = (f"{_format_log_time(row['timestamp'])} "
+                                 f"{_format_log_author(row['username'], row['full_name'])}: {text}")
+                    if not latest or latest[-1] != formatted:
+                        latest.append(formatted)
+                    return len(latest) < 10
+                repository.scan(target_chat_id, visit, descending=True, nonempty=True)
+                return list(reversed(latest))
+            recent_messages.extend(await asyncio.to_thread(collect))
+        else:
+            with open(LOG_FILE, "r", encoding="utf-8") as file:
+                for record in _iter_user_log_records(file):
+                    parsed = _parse_user_log_line(record)
+                    if not parsed:
+                        logging.warning(f"Не удалось распарсить запись лога:\n{record}")
+                        continue
+                    if parsed["chat_id"] != target_chat_id:
+                        continue
 
-                text = parsed["text"].strip().replace("\n", " / ")
-                if not text:
-                    continue
+                    text = parsed["text"].strip().replace("\n", " / ")
+                    if not text:
+                        continue
 
-                formatted_message = (
-                    f"{_format_log_time(parsed['timestamp'])} "
-                    f"{_format_log_author(parsed['username'], parsed['full_name'])}: {text}"
-                )
-                if recent_messages and recent_messages[-1] == formatted_message:
-                    continue
-                recent_messages.append(formatted_message)
+                    formatted_message = (
+                        f"{_format_log_time(parsed['timestamp'])} "
+                        f"{_format_log_author(parsed['username'], parsed['full_name'])}: {text}"
+                    )
+                    if recent_messages and recent_messages[-1] == formatted_message:
+                        continue
+                    recent_messages.append(formatted_message)
     except Exception as e:
         logging.error(f"Ошибка при чтении последних сообщений чата {target_chat_id}: {e}")
         await message.reply("Не удалось прочитать сообщения. Возможно, я хуисос")

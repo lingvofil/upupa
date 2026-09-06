@@ -1,4 +1,5 @@
 from collections import deque
+import asyncio
 import random
 import logging
 import os
@@ -6,6 +7,7 @@ import re
 import httpx
 from aiogram.types import BufferedInputFile, Message
 from core.paths import USER_MESSAGES_LOG_PATH
+from core.history_store import get_history_repository
 from core.state import chat_settings
 
 # Кэш шаблонов для производительности
@@ -49,6 +51,12 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
         return reply_text
 
     log_path = USER_MESSAGES_LOG_PATH
+    repository = get_history_repository(log_path)
+    if repository is not None:
+        rows = repository.select(chat_id, limit=1000, min_chars=4, exclude_commands=True)
+        messages = [row["text"].strip() for row in reversed(rows)
+                    if not any(word in row["text"].lower() for word in ("мем", "meme"))][:50]
+        return random.choice(messages) if messages else "Где все?"
     if not os.path.exists(log_path):
         return "Когда логи пусты, как мой кошелек"
 
@@ -88,7 +96,7 @@ def get_context_text(chat_id: int, reply_text: str = None) -> str:
 
 async def create_meme_image(chat_id: int, reply_text: str = None) -> BufferedInputFile | None:
     """Формирует URL мема, скачивает его и возвращает файл"""
-    source_text = get_context_text(chat_id, reply_text)
+    source_text = await asyncio.to_thread(get_context_text, chat_id, reply_text)
     templates = await get_all_templates()
     template = random.choice(templates)
     tid = template.get("id", "drake")

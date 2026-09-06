@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Callable
@@ -60,10 +61,34 @@ def check_telegram(
     return result
 
 
+def check_process(*, timeout: float, port: int = 8766, expected_pid: int | None = None,
+                  opener: Callable = urlopen) -> dict:
+    request = Request(f"http://127.0.0.1:{port}/ready")
+    try:
+        with opener(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise HealthCheckError("Bot process readiness is unavailable or unhealthy") from None
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise HealthCheckError("Bot process is not ready")
+    checks = payload.get("checks")
+    if not isinstance(checks, dict) or any(
+        checks.get(name) is not True for name in ("polling", "databases", "background_tasks")
+    ):
+        raise HealthCheckError("Bot process readiness checks failed")
+    if type(payload.get("pid")) is not int or payload["pid"] <= 0:
+        raise HealthCheckError("Bot process returned an invalid PID")
+    if expected_pid is not None and (expected_pid <= 0 or payload["pid"] != expected_pid):
+        raise HealthCheckError("Readiness PID does not match the systemd service")
+    return payload
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-dir", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--port", type=int, default=int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766")))
+    parser.add_argument("--expected-pid", type=int, default=os.getenv("UPUPA_EXPECTED_PID"))
     parser.add_argument(
         "--api-base",
         default="https://api.telegram.org",
@@ -72,6 +97,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        process = check_process(timeout=args.timeout, port=args.port, expected_pid=args.expected_pid)
         token = load_api_token(args.app_dir)
         result = check_telegram(
             token,
@@ -83,7 +109,7 @@ def main() -> int:
         return 1
 
     print(
-        "healthcheck ok: telegram=getMe "
+        f"healthcheck ok: process_pid={process['pid']} polling=ok databases=ok tasks=ok telegram=getMe "
         f"bot_id={result['id']} username={result.get('username', 'unknown')}"
     )
     return 0

@@ -76,6 +76,7 @@ def test_settings_import_without_gemini_keys():
             sys.executable,
             "-c",
             (
+                "import sys; sys.modules['config_private'] = None; "
                 "from core import settings; "
                 "assert settings.GEMINI_KEYS_POOL == []; "
                 "assert settings.PRIMARY_GEMINI_KEY is None; "

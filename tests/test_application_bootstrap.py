@@ -129,17 +129,34 @@ def test_main_delegates_to_application_runner(monkeypatch):
 def test_application_run_executes_startup_and_shutdown(monkeypatch):
     events = []
 
+    class FakeSession:
+        def middleware(self, observer):
+            events.append(("middleware",))
+
+        async def close(self):
+            events.append(("close-session",))
+
     class FakeBot:
+        session = FakeSession()
+
         async def delete_webhook(self, *, drop_pending_updates):
             events.append(("delete_webhook", drop_pending_updates))
 
     class FakeDispatcher:
-        async def start_polling(self, bot, *, skip_updates):
+        async def start_polling(self, bot, *, skip_updates, close_bot_session):
+            assert close_bot_session is False
             events.append(("start_polling", bot, skip_updates))
 
     class FakeSupervisor:
         async def stop(self):
             events.append(("stop",))
+
+    class FakeReadiness:
+        async def start(self):
+            events.append(("ready-start",))
+
+        async def stop(self):
+            events.append(("ready-stop",))
 
     bot = FakeBot()
     application = UpupaApplication(
@@ -148,6 +165,7 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
         supervisor=FakeSupervisor(),
     )
     monkeypatch.setattr(application, "initialize_state", lambda: events.append(("state",)))
+    monkeypatch.setattr(application, "create_readiness_server", FakeReadiness)
     monkeypatch.setattr(
         application,
         "start_background_tasks",
@@ -161,12 +179,16 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
     asyncio.run(application.run())
 
     assert events == [
+        ("middleware",),
         ("state",),
         ("background",),
         ("dispatcher",),
         ("delete_webhook", True),
+        ("ready-start",),
         ("start_polling", bot, True),
+        ("ready-stop",),
         ("stop",),
+        ("close-session",),
     ]
 
 

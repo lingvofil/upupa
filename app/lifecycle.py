@@ -19,7 +19,7 @@ class TaskSupervisor:
 
     @property
     def task_names(self) -> tuple[str, ...]:
-        return tuple(sorted(task.get_name() for task in self._tasks))
+        return tuple(sorted(task.get_name() for task in self._tasks if not task.done()))
 
     def start(self, coro: Coroutine[Any, Any, Any], *, name: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=name)

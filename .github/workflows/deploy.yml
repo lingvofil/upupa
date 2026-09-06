@@ -13,9 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       DEPLOY_SHA: ${{ github.sha }}
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || '88.218.122.208' }}
@@ -83,12 +87,16 @@ jobs:
           run_healthcheck() {
             local script="$1"
             local attempt
-            for attempt in 1 2 3; do
+            local service_pid
+            # First successful long poll can take 30 seconds in an idle chat.
+            for attempt in {1..12}; do
+              service_pid="$(service_ctl show --property MainPID --value "$SERVICE")" || return 1
               if service_ctl is-active --quiet "$SERVICE" &&
-                 "$VENV_PYTHON" "$script" --app-dir "$APP_DIR" --timeout 10; then
+                 [[ "$service_pid" =~ ^[1-9][0-9]*$ ]] &&
+                 UPUPA_EXPECTED_PID="$service_pid" "$VENV_PYTHON" "$script" --app-dir "$APP_DIR" --timeout 10; then
                 return 0
               fi
-              echo "Healthcheck attempt ${attempt}/3 failed" >&2
+              echo "Healthcheck attempt ${attempt}/12 failed" >&2
               sleep 5
             done
             return 1
@@ -110,13 +118,24 @@ jobs:
               echo "Pre-deploy backup retained at ${BACKUP_DIR}" >&2
             fi
 
+            if ! git cat-file -e "${PREVIOUS_SHA}:infrastructure/persistence/sqlite_history.py" 2>/dev/null; then
+              service_ctl stop "$SERVICE"
+              "$VENV_PYTHON" "$APP_DIR/scripts/prepare_history_rollback.py" --app-dir "$APP_DIR"
+            fi
+            if ! git cat-file -e "${PREVIOUS_SHA}:infrastructure/persistence/sqlite_rank_counters.py" 2>/dev/null; then
+              service_ctl stop "$SERVICE"
+              "$VENV_PYTHON" "$APP_DIR/scripts/export_rank_counters.py" --app-dir "$APP_DIR"
+            fi
+
             set +e
             git reset --hard "$PREVIOUS_SHA"
             "$VENV_PYTHON" -m pip install \
               --disable-pip-version-check -r requirements.txt
             service_ctl restart "$SERVICE"
             sleep 5
-            run_healthcheck "$HEALTHCHECK_SCRIPT"
+            # Use the restored revision's contract, including legacy getMe-only
+            # healthchecks when rolling back the first readiness deployment.
+            run_healthcheck "$APP_DIR/scripts/production_healthcheck.py"
             local rollback_status=$?
             set -e
 
@@ -143,8 +162,12 @@ jobs:
           DEPLOY_TMP_DIR="$(mktemp -d /tmp/upupa-deploy.XXXXXX)"
           BACKUP_SCRIPT="$DEPLOY_TMP_DIR/backup_runtime_state.py"
           HEALTHCHECK_SCRIPT="$DEPLOY_TMP_DIR/production_healthcheck.py"
+          HISTORY_INDEX_SCRIPT="$DEPLOY_TMP_DIR/index_history.py"
+          HISTORY_INDEX_MODULE="$DEPLOY_TMP_DIR/sqlite_history.py"
           git show "${TARGET_SHA}:scripts/backup_runtime_state.py" > "$BACKUP_SCRIPT"
           git show "${TARGET_SHA}:scripts/production_healthcheck.py" > "$HEALTHCHECK_SCRIPT"
+          git show "${TARGET_SHA}:scripts/index_history.py" > "$HISTORY_INDEX_SCRIPT"
+          git show "${TARGET_SHA}:infrastructure/persistence/sqlite_history.py" > "$HISTORY_INDEX_MODULE"
 
           BACKUP_DIR="$(
             "$VENV_PYTHON" "$BACKUP_SCRIPT" \
@@ -155,6 +178,11 @@ jobs:
           [[ -d "$BACKUP_DIR" ]]
           [[ -f "$BACKUP_DIR/manifest.json" ]]
           echo "Runtime backup created at ${BACKUP_DIR}"
+
+          # Stdlib-only target adapter: build the derived index while the old
+          # bot is still serving. Interrupted imports resume from checkpoints.
+          "$VENV_PYTHON" "$HISTORY_INDEX_SCRIPT" --app-dir "$APP_DIR" \
+            --repository-module "$HISTORY_INDEX_MODULE"
 
           git reset --hard "$TARGET_SHA"
           CODE_SWITCHED=1
