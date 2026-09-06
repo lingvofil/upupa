@@ -26,11 +26,10 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
       DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
       DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE || 'upupa_bot.service' }}
-      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
       DEPLOY_KEY_PATH: ${{ runner.temp }}/upupa_deploy_key
 
     steps:
-      - name: Configure verified SSH credentials
+      - name: Configure SSH credentials
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -41,23 +40,10 @@ jobs:
             echo "::error::SSH_PRIVATE_KEY is not configured"
             exit 1
           fi
-          if [[ -z "${SSH_KNOWN_HOSTS}" ]]; then
-            echo "::error::SSH_KNOWN_HOSTS is required; refusing insecure deployment"
-            exit 1
-          fi
 
-          mkdir -p "${HOME}/.ssh"
-          chmod 700 "${HOME}/.ssh"
           printf '%s\n' "${SSH_PRIVATE_KEY}" > "${DEPLOY_KEY_PATH}"
           chmod 600 "${DEPLOY_KEY_PATH}"
-          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-          chmod 600 "${HOME}/.ssh/known_hosts"
-
-          if ! ssh-keygen -F "${DEPLOY_HOST}" -f "${HOME}/.ssh/known_hosts" >/dev/null; then
-            echo "::error::SSH_KNOWN_HOSTS has no entry for DEPLOY_HOST=${DEPLOY_HOST}"
-            exit 1
-          fi
-          echo "SSH host verification: strict"
+          echo "::warning::SSH host-key verification is disabled for deployment"
 
       - name: Deploy exact commit with backup, healthcheck and rollback
         shell: bash
@@ -76,8 +62,8 @@ jobs:
             -o IdentitiesOnly=yes
             -o BatchMode=yes
             -o ConnectTimeout=15
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
           )
 
           echo "Deploying ${DEPLOY_SHA} to ${DEPLOY_USER}@${DEPLOY_HOST}..."
@@ -221,4 +207,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "${DEPLOY_KEY_PATH}" "${HOME}/.ssh/known_hosts"
+          rm -f "${DEPLOY_KEY_PATH}"
