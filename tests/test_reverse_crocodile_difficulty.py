@@ -28,6 +28,23 @@ def test_reverse_crocodile_has_three_disjoint_single_word_difficulty_pools():
     assert normalized["medium"].isdisjoint(normalized["hard"])
 
 
+def test_reverse_crocodile_pools_are_shifted_away_from_trivial_objects():
+    from games import crocodile
+    from games.reverse_crocodile_words import WORD_POOLS
+
+    all_words = {
+        crocodile._normalize_guess(word)
+        for pool in WORD_POOLS.values()
+        for word in pool
+    }
+    for trivial in ("кошка", "мяч", "ложка", "морковь", "лимон", "диван"):
+        assert crocodile._normalize_guess(trivial) not in all_words
+
+    assert "Лабиринт" in WORD_POOLS["easy"]
+    assert "Гравитация" in WORD_POOLS["medium"]
+    assert "Парадокс" in WORD_POOLS["hard"]
+
+
 def test_reverse_crocodile_difficulty_buttons_and_replay_keep_level():
     from games import reverse_crocodile as reverse
 
