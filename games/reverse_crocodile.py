@@ -212,28 +212,37 @@ def _has_next_hint(session: dict) -> bool:
     return bool(_remaining_reveal_positions(session))
 
 
-def _make_next_hint(session: dict) -> str | None:
-    """Length, first letter, then one new random letter per hint without revealing all."""
+def _prepare_next_hint(session: dict) -> tuple[str | None, int | None]:
+    """Prepare the next hint without mutating progressive reveal state."""
     word = session["word"]
     hint_number = int(session.get("hints", 0)) + 1
     if hint_number == 1:
-        return f"💡 В слове {len(word)} букв(ы)."
+        return f"💡 В слове {len(word)} букв(ы).", None
     if hint_number == 2:
-        return f"💡 Начинается на «{word[0].upper()}»."
+        return f"💡 Начинается на «{word[0].upper()}».", None
 
     positions = _remaining_reveal_positions(session)
     if not positions:
-        return None
+        return None, None
+    new_position = random.choice(positions)
     revealed = set(session.get("revealed_positions", ()))
-    revealed.add(random.choice(positions))
-    session["revealed_positions"] = revealed
-    visible = {0, *revealed}
+    visible = {0, *revealed, new_position}
     masked = " ".join(
         letter.upper() if index in visible else "▪️"
         for index, letter in enumerate(word)
         if not letter.isspace()
     )
-    return f"💡 Ещё одна буква: {masked}"
+    return f"💡 Ещё одна буква: {masked}", new_position
+
+
+def _make_next_hint(session: dict) -> str | None:
+    """Build and commit one hint; useful for deterministic state-level tests."""
+    hint, new_position = _prepare_next_hint(session)
+    if hint and new_position is not None:
+        revealed = set(session.get("revealed_positions", ()))
+        revealed.add(new_position)
+        session["revealed_positions"] = revealed
+    return hint
 
 
 def _surrender_remaining_seconds(session: dict, *, now: float | None = None) -> int:
@@ -289,10 +298,14 @@ async def _send_next_hint(chat_id: str, session: dict) -> bool:
     async with lock:
         if games.get(chat_id) is not session or not _has_next_hint(session):
             return False
-        hint = _make_next_hint(session)
+        hint, new_position = _prepare_next_hint(session)
         if not hint:
             return False
         await bot.send_message(int(chat_id), hint)
+        if new_position is not None:
+            revealed = set(session.get("revealed_positions", ()))
+            revealed.add(new_position)
+            session["revealed_positions"] = revealed
         session["hints"] = int(session.get("hints", 0)) + 1
         return True
 
