@@ -17,6 +17,7 @@ from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 
 dnd_router = Router()
+
 dnd_sessions = {}
 poll_map = {}
 
@@ -797,21 +798,19 @@ async def handle_roll(message: Message):
     session.pending_roll = None
     persist_dnd_sessions()
 
-    result_lines = [
-        f"🎲 {message.from_user.first_name} — {_roll_type_label(roll_type)}",
-        f"📌 {reason}",
-    ]
-    roll_line = f"🎯 d20: {_format_roll_dice(rolls, result)}"
+    result_line = (
+        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {reason}"
+    )
+    roll_summary = _format_roll_dice(rolls, result)
     if dc is not None:
-        roll_line += f" · DC {dc}"
-    result_lines.append(roll_line)
-    if mode != "NORMAL":
-        result_lines.append(f"⚖️ {_roll_mode_label(mode).capitalize()}")
+        roll_summary += f" против {dc}"
     if outcome:
-        result_lines.append("✅ Успех" if outcome == "успех" else "❌ Провал")
+        roll_summary += " — ✅ успех" if outcome == "успех" else " — ❌ провал"
+    if mode != "NORMAL":
+        roll_summary += f" · {_roll_mode_label(mode)}"
     if natural_note:
-        result_lines.append(f"✨ {natural_note.capitalize()}")
-    await message.answer("\n".join(result_lines))
+        roll_summary += f" · {natural_note}"
+    await message.answer(f"{result_line}\n🎯 {roll_summary}")
 
     prompt_parts = [
         f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()}: {reason}.",
