@@ -25,6 +25,7 @@ DND_MODEL_TIMEOUT_SECONDS = 90
 DND_POLL_TIMEOUT_SECONDS = 300
 DND_ACTION_WINDOW_SECONDS = 180
 DND_RECENT_SCENE_LIMIT = 2
+DND_MAX_ROLL_DC = 17
 DND_SCENE_TYPES = (
     "исследование",
     "социальная сцена",
@@ -35,6 +36,27 @@ DND_SCENE_TYPES = (
     "конфликт",
     "сюжетный поворот",
 )
+DND_ROLL_SKILLS = (
+    "Акробатика",
+    "Атлетика",
+    "Внимательность",
+    "Выживание",
+    "Дрессировка",
+    "Запугивание",
+    "Исполнение",
+    "История",
+    "Ловкость рук",
+    "Магия",
+    "Медицина",
+    "Обман",
+    "Природа",
+    "Проницательность",
+    "Расследование",
+    "Религия",
+    "Скрытность",
+    "Убеждение",
+)
+_DND_ROLL_SKILLS_BY_KEY = {skill.casefold(): skill for skill in DND_ROLL_SKILLS}
 
 _task_supervisor = None
 _finalizing_polls = set()
@@ -54,12 +76,26 @@ DND_SYSTEM_PROMPT = """
    ради него: это творческое ограничение, а не команда резко телепортировать сюжет.
 4. Не зацикливайся на одинаковой структуре ходов: чередуй способы подачи, конфликты,
    взаимодействие с окружением и последствия действий игроков.
-5. Используй броски только когда исход действительно неопределён и важен. Выбирай разумную
-   сложность DC от 5 до 30. Преимущество или помеху назначай только когда это следует из ситуации,
-   подготовки, позиции, помощи, состояния или окружения; не раздавай их каждому броску.
-6. Не используй характеристики, навыки, модификаторы, бонусы персонажей или листы персонажей.
-   Бросок описывается только тем, что происходит в сюжете: например «перепрыгнуть провал» или
-   «не отравиться дымом».
+5. Используй броски только когда исход действительно неопределён и важен. Здесь бросается чистый
+   d20 БЕЗ модификаторов, поэтому не завышай сложность. Калибруй DC так:
+   6–8 — легко; 9–10 — обычно; 11–12 — заметная трудность; 13–14 — сложно;
+   15–16 — очень сложно; 17 — исключительная, редкая ситуация. DC 18–20 не назначай:
+   без модификаторов они слишком суровы для этой упрощённой системы.
+6. TYPE:CHECK — основной тип броска. Используй его для активных действий игрока: искать,
+   замечать, расследовать, красться, убеждать, обманывать, запугивать, карабкаться, прыгать,
+   вскрывать, выслеживать, вспоминать знания и т.п. TYPE:SAVE используй ТОЛЬКО когда персонаж
+   реактивно сопротивляется уже возникшей опасности или эффекту: яд, обвал, падение, взрыв,
+   потеря равновесия и подобное. Не делай спасброском обычную попытку что-то сделать или узнать.
+7. Для CHECK по возможности указывай SKILL — смысловую категорию проверки. Допустимые значения:
+   Акробатика, Атлетика, Внимательность, Выживание, Дрессировка, Запугивание, Исполнение,
+   История, Ловкость рук, Магия, Медицина, Обман, Природа, Проницательность, Расследование,
+   Религия, Скрытность, Убеждение. SKILL нужен только для разнообразия и понятного названия
+   броска; он НЕ даёт бонусов и не требует листа персонажа. Если подходящего навыка нет, SKILL
+   можно не указывать.
+8. Не используй характеристики, модификаторы, бонусы персонажей или листы персонажей.
+   REASON описывает конкретное действие или опасность в текущей сцене.
+9. Преимущество или помеху назначай только когда это прямо следует из подготовки, позиции,
+   помощи, состояния или окружения; не раздавай их каждому броску.
 
 ФОРМАТ ТЕХНИЧЕСКИХ ТЕГОВ (В конце сообщения):
 
@@ -67,15 +103,22 @@ DND_SYSTEM_PROMPT = """
 [ACTION:POLL;OPTIONS:Вариант 1;Вариант 2;Вариант 3]
 (Максимум 4 варианта).
 
-Если нужен обычный сюжетный бросок:
-[ACTION:ROLL;TYPE:CHECK;REASON:перепрыгнуть провал;DC:12;MODE:NORMAL]
+Проверка внимательности:
+[ACTION:ROLL;TYPE:CHECK;SKILL:Внимательность;REASON:заметить движение в темноте;DC:10;MODE:NORMAL]
 
-Если персонаж сопротивляется опасности, эффекту, яду, падению, заклинанию и т.п. — спасбросок:
-[ACTION:ROLL;TYPE:SAVE;REASON:не отравиться дымом;DC:14;MODE:DISADVANTAGE]
+Проверка расследования:
+[ACTION:ROLL;TYPE:CHECK;SKILL:Расследование;REASON:понять, как открывается тайник;DC:12;MODE:NORMAL]
+
+Проверка скрытности:
+[ACTION:ROLL;TYPE:CHECK;SKILL:Скрытность;REASON:тихо пройти мимо охраны;DC:11;MODE:ADVANTAGE]
+
+Спасбросок — только реакция на уже возникшую опасность:
+[ACTION:ROLL;TYPE:SAVE;REASON:успеть отскочить от обвала;DC:11;MODE:DISADVANTAGE]
 
 TYPE: CHECK или SAVE.
+SKILL: один из перечисленных навыков и только для CHECK; для SAVE не указывай.
 MODE: NORMAL, ADVANTAGE или DISADVANTAGE.
-REASON: коротко опиши, что именно сейчас пытается сделать или пережить персонаж, без характеристик.
+REASON: коротко опиши, что именно сейчас пытается сделать или пережить персонаж.
 При ADVANTAGE бросаются два d20 и берётся больший, при DISADVANTAGE — меньший.
 Если преимущество/помеха не нужны, ставь NORMAL. Результат сравнивается с DC как чистый d20.
 
@@ -85,6 +128,12 @@ REASON: коротко опиши, что именно сейчас пытает
 Если игрок попросил завершить игру, опиши гибель и закончи тегом:
 [ACTION:END]
 """
+
+
+def _normalize_roll_skill(value) -> str | None:
+    if not value:
+        return None
+    return _DND_ROLL_SKILLS_BY_KEY.get(str(value).strip().casefold())
 
 
 def configure_task_supervisor(supervisor):
@@ -209,8 +258,14 @@ class GameSession:
         session.last_roll_stat = record.get("last_roll_stat")
         raw_roll = record.get("pending_roll") or None
         if raw_roll:
+            raw_type = raw_roll.get("type", "CHECK")
             session.pending_roll = {
-                "type": raw_roll.get("type", "CHECK"),
+                "type": raw_type,
+                "skill": (
+                    _normalize_roll_skill(raw_roll.get("skill"))
+                    if raw_type == "CHECK"
+                    else None
+                ),
                 "reason": raw_roll.get("reason") or "проверка по ситуации",
                 "dc": raw_roll.get("dc"),
                 "mode": raw_roll.get("mode", "NORMAL"),
@@ -218,6 +273,7 @@ class GameSession:
         elif session.state == "WAITING_ROLL":
             session.pending_roll = {
                 "type": "CHECK",
+                "skill": None,
                 "reason": "проверка по ситуации",
                 "dc": None,
                 "mode": "NORMAL",
@@ -434,6 +490,8 @@ def _parse_roll_command(command_str: str) -> dict:
     if roll_type not in {"CHECK", "SAVE"}:
         roll_type = "CHECK"
 
+    skill = _normalize_roll_skill(fields.get("SKILL")) if roll_type == "CHECK" else None
+
     mode = fields.get("MODE", "NORMAL").upper()
     mode_aliases = {
         "ADV": "ADVANTAGE",
@@ -448,12 +506,13 @@ def _parse_roll_command(command_str: str) -> dict:
     dc = None
     if "DC" in fields:
         try:
-            dc = max(5, min(30, int(fields["DC"])))
+            dc = max(5, min(DND_MAX_ROLL_DC, int(fields["DC"])))
         except (TypeError, ValueError):
             dc = None
 
     return {
         "type": roll_type,
+        "skill": skill,
         "reason": fields.get("REASON") or "проверка по ситуации",
         "dc": dc,
         "mode": mode,
@@ -473,8 +532,10 @@ def _roll_d20(mode: str) -> tuple[list[int], int]:
     return [first], first
 
 
-def _roll_type_label(roll_type: str) -> str:
-    return "Спасбросок" if roll_type == "SAVE" else "Бросок"
+def _roll_type_label(roll_type: str, skill: str | None = None) -> str:
+    if roll_type == "SAVE":
+        return "Спасбросок"
+    return skill or "Бросок"
 
 
 def _roll_mode_label(mode: str) -> str:
@@ -575,7 +636,9 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
         session.pending_actions = {}
         session.action_deadline = None
         persist_dnd_sessions()
-        details = [f"🎲 {_roll_type_label(roll['type'])}: {roll['reason']}"]
+        details = [
+            f"🎲 {_roll_type_label(roll['type'], roll.get('skill'))}: {roll['reason']}"
+        ]
         if roll["dc"] is not None:
             details.append(f"DC {roll['dc']}")
         if roll["mode"] != "NORMAL":
@@ -833,12 +896,14 @@ async def handle_roll(message: Message):
 
     roll = session.pending_roll or {
         "type": "CHECK",
+        "skill": None,
         "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
     }
     rolls, result = _roll_d20(roll.get("mode", "NORMAL"))
     roll_type = roll.get("type", "CHECK")
+    skill = _normalize_roll_skill(roll.get("skill")) if roll_type == "CHECK" else None
     reason = roll.get("reason") or "проверка по ситуации"
     dc = roll.get("dc")
     mode = roll.get("mode", "NORMAL")
@@ -849,9 +914,8 @@ async def handle_roll(message: Message):
     session.pending_roll = None
     persist_dnd_sessions()
 
-    result_lines = [
-        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {reason}"
-    ]
+    roll_label = _roll_type_label(roll_type, skill)
+    result_lines = [f"🎲 {message.from_user.first_name}: {roll_label} — {reason}"]
     if dc is not None:
         difficulty_line = f"⚙️ Сложность — {dc}"
         if mode == "ADVANTAGE":
@@ -873,8 +937,14 @@ async def handle_roll(message: Message):
     result_lines.append(roll_line)
     await message.answer("\n".join(result_lines))
 
+    if roll_type == "SAVE":
+        prompt_roll_label = "спасбросок"
+    elif skill:
+        prompt_roll_label = f"проверку навыка «{skill}»"
+    else:
+        prompt_roll_label = "проверку"
     prompt_parts = [
-        f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()}: {reason}.",
+        f"Игрок {message.from_user.first_name} сделал {prompt_roll_label}: {reason}.",
         f"Режим: {_roll_mode_label(mode)}.",
         f"Броски d20: {rolls}; итог: {result}.",
     ]
