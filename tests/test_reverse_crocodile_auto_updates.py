@@ -29,21 +29,22 @@ def test_minute_tick_sends_hint_then_bumps_round(monkeypatch):
     chat_id = "-100"
     session = _session()
     reverse.games[chat_id] = session
-    send_message = AsyncMock()
     delete_message = AsyncMock()
-    send_photo = AsyncMock(return_value=SimpleNamespace(message_id=20))
-    monkeypatch.setattr(reverse.bot, "send_message", send_message)
+    fake_bot = SimpleNamespace(
+        send_message=AsyncMock(),
+        send_photo=AsyncMock(return_value=SimpleNamespace(message_id=20)),
+    )
+    monkeypatch.setattr(reverse, "bot", fake_bot)
     monkeypatch.setattr(reverse.crocodile_game, "_safe_delete_message", delete_message)
-    monkeypatch.setattr(reverse.bot, "send_photo", send_photo)
 
     try:
         assert asyncio.run(reverse._run_round_tick(chat_id, session)) is True
         assert session["hints"] == 1
-        send_message.assert_awaited_once_with(-100, "💡 В слове 3 букв(ы).")
+        fake_bot.send_message.assert_awaited_once_with(-100, "💡 В слове 3 букв(ы).")
         delete_message.assert_awaited_once_with(-100, 10)
-        send_photo.assert_awaited_once()
-        assert send_photo.await_args.kwargs["chat_id"] == -100
-        assert send_photo.await_args.kwargs["reply_markup"] == reverse._keyboard(chat_id)
+        fake_bot.send_photo.assert_awaited_once()
+        assert fake_bot.send_photo.await_args.kwargs["chat_id"] == -100
+        assert fake_bot.send_photo.await_args.kwargs["reply_markup"] == reverse._keyboard(chat_id)
         assert session["message_id"] == 20
     finally:
         reverse.games.pop(chat_id, None)
@@ -55,18 +56,19 @@ def test_bump_continues_after_all_automatic_hints(monkeypatch):
     chat_id = "-100"
     session = _session(hints=reverse.MAX_HINTS)
     reverse.games[chat_id] = session
-    send_message = AsyncMock()
     delete_message = AsyncMock()
-    send_photo = AsyncMock(return_value=SimpleNamespace(message_id=30))
-    monkeypatch.setattr(reverse.bot, "send_message", send_message)
+    fake_bot = SimpleNamespace(
+        send_message=AsyncMock(),
+        send_photo=AsyncMock(return_value=SimpleNamespace(message_id=30)),
+    )
+    monkeypatch.setattr(reverse, "bot", fake_bot)
     monkeypatch.setattr(reverse.crocodile_game, "_safe_delete_message", delete_message)
-    monkeypatch.setattr(reverse.bot, "send_photo", send_photo)
 
     try:
         assert asyncio.run(reverse._run_round_tick(chat_id, session)) is True
-        send_message.assert_not_awaited()
+        fake_bot.send_message.assert_not_awaited()
         delete_message.assert_awaited_once_with(-100, 10)
-        send_photo.assert_awaited_once()
+        fake_bot.send_photo.assert_awaited_once()
         assert session["message_id"] == 30
     finally:
         reverse.games.pop(chat_id, None)
@@ -82,7 +84,7 @@ def test_finishing_round_cancels_minute_loop(monkeypatch):
         task = asyncio.create_task(asyncio.Event().wait())
         session["round_task"] = task
         reverse.games[chat_id] = session
-        monkeypatch.setattr(reverse.bot, "send_message", AsyncMock())
+        monkeypatch.setattr(reverse, "bot", SimpleNamespace(send_message=AsyncMock()))
         monkeypatch.setattr(reverse, "format_leaderboard", lambda *_args: "board")
         await reverse._finish_game(chat_id, "done")
         assert task.cancelled()
