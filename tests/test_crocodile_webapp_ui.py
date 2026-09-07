@@ -30,6 +30,7 @@ def test_crocodile_webapp_tolerates_partial_telegram_api():
 
     assert "window.Telegram && window.Telegram.WebApp" in source
     assert 'typeof tg.expand === "function"' in source
+    assert 'typeof tg.disableVerticalSwipes === "function"' in source
     assert 'typeof tg.ready === "function"' in source
     assert 'getHashParam("tgWebAppData")' in source
     assert "showTelegramAlert" in source
