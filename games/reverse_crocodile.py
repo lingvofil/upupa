@@ -34,7 +34,7 @@ IMAGE_STYLE = (
     "этикеток, логотипов или водяных знаков. Если предмет обычно содержит надпись, оставь это место пустым. "
 )
 
-MAX_HINTS = 3
+BASE_HINT_STAGES = 2
 SURRENDER_DELAY_SECONDS = 5 * 60
 ROUND_REFRESH_INTERVAL_SECONDS = 60
 
@@ -194,21 +194,46 @@ async def _generate_word_image(word: str, chat_id: str) -> bytes | None:
     return None
 
 
-def _make_hint(word: str, hint_number: int) -> str:
-    """1 — длина, 2 — первая буква, 3 — половина букв."""
+def _remaining_reveal_positions(session: dict) -> list[int]:
+    """Positions eligible for the progressive stage while keeping one letter hidden."""
+    word = session["word"]
+    revealed = set(session.get("revealed_positions", ()))
+    candidates = [
+        index
+        for index in range(1, len(word))
+        if not word[index].isspace() and index not in revealed
+    ]
+    return candidates if len(candidates) > 1 else []
+
+
+def _has_next_hint(session: dict) -> bool:
+    if int(session.get("hints", 0)) < BASE_HINT_STAGES:
+        return True
+    return bool(_remaining_reveal_positions(session))
+
+
+def _make_next_hint(session: dict) -> str | None:
+    """Length, first letter, then one new random letter per hint without revealing all."""
+    word = session["word"]
+    hint_number = int(session.get("hints", 0)) + 1
     if hint_number == 1:
         return f"💡 В слове {len(word)} букв(ы)."
     if hint_number == 2:
         return f"💡 Начинается на «{word[0].upper()}»."
-    letters = list(word)
-    positions = [i for i in range(1, len(letters)) if letters[i] != " "]
-    random.shuffle(positions)
-    hidden = set(positions[: max(1, len(positions) // 2)])
+
+    positions = _remaining_reveal_positions(session)
+    if not positions:
+        return None
+    revealed = set(session.get("revealed_positions", ()))
+    revealed.add(random.choice(positions))
+    session["revealed_positions"] = revealed
+    visible = {0, *revealed}
     masked = " ".join(
-        "▪️" if i in hidden else letters[i].upper()
-        for i in range(len(letters))
+        letter.upper() if index in visible else "▪️"
+        for index, letter in enumerate(word)
+        if not letter.isspace()
     )
-    return f"💡 Ладно, держите: {masked}"
+    return f"💡 Ещё одна буква: {masked}"
 
 
 def _surrender_remaining_seconds(session: dict, *, now: float | None = None) -> int:
@@ -262,12 +287,13 @@ async def _send_next_hint(chat_id: str, session: dict) -> bool:
         session["hint_lock"] = lock
 
     async with lock:
-        if games.get(chat_id) is not session or session.get("hints", 0) >= MAX_HINTS:
+        if games.get(chat_id) is not session or not _has_next_hint(session):
             return False
-        hint_number = int(session.get("hints", 0)) + 1
-        hint = _make_hint(session["word"], hint_number)
+        hint = _make_next_hint(session)
+        if not hint:
+            return False
         await bot.send_message(int(chat_id), hint)
-        session["hints"] = hint_number
+        session["hints"] = int(session.get("hints", 0)) + 1
         return True
 
 
@@ -276,7 +302,7 @@ async def _run_round_tick(chat_id: str, session: dict) -> bool:
     if games.get(chat_id) is not session:
         return False
 
-    if session.get("hints", 0) < MAX_HINTS:
+    if _has_next_hint(session):
         try:
             await _send_next_hint(chat_id, session)
         except asyncio.CancelledError:
@@ -336,6 +362,7 @@ async def start_game(message: types.Message, difficulty: str = "medium"):
         "word": word,
         "difficulty": difficulty,
         "hints": 0,
+        "revealed_positions": set(),
         "image": image,
         "message_id": None,
         "round_task": None,
@@ -396,7 +423,7 @@ async def handle_callback(cb: types.CallbackQuery):
         return
 
     if data.startswith("rcroc_hint_"):
-        if session["hints"] >= MAX_HINTS:
+        if not _has_next_hint(session):
             await cb.answer("Хватит с вас подсказок, думайте!", show_alert=True)
             return
         await cb.answer()
