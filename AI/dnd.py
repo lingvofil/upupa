@@ -798,19 +798,29 @@ async def handle_roll(message: Message):
     session.pending_roll = None
     persist_dnd_sessions()
 
-    result_parts = [
-        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {reason}",
-        f"d20: {_format_roll_dice(rolls, result)}",
+    result_lines = [
+        f"🎲 {message.from_user.first_name}: {_roll_type_label(roll_type)} — {reason}"
     ]
-    if mode != "NORMAL":
-        result_parts.append(_roll_mode_label(mode))
     if dc is not None:
-        result_parts.append(f"DC {dc}")
-    if outcome:
-        result_parts.append("✅ успех" if outcome == "успех" else "❌ провал")
+        difficulty_line = f"⚙️ Сложность — {dc}"
+        if mode == "ADVANTAGE":
+            difficulty_line += " (с преимуществом)"
+        elif mode == "DISADVANTAGE":
+            difficulty_line += " (с помехой)"
+        result_lines.append(difficulty_line + ".")
+    elif mode == "ADVANTAGE":
+        result_lines.append("⚙️ Бросок с преимуществом.")
+    elif mode == "DISADVANTAGE":
+        result_lines.append("⚙️ Бросок с помехой.")
+
+    if len(rolls) == 1:
+        roll_line = f"🎯 Бросок кубика — {result}"
+    else:
+        roll_line = f"🎯 Броски кубика — {rolls[0]} и {rolls[1]}, результат — {result}"
     if natural_note:
-        result_parts.append(f"🎯 {natural_note}")
-    await message.answer(" | ".join(result_parts))
+        roll_line += f" ({natural_note})"
+    result_lines.append(roll_line)
+    await message.answer("\n".join(result_lines))
 
     prompt_parts = [
         f"Игрок {message.from_user.first_name} сделал {_roll_type_label(roll_type).lower()}: {reason}.",
