@@ -187,10 +187,13 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
 
     assert session.state == "RESOLVING"
     assert session.pending_roll is None
-    assert "выдержать действие яда" in message.answers[0][0]
-    assert "5 и 18 → 18" in message.answers[0][0]
-    assert "✅ успех" in message.answers[0][0]
-    assert "преимущество" in message.answers[0][0]
+    assert message.answers[0][0] == (
+        "🎲 Алиса — Спасбросок\n"
+        "📌 выдержать действие яда\n"
+        "🎯 d20: 5 и 18 → 18 · DC 12\n"
+        "⚖️ Преимущество\n"
+        "✅ Успех"
+    )
     assert "DC: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
     assert parsed == [(message.bot, chat_id, "продолжение [ACTION:INPUT]")]
