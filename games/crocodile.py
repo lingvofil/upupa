@@ -236,11 +236,23 @@ def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игро�
     return "\n".join(lines)
 
 
-async def _safe_delete_message(chat_id: int, message_id: int):
+async def _safe_delete_message(chat_id: int, message_id: int) -> bool:
+    """Удалить сообщение и сообщить, можно ли безопасно публиковать замену."""
     try:
         await bot.delete_message(chat_id, message_id)
-    except Exception:
-        pass
+        return True
+    except Exception as e:
+        # Если сообщение уже исчезло, замена всё равно безопасна. Любая другая
+        # ошибка удаления означает, что старое превью могло остаться в чате.
+        if "message to delete not found" in str(e).lower():
+            return True
+        logging.warning(
+            "[crocodile] failed to delete message chat=%s message=%s: %s",
+            chat_id,
+            message_id,
+            e,
+        )
+        return False
 
 
 async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, caption: str):
@@ -258,6 +270,15 @@ async def _safe_edit_media(chat_id: int, message_id: int, image_bytes: bytes, ca
     except Exception as e:
         if "message is not modified" not in str(e).lower():
             logging.warning(f"Edit media error: {e}")
+
+
+def _preview_replace_lock(session: dict) -> asyncio.Lock:
+    """Один lock на сессию, чтобы два bump-а не заменяли превью параллельно."""
+    lock = session.get("_preview_replace_lock")
+    if lock is None:
+        lock = asyncio.Lock()
+        session["_preview_replace_lock"] = lock
+    return lock
 
 
 async def _ensure_session(chat_id: str) -> Optional[dict]:
@@ -311,6 +332,44 @@ async def _stop_session(chat_id: str, reason: str = ""):
     logging.info(f"[crocodile] session stopped chat={cid} reason={reason}")
 
 
+async def _bump_preview_once(chat_id: str, session: dict) -> bool:
+    """Поднять одно превью без риска оставить рядом старую копию."""
+    cid = str(chat_id)
+    async with _preview_replace_lock(session):
+        if game_sessions.get(cid) is not session:
+            return False
+
+        img = session.get("last_preview_bytes")
+        if not img:
+            return False
+
+        old_mid = session.get("preview_message_id")
+        if old_mid:
+            deleted = await _safe_delete_message(int(cid), int(old_mid))
+            if not deleted:
+                logging.warning(
+                    "[crocodile] preview bump skipped to avoid duplicate "
+                    "chat=%s message=%s",
+                    cid,
+                    old_mid,
+                )
+                return False
+
+        # Пока ждали Telegram, раунд мог завершиться или смениться.
+        if game_sessions.get(cid) is not session:
+            return False
+
+        msg = await bot.send_photo(
+            int(cid),
+            BufferedInputFile(img, "preview.jpg"),
+            caption=f"🎨 *Рисует:* {session.get('drawer_name','Player')}",
+            parse_mode="Markdown",
+        )
+        session["preview_message_id"] = msg.message_id
+        session["last_preview_time"] = time.time()
+        return True
+
+
 async def _bump_loop(chat_id: str):
     if not BUMP_INTERVAL or BUMP_INTERVAL <= 0:
         return
@@ -321,20 +380,13 @@ async def _bump_loop(chat_id: str):
             sess = game_sessions.get(cid)
             if not sess:
                 return
-            img = sess.get("last_preview_bytes")
-            if not img:
-                continue
-            old_mid = sess.get("preview_message_id")
-            if old_mid:
-                await _safe_delete_message(int(cid), int(old_mid))
-            msg = await bot.send_photo(
-                int(cid),
-                BufferedInputFile(img, "preview.jpg"),
-                caption=f"🎨 *Рисует:* {sess.get('drawer_name','Player')}",
-                parse_mode="Markdown",
-            )
-            sess["preview_message_id"] = msg.message_id
-            sess["last_preview_time"] = time.time()
+            try:
+                await _bump_preview_once(cid, sess)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Одиночный сбой Telegram не должен навсегда убивать bump-задачу.
+                logging.exception("[bump_loop] preview bump failed chat=%s", cid)
     except asyncio.CancelledError:
         return
     except Exception as e:
