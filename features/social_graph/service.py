@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from typing import Protocol, Sequence
 
 from aiogram import BaseMiddleware
@@ -19,6 +20,7 @@ MENTION_WEIGHT = 2.0
 REACTION_WEIGHT = 1.0
 DEFAULT_PERIOD_DAYS = 30
 RETENTION_DAYS = 90
+_USERNAME_TAG_RE = re.compile(r"\s+\(@[A-Za-z0-9_]+\)$")
 
 
 class SocialGraphRepository(Protocol):
@@ -95,11 +97,11 @@ def _is_group(chat_type) -> bool:
 
 
 def _display_name(user) -> str:
-    full_name = getattr(user, "full_name", None) or getattr(user, "first_name", None) or "Участник"
-    username = getattr(user, "username", None)
-    if username:
-        return f"{full_name} (@{username})"
-    return full_name
+    return getattr(user, "full_name", None) or getattr(user, "first_name", None) or "Участник"
+
+
+def _without_username_tag(display_name: str) -> str:
+    return _USERNAME_TAG_RE.sub("", display_name).strip() or "Участник"
 
 
 def _participant(user) -> tuple[int, str, str | None]:
@@ -200,7 +202,8 @@ async def capture_reaction(update: MessageReactionUpdated) -> bool:
 async def get_graph_data(chat_id: int, *, period_days: int = DEFAULT_PERIOD_DAYS) -> SocialGraphData:
     since = datetime.now(timezone.utc) - timedelta(days=period_days)
     interactions, names = await asyncio.to_thread(_repository().load_graph, chat_id, since)
-    return SocialGraphData(tuple(interactions), names, period_days)
+    clean_names = {user_id: _without_username_tag(name) for user_id, name in names.items()}
+    return SocialGraphData(tuple(interactions), clean_names, period_days)
 
 
 class SocialInteractionMiddleware(BaseMiddleware):
