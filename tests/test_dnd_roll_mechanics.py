@@ -189,7 +189,8 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
     assert session.pending_roll is None
     assert message.answers[0][0] == (
         "🎲 Алиса: Спасбросок — выдержать действие яда\n"
-        "🎯 5 и 18 → 18 против 12 — ✅ успех · преимущество"
+        "⚙️ Сложность — 12 (с преимуществом).\n"
+        "🎯 Броски кубика — 5 и 18, результат — 18"
     )
     assert "DC: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
@@ -231,11 +232,53 @@ def test_handle_roll_simplifies_normal_failure_summary(monkeypatch):
 
     assert message.answers[0][0] == (
         "🎲 Alina: Спасбросок — успеть выбежать из рушащегося здания\n"
-        "🎯 2 против 12 — ❌ провал"
+        "⚙️ Сложность — 12.\n"
+        "🎯 Бросок кубика — 2"
     )
     assert "d20" not in message.answers[0][0]
     assert "DC" not in message.answers[0][0]
     assert "|" not in message.answers[0][0]
+
+
+def test_handle_roll_labels_disadvantage_in_difficulty_line(monkeypatch):
+    chat_id = -100706
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        state="WAITING_ROLL",
+        pending_roll={
+            "type": "SAVE",
+            "reason": "устоять на ногах",
+            "dc": 14,
+            "mode": "DISADVANTAGE",
+        },
+        last_roll_stat=None,
+        recent_scene_types=[],
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    values = iter([17, 6])
+    monkeypatch.setattr(dnd.random, "randint", lambda _a, _b: next(values))
+
+    async def fake_generate(_session, _prompt):
+        return "продолжение [ACTION:INPUT]"
+
+    async def fake_parse(_bot, _chat_id, _text):
+        return None
+
+    monkeypatch.setattr(dnd, "generate_session_response", fake_generate)
+    monkeypatch.setattr(dnd, "parse_and_execute_turn", fake_parse)
+    message = FakeMessage(chat_id=chat_id, user_name="Alina")
+
+    try:
+        asyncio.run(dnd.handle_roll(message))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert message.answers[0][0] == (
+        "🎲 Alina: Спасбросок — устоять на ногах\n"
+        "⚙️ Сложность — 14 (с помехой).\n"
+        "🎯 Броски кубика — 17 и 6, результат — 6"
+    )
 
 
 def test_old_waiting_roll_state_restores_without_characteristic():
