@@ -19,6 +19,13 @@ def _session(message_id: int = 101) -> dict:
     }
 
 
+def _bot_stub(*, delete_message, send_photo):
+    return SimpleNamespace(
+        delete_message=delete_message,
+        send_photo=send_photo,
+    )
+
+
 def test_bump_skips_resend_when_old_preview_cannot_be_deleted(monkeypatch):
     sent = []
 
@@ -29,8 +36,11 @@ def test_bump_skips_resend_when_old_preview_cannot_be_deleted(monkeypatch):
         sent.append((args, kwargs))
         return SimpleNamespace(message_id=202)
 
-    monkeypatch.setattr(crocodile.bot, "delete_message", fail_delete)
-    monkeypatch.setattr(crocodile.bot, "send_photo", send_photo)
+    monkeypatch.setattr(
+        crocodile,
+        "bot",
+        _bot_stub(delete_message=fail_delete, send_photo=send_photo),
+    )
 
     session = _session()
     crocodile.game_sessions[CHAT_ID] = session
@@ -53,8 +63,11 @@ def test_bump_replaces_preview_after_successful_delete(monkeypatch):
     async def send_photo(*args, **kwargs):
         return SimpleNamespace(message_id=202)
 
-    monkeypatch.setattr(crocodile.bot, "delete_message", delete_message)
-    monkeypatch.setattr(crocodile.bot, "send_photo", send_photo)
+    monkeypatch.setattr(
+        crocodile,
+        "bot",
+        _bot_stub(delete_message=delete_message, send_photo=send_photo),
+    )
 
     session = _session()
     crocodile.game_sessions[CHAT_ID] = session
@@ -85,8 +98,11 @@ def test_parallel_bumps_leave_only_one_visible_preview(monkeypatch):
         visible.add(next_message_id)
         return SimpleNamespace(message_id=next_message_id)
 
-    monkeypatch.setattr(crocodile.bot, "delete_message", delete_message)
-    monkeypatch.setattr(crocodile.bot, "send_photo", send_photo)
+    monkeypatch.setattr(
+        crocodile,
+        "bot",
+        _bot_stub(delete_message=delete_message, send_photo=send_photo),
+    )
 
     session = _session()
     crocodile.game_sessions[CHAT_ID] = session
