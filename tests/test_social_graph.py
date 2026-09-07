@@ -73,6 +73,27 @@ def test_interaction_weights_are_explicit():
     assert REPLY_WEIGHT > MENTION_WEIGHT > REACTION_WEIGHT
 
 
+def test_participant_display_omits_username():
+    import features.social_graph.service as service
+
+    assert service._display_name(user(1, "Alice", "alice")) == "Alice"
+
+
+def test_graph_data_strips_legacy_username_tags(monkeypatch):
+    import features.social_graph.service as service
+
+    repo = FakeRepository()
+    repo.load_graph = lambda _chat_id, _since: (
+        [(1, 2, "reply", 3.0)],
+        {1: "Alice (@alice)", 2: "Bob (@bob_2)"},
+    )
+    monkeypatch.setattr(service, "_repository_instance", repo)
+
+    data = asyncio.run(service.get_graph_data(-100))
+
+    assert data.names == {1: "Alice", 2: "Bob"}
+
+
 def test_reply_interaction_is_recorded(monkeypatch):
     import features.social_graph.service as service
 
