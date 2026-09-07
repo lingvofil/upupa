@@ -38,6 +38,7 @@ DND_SCENE_TYPES = (
 
 _task_supervisor = None
 _finalizing_polls = set()
+_processing_backstories = set()
 
 
 DND_SYSTEM_PROMPT = """
@@ -118,6 +119,7 @@ class GameSession:
         self.chat_id = chat_id
         self.active_model = active_model or get_active_model(chat_id)
         self.state = "WAITING_BACKSTORY"
+        self.backstory_prompt_message_id = None
         self.last_roll_stat = None
         self.pending_roll = None
         self.current_poll_id = None
@@ -184,6 +186,7 @@ class GameSession:
             "active_model": self.active_model,
             "conversation": self.conversation,
             "state": self.state,
+            "backstory_prompt_message_id": self.backstory_prompt_message_id,
             "last_roll_stat": self.last_roll_stat,
             "pending_roll": self.pending_roll,
             "current_poll_id": self.current_poll_id,
@@ -202,6 +205,7 @@ class GameSession:
             conversation=record.get("conversation") or None,
         )
         session.state = record.get("state") or "WAITING_ACTION"
+        session.backstory_prompt_message_id = record.get("backstory_prompt_message_id")
         session.last_roll_stat = record.get("last_roll_stat")
         raw_roll = record.get("pending_roll") or None
         if raw_roll:
@@ -293,6 +297,20 @@ async def open_action_window(bot: Bot, chat_id: int):
     return prompt_message
 
 
+async def _restore_backstory_prompt(bot: Bot, chat_id: int):
+    session = dnd_sessions.get(chat_id)
+    if not session or session.state != "WAITING_BACKSTORY":
+        return
+    if getattr(session, "backstory_prompt_message_id", None):
+        return
+    prompt_message = await bot.send_message(
+        chat_id,
+        "Какую предысторию хочешь? (Ответь реплаем)",
+    )
+    session.backstory_prompt_message_id = prompt_message.message_id
+    persist_dnd_sessions()
+
+
 async def _restore_action_prompt(bot: Bot, chat_id: int):
     session = dnd_sessions.get(chat_id)
     if not session or session.state != "WAITING_ACTION":
@@ -349,6 +367,15 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 session.pending_actions = {}
                 session.action_deadline = None
                 session.pending_roll = None
+
+            if (
+                session.state == "WAITING_BACKSTORY"
+                and not getattr(session, "backstory_prompt_message_id", None)
+            ):
+                _start_background_task(
+                    _restore_backstory_prompt(bot, session.chat_id),
+                    name=f"dnd-backstory:{session.chat_id}:restore-prompt",
+                )
 
             if session.state == "WAITING_ACTION":
                 prompt_id = getattr(session, "action_prompt_message_id", None)
@@ -726,7 +753,11 @@ async def cmd_start_dnd(message: Message):
         logging.exception("DnD session creation failed chat_id=%s", message.chat.id)
         await message.answer("Не удалось разбудить мастера историй.")
         return
-    await message.answer(f"Ладно, {user_name}. Какую предысторию хочешь? (Ответь реплаем)")
+    prompt_message = await message.answer(
+        f"Ладно, {user_name}. Какую предысторию хочешь? (Ответь реплаем)"
+    )
+    session.backstory_prompt_message_id = prompt_message.message_id
+    persist_dnd_sessions()
 
 
 @dnd_router.message(F.text.lower().startswith(("упупа заверши историю", "упупа закончи историю")))
@@ -747,19 +778,31 @@ async def cmd_stop_dnd(message: Message):
         await message.answer("Игра окончена.")
 
 
-@dnd_router.message(
-    lambda m: m.reply_to_message
-    and dnd_sessions.get(m.chat.id)
-    and dnd_sessions[m.chat.id].state == "WAITING_BACKSTORY"
-)
+def _is_backstory_reply(message: Message) -> bool:
+    session = dnd_sessions.get(message.chat.id)
+    if (
+        not session
+        or session.state != "WAITING_BACKSTORY"
+        or message.chat.id in _processing_backstories
+    ):
+        return False
+    prompt_message_id = getattr(session, "backstory_prompt_message_id", None)
+    if not prompt_message_id or not message.reply_to_message:
+        return False
+    return int(message.reply_to_message.message_id) == int(prompt_message_id)
+
+
+@dnd_router.message(_is_backstory_reply)
 async def handle_backstory(message: Message):
     session = dnd_sessions[message.chat.id]
     backstory = message.text or message.caption
     if not backstory:
         await message.answer("Предысторию лучше прислать текстом.")
         return
-    msg = await message.answer("Генерирую...")
+    backstory_prompt_message_id = session.backstory_prompt_message_id
+    _processing_backstories.add(message.chat.id)
     try:
+        msg = await message.answer("Генерирую...")
         response_text = await generate_session_response(
             session,
             with_scene_direction(session, f"Предыстория: {backstory}. Начинай."),
@@ -768,10 +811,18 @@ async def handle_backstory(message: Message):
             await message.bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
             pass
+        session.backstory_prompt_message_id = None
+        persist_dnd_sessions()
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD backstory generation failed chat_id=%s", message.chat.id)
+        if dnd_sessions.get(message.chat.id) is session:
+            session.state = "WAITING_BACKSTORY"
+            session.backstory_prompt_message_id = backstory_prompt_message_id
+            persist_dnd_sessions()
         await message.answer("Мастер завис, но история сохранена. Попробуй ещё раз реплаем.")
+    finally:
+        _processing_backstories.discard(message.chat.id)
 
 
 @dnd_router.message(F.text.lower().contains("кидаю"))
