@@ -4,6 +4,7 @@
 # Очки угадывающих общие с обычным кракадилом; рисование идёт через тот же
 # GigaChat-first waterfall, что и современные image-фичи.
 
+import asyncio
 import logging
 import random
 import re
@@ -13,6 +14,7 @@ from aiogram import types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 from core.loader import bot
+from games import crocodile as crocodile_game
 from games.crocodile import _contains_answer, _normalize_guess, add_point, format_leaderboard
 from games.reverse_crocodile_words import (
     difficulty_label,
@@ -34,8 +36,9 @@ IMAGE_STYLE = (
 
 MAX_HINTS = 3
 SURRENDER_DELAY_SECONDS = 5 * 60
+ROUND_REFRESH_INTERVAL_SECONDS = 60
 
-# chat_id(str) -> {"word": str, "difficulty": str, "hints": int, "image": bytes, "started_at": float}
+# chat_id(str) -> session dict with word/difficulty/image, current message id and background task.
 games: dict[str, dict] = {}
 
 
@@ -225,6 +228,96 @@ def _format_surrender_wait(seconds: int) -> str:
     return f"{minutes}:{rest:02d}"
 
 
+def _round_caption(session: dict) -> str:
+    label = difficulty_label(session.get("difficulty"))
+    return (
+        "🦎 <b>КРАКАДИЛ НАОБОРОТ</b>\n"
+        f"Сложность: <b>{label}</b>\n"
+        "Теперь рисую я, а вы угадываете. Пишите варианты в чат!"
+    )
+
+
+async def _send_round_message(chat_id: str, session: dict, *, replace: bool) -> None:
+    """Send the round card and optionally replace its previous copy to bump it down."""
+    if replace:
+        old_message_id = session.get("message_id")
+        if old_message_id:
+            await crocodile_game._safe_delete_message(int(chat_id), int(old_message_id))
+
+    message = await bot.send_photo(
+        chat_id=int(chat_id),
+        photo=BufferedInputFile(session["image"], "rcroc.png"),
+        caption=_round_caption(session),
+        parse_mode="HTML",
+        reply_markup=_keyboard(chat_id),
+    )
+    session["message_id"] = message.message_id
+
+
+async def _send_next_hint(chat_id: str, session: dict) -> bool:
+    """Send exactly one next hint, shared by the manual button and the minute timer."""
+    lock = session.get("hint_lock")
+    if lock is None:
+        lock = asyncio.Lock()
+        session["hint_lock"] = lock
+
+    async with lock:
+        if games.get(chat_id) is not session or session.get("hints", 0) >= MAX_HINTS:
+            return False
+        hint_number = int(session.get("hints", 0)) + 1
+        hint = _make_hint(session["word"], hint_number)
+        await bot.send_message(int(chat_id), hint)
+        session["hints"] = hint_number
+        return True
+
+
+async def _run_round_tick(chat_id: str, session: dict) -> bool:
+    """Emit a minute hint when available, then put the round card at chat bottom."""
+    if games.get(chat_id) is not session:
+        return False
+
+    if session.get("hints", 0) < MAX_HINTS:
+        try:
+            await _send_next_hint(chat_id, session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("[rcroc] automatic hint failed chat=%s", chat_id)
+
+    if games.get(chat_id) is not session:
+        return False
+    try:
+        await _send_round_message(chat_id, session, replace=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.exception("[rcroc] round bump failed chat=%s", chat_id)
+    return games.get(chat_id) is session
+
+
+async def _round_loop(chat_id: str, session: dict) -> None:
+    try:
+        while games.get(chat_id) is session:
+            await asyncio.sleep(ROUND_REFRESH_INTERVAL_SECONDS)
+            if not await _run_round_tick(chat_id, session):
+                return
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logging.exception("[rcroc] round loop crashed chat=%s", chat_id)
+
+
+async def _cancel_round_task(session: dict) -> None:
+    task = session.get("round_task")
+    if not isinstance(task, asyncio.Task) or task.done() or task is asyncio.current_task():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def start_game(message: types.Message, difficulty: str = "medium"):
     chat_id = str(message.chat.id)
     difficulty = normalize_difficulty(difficulty)
@@ -239,31 +332,37 @@ async def start_game(message: types.Message, difficulty: str = "medium"):
         await status.edit_text("Не смог нарисовать, у меня лапки. Попробуй ещё раз.")
         return
 
-    games[chat_id] = {
+    session = {
         "word": word,
         "difficulty": difficulty,
         "hints": 0,
         "image": image,
+        "message_id": None,
+        "round_task": None,
+        "hint_lock": asyncio.Lock(),
         # Пять минут считаются с готовности раунда, а не со старта AI-генерации.
         "started_at": time.monotonic(),
     }
+    games[chat_id] = session
+    try:
+        await _send_round_message(chat_id, session, replace=False)
+        session["round_task"] = crocodile_game._start_background_task(
+            _round_loop(chat_id, session),
+            name=f"reverse-crocodile-round:{chat_id}",
+        )
+    except Exception:
+        games.pop(chat_id, None)
+        logging.exception("[rcroc] failed to start round chat=%s", chat_id)
+        await status.edit_text("Не смог запустить раунд. Попробуй ещё раз.")
+        return
+
     await status.delete()
-    await bot.send_photo(
-        chat_id=int(chat_id),
-        photo=BufferedInputFile(image, "rcroc.png"),
-        caption=(
-            "🦎 <b>КРАКАДИЛ НАОБОРОТ</b>\n"
-            f"Сложность: <b>{label}</b>\n"
-            "Теперь рисую я, а вы угадываете. Пишите варианты в чат!"
-        ),
-        parse_mode="HTML",
-        reply_markup=_keyboard(chat_id),
-    )
     logging.info("[rcroc] start chat=%s difficulty=%s word=%s", chat_id, difficulty, word)
 
 
 async def _finish_game(chat_id: str, text: str):
     session = games.pop(chat_id, None) or {}
+    await _cancel_round_task(session)
     difficulty = normalize_difficulty(session.get("difficulty"))
     await bot.send_message(
         int(chat_id), text, parse_mode="HTML", reply_markup=_again_keyboard(difficulty)
@@ -300,10 +399,8 @@ async def handle_callback(cb: types.CallbackQuery):
         if session["hints"] >= MAX_HINTS:
             await cb.answer("Хватит с вас подсказок, думайте!", show_alert=True)
             return
-        session["hints"] += 1
-        hint = _make_hint(session["word"], session["hints"])
         await cb.answer()
-        await bot.send_message(int(chat_id), hint)
+        await _send_next_hint(chat_id, session)
 
     elif data.startswith("rcroc_stop_"):
         remaining = _surrender_remaining_seconds(session)
