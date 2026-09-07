@@ -43,6 +43,7 @@ def test_reverse_crocodile_pools_are_shifted_away_from_trivial_objects():
     assert "Лабиринт" in WORD_POOLS["easy"]
     assert "Гравитация" in WORD_POOLS["medium"]
     assert "Парадокс" in WORD_POOLS["hard"]
+    assert "Цензура" in WORD_POOLS["hard"]
 
 
 def test_reverse_crocodile_difficulty_buttons_and_replay_keep_level():
