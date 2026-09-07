@@ -58,11 +58,17 @@ def test_backstory_router_only_accepts_reply_to_current_prompt():
         assert dnd._is_backstory_reply(plain) is False
         assert dnd._is_backstory_reply(wrong_reply) is False
         assert dnd._is_backstory_reply(correct_reply) is True
+
+        dnd._processing_backstories.add(chat_id)
+        try:
+            assert dnd._is_backstory_reply(correct_reply) is False
+        finally:
+            dnd._processing_backstories.discard(chat_id)
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
 
-def test_backstory_is_claimed_before_generation(monkeypatch):
+def test_backstory_is_claimed_in_memory_during_generation(monkeypatch):
     chat_id = -100602
     session = SimpleNamespace(
         state="WAITING_BACKSTORY",
@@ -76,7 +82,11 @@ def test_backstory_is_claimed_before_generation(monkeypatch):
 
     async def fake_generate(current_session, _prompt):
         observed_states.append(
-            (current_session.state, current_session.backstory_prompt_message_id)
+            (
+                current_session.state,
+                current_session.backstory_prompt_message_id,
+                chat_id in dnd._processing_backstories,
+            )
         )
         return "Сцена [ACTION:INPUT]"
 
@@ -93,10 +103,12 @@ def test_backstory_is_claimed_before_generation(monkeypatch):
             reply_to_message_id=88,
         )
         asyncio.run(dnd.handle_backstory(message))
+        assert observed_states == [("WAITING_BACKSTORY", 88, True)]
+        assert session.backstory_prompt_message_id is None
+        assert chat_id not in dnd._processing_backstories
     finally:
+        dnd._processing_backstories.discard(chat_id)
         dnd.dnd_sessions.pop(chat_id, None)
-
-    assert observed_states == [("RESOLVING", None)]
 
 
 def test_backstory_failure_reopens_same_prompt(monkeypatch):
@@ -123,5 +135,7 @@ def test_backstory_failure_reopens_same_prompt(monkeypatch):
         asyncio.run(dnd.handle_backstory(message))
         assert session.state == "WAITING_BACKSTORY"
         assert session.backstory_prompt_message_id == 99
+        assert chat_id not in dnd._processing_backstories
     finally:
+        dnd._processing_backstories.discard(chat_id)
         dnd.dnd_sessions.pop(chat_id, None)

@@ -38,6 +38,7 @@ DND_SCENE_TYPES = (
 
 _task_supervisor = None
 _finalizing_polls = set()
+_processing_backstories = set()
 
 
 DND_SYSTEM_PROMPT = """
@@ -779,7 +780,11 @@ async def cmd_stop_dnd(message: Message):
 
 def _is_backstory_reply(message: Message) -> bool:
     session = dnd_sessions.get(message.chat.id)
-    if not session or session.state != "WAITING_BACKSTORY":
+    if (
+        not session
+        or session.state != "WAITING_BACKSTORY"
+        or message.chat.id in _processing_backstories
+    ):
         return False
     prompt_message_id = getattr(session, "backstory_prompt_message_id", None)
     if not prompt_message_id or not message.reply_to_message:
@@ -795,9 +800,7 @@ async def handle_backstory(message: Message):
         await message.answer("Предысторию лучше прислать текстом.")
         return
     backstory_prompt_message_id = session.backstory_prompt_message_id
-    session.state = "RESOLVING"
-    session.backstory_prompt_message_id = None
-    persist_dnd_sessions()
+    _processing_backstories.add(message.chat.id)
     try:
         msg = await message.answer("Генерирую...")
         response_text = await generate_session_response(
@@ -808,6 +811,8 @@ async def handle_backstory(message: Message):
             await message.bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
             pass
+        session.backstory_prompt_message_id = None
+        persist_dnd_sessions()
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD backstory generation failed chat_id=%s", message.chat.id)
@@ -816,6 +821,8 @@ async def handle_backstory(message: Message):
             session.backstory_prompt_message_id = backstory_prompt_message_id
             persist_dnd_sessions()
         await message.answer("Мастер завис, но история сохранена. Попробуй ещё раз реплаем.")
+    finally:
+        _processing_backstories.discard(message.chat.id)
 
 
 @dnd_router.message(F.text.lower().contains("кидаю"))
