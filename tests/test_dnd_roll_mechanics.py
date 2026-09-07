@@ -215,13 +215,13 @@ def test_handle_roll_simplifies_normal_failure_summary(monkeypatch):
     monkeypatch.setattr(dnd.random, "randint", lambda _a, _b: 2)
 
     async def fake_generate(_session, _prompt):
-        raise RuntimeError("stop after output")
+        return "продолжение [ACTION:INPUT]"
 
-    async def fake_open_action_window(_bot, _chat_id):
+    async def fake_parse(_bot, _chat_id, _text):
         return None
 
     monkeypatch.setattr(dnd, "generate_session_response", fake_generate)
-    monkeypatch.setattr(dnd, "open_action_window", fake_open_action_window)
+    monkeypatch.setattr(dnd, "parse_and_execute_turn", fake_parse)
     message = FakeMessage(chat_id=chat_id, user_name="Alina")
 
     try:
