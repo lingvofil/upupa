@@ -294,6 +294,7 @@
 
   if (tg) {
     if (typeof tg.expand === "function") tg.expand();
+    if (typeof tg.disableVerticalSwipes === "function") tg.disableVerticalSwipes();
     if (typeof tg.ready === "function") tg.ready();
   }
 
