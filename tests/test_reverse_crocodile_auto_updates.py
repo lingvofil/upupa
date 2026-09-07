@@ -2,6 +2,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
 
@@ -81,6 +83,28 @@ def test_progressive_hints_never_reveal_the_entire_word(monkeypatch):
     assert len(session["revealed_positions"]) == 3
     assert reverse._has_next_hint(session) is False
     assert emitted[-1].count("▪️") == 1
+
+
+def test_failed_progressive_hint_send_does_not_consume_letter(monkeypatch):
+    import games.reverse_crocodile as reverse
+
+    chat_id = "-100"
+    session = _session(word="арбуз", hints=2)
+    reverse.games[chat_id] = session
+    monkeypatch.setattr(reverse.random, "choice", lambda positions: positions[0])
+    monkeypatch.setattr(
+        reverse,
+        "bot",
+        SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("telegram down"))),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="telegram down"):
+            asyncio.run(reverse._send_next_hint(chat_id, session))
+        assert session["hints"] == 2
+        assert session["revealed_positions"] == set()
+    finally:
+        reverse.games.pop(chat_id, None)
 
 
 def test_bump_continues_after_progressive_hints_are_exhausted(monkeypatch):
