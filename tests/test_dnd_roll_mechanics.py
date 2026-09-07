@@ -188,15 +188,54 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
     assert session.state == "RESOLVING"
     assert session.pending_roll is None
     assert message.answers[0][0] == (
-        "🎲 Алиса — Спасбросок\n"
-        "📌 выдержать действие яда\n"
-        "🎯 d20: 5 и 18 → 18 · DC 12\n"
-        "⚖️ Преимущество\n"
-        "✅ Успех"
+        "🎲 Алиса: Спасбросок — выдержать действие яда\n"
+        "🎯 5 и 18 → 18 против 12 — ✅ успех · преимущество"
     )
     assert "DC: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
     assert parsed == [(message.bot, chat_id, "продолжение [ACTION:INPUT]")]
+
+
+def test_handle_roll_simplifies_normal_failure_summary(monkeypatch):
+    chat_id = -100705
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        state="WAITING_ROLL",
+        pending_roll={
+            "type": "SAVE",
+            "reason": "успеть выбежать из рушащегося здания",
+            "dc": 12,
+            "mode": "NORMAL",
+        },
+        last_roll_stat=None,
+        recent_scene_types=[],
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(dnd.random, "randint", lambda _a, _b: 2)
+
+    async def fake_generate(_session, _prompt):
+        raise RuntimeError("stop after output")
+
+    async def fake_open_action_window(_bot, _chat_id):
+        return None
+
+    monkeypatch.setattr(dnd, "generate_session_response", fake_generate)
+    monkeypatch.setattr(dnd, "open_action_window", fake_open_action_window)
+    message = FakeMessage(chat_id=chat_id, user_name="Alina")
+
+    try:
+        asyncio.run(dnd.handle_roll(message))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert message.answers[0][0] == (
+        "🎲 Alina: Спасбросок — успеть выбежать из рушащегося здания\n"
+        "🎯 2 против 12 — ❌ провал"
+    )
+    assert "d20" not in message.answers[0][0]
+    assert "DC" not in message.answers[0][0]
+    assert "|" not in message.answers[0][0]
 
 
 def test_old_waiting_roll_state_restores_without_characteristic():
