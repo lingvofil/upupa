@@ -1,0 +1,122 @@
+name: Refine DnD backstory reply guard
+
+on:
+  push:
+    branches:
+      - fix/dnd-backstory-reply-target
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Refine backstory concurrency guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("AI/dnd.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  '_task_supervisor = None\n_finalizing_polls = set()\n',
+                  '_task_supervisor = None\n_finalizing_polls = set()\n_processing_backstories = set()\n',
+              ),
+              (
+                  '    if not session or session.state != "WAITING_BACKSTORY":\n        return False\n',
+                  '    if (\n'
+                  '        not session\n'
+                  '        or session.state != "WAITING_BACKSTORY"\n'
+                  '        or message.chat.id in _processing_backstories\n'
+                  '    ):\n'
+                  '        return False\n',
+              ),
+              (
+                  '    backstory_prompt_message_id = session.backstory_prompt_message_id\n'
+                  '    session.state = "RESOLVING"\n'
+                  '    session.backstory_prompt_message_id = None\n'
+                  '    persist_dnd_sessions()\n'
+                  '    try:\n',
+                  '    backstory_prompt_message_id = session.backstory_prompt_message_id\n'
+                  '    _processing_backstories.add(message.chat.id)\n'
+                  '    try:\n',
+              ),
+              (
+                  '        except Exception:\n'
+                  '            pass\n'
+                  '        await parse_and_execute_turn(message.bot, message.chat.id, response_text)\n',
+                  '        except Exception:\n'
+                  '            pass\n'
+                  '        session.backstory_prompt_message_id = None\n'
+                  '        persist_dnd_sessions()\n'
+                  '        await parse_and_execute_turn(message.bot, message.chat.id, response_text)\n',
+              ),
+              (
+                  '        await message.answer("Мастер завис, но история сохранена. Попробуй ещё раз реплаем.")\n\n\n@dnd_router.message(F.text.lower().contains("кидаю"))\n',
+                  '        await message.answer("Мастер завис, но история сохранена. Попробуй ещё раз реплаем.")\n'
+                  '    finally:\n'
+                  '        _processing_backstories.discard(message.chat.id)\n'
+                  '\n\n'
+                  '@dnd_router.message(F.text.lower().contains("кидаю"))\n',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match, got {count}: {old[:100]!r}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_dnd_backstory_reply.py")
+          tests = test_path.read_text(encoding="utf-8")
+          tests = tests.replace(
+              '                  assert dnd._is_backstory_reply(correct_reply) is True\n',
+              '                  assert dnd._is_backstory_reply(correct_reply) is True\n'
+              '                  dnd._processing_backstories.add(chat_id)\n'
+              '                  try:\n'
+              '                      assert dnd._is_backstory_reply(correct_reply) is False\n'
+              '                  finally:\n'
+              '                      dnd._processing_backstories.discard(chat_id)\n',
+              1,
+          )
+          tests = tests.replace(
+              '                      (current_session.state, current_session.backstory_prompt_message_id)\n',
+              '                      (\n'
+              '                          current_session.state,\n'
+              '                          current_session.backstory_prompt_message_id,\n'
+              '                          chat_id in dnd._processing_backstories,\n'
+              '                      )\n',
+              1,
+          )
+          tests = tests.replace(
+              '              assert observed_states == [("RESOLVING", None)]\n',
+              '              assert observed_states == [("WAITING_BACKSTORY", 88, True)]\n'
+              '              assert chat_id not in dnd._processing_backstories\n',
+              1,
+          )
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+      - name: Run targeted tests
+        run: python -m pytest tests/test_dnd_backstory_reply.py tests/test_dnd_turns.py -q
+      - name: Commit refinement
+        shell: bash
+        run: |
+          git rm .github/workflows/refine-dnd-backstory.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AI/dnd.py tests/test_dnd_backstory_reply.py
+          git commit -m "Harden DnD backstory concurrency handling"
+          git push origin HEAD:fix/dnd-backstory-reply-target
