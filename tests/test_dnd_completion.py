@@ -10,7 +10,12 @@ from AI.dnd_completion import DndParticipantCompletionMiddleware
 
 
 class FakeBot:
-    pass
+    def __init__(self):
+        self.messages = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.messages.append((chat_id, text, kwargs))
+        return SimpleNamespace(message_id=999)
 
 
 def _participant_session(chat_id, *, targets=None, pending_actions=None):
@@ -27,6 +32,7 @@ def _participant_session(chat_id, *, targets=None, pending_actions=None):
         action_target_user_ids=list(targets or []),
         action_prompt_message_id=777,
         pending_actions=dict(pending_actions or {}),
+        action_deadline=123.0,
     )
 
 
@@ -123,6 +129,66 @@ def test_action_does_not_finish_until_every_expected_participant_acts(monkeypatc
         dnd.dnd_sessions.pop(chat_id, None)
 
     assert calls == []
+
+
+def test_valid_reply_is_precollected_before_normal_handler(monkeypatch):
+    chat_id = -100806
+    session = _participant_session(chat_id)
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+    event = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=4, first_name="Г"),
+        reply_to_message=SimpleNamespace(message_id=777),
+        text="ломаю шкаф",
+        caption=None,
+    )
+
+    async def handler(_event, _data):
+        assert session.pending_actions["4"]["action"] == "ломаю шкаф"
+        return "handled"
+
+    try:
+        result = asyncio.run(
+            DndParticipantCompletionMiddleware()(handler, event, {"bot": bot})
+        )
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert result == "handled"
+    assert session.pending_actions["4"] == {
+        "user_id": 4,
+        "name": "Г",
+        "action": "ломаю шкаф",
+    }
+
+
+def test_unregistered_reply_gets_explicit_rejection(monkeypatch):
+    chat_id = -100807
+    session = _participant_session(chat_id)
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+    event = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=9, first_name="Лишний"),
+        reply_to_message=SimpleNamespace(message_id=777),
+        text="я тоже иду",
+        caption=None,
+    )
+
+    async def handler(_event, _data):
+        return None
+
+    try:
+        asyncio.run(DndParticipantCompletionMiddleware()(handler, event, {"bot": bot}))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert "9" not in session.pending_actions
+    assert bot.messages
+    assert "не записан" in bot.messages[-1][1]
 
 
 def test_poll_auto_finishes_when_all_eligible_participants_voted(monkeypatch):
