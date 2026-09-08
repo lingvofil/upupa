@@ -246,10 +246,6 @@ class UpupaApplication:
             name="channel-scheduler",
         )
         self.supervisor.start_resilient(
-            _background_ai_factory(lambda: visit_expiration_loop(self.bot)),
-            name="world-visit-expiration",
-        )
-        self.supervisor.start_resilient(
             crocodile_session_persistence_loop,
             name="crocodile-session-persistence",
         )
@@ -272,9 +268,11 @@ class UpupaApplication:
             return
 
         from AI.dnd import dnd_router
+        from AI.dnd_style import configure_dnd_style
 
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
+        configure_dnd_style()
         _configure_dnd_roll_labels()
         _configure_dnd_owner_host_override(dnd_router)
         main_router = get_main_router()
@@ -354,4 +352,3 @@ def create_application(
 
 async def run_application() -> None:
     application = create_application()
-    await application.run()
