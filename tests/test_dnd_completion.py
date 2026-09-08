@@ -191,6 +191,33 @@ def test_unregistered_reply_gets_explicit_rejection(monkeypatch):
     assert "не записан" in bot.messages[-1][1]
 
 
+def test_non_targeted_participant_gets_explicit_rejection(monkeypatch):
+    chat_id = -100808
+    session = _participant_session(chat_id, targets=[1, 2, 3])
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+    event = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=4, first_name="Г"),
+        reply_to_message=SimpleNamespace(message_id=777),
+        text="а я тоже полез",
+        caption=None,
+    )
+
+    async def handler(_event, _data):
+        return None
+
+    try:
+        asyncio.run(DndParticipantCompletionMiddleware()(handler, event, {"bot": bot}))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert "4" not in session.pending_actions
+    assert bot.messages
+    assert "эта движуха для" in bot.messages[-1][1]
+
+
 def test_poll_auto_finishes_when_all_eligible_participants_voted(monkeypatch):
     chat_id = -100804
     poll_id = "poll-804"
