@@ -194,6 +194,7 @@ class UpupaApplication:
             configure_task_supervisor as configure_dnd_tasks,
             restore_dnd_sessions,
         )
+        from AI.dnd_style import configure_dnd_style
         from AI.quiz import schedule_daily_quiz
         from features.channel.scheduler import channel_scheduler_loop
         from features.proactive import proactive_loop
@@ -210,6 +211,7 @@ class UpupaApplication:
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
 
+        configure_dnd_style()
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
         configure_crocodile_controls()
