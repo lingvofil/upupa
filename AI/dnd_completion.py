@@ -18,13 +18,16 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
     participants = list((getattr(session, "participants", {}) or {}).values())
     if not participants:
         return prompt
-    roster = "\n".join(
-        f"- ID {int(item['user_id'])}: {item.get('name') or f'егрок {int(item[\"user_id\"])}'}"
-        for item in participants
-        if item.get("user_id") is not None
-    )
-    if not roster:
+    roster_lines = []
+    for item in participants:
+        if item.get("user_id") is None:
+            continue
+        user_id = int(item["user_id"])
+        name = item.get("name") or f"егрок {user_id}"
+        roster_lines.append(f"- ID {user_id}: {name}")
+    if not roster_lines:
         return prompt
+    roster = "\n".join(roster_lines)
     return (
         f"{prompt}\n\n"
         f"{DND_PARTICIPANT_CONTEXT_MARKER}:\n{roster}\n"
