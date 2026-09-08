@@ -8,6 +8,35 @@ import time
 from aiogram import BaseMiddleware
 
 
+DND_PARTICIPANT_CONTEXT_MARKER = "ТЕКУЩИЕ УЧАСТНИКИ ПАРТИИ"
+
+
+def _with_participant_context(dnd, session, prompt: str) -> str:
+    """Keep the model aware of late-joining participant IDs and names."""
+    if not dnd._is_participant_mode(session):
+        return prompt
+    participants = list((getattr(session, "participants", {}) or {}).values())
+    if not participants:
+        return prompt
+    roster_lines = []
+    for item in participants:
+        if item.get("user_id") is None:
+            continue
+        user_id = int(item["user_id"])
+        name = item.get("name") or f"егрок {user_id}"
+        roster_lines.append(f"- ID {user_id}: {name}")
+    if not roster_lines:
+        return prompt
+    roster = "\n".join(roster_lines)
+    return (
+        f"{prompt}\n\n"
+        f"{DND_PARTICIPANT_CONTEXT_MARKER}:\n{roster}\n"
+        "Это актуальный состав: участники могли влиться в егру уже после старта. "
+        "Считай всех из этого списка полноценными персонажами и используй их ID в TARGETS, "
+        "когда ход относится к конкретным людям."
+    )
+
+
 class DndParticipantCompletionMiddleware(BaseMiddleware):
     """Collect participant replies robustly and finish complete group decisions early."""
 
@@ -68,22 +97,37 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         user_id = int(user.id)
         participants = dnd._participant_ids(session)
         targets = list(getattr(session, "action_target_user_ids", []) or [])
-        expected = self._expected_ids(dnd, session, targets)
         user_name = getattr(user, "first_name", None) or f"егрок {user_id}"
 
         if user_id not in participants:
-            logging.warning(
-                "DnD participant reply rejected: not registered chat_id=%s user_id=%s participants=%s",
+            if targets:
+                expected = self._expected_ids(dnd, session, targets)
+                names = ", ".join(dnd._target_names(session, sorted(expected)))
+                logging.info(
+                    "DnD late participant reply rejected: targeted turn chat_id=%s user_id=%s expected_ids=%s",
+                    chat_id,
+                    user_id,
+                    sorted(expected),
+                )
+                await bot.send_message(
+                    chat_id,
+                    f"{user_name}, щас не влезай: эта движуха для {names or 'других егроков'}.",
+                )
+                return
+
+            session.participants[str(user_id)] = {
+                "user_id": user_id,
+                "name": user_name,
+            }
+            participants.add(user_id)
+            logging.info(
+                "DnD late participant joined through open action chat_id=%s user_id=%s name=%s",
                 chat_id,
                 user_id,
-                sorted(participants),
+                user_name,
             )
-            await bot.send_message(
-                chat_id,
-                f"{user_name}, твой ход не учтён: ты не записан в эту егру.",
-            )
-            return
 
+        expected = self._expected_ids(dnd, session, targets)
         if expected and user_id not in expected:
             names = ", ".join(dnd._target_names(session, sorted(expected)))
             logging.info(
@@ -245,9 +289,22 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
 
 
 def configure_dnd_completion(dnd_router) -> None:
-    """Attach participant completion middleware once."""
+    """Attach participant completion middleware and live participant context once."""
     if getattr(dnd_router, "_upupa_dnd_completion_configured", False):
         return
+
+    from AI import dnd
+
+    original_generate_session_response = dnd.generate_session_response
+
+    async def generate_with_participant_context(session, prompt: str) -> str:
+        return await original_generate_session_response(
+            session,
+            _with_participant_context(dnd, session, prompt),
+        )
+
+    dnd.generate_session_response = generate_with_participant_context
+
     middleware = DndParticipantCompletionMiddleware()
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)

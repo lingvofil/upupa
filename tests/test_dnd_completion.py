@@ -6,7 +6,11 @@ from tests import test_smoke_imports
 del test_smoke_imports
 
 from AI import dnd
-from AI.dnd_completion import DndParticipantCompletionMiddleware
+from AI.dnd_completion import (
+    DND_PARTICIPANT_CONTEXT_MARKER,
+    DndParticipantCompletionMiddleware,
+    _with_participant_context,
+)
 
 
 class FakeBot:
@@ -164,7 +168,7 @@ def test_valid_reply_is_precollected_before_normal_handler(monkeypatch):
     }
 
 
-def test_unregistered_reply_gets_explicit_rejection(monkeypatch):
+def test_unregistered_reply_joins_open_group_turn(monkeypatch):
     chat_id = -100807
     session = _participant_session(chat_id)
     dnd.dnd_sessions[chat_id] = session
@@ -179,6 +183,53 @@ def test_unregistered_reply_gets_explicit_rejection(monkeypatch):
     )
 
     async def handler(_event, _data):
+        assert dnd._can_user_act(session, 9, []) is True
+        return "handled"
+
+    try:
+        result = asyncio.run(
+            DndParticipantCompletionMiddleware()(handler, event, {"bot": bot})
+        )
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert result == "handled"
+    assert session.participants["9"] == {"user_id": 9, "name": "Лишний"}
+    assert session.pending_actions["9"] == {
+        "user_id": 9,
+        "name": "Лишний",
+        "action": "я тоже иду",
+    }
+    assert bot.messages == []
+
+
+def test_late_joiner_counts_for_open_turn_auto_finalize(monkeypatch):
+    chat_id = -100809
+    session = _participant_session(
+        chat_id,
+        pending_actions={
+            str(user_id): {"user_id": user_id, "action": "x"}
+            for user_id in range(1, 5)
+        },
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    calls = []
+
+    async def fake_finalize(bot, resolved_chat_id, prompt_message_id):
+        calls.append((bot, resolved_chat_id, prompt_message_id))
+
+    monkeypatch.setattr(dnd, "finalize_group_actions", fake_finalize)
+    bot = FakeBot()
+    event = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=9, first_name="Новый"),
+        reply_to_message=SimpleNamespace(message_id=777),
+        text="врываюсь в дверь",
+        caption=None,
+    )
+
+    async def handler(_event, _data):
         return None
 
     try:
@@ -186,9 +237,37 @@ def test_unregistered_reply_gets_explicit_rejection(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
+    assert set(dnd._participant_ids(session)) == {1, 2, 3, 4, 9}
+    assert "9" in session.pending_actions
+    assert calls == [(bot, chat_id, 777)]
+
+
+def test_unregistered_reply_stays_blocked_on_targeted_turn(monkeypatch):
+    chat_id = -100810
+    session = _participant_session(chat_id, targets=[1, 2])
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+    event = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=9, first_name="Лишний"),
+        reply_to_message=SimpleNamespace(message_id=777),
+        text="вмешиваюсь",
+        caption=None,
+    )
+
+    async def handler(_event, _data):
+        return None
+
+    try:
+        asyncio.run(DndParticipantCompletionMiddleware()(handler, event, {"bot": bot}))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert "9" not in session.participants
     assert "9" not in session.pending_actions
     assert bot.messages
-    assert "не записан" in bot.messages[-1][1]
+    assert "эта движуха для" in bot.messages[-1][1]
 
 
 def test_non_targeted_participant_gets_explicit_rejection(monkeypatch):
@@ -216,6 +295,25 @@ def test_non_targeted_participant_gets_explicit_rejection(monkeypatch):
     assert "4" not in session.pending_actions
     assert bot.messages
     assert "эта движуха для" in bot.messages[-1][1]
+
+
+def test_live_participant_context_contains_late_joiner_id():
+    session = _participant_session(-100811)
+    session.participants["9"] = {"user_id": 9, "name": "Новый"}
+
+    prompt = _with_participant_context(dnd, session, "Продолжай сцену")
+
+    assert DND_PARTICIPANT_CONTEXT_MARKER in prompt
+    assert "- ID 9: Новый" in prompt
+    assert "актуальный состав" in prompt
+    assert "TARGETS" in prompt
+
+
+def test_abstract_mode_does_not_get_participant_context():
+    session = _participant_session(-100812)
+    session.mode = "abstract"
+
+    assert _with_participant_context(dnd, session, "продолжай") == "продолжай"
 
 
 def test_poll_auto_finishes_when_all_eligible_participants_voted(monkeypatch):
