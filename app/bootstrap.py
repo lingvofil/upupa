@@ -246,6 +246,10 @@ class UpupaApplication:
             name="channel-scheduler",
         )
         self.supervisor.start_resilient(
+            _background_ai_factory(lambda: visit_expiration_loop(self.bot)),
+            name="world-visit-expiration",
+        )
+        self.supervisor.start_resilient(
             crocodile_session_persistence_loop,
             name="crocodile-session-persistence",
         )
