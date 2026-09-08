@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 DND_STYLE_MARKER = "СТИЛЬ УПУПЫ: КРИВАЯ ЕГРА"
+DND_STORY_MAX_WORDS = 70
 DND_STYLE_INSTRUCTION = f"""
 {DND_STYLE_MARKER}.
 Пиши весь художественный текст намеренно криво и по-падонковски: используй эрративы,
@@ -21,6 +22,10 @@ DND_STYLE_INSTRUCTION = f"""
 либо конкретного персонажа короткой репликой вроде «дегенераты», «долбоёбы», «мудилы»,
 «кретины», «идиоты», если это уместно по сцене. Не используй оскорбления по защищённым признакам.
 Не поясняй, что специально делаешь ошибки: для этого мастера безграмотность — нормальная речь.
+
+ДЛИНА: обычно 40–60 слов художественного текста, жёсткий максимум 70 слов. Пиши плотнее:
+не пересказывай только что случившееся, не повторяй решения игроков и не разжёвывай очевидные
+последствия. Обычно достаточно одного-двух коротких абзацев плюс технический тег.
 
 СВОБОДНЫЕ ХОДЫ ПАРТИИ — ВАЖНЫ, НО НЕ ДВА ПОДРЯД. ACTION:INPUT может появляться часто,
 но не чаще чем через один игровой эпизод. НИКОГДА не ставь ACTION:INPUT, если предыдущий
@@ -78,6 +83,7 @@ _INSULT_SUFFIXES = (
 )
 
 _ACTION_TAG_RE = re.compile(r"\[ACTION:([A-Z]+)(?:[;\]])", flags=re.IGNORECASE)
+_FULL_ACTION_TAG_RE = re.compile(r"\[ACTION:.*?\]", flags=re.IGNORECASE | re.DOTALL)
 _INPUT_TAG_RE = re.compile(
     r"\[ACTION:INPUT(?:;TARGETS:([0-9,\s]+))?\]",
     flags=re.IGNORECASE,
@@ -98,6 +104,78 @@ def errative_text(text: str, *, add_insult: bool = False) -> str:
         if suffix.strip() not in result:
             result += suffix
     return result
+
+
+def _compact_request_text(text: str) -> str:
+    """Normalize legacy 100-word hints to the current compact DnD contract."""
+    result = str(text or "")
+    result = result.replace(
+        "СТРОГО до 100 слов",
+        "обычно 40–60 слов, СТРОГО не больше 70 слов",
+    )
+    result = result.replace(
+        "не более 100 слов",
+        "обычно 40–60 слов, максимум 70 слов",
+    )
+    result = result.replace(
+        "до 100 слов",
+        "обычно 40–60 слов, максимум 70 слов",
+    )
+    return result
+
+
+def _ensure_style_instruction(prompt: str) -> str:
+    result = _compact_request_text(prompt).rstrip()
+    if DND_STYLE_MARKER not in result:
+        result += "\n\n" + DND_STYLE_INSTRUCTION
+    return result
+
+
+def _compact_story_response(text: str) -> str:
+    """Keep user-facing story text under the hard cap while preserving the action tag."""
+    source = str(text or "").strip()
+    action_match = _FULL_ACTION_TAG_RE.search(source)
+    action_tag = action_match.group(0) if action_match else ""
+    story = _FULL_ACTION_TAG_RE.sub("", source).strip()
+    words = story.split()
+    if len(words) <= DND_STORY_MAX_WORDS:
+        return source
+
+    sentences = re.split(r"(?<=[.!?…])\s+", story)
+    kept = []
+    kept_words = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        sentence_words = len(sentence.split())
+        if kept_words + sentence_words > DND_STORY_MAX_WORDS:
+            break
+        kept.append(sentence)
+        kept_words += sentence_words
+
+    if kept:
+        compact_story = " ".join(kept).strip()
+    else:
+        compact_story = " ".join(words[:DND_STORY_MAX_WORDS]).rstrip(" ,;:") + "…"
+
+    if action_tag:
+        return f"{compact_story}\n{action_tag}".strip()
+    return compact_story
+
+
+def _replace_last_assistant_content(session, raw_text: str, compact_text: str) -> None:
+    if raw_text == compact_text:
+        return
+    conversation = getattr(session, "conversation", None)
+    if not isinstance(conversation, list):
+        return
+    for item in reversed(conversation):
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        if item.get("content") == raw_text:
+            item["content"] = compact_text
+        return
 
 
 def _action_kind(text: str | None) -> str | None:
@@ -125,13 +203,20 @@ def _fallback_non_input_poll(text: str) -> str:
         f"[ACTION:POLL{target_field};OPTIONS:Действовать осторожно;"
         "Рискнуть и полезть напролом]"
     )
-    return f"{clean_text}\n{tag}".strip()
+    return _compact_story_response(f"{clean_text}\n{tag}".strip())
 
 
 async def _generate_without_consecutive_input(original_generate, session, prompt: str) -> str:
-    """Generate a turn while guaranteeing that INPUT never follows INPUT."""
+    """Generate a compact turn while guaranteeing that INPUT never follows INPUT."""
     previous_action = _last_assistant_action(getattr(session, "conversation", []))
-    result = await original_generate(session, prompt)
+
+    async def generate_once(request: str) -> str:
+        raw_result = await original_generate(session, _ensure_style_instruction(request))
+        compact_result = _compact_story_response(raw_result)
+        _replace_last_assistant_content(session, raw_result, compact_result)
+        return compact_result
+
+    result = await generate_once(prompt)
     if previous_action != "INPUT" or _action_kind(result) != "INPUT":
         return result
 
@@ -146,7 +231,7 @@ async def _generate_without_consecutive_input(original_generate, session, prompt
         "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
     )
     for _attempt in range(2):
-        corrected = await original_generate(session, correction_prompt)
+        corrected = await generate_once(correction_prompt)
         if _action_kind(corrected) != "INPUT":
             return corrected
         result = corrected
@@ -194,8 +279,7 @@ def configure_dnd_style() -> None:
     if getattr(dnd, "_upupa_dnd_style_configured", False):
         return
 
-    if DND_STYLE_MARKER not in dnd.DND_SYSTEM_PROMPT:
-        dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + DND_STYLE_INSTRUCTION
+    dnd.DND_SYSTEM_PROMPT = _ensure_style_instruction(dnd.DND_SYSTEM_PROMPT)
 
     original_generate_session_response = dnd.generate_session_response
 
@@ -211,10 +295,8 @@ def configure_dnd_style() -> None:
     original_with_scene_direction = dnd.with_scene_direction
 
     def styled_with_scene_direction(session, prompt: str) -> str:
-        result = original_with_scene_direction(session, prompt)
-        if DND_STYLE_MARKER not in result:
-            result += "\n\n" + DND_STYLE_INSTRUCTION
-        return result
+        result = original_with_scene_direction(session, _compact_request_text(prompt))
+        return _ensure_style_instruction(result)
 
     dnd.with_scene_direction = styled_with_scene_direction
 
