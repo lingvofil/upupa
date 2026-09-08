@@ -21,8 +21,8 @@ from services.search import (
 )
 from services.sherlock import is_sherlock_command, process_sherlock_command
 from services.weather import (
-    handle_current_weather_command, 
-    handle_weekly_forecast_command
+    handle_current_weather_command,
+    handle_weekly_forecast_command as handle_weekly_forecast_service,
 )
 from services.nameinfo import process_name_info
 import services.distortion as distortion
@@ -122,4 +122,4 @@ async def handle_weather_command(message: types.Message):
         
 @router.message(lambda message: message.text and message.text.lower().startswith("погода неделя") and message.from_user.id not in BLOCKED_USERS)
 async def handle_weekly_forecast_command(message: types.Message):
-    await handle_weekly_forecast_command(message)
+    await handle_weekly_forecast_service(message)
