@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -74,6 +77,12 @@ _INSULT_SUFFIXES = (
     " Не тормозите, долбоёбы.",
 )
 
+_ACTION_TAG_RE = re.compile(r"\[ACTION:([A-Z]+)(?:[;\]])", flags=re.IGNORECASE)
+_INPUT_TAG_RE = re.compile(
+    r"\[ACTION:INPUT(?:;TARGETS:([0-9,\s]+))?\]",
+    flags=re.IGNORECASE,
+)
+
 
 def errative_text(text: str, *, add_insult: bool = False) -> str:
     """Apply a readable padonak-style distortion while preserving mechanics."""
@@ -89,6 +98,64 @@ def errative_text(text: str, *, add_insult: bool = False) -> str:
         if suffix.strip() not in result:
             result += suffix
     return result
+
+
+def _action_kind(text: str | None) -> str | None:
+    match = _ACTION_TAG_RE.search(str(text or ""))
+    return match.group(1).upper() if match else None
+
+
+def _last_assistant_action(conversation) -> str | None:
+    for item in reversed(list(conversation or [])):
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        action = _action_kind(item.get("content"))
+        if action:
+            return action
+    return None
+
+
+def _fallback_non_input_poll(text: str) -> str:
+    """Last-resort deterministic guard if the model ignores two correction prompts."""
+    input_match = _INPUT_TAG_RE.search(str(text or ""))
+    targets = input_match.group(1).strip() if input_match and input_match.group(1) else ""
+    clean_text = re.sub(r"\[ACTION:.*?\]", "", str(text or "")).strip()
+    target_field = f";TARGETS:{targets}" if targets else ""
+    tag = (
+        f"[ACTION:POLL{target_field};OPTIONS:Действовать осторожно;"
+        "Рискнуть и полезть напролом]"
+    )
+    return f"{clean_text}\n{tag}".strip()
+
+
+async def _generate_without_consecutive_input(original_generate, session, prompt: str) -> str:
+    """Generate a turn while guaranteeing that INPUT never follows INPUT."""
+    previous_action = _last_assistant_action(getattr(session, "conversation", []))
+    result = await original_generate(session, prompt)
+    if previous_action != "INPUT" or _action_kind(result) != "INPUT":
+        return result
+
+    logging.info(
+        "DnD rejected consecutive ACTION:INPUT chat_id=%s",
+        getattr(session, "chat_id", None),
+    )
+    correction_prompt = (
+        "Предыдущий технический ход уже был ACTION:INPUT, а ты снова выдал ACTION:INPUT. "
+        "Так нельзя. Перепиши ближайший сюжетный эпизод без нового свободного хода партии. "
+        "Заверши его только ACTION:ROLL или ACTION:POLL; если это настоящий финал — ACTION:END. "
+        "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
+    )
+    for _attempt in range(2):
+        corrected = await original_generate(session, correction_prompt)
+        if _action_kind(corrected) != "INPUT":
+            return corrected
+        result = corrected
+
+    logging.warning(
+        "DnD model ignored consecutive INPUT guard; using fallback poll chat_id=%s",
+        getattr(session, "chat_id", None),
+    )
+    return _fallback_non_input_poll(result)
 
 
 class _StyledBotProxy:
@@ -129,6 +196,17 @@ def configure_dnd_style() -> None:
 
     if DND_STYLE_MARKER not in dnd.DND_SYSTEM_PROMPT:
         dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + DND_STYLE_INSTRUCTION
+
+    original_generate_session_response = dnd.generate_session_response
+
+    async def guarded_generate_session_response(session, prompt: str) -> str:
+        return await _generate_without_consecutive_input(
+            original_generate_session_response,
+            session,
+            prompt,
+        )
+
+    dnd.generate_session_response = guarded_generate_session_response
 
     original_with_scene_direction = dnd.with_scene_direction
 
