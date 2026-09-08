@@ -50,7 +50,8 @@ def test_moods_change_content_length_and_top_level_probabilities():
     content_names = [mode["name"] for mode in POST_CONTENT_MODES]
     thoughtful_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, thoughtful)))
     assert thoughtful_weights["philosophy"] > 10
-    assert thoughtful_weights["philosophy"] > thoughtful_weights["absurd"]
+    assert thoughtful_weights["mischief"] > thoughtful_weights["philosophy"]
+    assert thoughtful_weights["chat"] > thoughtful_weights["philosophy"]
 
     sleepy_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, sleepy)))
     assert sleepy_weights["mischief"] > sleepy_weights["domestic"]
@@ -58,7 +59,8 @@ def test_moods_change_content_length_and_top_level_probabilities():
 
     length_names = [mode["name"] for mode in POST_LENGTH_MODES]
     thoughtful_lengths = dict(zip(length_names, length_weights(POST_LENGTH_MODES, thoughtful)))
-    assert thoughtful_lengths["medium"] == 30
+    assert thoughtful_lengths["short"] > thoughtful_lengths["medium"]
+    assert thoughtful_lengths["medium"] == 16
 
     assert image_probability(chaotic) == 0.25
     assert external_probability(neutral) == 0.15
@@ -82,6 +84,7 @@ def test_mood_prompt_is_injected_without_exposing_state_name():
 
     assert "текущее внутреннее состояние" in prompt
     assert "задумчив" in prompt
+    assert "не лицензия на тоску" in prompt
     assert "не называй это состояние" in prompt
     assert "thoughtful" not in prompt
 
