@@ -40,7 +40,7 @@ _REPLACEMENTS = (
     ("участников", "учаснегов"),
     ("участникам", "учаснегам"),
     ("история", "исторея"),
-    ("История", "Иstoreя"),
+    ("История", "Исторея"),
     ("действия", "дейсвия"),
     ("действие", "дейсвие"),
     ("Действия", "Дейсвия"),
@@ -102,6 +102,14 @@ class _StyledBotProxy:
 
     def __getattr__(self, name):
         return getattr(self._bot, name)
+
+    def __eq__(self, other):
+        if isinstance(other, _StyledBotProxy):
+            other = other._bot
+        return self._bot == other
+
+    def __repr__(self):
+        return repr(self._bot)
 
 
 def _styled_bot(bot):
