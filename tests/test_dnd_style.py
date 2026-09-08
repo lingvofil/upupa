@@ -1,10 +1,12 @@
 from AI.dnd_style import DND_STYLE_INSTRUCTION, errative_text
 
 
-def test_dnd_style_prioritizes_free_party_turns():
-    assert "примерно в половине" in DND_STYLE_INSTRUCTION
-    assert "около каждого второго хода" in DND_STYLE_INSTRUCTION
-    assert "ВСЕГДА предпочитай ACTION:INPUT" in DND_STYLE_INSTRUCTION
+def test_dnd_style_limits_free_party_turns_to_every_other_episode():
+    assert "НЕ ДВА ПОДРЯД" in DND_STYLE_INSTRUCTION
+    assert "не чаще чем через один игровой эпизод" in DND_STYLE_INSTRUCTION
+    assert "НИКОГДА не ставь ACTION:INPUT" in DND_STYLE_INSTRUCTION
+    assert "предыдущий\nтехнический тег мастера тоже был ACTION:INPUT" in DND_STYLE_INSTRUCTION
+    assert "После INPUT следующий эпизод должен завершаться ROLL или POLL" in DND_STYLE_INSTRUCTION
     assert "Не делай длинную цепочку ROLL/POLL" in DND_STYLE_INSTRUCTION
 
 
