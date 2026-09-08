@@ -3,7 +3,7 @@
 aiogram матчит сообщение по роутерам последовательно, catch-all (dialog) — последний.
 """
 from handlers import (
-    basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
+    crocodile_guesses, basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
     world_interactions, world_expansion, world_hub, world_listing, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
@@ -18,6 +18,10 @@ world_expansion._main_markup = build_world_main_markup
 world_hub._main_markup = build_world_main_markup
 
 ROUTERS = [
+    # Правильный ответ активного Кракадила важнее любой одноимённой команды.
+    # Фильтры этого роутера матчят только фактическое угадывание, поэтому
+    # обычные команды вне игры продолжают обрабатываться как раньше.
+    crocodile_guesses.router,
     basic.router,
     sms.router,
     world_visit_media.router,  # медиа-показы во время екскурсии должны перехватываться до текстового lifecycle
