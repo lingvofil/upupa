@@ -3,37 +3,31 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from aiogram import BaseMiddleware
 
 
 class DndParticipantCompletionMiddleware(BaseMiddleware):
-    """Finish participant-mode group decisions as soon as all eligible users answered."""
+    """Collect participant replies robustly and finish complete group decisions early."""
 
     async def __call__(self, handler, event, data):
-        result = await handler(event, data)
-        try:
-            await self._maybe_finalize(event, data)
-        except Exception:
-            logging.exception("DnD participant auto-finalize failed event=%r", event)
-        return result
-
-    async def _maybe_finalize(self, event, data) -> None:
         from AI import dnd
 
         bot = data.get("bot")
-        if bot is None:
-            return
+        try:
+            if bot is not None and getattr(event, "poll_id", None) is None:
+                await self._precollect_action_reply(dnd, bot, event)
+        except Exception:
+            logging.exception("DnD participant precollect failed event=%r", event)
 
-        poll_id = getattr(event, "poll_id", None)
-        if poll_id is not None:
-            await self._maybe_finalize_poll(dnd, bot, str(poll_id))
-            return
-
-        chat = getattr(event, "chat", None)
-        if chat is None:
-            return
-        await self._maybe_finalize_action(dnd, bot, int(chat.id))
+        result = await handler(event, data)
+        try:
+            if bot is not None:
+                await self._maybe_finalize(event, bot, dnd)
+        except Exception:
+            logging.exception("DnD participant auto-finalize failed event=%r", event)
+        return result
 
     @staticmethod
     def _expected_ids(dnd, session, target_user_ids) -> set[int]:
@@ -43,14 +37,102 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         targets = {int(value) for value in (target_user_ids or [])}
         return participants & targets if targets else participants
 
-    async def _maybe_finalize_action(self, dnd, bot, chat_id: int) -> None:
+    async def _precollect_action_reply(self, dnd, bot, event) -> None:
+        chat = getattr(event, "chat", None)
+        user = getattr(event, "from_user", None)
+        if chat is None or user is None:
+            return
+        chat_id = int(chat.id)
         session = dnd.dnd_sessions.get(chat_id)
-        if not session or session.state != "WAITING_ACTION":
+        if (
+            not session
+            or session.state != "WAITING_ACTION"
+            or not dnd._is_participant_mode(session)
+        ):
             return
 
         prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
-        if not prompt_message_id:
+        reply = getattr(event, "reply_to_message", None)
+        if not prompt_message_id or reply is None:
             return
+        if int(getattr(reply, "message_id", 0) or 0) != prompt_message_id:
+            return
+
+        action = getattr(event, "text", None) or getattr(event, "caption", None)
+        if not action:
+            return
+        normalized = str(action).strip().casefold()
+        if normalized == "дальше" or normalized.startswith("упупа"):
+            return
+
+        user_id = int(user.id)
+        participants = dnd._participant_ids(session)
+        targets = list(getattr(session, "action_target_user_ids", []) or [])
+        expected = self._expected_ids(dnd, session, targets)
+        user_name = getattr(user, "first_name", None) or f"егрок {user_id}"
+
+        if user_id not in participants:
+            logging.warning(
+                "DnD participant reply rejected: not registered chat_id=%s user_id=%s participants=%s",
+                chat_id,
+                user_id,
+                sorted(participants),
+            )
+            await bot.send_message(
+                chat_id,
+                f"{user_name}, твой ход не учтён: ты не записан в эту егру.",
+            )
+            return
+
+        if expected and user_id not in expected:
+            names = ", ".join(dnd._target_names(session, sorted(expected)))
+            logging.info(
+                "DnD participant reply rejected: not targeted chat_id=%s user_id=%s expected_ids=%s",
+                chat_id,
+                user_id,
+                sorted(expected),
+            )
+            await bot.send_message(
+                chat_id,
+                f"{user_name}, твой ход щас не учтён: эта движуха для {names}.",
+            )
+            return
+
+        session.pending_actions[str(user_id)] = {
+            "user_id": user_id,
+            "name": user_name,
+            "action": str(action),
+        }
+        dnd.persist_dnd_sessions()
+        logging.info(
+            "DnD participant action precollected chat_id=%s user_id=%s prompt_message_id=%s",
+            chat_id,
+            user_id,
+            prompt_message_id,
+        )
+
+    async def _maybe_finalize(self, event, bot, dnd) -> None:
+        poll_id = getattr(event, "poll_id", None)
+        if poll_id is not None:
+            await self._maybe_finalize_poll(dnd, bot, str(poll_id))
+            return
+
+        chat = getattr(event, "chat", None)
+        if chat is None:
+            return
+        chat_id = int(chat.id)
+        complete = await self._maybe_finalize_action(dnd, bot, chat_id)
+        if not complete:
+            await self._ensure_action_timer(dnd, bot, chat_id)
+
+    async def _maybe_finalize_action(self, dnd, bot, chat_id: int) -> bool:
+        session = dnd.dnd_sessions.get(chat_id)
+        if not session or session.state != "WAITING_ACTION":
+            return False
+
+        prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
+        if not prompt_message_id:
+            return False
 
         expected = self._expected_ids(
             dnd,
@@ -58,7 +140,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             getattr(session, "action_target_user_ids", []) or [],
         )
         if not expected:
-            return
+            return False
 
         submitted = set()
         for key, value in (getattr(session, "pending_actions", {}) or {}).items():
@@ -76,13 +158,42 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             sorted(submitted),
             sorted(expected),
         )
-        if expected.issubset(submitted):
-            logging.info(
-                "DnD participant action auto-finalize chat_id=%s prompt_message_id=%s",
-                chat_id,
-                prompt_message_id,
-            )
-            await dnd.finalize_group_actions(bot, chat_id, prompt_message_id)
+        if not expected.issubset(submitted):
+            return False
+
+        logging.info(
+            "DnD participant action auto-finalize chat_id=%s prompt_message_id=%s",
+            chat_id,
+            prompt_message_id,
+        )
+        await dnd.finalize_group_actions(bot, chat_id, prompt_message_id)
+        return True
+
+    async def _ensure_action_timer(self, dnd, bot, chat_id: int) -> None:
+        session = dnd.dnd_sessions.get(chat_id)
+        if (
+            not session
+            or session.state != "WAITING_ACTION"
+            or not dnd._is_participant_mode(session)
+            or getattr(session, "action_deadline", None) is not None
+            or not (getattr(session, "pending_actions", {}) or {})
+        ):
+            return
+        prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
+        if not prompt_message_id:
+            return
+
+        session.action_deadline = time.time() + dnd.DND_ACTION_WINDOW_SECONDS
+        dnd.persist_dnd_sessions()
+        dnd._start_background_task(
+            dnd.wait_for_action_timeout(bot, chat_id, prompt_message_id),
+            name=f"dnd-actions:{chat_id}:{prompt_message_id}:completion-fallback",
+        )
+        logging.warning(
+            "DnD participant action timer recovered chat_id=%s prompt_message_id=%s",
+            chat_id,
+            prompt_message_id,
+        )
 
     async def _maybe_finalize_poll(self, dnd, bot, poll_id: str) -> None:
         chat_id = dnd.poll_map.get(poll_id)
