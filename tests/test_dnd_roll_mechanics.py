@@ -149,8 +149,8 @@ def test_roll_d20_uses_lowest_for_disadvantage(monkeypatch):
 def test_roll_outcome_uses_dc_without_modifiers():
     assert dnd._roll_outcome(14, 14) == "успех"
     assert dnd._roll_outcome(13, 14) == "провал"
-    assert dnd._natural_roll_note(20) == "натуральная 20"
-    assert dnd._natural_roll_note(1) == "натуральная 1"
+    assert dnd._natural_roll_note(20) == "КРИТИЧЕСКАЯ УДАЧА"
+    assert dnd._natural_roll_note(1) == "КРИТИЧЕСКАЯ НЕУДАЧА"
 
 
 def test_parse_turn_stores_story_save_without_skill(monkeypatch):
