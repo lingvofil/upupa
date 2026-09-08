@@ -208,10 +208,15 @@ def _fallback_non_input_poll(text: str) -> str:
 
 async def _generate_without_consecutive_input(original_generate, session, prompt: str) -> str:
     """Generate a compact turn while guaranteeing that INPUT never follows INPUT."""
-    previous_action = _last_assistant_action(getattr(session, "conversation", []))
+    conversation = getattr(session, "conversation", None)
+    previous_action = _last_assistant_action(conversation or [])
 
-    async def generate_once(request: str) -> str:
-        raw_result = await original_generate(session, _ensure_style_instruction(request))
+    async def generate_once(request: str, *, force_style: bool = False) -> str:
+        if force_style or isinstance(conversation, list):
+            prepared_request = _ensure_style_instruction(request)
+        else:
+            prepared_request = _compact_request_text(request)
+        raw_result = await original_generate(session, prepared_request)
         compact_result = _compact_story_response(raw_result)
         _replace_last_assistant_content(session, raw_result, compact_result)
         return compact_result
@@ -231,7 +236,7 @@ async def _generate_without_consecutive_input(original_generate, session, prompt
         "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
     )
     for _attempt in range(2):
-        corrected = await generate_once(correction_prompt)
+        corrected = await generate_once(correction_prompt, force_style=True)
         if _action_kind(corrected) != "INPUT":
             return corrected
         result = corrected
