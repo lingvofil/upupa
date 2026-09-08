@@ -54,8 +54,9 @@ class FakeBot:
         return SimpleNamespace(message_id=100 + len(self.messages))
 
 
-def test_dnd_poll_timeout_is_five_minutes():
-    assert dnd.DND_POLL_TIMEOUT_SECONDS == 300
+def test_dnd_poll_timeout_is_three_minutes():
+    assert dnd.DND_POLL_TIMEOUT_SECONDS == 180
+    assert dnd.DND_ACTION_WINDOW_SECONDS == 180
 
 
 def test_scene_director_does_not_repeat_last_two(monkeypatch):
@@ -67,6 +68,40 @@ def test_scene_director_does_not_repeat_last_two(monkeypatch):
     for index, scene_type in enumerate(picked):
         assert scene_type not in picked[max(0, index - 2):index]
     assert len(session.recent_scene_types) <= dnd.DND_RECENT_SCENE_LIMIT
+
+
+def test_roll_prompt_uses_human_difficulty_label(monkeypatch):
+    chat_id = -100499
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        mode="abstract",
+        state="RESOLVING",
+        pending_roll=None,
+        last_roll_stat=None,
+        action_prompt_message_id=None,
+        pending_actions={},
+        action_deadline=None,
+        action_target_user_ids=[],
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+
+    try:
+        asyncio.run(
+            dnd.parse_and_execute_turn(
+                bot,
+                chat_id,
+                "Кабан несётся прямо на тебя. "
+                "[ACTION:ROLL;TYPE:SAVE;REASON:успеть увернуться от тарана кабана;DC:12;MODE:NORMAL]",
+            )
+        )
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    prompt = bot.messages[-1][1]
+    assert "сложность 12" in prompt
+    assert "DC 12" not in prompt
 
 
 def test_group_action_router_only_accepts_replies_to_current_prompt():
@@ -102,6 +137,50 @@ def test_group_action_router_only_accepts_replies_to_current_prompt():
         assert dnd._is_group_action_reply(plain_chat) is False
         assert dnd._is_group_action_reply(wrong_reply) is False
         assert dnd._is_group_action_reply(correct_reply) is True
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_participant_mode_restricts_targeted_turn_to_named_player():
+    chat_id = -1005001
+    session = SimpleNamespace(
+        mode="participants",
+        state="WAITING_ACTION",
+        action_prompt_message_id=177,
+        action_target_user_ids=[1],
+        participants={
+            "1": {"user_id": 1, "name": "Алиса"},
+            "2": {"user_id": 2, "name": "Боря"},
+        },
+    )
+    dnd.dnd_sessions[chat_id] = session
+
+    try:
+        alice = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            user_name="Алиса",
+            text="прыгаю в окно",
+            reply_to_message_id=177,
+        )
+        boris = FakeMessage(
+            chat_id=chat_id,
+            user_id=2,
+            user_name="Боря",
+            text="тоже прыгаю",
+            reply_to_message_id=177,
+        )
+        outsider = FakeMessage(
+            chat_id=chat_id,
+            user_id=3,
+            user_name="Вася",
+            text="а я дверь открою",
+            reply_to_message_id=177,
+        )
+
+        assert dnd._is_group_action_reply(alice) is True
+        assert dnd._is_group_action_reply(boris) is False
+        assert dnd._is_group_action_reply(outsider) is False
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
@@ -239,3 +318,63 @@ def test_finalize_group_actions_sends_all_actions_to_master(monkeypatch):
     assert session.state == "RESOLVING"
     assert session.pending_actions == {}
     assert session.action_prompt_message_id is None
+
+
+def test_participant_poll_counts_only_registered_target_votes():
+    session = SimpleNamespace(
+        mode="participants",
+        participants={
+            "1": {"user_id": 1, "name": "Алиса"},
+            "2": {"user_id": 2, "name": "Боря"},
+        },
+        pending_poll={
+            "target_user_ids": [1],
+            "votes": {"1": 0},
+        },
+    )
+
+    assert dnd._poll_user_is_eligible(session, 1) is True
+    assert dnd._poll_user_is_eligible(session, 2) is False
+    assert dnd._poll_user_is_eligible(session, 3) is False
+    assert dnd._eligible_poll_vote_counts(session, ["A", "B"]) == [1, 0]
+
+
+def test_only_host_can_finish_action_window_early(monkeypatch):
+    chat_id = -100504
+    session = SimpleNamespace(
+        starter_user_id=1,
+        state="WAITING_ACTION",
+        action_prompt_message_id=222,
+        pending_actions={"2": {"user_id": 2, "name": "Боря", "action": "иду"}},
+    )
+    dnd.dnd_sessions[chat_id] = session
+    calls = []
+
+    async def fake_finalize(bot, resolved_chat_id, prompt_id):
+        calls.append((bot, resolved_chat_id, prompt_id))
+
+    monkeypatch.setattr(dnd, "finalize_group_actions", fake_finalize)
+    bot = object()
+    non_host = FakeMessage(
+        chat_id=chat_id,
+        user_id=2,
+        user_name="Боря",
+        text="дальше",
+        bot=bot,
+    )
+    host = FakeMessage(
+        chat_id=chat_id,
+        user_id=1,
+        user_name="Алиса",
+        text="дальше",
+        bot=bot,
+    )
+
+    try:
+        asyncio.run(dnd.handle_dnd_next(non_host))
+        asyncio.run(dnd.handle_dnd_next(host))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert calls == [(bot, chat_id, 222)]
+    assert non_host.answers[0][0] == "«Дальше» может сказать только ведущий."

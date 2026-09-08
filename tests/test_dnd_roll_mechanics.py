@@ -30,7 +30,7 @@ class FakeMessage:
 
 def test_system_prompt_uses_skill_checks_and_calibrated_dc():
     assert "SKILL:Внимательность" in dnd.DND_SYSTEM_PROMPT
-    assert "SKILL:Расследование" in dnd.DND_SYSTEM_PROMPT
+    assert "Расследование" in dnd.DND_SYSTEM_PROMPT
     assert "TYPE:CHECK — основной тип броска" in dnd.DND_SYSTEM_PROMPT
     assert "TYPE:SAVE используй ТОЛЬКО" in dnd.DND_SYSTEM_PROMPT
     assert "DC 18–20 не назначай" in dnd.DND_SYSTEM_PROMPT
@@ -49,6 +49,7 @@ def test_parse_roll_command_supports_save_reason_dc_and_disadvantage():
         "reason": "не отравиться дымом",
         "dc": 14,
         "mode": "DISADVANTAGE",
+        "target_user_ids": [],
     }
 
 
@@ -61,10 +62,19 @@ def test_parse_roll_command_supports_named_check_skills():
         "reason": "заметить следы",
         "dc": 10,
         "mode": "NORMAL",
+        "target_user_ids": [],
     }
     assert dnd._parse_roll_command(
         "ROLL;TYPE:CHECK;SKILL:расследование;REASON:осмотреть замок;DC:12;MODE:NORMAL"
     )["skill"] == "Расследование"
+
+
+def test_parse_roll_command_supports_targets():
+    roll = dnd._parse_roll_command(
+        "ROLL;TYPE:SAVE;REASON:увернуться;DC:12;MODE:NORMAL;TARGETS:123,456"
+    )
+
+    assert roll["target_user_ids"] == [123, 456]
 
 
 def test_parse_roll_command_ignores_skill_on_save_and_unknown_skill():
@@ -85,6 +95,7 @@ def test_parse_roll_command_does_not_use_legacy_characteristic():
         "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
+        "target_user_ids": [],
     }
     assert "stat" not in roll
 
@@ -98,6 +109,7 @@ def test_parse_roll_command_caps_dc_for_pure_d20_and_accepts_short_modes():
         "reason": "перепрыгнуть провал",
         "dc": 17,
         "mode": "ADVANTAGE",
+        "target_user_ids": [],
     }
     assert dnd._parse_roll_command(
         "ROLL;TYPE:CHECK;REASON:очень сложная попытка;DC:20;MODE:NORMAL"
@@ -110,6 +122,7 @@ def test_parse_roll_command_caps_dc_for_pure_d20_and_accepts_short_modes():
         "reason": "не упасть",
         "dc": 5,
         "mode": "DISADVANTAGE",
+        "target_user_ids": [],
     }
 
 
@@ -172,12 +185,14 @@ def test_parse_turn_stores_story_save_without_skill(monkeypatch):
         "reason": "не сорваться с карниза",
         "dc": 13,
         "mode": "ADVANTAGE",
+        "target_user_ids": [],
     }
     assert session.last_roll_stat is None
     assert session.pending_actions == {}
     assert session.action_prompt_message_id is None
     assert "Спасбросок: не сорваться с карниза" in bot.messages[-1][1]
-    assert "DC 13" in bot.messages[-1][1]
+    assert "сложность 13" in bot.messages[-1][1]
+    assert "DC 13" not in bot.messages[-1][1]
     assert "преимущество" in bot.messages[-1][1]
 
 
@@ -257,7 +272,7 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
         "⚙️ Сложность — 12 (с преимуществом).\n"
         "🎯 Броски кубика — 5 и 18, результат — 18"
     )
-    assert "DC: 12; результат: успех" in prompts[0]
+    assert "Сложность: 12; результат: успех" in prompts[0]
     assert "Броски d20: [5, 18]; итог: 18" in prompts[0]
     assert parsed == [(message.bot, chat_id, "продолжение [ACTION:INPUT]")]
 
@@ -408,6 +423,7 @@ def test_old_waiting_roll_state_restores_without_characteristic():
         "reason": "проверка по ситуации",
         "dc": None,
         "mode": "NORMAL",
+        "target_user_ids": [],
     }
     assert "stat" not in session.pending_roll
 
@@ -434,6 +450,7 @@ def test_old_pending_roll_with_stat_is_sanitized():
         "reason": "проверка по ситуации",
         "dc": 15,
         "mode": "DISADVANTAGE",
+        "target_user_ids": [],
     }
     assert "stat" not in session.pending_roll
 
