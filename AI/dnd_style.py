@@ -119,7 +119,9 @@ def _styled_bot(bot):
 def configure_dnd_style() -> None:
     """Install DnD-only style wrappers. Safe to call more than once."""
     from AI import dnd
+    from AI.dnd_completion import configure_dnd_completion
 
+    configure_dnd_completion(dnd.dnd_router)
     if getattr(dnd, "_upupa_dnd_style_configured", False):
         return
 
