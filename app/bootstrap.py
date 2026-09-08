@@ -7,7 +7,7 @@ Bot и Dispatcher создаются только в composition root. Прик�
 from dataclasses import dataclass, field
 from functools import partial
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
 from app.diagnostics import build_runtime_diagnostics, resource_snapshot_loop
@@ -15,7 +15,7 @@ from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
 from core.logging_setup import logger
-from core.settings import API_TOKEN, HEALTHCHECK_PORT, validate_required_settings
+from core.settings import ADMIN_ID, API_TOKEN, HEALTHCHECK_PORT, validate_required_settings
 from infrastructure.ai.execution import ai_execution_lane
 
 
@@ -28,6 +28,58 @@ REQUIRED_BACKGROUND_TASKS = (
 )
 
 _main_router: Router | None = None
+_dnd_owner_host_middleware_configured = False
+
+
+class DndOwnerHostOverrideMiddleware(BaseMiddleware):
+    """Temporarily grant the configured bot owner DnD host privileges."""
+
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user is None or int(user.id) != int(ADMIN_ID):
+            return await handler(event, data)
+
+        chat = getattr(event, "chat", None)
+        if chat is None:
+            chat = getattr(getattr(event, "message", None), "chat", None)
+        if chat is None:
+            return await handler(event, data)
+
+        from AI import dnd
+
+        session = dnd.dnd_sessions.get(chat.id)
+        if session is None:
+            return await handler(event, data)
+
+        previous_host_id = getattr(session, "starter_user_id", None)
+        if previous_host_id is not None and int(previous_host_id) == int(ADMIN_ID):
+            return await handler(event, data)
+
+        session.starter_user_id = int(ADMIN_ID)
+        logger.info(
+            "DnD owner host override chat_id=%s owner_id=%s previous_host_id=%s",
+            chat.id,
+            ADMIN_ID,
+            previous_host_id,
+        )
+        try:
+            return await handler(event, data)
+        finally:
+            current_session = dnd.dnd_sessions.get(chat.id)
+            if current_session is session:
+                current_session.starter_user_id = previous_host_id
+                dnd.persist_dnd_sessions()
+
+
+def _configure_dnd_owner_host_override(dnd_router: Router) -> None:
+    global _dnd_owner_host_middleware_configured
+    if _dnd_owner_host_middleware_configured:
+        return
+
+    middleware = DndOwnerHostOverrideMiddleware()
+    dnd_router.message.outer_middleware(middleware)
+    dnd_router.callback_query.outer_middleware(middleware)
+    _dnd_owner_host_middleware_configured = True
 
 
 def _background_ai_factory(coro_factory):
@@ -201,6 +253,7 @@ class UpupaApplication:
 
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
+        _configure_dnd_owner_host_override(dnd_router)
         main_router = get_main_router()
         attached = tuple(getattr(self.dispatcher, "sub_routers", ()))
 
