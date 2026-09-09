@@ -100,32 +100,29 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         user_name = getattr(user, "first_name", None) or f"егрок {user_id}"
 
         if user_id not in participants:
-            if targets:
-                expected = self._expected_ids(dnd, session, targets)
-                names = ", ".join(dnd._target_names(session, sorted(expected)))
-                logging.info(
-                    "DnD late participant reply rejected: targeted turn chat_id=%s user_id=%s expected_ids=%s",
-                    chat_id,
-                    user_id,
-                    sorted(expected),
-                )
-                await bot.send_message(
-                    chat_id,
-                    f"{user_name}, щас не влезай: эта движуха для {names or 'других егроков'}.",
-                )
-                return
-
             session.participants[str(user_id)] = {
                 "user_id": user_id,
                 "name": user_name,
             }
             participants.add(user_id)
+            dnd.persist_dnd_sessions()
             logging.info(
-                "DnD late participant joined through open action chat_id=%s user_id=%s name=%s",
+                "DnD late participant joined chat_id=%s user_id=%s name=%s targeted=%s",
                 chat_id,
                 user_id,
                 user_name,
+                bool(targets),
             )
+
+            if targets:
+                expected = self._expected_ids(dnd, session, targets)
+                names = ", ".join(dnd._target_names(session, sorted(expected)))
+                await bot.send_message(
+                    chat_id,
+                    f"{user_name}, ты влез в егру. Но щас ход {names or 'других егроков'}: "
+                    "твой ответ не учтён — жди следующей движухи.",
+                )
+                return
 
         expected = self._expected_ids(dnd, session, targets)
         if expected and user_id not in expected:
