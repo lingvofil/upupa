@@ -242,11 +242,12 @@ def test_late_joiner_counts_for_open_turn_auto_finalize(monkeypatch):
     assert calls == [(bot, chat_id, 777)]
 
 
-def test_unregistered_reply_stays_blocked_on_targeted_turn(monkeypatch):
+def test_unregistered_reply_joins_but_waits_on_targeted_turn(monkeypatch):
     chat_id = -100810
     session = _participant_session(chat_id, targets=[1, 2])
     dnd.dnd_sessions[chat_id] = session
-    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    persisted = []
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: persisted.append(True))
     bot = FakeBot()
     event = SimpleNamespace(
         chat=SimpleNamespace(id=chat_id),
@@ -257,6 +258,7 @@ def test_unregistered_reply_stays_blocked_on_targeted_turn(monkeypatch):
     )
 
     async def handler(_event, _data):
+        assert dnd._can_user_act(session, 9, [1, 2]) is False
         return None
 
     try:
@@ -264,10 +266,13 @@ def test_unregistered_reply_stays_blocked_on_targeted_turn(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
-    assert "9" not in session.participants
+    assert session.participants["9"] == {"user_id": 9, "name": "Лишний"}
     assert "9" not in session.pending_actions
+    assert persisted == [True]
     assert bot.messages
-    assert "эта движуха для" in bot.messages[-1][1]
+    assert "ты влез в егру" in bot.messages[-1][1]
+    assert "щас ход А, Б" in bot.messages[-1][1]
+    assert "твой ответ не учтён" in bot.messages[-1][1]
 
 
 def test_non_targeted_participant_gets_explicit_rejection(monkeypatch):
