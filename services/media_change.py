@@ -38,6 +38,10 @@ def _is_audio_document(document: types.Document) -> bool:
     return False
 
 
+def _is_video_sticker(message: types.Message) -> bool:
+    return bool(message and message.sticker and message.sticker.is_video)
+
+
 def _extract_media_source(message: types.Message) -> types.Message | None:
     if message.reply_to_message:
         source = message.reply_to_message
@@ -84,6 +88,7 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
             or source.animation
             or source.audio
             or source.voice
+            or _is_video_sticker(source)
             or (source.document and (_is_video_document(source.document) or _is_audio_document(source.document)))
         ):
             return source
@@ -93,6 +98,7 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
         or message.animation
         or message.audio
         or message.voice
+        or _is_video_sticker(message)
         or (message.document and (_is_video_document(message.document) or _is_audio_document(message.document)))
     ):
         return message
@@ -199,7 +205,7 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
     media_source = _extract_media_source(message)
 
     if not media_source:
-        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
+        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
         return
 
     file_obj = (
@@ -212,7 +218,7 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
     )
 
     if not file_obj:
-        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
+        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
         return
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -380,13 +386,20 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     media_source = _extract_reversible_media_source(message)
 
     if not media_source:
-        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «наоборот».")
+        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
         return
 
-    file_obj = media_source.video or media_source.animation or media_source.audio or media_source.voice or media_source.document
+    file_obj = (
+        media_source.video
+        or media_source.animation
+        or media_source.audio
+        or media_source.voice
+        or media_source.document
+        or media_source.sticker
+    )
 
     if not file_obj:
-        await message.reply("Реплайни на видео/гифку/войс/аудио или отправь с подписью «наоборот».")
+        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
         return
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -412,7 +425,9 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
             is_voice_input = bool(media_source.voice)
             is_audio_input = bool(media_source.audio or (media_source.document and _is_audio_document(media_source.document)))
 
-            if media_source.animation:
+            if _is_video_sticker(media_source):
+                input_suffix = ".webm"
+            elif media_source.animation:
                 input_suffix = ".webm"
             elif media_source.audio or media_source.voice:
                 input_suffix = ".ogg"
