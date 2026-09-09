@@ -37,6 +37,38 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
     )
 
 
+def _refresh_gemini_chat_session(dnd, session) -> None:
+    """Rebuild Gemini state from DnD's canonical conversation before every turn."""
+    if getattr(session, "active_model", None) != "gemini":
+        return
+
+    history = []
+    for item in getattr(session, "conversation", None) or []:
+        if not isinstance(item, dict):
+            continue
+        source_role = item.get("role")
+        content = item.get("content")
+        if content is None:
+            continue
+        if source_role in {"assistant", "model"}:
+            role = "model"
+        elif source_role == "user":
+            role = "user"
+        else:
+            logging.warning(
+                "DnD dropped invalid Gemini history role chat_id=%s role=%r",
+                getattr(session, "chat_id", None),
+                source_role,
+            )
+            continue
+        history.append({"role": role, "parts": [str(content)]})
+
+    session.chat_session = dnd.model.start_chat(
+        chat_id=session.chat_id,
+        history=history,
+    )
+
+
 class DndParticipantCompletionMiddleware(BaseMiddleware):
     """Collect participant replies robustly and finish complete group decisions early."""
 
@@ -286,7 +318,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
 
 
 def configure_dnd_completion(dnd_router) -> None:
-    """Attach participant completion middleware and live participant context once."""
+    """Attach participant completion middleware and DnD generation guards once."""
     if getattr(dnd_router, "_upupa_dnd_completion_configured", False):
         return
 
@@ -295,6 +327,7 @@ def configure_dnd_completion(dnd_router) -> None:
     original_generate_session_response = dnd.generate_session_response
 
     async def generate_with_participant_context(session, prompt: str) -> str:
+        _refresh_gemini_chat_session(dnd, session)
         return await original_generate_session_response(
             session,
             _with_participant_context(dnd, session, prompt),
