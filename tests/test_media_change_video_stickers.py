@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,8 +50,7 @@ def test_reverse_extractor_does_not_expand_to_static_or_animated_stickers():
         assert media_change._extract_reversible_media_source(command) is None
 
 
-@pytest.mark.asyncio
-async def test_reverse_video_sticker_uses_webm_input_and_returns_video(monkeypatch):
+def test_reverse_video_sticker_uses_webm_input_and_returns_video(monkeypatch):
     source = _message(sticker=_video_sticker())
     processing_message = SimpleNamespace(delete=_async_noop)
     replies = []
@@ -88,7 +88,7 @@ async def test_reverse_video_sticker_uses_webm_input_and_returns_video(monkeypat
 
     monkeypatch.setattr(media_change, "_reverse_video_ffmpeg", fake_reverse)
 
-    await media_change.handle_reverse_command(command, FakeBot())
+    asyncio.run(media_change.handle_reverse_command(command, FakeBot()))
 
     assert replies == ["⚙️ обращаю вспять..."]
     assert len(video_replies) == 1
