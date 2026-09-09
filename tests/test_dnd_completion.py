@@ -9,6 +9,7 @@ from AI import dnd
 from AI.dnd_completion import (
     DND_PARTICIPANT_CONTEXT_MARKER,
     DndParticipantCompletionMiddleware,
+    _refresh_gemini_chat_session,
     _with_participant_context,
 )
 
@@ -319,6 +320,62 @@ def test_abstract_mode_does_not_get_participant_context():
     session.mode = "abstract"
 
     assert _with_participant_context(dnd, session, "продолжай") == "продолжай"
+
+
+def test_gemini_chat_session_rebuild_drops_invalid_sdk_role(monkeypatch):
+    starts = []
+    fresh_chat = object()
+
+    def fake_start_chat(*, chat_id, history):
+        starts.append((chat_id, history))
+        return fresh_chat
+
+    monkeypatch.setattr(dnd.model, "start_chat", fake_start_chat)
+    poisoned_chat = object()
+    session = SimpleNamespace(
+        chat_id=-100813,
+        active_model="gemini",
+        conversation=[
+            {"role": "user", "content": "первый ход"},
+            {"role": "assistant", "content": "ответ мастера"},
+            {"role": None, "content": "сломанная SDK-запись"},
+        ],
+        chat_session=poisoned_chat,
+    )
+
+    _refresh_gemini_chat_session(dnd, session)
+
+    assert session.chat_session is fresh_chat
+    assert starts == [
+        (
+            -100813,
+            [
+                {"role": "user", "parts": ["первый ход"]},
+                {"role": "model", "parts": ["ответ мастера"]},
+            ],
+        )
+    ]
+
+
+def test_non_gemini_chat_session_is_not_rebuilt(monkeypatch):
+    starts = []
+    original_chat = object()
+    session = SimpleNamespace(
+        chat_id=-100814,
+        active_model="groq",
+        conversation=[{"role": "user", "content": "ход"}],
+        chat_session=original_chat,
+    )
+    monkeypatch.setattr(
+        dnd.model,
+        "start_chat",
+        lambda **kwargs: starts.append(kwargs),
+    )
+
+    _refresh_gemini_chat_session(dnd, session)
+
+    assert session.chat_session is original_chat
+    assert starts == []
 
 
 def test_poll_auto_finishes_when_all_eligible_participants_voted(monkeypatch):
