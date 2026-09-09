@@ -322,7 +322,7 @@ def test_abstract_mode_does_not_get_participant_context():
     assert _with_participant_context(dnd, session, "продолжай") == "продолжай"
 
 
-def test_gemini_chat_session_rebuild_drops_invalid_sdk_role(monkeypatch):
+def test_gemini_chat_session_rebuild_drops_invalid_sdk_role():
     starts = []
     fresh_chat = object()
 
@@ -330,7 +330,9 @@ def test_gemini_chat_session_rebuild_drops_invalid_sdk_role(monkeypatch):
         starts.append((chat_id, history))
         return fresh_chat
 
-    monkeypatch.setattr(dnd.model, "start_chat", fake_start_chat)
+    fake_dnd = SimpleNamespace(
+        model=SimpleNamespace(start_chat=fake_start_chat),
+    )
     poisoned_chat = object()
     session = SimpleNamespace(
         chat_id=-100813,
@@ -343,7 +345,7 @@ def test_gemini_chat_session_rebuild_drops_invalid_sdk_role(monkeypatch):
         chat_session=poisoned_chat,
     )
 
-    _refresh_gemini_chat_session(dnd, session)
+    _refresh_gemini_chat_session(fake_dnd, session)
 
     assert session.chat_session is fresh_chat
     assert starts == [
@@ -357,22 +359,20 @@ def test_gemini_chat_session_rebuild_drops_invalid_sdk_role(monkeypatch):
     ]
 
 
-def test_non_gemini_chat_session_is_not_rebuilt(monkeypatch):
+def test_non_gemini_chat_session_is_not_rebuilt():
     starts = []
     original_chat = object()
+    fake_dnd = SimpleNamespace(
+        model=SimpleNamespace(start_chat=lambda **kwargs: starts.append(kwargs)),
+    )
     session = SimpleNamespace(
         chat_id=-100814,
         active_model="groq",
         conversation=[{"role": "user", "content": "ход"}],
         chat_session=original_chat,
     )
-    monkeypatch.setattr(
-        dnd.model,
-        "start_chat",
-        lambda **kwargs: starts.append(kwargs),
-    )
 
-    _refresh_gemini_chat_session(dnd, session)
+    _refresh_gemini_chat_session(fake_dnd, session)
 
     assert session.chat_session is original_chat
     assert starts == []
