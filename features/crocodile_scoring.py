@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import math
 import time
 
@@ -208,9 +209,40 @@ async def check_regular_answer(message) -> bool:
         artists = _artists(session)
         artist_ids = {user_id for user_id, _name in artists}
         is_drawer = bool(from_user and from_user.id in artist_ids)
-        correct = crocodile._contains_answer(message.text, session.get("word", "")) and not is_drawer
-        if not correct:
+        contains_answer = crocodile._contains_answer(
+            message.text,
+            session.get("word", ""),
+        )
+
+        # Do not delegate artist messages to lower Crocodile wrappers. The legacy
+        # check_answer() only knows about drawer_id, so a second duo artist could
+        # otherwise be misclassified as an ordinary guesser if wrapper ordering
+        # changes or one of the mode guards is bypassed.
+        if is_drawer:
+            if contains_answer:
+                logging.info(
+                    "[crocodile] ignored artist self-guess chat=%s user=%s message=%s mode=%s",
+                    chat_id,
+                    getattr(from_user, "id", None),
+                    getattr(message, "message_id", None),
+                    session.get("mode") or "classic",
+                )
+                return True
+            return False
+
+        if not contains_answer:
             return await crocodile.check_answer(message)
+
+        logging.info(
+            "[crocodile] accepted guess chat=%s user=%s message=%s word=%r text=%r mode=%s artists=%s",
+            chat_id,
+            getattr(from_user, "id", None),
+            getattr(message, "message_id", None),
+            session.get("word", ""),
+            str(message.text)[:200],
+            session.get("mode") or "classic",
+            sorted(artist_ids),
+        )
 
         started_at = float(session.get("started_at") or 0)
         elapsed = max(0.0, time.time() - started_at) if started_at > 0 else None
