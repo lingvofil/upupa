@@ -136,6 +136,11 @@ def _merge_wav_chunks_to_mp3(wav_chunks: list[bytes]) -> bytes:
     for chunk in wav_chunks:
         combined += AudioSegment.from_file(BytesIO(chunk), format="wav")
 
+    logging.info(
+        "[speech][merge] chunks=%s actual_duration_seconds=%.1f",
+        len(wav_chunks),
+        len(combined) / 1000,
+    )
     output = BytesIO()
     combined.export(output, format="mp3", bitrate="128k")
     return output.getvalue()

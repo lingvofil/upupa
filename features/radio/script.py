@@ -19,6 +19,7 @@ RADIO_RECENT_CONTEXT_CHARS = 6500
 RADIO_WORDS_PER_MINUTE = 135
 RADIO_DURATION_MINUTES = (1, 3, 5)
 RADIO_DEFAULT_DURATION_MINUTES = 3
+RADIO_MIN_LENGTH_ATTEMPTS = 3
 RADIO_DURATION_WORD_RANGES = {
     1: (100, 140, 160),
     3: (330, 480, RADIO_MAX_WORDS),
@@ -272,7 +273,8 @@ async def generate_radio_script(
 - В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
 - После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
 - Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
-{social_rule}{international_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Обычно цель — {target_min_words}–{target_max_words} русских слов. Если материала мало, делай короче и не лей воду.
+{social_rule}{international_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Цель — {target_min_words}–{target_max_words} русских слов.
+- Не опускайся ниже {target_min_words} слов. Если фактов немного, не выдумывай новые: подробнее и живее раскрывай существующие темы, используй естественные переходы, подводки, реакции ведущего и эксперта.
 - Никогда не превышай {hard_max_words} слов вместе с метками.
 
 Рубрики этого выпуска:
@@ -285,11 +287,6 @@ async def generate_radio_script(
 {social_block}{world_block}
 Верни только сценарий с метками {SPEAKER_HOST}: / {SPEAKER_EXPERT}:.
 """
-    prompt = build_prompt_with_current_chat_prompt(
-        chat_id,
-        task_prompt,
-        task_name="сценарий Радио Упупы",
-    )
 
     logging.info(
         "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s world_context=%s rubrics=%s current_prompt=true",
@@ -305,13 +302,62 @@ async def generate_radio_script(
         bool(world_context),
         ",".join(name for name, _instruction in rubrics),
     )
-    raw_script = await _generate_with_active_model(prompt, chat_id, is_summarization=True)
-    script = sanitize_radio_script(raw_script, max_words=hard_max_words)
-    if not script:
-        raise RuntimeError("Radio script model returned empty text")
 
-    return RadioScript(
-        text=script,
-        word_count=len(script.split()),
-        used_structured_summary=use_summary,
+    last_word_count = 0
+    for attempt in range(1, RADIO_MIN_LENGTH_ATTEMPTS + 1):
+        retry_note = ""
+        if attempt > 1:
+            retry_note = f"""
+
+ОБЯЗАТЕЛЬНАЯ КОРРЕКТИРОВКА ДЛИНЫ:
+Предыдущая попытка получилась всего на {last_word_count} слов — это слишком коротко для выбранных {duration_minutes} минут.
+Перепиши сценарий полностью, а не продолжай прежний. Итог должен быть не короче {target_min_words} и не длиннее {hard_max_words} слов. Не добавляй новых фактов: расширяй подачу только за счёт уже данного материала, переходов и комментариев ведущего/эксперта.
+"""
+        prompt = build_prompt_with_current_chat_prompt(
+            chat_id,
+            task_prompt + retry_note,
+            task_name="сценарий Радио Упупы",
+        )
+        raw_script = await _generate_with_active_model(prompt, chat_id, is_summarization=True)
+        script = sanitize_radio_script(raw_script, max_words=hard_max_words)
+        if not script:
+            last_word_count = 0
+            logging.warning(
+                "[radio][script] empty attempt=%s/%s requested_minutes=%s",
+                attempt,
+                RADIO_MIN_LENGTH_ATTEMPTS,
+                duration_minutes,
+            )
+            continue
+
+        last_word_count = len(script.split())
+        logging.info(
+            "[radio][script] attempt=%s/%s requested_minutes=%s words=%s min_words=%s",
+            attempt,
+            RADIO_MIN_LENGTH_ATTEMPTS,
+            duration_minutes,
+            last_word_count,
+            target_min_words,
+        )
+        if last_word_count >= target_min_words:
+            return RadioScript(
+                text=script,
+                word_count=last_word_count,
+                used_structured_summary=use_summary,
+            )
+
+        logging.warning(
+            "[radio][script] too short attempt=%s/%s requested_minutes=%s words=%s min_words=%s",
+            attempt,
+            RADIO_MIN_LENGTH_ATTEMPTS,
+            duration_minutes,
+            last_word_count,
+            target_min_words,
+        )
+
+    if last_word_count == 0:
+        raise RuntimeError("Radio script model returned empty text")
+    raise RuntimeError(
+        f"Radio script remained too short after {RADIO_MIN_LENGTH_ATTEMPTS} attempts: "
+        f"{last_word_count} < {target_min_words} words"
     )
