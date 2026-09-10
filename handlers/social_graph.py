@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from aiogram import Router, types
 from aiogram.types import BufferedInputFile
 
@@ -19,7 +21,7 @@ from features.social_graph.caricature import (
     build_cringe_social_graph_prompt,
 )
 from features.social_graph.image_generation import generate_social_graph_image
-from features.social_graph.rendering import render_graph_png_async
+from features.social_graph.rendering import render_cringe_graph_png_async, render_graph_png_async
 from features.social_graph.service import (
     REPLY_WEIGHT,
     capture_reaction,
@@ -134,9 +136,16 @@ async def handle_cringe_social_graph(message: types.Message):
 
     await message.reply("🖍 Ща испорчу вашу статистику в Paint.")
     prompt = build_cringe_social_graph_prompt(view, data.period_days)
-    image, _provider = await generate_social_graph_image(prompt)
-    if not image:
+    portrait_sheet, _provider = await generate_social_graph_image(prompt)
+    if not portrait_sheet:
         await message.reply("Не смог всрать картинку: рисовалка сдохла.")
+        return
+
+    try:
+        image = await render_cringe_graph_png_async(view, portrait_sheet)
+    except Exception as exc:
+        logging.warning("[social_graph] hybrid render failed: %s", exc, exc_info=True)
+        await message.reply("Рожи нарисовал, а собрать их в соцграф не смог.")
         return
 
     await message.answer_photo(
