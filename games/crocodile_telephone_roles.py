@@ -234,13 +234,14 @@ async def handle_telephone_callback_with_roles(callback) -> Any:
 
         players = game.setdefault("players", [])
         ids = {_user_id(row[0]) for row in players if isinstance(row, (list, tuple)) and row}
-        if user_id not in ids:
+        is_new = user_id not in ids
+        if is_new:
             if len(players) >= crocodile_modes.TELEPHONE_MAX_PLAYERS:
                 return await callback.answer("Мест больше нет", show_alert=True)
             players.append((user_id, str(getattr(user, "full_name", None) or f"Игрок {user_id}")))
 
         roles = _ensure_roles(game)
-        previous = roles.get(str(user_id))
+        previous = None if is_new else roles.get(str(user_id))
         roles[str(user_id)] = role
         game[_ROLE_FIELD] = roles
         _persist()
@@ -303,7 +304,11 @@ def _role_of(game: dict, user_id: Any) -> str | None:
     return _ensure_roles(game).get(str(uid))
 
 
-def _alternating_remaining(game: dict, remaining: list[tuple[int, str]], required: str) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+def _alternating_remaining(
+    game: dict,
+    remaining: list[tuple[int, str]],
+    required: str,
+) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
     pools = {
         ROLE_TEXT: [row for row in remaining if _role_of(game, row[0]) == ROLE_TEXT],
         ROLE_DRAW: [row for row in remaining if _role_of(game, row[0]) == ROLE_DRAW],
@@ -331,12 +336,16 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
         return "Пропускать уже некого."
 
     skipped_id, skipped_name = players.pop(step)
+    game["players"] = players
     roles = _ensure_roles(game)
     roles.pop(str(_user_id(skipped_id) or skipped_id), None)
+    game[_ROLE_FIELD] = roles
+
     required = ROLE_TEXT if step % 2 == 0 else ROLE_DRAW
     prefix = players[:step]
     ordered, dropped = _alternating_remaining(game, players[step:], required)
     game["players"] = prefix + ordered
+    roles = _ensure_roles(game)
     for user_id, _name in dropped:
         roles.pop(str(_user_id(user_id) or user_id), None)
     game[_ROLE_FIELD] = roles
