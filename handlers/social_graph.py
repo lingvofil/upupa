@@ -41,7 +41,7 @@ def _is_command(message: types.Message, command: str) -> bool:
 
 
 def _is_cringe_graph_command(message: types.Message) -> bool:
-    return _is_command(message, "всратый соцграф") or _is_command(message, "соцграф всратый")
+    return _is_command(message, "соцграф рисунок") or _is_command(message, "соцграф картинка")
 
 
 def _disabled_text() -> str:
