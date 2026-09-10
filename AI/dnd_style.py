@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,9 +19,9 @@ DND_STYLE_INSTRUCTION = f"""
 «игроки» — «егроки», «участники» — «учаснеги». Не превращай текст в нечитаемый набор букв:
 смысл сцены и варианты действий должны оставаться понятными.
 
-Будь заметно грубее: почти в каждом сюжетном сообщении подкалывай или оскорбляй партию
-либо конкретного персонажа короткой репликой вроде «дегенераты», «долбоёбы», «мудилы»,
-«кретины», «идиоты», если это уместно по сцене. Не используй оскорбления по защищённым признакам.
+Будь заметно грубее: подкалывай партию и конкретных персонажей по ситуации, но не заканчивай
+каждое сообщение одной и той же дежурной обзывалкой. Сарказм, мат и издёвка должны быть частью
+конкретной сцены, а не копипастой. Не используй оскорбления по защищённым признакам.
 Не поясняй, что специально делаешь ошибки: для этого мастера безграмотность — нормальная речь.
 
 ДЛИНА: обычно 40–60 слов художественного текста, жёсткий максимум 70 слов. Пиши плотнее:
@@ -35,6 +36,15 @@ DND_STYLE_INSTRUCTION = f"""
 предпочитай ACTION:INPUT только при соблюдении этого ограничения. Не делай длинную цепочку ROLL/POLL:
 после одного-двух таких эпизодов снова можно дать свободный ACTION:INPUT. POLL используй только когда
 реально нужны несколько заранее сформулированных альтернатив, ROLL — только когда важен неопределённый исход.
+
+БАЛАНС БРОСКОВ: MODE:NORMAL — штатный режим и должен использоваться заметно чаще всего,
+ориентир примерно 70–80% бросков. ADVANTAGE и DISADVANTAGE — редкие ситуационные исключения,
+а не украшение каждого броска. Назначай их только когда в ТЕКУЩЕЙ сцене есть конкретный фактор:
+явная помощь/подготовка/позиционное преимущество либо конкретная помеха/состояние/опасное окружение.
+Не ставь DISADVANTAGE просто потому, что у персонажа вообще есть слабость: она должна буквально
+мешать именно этому действию здесь и сейчас. Аналогично сильная сторона не обязана автоматически
+давать ADVANTAGE. Не выдавай модифицированный MODE несколько бросков подряд. Примеры тегов из
+базовой инструкции показывают только синтаксис и НЕ задают желаемую частоту режимов.
 """.strip()
 
 
@@ -80,7 +90,21 @@ _INSULT_SUFFIXES = (
     " Шевелитесь, мудилы.",
     " Думайте, кретины.",
     " Не тормозите, долбоёбы.",
+    " Решайте уже, герои хуевы.",
+    " Ну давайте, мастера катастроф.",
+    " Чо встали, стратеги из ларька.",
+    " Соберитесь, цирк уехал без вас.",
+    " Пошевелите извилинами, если нашли.",
+    " Давайте, легенды районного масштаба.",
+    " Решение будет или опять коллективный ступор?",
+    " Ну же, специалисты по плохим идеям.",
+    " Не тупим, у мира и без вас проблем хватает.",
+    " Шевелитесь, пока сюжет не сдох.",
+    " Выбирайте, пока здравый смысл не вернулся.",
+    " Ну чо, академики хуёвых решений.",
 )
+
+_last_insult_by_key: dict[str, str] = {}
 
 _ACTION_TAG_RE = re.compile(r"\[ACTION:([A-Z]+)(?:[;\]])", flags=re.IGNORECASE)
 _FULL_ACTION_TAG_RE = re.compile(r"\[ACTION:.*?\]", flags=re.IGNORECASE | re.DOTALL)
@@ -88,21 +112,35 @@ _INPUT_TAG_RE = re.compile(
     r"\[ACTION:INPUT(?:;TARGETS:([0-9,\s]+))?\]",
     flags=re.IGNORECASE,
 )
+_ROLL_MODE_RE = re.compile(
+    r"(\[ACTION:ROLL\b[^\]]*?\bMODE:)(NORMAL|ADVANTAGE|DISADVANTAGE)(?=;|\])",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
-def errative_text(text: str, *, add_insult: bool = False) -> str:
-    """Apply a readable padonak-style distortion while preserving mechanics."""
+def _pick_insult_suffix(key=None) -> str:
+    state_key = str(key) if key is not None else "__global__"
+    previous = _last_insult_by_key.get(state_key)
+    candidates = [suffix for suffix in _INSULT_SUFFIXES if suffix != previous]
+    suffix = random.choice(candidates or list(_INSULT_SUFFIXES))
+    _last_insult_by_key[state_key] = suffix
+    return suffix
+
+
+def errative_text(text: str, *, add_insult: bool = False, taunt_key=None) -> str:
+    """Apply readable padonak-style distortion and at most one varied taunt."""
     if not text:
         return text
     result = str(text)
     for source, target in _REPLACEMENTS:
         result = result.replace(source, target)
-    if add_insult and not any(
-        label in result for label in ("КРИТИЧЕСКАЯ УДАЧА", "КРИТИЧЕСКАЯ НЕУДАЧА")
+    already_taunted = any(suffix.strip() in result for suffix in _INSULT_SUFFIXES)
+    if (
+        add_insult
+        and not already_taunted
+        and not any(label in result for label in ("КРИТИЧЕСКАЯ УДАЧА", "КРИТИЧЕСКАЯ НЕУДАЧА"))
     ):
-        suffix = _INSULT_SUFFIXES[len(result) % len(_INSULT_SUFFIXES)]
-        if suffix.strip() not in result:
-            result += suffix
+        result += _pick_insult_suffix(taunt_key)
     return result
 
 
@@ -183,6 +221,59 @@ def _action_kind(text: str | None) -> str | None:
     return match.group(1).upper() if match else None
 
 
+def _roll_mode(text: str | None) -> str | None:
+    match = _ROLL_MODE_RE.search(str(text or ""))
+    return match.group(2).upper() if match else None
+
+
+def _recent_roll_modes(conversation, *, limit: int = 4) -> list[str]:
+    modes = []
+    for item in reversed(list(conversation or [])):
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        mode = _roll_mode(item.get("content"))
+        if not mode:
+            continue
+        modes.append(mode)
+        if len(modes) >= limit:
+            break
+    return list(reversed(modes))
+
+
+def _replace_roll_mode(text: str, mode: str) -> str:
+    return _ROLL_MODE_RE.sub(lambda match: match.group(1) + mode, str(text), count=1)
+
+
+def _balance_roll_mode(session, text: str, *, history=None) -> str:
+    """Keep non-normal roll modes exceptional even if the model overproduces them."""
+    requested = _roll_mode(text)
+    if requested not in {"ADVANTAGE", "DISADVANTAGE"}:
+        return text
+    recent = _recent_roll_modes(
+        history if history is not None else getattr(session, "conversation", None),
+        limit=4,
+    )
+    if not recent:
+        return text
+
+    recent_modified = sum(mode != "NORMAL" for mode in recent)
+    should_normalize = (
+        recent[-1] != "NORMAL"
+        or requested in recent
+        or recent_modified >= 2
+    )
+    if not should_normalize:
+        return text
+
+    logging.info(
+        "DnD roll mode balanced chat_id=%s requested=%s recent=%s applied=NORMAL",
+        getattr(session, "chat_id", None),
+        requested,
+        recent,
+    )
+    return _replace_roll_mode(text, "NORMAL")
+
+
 def _last_assistant_action(conversation) -> str | None:
     for item in reversed(list(conversation or [])):
         if not isinstance(item, dict) or item.get("role") != "assistant":
@@ -207,19 +298,21 @@ def _fallback_non_input_poll(text: str) -> str:
 
 
 async def _generate_without_consecutive_input(original_generate, session, prompt: str) -> str:
-    """Generate a compact turn while guaranteeing that INPUT never follows INPUT."""
+    """Generate a compact turn while guarding INPUT cadence and roll-mode balance."""
     conversation = getattr(session, "conversation", None)
     previous_action = _last_assistant_action(conversation or [])
 
     async def generate_once(request: str, *, force_style: bool = False) -> str:
+        history_before = list(conversation) if isinstance(conversation, list) else []
         if force_style or isinstance(conversation, list):
             prepared_request = _ensure_style_instruction(request)
         else:
             prepared_request = _compact_request_text(request)
         raw_result = await original_generate(session, prepared_request)
         compact_result = _compact_story_response(raw_result)
-        _replace_last_assistant_content(session, raw_result, compact_result)
-        return compact_result
+        balanced_result = _balance_roll_mode(session, compact_result, history=history_before)
+        _replace_last_assistant_content(session, raw_result, balanced_result)
+        return balanced_result
 
     result = await generate_once(prompt)
     if previous_action != "INPUT" or _action_kind(result) != "INPUT":
@@ -255,7 +348,7 @@ class _StyledBotProxy:
     async def send_message(self, chat_id, text, **kwargs):
         return await self._bot.send_message(
             chat_id,
-            errative_text(text, add_insult=True),
+            errative_text(text, add_insult=True, taunt_key=chat_id),
             **kwargs,
         )
 
@@ -305,14 +398,16 @@ def configure_dnd_style() -> None:
 
     dnd.with_scene_direction = styled_with_scene_direction
 
+    # Keep text distortion local, but let _StyledBotProxy own the single automatic
+    # taunt. Previously these helpers added one taunt and the proxy added another.
     original_action_prompt_text = dnd._action_prompt_text
     dnd._action_prompt_text = lambda session: errative_text(
-        original_action_prompt_text(session), add_insult=True
+        original_action_prompt_text(session), add_insult=False
     )
 
     original_lobby_text = dnd._lobby_text
     dnd._lobby_text = lambda session: errative_text(
-        original_lobby_text(session), add_insult=True
+        original_lobby_text(session), add_insult=False
     )
 
     original_poll_question = dnd._poll_question
@@ -322,7 +417,7 @@ def configure_dnd_style() -> None:
 
     original_outcome_from_counts = dnd._outcome_from_counts
     dnd._outcome_from_counts = lambda options, counts: errative_text(
-        original_outcome_from_counts(options, counts), add_insult=True
+        original_outcome_from_counts(options, counts), add_insult=False
     )
 
     def styled_mode_keyboard() -> InlineKeyboardMarkup:
