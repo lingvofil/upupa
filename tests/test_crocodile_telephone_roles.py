@@ -209,7 +209,11 @@ def test_role_aware_skip_never_gives_draw_turn_to_text_player(monkeypatch):
     send_step = AsyncMock()
     finish = AsyncMock()
     monkeypatch.setattr(roles.crocodile_party_controls, "_close_synthetic_room", close_room)
-    monkeypatch.setattr(roles.crocodile_party_controls.bot, "send_message", send_message)
+    monkeypatch.setattr(
+        roles.crocodile_party_controls,
+        "bot",
+        SimpleNamespace(send_message=send_message),
+    )
     monkeypatch.setattr(roles.crocodile_modes, "_send_telephone_step", send_step)
     monkeypatch.setattr(roles.crocodile_modes, "_finish_telephone", finish)
 
