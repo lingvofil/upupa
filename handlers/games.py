@@ -4,10 +4,20 @@ from aiogram import Router
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
 from core.loader import bot
-from features.crocodile_scoring import format_artist_leaderboard
+from features.crocodile_archive import send_gallery
+from features.crocodile_scoring import (
+    format_artist_leaderboard,
+    format_slowest_artist_leaderboard,
+)
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
-from games import crocodile, crocodile_likes, reverse_crocodile
+from games import (
+    crocodile,
+    crocodile_likes,
+    crocodile_modes,
+    reverse_crocodile,
+    reverse_crocodile_modes,
+)
 from AI.quiz import process_poll_answer
 
 
@@ -43,9 +53,19 @@ def _release_reverse_croc_start(chat_id: int) -> None:
     _reverse_croc_starts_in_progress.discard(chat_id)
 
 
+def _is_new_reverse_start(data: str) -> bool:
+    if data.startswith("rcrocm_again_"):
+        return True
+    return data in {
+        "rcrocm_reveal", "rcrocm_movie", "rcrocm_cartoon",
+        "rcrocm_proverb", "rcrocm_saying",
+    }
+
+
 @router.message(F.text.lower() == "егра")
 async def egra_command_handler(message: types.Message):
     await start_egra(message, bot)
+
 
 @router.poll_answer()
 async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
@@ -53,9 +73,11 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     if not is_egra_handled:
         await _process_quiz_poll_answer_once(poll_answer, bot)
 
+
 @router.callback_query(F.data == "egra_final_choice")
 async def egra_callback_handler(callback_query: types.CallbackQuery):
     await handle_final_button_press(callback_query, bot)
+
 
 @router.message(F.text.lower().in_(["мем", "meme"]))
 async def meme_command_handler(message: Message):
@@ -67,17 +89,56 @@ async def meme_command_handler(message: Message):
     else:
         await message.answer("Ошибка при создании мема.")
 
+
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
     await crocodile.handle_start_game(message)
 
-@router.message(lambda m: m.text and m.text.lower().strip() in {"кракадил художники", "кракадил хуйдожники"})
+
+@router.message(F.text.lower() == "кракадил дуэль")
+async def start_croc_duel(message: types.Message):
+    await crocodile_modes.start_duel(message)
+
+
+@router.message(
+    lambda m: m.text and m.text.lower().strip() in {
+        "кракадил телефон", "кракадил испорченный телефон"
+    }
+)
+async def start_croc_telephone(message: types.Message):
+    await crocodile_modes.start_telephone(message)
+
+
+@router.message(F.text.lower() == "кракадил галерея")
+async def croc_gallery(message: types.Message):
+    await send_gallery(message)
+
+
+@router.message(
+    lambda m: m.text and m.text.lower().strip() in {
+        "кракадил художники", "кракадил хуйдожники"
+    }
+)
 async def croc_artist_stats(message: types.Message):
     await message.answer(
         format_artist_leaderboard(message.chat.id),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+
+@router.message(
+    lambda m: m.text and m.text.lower().strip() in {
+        "кракадил художники время", "кракадил хуйдожники время", "кракадил долго"
+    }
+)
+async def croc_slowest_artist_stats(message: types.Message):
+    await message.answer(
+        format_slowest_artist_leaderboard(message.chat.id),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
 
 @router.callback_query(
     F.data.startswith("cr_") | F.data.in_(("btn_like", "btn_want_draw"))
@@ -91,9 +152,21 @@ async def croc_callback(callback: types.CallbackQuery):
     else:
         await crocodile.handle_callback(callback)
 
+
+@router.callback_query(F.data.startswith("cduel_"))
+async def croc_duel_callback(callback: types.CallbackQuery):
+    await crocodile_modes.handle_duel_callback(callback)
+
+
+@router.callback_query(F.data.startswith("ctel_"))
+async def croc_telephone_callback(callback: types.CallbackQuery):
+    await crocodile_modes.handle_telephone_callback(callback)
+
+
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
     await crocodile.handle_text_stop(message)
+
 
 @router.message(F.text.lower() == "кракадил наоборот")
 async def start_reverse_croc(message: types.Message):
@@ -101,7 +174,8 @@ async def start_reverse_croc(message: types.Message):
     if chat_id in _reverse_croc_starts_in_progress or str(chat_id) in reverse_crocodile.games:
         await message.answer("🦎 Раунд уже запускается или идёт.")
         return
-    await reverse_crocodile.ask_difficulty(message)
+    await reverse_crocodile_modes.ask_mode(message)
+
 
 @router.callback_query(F.data.startswith("rcroc_"))
 async def reverse_croc_callback(callback: types.CallbackQuery):
@@ -128,3 +202,23 @@ async def reverse_croc_callback(callback: types.CallbackQuery):
         return
 
     await reverse_crocodile.handle_callback(callback)
+
+
+@router.callback_query(F.data.startswith("rcrocm_"))
+async def reverse_croc_mode_callback(callback: types.CallbackQuery):
+    data = callback.data or ""
+    if not _is_new_reverse_start(data):
+        await reverse_crocodile_modes.handle_callback(callback)
+        return
+
+    chat_id = callback.message.chat.id
+    if not _claim_reverse_croc_start(chat_id):
+        await callback.answer(
+            "Новый раунд уже запускается или идёт.",
+            show_alert=True,
+        )
+        return
+    try:
+        await reverse_crocodile_modes.handle_callback(callback)
+    finally:
+        _release_reverse_croc_start(chat_id)

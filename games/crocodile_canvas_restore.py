@@ -1,13 +1,4 @@
-"""Restore the active Crocodile bitmap when the Mini App is reopened.
-
-The legacy client treated every Socket.IO connect as if its local canvas were the
-source of truth. A freshly reopened WebApp therefore joined with a blank bitmap
-and immediately uploaded that blank snapshot, overwriting the server-side frame.
-
-This module keeps same-page reconnect behaviour (local bitmap wins after a
-transport drop), but makes the first join restore the persisted server frame
-before drawing/snapshot submission is enabled.
-"""
+"""Restore Crocodile canvases and inject mode-aware Mini App UI."""
 
 from __future__ import annotations
 
@@ -36,13 +27,13 @@ def _image_data_url(image: bytes) -> str:
 
 
 async def join_room_with_canvas_restore(sid, data):
-    """Return the current raster together with the normal join acknowledgement."""
+    """Return current raster plus the UI contract for the authorized step."""
     response = await _original_join_room(sid, data)
     if not isinstance(response, dict) or not response.get("ok"):
         return response
 
     try:
-        _room, _chat_id, session = await crocodile._authorize_socket_room(sid, data)
+        _room, _session_key, session = await crocodile._authorize_socket_room(sid, data)
     except crocodile.WebAppAuthError as exc:
         logging.warning("[socket] failed to re-read joined Crocodile session: %s", exc)
         return {"ok": False, "error": "unauthorized"}
@@ -53,6 +44,12 @@ async def join_room_with_canvas_restore(sid, data):
 
     restored = dict(response)
     restored["image"] = _image_data_url(bytes(image))
+    try:
+        from games.crocodile_modes import canvas_join_payload
+        restored.update(canvas_join_payload(session))
+    except Exception:
+        restored.setdefault("ui_mode", "draw")
+        restored.setdefault("word", session.get("word", ""))
     return restored
 
 
@@ -67,15 +64,72 @@ _SEND_SNAP_DECLARATION = "  function sendSnap(force = false) {\n"
 _BEGIN_STROKE_DECLARATION = "  function beginStroke(clientX, clientY) {\n"
 _FINISH_DECLARATION = "  window.finish = () => {\n"
 
-_RESTORE_HELPER = r'''  function restoreServerCanvas(imageData) {
+_RESTORE_HELPER = r'''  function activateTelephoneTextMode(response) {
+    roomReady = true;
+    hasJoinedRoom = true;
+    canvas.style.display = "none";
+    const toolbar = document.getElementById("toolbar");
+    if (toolbar) toolbar.style.display = "none";
+
+    let panel = document.getElementById("telephoneTextPanel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "telephoneTextPanel";
+      panel.style.cssText = "min-height:100vh;background:#222;color:#fff;padding:20px;display:flex;flex-direction:column;gap:14px;font-family:system-ui,-apple-system,sans-serif;overflow:auto";
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.textContent = response.prompt || "Напиши ответ";
+    title.style.cssText = "font-size:20px;font-weight:800;line-height:1.3";
+    panel.appendChild(title);
+
+    if (response.reference_image) {
+      const img = document.createElement("img");
+      img.src = response.reference_image;
+      img.alt = "Предыдущий рисунок";
+      img.style.cssText = "width:100%;max-height:58vh;object-fit:contain;background:#fff;border-radius:14px";
+      panel.appendChild(img);
+    }
+
+    const input = document.createElement("textarea");
+    input.maxLength = 120;
+    input.rows = 3;
+    input.placeholder = "Пиши сюда…";
+    input.style.cssText = "width:100%;font-size:18px;padding:14px;border-radius:12px;border:0;resize:none;user-select:text;-webkit-user-select:text";
+    panel.appendChild(input);
+
+    const submit = document.createElement("button");
+    submit.textContent = "Готово ✓";
+    submit.style.cssText = "font-size:18px;font-weight:800;padding:14px;border:0;border-radius:12px;background:#34c759;color:#fff";
+    panel.appendChild(submit);
+    submit.onclick = () => {
+      const text = input.value.trim();
+      if (!text) {
+        showTelegramAlert("Сначала что-нибудь напиши.");
+        return;
+      }
+      submit.disabled = true;
+      socket.emit("submit_text", { room: roomId, text: text }, (result) => {
+        if (result && result.ok) {
+          closeWebApp();
+          return;
+        }
+        submit.disabled = false;
+        showTelegramAlert((result && result.error) || "Не удалось отправить ответ.");
+      });
+    };
+    setTimeout(() => input.focus(), 100);
+  }
+
+  function restoreServerCanvas(imageData) {
     return new Promise((resolve) => {
       if (!imageData) {
         resolve(false);
         return;
       }
 
-      // Make the bitmap match the current WebView before painting the stored
-      // preview. resize() preserves the bitmap on later viewport changes.
       resize();
       const image = new Image();
       image.onload = () => {
@@ -98,21 +152,25 @@ _RESTORE_HELPER = r'''  function restoreServerCanvas(imageData) {
 
 '''
 
-_NEW_FIRST_JOIN = r'''      // On a fresh WebApp open the server-side bitmap is authoritative. The old
-      // behaviour uploaded this brand-new blank canvas here and erased the round.
+_NEW_FIRST_JOIN = r'''      // On a fresh WebApp open the server-side state is authoritative.
       if (!hasJoinedRoom) {
+        if (response.ui_mode === "text") {
+          activateTelephoneTextMode(response);
+          return;
+        }
         restoreServerCanvas(response.image).then((restored) => {
           if (!restored) {
             console.error("Failed to restore active canvas");
             showTelegramAlert("Не удалось восстановить текущий рисунок. Открой холст ещё раз.");
             socket.disconnect();
+            return;
           }
+          if (response.word) showWordPopup(response.word);
         });
         return;
       }
 
-      // A reconnect inside the same already-restored WebApp is different: the
-      // local bitmap may contain strokes made while the transport was down.
+      // A reconnect inside the same already-restored WebApp keeps local strokes.
       roomReady = true;
       isDirty = true;
       sendSnap(true);
@@ -120,7 +178,7 @@ _NEW_FIRST_JOIN = r'''      // On a fresh WebApp open the server-side bitmap is 
 
 
 def patch_crocodile_html(source: str) -> str:
-    """Inject first-join restore logic into the current Mini App source."""
+    """Inject first-join restore and telephone text-step UI."""
     replacements = (
         (
             _STATE_DECLARATION,
@@ -162,27 +220,29 @@ def patch_crocodile_html(source: str) -> str:
 async def canvas_restore_middleware(request: web.Request, handler):
     if request.path not in {"/game", "/game/"}:
         return await handler(request)
-
     try:
         source = _INDEX_PATH.read_text(encoding="utf-8")
-        html = patch_crocodile_html(source)
+        html_source = patch_crocodile_html(source)
     except Exception:
         logging.exception("[crocodile] failed to prepare reopen-safe Mini App HTML")
         return await handler(request)
-
     return web.Response(
-        text=html,
+        text=html_source,
         content_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
 
 
 def configure_crocodile_canvas_restore() -> None:
-    """Install socket + HTTP restore hooks before the aiohttp app is started."""
+    """Install party modes, socket restore and HTTP patch before server start."""
     global _configured
     if _configured:
         return
+    from games.crocodile_modes import configure_crocodile_modes
 
+    # Bootstrap calls this after persistence/controls, so this is the stable
+    # composition point for the extra Socket.IO handlers.
+    configure_crocodile_modes()
     crocodile.sio.on("join_room", handler=join_room_with_canvas_restore)
     crocodile.app.middlewares.append(canvas_restore_middleware)
     _configured = True
