@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
@@ -8,7 +9,11 @@ def test_telephone_turn_mentions_current_player_and_escapes_name(monkeypatch):
     from games import crocodile_telephone_mentions as mentions
 
     send_message = AsyncMock()
-    monkeypatch.setattr(mentions.crocodile_modes.bot, "send_message", send_message)
+    monkeypatch.setattr(
+        mentions.crocodile_modes,
+        "bot",
+        SimpleNamespace(send_message=send_message),
+    )
     monkeypatch.setattr(mentions.crocodile_modes, "_blank", lambda: b"blank")
     monkeypatch.setattr(
         mentions.crocodile_modes,
@@ -46,7 +51,11 @@ def test_telephone_first_turn_mentions_player_too(monkeypatch):
     from games import crocodile_telephone_mentions as mentions
 
     send_message = AsyncMock()
-    monkeypatch.setattr(mentions.crocodile_modes.bot, "send_message", send_message)
+    monkeypatch.setattr(
+        mentions.crocodile_modes,
+        "bot",
+        SimpleNamespace(send_message=send_message),
+    )
     monkeypatch.setattr(mentions.crocodile_modes, "_blank", lambda: b"blank")
     monkeypatch.setattr(
         mentions.crocodile_modes,
