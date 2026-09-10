@@ -13,6 +13,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboar
 from core.loader import bot
 from features import crocodile_archive
 from games import crocodile, crocodile_modes
+from games import crocodile_party_state as party_state
 
 
 GALLERY_PAGE_SIZE = 10
@@ -41,6 +42,10 @@ async def check_duel_answer_locked(message) -> bool:
     # aiogram runs handlers cooperatively. With no await above this assignment,
     # the first correct answer closes the phase atomically for later updates.
     duel["phase"] = "answer_resolved"
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-duel] failed to persist resolved answer chat=%s", chat_id)
 
     if message.from_user:
         crocodile.add_point(chat_id, message.from_user.id, message.from_user.full_name)
@@ -92,6 +97,10 @@ def _telephone_controls_keyboard(chat_id: str) -> InlineKeyboardMarkup:
 async def _send_telephone_step_with_controls(chat_id: str, game: dict) -> None:
     """Keep the original private-turn message and add resilient round controls."""
     await _original_send_telephone_step(chat_id, game)
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-party] failed to persist telephone step chat=%s", chat_id)
     if (
         crocodile_modes.telephone_games.get(str(chat_id)) is game
         and game.get("phase") == "playing"
@@ -122,6 +131,10 @@ async def _finish_telephone_after_reveal(chat_id: str, game: dict) -> None:
     """Reveal the whole chain first, then publish its drawings to the gallery."""
     chain = list(game.get("chain", []))
     await _original_finish_telephone(chat_id, game)
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-party] failed to persist telephone finish chat=%s", chat_id)
     for item in chain:
         if item.get("kind") != "image":
             continue
@@ -163,6 +176,10 @@ async def _cancel_telephone(chat_id: str, game: dict, *, announce: bool = True) 
     if crocodile_modes.telephone_games.get(chat_id) is not game:
         return
     crocodile_modes.telephone_games.pop(chat_id, None)
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-party] failed to persist telephone cancellation chat=%s", chat_id)
     await _cleanup_mode_canvases(chat_id, "telephone")
     if announce:
         await bot.send_message(
@@ -175,6 +192,10 @@ async def _cancel_duel(chat_id: str, duel: dict, *, announce: bool = True) -> No
     if crocodile_modes.duel_games.get(chat_id) is not duel:
         return
     crocodile_modes.duel_games.pop(chat_id, None)
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-party] failed to persist duel cancellation chat=%s", chat_id)
     task = duel.get("vote_task")
     if task is not None and hasattr(task, "cancel"):
         task.cancel()
@@ -198,6 +219,10 @@ async def _skip_telephone(chat_id: str, game: dict) -> str:
     _skipped_id, skipped_name = players.pop(step)
     key = crocodile_modes._session_key(chat_id, f"t{step}")
     crocodile_modes.canvas_sessions.pop(key, None)
+    try:
+        party_state.persist_party_modes(force=True)
+    except Exception:
+        logging.exception("[croc-party] failed to persist telephone skip chat=%s", chat_id)
     await _close_synthetic_room(chat_id, f"t{step}")
     await bot.send_message(
         int(chat_id),
@@ -595,6 +620,37 @@ async def _start_telephone_guarded(message) -> None:
     await _original_start_telephone(message)
 
 
+def install_crocodile_help() -> None:
+    """Add party-mode commands to the existing interactive help section."""
+    try:
+        from prompts import help_texts
+
+        section = help_texts.HELP_DICT.get("creative", "")
+        if "<code>кракадил дуэль</code>" in section:
+            return
+        old = "<code>кракадил</code> - норисуй даунский рисунок\n"
+        new = (
+            "<code>кракадил</code> - единое меню и статус текущей партии\n"
+            "<code>кракадил дуэль</code> - два художника рисуют одно слово параллельно\n"
+            "<code>кракадил телефон</code> - испорченный телефон: слово → рисунок → догадка\n"
+            "<code>кракадил галерея</code> - рисунки чата с просмотром старых страниц\n"
+        )
+        if old in section:
+            section = section.replace(old, new, 1)
+        else:
+            section += "\n" + new
+        help_texts.HELP_DICT["creative"] = section
+        help_texts.HELP_TEXT = "\n\n".join(help_texts.HELP_DICT.values())
+        try:
+            import prompts
+
+            prompts.HELP_TEXT = help_texts.HELP_TEXT
+        except Exception:
+            pass
+    except Exception:
+        logging.exception("[croc-party] failed to extend help text")
+
+
 def configure_crocodile_party_controls() -> None:
     """Install party-mode controls after ``configure_crocodile_modes``."""
     global _configured
@@ -618,4 +674,5 @@ def configure_crocodile_party_controls() -> None:
     crocodile_modes._finish_telephone = _finish_telephone_after_reveal
     crocodile_modes.start_duel = _start_duel_guarded
     crocodile_modes.start_telephone = _start_telephone_guarded
+    install_crocodile_help()
     _configured = True
