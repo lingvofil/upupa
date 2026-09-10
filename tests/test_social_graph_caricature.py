@@ -60,13 +60,24 @@ def test_cringe_social_graph_command_has_two_exact_aliases():
     def msg(text):
         return SimpleNamespace(text=text, from_user=SimpleNamespace(id=987654321))
 
-    assert handler._is_cringe_graph_command(msg("всратый соцграф"))
-    assert handler._is_cringe_graph_command(msg("Соцграф всратый"))
-    assert not handler._is_cringe_graph_command(msg("покажи всратый соцграф"))
-    assert not handler._is_cringe_graph_command(msg("всратый соцграф пожалуйста"))
+    assert handler._is_cringe_graph_command(msg("соцграф рисунок"))
+    assert handler._is_cringe_graph_command(msg("соцграф картинка"))
+    assert handler._is_cringe_graph_command(msg("СоЦгРаФ РиСуНоК"))
+    assert handler._is_cringe_graph_command(msg("СОЦГРАФ КАРТИНКА"))
+
+    assert not handler._is_cringe_graph_command(msg("всратый соцграф"))
+    assert not handler._is_cringe_graph_command(msg("соцграф всратый"))
+    assert not handler._is_cringe_graph_command(msg("покажи соцграф рисунок"))
+    assert not handler._is_cringe_graph_command(msg("соцграф рисунок пожалуйста"))
+    assert not handler._is_cringe_graph_command(msg("покажи соцграф картинка"))
+    assert not handler._is_cringe_graph_command(msg("соцграф картинка пожалуйста"))
 
 
-def test_help_advertises_cringe_social_graph():
+def test_help_advertises_social_graph_picture_command():
     from prompts.help_texts import HELP_DICT
 
-    assert "<code>всратый соцграф</code>" in HELP_DICT["social"]
+    social_help = HELP_DICT["social"]
+    assert "<code>соцграф рисунок</code>" in social_help
+    assert "<code>соцграф картинка</code>" in social_help
+    assert "<code>всратый соцграф</code>" not in social_help
+    assert "<code>соцграф всратый</code>" not in social_help
