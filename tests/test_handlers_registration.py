@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 154  # + Crocodile priority + Radio duration callback + World symbols
+EXPECTED_TOTAL_HANDLERS = 155  # + Crocodile priority + Radio duration callback + World symbols + соцграф рисунок
 
 
 def _count_handlers(router):
