@@ -16,6 +16,7 @@ _original_get_game_keyboard = None
 _original_handle_callback = None
 _original_session_to_record = None
 _original_session_from_record = None
+_original_party_menu_keyboard = None
 
 
 def _artist_ids(session: dict) -> list[int]:
@@ -79,6 +80,23 @@ def get_game_keyboard_with_duo_opt_in(chat_id: int) -> InlineKeyboardMarkup:
         text = "👥 Позвать второго — решает художник"
         callback_data = f"cr_duo_invite_{chat_id}"
     rows.append([InlineKeyboardButton(text=text, callback_data=callback_data)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def unified_menu_keyboard_without_default_duo(chat_id: int | str) -> InlineKeyboardMarkup:
+    """Do not advertise duo as a start mode; it is unlocked by the first artist."""
+    keyboard = _original_party_menu_keyboard(chat_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in keyboard.inline_keyboard:
+        rendered: list[InlineKeyboardButton] = []
+        for button in row:
+            if button.callback_data == "cmenu_classic":
+                rendered.append(
+                    InlineKeyboardButton(text="🎨 Обычный", callback_data="cmenu_classic")
+                )
+            else:
+                rendered.append(button)
+        rows.append(rendered)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -198,16 +216,21 @@ def configure_crocodile_duo_opt_in() -> None:
     global _configured
     global _original_get_game_keyboard, _original_handle_callback
     global _original_session_to_record, _original_session_from_record
+    global _original_party_menu_keyboard
     if _configured:
         return
+
+    from games import crocodile_party_controls
 
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_handle_callback = crocodile.handle_callback
     _original_session_to_record = crocodile_persistence._session_to_record
     _original_session_from_record = crocodile_persistence._session_from_record
+    _original_party_menu_keyboard = crocodile_party_controls.menu_keyboard
 
     crocodile.get_game_keyboard = get_game_keyboard_with_duo_opt_in
     crocodile.handle_callback = handle_duo_opt_in_callback
     crocodile_persistence._session_to_record = _session_to_record_with_duo_opt_in
     crocodile_persistence._session_from_record = _session_from_record_with_duo_opt_in
+    crocodile_party_controls.menu_keyboard = unified_menu_keyboard_without_default_duo
     _configured = True
