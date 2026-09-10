@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import html
+import math
+import time
 
 from core.json_repository import JsonFileRepository
 from core.paths import CROCODILE_ARTIST_SCORES_PATH
@@ -11,9 +13,37 @@ from games import crocodile
 
 
 ARTIST_LEADERBOARD_TOP = 10
+DRAW_PRIORITY_SECONDS = 5.0
 _locks: dict[str, asyncio.Lock] = {}
 _artist_repository = JsonFileRepository(CROCODILE_ARTIST_SCORES_PATH)
 _artist_lock = asyncio.Lock()
+_draw_priority_by_chat: dict[str, tuple[int, float]] = {}
+
+
+def grant_draw_priority(chat_id: int | str, user_id: int, *, now: float | None = None) -> None:
+    """Give the correct guesser a short exclusive window to claim the next drawing turn."""
+    current = time.monotonic() if now is None else float(now)
+    _draw_priority_by_chat[str(chat_id)] = (
+        int(user_id),
+        current + DRAW_PRIORITY_SECONDS,
+    )
+
+
+def can_claim_draw(chat_id: int | str, user_id: int, *, now: float | None = None) -> tuple[bool, int]:
+    """Return whether a user may claim drawing now and seconds left for another user's priority."""
+    cid = str(chat_id)
+    priority = _draw_priority_by_chat.get(cid)
+    if priority is None:
+        return True, 0
+
+    winner_id, deadline = priority
+    current = time.monotonic() if now is None else float(now)
+    if current >= deadline:
+        _draw_priority_by_chat.pop(cid, None)
+        return True, 0
+    if int(user_id) == winner_id:
+        return True, 0
+    return False, max(1, math.ceil(deadline - current))
 
 
 def _load_artist_scores_sync() -> dict[str, dict[str, dict]]:
@@ -94,5 +124,8 @@ async def check_regular_answer(message) -> bool:
         drawer_name = str(session.get("drawer_name") or "Художник")
         if drawer_id > 0:
             await record_artist_success(chat_id, drawer_id, drawer_name)
+
+        if from_user:
+            grant_draw_priority(chat_id, from_user.id)
 
         return await crocodile.check_answer(message)
