@@ -292,10 +292,24 @@ def _like_already_registered(callback) -> bool:
         return False
 
 
+def _is_target_artist(callback, target: dict | None) -> bool:
+    if not target or not callback.from_user:
+        return False
+    user_id = int(callback.from_user.id)
+    return any(
+        int(artist.get("id", 0)) == user_id
+        for artist in crocodile_ratings.normalize_artists(target.get("artists"))
+    )
+
+
 async def _handle_attributed_like(callback, token: str) -> None:
     target = crocodile_ratings.get_like_target(token)
     if target and str(target.get("chat_id")) != str(callback.message.chat.id):
         await callback.answer("Эта кнопка вообще от другого рисунка.", show_alert=True)
+        return
+
+    if _is_target_artist(callback, target):
+        await callback.answer("Свой рисунок лайкать нельзя 😏", show_alert=True)
         return
 
     already_liked = _like_already_registered(callback)
