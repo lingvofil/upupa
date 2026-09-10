@@ -105,4 +105,8 @@ def configure_crocodile_telephone_skip_permissions() -> None:
     _original_menu_callback = crocodile_party_controls.handle_menu_callback
     crocodile_modes.handle_telephone_callback = telephone_callback_with_skip_permissions
     crocodile_party_controls.handle_menu_callback = menu_callback_with_skip_permissions
+
+    from games.crocodile_telephone_roles import configure_crocodile_telephone_roles
+
+    configure_crocodile_telephone_roles()
     _configured = True
