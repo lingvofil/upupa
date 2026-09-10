@@ -69,11 +69,11 @@ def get_game_keyboard_with_duo_opt_in(chat_id: int) -> InlineKeyboardMarkup:
     """Show an invite action first; a join action appears only after artist opt-in."""
     keyboard = _strip_duo_buttons(_original_get_game_keyboard(chat_id))
     session = crocodile.game_sessions.get(str(chat_id))
-    if not session or len(_artist_ids(session)) >= 2:
+    if session and len(_artist_ids(session)) >= 2:
         return keyboard
 
     rows = [list(row) for row in keyboard.inline_keyboard]
-    if session.get("duo_invite_open"):
+    if session and session.get("duo_invite_open"):
         text = "✋ Стать вторым художником"
         callback_data = f"cr_duo_join_{chat_id}"
     else:
