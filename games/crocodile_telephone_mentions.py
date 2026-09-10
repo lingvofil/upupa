@@ -90,4 +90,12 @@ def configure_crocodile_telephone_mentions() -> None:
     # persistence and skip/cancel controls. Replacing only the captured sender
     # preserves all of that behaviour while changing the turn announcement.
     crocodile_party_controls._original_send_telephone_step = send_telephone_step_with_mention
+
+    # Install this last so direct and unified-menu skips see the final admin/UI
+    # wrappers while enforcing one identical permission rule.
+    from games.crocodile_telephone_skip_permissions import (
+        configure_crocodile_telephone_skip_permissions,
+    )
+
+    configure_crocodile_telephone_skip_permissions()
     _configured = True
