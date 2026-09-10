@@ -234,3 +234,7 @@ def configure_crocodile_duo_opt_in() -> None:
     crocodile_persistence._session_from_record = _session_from_record_with_duo_opt_in
     crocodile_party_controls.menu_keyboard = unified_menu_keyboard_without_default_duo
     _configured = True
+
+    from games.crocodile_ui_enhancements import configure_crocodile_ui_enhancements
+
+    configure_crocodile_ui_enhancements()
