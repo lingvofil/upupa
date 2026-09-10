@@ -10,7 +10,7 @@ from pathlib import Path
 
 from AI.summarize import _get_chat_messages
 from core.paths import USER_MESSAGES_LOG_PATH
-from features.radio.script import RadioScript, generate_radio_script
+from features.radio.script import RADIO_DEFAULT_DURATION_MINUTES, RadioScript, generate_radio_script
 from features.radio.voices import strip_speaker_labels, synthesize_two_voice_radio
 from features.social_graph.summary_context import build_radio_social_context
 from services.speech import SpeechAudio, SpeechSynthesisError, synthesize_speech
@@ -33,6 +33,7 @@ class RadioEpisode:
     message_count: int
     tts_provider: str
     tts_chunks: int
+    requested_duration_minutes: int = RADIO_DEFAULT_DURATION_MINUTES
 
 
 class RadioHistoryError(RuntimeError):
@@ -141,6 +142,7 @@ async def build_radio_episode(
     *,
     log_file_path: str | Path = USER_MESSAGES_LOG_PATH,
     now: datetime | None = None,
+    duration_minutes: int = RADIO_DEFAULT_DURATION_MINUTES,
 ) -> RadioEpisode:
     messages, chat_name, period_hours = await collect_radio_history(
         chat_id,
@@ -160,14 +162,16 @@ async def build_radio_episode(
             period_hours,
             world_context=world_context,
             social_context=social_context,
+            duration_minutes=duration_minutes,
         )
     except Exception:
         logging.exception("[radio][script] generation failed chat=%s", chat_id)
         raise
 
     logging.info(
-        "[radio][tts] chat=%s words=%s estimated_seconds=%s",
+        "[radio][tts] chat=%s requested_minutes=%s words=%s estimated_seconds=%s",
         chat_id,
+        duration_minutes,
         script_result.word_count,
         script_result.estimated_seconds,
     )
@@ -186,4 +190,5 @@ async def build_radio_episode(
         message_count=len(messages),
         tts_provider=speech.provider,
         tts_chunks=speech.chunks,
+        requested_duration_minutes=duration_minutes,
     )

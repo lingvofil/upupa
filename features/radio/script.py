@@ -17,6 +17,13 @@ RADIO_CONTEXT_CHARS = 22000
 RADIO_SUMMARY_INPUT_CHARS = 15000
 RADIO_RECENT_CONTEXT_CHARS = 6500
 RADIO_WORDS_PER_MINUTE = 135
+RADIO_DURATION_MINUTES = (1, 3, 5)
+RADIO_DEFAULT_DURATION_MINUTES = 3
+RADIO_DURATION_WORD_RANGES = {
+    1: (100, 140, 160),
+    3: (330, 480, RADIO_MAX_WORDS),
+    5: (580, 720, 760),
+}
 
 RADIO_RUBRICS = (
     ("главные новости", "коротко собери 1–2 главных события или темы выпуска"),
@@ -40,6 +47,13 @@ class RadioScript:
     @property
     def estimated_seconds(self) -> int:
         return round(self.word_count / RADIO_WORDS_PER_MINUTE * 60)
+
+
+def get_radio_word_targets(duration_minutes: int) -> tuple[int, int, int]:
+    try:
+        return RADIO_DURATION_WORD_RANGES[duration_minutes]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported radio duration: {duration_minutes}") from exc
 
 
 def _message_line(message: dict) -> str:
@@ -205,7 +219,9 @@ async def generate_radio_script(
     *,
     world_context: str | None = None,
     social_context: str | None = None,
+    duration_minutes: int = RADIO_DEFAULT_DURATION_MINUTES,
 ) -> RadioScript:
+    target_min_words, target_max_words, hard_max_words = get_radio_word_targets(duration_minutes)
     title = chat_name or f"чат {chat_id}"
     total_context_chars = _source_size(messages)
     use_summary = total_context_chars > RADIO_CONTEXT_CHARS
@@ -243,7 +259,7 @@ async def generate_radio_script(
         world_block = ""
 
     rubrics = _choose_rubrics(world_context=world_context, social_context=social_context)
-    task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай небольшой голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
+    task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
 - Используй только факты, темы, участников и детали из предоставленного материала. Ничего не выдумывай.
@@ -256,8 +272,8 @@ async def generate_radio_script(
 - В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
 - После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
 - Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
-{social_rule}{international_rule}- Обычно цель — 330–480 русских слов. Если материала мало, делай короче и не лей воду.
-- Никогда не превышай 520 слов вместе с метками.
+{social_rule}{international_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Обычно цель — {target_min_words}–{target_max_words} русских слов. Если материала мало, делай короче и не лей воду.
+- Никогда не превышай {hard_max_words} слов вместе с метками.
 
 Рубрики этого выпуска:
 {_rubrics_prompt(rubrics)}
@@ -276,8 +292,12 @@ async def generate_radio_script(
     )
 
     logging.info(
-        "[radio][script] messages=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s world_context=%s rubrics=%s current_prompt=true",
+        "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s world_context=%s rubrics=%s current_prompt=true",
         len(messages),
+        duration_minutes,
+        target_min_words,
+        target_max_words,
+        hard_max_words,
         total_context_chars,
         len(source_block),
         use_summary,
@@ -286,7 +306,7 @@ async def generate_radio_script(
         ",".join(name for name, _instruction in rubrics),
     )
     raw_script = await _generate_with_active_model(prompt, chat_id, is_summarization=True)
-    script = sanitize_radio_script(raw_script)
+    script = sanitize_radio_script(raw_script, max_words=hard_max_words)
     if not script:
         raise RuntimeError("Radio script model returned empty text")
 
