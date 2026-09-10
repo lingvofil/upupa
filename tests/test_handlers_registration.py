@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 151  # + соцграф рисунок
+EXPECTED_TOTAL_HANDLERS = 155  # + Crocodile priority + Radio duration callback + World symbols + соцграф рисунок
 
 
 def _count_handlers(router):
@@ -32,6 +32,7 @@ def test_world_router_is_registered_before_dialog():
         world_hub,
         world_interactions,
         world_listing,
+        world_symbols,
         world_visit_decisions,
         world_visit_lifecycle,
         world_visit_media,
@@ -42,6 +43,7 @@ def test_world_router_is_registered_before_dialog():
     assert world_visit_decisions.router in ROUTERS
     assert world_interactions.router in ROUTERS
     assert world_expansion.router in ROUTERS
+    assert world_symbols.router in ROUTERS
     assert world_hub.router in ROUTERS
     assert world_listing.router in ROUTERS
     assert world.router in ROUTERS
@@ -49,7 +51,8 @@ def test_world_router_is_registered_before_dialog():
     assert ROUTERS.index(world_visit_lifecycle.router) < ROUTERS.index(world_visit_decisions.router)
     assert ROUTERS.index(world_visit_decisions.router) < ROUTERS.index(world_interactions.router)
     assert ROUTERS.index(world_interactions.router) < ROUTERS.index(world_expansion.router)
-    assert ROUTERS.index(world_expansion.router) < ROUTERS.index(world_hub.router)
+    assert ROUTERS.index(world_expansion.router) < ROUTERS.index(world_symbols.router)
+    assert ROUTERS.index(world_symbols.router) < ROUTERS.index(world_hub.router)
     assert ROUTERS.index(world_hub.router) < ROUTERS.index(world_listing.router)
     assert ROUTERS.index(world_listing.router) < ROUTERS.index(world.router)
     assert ROUTERS.index(world.router) < ROUTERS.index(dialog.router)
@@ -57,7 +60,7 @@ def test_world_router_is_registered_before_dialog():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 28
+    assert len(ROUTERS) == 29
 
 
 def test_whatisthere_guard_does_not_match_pun_command():
