@@ -33,6 +33,11 @@ def is_crocodile_admin(user_id: int | str | None) -> bool:
         return False
 
 
+def _callback_user_id(callback) -> int | None:
+    """Read callback user defensively; legacy tests/proxies may omit from_user."""
+    return getattr(getattr(callback, "from_user", None), "id", None)
+
+
 def stop_lock_remaining_seconds_with_admin(
     session: dict,
     user_id: int,
@@ -48,7 +53,7 @@ def stop_lock_remaining_seconds_with_admin(
 async def handle_telephone_callback_with_admin(callback) -> Any:
     """Allow the owner to start/cancel/skip a telephone chain as a fallback."""
     data = callback.data or ""
-    if not is_crocodile_admin(getattr(callback.from_user, "id", None)):
+    if not is_crocodile_admin(_callback_user_id(callback)):
         return await _original_handle_telephone_callback(callback)
 
     if data.startswith("ctel_skip_"):
@@ -91,7 +96,7 @@ async def handle_duel_callback_with_admin(callback) -> Any:
     """Allow the owner to cancel a duel in any phase."""
     data = callback.data or ""
     if (
-        is_crocodile_admin(getattr(callback.from_user, "id", None))
+        is_crocodile_admin(_callback_user_id(callback))
         and data.startswith("cduel_cancel_")
     ):
         chat_id = data[len("cduel_cancel_"):]
@@ -183,7 +188,7 @@ async def reverse_callback_with_admin(callback) -> Any:
     """Owner may use the normal surrender button without waiting five minutes."""
     data = callback.data or ""
     if (
-        is_crocodile_admin(getattr(callback.from_user, "id", None))
+        is_crocodile_admin(_callback_user_id(callback))
         and data.startswith("rcroc_stop_")
     ):
         chat_id = data[len("rcroc_stop_"):]
@@ -197,7 +202,7 @@ async def reverse_modes_callback_with_admin(callback) -> Any:
     """Owner may stop themed/progressive reverse modes immediately too."""
     data = callback.data or ""
     if (
-        is_crocodile_admin(getattr(callback.from_user, "id", None))
+        is_crocodile_admin(_callback_user_id(callback))
         and data.startswith("rcrocm_stop_")
     ):
         rest = data[len("rcrocm_stop_"):]
