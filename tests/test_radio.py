@@ -317,7 +317,7 @@ def test_radio_telegram_send_error_is_user_facing(monkeypatch):
         send_voice=AsyncMock(side_effect=RuntimeError("telegram rejected voice")),
     )
     message = SimpleNamespace(
-        text="радио упупы",
+        text="радио упупы 3",
         chat=SimpleNamespace(id=-1001),
         message_id=555,
         bot=bot,
