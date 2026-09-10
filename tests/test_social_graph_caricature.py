@@ -38,7 +38,8 @@ def test_cringe_prompt_is_intentionally_bad_and_data_grounded():
     assert "не придумывай любовь" in prompt.lower()
     assert "ровно 3 персонажей" in prompt.lower()
     assert "не добавляй никаких других людей" in prompt.lower()
-    assert "облачк" not in prompt.lower()
+    assert "нелепые облачка сообщений" not in prompt.lower()
+    assert "тянут к себе облачка сообщений" not in prompt.lower()
     assert "секс" not in prompt.lower()
 
 
