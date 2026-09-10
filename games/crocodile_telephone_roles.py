@@ -346,8 +346,13 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
     ordered, dropped = _alternating_remaining(game, players[step:], required)
     game["players"] = prefix + ordered
     roles = _ensure_roles(game)
-    for user_id, _name in dropped:
-        roles.pop(str(_user_id(user_id) or user_id), None)
+    dropped_ids = {str(_user_id(user_id) or user_id) for user_id, _name in dropped}
+    game["players"] = [
+        row
+        for row in game["players"]
+        if str(_user_id(row[0]) or row[0]) not in dropped_ids
+    ]
+    roles = _ensure_roles(game)
     game[_ROLE_FIELD] = roles
 
     key = crocodile_modes._session_key(chat_id, f"t{step}")
