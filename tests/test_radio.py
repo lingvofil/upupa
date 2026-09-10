@@ -43,6 +43,12 @@ def _message(text: str, *, name: str = "Вася") -> dict:
     }
 
 
+def _long_radio_script(prefix: str, minimum_words: int = 340) -> str:
+    words = prefix.split()
+    words.extend(["эфир"] * max(0, minimum_words - len(words)))
+    return " ".join(words)
+
+
 def test_radio_command_variants_and_router_order():
     import handlers
     import handlers.radio as radio_handler
@@ -135,7 +141,9 @@ def test_normal_radio_script_uses_dedicated_spoken_prompt(monkeypatch):
 
     async def fake_generate(prompt, chat_id, **kwargs):
         prompts.append((prompt, chat_id, kwargs))
-        return "В эфире Упупа. Вася обсуждал арбуз, Петя спорил про лёд. На этом всё."
+        return _long_radio_script(
+            "В эфире Упупа. Вася обсуждал арбуз, Петя спорил про лёд. На этом всё."
+        )
 
     monkeypatch.setattr(radio_script, "_generate_with_active_model", fake_generate)
     messages = [
@@ -165,7 +173,9 @@ def test_large_history_is_summarized_before_final_script(monkeypatch):
         prompts.append(prompt)
         if "редакторскую выжимку" in prompt:
             return "В чате долго обсуждали арбузы и лёд. Вася был активнее всех."
-        return "В эфире Упупа. Сегодня обсуждали арбузы и лёд. Вася был активнее всех. Конец выпуска."
+        return _long_radio_script(
+            "В эфире Упупа. Сегодня обсуждали арбузы и лёд. Вася был активнее всех. Конец выпуска."
+        )
 
     monkeypatch.setattr(radio_script, "_generate_with_active_model", fake_generate)
     messages = [

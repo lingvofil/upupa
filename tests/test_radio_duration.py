@@ -131,3 +131,69 @@ def test_script_duration_changes_prompt_and_hard_limit(monkeypatch):
     assert radio_script.get_radio_word_targets(5) == (580, 720, 760)
     with pytest.raises(ValueError):
         radio_script.get_radio_word_targets(2)
+
+
+def test_short_script_is_regenerated_until_duration_floor(monkeypatch):
+    import features.radio.script as radio_script
+
+    prompts = []
+    outputs = [
+        " ".join(["коротко"] * 120),
+        " ".join(["нормально"] * 360),
+    ]
+
+    async def fake_generate(prompt, chat_id, **kwargs):
+        prompts.append(prompt)
+        return outputs.pop(0)
+
+    monkeypatch.setattr(radio_script, "_generate_with_active_model", fake_generate)
+    messages = [
+        {"display_name": "Вася", "username": "vasya", "text": "Обсуждали арбуз и лёд."},
+        {"display_name": "Петя", "username": "petya", "text": "Потом спорили про коктейль."},
+    ]
+
+    result = asyncio.run(
+        radio_script.generate_radio_script(
+            "-1001",
+            "Чятище",
+            messages,
+            24,
+            duration_minutes=3,
+        )
+    )
+
+    assert result.word_count == 360
+    assert len(prompts) == 2
+    assert "не опускайся ниже 330 слов" in prompts[0].lower()
+    assert "предыдущая попытка получилась всего на 120 слов" in prompts[1].lower()
+    assert "перепиши сценарий полностью" in prompts[1].lower()
+
+
+def test_persistently_short_script_fails_instead_of_sending_tiny_episode(monkeypatch):
+    import features.radio.script as radio_script
+
+    calls = 0
+
+    async def fake_generate(prompt, chat_id, **kwargs):
+        nonlocal calls
+        calls += 1
+        return " ".join(["коротко"] * 120)
+
+    monkeypatch.setattr(radio_script, "_generate_with_active_model", fake_generate)
+    messages = [
+        {"display_name": "Вася", "username": "vasya", "text": "Обсуждали арбуз и лёд."},
+        {"display_name": "Петя", "username": "petya", "text": "Потом спорили про коктейль."},
+    ]
+
+    with pytest.raises(RuntimeError, match="remained too short"):
+        asyncio.run(
+            radio_script.generate_radio_script(
+                "-1001",
+                "Чятище",
+                messages,
+                24,
+                duration_minutes=3,
+            )
+        )
+
+    assert calls == radio_script.RADIO_MIN_LENGTH_ATTEMPTS
