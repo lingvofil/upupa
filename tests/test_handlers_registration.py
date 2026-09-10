@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 163  # main 155 + 8 новых обработчиков режимов кракадила
+EXPECTED_TOTAL_HANDLERS = 165  # +2 callback-handler'а единого меню/галереи кракадила
 
 
 def _count_handlers(router):

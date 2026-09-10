@@ -4,7 +4,6 @@ from aiogram import Router
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
 from core.loader import bot
-from features.crocodile_archive import send_gallery
 from features.crocodile_scoring import (
     format_artist_leaderboard,
     format_slowest_artist_leaderboard,
@@ -15,6 +14,7 @@ from games import (
     crocodile,
     crocodile_likes,
     crocodile_modes,
+    crocodile_party_controls,
     reverse_crocodile,
     reverse_crocodile_modes,
 )
@@ -92,7 +92,7 @@ async def meme_command_handler(message: Message):
 
 @router.message(F.text.lower() == "кракадил")
 async def start_croc(message: types.Message):
-    await crocodile.handle_start_game(message)
+    await crocodile_party_controls.show_menu(message)
 
 
 @router.message(F.text.lower() == "кракадил дуэль")
@@ -111,7 +111,7 @@ async def start_croc_telephone(message: types.Message):
 
 @router.message(F.text.lower() == "кракадил галерея")
 async def croc_gallery(message: types.Message):
-    await send_gallery(message)
+    await crocodile_party_controls.send_gallery_page(message)
 
 
 @router.message(
@@ -163,14 +163,30 @@ async def croc_telephone_callback(callback: types.CallbackQuery):
     await crocodile_modes.handle_telephone_callback(callback)
 
 
+@router.callback_query(F.data.startswith("cmenu_"))
+async def croc_menu_callback(callback: types.CallbackQuery):
+    await crocodile_party_controls.handle_menu_callback(callback)
+
+
+@router.callback_query(F.data.startswith("cgal_"))
+async def croc_gallery_callback(callback: types.CallbackQuery):
+    await crocodile_party_controls.handle_gallery_callback(callback)
+
+
 @router.message(lambda m: m.text and m.text.lower().strip() == "кракадил стоп")
 async def stop_croc_text(message: types.Message):
-    await crocodile.handle_text_stop(message)
+    await crocodile_party_controls.stop_crocodile(message)
 
 
 @router.message(F.text.lower() == "кракадил наоборот")
 async def start_reverse_croc(message: types.Message):
     chat_id = message.chat.id
+    if crocodile_party_controls.has_active_non_reverse_party(chat_id):
+        await message.answer(
+            crocodile_party_controls.party_status_text(chat_id)
+            + "\nСначала закончи эту партию."
+        )
+        return
     if chat_id in _reverse_croc_starts_in_progress or str(chat_id) in reverse_crocodile.games:
         await message.answer("🦎 Раунд уже запускается или идёт.")
         return
