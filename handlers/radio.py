@@ -131,7 +131,7 @@ async def handle_radio_command(message: types.Message):
 
 @router.callback_query(lambda query: bool(query.data) and query.data.startswith(_RADIO_CALLBACK_PREFIX))
 async def handle_radio_duration_callback(query: types.CallbackQuery):
-    if query.from_user.id in BLOCKED_USERS:
+    if query.from_user is None or query.from_user.id in BLOCKED_USERS:
         await query.answer()
         return
 
@@ -155,11 +155,11 @@ async def handle_radio_duration_callback(query: types.CallbackQuery):
 
     await query.answer()
     status = query.message
-    await status.edit_text("захажу в радиорубку")
+    await status.edit_text("захажу в радиорубку", reply_markup=None)
     replied = getattr(status, "reply_to_message", None)
     reply_to_message_id = getattr(replied, "message_id", None)
     await _deliver_radio(
-        bot=query.bot,
+        bot=query.message.bot,
         chat_id=chat_id,
         reply_to_message_id=reply_to_message_id,
         status=status,
