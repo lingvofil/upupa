@@ -239,10 +239,14 @@ def configure_crocodile_canvas_restore() -> None:
     if _configured:
         return
     from games.crocodile_modes import configure_crocodile_modes
+    from games.crocodile_party_controls import configure_crocodile_party_controls
+    from games.crocodile_party_state import configure_crocodile_party_state
 
     # Bootstrap calls this after persistence/controls, so this is the stable
-    # composition point for the extra Socket.IO handlers.
+    # composition point for the extra Socket.IO handlers and mode persistence.
     configure_crocodile_modes()
+    configure_crocodile_party_state()
+    configure_crocodile_party_controls()
     crocodile.sio.on("join_room", handler=join_room_with_canvas_restore)
     crocodile.app.middlewares.append(canvas_restore_middleware)
     _configured = True
