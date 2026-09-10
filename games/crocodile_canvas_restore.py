@@ -64,7 +64,21 @@ _SEND_SNAP_DECLARATION = "  function sendSnap(force = false) {\n"
 _BEGIN_STROKE_DECLARATION = "  function beginStroke(clientX, clientY) {\n"
 _FINISH_DECLARATION = "  window.finish = () => {\n"
 
-_RESTORE_HELPER = r'''  function activateTelephoneTextMode(response) {
+_RESTORE_HELPER = r'''  function isTelephoneRoom() {
+    return /_t\d+$/.test(String(roomId || ""));
+  }
+
+  function configureTurnFinishButton() {
+    const finishButton = document.querySelector('button[onclick="finish()"]');
+    if (!finishButton || !isTelephoneRoom()) return;
+    finishButton.textContent = "✅ Завершить ход";
+    finishButton.setAttribute("aria-label", "Завершить свой ход");
+    finishButton.classList.remove("btn-red");
+    finishButton.style.background = "#34c759";
+    finishButton.style.color = "#fff";
+  }
+
+  function activateTelephoneTextMode(response) {
     roomReady = true;
     hasJoinedRoom = true;
     canvas.style.display = "none";
@@ -101,7 +115,7 @@ _RESTORE_HELPER = r'''  function activateTelephoneTextMode(response) {
     panel.appendChild(input);
 
     const submit = document.createElement("button");
-    submit.textContent = "Готово ✓";
+    submit.textContent = "✅ Завершить ход";
     submit.style.cssText = "font-size:18px;font-weight:800;padding:14px;border:0;border-radius:12px;background:#34c759;color:#fff";
     panel.appendChild(submit);
     submit.onclick = () => {
@@ -154,6 +168,7 @@ _RESTORE_HELPER = r'''  function activateTelephoneTextMode(response) {
 
 _NEW_FIRST_JOIN = r'''      // On a fresh WebApp open the server-side state is authoritative.
       if (!hasJoinedRoom) {
+        configureTurnFinishButton();
         if (response.ui_mode === "text") {
           activateTelephoneTextMode(response);
           return;
