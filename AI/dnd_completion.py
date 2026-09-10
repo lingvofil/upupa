@@ -323,6 +323,7 @@ def configure_dnd_completion(dnd_router) -> None:
         return
 
     from AI import dnd
+    from AI.dnd_campaign import configure_dnd_campaign
 
     original_generate_session_response = dnd.generate_session_response
 
@@ -338,4 +339,5 @@ def configure_dnd_completion(dnd_router) -> None:
     middleware = DndParticipantCompletionMiddleware()
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)
+    configure_dnd_campaign(dnd, dnd_router)
     dnd_router._upupa_dnd_completion_configured = True
