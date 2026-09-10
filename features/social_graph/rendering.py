@@ -6,6 +6,8 @@ import asyncio
 from io import BytesIO
 import math
 import random
+import unicodedata
+from typing import Mapping
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -32,6 +34,44 @@ def _load_font(size: int):
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def _glyph_signature(font, char: str):
+    try:
+        mask = font.getmask(char)
+    except (AttributeError, OSError, UnicodeEncodeError, ValueError):
+        return None
+    return mask.size, mask.getbbox(), bytes(mask)
+
+
+def _font_supports_char(font, char: str) -> bool:
+    if char.isspace():
+        return True
+    signature = _glyph_signature(font, char)
+    if signature is None:
+        return False
+    missing_signatures = {
+        candidate
+        for candidate in (
+            _glyph_signature(font, "\U0010ffff"),
+            _glyph_signature(font, "\u0378"),
+        )
+        if candidate is not None
+    }
+    return signature not in missing_signatures
+
+
+def _sanitize_label_for_font(label: str, font) -> str:
+    """Normalize styled Unicode and strip glyphs that would render as tofu squares."""
+    normalized = unicodedata.normalize("NFKC", str(label or "Участник"))
+    safe_chars: list[str] = []
+    for char in normalized:
+        if char == "□" or unicodedata.category(char) in {"Cf", "Cs", "Co", "Cn"}:
+            continue
+        if _font_supports_char(font, char):
+            safe_chars.append(char)
+    safe = " ".join("".join(safe_chars).split())
+    return safe or "Участник"
 
 
 def _force_layout(graph: RenderGraph) -> dict[int, tuple[float, float]]:
@@ -162,7 +202,8 @@ def render_graph_png(graph: RenderGraph) -> bytes:
             outline=(70, 70, 75, 255),
             width=2,
         )
-        label = node.label if len(node.label) <= 24 else node.label[:22] + "…"
+        label = _sanitize_label_for_font(node.label, node_font)
+        label = label if len(label) <= 24 else label[:22] + "…"
         bbox = draw.textbbox((0, 0), label, font=node_font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
@@ -298,7 +339,7 @@ def _draw_crude_arrowhead(
     )
 
 
-def _draw_cringe_edge(draw: ImageDraw.ImageDraw, edge, positions, max_edge: float) -> None:
+def _draw_cringe_edge(draw: ImageDraw.ImageDraw, edge, positions, max_edge: float):
     start, end = _shorten_edge(positions[edge.user_a], positions[edge.user_b])
     width = max(4, min(12, round(4 + 8 * math.sqrt(edge.total_weight / max_edge))))
     seed = edge.user_a * 1_000_003 + edge.user_b * 97
@@ -314,12 +355,65 @@ def _draw_cringe_edge(draw: ImageDraw.ImageDraw, edge, positions, max_edge: floa
         _draw_crude_arrowhead(draw, points[-2], points[-1], width, 0.75 + 0.3 * forward_ratio)
     if backward_ratio >= 0.22:
         _draw_crude_arrowhead(draw, points[1], points[0], width, 0.75 + 0.3 * backward_ratio)
+    return points
+
+
+def _cringe_edge_label_position(points, positions, occupied, seed: int, index: int):
+    x1, y1 = points[1]
+    x2, y2 = points[2]
+    dx, dy = x2 - x1, y2 - y1
+    distance = max(math.hypot(dx, dy), 1.0)
+    px, py = -dy / distance, dx / distance
+    sign = 1 if seed % 2 else -1
+    offset = 24 + (index % 3) * 9
+
+    for _attempt in range(7):
+        x = (x1 + x2) / 2 + px * offset * sign
+        y = (y1 + y2) / 2 + py * offset * sign
+        too_close_to_node = any(
+            math.hypot(x - node_x, y - node_y) < CRINGE_AVATAR_RADIUS + 32
+            for node_x, node_y in positions.values()
+        )
+        too_close_to_label = any(math.hypot(x - ox, y - oy) < 90 for ox, oy in occupied)
+        if not too_close_to_node and not too_close_to_label:
+            return (
+                min(CANVAS_WIDTH - 70, max(70, x)),
+                min(CANVAS_HEIGHT - 50, max(50, y)),
+            )
+        offset += 18
+        if _attempt == 3:
+            sign *= -1
+
+    return (
+        min(CANVAS_WIDTH - 70, max(70, x)),
+        min(CANVAS_HEIGHT - 50, max(50, y)),
+    )
+
+
+def _draw_cringe_edge_keyword(draw: ImageDraw.ImageDraw, center, keyword: str) -> None:
+    font = _load_font(18)
+    keyword = _sanitize_label_for_font(keyword, font)
+    bbox = draw.textbbox((0, 0), keyword, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x, y = center
+    tx = x - text_w / 2
+    ty = y - text_h / 2
+    pad_x, pad_y = 7, 4
+    draw.rounded_rectangle(
+        (tx - pad_x, ty - pad_y, tx + text_w + pad_x, ty + text_h + pad_y),
+        radius=7,
+        fill=(250, 248, 241, 245),
+        outline=(45, 45, 45, 220),
+        width=2,
+    )
+    draw.text((tx, ty), keyword, font=font, fill=(25, 25, 25, 255))
 
 
 def _draw_cringe_label(draw: ImageDraw.ImageDraw, center, label: str) -> None:
-    label = " ".join(str(label or "Участник").split())
     x, y = center
     font = _load_font(26)
+    label = _sanitize_label_for_font(label, font)
     for size in range(26, 11, -1):
         candidate = _load_font(size)
         bbox = draw.textbbox((0, 0), label, font=candidate)
@@ -359,7 +453,11 @@ def _draw_cringe_crown(draw: ImageDraw.ImageDraw, center) -> None:
     draw.line(points + [points[0]], fill=(35, 35, 35, 255), width=4, joint="curve")
 
 
-def render_cringe_graph_png(graph: RenderGraph, portrait_sheet: bytes) -> bytes:
+def render_cringe_graph_png(
+    graph: RenderGraph,
+    portrait_sheet: bytes,
+    edge_keywords: Mapping[tuple[int, int], str] | None = None,
+) -> bytes:
     """Compose an exact graph using anonymous AI portraits as the only generated artwork."""
     if not graph.nodes or not graph.edges:
         raise ValueError("Cannot render an empty social graph")
@@ -372,10 +470,21 @@ def render_cringe_graph_png(graph: RenderGraph, portrait_sheet: bytes) -> bytes:
     image = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), (245, 244, 239))
     draw = ImageDraw.Draw(image, "RGBA")
     max_edge = max(edge.total_weight for edge in graph.edges)
+    edge_labels = []
+    edge_keywords = edge_keywords or {}
 
-    for edge in graph.edges:
+    for index, edge in enumerate(graph.edges):
         if edge.user_a in positions and edge.user_b in positions:
-            _draw_cringe_edge(draw, edge, positions, max_edge)
+            points = _draw_cringe_edge(draw, edge, positions, max_edge)
+            edge_labels.append((index, edge, points))
+
+    occupied_labels = []
+    for index, edge, points in edge_labels:
+        seed = edge.user_a * 1_000_003 + edge.user_b * 97
+        center = _cringe_edge_label_position(points, positions, occupied_labels, seed, index)
+        occupied_labels.append(center)
+        key = tuple(sorted((edge.user_a, edge.user_b)))
+        _draw_cringe_edge_keyword(draw, center, edge_keywords.get(key, "связь"))
 
     mask = Image.new("L", (CRINGE_AVATAR_SIZE, CRINGE_AVATAR_SIZE), 0)
     mask_draw = ImageDraw.Draw(mask)
@@ -412,5 +521,9 @@ async def render_graph_png_async(graph: RenderGraph) -> bytes:
     return await asyncio.to_thread(render_graph_png, graph)
 
 
-async def render_cringe_graph_png_async(graph: RenderGraph, portrait_sheet: bytes) -> bytes:
-    return await asyncio.to_thread(render_cringe_graph_png, graph, portrait_sheet)
+async def render_cringe_graph_png_async(
+    graph: RenderGraph,
+    portrait_sheet: bytes,
+    edge_keywords: Mapping[tuple[int, int], str] | None = None,
+) -> bytes:
+    return await asyncio.to_thread(render_cringe_graph_png, graph, portrait_sheet, edge_keywords)
