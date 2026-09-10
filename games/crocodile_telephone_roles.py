@@ -20,7 +20,6 @@ _ROLE_FIELD = "telephone_roles"
 _configured = False
 _original_start_telephone = None
 _original_handle_telephone_callback = None
-_original_lobby_keyboard = None
 _original_party_status_text = None
 _original_skip_telephone = None
 
@@ -345,15 +344,7 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
     prefix = players[:step]
     ordered, dropped = _alternating_remaining(game, players[step:], required)
     game["players"] = prefix + ordered
-    roles = _ensure_roles(game)
-    dropped_ids = {str(_user_id(user_id) or user_id) for user_id, _name in dropped}
-    game["players"] = [
-        row
-        for row in game["players"]
-        if str(_user_id(row[0]) or row[0]) not in dropped_ids
-    ]
-    roles = _ensure_roles(game)
-    game[_ROLE_FIELD] = roles
+    _ensure_roles(game)
 
     key = crocodile_modes._session_key(chat_id, f"t{step}")
     crocodile_modes.canvas_sessions.pop(key, None)
@@ -380,13 +371,12 @@ def configure_crocodile_telephone_roles() -> None:
     """Install role lobby last so it sees admin, resilience and permission wrappers."""
     global _configured
     global _original_start_telephone, _original_handle_telephone_callback
-    global _original_lobby_keyboard, _original_party_status_text, _original_skip_telephone
+    global _original_party_status_text, _original_skip_telephone
     if _configured:
         return
 
     _original_start_telephone = crocodile_modes.start_telephone
     _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
-    _original_lobby_keyboard = crocodile_modes._telephone_lobby_keyboard
     _original_party_status_text = crocodile_party_controls.party_status_text
     _original_skip_telephone = crocodile_party_controls._skip_telephone
 
