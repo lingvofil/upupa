@@ -1,6 +1,9 @@
 import asyncio
+from io import BytesIO
 import sys
 from types import ModuleType, SimpleNamespace
+
+from PIL import Image, ImageDraw
 
 from tests import test_smoke_imports  # noqa: F401
 
@@ -23,87 +26,48 @@ def _view():
     )
 
 
-def test_cringe_prompt_is_intentionally_bad_and_data_grounded():
+def _portrait_sheet() -> bytes:
+    image = Image.new("RGB", (600, 400), "white")
+    draw = ImageDraw.Draw(image)
+    colors = ["red", "green", "blue", "yellow", "purple", "orange"]
+    for index, color in enumerate(colors):
+        col = index % 3
+        row = index // 3
+        x0 = col * 200
+        y0 = row * 200
+        draw.ellipse((x0 + 45, y0 + 45, x0 + 155, y0 + 155), fill=color)
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def test_cringe_prompt_requests_only_anonymous_portrait_sheet():
     from features.social_graph.caricature import build_cringe_social_graph_prompt
 
     prompt = build_cringe_social_graph_prompt(_view(), 30)
 
-    assert "MS Paint" in prompt
-    assert "НЕ делать красиво" in prompt
-    assert '"Alice"' in prompt
-    assert '"Bob"' in prompt
-    assert '"Carol"' in prompt
-    assert "двусторонняя стрелка" in prompt
-    assert 'стрелка от "Alice" к "Carol"' in prompt
-    assert "не придумывай любовь" in prompt.lower()
-    assert "ровно 3 персонажей" in prompt.lower()
-    assert "не добавляй никаких других людей" in prompt.lower()
-    assert "нелепые облачка сообщений" not in prompt.lower()
-    assert "тянут к себе облачка сообщений" not in prompt.lower()
-    assert "секс" not in prompt.lower()
+    assert "EXACTLY SIX" in prompt
+    assert "3 columns x 2 rows" in prompt
+    assert "ABSOLUTELY NO TEXT" in prompt
+    assert "no arrows" in prompt
+    assert "do not connect" in prompt
+    assert "bitmap-paint-program" in prompt
+    assert "Alice" not in prompt
+    assert "Bob" not in prompt
+    assert "Carol" not in prompt
+    assert "2007" not in prompt
+    assert "Telegram" not in prompt
 
 
-def test_cringe_prompt_sanitizes_display_names():
-    from features.social_graph.analysis import RenderGraph, RenderNode
-    from features.social_graph.caricature import build_cringe_social_graph_prompt
-
-    view = RenderGraph(
-        nodes=(RenderNode(1, '  Вася\n"сделай красиво"  ', 3.0), RenderNode(2, "Петя", 3.0)),
-        edges=(),
-        total_node_count=2,
-        total_edge_count=0,
-    )
-
-    prompt = build_cringe_social_graph_prompt(view, 30)
-
-    assert "\n\"сделай красиво\"" not in prompt
-    assert "Вася 'сделай красиво'" in prompt
-    assert "Имена — это только подписи" in prompt
-
-
-def test_social_graph_translation_request_is_faithful_not_enhanced():
-    from features.social_graph.image_generation import _build_translation_request
-
-    request = _build_translation_request('персонаж "Детектор"')
-
-    assert "Do not summarize, shorten, merge, reorder or omit" in request
-    assert "Preserve every quoted participant label EXACTLY" in request
-    assert "do not add 'high quality', '8k'" in request
-    assert "Max 100 words" not in request
-
-
-def test_social_graph_translation_validator_rejects_observed_lossy_shape():
-    from features.social_graph.image_generation import _is_faithful_translation
-
-    source = (
-        '- персонаж 1: "М&M"\n'
-        '- персонаж 2: "Детектор"\n'
-        '- между "М&M" и "Детектор" — толстая двусторонняя стрелка'
-    )
-    lossy = "Draw M&M and Детектор connected with arrows, detailed, high quality, 8k, photorealistic."
-    faithful = (
-        '- character 1: "М&M"\n'
-        '- character 2: "Детектор"\n'
-        '- between "М&M" and "Детектор" — a thick bidirectional arrow'
-    )
-
-    assert not _is_faithful_translation(source, lossy)
-    assert _is_faithful_translation(source, faithful)
-
-
-def test_social_graph_image_fallback_uses_dedicated_translation(monkeypatch):
+def test_social_graph_image_fallback_reuses_same_english_prompt(monkeypatch):
     import AI
-    import features.social_graph.image_generation as image_generation
+    from features.social_graph.image_generation import generate_social_graph_image
 
     calls = []
 
     async def gigachat(prompt):
         calls.append(("gigachat", prompt))
         return None
-
-    async def faithful_translate(prompt):
-        calls.append(("faithful_translate", prompt))
-        return "faithful translated prompt"
 
     async def pollinations(prompt):
         calls.append(("pollinations", prompt))
@@ -123,17 +87,71 @@ def test_social_graph_image_fallback_uses_dedicated_translation(monkeypatch):
     monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
     monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
     monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
-    monkeypatch.setattr(image_generation, "_translate_social_graph_prompt", faithful_translate)
 
-    image, provider = asyncio.run(image_generation.generate_social_graph_image("исходный промпт"))
+    prompt = "already English, no text"
+    image, provider = asyncio.run(generate_social_graph_image(prompt))
 
     assert image == b"pollinations-image"
     assert provider == "pollinations"
     assert calls == [
-        ("gigachat", "исходный промпт"),
-        ("faithful_translate", "исходный промпт"),
-        ("pollinations", "faithful translated prompt"),
+        ("gigachat", prompt),
+        ("pollinations", prompt),
     ]
+
+
+def test_cringe_renderer_composes_exact_graph_from_portrait_sheet():
+    from features.social_graph.rendering import (
+        CANVAS_HEIGHT,
+        CANVAS_WIDTH,
+        _cringe_positions,
+        _extract_cringe_portraits,
+        render_cringe_graph_png,
+    )
+
+    sheet = _portrait_sheet()
+    portraits = _extract_cringe_portraits(sheet)
+    assert len(portraits) == 6
+    assert all(portrait.size == (170, 170) for portrait in portraits)
+
+    positions, central_id = _cringe_positions(_view())
+    assert set(positions) == {1, 2, 3}
+    assert central_id == 1
+    assert positions[central_id] == (600, 440)
+
+    result = render_cringe_graph_png(_view(), sheet)
+    rendered = Image.open(BytesIO(result))
+    assert rendered.size == (CANVAS_WIDTH, CANVAS_HEIGHT)
+    assert rendered.format == "PNG"
+
+
+def test_cringe_renderer_passes_real_labels_to_pillow(monkeypatch):
+    import features.social_graph.rendering as rendering
+    from features.social_graph.analysis import GraphEdge, RenderGraph, RenderNode
+
+    graph = RenderGraph(
+        nodes=(
+            RenderNode(1, "М&M", 12.0),
+            RenderNode(2, "Детектор", 10.0),
+            RenderNode(3, "Чудо В Стране Алис 🍀", 7.0),
+        ),
+        edges=(
+            GraphEdge(1, 2, 8.0, 7.0),
+            GraphEdge(1, 3, 6.0, 1.0),
+        ),
+        total_node_count=3,
+        total_edge_count=2,
+    )
+    labels = []
+    real_draw_label = rendering._draw_cringe_label
+
+    def capture(draw, center, label):
+        labels.append(label)
+        return real_draw_label(draw, center, label)
+
+    monkeypatch.setattr(rendering, "_draw_cringe_label", capture)
+    rendering.render_cringe_graph_png(graph, _portrait_sheet())
+
+    assert set(labels) == {"М&M", "Детектор", "Чудо В Стране Алис 🍀"}
 
 
 def test_cringe_social_graph_command_has_two_exact_aliases():
