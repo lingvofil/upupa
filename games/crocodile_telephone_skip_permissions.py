@@ -109,4 +109,10 @@ def configure_crocodile_telephone_skip_permissions() -> None:
     from games.crocodile_telephone_roles import configure_crocodile_telephone_roles
 
     configure_crocodile_telephone_roles()
+
+    from games.crocodile_telephone_role_announcements import (
+        configure_crocodile_telephone_role_announcements,
+    )
+
+    configure_crocodile_telephone_role_announcements()
     _configured = True
