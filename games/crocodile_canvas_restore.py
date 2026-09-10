@@ -238,6 +238,7 @@ def configure_crocodile_canvas_restore() -> None:
     global _configured
     if _configured:
         return
+    from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_duo_optin import configure_crocodile_duo_opt_in
     from games.crocodile_modes import configure_crocodile_modes
     from games.crocodile_party_controls import configure_crocodile_party_controls
@@ -249,6 +250,7 @@ def configure_crocodile_canvas_restore() -> None:
     configure_crocodile_party_state()
     configure_crocodile_party_controls()
     configure_crocodile_duo_opt_in()
+    configure_crocodile_admin_controls()
     crocodile.sio.on("join_room", handler=join_room_with_canvas_restore)
     crocodile.app.middlewares.append(canvas_restore_middleware)
     _configured = True
