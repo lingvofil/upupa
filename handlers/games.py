@@ -4,7 +4,7 @@ from aiogram import Router
 from aiogram import Bot, F, types
 from aiogram.types import Message, PollAnswer
 from core.loader import bot
-from features.crocodile_scoring import format_artist_leaderboard
+from features.crocodile_scoring import can_claim_draw, format_artist_leaderboard
 from games.egra import start_egra, handle_egra_answer, handle_final_button_press
 from services import memegenerator
 from games import crocodile, crocodile_likes, reverse_crocodile
@@ -85,6 +85,15 @@ async def croc_artist_stats(message: types.Message):
 async def croc_callback(callback: types.CallbackQuery):
     if callback.data == "btn_like":
         await crocodile_likes.handle_like_callback(callback)
+    elif callback.data == "btn_want_draw":
+        allowed, seconds_left = can_claim_draw(callback.message.chat.id, callback.from_user.id)
+        if not allowed:
+            await callback.answer(
+                f"Угадавший выбирает первым. Подожди ещё {seconds_left} сек.",
+                show_alert=True,
+            )
+            return
+        await crocodile.handle_callback(callback)
     elif callback.data == "cr_restart":
         await crocodile.handle_start_game(callback.message)
         await callback.answer()
