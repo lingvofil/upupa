@@ -48,7 +48,6 @@ async def join_room_with_canvas_restore(sid, data):
         from games.crocodile_modes import canvas_join_payload
         restored.update(canvas_join_payload(session))
     except Exception:
-        # Party-mode module is optional for isolated unit tests/imports.
         restored.setdefault("ui_mode", "draw")
         restored.setdefault("word", session.get("word", ""))
     return restored
@@ -235,10 +234,15 @@ async def canvas_restore_middleware(request: web.Request, handler):
 
 
 def configure_crocodile_canvas_restore() -> None:
-    """Install socket + HTTP restore hooks before the aiohttp app is started."""
+    """Install party modes, socket restore and HTTP patch before server start."""
     global _configured
     if _configured:
         return
+    from games.crocodile_modes import configure_crocodile_modes
+
+    # Bootstrap calls this after persistence/controls, so this is the stable
+    # composition point for the extra Socket.IO handlers.
+    configure_crocodile_modes()
     crocodile.sio.on("join_room", handler=join_room_with_canvas_restore)
     crocodile.app.middlewares.append(canvas_restore_middleware)
     _configured = True
