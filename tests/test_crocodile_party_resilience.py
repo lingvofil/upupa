@@ -145,7 +145,7 @@ def test_duel_accepts_only_one_concurrent_correct_answer(monkeypatch):
     monkeypatch.setattr(crocodile, "add_point", add_point)
     monkeypatch.setattr(scoring, "record_artist_success", slow_artist_record)
     monkeypatch.setattr(controls.party_state, "persist_party_modes", MagicMock())
-    monkeypatch.setattr(controls.bot, "send_message", AsyncMock())
+    monkeypatch.setattr(controls, "bot", SimpleNamespace(send_message=AsyncMock()))
     monkeypatch.setattr(crocodile_modes, "_start_duel_vote", start_vote)
     first = _message(-42, 10, "Угадавший 1")
     second = _message(-42, 20, "Угадавший 2")
@@ -189,7 +189,7 @@ def test_active_telephone_can_be_cancelled_by_host(monkeypatch):
     )
     monkeypatch.setattr(controls.party_state, "persist_party_modes", MagicMock())
     monkeypatch.setattr(controls, "_close_synthetic_room", AsyncMock())
-    monkeypatch.setattr(controls.bot, "send_message", AsyncMock())
+    monkeypatch.setattr(controls, "bot", SimpleNamespace(send_message=AsyncMock()))
 
     asyncio.run(controls.handle_telephone_callback_resilient(callback))
 
@@ -217,7 +217,7 @@ def test_telephone_skip_removes_absent_player_without_flipping_step_parity(monke
     monkeypatch.setattr(crocodile_modes, "_send_telephone_step", resend)
     monkeypatch.setattr(controls.party_state, "persist_party_modes", MagicMock())
     monkeypatch.setattr(controls, "_close_synthetic_room", AsyncMock())
-    monkeypatch.setattr(controls.bot, "send_message", AsyncMock())
+    monkeypatch.setattr(controls, "bot", SimpleNamespace(send_message=AsyncMock()))
 
     asyncio.run(controls._skip_telephone(chat_id, game))
 
