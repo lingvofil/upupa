@@ -21,6 +21,11 @@ from features.social_graph.caricature import (
     build_cringe_social_graph_prompt,
 )
 from features.social_graph.image_generation import generate_social_graph_image
+from features.social_graph.interaction_analysis import (
+    build_cringe_graph_explanation,
+    build_edge_interaction_profiles,
+    edge_keywords,
+)
 from features.social_graph.rendering import render_cringe_graph_png_async, render_graph_png_async
 from features.social_graph.service import (
     REPLY_WEIGHT,
@@ -141,8 +146,10 @@ async def handle_cringe_social_graph(message: types.Message):
         await message.reply("Не смог всрать картинку: рисовалка сдохла.")
         return
 
+    profiles = build_edge_interaction_profiles(data.interactions, view.edges)
+
     try:
-        image = await render_cringe_graph_png_async(view, portrait_sheet)
+        image = await render_cringe_graph_png_async(view, portrait_sheet, edge_keywords(profiles))
     except Exception as exc:
         logging.warning("[social_graph] hybrid render failed: %s", exc, exc_info=True)
         await message.reply("Рожи нарисовал, а собрать их в соцграф не смог.")
@@ -152,6 +159,7 @@ async def handle_cringe_social_graph(message: types.Message):
         BufferedInputFile(image, filename="social_graph_cringe.png"),
         caption=CRINGE_GRAPH_CAPTION,
     )
+    await message.answer(build_cringe_graph_explanation(view, profiles, data.names))
 
 
 @router.message(lambda message: _is_command(message, "мои связи"))
