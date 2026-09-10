@@ -4,7 +4,7 @@ aiogram матчит сообщение по роутерам последова
 """
 from handlers import (
     crocodile_guesses, basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
-    world_interactions, world_expansion, world_hub, world_listing, stats_lexicon,
+    world_interactions, world_expansion, world_symbols, world_hub, world_listing, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
 )
@@ -29,6 +29,7 @@ ROUTERS = [
     world_visit_decisions.router,  # legacy guard входящих приглашений; lifecycle перехватывает новые решения первым
     world_interactions.router,  # дипломатические действия перехватывают main/diplomacy callbacks хаба
     world_expansion.router,  # характеристики, санкции и международный суд — до старого hub
+    world_symbols.router,  # государственные флаги/гербы и их callbacks
     world_hub.router,  # интерактивный Мир Упупы
     world_listing.router,
     world.router,
