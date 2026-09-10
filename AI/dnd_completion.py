@@ -323,6 +323,7 @@ def configure_dnd_completion(dnd_router) -> None:
         return
 
     from AI import dnd
+    from AI.dnd_campaign import configure_dnd_campaign
 
     original_generate_session_response = dnd.generate_session_response
 
@@ -338,4 +339,14 @@ def configure_dnd_completion(dnd_router) -> None:
     middleware = DndParticipantCompletionMiddleware()
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)
+    configure_dnd_campaign(dnd, dnd_router)
+
+    campaign_generate_session_response = dnd.generate_session_response
+
+    async def generate_with_campaign_compat(session, prompt: str) -> str:
+        if not hasattr(session, "conversation"):
+            return await generate_with_participant_context(session, prompt)
+        return await campaign_generate_session_response(session, prompt)
+
+    dnd.generate_session_response = generate_with_campaign_compat
     dnd_router._upupa_dnd_completion_configured = True
