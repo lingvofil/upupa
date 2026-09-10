@@ -13,6 +13,12 @@ from features.social_graph.analysis import (
     rank_central_participants,
     select_render_graph,
 )
+from features.social_graph.caricature import (
+    MAX_CRINGE_EDGES,
+    MAX_CRINGE_NODES,
+    build_cringe_social_graph_prompt,
+)
+from features.social_graph.image_generation import generate_social_graph_image
 from features.social_graph.rendering import render_graph_png_async
 from features.social_graph.service import (
     REPLY_WEIGHT,
@@ -32,6 +38,10 @@ def _is_command(message: types.Message, command: str) -> bool:
         and message.from_user.id not in BLOCKED_USERS
         and message.text.strip().lower() == command
     )
+
+
+def _is_cringe_graph_command(message: types.Message) -> bool:
+    return _is_command(message, "всратый соцграф") or _is_command(message, "соцграф всратый")
 
 
 def _disabled_text() -> str:
@@ -99,6 +109,43 @@ async def handle_social_graph(message: types.Message):
         f"стрелка появляется только при заметной асимметрии.{suffix}"
     )
     await message.answer_photo(BufferedInputFile(png, filename="social_graph.png"), caption=caption)
+
+
+@router.message(lambda message: _is_cringe_graph_command(message))
+async def handle_cringe_social_graph(message: types.Message):
+    if not await _ensure_available(message):
+        return
+    data = await get_graph_data(message.chat.id)
+    edges = aggregate_edges(data.interactions)
+    if not edges:
+        await message.reply(f"За последние {data.period_days} дней даже всрать пока нечего — связей мало.")
+        return
+
+    view = select_render_graph(
+        edges,
+        data.names,
+        max_nodes=MAX_CRINGE_NODES,
+        max_edges=MAX_CRINGE_EDGES,
+    )
+    if not view.edges:
+        await message.reply(f"За последние {data.period_days} дней даже всрать пока нечего — связей мало.")
+        return
+
+    await message.reply("🖍 Ща испорчу вашу статистику в Paint.")
+    prompt = build_cringe_social_graph_prompt(view, data.period_days)
+    image, _provider = await generate_social_graph_image(prompt)
+    if not image:
+        await message.reply("Не смог всрать картинку: рисовалка сдохла.")
+        return
+
+    caption = (
+        f"🖍 Всратый соцграф за последние {data.period_days} дней. "
+        "Связи — из статистики; рожи и художественная хуита — нейросеть."
+    )
+    await message.answer_photo(
+        BufferedInputFile(image, filename="social_graph_cringe.png"),
+        caption=caption,
+    )
 
 
 @router.message(lambda message: _is_command(message, "мои связи"))
