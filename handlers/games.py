@@ -21,10 +21,6 @@ from games import (
 from AI.quiz import process_poll_answer
 
 
-# Controls/persistence are configured during bootstrap; this installs only the
-# extra mode layer. Calling twice is explicitly harmless.
-crocodile_modes.configure_crocodile_modes()
-
 router = Router(name="games")
 _quiz_poll_answers_in_progress: set[str] = set()
 _reverse_croc_starts_in_progress: set[int] = set()
