@@ -125,6 +125,9 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         normalized = str(action).strip().casefold()
         if normalized == "дальше" or normalized.startswith("упупа"):
             return
+        from AI.dnd_state_commands import is_state_command
+        if is_state_command(action):
+            return
 
         user_id = int(user.id)
         participants = dnd._participant_ids(session)
@@ -324,6 +327,7 @@ def configure_dnd_completion(dnd_router) -> None:
 
     from AI import dnd
     from AI.dnd_campaign import configure_dnd_campaign
+    from AI.dnd_state_commands import configure_dnd_state_commands
 
     original_generate_session_response = dnd.generate_session_response
 
@@ -336,6 +340,9 @@ def configure_dnd_completion(dnd_router) -> None:
 
     dnd.generate_session_response = generate_with_participant_context
 
+    # State queries and the short start alias must run before action collection,
+    # otherwise a reply like «Мой герой» can become an in-game move.
+    configure_dnd_state_commands(dnd_router)
     middleware = DndParticipantCompletionMiddleware()
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)
