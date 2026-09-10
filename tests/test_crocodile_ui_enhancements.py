@@ -61,6 +61,26 @@ def test_main_menu_contains_ratings_before_gallery(monkeypatch):
     assert callbacks == ["cmenu_classic", "cmenu_ratings", "cmenu_gallery"]
 
 
+def test_ratings_submenu_contains_all_requested_views():
+    from games import crocodile_ui_enhancements as ui
+
+    keyboard = ui.ratings_menu_keyboard()
+    callbacks = {
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    assert {
+        "cmenu_rating_game",
+        "cmenu_rating_artists",
+        "cmenu_rating_likes",
+        "cmenu_rating_slow",
+        "cmenu_rating_longest",
+        "cmenu_main",
+    } <= callbacks
+
+
 def test_unified_classic_start_reveals_word_in_callback_alert(monkeypatch):
     from games import crocodile
     from games import crocodile_party_controls
