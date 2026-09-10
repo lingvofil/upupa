@@ -29,6 +29,7 @@ from features.social_graph.service import (
 
 
 router = Router(name="social_graph")
+CRINGE_GRAPH_CAPTION = "рожи и художественная хуита"
 
 
 def _is_command(message: types.Message, command: str) -> bool:
@@ -138,13 +139,9 @@ async def handle_cringe_social_graph(message: types.Message):
         await message.reply("Не смог всрать картинку: рисовалка сдохла.")
         return
 
-    caption = (
-        f"🖍 Всратый соцграф за последние {data.period_days} дней. "
-        "Связи — из статистики; рожи и художественная хуита — нейросеть."
-    )
     await message.answer_photo(
         BufferedInputFile(image, filename="social_graph_cringe.png"),
-        caption=caption,
+        caption=CRINGE_GRAPH_CAPTION,
     )
 
 
