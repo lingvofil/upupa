@@ -225,6 +225,7 @@ def configure_crocodile_admin_controls() -> None:
 
     from games import reverse_crocodile as reverse
     from games import reverse_crocodile_modes as reverse_modes
+    from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
 
     _original_stop_lock_remaining_seconds = crocodile_controls.stop_lock_remaining_seconds
     _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
@@ -241,4 +242,5 @@ def configure_crocodile_admin_controls() -> None:
     crocodile_party_controls.menu_keyboard = menu_keyboard_with_admin_emergency_stop
     reverse.handle_callback = reverse_callback_with_admin
     reverse_modes.handle_callback = reverse_modes_callback_with_admin
+    configure_crocodile_telephone_mentions()
     _configured = True
