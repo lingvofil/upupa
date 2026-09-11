@@ -184,6 +184,7 @@
 
   <div class="tools">
     <button id="eraserButton" class="btn btn-gray" type="button" aria-pressed="false">⌫ Ластик</button>
+    <button id="fillButton" class="btn btn-gray" type="button" aria-pressed="false">🪣 Заливка</button>
     <label class="size-control" for="brushSize">
       Кисть
       <input id="brushSize" type="range" min="2" max="28" step="1" value="6" aria-label="Толщина кисти" />
@@ -208,19 +209,34 @@
   // --- COLORS & TOOLS ---
   let currentColor = "#000000";
   let erasing = false;
+  let fillMode = false;
   let brushSize = 6;
   let brushOpacity = 1;
 
   const eraserButton = document.getElementById("eraserButton");
+  const fillButton = document.getElementById("fillButton");
   const brushSizeInput = document.getElementById("brushSize");
   const brushSizeValue = document.getElementById("brushSizeValue");
   const brushOpacityInput = document.getElementById("brushOpacity");
   const brushOpacityValue = document.getElementById("brushOpacityValue");
 
-  function setEraser(active) {
-    erasing = Boolean(active);
+  function syncToolButtons() {
     eraserButton.classList.toggle("active", erasing);
     eraserButton.setAttribute("aria-pressed", erasing ? "true" : "false");
+    fillButton.classList.toggle("active", fillMode);
+    fillButton.setAttribute("aria-pressed", fillMode ? "true" : "false");
+  }
+
+  function setEraser(active) {
+    erasing = Boolean(active);
+    if (erasing) fillMode = false;
+    syncToolButtons();
+  }
+
+  function setFill(active) {
+    fillMode = Boolean(active);
+    if (fillMode) erasing = false;
+    syncToolButtons();
   }
 
   function setColor(c) {
@@ -258,6 +274,10 @@
 
   eraserButton.addEventListener("click", function() {
     setEraser(!erasing);
+  });
+
+  fillButton.addEventListener("click", function() {
+    setFill(!fillMode);
   });
 
   brushSizeInput.addEventListener("input", function() {
@@ -346,6 +366,7 @@
   const HISTORY_LIMIT = 20;
   const MIN_CANVAS_ZOOM = 1;
   const MAX_CANVAS_ZOOM = 4;
+  const FILL_PROTOCOL_PREFIX = "__fill__:";
   let undoStack = [];
   let redoStack = [];
   let isDirty = false;
@@ -595,7 +616,165 @@
     ctx.restore();
   }
 
+  function parseHexColor(color) {
+    const match = /^#([0-9a-f]{6})$/i.exec(String(color || ""));
+    if (!match) return null;
+    const value = parseInt(match[1], 16);
+    return {
+      r: (value >> 16) & 255,
+      g: (value >> 8) & 255,
+      b: value & 255,
+      a: 255
+    };
+  }
+
+  function floodFill(point, color) {
+    if (canvas.width < 1 || canvas.height < 1) return false;
+    const replacement = parseHexColor(color);
+    if (!replacement) return false;
+
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(point.x)));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(point.y)));
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = image.data;
+    const startPixel = y * canvas.width + x;
+    const startOffset = startPixel * 4;
+    const target = {
+      r: pixels[startOffset],
+      g: pixels[startOffset + 1],
+      b: pixels[startOffset + 2],
+      a: pixels[startOffset + 3]
+    };
+
+    if (
+      target.r === replacement.r &&
+      target.g === replacement.g &&
+      target.b === replacement.b &&
+      target.a === replacement.a
+    ) {
+      return false;
+    }
+
+    function matches(pixelIndex) {
+      const offset = pixelIndex * 4;
+      return (
+        pixels[offset] === target.r &&
+        pixels[offset + 1] === target.g &&
+        pixels[offset + 2] === target.b &&
+        pixels[offset + 3] === target.a
+      );
+    }
+
+    function paint(pixelIndex) {
+      const offset = pixelIndex * 4;
+      pixels[offset] = replacement.r;
+      pixels[offset + 1] = replacement.g;
+      pixels[offset + 2] = replacement.b;
+      pixels[offset + 3] = replacement.a;
+    }
+
+    const stack = [startPixel];
+    paint(startPixel);
+    while (stack.length) {
+      const pixelIndex = stack.pop();
+      const px = pixelIndex % canvas.width;
+      const py = Math.floor(pixelIndex / canvas.width);
+      let next;
+
+      if (px > 0) {
+        next = pixelIndex - 1;
+        if (matches(next)) {
+          paint(next);
+          stack.push(next);
+        }
+      }
+      if (px + 1 < canvas.width) {
+        next = pixelIndex + 1;
+        if (matches(next)) {
+          paint(next);
+          stack.push(next);
+        }
+      }
+      if (py > 0) {
+        next = pixelIndex - canvas.width;
+        if (matches(next)) {
+          paint(next);
+          stack.push(next);
+        }
+      }
+      if (py + 1 < canvas.height) {
+        next = pixelIndex + canvas.width;
+        if (matches(next)) {
+          paint(next);
+          stack.push(next);
+        }
+      }
+    }
+
+    ctx.putImageData(image, 0, 0);
+    return true;
+  }
+
+  function emitFillStep(point, color) {
+    if (!socket.connected || canvas.width < 1 || canvas.height < 1) return;
+    const nx = Math.max(0, Math.min(1, point.x / canvas.width));
+    const ny = Math.max(0, Math.min(1, point.y / canvas.height));
+    socket.emit("draw_step", {
+      room: roomId,
+      px: nx,
+      py: ny,
+      x: nx,
+      y: ny,
+      color: FILL_PROTOCOL_PREFIX + color,
+      width: 0
+    });
+  }
+
+  function applyFill(point, color, options = {}) {
+    const recordHistory = options.recordHistory !== false;
+    const publish = options.publish !== false;
+    if (!parseHexColor(color)) return false;
+
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(point.x)));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(point.y)));
+    const current = ctx.getImageData(x, y, 1, 1).data;
+    const replacement = parseHexColor(color);
+    if (
+      current[0] === replacement.r &&
+      current[1] === replacement.g &&
+      current[2] === replacement.b &&
+      current[3] === replacement.a
+    ) {
+      return false;
+    }
+
+    if (recordHistory) pushUndoState();
+    if (!floodFill({ x: x, y: y }, color)) return false;
+
+    if (publish) emitFillStep({ x: x, y: y }, color);
+    isDirty = true;
+    if (publish) sendSnap(false);
+    return true;
+  }
+
   socket.on("draw_data", (d) => {
+    const color = typeof d.color === "string" ? d.color : "";
+    if (color.startsWith(FILL_PROTOCOL_PREFIX)) {
+      const nx = Number(d.x);
+      const ny = Number(d.y);
+      if (Number.isFinite(nx) && Number.isFinite(ny)) {
+        applyFill(
+          {
+            x: Math.max(0, Math.min(1, nx)) * canvas.width,
+            y: Math.max(0, Math.min(1, ny)) * canvas.height
+          },
+          color.slice(FILL_PROTOCOL_PREFIX.length),
+          { recordHistory: false, publish: false }
+        );
+      }
+      return;
+    }
+
     drawLine(
       { x: d.px, y: d.py },
       { x: d.x, y: d.y },
@@ -662,6 +841,8 @@
   let drawing = false;
   let activePointerId = null;
   let strokeChanged = false;
+  let pendingFillPointerId = null;
+  let pendingFillClientPoint = null;
   let last = { x: 0, y: 0 };
 
   function getPosFromClient(clientX, clientY) {
@@ -673,6 +854,16 @@
       x: (clientX - r.left) * scaleX,
       y: (clientY - r.top) * scaleY
     };
+  }
+
+  function applyFillFromClient(clientX, clientY) {
+    const point = getPosFromClient(clientX, clientY);
+    return applyFill(point, currentColor);
+  }
+
+  function cancelPendingFill() {
+    pendingFillPointerId = null;
+    pendingFillClientPoint = null;
   }
 
   function beginStroke(clientX, clientY) {
@@ -737,6 +928,8 @@
         capturePointerSafely(e);
 
         if (touchGestureActive || touchPointers.size >= 2) {
+          cancelPendingFill();
+          activePointerId = null;
           if (!touchGestureActive && drawing) endStroke();
           touchGestureActive = true;
           if (touchPointers.size === 2 || !pinchState) beginPinchFromPointerMap();
@@ -745,6 +938,12 @@
       }
 
       activePointerId = e.pointerId;
+      if (fillMode) {
+        pendingFillPointerId = e.pointerId;
+        pendingFillClientPoint = { clientX: e.clientX, clientY: e.clientY };
+        capturePointerSafely(e);
+        return;
+      }
       beginStroke(e.clientX, e.clientY);
       capturePointerSafely(e);
     });
@@ -758,6 +957,10 @@
           return;
         }
       }
+      if (e.pointerId === pendingFillPointerId) {
+        e.preventDefault();
+        return;
+      }
       if (!drawing || e.pointerId !== activePointerId) return;
       e.preventDefault();
       continueStroke(e.clientX, e.clientY);
@@ -768,6 +971,8 @@
         const wasGesture = touchGestureActive;
         touchPointers.delete(e.pointerId);
         if (wasGesture) {
+          cancelPendingFill();
+          activePointerId = null;
           e.preventDefault();
           if (touchPointers.size >= 2) {
             beginPinchFromPointerMap();
@@ -778,6 +983,14 @@
           return;
         }
       }
+      if (e.pointerId === pendingFillPointerId) {
+        e.preventDefault();
+        const pending = pendingFillClientPoint;
+        cancelPendingFill();
+        activePointerId = null;
+        if (fillMode && pending) applyFillFromClient(pending.clientX, pending.clientY);
+        return;
+      }
       if (!drawing || e.pointerId !== activePointerId) return;
       e.preventDefault();
       endStroke();
@@ -786,6 +999,10 @@
     canvas.addEventListener("pointerup", finishPointerStroke);
     canvas.addEventListener("pointercancel", finishPointerStroke);
     canvas.addEventListener("lostpointercapture", function(e) {
+      if (e.pointerId === pendingFillPointerId) {
+        cancelPendingFill();
+        activePointerId = null;
+      }
       if (e.pointerType === "touch" && touchPointers.has(e.pointerId)) {
         touchPointers.delete(e.pointerId);
         if (touchGestureActive) {
@@ -811,6 +1028,7 @@
       e.preventDefault();
 
       if (touchGestureActive || e.touches.length >= 2) {
+        cancelPendingFill();
         if (!touchGestureActive && drawing) endStroke();
         touchGestureActive = true;
         if (e.touches.length >= 2) beginPinch(e.touches[0], e.touches[1]);
@@ -818,13 +1036,22 @@
       }
 
       const t = e.touches[0];
+      if (fillMode) {
+        pendingFillClientPoint = { clientX: t.clientX, clientY: t.clientY };
+        return;
+      }
       beginStroke(t.clientX, t.clientY);
     }, { passive: false });
 
     canvas.addEventListener("touchmove", function(e) {
       if (touchGestureActive) {
+        cancelPendingFill();
         e.preventDefault();
         if (e.touches.length >= 2) updatePinch(e.touches[0], e.touches[1]);
+        return;
+      }
+      if (pendingFillClientPoint) {
+        e.preventDefault();
         return;
       }
       if (!drawing || !e.touches.length) return;
@@ -836,12 +1063,19 @@
     function finishFallbackTouch(e) {
       e.preventDefault();
       if (touchGestureActive) {
+        cancelPendingFill();
         if (e.touches.length >= 2) {
           beginPinch(e.touches[0], e.touches[1]);
         } else {
           pinchState = null;
         }
         if (e.touches.length === 0) touchGestureActive = false;
+        return;
+      }
+      if (pendingFillClientPoint) {
+        const pending = pendingFillClientPoint;
+        cancelPendingFill();
+        if (fillMode) applyFillFromClient(pending.clientX, pending.clientY);
         return;
       }
       endStroke();
@@ -853,6 +1087,10 @@
     canvas.addEventListener("mousedown", function(e) {
       if (e.button !== 0) return;
       e.preventDefault();
+      if (fillMode) {
+        applyFillFromClient(e.clientX, e.clientY);
+        return;
+      }
       beginStroke(e.clientX, e.clientY);
     });
     window.addEventListener("mousemove", function(e) {
