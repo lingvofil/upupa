@@ -161,46 +161,72 @@ def test_person_context_uses_real_target_messages_and_neighbors():
     assert "ты его хоть разморозь" in context
 
 
-def test_yue2_endpoint_arguments_select_no_score_fast_and_seed():
+def test_yue2_generate_song_uses_documented_api_contract(monkeypatch, tmp_path):
     import features.song.hf_yue2 as yue2
 
-    endpoint = {
-        "parameters": [
-            {"label": "Style", "parameter_name": "style"},
-            {"label": "Lyrics", "parameter_name": "lyrics"},
-            {"label": "Symbolic planning", "parameter_name": "planning", "choices": ["Melody + chords", "Melody only", "No score"]},
-            {"label": "Render quality", "parameter_name": "quality", "choices": ["Fast · 16 steps", "Best quality · 32 steps"]},
-            {"label": "Seed", "parameter_name": "seed", "parameter_default": 42},
-        ]
-    }
+    source_mp3 = tmp_path / "generated.mp3"
+    source_flac = tmp_path / "generated.flac"
+    source_mp3.write_bytes(b"mp3-data")
+    source_flac.write_bytes(b"flac-data")
+    captured = {}
 
-    args = yue2._build_endpoint_args(
-        endpoint,
-        style_prompt="raw punk",
-        lyrics="[verse]\nраз\ндва\nтри\nчетыре",
-        seed=123456,
-    )
+    class FakeJob:
+        def result(self, timeout=None):
+            captured["timeout"] = timeout
+            return (str(source_mp3), str(source_flac), "X:1\nK:C")
 
-    assert args == (
+    class FakeClient:
+        def __init__(self, src, **kwargs):
+            captured["src"] = src
+            captured["client_kwargs"] = kwargs
+
+        def submit(self, *args, **kwargs):
+            captured["submit_args"] = args
+            captured["submit_kwargs"] = kwargs
+            return FakeJob()
+
+        def close(self):
+            captured["closed"] = True
+
+    class FakeRandom:
+        def randint(self, _start, _end):
+            return 123456
+
+    monkeypatch.setattr(yue2, "HUGGINGFACE_TOKEN", "hf_test")
+    monkeypatch.setattr(yue2, "Client", FakeClient)
+    monkeypatch.setattr(yue2.random, "SystemRandom", lambda: FakeRandom())
+
+    output = yue2._generate_sync(
+        "[verse]\nраз\ndва\nтри\nчетыре",
         "raw punk",
-        "[verse]\nраз\ндва\nтри\nчетыре",
-        "No score",
-        "Fast · 16 steps",
-        123456,
     )
+    try:
+        assert captured["src"] == "lingvofil/upupa-yue2"
+        assert captured["submit_args"] == ()
+        assert captured["submit_kwargs"] == {
+            "style": "raw punk",
+            "lyrics": "[verse]\nраз\ndва\nтри\nчетыре",
+            "planning_mode": "off",
+            "render_quality": "16",
+            "seed": 123456,
+            "api_name": "/generate_song",
+        }
+        assert captured["timeout"] == yue2.YUE2_TIMEOUT_SECONDS
+        assert captured["closed"] is True
+        assert output.read_bytes() == b"mp3-data"
+    finally:
+        output.unlink(missing_ok=True)
 
 
-def test_yue2_result_prefers_mp3_and_copies_out_of_download_dir(tmp_path):
+def test_yue2_result_uses_first_generate_song_output_as_mp3(tmp_path):
     import features.song.hf_yue2 as yue2
 
-    flac = tmp_path / "song.flac"
     mp3 = tmp_path / "song.mp3"
-    abc = tmp_path / "song.abc"
-    flac.write_bytes(b"flac")
+    flac = tmp_path / "song.flac"
     mp3.write_bytes(b"mp3-data")
-    abc.write_text("ABC")
+    flac.write_bytes(b"flac-data")
 
-    output = yue2._download_or_copy_mp3((str(flac), str(mp3), str(abc)))
+    output = yue2._download_or_copy_mp3((str(mp3), str(flac), "X:1\nK:C"))
     try:
         assert output.suffix == ".mp3"
         assert output.read_bytes() == b"mp3-data"
