@@ -22,7 +22,7 @@ YUE2_API_NAME = "/generate_song"
 YUE2_TIMEOUT_SECONDS = 480
 YUE2_MAX_MP3_BYTES = 45 * 1024 * 1024
 YUE2_PLANNING_MODE = "off"
-YUE2_RENDER_QUALITY = "16"
+YUE2_RENDER_QUALITY = 16
 
 _generation_lock = asyncio.Lock()
 

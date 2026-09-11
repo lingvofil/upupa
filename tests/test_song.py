@@ -161,7 +161,7 @@ def test_person_context_uses_real_target_messages_and_neighbors():
     assert "ты его хоть разморозь" in context
 
 
-def test_yue2_generate_song_uses_documented_api_contract(monkeypatch, tmp_path):
+def test_yue2_generate_song_uses_runtime_api_contract(monkeypatch, tmp_path):
     import features.song.hf_yue2 as yue2
 
     source_mp3 = tmp_path / "generated.mp3"
@@ -207,7 +207,7 @@ def test_yue2_generate_song_uses_documented_api_contract(monkeypatch, tmp_path):
             "style": "raw punk",
             "lyrics": "[verse]\nраз\ndва\nтри\nчетыре",
             "planning_mode": "off",
-            "render_quality": "16",
+            "render_quality": 16,
             "seed": 123456,
             "api_name": "/generate_song",
         }
