@@ -19,7 +19,7 @@ OPENWEATHER_API_KEY = "7cf485d99b222b17e90f6d57df6c2d7d"
 
 # Список городов
 CITIES = [
-    "Moscow", "Odintsovo", "Saint Petersburg", "Vladikavkaz", "Kazan", 
+    "Moscow", "Odintsovo", "Saint Petersburg", "Arkhangelsk", "Vladikavkaz", "Kazan", 
     "Omsk", "Irkutsk", "Slyudyanka", "Baykalsk", "Kyakhta",
     "Angarsk", "Minsk", "Sochi", "Samara", "Almaty"
 ]
@@ -94,7 +94,7 @@ async def get_all_cities_weather() -> List[Tuple[str, int, str]]:
     result = []
     city_map = {
         "Moscow": "Москва", "Odintsovo": "Одинцово", "Saint Petersburg": "Санкт-Петербург",
-        "Vladikavkaz": "Владикавказ", "Kazan": "Казань", "Omsk": "Омск",
+        "Arkhangelsk": "Архангельск", "Vladikavkaz": "Владикавказ", "Kazan": "Казань", "Omsk": "Омск",
         "Irkutsk": "Иркутск", "Slyudyanka": "Слюдянка", "Baykalsk": "Байкальск",
         "Kyakhta": "Кяхта", "Angarsk": "Ангарск", "Minsk": "Минск",
         "Sochi": "Сочи", "Samara": "Самара", "Almaty": "Алматы"
