@@ -8,7 +8,7 @@ import re
 from aiogram import Router, types
 from aiogram.types import FSInputFile
 
-from core.settings import BLOCKED_USERS
+from core.settings import ADMIN_ID, BLOCKED_USERS
 from features.song.hf_yue2 import (
     Yue2ConfigurationError,
     Yue2GenerationError,
@@ -115,6 +115,11 @@ async def _send_song(message: types.Message, status, song: GeneratedSong) -> Non
     and message.from_user.id not in BLOCKED_USERS
 )
 async def handle_song_command(message: types.Message):
+    # Keep catching song-shaped commands before the catch-all dialog router,
+    # but only the bot owner may actually invoke this expensive feature.
+    if message.from_user.id != ADMIN_ID:
+        return
+
     mode, target = parse_song_request(message)
     if mode is None:
         await message.reply("🎵 Не понял состав группы. Напиши `песня чат` или `песня @username` и укажи одного участника.")
