@@ -18,10 +18,11 @@ from core.settings import HUGGINGFACE_TOKEN
 
 
 YUE2_SPACE_ID = "lingvofil/upupa-yue2"
+YUE2_API_NAME = "/generate_song"
 YUE2_TIMEOUT_SECONDS = 480
 YUE2_MAX_MP3_BYTES = 45 * 1024 * 1024
-YUE2_PLANNING_NO_SCORE = "No score"
-YUE2_FAST_QUALITY = "Fast · 16 steps"
+YUE2_PLANNING_MODE = "off"
+YUE2_RENDER_QUALITY = "16"
 
 _generation_lock = asyncio.Lock()
 
@@ -40,122 +41,6 @@ class Yue2QuotaError(Yue2GenerationError):
         self.retry_hint = retry_hint
 
 
-def _endpoint_text(endpoint: dict) -> str:
-    parts: list[str] = []
-    for parameter in endpoint.get("parameters") or []:
-        if not isinstance(parameter, dict):
-            continue
-        for key in ("label", "parameter_name", "component"):
-            value = parameter.get(key)
-            if value:
-                parts.append(str(value))
-    return " ".join(parts).lower()
-
-
-def _looks_like_song_endpoint(api_name: str, endpoint: dict) -> bool:
-    name = str(api_name).lower()
-    text = _endpoint_text(endpoint)
-    if "style" not in text or "lyric" not in text:
-        return False
-    return "generate" in name or "song" in name or "audio" in name
-
-
-def _discover_generate_endpoint(client: Client) -> tuple[str | None, int | None, dict | None]:
-    try:
-        info = client.view_api(print_info=False, return_format="dict") or {}
-        named = info.get("named_endpoints") or {}
-        for api_name, endpoint in named.items():
-            if isinstance(endpoint, dict) and _looks_like_song_endpoint(str(api_name), endpoint):
-                return str(api_name), None, endpoint
-
-        for api_name, endpoint in named.items():
-            if isinstance(endpoint, dict):
-                text = _endpoint_text(endpoint)
-                if "style" in text and "lyric" in text:
-                    return str(api_name), None, endpoint
-
-        unnamed = info.get("unnamed_endpoints") or {}
-        for fn_index, endpoint in unnamed.items():
-            if isinstance(endpoint, dict) and "style" in _endpoint_text(endpoint) and "lyric" in _endpoint_text(endpoint):
-                return None, int(fn_index), endpoint
-    except Exception as exc:
-        logging.warning("[song][yue2] API discovery failed: %s", exc)
-
-    return "/generate_song", None, None
-
-
-def _walk_strings(value: Any):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for child in value.values():
-            yield from _walk_strings(child)
-    elif isinstance(value, (list, tuple)):
-        for child in value:
-            yield from _walk_strings(child)
-
-
-def _matching_choice(parameter: dict, marker: str, fallback: str) -> str:
-    marker = marker.lower()
-    for value in _walk_strings(parameter):
-        if marker in value.lower() and len(value) <= 120:
-            return value
-    return fallback
-
-
-def _parameter_key(parameter: dict) -> str:
-    return " ".join(
-        str(parameter.get(key) or "")
-        for key in ("parameter_name", "label", "component")
-    ).lower()
-
-
-def _parameter_default(parameter: dict) -> tuple[bool, Any]:
-    for key in ("parameter_default", "default"):
-        if key in parameter:
-            return True, parameter[key]
-    return False, None
-
-
-def _build_endpoint_args(
-    endpoint: dict | None,
-    *,
-    style_prompt: str,
-    lyrics: str,
-    seed: int,
-) -> tuple[Any, ...]:
-    if not endpoint:
-        return (
-            style_prompt,
-            lyrics,
-            YUE2_PLANNING_NO_SCORE,
-            YUE2_FAST_QUALITY,
-            seed,
-        )
-
-    args: list[Any] = []
-    for parameter in endpoint.get("parameters") or []:
-        if not isinstance(parameter, dict):
-            continue
-        key = _parameter_key(parameter)
-        if "style" in key:
-            args.append(style_prompt)
-        elif "lyric" in key:
-            args.append(lyrics)
-        elif "symbolic" in key or "planning" in key or "score" in key or "cot" in key:
-            args.append(_matching_choice(parameter, "no score", YUE2_PLANNING_NO_SCORE))
-        elif "quality" in key or "render" in key or "step" in key:
-            args.append(_matching_choice(parameter, "fast", YUE2_FAST_QUALITY))
-        elif "seed" in key:
-            args.append(seed)
-        else:
-            has_default, default = _parameter_default(parameter)
-            if not has_default:
-                raise Yue2GenerationError(f"Unknown required YuE2 Space parameter: {key or parameter!r}")
-            args.append(default)
-    return tuple(args)
-
-
 def _candidate_strings(value: Any) -> list[str]:
     result: list[str] = []
     if value is None:
@@ -169,12 +54,11 @@ def _candidate_strings(value: Any) -> list[str]:
             result.extend(_candidate_strings(item))
         return result
     if isinstance(value, dict):
-        # Prefer explicitly audio/mp3-shaped fields before generic FileData fields.
-        for key in ("mp3", "audio", "value", "path", "url"):
+        for key in ("path", "url", "value", "name"):
             if key in value:
                 result.extend(_candidate_strings(value[key]))
         for key, item in value.items():
-            if key not in {"mp3", "audio", "value", "path", "url"}:
+            if key not in {"path", "url", "value", "name"}:
                 result.extend(_candidate_strings(item))
     return result
 
@@ -185,15 +69,21 @@ def _is_mp3_reference(value: str) -> bool:
 
 
 def _download_or_copy_mp3(result: Any) -> Path:
-    candidates = _candidate_strings(result)
-    mp3_candidates = [value for value in candidates if _is_mp3_reference(value)]
-    if not mp3_candidates:
-        raise Yue2GenerationError("YuE2 Space did not return an MP3 result")
+    """Copy the first /generate_song result (documented MP3 output) to our own temp file."""
+    if not isinstance(result, (list, tuple)) or not result:
+        raise Yue2GenerationError("YuE2 Space returned an unexpected result")
+
+    # /generate_song contract:
+    #   result[0] -> MP3, result[1] -> FLAC, result[2] -> editable ABC score.
+    mp3_result = result[0]
+    candidates = [value for value in _candidate_strings(mp3_result) if _is_mp3_reference(value)]
+    if not candidates:
+        raise Yue2GenerationError("YuE2 Space did not return the documented MP3 output")
 
     fd, output_name = tempfile.mkstemp(prefix="upupa_yue2_", suffix=".mp3")
     Path(output_name).unlink(missing_ok=True)
     try:
-        for value in mp3_candidates:
+        for value in candidates:
             path = Path(value)
             if path.is_file():
                 if not 0 < path.stat().st_size <= YUE2_MAX_MP3_BYTES:
@@ -274,22 +164,22 @@ def _generate_sync(lyrics: str, style_prompt: str) -> Path:
                 verbose=False,
                 download_files=download_dir,
             )
-            api_name, fn_index, endpoint = _discover_generate_endpoint(client)
-            args = _build_endpoint_args(
-                endpoint,
-                style_prompt=style_prompt,
-                lyrics=lyrics,
-                seed=seed,
-            )
-            submit_kwargs = {"api_name": api_name} if api_name else {"fn_index": fn_index}
             logging.info(
-                "[song][yue2] submit space=%s endpoint=%s fn_index=%s seed=%s",
+                "[song][yue2] submit space=%s endpoint=%s planning=%s quality=%s seed=%s",
                 YUE2_SPACE_ID,
-                api_name,
-                fn_index,
+                YUE2_API_NAME,
+                YUE2_PLANNING_MODE,
+                YUE2_RENDER_QUALITY,
                 seed,
             )
-            job = client.submit(*args, **submit_kwargs)
+            job = client.submit(
+                style=style_prompt,
+                lyrics=lyrics,
+                planning_mode=YUE2_PLANNING_MODE,
+                render_quality=YUE2_RENDER_QUALITY,
+                seed=seed,
+                api_name=YUE2_API_NAME,
+            )
             result = job.result(timeout=YUE2_TIMEOUT_SECONDS)
             output = _download_or_copy_mp3(result)
             logging.info("[song][yue2] generated mp3 bytes=%s", output.stat().st_size)
