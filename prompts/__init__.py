@@ -6,7 +6,13 @@
   personas.py   — персоны бота (PROMPTS_DICT) и функции доступа
   chat_data.py  — ранги, стоп-слова, каналы, queries, actions
 """
-from prompts.help_texts import HELP_DICT, HELP_TEXT
+from prompts import help_texts as _help_texts
+from prompts.dnd_help import install_dnd_help
+
+install_dnd_help(_help_texts)
+HELP_DICT = _help_texts.HELP_DICT
+HELP_TEXT = _help_texts.HELP_TEXT
+
 from prompts.ai_prompts import (
     PARODY_PROMPT, MEME_SYSTEM_PROMPT, PROMPTS_MEDIA, PROMPT_DESCRIBE,
     SPECIAL_PROMPT, PROMPT_SERIOUS_MODE, CUSTOM_PROMPT_TEMPLATE,
