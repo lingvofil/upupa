@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 165  # +2 callback-handler'а единого меню/галереи кракадила
+EXPECTED_TOTAL_HANDLERS = 166  # +1 команда коротких песен YuE2
 
 
 def _count_handlers(router):
@@ -60,7 +60,7 @@ def test_world_router_is_registered_before_dialog():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 29
+    assert len(ROUTERS) == 30
 
 
 def test_whatisthere_guard_does_not_match_pun_command():
