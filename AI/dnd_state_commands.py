@@ -262,39 +262,44 @@ def render_status(dnd, chat_id: int) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     if session is not None:
-        lines = ["🧭 Что происходит?", "Егра сейчас активна."]
+        blocks = ["🧭 Что происходит?", "Егра сейчас активна."]
         plot = getattr(session, "selected_plot", None)
         if plot:
-            lines.append(f"🎬 Сюжет: {plot}")
-        lines.extend(_active_detail(dnd, session))
+            blocks.append(f"🎬 Сюжет\n{plot}")
+        detail = _active_detail(dnd, session)
+        if detail:
+            blocks.append("\n".join(detail))
         scene_log = getattr(session, "scene_log", []) or []
         if scene_log:
-            lines.append(f"📍 Последняя сцена: {scene_log[-1]}")
+            blocks.append(f"📍 Последняя сцена\n{scene_log[-1]}")
         threat = _threat_line(getattr(session, "threat", None))
         if threat:
-            lines.append(threat)
-        return "\n".join(lines)
+            blocks.append(threat)
+        return "\n\n".join(blocks)
 
     latest = campaign._latest_campaign(chat_id)
     if not latest:
         return "🧭 Сейчас ничего не происходит: активной егры нет и сохранённых кампаний тоже нет."
 
-    lines = ["🧭 Что происходит?", "Активной егры сейчас нет. Показываю последнюю завершённую."]
+    blocks = [
+        "🧭 Что происходит?",
+        "Активной егры сейчас нет.\nПоказываю последнюю завершённую.",
+    ]
     if latest.get("selected_plot"):
-        lines.append(f"🎬 Сюжет: {latest['selected_plot']}")
+        blocks.append(f"🎬 Сюжет\n{latest['selected_plot']}")
     finale = str(latest.get("finale") or "").strip()
     epilogue = str(latest.get("epilogue") or "").strip()
     scenes = latest.get("scenes") or []
     if finale:
-        lines.append(f"🏁 Финал: {finale}")
+        blocks.append(f"🏁 Финал\n{finale}")
     elif scenes:
-        lines.append(f"📍 Последняя сцена: {scenes[-1]}")
+        blocks.append(f"📍 Последняя сцена\n{scenes[-1]}")
     if epilogue:
-        lines.append(f"📚 Эпилог: {epilogue}")
+        blocks.append(f"📚 Эпилог\n{epilogue}")
     threat = _threat_line(latest.get("threat"))
     if threat:
-        lines.append(threat)
-    return "\n".join(lines)
+        blocks.append(threat)
+    return "\n\n".join(blocks)
 
 
 def render_state_command(kind: str, dnd, chat_id: int, user_id: int, user_name: str | None = None) -> str:
