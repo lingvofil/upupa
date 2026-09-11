@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
+import math
 import time
 
 from core.json_repository import JsonFileRepository
@@ -12,9 +14,47 @@ from games import crocodile
 
 
 ARTIST_LEADERBOARD_TOP = 10
+DRAW_PRIORITY_SECONDS = 5.0
 _locks: dict[str, asyncio.Lock] = {}
 _artist_repository = JsonFileRepository(CROCODILE_ARTIST_SCORES_PATH)
 _artist_lock = asyncio.Lock()
+_draw_priority_by_chat: dict[str, tuple[int, float]] = {}
+
+
+def grant_draw_priority(
+    chat_id: int | str,
+    user_id: int,
+    *,
+    now: float | None = None,
+) -> None:
+    """Give the correct guesser a short exclusive window for the next drawing turn."""
+    current = time.monotonic() if now is None else float(now)
+    _draw_priority_by_chat[str(chat_id)] = (
+        int(user_id),
+        current + DRAW_PRIORITY_SECONDS,
+    )
+
+
+def can_claim_draw(
+    chat_id: int | str,
+    user_id: int,
+    *,
+    now: float | None = None,
+) -> tuple[bool, int]:
+    """Return whether user may claim drawing and seconds left on another winner's priority."""
+    cid = str(chat_id)
+    priority = _draw_priority_by_chat.get(cid)
+    if priority is None:
+        return True, 0
+
+    winner_id, deadline = priority
+    current = time.monotonic() if now is None else float(now)
+    if current >= deadline:
+        _draw_priority_by_chat.pop(cid, None)
+        return True, 0
+    if int(user_id) == winner_id:
+        return True, 0
+    return False, max(1, math.ceil(deadline - current))
 
 
 def _normalize_artist_row(value: dict) -> dict:
@@ -169,9 +209,40 @@ async def check_regular_answer(message) -> bool:
         artists = _artists(session)
         artist_ids = {user_id for user_id, _name in artists}
         is_drawer = bool(from_user and from_user.id in artist_ids)
-        correct = crocodile._contains_answer(message.text, session.get("word", "")) and not is_drawer
-        if not correct:
+        contains_answer = crocodile._contains_answer(
+            message.text,
+            session.get("word", ""),
+        )
+
+        # Do not delegate artist messages to lower Crocodile wrappers. The legacy
+        # check_answer() only knows about drawer_id, so a second duo artist could
+        # otherwise be misclassified as an ordinary guesser if wrapper ordering
+        # changes or one of the mode guards is bypassed.
+        if is_drawer:
+            if contains_answer:
+                logging.info(
+                    "[crocodile] ignored artist self-guess chat=%s user=%s message=%s mode=%s",
+                    chat_id,
+                    getattr(from_user, "id", None),
+                    getattr(message, "message_id", None),
+                    session.get("mode") or "classic",
+                )
+                return True
+            return False
+
+        if not contains_answer:
             return await crocodile.check_answer(message)
+
+        logging.info(
+            "[crocodile] accepted guess chat=%s user=%s message=%s word=%r text=%r mode=%s artists=%s",
+            chat_id,
+            getattr(from_user, "id", None),
+            getattr(message, "message_id", None),
+            session.get("word", ""),
+            str(message.text)[:200],
+            session.get("mode") or "classic",
+            sorted(artist_ids),
+        )
 
         started_at = float(session.get("started_at") or 0)
         elapsed = max(0.0, time.time() - started_at) if started_at > 0 else None
@@ -182,5 +253,8 @@ async def check_regular_answer(message) -> bool:
                 drawer_name,
                 elapsed_seconds=elapsed,
             )
+
+        if from_user:
+            grant_draw_priority(chat_id, from_user.id)
 
         return await crocodile.check_answer(message)
