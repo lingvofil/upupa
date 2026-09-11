@@ -69,7 +69,8 @@ CHANNEL_SETTINGS = {
     "нейрорецепты": {
         "url": "https://tgstat.ru/channel/@neural_recipes",
         "reply_message": "Чего бы паесть необычнава",
-        "error_message": "Нихуя"
+        "error_message": "Нихуя",
+        "include_post_title": True
     },
     "рецепты": {
         "url": "https://tgstat.ru/channel/@uhbla",
@@ -97,7 +98,7 @@ queries = {
     "кот": ("cat photography", "cat_image.jpg", "Хуёт"),
     "кошка": ("cute cat photography", "cat1_image.jpg", "Хуёшка"),
     "кот и кошка": ("couple of cats photography", "cat2_image.jpg", "Хуёт и хуёшка"),
-    "котенок": ("cute kitty photography", "cat3_image.jpg", "Хуенок"),
+    "котенок": ("cute kitty photography", "kitty_image.jpg", "Хуенок"),
     "выдра": ("cute otter photography", "otter_image.jpg", "хуидра"),
     "крол": ("cute rabbit photography", "rabbit_image.jpg", "говнёл"),
     "птичка": ("cute bird photography", "bird_image.jpg", "хуичка"),
@@ -108,15 +109,15 @@ queries = {
     "лягушка": ("cute frog photography", "frog_image.jpg", "говнюшка"),
     "шиншилла": ("chinchilla photography", "shin_image.jpg", "хуила"),
     "опоссум": ("awesome opossum photography", "opossum_image.jpg", "говнёссум"),
-    "рыбка": ("underwater photography fish close up", "fish_image.jpg", "Говнибка"),
+    "рыбка": ("underwater photography fish close up", "ribka_image.jpg", "Говнибка"),
     "носекомое": ("insect close up photography", "insect_image.jpg", "Хуекомое"),
     "белка": ("cute squirrel photography", "belka_image.jpg", "Говнелка"),
     "пчолка": ("bee cute photography", "bee_image.jpg", "Говнёлка"),
     "шмеле": ("bumblebee cute photography", "bumblebee_image.jpg", "Говнеле"),
     "сыч": ("cute owl photography", "owl_image.jpg", "Говнич"),
     "червяк": ("worm close up photography", "worm_image.jpg", "Говняк"),
-    "фенек": ("fennec cute photography", "fenek_image.jpg", "Говнёк"), 
-    "енот": ("racoon cute photography", "racoon_image.jpg", "Говнот"),
+    "фенек": ("fennec cute photography", "fennek_image.jpg", "Говнёк"), 
+    "енот": ("racoon cute photography", "enot_image.jpg", "Говнот"),
 }
 
 actions = [
