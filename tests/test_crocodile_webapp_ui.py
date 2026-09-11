@@ -38,12 +38,14 @@ def test_crocodile_webapp_tolerates_partial_telegram_api():
     assert "closeWebApp" in source
 
 
-def test_crocodile_canvas_has_eraser_and_brush_size_control_without_skip_button():
+def test_crocodile_canvas_has_eraser_fill_and_brush_size_control_without_skip_button():
     source = _source()
     toolbar = _toolbar(source)
 
     assert 'id="eraserButton"' in toolbar
     assert '>⌫ Ластик</button>' in toolbar
+    assert 'id="fillButton"' in toolbar
+    assert '>🪣 Заливка</button>' in toolbar
     assert 'id="brushSize"' in toolbar
     assert 'type="range"' in toolbar
     assert 'min="2"' in toolbar
@@ -70,6 +72,43 @@ def test_crocodile_canvas_has_undo_redo_and_brush_intensity_controls():
     assert "window.undo = () =>" in source
     assert "window.redo = () =>" in source
     assert "ctx.putImageData(state.imageData, 0, 0);" in source
+
+
+def test_crocodile_fill_uses_flood_fill_and_participates_in_history():
+    source = _source()
+
+    assert "let fillMode = false;" in source
+    assert "function setFill(active)" in source
+    assert "function floodFill(point, color)" in source
+    assert "ctx.getImageData(0, 0, canvas.width, canvas.height)" in source
+    assert "ctx.putImageData(image, 0, 0);" in source
+    assert "if (recordHistory) pushUndoState();" in source
+    assert "applyFillFromClient" in source
+
+
+def test_crocodile_fill_is_synced_through_authorized_draw_protocol():
+    source = _source()
+    server_source = CROCODILE_PY.read_text(encoding="utf-8")
+
+    assert 'const FILL_PROTOCOL_PREFIX = "__fill__:";' in source
+    assert 'color: FILL_PROTOCOL_PREFIX + color' in source
+    assert 'socket.emit("draw_step"' in source
+    assert "color.startsWith(FILL_PROTOCOL_PREFIX)" in source
+    assert "color.slice(FILL_PROTOCOL_PREFIX.length)" in source
+    assert 'async def draw_step' in server_source
+    assert "_authorize_socket_room" in server_source
+    assert '("px", "py", "x", "y", "color", "width")' in server_source
+
+
+def test_crocodile_fill_waits_for_touch_release_so_pinch_does_not_fill():
+    source = _source()
+
+    assert "let pendingFillPointerId = null;" in source
+    assert "let pendingFillClientPoint = null;" in source
+    assert "function cancelPendingFill()" in source
+    assert "touchPointers.size >= 2" in source
+    assert "cancelPendingFill();" in source
+    assert "e.pointerId === pendingFillPointerId" in source
 
 
 def test_crocodile_pointer_coordinates_are_scaled_to_canvas_bitmap():
