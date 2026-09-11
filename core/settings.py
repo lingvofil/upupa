@@ -86,6 +86,10 @@ except ImportError:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
+# New deployments may use Hugging Face's conventional HF_TOKEN name, while
+# older Upupa code and config_private keep using HUGGINGFACE_TOKEN.
+HUGGINGFACE_TOKEN = os.getenv("HF_TOKEN") or HUGGINGFACE_TOKEN
+
 # =========================
 # === GEMINI KEYS ===
 # =========================

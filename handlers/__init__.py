@@ -6,7 +6,7 @@ from handlers import (
     crocodile_guesses, basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
     world_interactions, world_expansion, world_symbols, world_hub, world_listing, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
-    birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, dialog,
+    birthdays, court, ai_summary, ai_prompts, video, channel, social_graph, radio, song, dialog,
 )
 from features.world.hub_ui import build_world_main_markup
 
@@ -49,5 +49,6 @@ ROUTERS = [
     channel.router, # админская команда канала — до catch-all
     social_graph.router, # соцграф + message_reaction — до catch-all
     radio.router,   # Радио Упупы — до catch-all
+    song.router,    # короткие песни YuE2 — до catch-all
     dialog.router,
 ]
