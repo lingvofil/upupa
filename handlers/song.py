@@ -64,8 +64,12 @@ def parse_song_request(message: types.Message) -> tuple[str | None, SongTarget |
 
 
 def is_song_command(message: types.Message) -> bool:
-    mode, _target = parse_song_request(message)
-    return mode is not None
+    """Catch valid songs plus malformed mention-shaped song commands for a useful error."""
+    text = _normalized_text(message)
+    lowered = text.casefold()
+    if lowered == "песня чат" or lowered.startswith("песня @"):
+        return True
+    return lowered.startswith("песня ") and bool(_text_mention_users(message))
 
 
 def _quota_message(exc: Yue2QuotaError) -> str:
@@ -113,6 +117,7 @@ async def _send_song(message: types.Message, status, song: GeneratedSong) -> Non
 async def handle_song_command(message: types.Message):
     mode, target = parse_song_request(message)
     if mode is None:
+        await message.reply("🎵 Не понял состав группы. Напиши `песня чат` или `песня @username` и укажи одного участника.")
         return
 
     status = await message.reply("🎵 Пошол собирать группу из людей, которых выгнали из караоке…")
