@@ -69,7 +69,8 @@ CHANNEL_SETTINGS = {
     "нейрорецепты": {
         "url": "https://tgstat.ru/channel/@neural_recipes",
         "reply_message": "Чего бы паесть необычнава",
-        "error_message": "Нихуя"
+        "error_message": "Нихуя",
+        "include_post_title": True
     },
     "рецепты": {
         "url": "https://tgstat.ru/channel/@uhbla",

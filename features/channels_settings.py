@@ -38,6 +38,19 @@ async def process_channel_command(message: types.Message, channel_settings: dict
     await _process_random_media(message, prepared_info)
 
 
+def _extract_post_title(post_text):
+    """Возвращает только первую непустую строку текста поста."""
+    if not post_text:
+        return None
+
+    for line in str(post_text).splitlines():
+        title = " ".join(line.split())
+        if title:
+            # Telegram ограничивает подпись к фото/видео 1024 символами.
+            return title[:1024]
+    return None
+
+
 async def _process_random_media(message: types.Message, channel_info: dict) -> bool:
     """
     Обрабатывает запрос на отправку случайного медиафайла.
@@ -57,10 +70,27 @@ async def _process_random_media(message: types.Message, channel_info: dict) -> b
     
     while attempt < max_attempts:
         try:
-            # Теперь функция всегда получает 'url' в channel_info
-            media_item = await _download_random_media(channel_info["url"])
-            await _send_media_file(message, media_item['url'], media_item['type'])
-            logging.info(f"Медиафайл успешно отправлен: {media_item['type']}")
+            include_post_title = bool(channel_info.get("include_post_title"))
+            media_item = await _download_random_media(
+                channel_info["url"],
+                include_post_title=include_post_title,
+            )
+            caption = (
+                _extract_post_title(media_item.get("post_text"))
+                if include_post_title
+                else None
+            )
+            await _send_media_file(
+                message,
+                media_item['url'],
+                media_item['type'],
+                caption=caption,
+            )
+            logging.info(
+                "Медиафайл успешно отправлен: %s; заголовок=%r",
+                media_item['type'],
+                caption,
+            )
             return True
             
         except Exception as e:
@@ -74,7 +104,7 @@ async def _process_random_media(message: types.Message, channel_info: dict) -> b
                 continue
 
 # Вспомогательные функции переименованы с подчеркиванием для ясности
-async def _download_random_media(url):
+async def _download_random_media(url, include_post_title=False):
     """Downloads a random media file from a given URL."""
     try:
         async with async_playwright() as p:
@@ -105,22 +135,73 @@ async def _download_random_media(url):
                 # Оставляем явное ожидание для подгрузки картинок (infinite scroll / lazy load)
                 await page.wait_for_timeout(10000)
                 
-                media_urls = await page.evaluate("""
-                    () => {
-                        let media_sources = [];
+                media_urls = await page.evaluate(
+                    """
+                    (includePostTitle) => {
+                        const mediaSources = [];
+                        const textSelectors = [
+                            '.post-text',
+                            '.post-description',
+                            '.post-content',
+                            '.post-body',
+                            '.card-text',
+                            '.message-text',
+                            '[class*="post-text"]',
+                            '[class*="post__text"]'
+                        ];
+
+                        const getPostText = (element) => {
+                            if (!includePostTitle) {
+                                return null;
+                            }
+
+                            let node = element;
+                            let fallback = null;
+                            for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+                                for (const selector of textSelectors) {
+                                    const candidate = node.matches?.(selector)
+                                        ? node
+                                        : node.querySelector?.(selector);
+                                    const text = candidate?.innerText?.trim();
+                                    if (text) {
+                                        return text;
+                                    }
+                                }
+
+                                const ancestorText = node.innerText?.trim();
+                                if (ancestorText && ancestorText.length <= 5000) {
+                                    fallback = ancestorText;
+                                }
+                            }
+                            return fallback;
+                        };
+
                         document.querySelectorAll('video source, video').forEach(source => {
                             if (source.src || source.currentSrc) {
-                                media_sources.push({ type: 'video', url: source.src || source.currentSrc });
+                                const video = source.closest('video') || source;
+                                mediaSources.push({
+                                    type: 'video',
+                                    url: source.src || source.currentSrc,
+                                    post_text: getPostText(video)
+                                });
                             }
                         });
                         document.querySelectorAll('img').forEach(img => {
                             if (img.src && !img.src.includes('placeholder') && img.naturalWidth > 640 && img.naturalHeight > 640) {
-                                media_sources.push({ type: 'image', url: img.src, width: img.naturalWidth, height: img.naturalHeight });
+                                mediaSources.push({
+                                    type: 'image',
+                                    url: img.src,
+                                    width: img.naturalWidth,
+                                    height: img.naturalHeight,
+                                    post_text: getPostText(img)
+                                });
                             }
                         });
-                        return media_sources;
+                        return mediaSources;
                     }
-                """)
+                    """,
+                    include_post_title,
+                )
                 
                 if not media_urls:
                     raise Exception("Не найдено ни одного подходящего медиафайла.")
@@ -133,7 +214,7 @@ async def _download_random_media(url):
         logging.error(f"Ошибка при получении медиафайла: {str(e)}")
         raise
 
-async def _send_media_file(message, media_url, media_type):
+async def _send_media_file(message, media_url, media_type, caption=None):
     """Sends a media file to the chat."""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
@@ -151,9 +232,9 @@ async def _send_media_file(message, media_url, media_type):
         media = FSInputFile(file_name)
         
         if media_type == 'video':
-            await message.answer_video(media)
+            await message.answer_video(media, caption=caption)
         else:
-            await message.answer_photo(media)
+            await message.answer_photo(media, caption=caption)
             
         os.remove(file_name)
     except Exception as e:
