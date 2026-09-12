@@ -19,12 +19,12 @@ def _audio_response(data: bytes = b"pcm"):
     )
 
 
-def test_radio_upupa_alias_and_duration_are_accepted():
+def test_radio_upupa_alias_is_accepted_without_duration_suffix():
     import handlers.radio as radio_handler
 
-    assert radio_handler.parse_radio_request("радио упупа") == (True, None)
-    assert radio_handler.parse_radio_request("Радио Упупа 3") == (True, 3)
     assert radio_handler.is_radio_command("радио упупа")
+    assert radio_handler.is_radio_command("Радио Упупа")
+    assert not radio_handler.is_radio_command("Радио Упупа 3")
 
 
 def test_dual_voice_radio_uses_one_pooled_gemini_request(monkeypatch):
