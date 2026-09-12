@@ -19,7 +19,7 @@ from services.speech import SpeechSynthesisError
 
 router = Router(name="radio")
 
-_RADIO_COMMAND_RE = re.compile(r"^(?:радио упупы|упупа радио)(?:\s+(\d+))?$")
+_RADIO_COMMAND_RE = re.compile(r"^(?:радио упупы|радио упупа|упупа радио)(?:\s+(\d+))?$")
 _RADIO_CALLBACK_PREFIX = "radio:duration:"
 
 

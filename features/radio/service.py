@@ -11,9 +11,13 @@ from pathlib import Path
 from AI.summarize import _get_chat_messages
 from core.paths import USER_MESSAGES_LOG_PATH
 from features.radio.script import RADIO_DEFAULT_DURATION_MINUTES, RadioScript, generate_radio_script
-from features.radio.voices import strip_speaker_labels, synthesize_two_voice_radio
+from features.radio.voices import (
+    RadioTTSQuotaError,
+    synthesize_single_voice_radio,
+    synthesize_two_voice_radio,
+)
 from features.social_graph.summary_context import build_radio_social_context
-from services.speech import SpeechAudio, SpeechSynthesisError, synthesize_speech
+from services.speech import SpeechAudio, SpeechSynthesisError
 
 
 HISTORY_WINDOWS_HOURS = (24, 72, 168)
@@ -122,19 +126,18 @@ async def _social_radio_context(chat_id: str, period_hours: int, now: datetime |
 
 
 async def _synthesize_radio_script(script: str) -> SpeechAudio:
-    """Prefer separate host/expert voices, then fall back to ordinary clean speech."""
+    """Prefer one multi-speaker request, then fall back to pooled single voice."""
     try:
         dual = await synthesize_two_voice_radio(script)
         if dual is not None:
             return dual
+    except RadioTTSQuotaError:
+        logging.warning("[radio][tts] Gemini quota exhausted across the shared key pool")
+        raise
     except Exception:
         logging.exception("[radio][tts] dual-voice synthesis failed; using single voice")
 
-    return await synthesize_speech(
-        strip_speaker_labels(script),
-        provider_order=("gemini", "groq"),
-        allow_groq_for_cyrillic=False,
-    )
+    return await synthesize_single_voice_radio(script)
 
 
 async def build_radio_episode(
@@ -176,19 +179,19 @@ async def build_radio_episode(
         script_result.estimated_seconds,
     )
     try:
-        speech: SpeechAudio = await _synthesize_radio_script(script_result.text)
+        radio_audio: SpeechAudio = await _synthesize_radio_script(script_result.text)
     except SpeechSynthesisError:
         logging.exception("[radio][tts] all suitable TTS paths failed chat=%s", chat_id)
         raise
 
     return RadioEpisode(
-        audio=speech.data,
+        audio=radio_audio.data,
         script=script_result.text,
         word_count=script_result.word_count,
         estimated_seconds=script_result.estimated_seconds,
         period_hours=period_hours,
         message_count=len(messages),
-        tts_provider=speech.provider,
-        tts_chunks=speech.chunks,
+        tts_provider=radio_audio.provider,
+        tts_chunks=radio_audio.chunks,
         requested_duration_minutes=duration_minutes,
     )
