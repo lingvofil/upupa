@@ -8,8 +8,9 @@ import logging
 import random
 import re
 
-from core.settings import TTS_MODELS_QUEUE
-from infrastructure.ai.clients import model as gemini_model
+from core.settings import GEMINI_KEYS_POOL, TTS_MODELS_QUEUE
+from infrastructure.ai.clients import LazyResource
+from infrastructure.ai.gemini import ModelFallbackWrapper
 import services.speech as speech
 
 
@@ -29,6 +30,18 @@ class SpeakerTurn:
 
 class RadioTTSQuotaError(speech.SpeechSynthesisError):
     """All Gemini keys available to the shared fallback pool are quota-exhausted."""
+
+
+def _build_radio_gemini_pool() -> ModelFallbackWrapper:
+    """Build one persistent TTS-only pool so key round-robin survives chunks."""
+    return ModelFallbackWrapper(
+        list(TTS_MODELS_QUEUE),
+        list(TTS_MODELS_QUEUE),
+        keys_pool=GEMINI_KEYS_POOL,
+    )
+
+
+radio_gemini_model = LazyResource("radio_tts_model", _build_radio_gemini_pool)
 
 
 def parse_speaker_turns(script: str) -> tuple[SpeakerTurn, ...]:
@@ -70,32 +83,27 @@ def _extract_radio_wav(response) -> bytes:
 
 
 def _generate_radio_tts_sync(text: str, speech_config: dict) -> bytes:
-    """Generate one radio audio chunk through the shared Gemini key pool."""
-    last_error: Exception | None = None
-    quota_only = True
-    generation_config = {
-        "response_modalities": ["AUDIO"],
-        "speech_config": speech_config,
-    }
-
-    for model_name in TTS_MODELS_QUEUE:
-        try:
-            logging.info("[radio][tts] pooled Gemini model=%s chars=%s", model_name, len(text))
-            response = gemini_model.generate_custom(
-                model_name,
-                text,
-                generation_config=generation_config,
-                require_text=False,
-            )
-            return _extract_radio_wav(response)
-        except Exception as exc:
-            last_error = exc
-            quota_only = quota_only and _looks_like_quota_error(exc)
-            logging.warning("[radio][tts] pooled Gemini model=%s failed: %s", model_name, exc)
-
-    if last_error is not None and quota_only:
-        raise RadioTTSQuotaError(f"Gemini radio TTS quota exhausted: {last_error}")
-    raise speech.SpeechSynthesisError(f"Gemini radio TTS failed: {last_error}")
+    """Generate one bounded radio chunk through a persistent Gemini key pool."""
+    try:
+        logging.info(
+            "[radio][tts] pooled Gemini models=%s chars=%s",
+            ",".join(TTS_MODELS_QUEUE),
+            len(text),
+        )
+        response = radio_gemini_model.generate_content(
+            text,
+            generation_config={
+                "response_modalities": ["AUDIO"],
+                "speech_config": speech_config,
+            },
+            require_text=False,
+        )
+        return _extract_radio_wav(response)
+    except Exception as exc:
+        logging.warning("[radio][tts] pooled Gemini chunk failed: %s", exc)
+        if _looks_like_quota_error(exc):
+            raise RadioTTSQuotaError(f"Gemini radio TTS quota exhausted: {exc}") from exc
+        raise speech.SpeechSynthesisError(f"Gemini radio TTS failed: {exc}") from exc
 
 
 def _dual_voice_chunks(turns: tuple[SpeakerTurn, ...]) -> list[str]:
