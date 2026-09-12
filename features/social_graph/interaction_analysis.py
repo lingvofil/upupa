@@ -116,15 +116,6 @@ def edge_keywords(profiles: Mapping[tuple[int, int], EdgeInteractionProfile]) ->
     return {key: profile.keyword for key, profile in profiles.items()}
 
 
-def _share_summary(profile: EdgeInteractionProfile) -> str:
-    shares = profile.shares
-    return (
-        f"реплаи {round(shares['reply'] * 100)}%, "
-        f"пинги {round(shares['mention'] * 100)}%, "
-        f"реакты {round(shares['reaction'] * 100)}%"
-    )
-
-
 def _edge_direction(edge: GraphEdge, names: Mapping[int, str]) -> str:
     name_a = names.get(edge.user_a, "Участник")
     name_b = names.get(edge.user_b, "Участник")
@@ -142,44 +133,84 @@ def _dominant_direction(profile: EdgeInteractionProfile, interaction_type: str) 
     return profile.user_b, profile.user_a
 
 
+def _mixed_flavour(profile: EdgeInteractionProfile) -> str:
+    labels = {
+        "reply": "реплаи",
+        "mention": "пинги",
+        "reaction": "реакции",
+    }
+    ranked = sorted(profile.shares.items(), key=lambda item: (-item[1], INTERACTION_TYPES.index(item[0])))
+    active = [labels[key] for key, share in ranked if share > 0]
+    if len(active) >= 3:
+        return f"{active[0]}, {active[1]} и {active[2]} лезут почти вровень"
+    if len(active) == 2:
+        return f"{active[0]} и {active[1]} перемешались почти поровну"
+    if active:
+        return f"главную роль почему-то играет {active[0]}"
+    return "даже тип взаимодействия толком не разобрать"
+
+
 def describe_graph_edge(
     edge: GraphEdge,
     profile: EdgeInteractionProfile,
     names: Mapping[int, str],
 ) -> str:
-    """Describe only observable messaging mechanics, never inferred offline relationships."""
+    """Turn observable messaging mechanics into a compact sarcastic interpretation."""
     keyword = profile.keyword
-    shares = _share_summary(profile)
 
     if keyword == "срач":
-        commentary = "реплаятся как ненормальные и примерно на равных."
+        commentary = (
+            "взаимный абонемент на кнопку «Ответить»: один влез — второй обязан влезть следом. "
+            "По крайней мере, доёб тут демократичный."
+        )
     elif keyword == "доёб":
         actor_id, target_id = _dominant_direction(profile, "reply")
         actor = names.get(actor_id, "Кто-то") if actor_id is not None else "Кто-то"
         target = names.get(target_id, "кого-то") if target_id is not None else "кого-то"
-        commentary = f"реплаи с перекосом: {actor} заметно чаще лезет с ответами к {target}."
+        commentary = (
+            f"{actor} явно оформил {target} в персональную подписку: заметно чаще лезет с реплаями, "
+            "чем получает ответный доёб. Настойчивость односторонняя, зато стабильная."
+        )
     elif keyword == "пинги":
         actor_id, target_id = _dominant_direction(profile, "mention")
         if actor_id is None:
-            commentary = "дёргают друг друга по имени; написать без пинга, видимо, западло."
+            commentary = (
+                "без упоминания друг друга уже, похоже, не узнают. Чат превратился в стойку ресепшена: "
+                "«эй, ты, сюда» по кругу."
+            )
         else:
             actor = names.get(actor_id, "Кто-то")
             target = names.get(target_id, "кого-то")
-            commentary = f"{actor} заметно чаще дёргает {target} по имени."
+            commentary = (
+                f"{actor} использует {target} как кнопку вызова персонала: регулярно дёргает по имени, "
+                "будто тот обязан явиться со звуковым сигналом."
+            )
     elif keyword == "реакты":
         actor_id, target_id = _dominant_direction(profile, "reaction")
         if actor_id is None:
-            commentary = "молча обкидываются реакциями, слова сегодня не завезли."
+            commentary = (
+                "вместо разговора — интенсивный обмен пиктограммами. Слова экономят так бережно, "
+                "будто за каждую букву пришлют счёт."
+            )
         else:
             actor = names.get(actor_id, "Кто-то")
             target = names.get(target_id, "кого-то")
-            commentary = f"{actor} заметно чаще закидывает {target} реакциями вместо лишних букв."
+            commentary = (
+                f"{actor} предпочитает общаться с {target} кнопками реакций. Видимо, полноценные фразы "
+                "для этих отношений уже слишком официальны."
+            )
     elif keyword == "винегрет":
-        commentary = "коммуникационный винегрет: всё намешали в одну статистическую помойку."
+        commentary = (
+            f"полный коммуникационный винегрет: {_mixed_flavour(profile)}. Одного способа достать друг друга "
+            "им принципиально мало."
+        )
     else:
-        commentary = "связь в графе есть, а нормального типа взаимодействия в данных не нашлось."
+        commentary = (
+            "связь в графе есть, а внятного жанра у неё нет. Даже статистика посмотрела на это и решила "
+            "не брать ответственность."
+        )
 
-    return f"• {_edge_direction(edge, names)} — {keyword}: {shares}; {commentary}"
+    return f"• {_edge_direction(edge, names)} — {keyword}. {commentary}"
 
 
 def build_cringe_graph_explanation(
@@ -187,7 +218,7 @@ def build_cringe_graph_explanation(
     profiles: Mapping[tuple[int, int], EdgeInteractionProfile],
     names: Mapping[int, str],
 ) -> str:
-    lines = ["Что тут за хуйня по связям:"]
+    lines = ["Если перевести этот позор с языка статистики:"]
     for edge in graph.edges:
         key = _edge_key(edge.user_a, edge.user_b)
         profile = profiles.get(key, EdgeInteractionProfile(*key))

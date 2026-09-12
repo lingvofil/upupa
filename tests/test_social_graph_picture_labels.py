@@ -104,7 +104,7 @@ def test_cringe_renderer_draws_exactly_one_keyword_per_visible_edge(monkeypatch)
     assert set(keywords) == {"срач", "пинги"}
 
 
-def test_cringe_explanation_is_built_from_real_interaction_data():
+def test_cringe_explanation_is_interpretive_instead_of_percentage_dump():
     from features.social_graph.analysis import aggregate_edges, select_render_graph
     from features.social_graph.interaction_analysis import (
         build_cringe_graph_explanation,
@@ -122,13 +122,41 @@ def test_cringe_explanation_is_built_from_real_interaction_data():
     profiles = build_edge_interaction_profiles(interactions, view.edges)
     text = build_cringe_graph_explanation(view, profiles, names)
 
-    assert text.startswith("Что тут за хуйня по связям:")
+    assert text.startswith("Если перевести этот позор с языка статистики:")
     assert "Детектор → М&M" in text
     assert "доёб" in text
-    assert "реплаи 100%" in text
+    assert "персональную подписку" in text
     assert "Детектор → Alina" in text
     assert "реакты" in text
-    assert "реакты 100%" in text
+    assert "кнопками реакций" in text
+    assert "%" not in text
+    assert "реплаи 100" not in text
+    assert "реакты 100" not in text
+
+
+def test_mixed_explanation_describes_the_mix_without_numbers():
+    from features.social_graph.analysis import aggregate_edges, select_render_graph
+    from features.social_graph.interaction_analysis import (
+        build_cringe_graph_explanation,
+        build_edge_interaction_profiles,
+    )
+
+    interactions = [
+        (1, 2, "reply", 3.0),
+        (1, 2, "mention", 3.0),
+        (2, 1, "reaction", 2.5),
+    ]
+    names = {1: "Детектор", 2: "SONNE"}
+    view = select_render_graph(aggregate_edges(interactions), names, max_nodes=6, max_edges=7)
+    profiles = build_edge_interaction_profiles(interactions, view.edges)
+
+    text = build_cringe_graph_explanation(view, profiles, names)
+
+    assert "винегрет" in text
+    assert "реплаи" in text
+    assert "пинги" in text
+    assert "реакции" in text
+    assert "%" not in text
 
 
 def test_cringe_handler_sends_explanation_after_picture(monkeypatch):
@@ -178,4 +206,5 @@ def test_cringe_handler_sends_explanation_after_picture(monkeypatch):
 
     assert [kind for kind, _value in calls][-2:] == ["photo", "text"]
     assert "срач" in calls[-1][1]
-    assert "реплаи 100%" in calls[-1][1]
+    assert "взаимный абонемент" in calls[-1][1]
+    assert "%" not in calls[-1][1]
