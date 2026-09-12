@@ -24,6 +24,7 @@ REVEAL_COLS = 5
 REVEAL_ROWS = 6
 REVEAL_PER_TICK = 3
 SURRENDER_DELAY_SECONDS = 5 * 60
+ROUND_REFRESH_INTERVAL_SECONDS = 60
 
 
 def mode_keyboard() -> InlineKeyboardMarkup:
@@ -101,7 +102,6 @@ async def _build_subject_clue(secret: str, chat_id: str, mode: str) -> str | Non
         compact = _compact(clue)
         if secret_compact and secret_compact in compact:
             continue
-        # Also reject any reasonably long word from a multi-word title/phrase.
         leaked = False
         for token in re.findall(r"[0-9a-zа-яё]+", secret.casefold()):
             if len(token) >= 5 and token in compact:
@@ -169,7 +169,6 @@ def build_reveal_frame(image_bytes: bytes, revealed_tiles: int, *, order: list[i
         right = round((col + 1) * tile_w)
         bottom = round((row + 1) * tile_h)
         masked.paste(source.crop((left, top, right, bottom)), (left, top))
-    # faint grid makes the deliberately hidden fragments visually obvious
     for col in range(1, REVEAL_COLS):
         x = round(col * tile_w)
         draw.line((x, 0, x, source.height), fill=(235, 235, 235), width=1)
@@ -201,7 +200,21 @@ async def _visible_image(session: dict) -> bytes:
     )
 
 
-async def _send_round(chat_id: str, session: dict) -> None:
+async def _send_round(chat_id: str, session: dict, *, replace: bool = False) -> bool:
+    if replace:
+        old_message_id = session.get("message_id")
+        if old_message_id:
+            deleted = await crocodile._safe_delete_message(int(chat_id), int(old_message_id))
+            if not deleted:
+                logging.warning(
+                    "[rcroc-mode] round bump skipped to avoid duplicate chat=%s message=%s",
+                    chat_id,
+                    old_message_id,
+                )
+                return False
+        if reverse.games.get(chat_id) is not session:
+            return False
+
     image = await _visible_image(session)
     msg = await bot.send_photo(
         int(chat_id),
@@ -211,6 +224,7 @@ async def _send_round(chat_id: str, session: dict) -> None:
         reply_markup=_round_keyboard(chat_id, session["mode"]),
     )
     session["message_id"] = msg.message_id
+    return True
 
 
 async def _reveal_loop(chat_id: str, session: dict) -> None:
@@ -240,9 +254,47 @@ async def _reveal_loop(chat_id: str, session: dict) -> None:
         return
 
 
+async def _run_round_tick(chat_id: str, session: dict) -> bool:
+    """Emit the next minute hint and move the current drawing to the chat bottom."""
+    if reverse.games.get(chat_id) is not session:
+        return False
+
+    if reverse._has_next_hint(session):
+        try:
+            await reverse._send_next_hint(chat_id, session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("[rcroc-mode] automatic hint failed chat=%s", chat_id)
+
+    if reverse.games.get(chat_id) is not session:
+        return False
+    try:
+        await _send_round(chat_id, session, replace=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.exception("[rcroc-mode] round bump failed chat=%s", chat_id)
+    return reverse.games.get(chat_id) is session
+
+
+async def _round_loop(chat_id: str, session: dict) -> None:
+    try:
+        while reverse.games.get(chat_id) is session:
+            await asyncio.sleep(ROUND_REFRESH_INTERVAL_SECONDS)
+            if not await _run_round_tick(chat_id, session):
+                return
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logging.exception("[rcroc-mode] round loop crashed chat=%s", chat_id)
+
+
 async def _cancel_task(session: dict) -> None:
-    task = session.get("mode_task")
-    if isinstance(task, asyncio.Task) and not task.done() and task is not asyncio.current_task():
+    for key in ("mode_task", "round_task"):
+        task = session.get(key)
+        if not isinstance(task, asyncio.Task) or task.done() or task is asyncio.current_task():
+            continue
         task.cancel()
         try:
             await task
@@ -278,6 +330,11 @@ async def start_mode(message, mode: str) -> None:
         "message_id": None,
         "started_at": time.monotonic(),
         "mode_task": None,
+        "round_task": None,
+        "hints": 0,
+        "revealed_positions": set(),
+        "hint_lock": asyncio.Lock(),
+        "last_hint_at": None,
         "revealed_tiles": REVEAL_PER_TICK,
         "reveal_order": [],
     }
@@ -288,8 +345,12 @@ async def start_mode(message, mode: str) -> None:
             session["mode_task"] = crocodile._start_background_task(
                 _reveal_loop(chat_id, session), name=f"reverse-croc-reveal:{chat_id}"
             )
+        session["round_task"] = crocodile._start_background_task(
+            _round_loop(chat_id, session), name=f"reverse-croc-mode-round:{chat_id}"
+        )
     except Exception:
         reverse.games.pop(chat_id, None)
+        await _cancel_task(session)
         logging.exception("[rcroc-mode] failed to start mode=%s", mode)
         await status.edit_text("Не смог запустить раунд.")
         return
@@ -316,7 +377,7 @@ async def check_answer(message) -> bool:
     session = reverse.games.get(chat_id)
     if not session or session.get("mode") in (None, "word") or not message.text:
         return False
-    if not crocodile._contains_answer(message.text, session.get("word", "")):
+    if not reverse._contains_reverse_answer(message.text, session.get("word", "")):
         return False
     if message.from_user:
         crocodile.add_point(chat_id, message.from_user.id, message.from_user.full_name)
