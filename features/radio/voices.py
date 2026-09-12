@@ -15,6 +15,11 @@ import services.speech as speech
 
 _LABEL_RE = re.compile(r"(?P<label>ВЕДУЩИЙ|ЭКСПЕРТ)\s*:\s*", re.IGNORECASE)
 
+# A full ~3 minute episode can exceed the Gemini transport deadline when it is
+# synthesized in one request. Keep each request around a short spoken segment,
+# while still making far fewer calls than the old per-speaker-turn pipeline.
+RADIO_TTS_CHUNK_CHARS = 800
+
 
 @dataclass(frozen=True)
 class SpeakerTurn:
@@ -75,7 +80,7 @@ def _generate_radio_tts_sync(text: str, speech_config: dict) -> bytes:
 
     for model_name in TTS_MODELS_QUEUE:
         try:
-            logging.info("[radio][tts] pooled Gemini model=%s", model_name)
+            logging.info("[radio][tts] pooled Gemini model=%s chars=%s", model_name, len(text))
             response = gemini_model.generate_custom(
                 model_name,
                 text,
@@ -93,17 +98,70 @@ def _generate_radio_tts_sync(text: str, speech_config: dict) -> bytes:
     raise speech.SpeechSynthesisError(f"Gemini radio TTS failed: {last_error}")
 
 
+def _dual_voice_chunks(turns: tuple[SpeakerTurn, ...]) -> list[str]:
+    """Split labelled dialogue while repeating speaker labels in every chunk."""
+    segments: list[str] = []
+    for turn in turns:
+        label = "HOST" if turn.speaker == "host" else "EXPERT"
+        prefix = f"{label}: "
+        max_text_chars = RADIO_TTS_CHUNK_CHARS - len(prefix)
+        for part in speech.split_text_for_tts(turn.text, max_text_chars):
+            segments.append(prefix + part)
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    for segment in segments:
+        extra = len(segment) + (1 if current else 0)
+        if current and current_chars + extra > RADIO_TTS_CHUNK_CHARS:
+            chunks.append("\n".join(current))
+            current = []
+            current_chars = 0
+        current.append(segment)
+        current_chars += len(segment) + (1 if len(current) > 1 else 0)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+async def _synthesize_radio_chunks(
+    chunks: list[str],
+    speech_config: dict,
+    *,
+    provider: str,
+) -> speech.SpeechAudio:
+    if not chunks:
+        raise speech.SpeechSynthesisError("Cannot synthesize empty radio script")
+
+    wav_chunks: list[bytes] = []
+    for index, chunk in enumerate(chunks, 1):
+        logging.info(
+            "[radio][tts] provider=%s chunk=%s/%s chars=%s",
+            provider,
+            index,
+            len(chunks),
+            len(chunk),
+        )
+        wav_chunks.append(
+            await asyncio.to_thread(_generate_radio_tts_sync, chunk, speech_config)
+        )
+
+    mp3 = await asyncio.to_thread(speech._merge_wav_chunks_to_mp3, wav_chunks)
+    return speech.SpeechAudio(
+        data=mp3,
+        format="mp3",
+        provider=provider,
+        chunks=len(wav_chunks),
+    )
+
+
 async def synthesize_two_voice_radio(script: str) -> speech.SpeechAudio | None:
-    """Synthesize the whole host/expert dialogue in one multi-speaker request."""
+    """Synthesize host/expert dialogue in bounded multi-speaker chunks."""
     turns = parse_speaker_turns(script)
     if not turns or not any(turn.speaker == "expert" for turn in turns):
         return None
 
     host_voice, expert_voice = random.sample(speech.AVAILABLE_GEMINI_VOICES, 2)
-    transcript = "\n".join(
-        f"{'HOST' if turn.speaker == 'host' else 'EXPERT'}: {turn.text}"
-        for turn in turns
-    )
     speech_config = {
         "language_code": "ru-RU",
         "multi_speaker_voice_config": {
@@ -123,15 +181,18 @@ async def synthesize_two_voice_radio(script: str) -> speech.SpeechAudio | None:
             ]
         },
     }
-    wav = await asyncio.to_thread(_generate_radio_tts_sync, transcript, speech_config)
-    mp3 = await asyncio.to_thread(speech._merge_wav_chunks_to_mp3, [wav])
-    return speech.SpeechAudio(data=mp3, format="mp3", provider="gemini-dual", chunks=1)
+    return await _synthesize_radio_chunks(
+        _dual_voice_chunks(turns),
+        speech_config,
+        provider="gemini-dual",
+    )
 
 
 async def synthesize_single_voice_radio(script: str) -> speech.SpeechAudio:
-    """Single-voice radio fallback that still uses the shared Gemini key pool."""
+    """Single-voice fallback using the same bounded pooled Gemini chunks."""
     text = strip_speaker_labels(script)
-    if not text:
+    chunks = speech.split_text_for_tts(text, RADIO_TTS_CHUNK_CHARS)
+    if not chunks:
         raise speech.SpeechSynthesisError("Cannot synthesize empty radio script")
 
     voice = random.choice(speech.AVAILABLE_GEMINI_VOICES)
@@ -141,9 +202,11 @@ async def synthesize_single_voice_radio(script: str) -> speech.SpeechAudio:
             "prebuilt_voice_config": {"voice_name": voice}
         },
     }
-    wav = await asyncio.to_thread(_generate_radio_tts_sync, text, speech_config)
-    mp3 = await asyncio.to_thread(speech._merge_wav_chunks_to_mp3, [wav])
-    return speech.SpeechAudio(data=mp3, format="mp3", provider="gemini", chunks=1)
+    return await _synthesize_radio_chunks(
+        chunks,
+        speech_config,
+        provider="gemini",
+    )
 
 
 def strip_speaker_labels(script: str) -> str:
