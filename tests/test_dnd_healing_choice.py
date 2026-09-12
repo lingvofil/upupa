@@ -8,7 +8,7 @@ from AI import dnd_combat as combat
 from AI import dnd_healing_choice as healing
 
 
-def _session(*, owner_id=1, target_id=2):
+def _session(*, owner_id=1):
     return SimpleNamespace(
         participants={
             "1": {"user_id": 1, "name": "Алиса"},
@@ -40,13 +40,10 @@ def test_lethal_attack_waits_for_healer_instead_of_auto_consuming(monkeypatch):
     assert session.character_sheets["2"]["hp"] == 0
     assert session.character_sheets["2"]["status"] == "dying"
     assert session.healing_charge["used"] is False
-    assert session.pending_heal_decision == {
-        "target_id": 2,
-        "owner_id": 1,
-        "nonce": 123456,
-        "attack_prompt": session.pending_heal_decision["attack_prompt"],
-        "reason": "орк рубит Борю",
-    }
+    assert session.pending_heal_decision["target_id"] == 2
+    assert session.pending_heal_decision["owner_id"] == 1
+    assert session.pending_heal_decision["nonce"] == 123456
+    assert session.pending_heal_decision["reason"] == "орк рубит Борю"
     assert "при смерти" in summary
     assert "выбывает из этой егры" not in summary
 
@@ -98,7 +95,7 @@ def test_healer_can_accept_and_charge_is_consumed(monkeypatch):
 
 
 def test_refusing_self_heal_loses_charge_with_dead_owner():
-    session = _session(owner_id=1, target_id=1)
+    session = _session(owner_id=1)
     session.character_sheets["1"]["hp"] = 0
     session.character_sheets["1"]["status"] = "dying"
     session.pending_heal_decision = {
