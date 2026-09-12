@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 166  # +1 команда коротких песен YuE2
+EXPECTED_TOTAL_HANDLERS = 165  # radio duration callback removed; default duration is fixed
 
 
 def _count_handlers(router):

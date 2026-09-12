@@ -7,57 +7,24 @@ import pytest
 from tests import test_smoke_imports  # noqa: F401
 
 
-def test_radio_duration_parser_and_keyboard():
+def test_radio_command_uses_default_duration_without_selector(monkeypatch):
     import handlers.radio as radio_handler
 
-    assert radio_handler.parse_radio_request("радио упупы") == (True, None)
-    assert radio_handler.parse_radio_request("Упупа, радио 3") == (True, 3)
-    assert radio_handler.parse_radio_request("радио упупы 5") == (True, 5)
-    assert radio_handler.parse_radio_request("радио упупы 2") == (True, 2)
-    assert radio_handler.parse_radio_request("радио упупы пожалуйста") == (False, None)
-
-    markup = radio_handler.get_radio_duration_markup()
-    buttons = [button for row in markup.inline_keyboard for button in row]
-    assert [button.text for button in buttons] == ["1 мин", "3 мин", "5 мин"]
-    assert [button.callback_data for button in buttons] == [
-        "radio:duration:1",
-        "radio:duration:3",
-        "radio:duration:5",
-    ]
-
-
-def test_bare_radio_command_asks_for_duration(monkeypatch):
-    import handlers.radio as radio_handler
-
-    build = AsyncMock()
-    monkeypatch.setattr(radio_handler, "build_radio_episode", build)
-
-    reply = AsyncMock()
-    message = SimpleNamespace(
-        text="радио упупы",
-        chat=SimpleNamespace(id=-1001),
-        from_user=SimpleNamespace(id=42),
-        reply=reply,
-    )
-
-    asyncio.run(radio_handler.handle_radio_command(message))
-
-    build.assert_not_awaited()
-    reply.assert_awaited_once()
-    assert reply.await_args.args[0] == "📻 Скока вещаем?"
-    markup = reply.await_args.kwargs["reply_markup"]
-    assert len(markup.inline_keyboard[0]) == 3
-
-
-def test_direct_radio_duration_reaches_episode_builder(monkeypatch):
-    import handlers.radio as radio_handler
+    assert radio_handler.is_radio_command("радио упупы")
+    assert radio_handler.is_radio_command("радио упупа")
+    assert radio_handler.is_radio_command("Упупа, радио")
+    assert not radio_handler.is_radio_command("радио упупы 1")
+    assert not radio_handler.is_radio_command("радио упупа 3")
+    assert not hasattr(radio_handler, "get_radio_duration_markup")
+    assert not hasattr(radio_handler, "handle_radio_duration_callback")
 
     episode = SimpleNamespace(
         audio=b"mp3",
+        requested_duration_minutes=3,
         message_count=12,
-        word_count=650,
+        word_count=360,
         tts_provider="gemini",
-        tts_chunks=2,
+        tts_chunks=1,
     )
     build = AsyncMock(return_value=episode)
     monkeypatch.setattr(radio_handler, "build_radio_episode", build)
@@ -65,7 +32,7 @@ def test_direct_radio_duration_reaches_episode_builder(monkeypatch):
     status = SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock())
     bot = SimpleNamespace(send_chat_action=AsyncMock(), send_voice=AsyncMock())
     message = SimpleNamespace(
-        text="радио упупы 5",
+        text="радио упупа",
         chat=SimpleNamespace(id=-1001),
         from_user=SimpleNamespace(id=42),
         message_id=555,
@@ -75,38 +42,19 @@ def test_direct_radio_duration_reaches_episode_builder(monkeypatch):
 
     asyncio.run(radio_handler.handle_radio_command(message))
 
-    build.assert_awaited_once_with("-1001", duration_minutes=5)
+    build.assert_awaited_once_with("-1001")
     bot.send_voice.assert_awaited_once()
     assert bot.send_voice.await_args.kwargs["reply_to_message_id"] == 555
 
 
-def test_invalid_direct_duration_is_rejected(monkeypatch):
-    import handlers.radio as radio_handler
-
-    build = AsyncMock()
-    monkeypatch.setattr(radio_handler, "build_radio_episode", build)
-    reply = AsyncMock()
-    message = SimpleNamespace(
-        text="радио упупы 2",
-        chat=SimpleNamespace(id=-1001),
-        from_user=SimpleNamespace(id=42),
-        reply=reply,
-    )
-
-    asyncio.run(radio_handler.handle_radio_command(message))
-
-    build.assert_not_awaited()
-    assert "1, 3, 5" in reply.await_args.args[0]
-
-
-def test_script_duration_changes_prompt_and_hard_limit(monkeypatch):
+def test_default_script_duration_changes_prompt_and_hard_limit(monkeypatch):
     import features.radio.script as radio_script
 
     prompts = []
 
     async def fake_generate(prompt, chat_id, **kwargs):
         prompts.append(prompt)
-        return " ".join(["слово"] * 300)
+        return " ".join(["слово"] * 360)
 
     monkeypatch.setattr(radio_script, "_generate_with_active_model", fake_generate)
     messages = [
@@ -120,20 +68,19 @@ def test_script_duration_changes_prompt_and_hard_limit(monkeypatch):
             "Чятище",
             messages,
             24,
-            duration_minutes=1,
         )
     )
 
-    assert len(result.text.split()) <= 160
-    assert "примерно 1 мин" in prompts[0]
-    assert "100–140" in prompts[0]
-    assert "160 слов" in prompts[0]
-    assert radio_script.get_radio_word_targets(5) == (580, 720, 760)
+    assert radio_script.RADIO_DEFAULT_DURATION_MINUTES == 3
+    assert len(result.text.split()) <= radio_script.RADIO_MAX_WORDS
+    assert "примерно 3 мин" in prompts[0]
+    assert "330–480" in prompts[0]
+    assert f"{radio_script.RADIO_MAX_WORDS} слов" in prompts[0]
     with pytest.raises(ValueError):
         radio_script.get_radio_word_targets(2)
 
 
-def test_short_script_is_regenerated_until_duration_floor(monkeypatch):
+def test_short_script_is_regenerated_until_default_duration_floor(monkeypatch):
     import features.radio.script as radio_script
 
     prompts = []
@@ -158,7 +105,6 @@ def test_short_script_is_regenerated_until_duration_floor(monkeypatch):
             "Чятище",
             messages,
             24,
-            duration_minutes=3,
         )
     )
 
@@ -169,7 +115,7 @@ def test_short_script_is_regenerated_until_duration_floor(monkeypatch):
     assert "перепиши сценарий полностью" in prompts[1].lower()
 
 
-def test_persistently_short_script_fails_instead_of_sending_tiny_episode(monkeypatch):
+def test_persistently_short_default_script_fails_instead_of_sending_tiny_episode(monkeypatch):
     import features.radio.script as radio_script
 
     calls = 0
@@ -192,7 +138,6 @@ def test_persistently_short_script_fails_instead_of_sending_tiny_episode(monkeyp
                 "Чятище",
                 messages,
                 24,
-                duration_minutes=3,
             )
         )
 

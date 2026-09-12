@@ -54,8 +54,10 @@ def test_radio_command_variants_and_router_order():
     import handlers.radio as radio_handler
 
     assert radio_handler.is_radio_command("радио упупы")
+    assert radio_handler.is_radio_command("радио упупа")
     assert radio_handler.is_radio_command("Упупа радио")
     assert radio_handler.is_radio_command("Упупа, радио")
+    assert not radio_handler.is_radio_command("радио упупы 3")
     assert not radio_handler.is_radio_command("упупа радиостанция")
 
     names = [router.name for router in handlers.ROUTERS]
@@ -327,7 +329,7 @@ def test_radio_telegram_send_error_is_user_facing(monkeypatch):
         send_voice=AsyncMock(side_effect=RuntimeError("telegram rejected voice")),
     )
     message = SimpleNamespace(
-        text="радио упупы 3",
+        text="радио упупы",
         chat=SimpleNamespace(id=-1001),
         message_id=555,
         bot=bot,
