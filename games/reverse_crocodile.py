@@ -15,7 +15,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboar
 
 from core.loader import bot
 from games import crocodile as crocodile_game
-from games.crocodile import _contains_answer, _normalize_guess, add_point, format_leaderboard
+from games.crocodile import _normalize_guess, add_point, format_leaderboard
 from games.reverse_crocodile_words import (
     difficulty_label,
     normalize_difficulty,
@@ -26,8 +26,10 @@ from games.reverse_crocodile_words import (
 # смешная рисовалка, которую интересно разгадывать.
 IMAGE_STYLE = (
     "Нарисуй как неумелый человек фломастерами или восковыми мелками на белой бумаге: "
-    "простые плоские формы, немного кривые линии, неровные контуры, минимум деталей, без реализма, "
-    "без 3D, без глянца, без кинематографического света и без дизайнерской полировки. "
+    "простые плоские формы, заметно кривые и чуть дрожащие линии, неровные контуры, минимум деталей, без реализма. "
+    "Пропорции местами нелепые, перспектива слегка сломана, закраска кое-где вылезает за контуры, "
+    "будто человек рисует быстро и не очень умеет. При этом предметы должны оставаться узнаваемыми. "
+    "Без 3D, без глянца, без кинематографического света и без дизайнерской полировки. "
     "Один главный визуальный гэг. Если естественно получается визуальный каламбур, буквальное смешное прочтение "
     "или игра значений — используй её. "
     "На изображении не должно быть вообще никакого читаемого текста: никаких букв, слов, подписей, вывесок, "
@@ -91,6 +93,25 @@ async def ask_difficulty(message: types.Message) -> None:
 
 def _compact_letters(text: str) -> str:
     return re.sub(r"[^0-9a-zа-яё]+", "", (text or "").casefold())
+
+
+def _answer_characters(text: str) -> list[str]:
+    """Characters that actually count as the answer; punctuation is decorative."""
+    return [char for char in _normalize_guess(text) if char.isalnum()]
+
+
+def _normalize_reverse_guess(text: str) -> str:
+    """Normalize a guess for similarity checks without counting punctuation."""
+    return "".join(_answer_characters(text))
+
+
+def _contains_reverse_answer(text: str, word: str) -> bool:
+    """Match the answer as a token while allowing punctuation between its characters."""
+    answer = _answer_characters(word)
+    if not answer:
+        return False
+    pattern = r"(?<!\w)" + r"[\W_]*".join(re.escape(char) for char in answer) + r"(?!\w)"
+    return re.search(pattern, _normalize_guess(text), flags=re.UNICODE) is not None
 
 
 def _clue_leaks_secret(clue: str, word: str) -> bool:
@@ -197,13 +218,13 @@ async def _generate_word_image(word: str, chat_id: str) -> bytes | None:
 
 
 def _remaining_reveal_positions(session: dict) -> list[int]:
-    """Positions eligible for the progressive stage while keeping one letter hidden."""
+    """Positions eligible for the progressive stage while keeping one answer character hidden."""
     word = session["word"]
     revealed = set(session.get("revealed_positions", ()))
     candidates = [
         index
         for index in range(1, len(word))
-        if not word[index].isspace() and index not in revealed
+        if word[index].isalnum() and index not in revealed
     ]
     return candidates if len(candidates) > 1 else []
 
@@ -217,22 +238,25 @@ def _has_next_hint(session: dict) -> bool:
 def _prepare_next_hint(session: dict) -> tuple[str | None, int | None]:
     """Prepare the next hint without mutating progressive reveal state."""
     word = session["word"]
+    answer_positions = [index for index, char in enumerate(word) if char.isalnum()]
     hint_number = int(session.get("hints", 0)) + 1
+    if not answer_positions:
+        return None, None
     if hint_number == 1:
-        return f"💡 В слове {len(word)} букв(ы).", None
+        return f"💡 В слове {len(answer_positions)} букв(ы).", None
     if hint_number == 2:
-        return f"💡 Начинается на «{word[0].upper()}».", None
+        return f"💡 Начинается на «{word[answer_positions[0]].upper()}».", None
 
     positions = _remaining_reveal_positions(session)
     if not positions:
         return None, None
     new_position = random.choice(positions)
     revealed = set(session.get("revealed_positions", ()))
-    visible = {0, *revealed, new_position}
+    visible = {answer_positions[0], *revealed, new_position}
     masked = " ".join(
         letter.upper() if index in visible else "▪️"
         for index, letter in enumerate(word)
-        if not letter.isspace()
+        if letter.isalnum()
     )
     return f"💡 Ещё одна буква: {masked}", new_position
 
@@ -497,9 +521,9 @@ async def check_answer(msg: types.Message) -> bool:
     if not session or not msg.text:
         return False
 
-    guess = _normalize_guess(msg.text)
-    word = _normalize_guess(session["word"])
-    contains_answer = _contains_answer(msg.text, session["word"])
+    guess = _normalize_reverse_guess(msg.text)
+    word = _normalize_reverse_guess(session["word"])
+    contains_answer = _contains_reverse_answer(msg.text, session["word"])
 
     if contains_answer:
         await crocodile_game._safe_react_to_guess(
@@ -510,7 +534,7 @@ async def check_answer(msg: types.Message) -> bool:
         winner = msg.from_user.full_name if msg.from_user else "Кто-то"
         await _finish_game(
             chat_id,
-            f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{word.upper()}</b>.\nА я неплохо рисую, да?",
+            f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{session['word'].upper()}</b>.\nА я неплохо рисую, да?",
         )
         return True
 
