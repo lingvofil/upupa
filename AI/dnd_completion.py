@@ -328,6 +328,7 @@ def configure_dnd_completion(dnd_router) -> None:
     from AI import dnd
     from AI.dnd_campaign import configure_dnd_campaign
     from AI.dnd_combat import install_dnd_combat
+    from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_fun import install_fun_inventory
     from AI.dnd_state_commands import configure_dnd_state_commands
 
@@ -351,6 +352,7 @@ def configure_dnd_completion(dnd_router) -> None:
     dnd_router.poll_answer.outer_middleware(middleware)
     configure_dnd_campaign(dnd, dnd_router)
     install_dnd_combat(dnd_router)
+    install_dnd_healing_choice(dnd_router)
 
     campaign_generate_session_response = dnd.generate_session_response
 
