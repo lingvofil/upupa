@@ -93,13 +93,16 @@ def test_reverse_progressive_reveal_is_five_seconds_and_gets_fuller():
     assert len(later) > 100
 
 
-def test_reverse_mode_menu_contains_requested_categories():
+def test_reverse_mode_menu_contains_combined_proverbs_and_pun():
     from games.reverse_crocodile_modes import mode_keyboard
 
-    texts = [button.text for row in mode_keyboard().inline_keyboard for button in row]
-    joined = " ".join(texts).lower()
-    assert "по кускам" in joined
-    assert "фильм" in joined
-    assert "мультфильм" in joined
-    assert "пословица" in joined
-    assert "поговорка" in joined
+    buttons = [button for row in mode_keyboard().inline_keyboard for button in row]
+    texts = [button.text for button in buttons]
+    callbacks = [button.callback_data for button in buttons]
+
+    assert "🧠 Пословицы/поговорки" in texts
+    assert "🤡 Каламбур" in texts
+    assert "🧠 Пословица" not in texts
+    assert "🗣 Поговорка" not in texts
+    assert "rcrocm_proverbs" in callbacks
+    assert "rcrocm_pun" in callbacks
