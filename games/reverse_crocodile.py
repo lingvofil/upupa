@@ -36,6 +36,7 @@ IMAGE_STYLE = (
 
 # 1: длина слова; 2: первая буква; 3+: по одной новой случайной позиции.
 BASE_HINT_STAGES = 2
+HINT_COOLDOWN_SECONDS = 60
 SURRENDER_DELAY_SECONDS = 5 * 60
 ROUND_REFRESH_INTERVAL_SECONDS = 60
 
@@ -246,6 +247,18 @@ def _make_next_hint(session: dict) -> str | None:
     return hint
 
 
+def _hint_remaining_seconds(session: dict, *, now: float | None = None) -> int:
+    """Return whole seconds left until another hint may be emitted."""
+    last_hint_at = session.get("last_hint_at")
+    if last_hint_at is None:
+        return 0
+    current = time.monotonic() if now is None else now
+    remaining = HINT_COOLDOWN_SECONDS - (current - float(last_hint_at))
+    if remaining <= 0:
+        return 0
+    return int(remaining + 0.999)
+
+
 def _surrender_remaining_seconds(session: dict, *, now: float | None = None) -> int:
     """Return whole seconds left before surrender is allowed for this round."""
     started_at = session.get("started_at")
@@ -290,7 +303,7 @@ async def _send_round_message(chat_id: str, session: dict, *, replace: bool) -> 
 
 
 async def _send_next_hint(chat_id: str, session: dict) -> bool:
-    """Send exactly one next hint, shared by the manual button and the minute timer."""
+    """Send at most one hint per minute, shared by the button and the timer."""
     lock = session.get("hint_lock")
     if lock is None:
         lock = asyncio.Lock()
@@ -298,6 +311,8 @@ async def _send_next_hint(chat_id: str, session: dict) -> bool:
 
     async with lock:
         if games.get(chat_id) is not session or not _has_next_hint(session):
+            return False
+        if _hint_remaining_seconds(session):
             return False
         hint, new_position = _prepare_next_hint(session)
         if not hint:
@@ -308,6 +323,7 @@ async def _send_next_hint(chat_id: str, session: dict) -> bool:
             revealed.add(new_position)
             session["revealed_positions"] = revealed
         session["hints"] = int(session.get("hints", 0)) + 1
+        session["last_hint_at"] = time.monotonic()
         return True
 
 
@@ -381,6 +397,7 @@ async def start_game(message: types.Message, difficulty: str = "medium"):
         "message_id": None,
         "round_task": None,
         "hint_lock": asyncio.Lock(),
+        "last_hint_at": None,
         # Пять минут считаются с готовности раунда, а не со старта AI-генерации.
         "started_at": time.monotonic(),
     }
@@ -440,8 +457,25 @@ async def handle_callback(cb: types.CallbackQuery):
         if not _has_next_hint(session):
             await cb.answer("Хватит с вас подсказок, думайте!", show_alert=True)
             return
-        await cb.answer()
-        await _send_next_hint(chat_id, session)
+        remaining = _hint_remaining_seconds(session)
+        if remaining:
+            await cb.answer(
+                f"Следующая подсказка через {_format_surrender_wait(remaining)}.",
+                show_alert=True,
+            )
+            return
+        sent = await _send_next_hint(chat_id, session)
+        if sent:
+            await cb.answer()
+            return
+        remaining = _hint_remaining_seconds(session)
+        if remaining:
+            await cb.answer(
+                f"Следующая подсказка через {_format_surrender_wait(remaining)}.",
+                show_alert=True,
+            )
+        else:
+            await cb.answer("Хватит с вас подсказок, думайте!", show_alert=True)
 
     elif data.startswith("rcroc_stop_"):
         remaining = _surrender_remaining_seconds(session)
@@ -463,15 +497,26 @@ async def check_answer(msg: types.Message) -> bool:
     if not session or not msg.text:
         return False
 
+    guess = _normalize_guess(msg.text)
     word = _normalize_guess(session["word"])
-    if not _contains_answer(msg.text, session["word"]):
-        return False
+    contains_answer = _contains_answer(msg.text, session["word"])
 
-    if msg.from_user:
-        add_point(chat_id, msg.from_user.id, msg.from_user.full_name)
-    winner = msg.from_user.full_name if msg.from_user else "Кто-то"
-    await _finish_game(
-        chat_id,
-        f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{word.upper()}</b>.\nА я неплохо рисую, да?",
-    )
-    return True
+    if contains_answer:
+        await crocodile_game._safe_react_to_guess(
+            msg, crocodile_game.CORRECT_GUESS_REACTION
+        )
+        if msg.from_user:
+            add_point(chat_id, msg.from_user.id, msg.from_user.full_name)
+        winner = msg.from_user.full_name if msg.from_user else "Кто-то"
+        await _finish_game(
+            chat_id,
+            f"🎉 <b>{winner}</b> угадал! Это был(а) <b>{word.upper()}</b>.\nА я неплохо рисую, да?",
+        )
+        return True
+
+    if crocodile_game._is_close_guess(guess, word):
+        await crocodile_game._safe_react_to_guess(
+            msg, crocodile_game.CLOSE_GUESS_REACTION
+        )
+
+    return False
