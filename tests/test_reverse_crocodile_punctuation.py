@@ -9,9 +9,12 @@ from games import reverse_crocodile as reverse
 def test_reverse_guess_ignores_punctuation_in_answer_and_guess():
     assert reverse._contains_reverse_answer("Это точно рокнролл!", "рок-н-ролл")
     assert reverse._contains_reverse_answer("рок—н—ролл", "рок-н-ролл")
+    assert reverse._contains_reverse_answer("рок–н–ролл", "рок-н-ролл")
     assert reverse._contains_reverse_answer("к.о.т", "кот")
     assert reverse._contains_reverse_answer("ну погоди", "Ну, погоди!")
+    assert reverse._contains_reverse_answer("«ну» (погоди)", "Ну, погоди!")
     assert reverse._contains_reverse_answer("иван да марья", "Иван: да Марья")
+    assert reverse._contains_reverse_answer("иван; да… марья?", "Иван: да Марья")
     assert reverse._contains_reverse_answer("точка тире", "точка — тире...")
     assert reverse._normalize_reverse_guess("  Ё-жик?!  ") == "ежик"
 
@@ -19,6 +22,7 @@ def test_reverse_guess_ignores_punctuation_in_answer_and_guess():
 def test_reverse_guess_still_requires_word_boundaries():
     assert not reverse._contains_reverse_answer("котик", "кот")
     assert not reverse._contains_reverse_answer("скот", "кот")
+    assert not reverse._contains_reverse_answer("рокнролльщик", "рок-н-ролл")
 
 
 def test_reverse_hints_do_not_count_or_reveal_punctuation():
