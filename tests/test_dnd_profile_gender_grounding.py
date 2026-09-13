@@ -39,6 +39,12 @@ def test_generated_gender_is_normalized_when_model_supplies_it():
     assert profile["gender"] == "женский"
 
 
+def test_gender_normalizer_accepts_short_and_english_variants():
+    assert feature._normalize_gender("М") == "мужской"
+    assert feature._normalize_gender("female") == "женский"
+    assert feature._normalize_gender("эльф") is None
+
+
 def test_metaphysical_plot_guard_rejects_reality_breaks_and_doubles():
     forbidden = (
         "Разрыв реальности выпускает двойников героев на улицы города.",
