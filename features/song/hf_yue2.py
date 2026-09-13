@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 import random
 import re
@@ -80,16 +81,27 @@ def _download_or_copy_mp3(result: Any) -> Path:
     if not candidates:
         raise Yue2GenerationError("YuE2 Space did not return the documented MP3 output")
 
-    fd, output_name = tempfile.mkstemp(prefix="upupa_yue2_", suffix=".mp3")
-    Path(output_name).unlink(missing_ok=True)
+    fd: int | None = None
+    output_path: Path | None = None
+    keep_output = False
     try:
+        fd, output_name = tempfile.mkstemp(prefix="upupa_yue2_", suffix=".mp3")
+        output_path = Path(output_name)
+
+        # Windows keeps an exclusive handle for the descriptor returned by
+        # mkstemp(). Close it before unlinking/reusing the path.
+        os.close(fd)
+        fd = None
+        output_path.unlink(missing_ok=True)
+
         for value in candidates:
             path = Path(value)
             if path.is_file():
                 if not 0 < path.stat().st_size <= YUE2_MAX_MP3_BYTES:
                     continue
-                shutil.copyfile(path, output_name)
-                return Path(output_name)
+                shutil.copyfile(path, output_path)
+                keep_output = True
+                return output_path
 
             if value.startswith(("https://", "http://")):
                 response = requests.get(value, timeout=90)
@@ -97,20 +109,19 @@ def _download_or_copy_mp3(result: Any) -> Path:
                 data = response.content
                 if not 0 < len(data) <= YUE2_MAX_MP3_BYTES:
                     continue
-                Path(output_name).write_bytes(data)
-                return Path(output_name)
-    except Exception:
-        Path(output_name).unlink(missing_ok=True)
-        raise
-    finally:
-        try:
-            import os
-            os.close(fd)
-        except OSError:
-            pass
+                output_path.write_bytes(data)
+                keep_output = True
+                return output_path
 
-    Path(output_name).unlink(missing_ok=True)
-    raise Yue2GenerationError("YuE2 returned no readable MP3 file")
+        raise Yue2GenerationError("YuE2 returned no readable MP3 file")
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if output_path is not None and not keep_output:
+            output_path.unlink(missing_ok=True)
 
 
 def _extract_retry_hint(text: str) -> str | None:

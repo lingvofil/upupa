@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 
 
@@ -42,10 +43,36 @@ def _allocated_bytes(path: Path) -> int:
     return int(blocks) * 512
 
 
+def _remove_readonly_and_retry(func, path: str, exc_info) -> None:
+    """Retry rmtree entries that Windows refuses because they are read-only."""
+    exc = exc_info[1]
+    if not isinstance(exc, OSError) or exc.errno not in {errno.EACCES, errno.EPERM}:
+        raise exc
+    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    func(path)
+
+
+def _remove_tree(path: Path, *, ignore_errors: bool = False) -> None:
+    """Remove backup trees, including immutable journal chunks on Windows."""
+    try:
+        shutil.rmtree(path, onerror=_remove_readonly_and_retry)
+    except FileNotFoundError:
+        return
+    except OSError:
+        if not ignore_errors:
+            raise
+
+
 def _backup_sqlite(source: Path, target: Path) -> None:
-    with sqlite3.connect(source, timeout=30) as source_conn:
-        with sqlite3.connect(target) as target_conn:
+    source_conn = sqlite3.connect(source, timeout=30)
+    try:
+        target_conn = sqlite3.connect(target)
+        try:
             source_conn.backup(target_conn)
+        finally:
+            target_conn.close()
+    finally:
+        source_conn.close()
 
 
 def _completed_backups(destination_root: Path) -> list[Path]:
@@ -75,13 +102,13 @@ def prune_backups(destination_root: Path, *, keep_completed: int) -> list[Path]:
             and BACKUP_DIR_RE.fullmatch(child.name)
             and not (child / "manifest.json").is_file()
         ):
-            shutil.rmtree(child)
+            _remove_tree(child)
             removed.append(child)
 
     completed = _completed_backups(destination_root)
     stale = completed[:-keep_completed] if keep_completed else completed
     for child in stale:
-        shutil.rmtree(child)
+        _remove_tree(child)
         removed.append(child)
     return removed
 
@@ -315,7 +342,7 @@ def _create_backup_once(
         return backup_dir
     except BaseException:
         # A failed copy must not make disk pressure worse for the next deploy.
-        shutil.rmtree(backup_dir, ignore_errors=True)
+        _remove_tree(backup_dir, ignore_errors=True)
         raise
 
 
