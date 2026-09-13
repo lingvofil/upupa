@@ -11,7 +11,7 @@ from aiogram import Router, types
 import features.statistics as bot_statistics
 from features.crocodile_scoring import check_regular_answer
 from features.dialog_pipeline import process_dialog_pipeline
-from games import crocodile_modes, reverse_crocodile, reverse_crocodile_modes
+from games import crocodile_modes, reverse_crocodile, reverse_crocodile_guessing
 from services import memegenerator
 
 
@@ -27,7 +27,7 @@ async def process_message(message: types.Message):
         return
     reverse_session = reverse_crocodile.games.get(str(message.chat.id)) or {}
     if reverse_session.get("mode") not in (None, "word"):
-        if await reverse_crocodile_modes.check_answer(message):
+        if await reverse_crocodile_guessing.check_special_answer(message):
             return
     elif await reverse_crocodile.check_answer(message):
         return
