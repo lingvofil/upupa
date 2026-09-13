@@ -18,7 +18,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "configure_crocodile_modes()",
         "persistence.configure_crocodile_persistence_dependencies(",
         "configure_crocodile_party_controls()",
-        "configure_crocodile_duo_opt_in()",
+        "duo_optin.configure_crocodile_duo_opt_in()",
         "configure_crocodile_ui_enhancements()",
         "configure_crocodile_admin_controls()",
         "configure_crocodile_telephone_mentions()",
@@ -86,6 +86,44 @@ def test_party_state_does_not_assign_into_runtime_modules():
     ) == 1
     assert "party_state.crocodile_persistence_dependencies()" in runtime_source
     assert "configure_crocodile_party_state" not in runtime_source
+
+
+def test_duo_opt_in_does_not_replace_persistence_serializers():
+    duo_source = _source("games/crocodile_duo_optin.py")
+    tree = ast.parse(duo_source)
+    assigned = []
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "crocodile_persistence"
+            ):
+                assigned.append(target.attr)
+
+    assert assigned == []
+    assert "_original_session_to_record" not in duo_source
+    assert "_original_session_from_record" not in duo_source
+    assert "_session_to_record_with_duo_opt_in" not in duo_source
+    assert "_session_from_record_with_duo_opt_in" not in duo_source
+
+    runtime_source = _source("games/crocodile_runtime.py")
+    record_duo = runtime_source.index(
+        "duo_optin.enrich_session_record_with_duo_opt_in"
+    )
+    record_party = runtime_source.index("party_dependencies.enrich_session_record")
+    restore_duo = runtime_source.index(
+        "duo_optin.enrich_restored_session_with_duo_opt_in"
+    )
+    restore_party = runtime_source.index("party_dependencies.enrich_restored_session")
+    assert record_duo < record_party
+    assert restore_duo < restore_party
 
 
 def test_duel_vote_deadline_is_owned_by_modes():
