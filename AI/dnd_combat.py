@@ -123,13 +123,25 @@ def _participant_name(session, user_id: int) -> str:
     return item.get("name") or f"Егрок {int(user_id)}"
 
 
+def _sorted_stats(stats: dict) -> list[tuple[str, int]]:
+    items = [(key, int(stats[key])) for key in ABILITY_KEYS]
+    return sorted(items, key=lambda item: item[1], reverse=True)
+
+
 def _stats_line(stats: dict) -> str:
     chunks = []
-    for key in ABILITY_KEYS:
-        score = int(stats[key])
+    for key, score in _sorted_stats(stats):
         mod = ability_modifier(score)
         chunks.append(f"{ABILITY_SHORT[key]} {score} ({mod:+d})")
     return " · ".join(chunks)
+
+
+def _stats_block(stats: dict, *, prefix: str = "  ") -> str:
+    lines = []
+    for key, score in _sorted_stats(stats):
+        mod = ability_modifier(score)
+        lines.append(f"{prefix}{ABILITY_LABELS[key]} — {score} ({mod:+d})")
+    return "\n".join(lines)
 
 
 def _strip_fence(text: str) -> str:
@@ -231,8 +243,8 @@ async def initialize_party_combat(dnd, bot, session) -> None:
     for user_id in user_ids:
         sheet = session.character_sheets[str(user_id)]
         lines.append(
-            f"• {_participant_name(session, user_id)} — ❤️ {sheet['hp']}/{sheet['max_hp']}, "
-            f"🛡 КБ {sheet['ac']}; {_stats_line(sheet['stats'])}"
+            f"• {_participant_name(session, user_id)} — ❤️ {sheet['hp']}/{sheet['max_hp']}, 🛡 КБ {sheet['ac']}\n"
+            f"{_stats_block(sheet['stats'])}"
         )
     lines.append(
         f"🧪 Одноразовая аварийная лечилка случайно досталась {_participant_name(session, owner_id)}. "
@@ -547,7 +559,7 @@ def _hero_combat_lines(session, user_id: int) -> list[str]:
     lines = [
         f"❤️ Здоровье: {sheet.get('hp', 0)}/{sheet.get('max_hp', 0)} ({status})",
         f"🛡 Класс брони: {sheet.get('ac')}",
-        "📊 " + _stats_line(sheet["stats"]),
+        "📊 Характеристики:\n" + _stats_block(sheet["stats"]),
     ]
     charge = getattr(session, "healing_charge", {}) or {}
     if not charge.get("used") and charge.get("owner_id") is not None and int(charge["owner_id"]) == int(user_id):
@@ -728,7 +740,7 @@ def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
             history_lines = [
                 f"❤️ Базовое здоровье: {sheet.get('max_hp')}",
                 f"🛡 Класс брони: {sheet.get('ac')}",
-                "📊 " + _stats_line(sheet["stats"]),
+                "📊 Характеристики:\n" + _stats_block(sheet["stats"]),
             ]
             return text + "\n" + "\n".join(history_lines)
         return text
