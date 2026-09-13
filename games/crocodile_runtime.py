@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 
 _configured = False
 
@@ -34,8 +36,13 @@ def _compose_extra_persistors(*persistors):
     def persist(*, force: bool = False) -> bool:
         changed = False
         for callback in callbacks:
-            if callback(force=force):
-                changed = True
+            try:
+                if callback(force=force):
+                    changed = True
+            except Exception:
+                logging.exception(
+                    "[crocodile] extra persistence callback failed: %r", callback
+                )
         return changed
 
     return persist
@@ -47,7 +54,12 @@ def _compose_extra_restorers(*restorers):
     def restore() -> int:
         restored = 0
         for callback in callbacks:
-            restored += int(callback() or 0)
+            try:
+                restored += int(callback() or 0)
+            except Exception:
+                logging.exception(
+                    "[crocodile] extra restore callback failed: %r", callback
+                )
         return restored
 
     return restore
