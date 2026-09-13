@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 import re
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, MessageReactionUpdated
@@ -60,6 +60,32 @@ class SocialGraphRepository(Protocol):
         chat_id: int,
         since: datetime,
     ) -> tuple[list[tuple[int, int, str, float]], dict[int, str]]: ...
+
+    def load_relationship_states(self, chat_id: int, user_id: int | None = None) -> list[dict[str, Any]]: ...
+
+    def save_relationship_snapshot(
+        self,
+        *,
+        chat_id: int,
+        user_a_id: int,
+        user_b_id: int,
+        affinity: int,
+        tension: int,
+        xp: float,
+        level: int,
+        reciprocity: float,
+        archetype: str,
+        trend: str,
+        captured_at: datetime,
+    ) -> None: ...
+
+    def load_relationship_snapshots(
+        self,
+        chat_id: int,
+        user_a_id: int,
+        user_b_id: int,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
 
 
 _repository_instance: SocialGraphRepository | None = None
@@ -204,6 +230,50 @@ async def get_graph_data(chat_id: int, *, period_days: int = DEFAULT_PERIOD_DAYS
     interactions, names = await asyncio.to_thread(_repository().load_graph, chat_id, since)
     clean_names = {user_id: _without_username_tag(name) for user_id, name in names.items()}
     return SocialGraphData(tuple(interactions), clean_names, period_days)
+
+
+async def resolve_relationship_usernames(
+    chat_id: int,
+    usernames: Sequence[str],
+) -> dict[str, tuple[int, str, str | None]]:
+    return await asyncio.to_thread(_repository().resolve_usernames, chat_id, usernames)
+
+
+async def load_relationship_states(chat_id: int, *, user_id: int | None = None) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_repository().load_relationship_states, chat_id, user_id)
+
+
+async def save_relationship_snapshot(view) -> None:
+    await asyncio.to_thread(
+        _repository().save_relationship_snapshot,
+        chat_id=view.chat_id,
+        user_a_id=view.user_a_id,
+        user_b_id=view.user_b_id,
+        affinity=view.affinity,
+        tension=view.tension,
+        xp=view.xp,
+        level=view.level,
+        reciprocity=view.reciprocity,
+        archetype=view.archetype,
+        trend=view.trend,
+        captured_at=datetime.now(timezone.utc),
+    )
+
+
+async def load_relationship_snapshots(
+    chat_id: int,
+    user_a_id: int,
+    user_b_id: int,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        _repository().load_relationship_snapshots,
+        chat_id,
+        user_a_id,
+        user_b_id,
+        limit,
+    )
 
 
 class SocialInteractionMiddleware(BaseMiddleware):
