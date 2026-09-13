@@ -156,7 +156,8 @@ class SQLiteChronicleCandidateStore:
                     unique_reactors=CASE WHEN ? IS NULL THEN unique_reactors ELSE MAX(unique_reactors,?) END,
                     reply_count=reply_count+?,
                     participants_json=?,source_message_ids_json=?,metadata_json=?,
-                    status=CASE WHEN status='rejected' THEN status ELSE 'observing' END
+                    status=CASE WHEN status='saved' THEN status ELSE 'observing' END,
+                    reject_reason=CASE WHEN status='saved' THEN reject_reason ELSE NULL END
                   WHERE id=?""",
                 (
                     anchor_message_id, ts(timestamp), ts(timestamp), ts(timestamp), ts(due_at),
