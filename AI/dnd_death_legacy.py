@@ -7,6 +7,58 @@ from datetime import datetime, timezone
 GENDER_STEP = "gender"
 
 
+def _sheet_is_dead(sheet) -> bool:
+    if not isinstance(sheet, dict):
+        return False
+    status = str(sheet.get("status") or "").casefold()
+    try:
+        hp = int(sheet.get("hp", 1) or 0)
+    except (TypeError, ValueError):
+        hp = 1
+    return status == "dead" or hp <= 0
+
+
+def backfill_death_flags(archive) -> bool:
+    """Infer latest player death state from archived per-campaign combat sheets."""
+    if not isinstance(archive, dict):
+        return False
+    chats = archive.get("chats")
+    if not isinstance(chats, dict):
+        return False
+
+    changed = False
+    for chat in chats.values():
+        if not isinstance(chat, dict):
+            continue
+        players = chat.get("players") or {}
+        campaigns = chat.get("campaigns") or []
+        if not isinstance(players, dict) or not isinstance(campaigns, list):
+            continue
+
+        latest = {}
+        for campaign_row in campaigns:
+            if not isinstance(campaign_row, dict):
+                continue
+            sheets = campaign_row.get("character_sheets") or {}
+            if isinstance(sheets, dict):
+                for user_id, sheet in sheets.items():
+                    latest[str(user_id)] = _sheet_is_dead(sheet)
+            for user_id in campaign_row.get("dead_user_ids") or []:
+                latest[str(user_id)] = True
+
+        for user_id, dead in latest.items():
+            row = players.get(str(user_id))
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("dead")) != bool(dead):
+                row["dead"] = bool(dead)
+                changed = True
+            if not dead and "died_at" in row:
+                row.pop("died_at", None)
+                changed = True
+    return changed
+
+
 def history_is_dead(campaign, chat_id: int, user_id: int) -> bool:
     history = campaign._player_history(chat_id, user_id) or {}
     return bool(history.get("dead"))
@@ -40,6 +92,10 @@ def install_dnd_death_legacy(dnd_router) -> None:
     if getattr(campaign, "_upupa_dnd_death_legacy_installed", False):
         return
 
+    campaign._load_archive(dnd)
+    if backfill_death_flags(getattr(campaign, "_archive", None)):
+        campaign._save_archive(dnd)
+
     # Archive the final life/death state after the combat layer has written its
     # normal campaign/player history. This keeps the old hero inspectable but
     # gives the next lobby an explicit tombstone flag.
@@ -50,21 +106,16 @@ def install_dnd_death_legacy(dnd_router) -> None:
         chat = campaign._chat_history(session.chat_id, True)
         players = chat.setdefault("players", {})
         dead_ids = []
+        now = datetime.now(timezone.utc).isoformat()
         for participant in (getattr(session, "participants", {}) or {}).values():
             user_id = int(participant["user_id"])
             key = str(user_id)
             sheet = (getattr(session, "character_sheets", {}) or {}).get(key)
-            dead = bool(
-                isinstance(sheet, dict)
-                and (
-                    str(sheet.get("status") or "").casefold() == "dead"
-                    or int(sheet.get("hp", 1) or 0) <= 0
-                )
-            )
+            dead = _sheet_is_dead(sheet)
             row = players.setdefault(key, {})
             row["dead"] = dead
             if dead:
-                row["died_at"] = datetime.now(timezone.utc).isoformat()
+                row["died_at"] = now
                 dead_ids.append(user_id)
             else:
                 row.pop("died_at", None)
@@ -94,7 +145,7 @@ def install_dnd_death_legacy(dnd_router) -> None:
         }
         session.reputations[key] = []
         session.inventories.pop(key, None)
-        # Return only the tombstone metadata: callers that normally inherit
+        # Return only tombstone metadata: callers that normally inherit
         # old['profile'] are therefore forced to generate a new character.
         return {"name": old.get("name"), "dead": True, "died_at": old.get("died_at")}
 
