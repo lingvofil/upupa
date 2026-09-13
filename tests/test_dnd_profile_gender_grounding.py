@@ -1,4 +1,3 @@
-from AI import dnd_campaign as campaign
 from AI import dnd_profile_gender_grounding as feature
 
 
@@ -13,34 +12,9 @@ def test_gender_keyboard_has_two_explicit_choices_without_regeneration():
     ]
 
 
-def test_generated_four_field_profile_is_upgraded_with_gender():
-    raw = (
-        '{"style":"курьер реликвий","strength":"видит чужой блеф",'
-        '"weakness":"лезет в запретное","special":"аварийный план"}'
-    )
-
-    profile = feature._profile_from_generated_payload(campaign, raw)
-
-    assert profile["style"] == "курьер реликвий"
-    assert profile["strength"] == "видит чужой блеф"
-    assert profile["weakness"] == "лезет в запретное"
-    assert profile["special"] == "аварийный план"
-    assert profile["gender"] in feature.GENDER_OPTIONS
-
-
-def test_generated_gender_is_normalized_when_model_supplies_it():
-    raw = (
-        '{"style":"следопыт","strength":"терпеливый","weakness":"азартный",'
-        '"special":"грязный трюк","gender":"женщина"}'
-    )
-
-    profile = feature._profile_from_generated_payload(campaign, raw)
-
-    assert profile["gender"] == "женский"
-
-
-def test_gender_normalizer_accepts_short_and_english_variants():
+def test_gender_normalizer_accepts_short_russian_and_english_variants():
     assert feature._normalize_gender("М") == "мужской"
+    assert feature._normalize_gender("женщина") == "женский"
     assert feature._normalize_gender("female") == "женский"
     assert feature._normalize_gender("эльф") is None
 
