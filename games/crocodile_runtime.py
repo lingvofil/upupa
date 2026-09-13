@@ -130,6 +130,7 @@ def configure_crocodile_runtime() -> None:
     )
     from games.crocodile_ui_enhancements import (
         configure_crocodile_ui_enhancements,
+        decorate_party_menu_with_ratings,
         handle_crocodile_callback_with_ui,
     )
 
@@ -164,6 +165,7 @@ def configure_crocodile_runtime() -> None:
     party_controls.menu_keyboard = _compose_party_menu_keyboard(
         party_controls.menu_keyboard,
         duo_optin.decorate_party_menu_without_default_duo,
+        decorate_party_menu_with_ratings,
     )
     crocodile.get_game_keyboard = _compose_game_keyboard(
         base_game_keyboard,
