@@ -6,18 +6,40 @@ from __future__ import annotations
 _configured = False
 
 
+def _compose_session_record_enrichers(*enrichers):
+    callbacks = tuple(callback for callback in enrichers if callback is not None)
+
+    def enrich(chat_id: str, session: dict, record: dict) -> dict:
+        for callback in callbacks:
+            record = callback(chat_id, session, record)
+        return record
+
+    return enrich
+
+
+def _compose_restored_session_enrichers(*enrichers):
+    callbacks = tuple(callback for callback in enrichers if callback is not None)
+
+    def enrich(record: dict, chat_id: str, session: dict) -> tuple[str, dict]:
+        for callback in callbacks:
+            chat_id, session = callback(record, chat_id, session)
+        return chat_id, session
+
+    return enrich
+
+
 def configure_crocodile_runtime() -> None:
     """Install Crocodile runtime layers once in their dependency order."""
     global _configured
     if _configured:
         return
 
+    from games import crocodile_duo_optin as duo_optin
     from games import crocodile_party_state as party_state
     from games import crocodile_persistence as persistence
     from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
     from games.crocodile_controls import configure_crocodile_controls
-    from games.crocodile_duo_optin import configure_crocodile_duo_opt_in
     from games.crocodile_modes import configure_crocodile_modes
     from games.crocodile_party_controls import configure_crocodile_party_controls
     from games.crocodile_single_words import configure_crocodile_single_words
@@ -35,11 +57,23 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_controls()
     configure_crocodile_single_words()
     configure_crocodile_modes()
+    party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
-        party_state.crocodile_persistence_dependencies()
+        persistence.CrocodilePersistenceDependencies(
+            enrich_session_record=_compose_session_record_enrichers(
+                duo_optin.enrich_session_record_with_duo_opt_in,
+                party_dependencies.enrich_session_record,
+            ),
+            enrich_restored_session=_compose_restored_session_enrichers(
+                duo_optin.enrich_restored_session_with_duo_opt_in,
+                party_dependencies.enrich_restored_session,
+            ),
+            persist_extra_state=party_dependencies.persist_extra_state,
+            restore_extra_state=party_dependencies.restore_extra_state,
+        )
     )
     configure_crocodile_party_controls()
-    configure_crocodile_duo_opt_in()
+    duo_optin.configure_crocodile_duo_opt_in()
     configure_crocodile_ui_enhancements()
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
