@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
 import random
 import secrets
 import time
+from typing import Callable
 
 from core.paths import CROCODILE_STATE_PATH
 from games import crocodile
@@ -40,6 +42,29 @@ _original_pick_word = crocodile._pick_word
 _original_stop_session = crocodile._stop_session
 _original_authorize_socket_room = crocodile._authorize_socket_room
 _runtime_guards_configured = False
+
+
+@dataclass(frozen=True)
+class CrocodilePersistenceDependencies:
+    """Optional extension points wired by the Crocodile composition root."""
+
+    enrich_session_record: Callable[[str, dict, dict], dict] | None = None
+    enrich_restored_session: (
+        Callable[[dict, str, dict], tuple[str, dict]] | None
+    ) = None
+    persist_extra_state: Callable[..., bool] | None = None
+    restore_extra_state: Callable[[], int] | None = None
+
+
+_persistence_dependencies = CrocodilePersistenceDependencies()
+
+
+def configure_crocodile_persistence_dependencies(
+    dependencies: CrocodilePersistenceDependencies,
+) -> None:
+    """Set explicitly composed persistence callbacks without replacing functions."""
+    global _persistence_dependencies
+    _persistence_dependencies = dependencies
 
 
 def _state_path() -> Path:
@@ -372,7 +397,11 @@ def _serialize_current_state() -> str:
     records = []
     for chat_id, session in sorted(crocodile.game_sessions.items()):
         try:
-            records.append(_session_to_record(chat_id, session))
+            record = _session_to_record(chat_id, session)
+            enrich_record = _persistence_dependencies.enrich_session_record
+            if enrich_record is not None:
+                record = enrich_record(chat_id, session, record)
+            records.append(record)
         except Exception:
             logging.exception(
                 "[crocodile] failed to serialize session chat=%s", chat_id
@@ -391,20 +420,28 @@ def _serialize_current_state() -> str:
 
 
 def persist_crocodile_sessions(*, force: bool = False) -> bool:
-    """Atomically persist active sessions when their durable state changed."""
+    """Atomically persist active sessions and any explicitly wired extra state."""
     global _last_payload
 
     payload = _serialize_current_state()
-    if not force and payload == _last_payload:
-        return False
+    regular_changed = force or payload != _last_payload
+    if regular_changed:
+        path = _state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path.write_text(payload, encoding="utf-8")
+        temp_path.replace(path)
+        _last_payload = payload
 
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(payload, encoding="utf-8")
-    temp_path.replace(path)
-    _last_payload = payload
-    return True
+    extra_changed = False
+    persist_extra = _persistence_dependencies.persist_extra_state
+    if persist_extra is not None:
+        try:
+            extra_changed = bool(persist_extra(force=force))
+        except Exception:
+            logging.exception("[crocodile] failed to persist extra state")
+
+    return regular_changed or extra_changed
 
 
 def restore_crocodile_sessions() -> int:
@@ -412,6 +449,9 @@ def restore_crocodile_sessions() -> int:
     global _last_payload
 
     configure_crocodile_runtime()
+    restore_extra = _persistence_dependencies.restore_extra_state
+    if restore_extra is not None:
+        restore_extra()
     migrate_crocodile_scores()
 
     path = _state_path()
@@ -437,6 +477,9 @@ def restore_crocodile_sessions() -> int:
     for record in payload.get("sessions", []):
         try:
             chat_id, session = _session_from_record(record)
+            enrich_session = _persistence_dependencies.enrich_restored_session
+            if enrich_session is not None:
+                chat_id, session = enrich_session(record, chat_id, session)
             restored_sessions[chat_id] = session
         except Exception:
             logging.exception(

@@ -12,6 +12,7 @@ def configure_crocodile_runtime() -> None:
     if _configured:
         return
 
+    from games import crocodile_party_state as party_state
     from games import crocodile_persistence as persistence
     from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
@@ -19,7 +20,6 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_duo_optin import configure_crocodile_duo_opt_in
     from games.crocodile_modes import configure_crocodile_modes
     from games.crocodile_party_controls import configure_crocodile_party_controls
-    from games.crocodile_party_state import configure_crocodile_party_state
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
@@ -35,7 +35,10 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_controls()
     configure_crocodile_single_words()
     configure_crocodile_modes()
-    configure_crocodile_party_state()
+    party_state.configure_crocodile_party_state()
+    persistence.configure_crocodile_persistence_dependencies(
+        party_state.crocodile_persistence_dependencies()
+    )
     configure_crocodile_party_controls()
     configure_crocodile_duo_opt_in()
     configure_crocodile_ui_enhancements()
