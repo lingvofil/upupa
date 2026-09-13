@@ -5,7 +5,7 @@ from AI import dnd_inventory_fun as inventory_fun
 
 
 INVENTORY_EFFECTS_MARKER = "ХАРАКТЕРИСТИКИ ПРЕДМЕТОВ УПУПЫ"
-INVENTORY_EFFECT_VERSION = 1
+INVENTORY_EFFECT_MIGRATION_VERSION = 1
 INVENTORY_EFFECT_RULES = f"""
 {INVENTORY_EFFECTS_MARKER}: у нового предмета или артефакта можно указать короткую характеристику, если она делает вещь
 понятнее, полезнее или смешнее. Не выдумывай характеристику только ради заполнения поля.
@@ -74,13 +74,11 @@ def _parse_bonus(value) -> int | None:
     return max(-9, min(9, bonus))
 
 
-def _effect_is_checked(item) -> bool:
-    if not isinstance(item, dict):
-        return False
+def _version(value) -> int:
     try:
-        return int(item.get("effect_version", 0) or 0) >= INVENTORY_EFFECT_VERSION
+        return max(0, int(value or 0))
     except (TypeError, ValueError):
-        return False
+        return 0
 
 
 def _has_explicit_effect(item) -> bool:
@@ -156,7 +154,7 @@ def _apply_effect_fields(item: dict, fields: dict) -> bool:
 
 def backfill_legacy_inventory_item(item) -> tuple[dict | object, bool]:
     """Upgrade one pre-effects inventory entry without changing its gameplay math."""
-    if _effect_is_checked(item):
+    if _has_explicit_effect(item):
         return item, False
 
     if isinstance(item, dict):
@@ -168,16 +166,12 @@ def backfill_legacy_inventory_item(item) -> tuple[dict | object, bool]:
         upgraded = {"name": name, "kind": inventory_fun._kind(item)}
 
     changed = upgraded is not item
-    if not _has_explicit_effect(upgraded):
-        changed = _apply_effect_fields(upgraded, _legacy_effect_fields(upgraded)) or changed
-    if upgraded.get("effect_version") != INVENTORY_EFFECT_VERSION:
-        upgraded["effect_version"] = INVENTORY_EFFECT_VERSION
-        changed = True
+    changed = _apply_effect_fields(upgraded, _legacy_effect_fields(upgraded)) or changed
     return upgraded, changed
 
 
 def backfill_inventory_items(items) -> bool:
-    """Upgrade a mutable inventory list in place and report whether it changed."""
+    """Upgrade a mutable legacy inventory list in place."""
     if not isinstance(items, list):
         return False
     changed = False
@@ -190,7 +184,7 @@ def backfill_inventory_items(items) -> bool:
 
 
 def backfill_archive_data(archive) -> bool:
-    """Upgrade persistent player inventories and historical campaign snapshots."""
+    """Upgrade inventory payloads inside an archive regardless of schema version."""
     if not isinstance(archive, dict):
         return False
     chats = archive.get("chats")
@@ -219,11 +213,31 @@ def backfill_archive_data(archive) -> bool:
     return changed
 
 
+def migrate_archive_data(archive) -> bool:
+    """Run the legacy archive migration once, without touching future plain items."""
+    if not isinstance(archive, dict):
+        return False
+    if _version(archive.get("inventory_effects_version")) >= INVENTORY_EFFECT_MIGRATION_VERSION:
+        return False
+    backfill_archive_data(archive)
+    archive["inventory_effects_version"] = INVENTORY_EFFECT_MIGRATION_VERSION
+    return True
+
+
+def migrate_session_inventory(session) -> bool:
+    """Upgrade inventories restored from a pre-effects active session exactly once."""
+    if _version(getattr(session, "inventory_effects_version", 0)) >= INVENTORY_EFFECT_MIGRATION_VERSION:
+        return False
+    inventories = getattr(session, "inventories", {}) or {}
+    if isinstance(inventories, dict):
+        for items in inventories.values():
+            backfill_inventory_items(items)
+    session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
+    return True
+
+
 def format_inventory_effect(item) -> str:
     """Render optional item metadata without treating it as a core d20 modifier."""
-    if not _effect_is_checked(item) and not _has_explicit_effect(item):
-        item, _changed = backfill_legacy_inventory_item(item)
-
     parts = []
     bonus = _bonus_per_unit(item)
     trait = _trait(item)
@@ -245,7 +259,6 @@ def format_inventory_entry(item) -> str:
 
 
 def render_inventory_lines(items) -> list[str]:
-    backfill_inventory_items(items)
     result = []
     for item in items or []:
         text = format_inventory_entry(item)
@@ -282,7 +295,6 @@ def _refresh_notice(notices: list[str], session, player: str, item: dict) -> Non
 
 def apply_item_effect_metadata(campaign, original_apply, session, text):
     """Decorate ITEM:ADD results after the existing inventory mechanics have applied the tag."""
-    before = inventory_fun._snapshot_inventory(session)
     cleaned, notices = original_apply(session, text)
     valid_players = _valid_players(session)
 
@@ -292,6 +304,8 @@ def apply_item_effect_metadata(campaign, original_apply, session, text):
             continue
         head, fields = campaign._parse_fields(payload)
         if str(head or "").upper() != "ADD":
+            continue
+        if not any(fields.get(key) for key in ("BONUS", "TRAIT", "EFFECT")):
             continue
 
         player = str(fields.get("PLAYER") or "")
@@ -309,18 +323,7 @@ def apply_item_effect_metadata(campaign, original_apply, session, text):
         else:
             item = {"name": inventory_fun._name(current), "kind": inventory_fun._kind(current)}
             inventory[index] = item
-
-        has_requested_effect = any(fields.get(key) for key in ("BONUS", "TRAIT", "EFFECT"))
-        existed_before = (player, item_name.casefold()) in before
-        if existed_before and not has_requested_effect and not _effect_is_checked(item):
-            upgraded, _changed = backfill_legacy_inventory_item(item)
-            if upgraded is not item:
-                inventory[index] = upgraded
-                item = upgraded
-        else:
-            item["effect_version"] = INVENTORY_EFFECT_VERSION
-
-        if has_requested_effect and _apply_effect_fields(item, fields):
+        if _apply_effect_fields(item, fields):
             _refresh_notice(notices, session, player, item)
 
     return cleaned, notices
@@ -330,13 +333,41 @@ def _inventory_context(campaign, session) -> str:
     campaign._ensure(session)
     out = []
     for key, items in session.inventories.items():
-        backfill_inventory_items(items)
         names = [format_inventory_entry(item) for item in items]
         names = [name for name in names if name]
         if names:
             out.append(f"- ID {key}: {', '.join(names)}")
     out.append(inventory_fun._artifact_progress_line(session))
     return "\n".join(out)
+
+
+def _install_session_schema_migration(campaign) -> None:
+    """Persist a session-level schema marker without changing individual item records."""
+    original_ensure = campaign._ensure
+    original_state = campaign._state
+    original_restore_state = campaign._restore_state
+
+    def ensure(session):
+        original_ensure(session)
+        if not hasattr(session, "inventory_effects_version"):
+            session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
+
+    def state(session):
+        row = original_state(session)
+        row["inventory_effects_version"] = _version(
+            getattr(session, "inventory_effects_version", INVENTORY_EFFECT_MIGRATION_VERSION)
+        )
+        return row
+
+    def restore_state(session, data):
+        stored_version = _version((data or {}).get("inventory_effects_version")) if isinstance(data, dict) else 0
+        original_restore_state(session, data)
+        session.inventory_effects_version = stored_version
+        migrate_session_inventory(session)
+
+    campaign._ensure = ensure
+    campaign._state = state
+    campaign._restore_state = restore_state
 
 
 def install_dnd_inventory_effects(dnd) -> None:
@@ -348,9 +379,10 @@ def install_dnd_inventory_effects(dnd) -> None:
         return
 
     campaign._load_archive(dnd)
-    if backfill_archive_data(getattr(campaign, "_archive", None)):
+    if migrate_archive_data(getattr(campaign, "_archive", None)):
         campaign._save_archive(dnd)
 
+    _install_session_schema_migration(campaign)
     original_apply = campaign._apply_metadata
 
     def apply_metadata(session, text):
