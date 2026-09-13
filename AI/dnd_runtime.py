@@ -10,6 +10,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_campaign import configure_dnd_campaign
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_healing_choice import install_dnd_healing_choice
+    from AI.dnd_inventory_effects import install_dnd_inventory_effects
     from AI.dnd_inventory_fun import install_fun_inventory
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
@@ -28,6 +29,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_healing_choice(router)
     install_dnd_inventory_reliability(dnd)
+    install_dnd_inventory_effects(dnd)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
