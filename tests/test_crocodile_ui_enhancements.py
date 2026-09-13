@@ -42,21 +42,17 @@ def test_game_keyboard_renames_other_to_next(monkeypatch):
     assert next_button.text == "⏭ Следующее"
 
 
-def test_main_menu_contains_ratings_before_gallery(monkeypatch):
+def test_main_menu_contains_ratings_before_gallery():
     from games import crocodile_ui_enhancements as ui
 
-    monkeypatch.setattr(
-        ui,
-        "_original_party_menu_keyboard",
-        lambda chat_id: InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🎨 Обычный", callback_data="cmenu_classic")],
-                [InlineKeyboardButton(text="🖼 Галерея", callback_data="cmenu_gallery")],
-            ]
-        ),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎨 Обычный", callback_data="cmenu_classic")],
+            [InlineKeyboardButton(text="🖼 Галерея", callback_data="cmenu_gallery")],
+        ]
     )
 
-    keyboard = ui.menu_keyboard_with_ratings(-42)
+    keyboard = ui.decorate_party_menu_with_ratings(keyboard)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
     assert callbacks == ["cmenu_classic", "cmenu_ratings", "cmenu_gallery"]
 

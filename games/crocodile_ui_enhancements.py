@@ -23,7 +23,6 @@ _original_start_new_game = None
 _original_get_game_keyboard = None
 _original_get_end_game_keyboard = None
 _original_check_answer = None
-_original_party_menu_keyboard = None
 _original_party_menu_callback = None
 _original_final_frame_handler = None
 
@@ -154,8 +153,10 @@ def get_end_game_keyboard_with_attribution(likes: int = 0) -> InlineKeyboardMark
     return _like_button_with_token(keyboard, token)
 
 
-def menu_keyboard_with_ratings(chat_id: int | str) -> InlineKeyboardMarkup:
-    keyboard = _original_party_menu_keyboard(chat_id)
+def decorate_party_menu_with_ratings(
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Insert ratings into an already rendered Crocodile party menu."""
     rows = [list(row) for row in keyboard.inline_keyboard]
     if any(
         button.callback_data == "cmenu_ratings"
@@ -388,11 +389,10 @@ async def final_frame_with_like_context(sid, data):
 
 
 def configure_crocodile_ui_enhancements() -> None:
-    """Install the final Crocodile UI layer after party and duo extensions."""
+    """Install the remaining Crocodile UI layer after explicit menu composition."""
     global _configured
     global _original_start_new_game, _original_get_game_keyboard
     global _original_get_end_game_keyboard, _original_check_answer
-    global _original_party_menu_keyboard
     global _original_party_menu_callback, _original_final_frame_handler
     if _configured:
         return
@@ -401,7 +401,6 @@ def configure_crocodile_ui_enhancements() -> None:
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_get_end_game_keyboard = crocodile.get_end_game_keyboard
     _original_check_answer = crocodile.check_answer
-    _original_party_menu_keyboard = crocodile_party_controls.menu_keyboard
     _original_party_menu_callback = crocodile_party_controls.handle_menu_callback
     _original_final_frame_handler = crocodile_modes.final_frame_with_modes
 
@@ -409,7 +408,6 @@ def configure_crocodile_ui_enhancements() -> None:
     crocodile.get_game_keyboard = get_game_keyboard_with_clear_next
     crocodile.get_end_game_keyboard = get_end_game_keyboard_with_attribution
     crocodile.check_answer = check_answer_with_like_context
-    crocodile_party_controls.menu_keyboard = menu_keyboard_with_ratings
     crocodile_party_controls.handle_menu_callback = handle_party_menu_callback_with_ratings
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True
