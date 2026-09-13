@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -33,6 +34,14 @@ class Holiday:
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _normalize_title_key(text: str) -> str:
+    """Normalize a generated holiday title for tolerant source matching."""
+    normalized = unicodedata.normalize("NFKC", _normalize_text(text)).casefold().replace("ё", "е")
+    return " ".join(
+        "".join(char if char.isalnum() else " " for char in normalized).split()
+    )
 
 
 def _fetch_calend_holidays_sync(month: int, day: int) -> list[Holiday]:
@@ -90,15 +99,52 @@ def get_holiday_broadcast_chat_ids() -> list[int]:
     return enabled_chat_ids
 
 
+def _json_list_from_value(value) -> list[dict] | None:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        for key in ("holidays", "items", "data"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return nested
+    return None
+
+
 def _extract_json_list(text: str) -> list[dict]:
-    json_match = re.search(r"```json\s*(.*?)\s*```", text or "", re.DOTALL | re.IGNORECASE)
-    json_text = json_match.group(1) if json_match else (text or "").strip()
-    if not json_text.startswith("["):
-        bracket_match = re.search(r"(\[.*\])", json_text, re.DOTALL)
-        if bracket_match:
-            json_text = bracket_match.group(1)
-    parsed = json.loads(json_text)
-    return parsed if isinstance(parsed, list) else []
+    """Extract a JSON list even when the model wraps it in prose or an object."""
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("empty model response")
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL | re.IGNORECASE)
+    candidates = [fenced.group(1).strip()] if fenced else []
+    candidates.append(raw)
+
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            parsed = None
+        extracted = _json_list_from_value(parsed)
+        if extracted is not None:
+            return extracted
+
+        starts = sorted(
+            position
+            for position in (candidate.find("["), candidate.find("{"))
+            if position >= 0
+        )
+        for start in starts:
+            try:
+                parsed, _ = decoder.raw_decode(candidate[start:])
+            except json.JSONDecodeError:
+                continue
+            extracted = _json_list_from_value(parsed)
+            if extracted is not None:
+                return extracted
+
+    raise ValueError("model response does not contain a JSON holiday list")
 
 
 def _build_digest_prompt(holidays: list[Holiday]) -> str:
@@ -111,18 +157,48 @@ def _build_digest_prompt(holidays: list[Holiday]) -> str:
     return (
         "Сделай ежедневную рассылку праздников для Telegram по данным ниже. "
         "Для каждого праздника верни короткое описание на русском: 1-3 предложения, без вводной болтовни. "
-        "Сохрани ровно эти названия праздников, не добавляй праздники от себя. "
-        "Стиль описаний должен соответствовать текущему промпту чата. "
-        "Ответ верни строго JSON-массивом без markdown: "
-        '[{"title": "название", "description": "краткое описание"}].\n\n'
+        "Не добавляй праздники от себя и сохрани порядок исходного списка. "
+        "Стиль descriptions должен соответствовать текущему промпту чата. "
+        "Ответ верни строго валидным JSON-массивом без markdown. "
+        "Для связи с исходным праздником обязательно копируй его числовой id; название повторять не нужно. "
+        'Формат: [{"id": 1, "description": "краткое описание"}].\n\n'
         f"Данные:\n{source}"
     )
+
+
+def _resolve_generated_holiday_title(
+    item: dict,
+    index: int,
+    holidays: list[Holiday],
+    title_lookup: dict[str, str],
+    *,
+    allow_position_fallback: bool,
+) -> tuple[str | None, str]:
+    raw_id = item.get("id")
+    try:
+        holiday_id = int(raw_id)
+    except (TypeError, ValueError):
+        holiday_id = 0
+    if 1 <= holiday_id <= len(holidays):
+        return holidays[holiday_id - 1].title, "id"
+
+    generated_title = _normalize_text(str(item.get("title", "")))
+    if generated_title:
+        source_title = title_lookup.get(_normalize_title_key(generated_title))
+        if source_title:
+            return source_title, "normalized title"
+
+    if allow_position_fallback and index < len(holidays):
+        return holidays[index].title, "position"
+
+    return None, "unmatched"
 
 
 async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -> dict[str, str]:
     if not holidays:
         return {}
 
+    response_text = ""
     try:
         task_prompt = _build_digest_prompt(holidays)
         prompt = build_prompt_with_current_chat_prompt(
@@ -133,18 +209,60 @@ async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -
         response_text = await generate_simple_response(prompt, str(chat_id))
         generated = _extract_json_list(response_text)
     except Exception as e:
-        logging.warning(f"Holiday digest generation failed: {e}", exc_info=True)
+        logging.warning(
+            "Holiday digest: AI post-processing failed for chat %s; using calend.ru descriptions. "
+            "Reason: %s. Response preview: %r",
+            chat_id,
+            e,
+            response_text[:300],
+            exc_info=True,
+        )
         return {}
 
     descriptions: dict[str, str] = {}
-    known_titles = {holiday.title for holiday in holidays}
-    for item in generated:
+    title_lookup = {
+        _normalize_title_key(holiday.title): holiday.title
+        for holiday in holidays
+        if _normalize_title_key(holiday.title)
+    }
+    allow_position_fallback = len(generated) == len(holidays)
+
+    for index, item in enumerate(generated):
         if not isinstance(item, dict):
             continue
-        title = _normalize_text(str(item.get("title", "")))
         description = _normalize_text(str(item.get("description", "")))
-        if title in known_titles and description:
-            descriptions[title] = description
+        if not description:
+            continue
+
+        source_title, match_method = _resolve_generated_holiday_title(
+            item,
+            index,
+            holidays,
+            title_lookup,
+            allow_position_fallback=allow_position_fallback,
+        )
+        if not source_title or source_title in descriptions:
+            continue
+        descriptions[source_title] = description
+        if match_method == "position":
+            logging.info(
+                "Holiday digest: matched generated item %s to %r by position for chat %s",
+                index + 1,
+                source_title,
+                chat_id,
+            )
+
+    missing_titles = [holiday.title for holiday in holidays if holiday.title not in descriptions]
+    if missing_titles:
+        logging.warning(
+            "Holiday digest: AI descriptions incomplete for chat %s (%s/%s generated); "
+            "using calend.ru fallback for: %s",
+            chat_id,
+            len(descriptions),
+            len(holidays),
+            "; ".join(missing_titles),
+        )
+
     return descriptions
 
 
