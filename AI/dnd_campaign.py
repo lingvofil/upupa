@@ -298,11 +298,18 @@ def _parse_generated_profile(raw):
     return profile if _profile_complete(profile) else None
 
 
+def _profile_choice_text(step, options, *, heading="🎭 Выбери"):
+    visible = list(options[:PROFILE_OPTION_COUNT])
+    return f"{heading} {PROFILE_LABELS[step]}:\n\n" + "\n".join(
+        f"{index + 1}. {label}" for index, label in enumerate(visible)
+    )
+
+
 def _profile_keyboard(user_id, step, options):
     rows = [[InlineKeyboardButton(
-        text=label,
+        text=str(index + 1),
         callback_data=f"dnd:prof:{int(user_id)}:{step}:{index}",
-    )] for index, label in enumerate(options[:PROFILE_OPTION_COUNT])]
+    ) for index, _label in enumerate(options[:PROFILE_OPTION_COUNT])]]
     rows.append([InlineKeyboardButton(
         text="🎲 Ещё варианты",
         callback_data=f"dnd:prof:{int(user_id)}:{step}:regen",
@@ -705,9 +712,9 @@ async def _show_profile_step(dnd, callback, session, user_id, step, *, regenerat
     current = list(session.profile_options.get(str(user_id), {}).get(step) or [])
     if regenerate or not _options_are_valid(current):
         current = await _generate_profile_options(dnd, session, user_id, step, exclude=current if regenerate else None)
-    prefix = "🎲 Новая пачка. " if regenerate else "🎭 "
+    heading = "🎲 Новая пачка. Выбери" if regenerate else "🎭 Выбери"
     await callback.message.edit_text(
-        f"{prefix}Выбери {PROFILE_LABELS[step]}:",
+        _profile_choice_text(step, current, heading=heading),
         reply_markup=_profile_keyboard(user_id, step, current),
     )
 
@@ -727,7 +734,7 @@ async def _profile_prompt(dnd, callback, session):
     else:
         options = await _generate_profile_options(dnd, session, user_id, "style")
         await callback.message.answer(
-            f"🎭 Выбери {PROFILE_LABELS['style']}:",
+            _profile_choice_text("style", options),
             reply_markup=_profile_keyboard(user_id, "style", options),
         )
     dnd.persist_dnd_sessions()
@@ -766,7 +773,7 @@ async def _profile_callback(callback, dnd):
         await callback.answer("Генерирую.")
         options = await _generate_profile_options(dnd, session, user_id, "style")
         await callback.message.edit_text(
-            f"🎭 Выбери {PROFILE_LABELS['style']}:",
+            _profile_choice_text("style", options),
             reply_markup=_profile_keyboard(user_id, "style", options),
         )
         return
@@ -802,7 +809,7 @@ async def _profile_callback(callback, dnd):
         step = PROFILE_STEPS[idx + 1]
         next_options = await _generate_profile_options(dnd, session, user_id, step)
         await callback.message.edit_text(
-            f"🎭 Теперь выбери {PROFILE_LABELS[step]}:",
+            _profile_choice_text(step, next_options, heading="🎭 Теперь выбери"),
             reply_markup=_profile_keyboard(user_id, step, next_options),
         )
     else:
