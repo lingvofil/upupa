@@ -41,6 +41,7 @@ jobs:
             tests/test_architecture_guardrails.py \
             tests/test_production_hardening.py \
             tests/test_portability_regressions.py \
+            tests/test_dnd_completion_policy.py \
             tests/test_dnd_runtime.py
       - name: Run tests with coverage
         run: >-
