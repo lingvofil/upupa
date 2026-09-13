@@ -32,6 +32,11 @@ def _clean_response(text: str | None, *, max_chars: int = 420) -> str | None:
     return compact[:max_chars]
 
 
+def _is_dnd_history_item(item: "RelationshipTimelineItem") -> bool:
+    """DnD is a shared activity, not evidence of how the pair relates in chat."""
+    return item.event_type == "game_dnd" or item.source in {"dnd_archive", "chronicle:dnd"}
+
+
 async def interpret_personal_summary(
     summary: PersonalSummary,
     names: dict[int, str],
@@ -119,10 +124,12 @@ async def narrate_relationship_history(
     *,
     generator: Generator | None = None,
 ) -> str | None:
-    if not timeline:
+    narrative_timeline = tuple(item for item in timeline if not _is_dnd_history_item(item))
+    if not narrative_timeline:
         return None
+
     facts = []
-    for item in timeline[-10:]:
+    for item in narrative_timeline[-10:]:
         facts.append(
             f"{item.timestamp:%Y-%m-%d} | {item.event_type} | {item.title} | {item.summary} | source={item.source}"
         )
