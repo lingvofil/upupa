@@ -72,6 +72,34 @@ def _uses_active_inventory(dnd, chat_id: int, user_id: int) -> bool:
     return str(int(user_id)) in participants
 
 
+def _dead_archive_inventory_locked(campaign, dnd, chat_id: int, user_id: int) -> bool:
+    return (
+        not _uses_active_inventory(dnd, chat_id, user_id)
+        and history_is_dead(campaign, chat_id, user_id)
+    )
+
+
+def _dead_archive_transfer_block_reason(campaign, dnd, chat_id: int, sender_id: int, target_id: int) -> str | None:
+    session = dnd.dnd_sessions.get(int(chat_id))
+    participants = (
+        getattr(session, "participants", {}) or {}
+        if session is not None and getattr(session, "mode", None) == "participants"
+        else {}
+    )
+    sender_key = str(int(sender_id))
+    target_key = str(int(target_id))
+
+    # The current campaign owns the inventory once either side is a participant.
+    # The normal transfer layer will then require both sides to be participants.
+    if sender_key in participants or target_key in participants:
+        return None
+    if history_is_dead(campaign, chat_id, sender_id):
+        return "Инвентарь погибшего героя недоступен: передавать его вещи нельзя."
+    if history_is_dead(campaign, chat_id, target_id):
+        return "Последний герой получателя погиб: передавать вещи в его архив нельзя. Сначала нужен новый герой."
+    return None
+
+
 async def _start_fresh_profile(campaign, dnd, callback, session, user_id: int, *, edit=False) -> None:
     key = str(int(user_id))
     campaign._ensure(session)
@@ -214,10 +242,7 @@ def install_dnd_death_legacy(dnd_router) -> None:
     original_render_inventory = state_commands.render_inventory
 
     def render_inventory(dnd_module, chat_id, user_id):
-        if (
-            not _uses_active_inventory(dnd_module, chat_id, user_id)
-            and history_is_dead(campaign, chat_id, user_id)
-        ):
+        if _dead_archive_inventory_locked(campaign, dnd_module, chat_id, user_id):
             return (
                 "🎒 Инвентарь недоступен: этот персонаж погиб.\n"
                 "Его вещи остались только в архиве приключения и больше не являются игровым имуществом."
@@ -229,37 +254,15 @@ def install_dnd_death_legacy(dnd_router) -> None:
     original_transfer_inventory = inventory_fun.transfer_inventory
 
     def transfer_inventory(dnd_module, chat_id, sender_id, target_id, item_query, quantity=1):
-        session = dnd_module.dnd_sessions.get(int(chat_id))
-        participants = (
-            getattr(session, "participants", {}) or {}
-            if session is not None and getattr(session, "mode", None) == "participants"
-            else {}
+        reason = _dead_archive_transfer_block_reason(
+            campaign,
+            dnd_module,
+            chat_id,
+            sender_id,
+            target_id,
         )
-        sender_key = str(int(sender_id))
-        target_key = str(int(target_id))
-
-        # If either side belongs to the current participant campaign, preserve
-        # the normal active-session rules (including the requirement that both
-        # sides are participants). The old death flag belongs to the previous
-        # hero and must not block the newly created active character.
-        if sender_key in participants or target_key in participants:
-            return original_transfer_inventory(
-                dnd_module,
-                chat_id,
-                sender_id,
-                target_id,
-                item_query,
-                quantity,
-            )
-
-        if history_is_dead(campaign, chat_id, sender_id):
-            raise inventory_fun.InventoryTransferError(
-                "Инвентарь погибшего героя недоступен: передавать его вещи нельзя."
-            )
-        if history_is_dead(campaign, chat_id, target_id):
-            raise inventory_fun.InventoryTransferError(
-                "Последний герой получателя погиб: передавать вещи в его архив нельзя. Сначала нужен новый герой."
-            )
+        if reason:
+            raise inventory_fun.InventoryTransferError(reason)
         return original_transfer_inventory(
             dnd_module,
             chat_id,
