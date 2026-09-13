@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
         "configure_crocodile_party_state()",
+        "persistence.configure_crocodile_persistence_dependencies(",
         "configure_crocodile_party_controls()",
         "configure_crocodile_duo_opt_in()",
         "configure_crocodile_ui_enhancements()",
@@ -52,6 +54,35 @@ def test_crocodile_installers_do_not_compose_other_installers():
     assert "configure_crocodile_telephone_skip_permissions()" not in mentions
     assert "configure_crocodile_telephone_roles()" not in skip
     assert "configure_crocodile_telephone_role_announcements()" not in skip
+
+
+def test_party_state_does_not_assign_into_persistence_module():
+    state_source = _source("games/crocodile_party_state.py")
+    tree = ast.parse(state_source)
+    assigned = []
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "persistence"
+            ):
+                assigned.append(target.attr)
+
+    assert assigned == []
+    assert "configure_crocodile_persistence_dependencies(" not in state_source
+
+    runtime_source = _source("games/crocodile_runtime.py")
+    assert runtime_source.count(
+        "persistence.configure_crocodile_persistence_dependencies("
+    ) == 1
+    assert "party_state.crocodile_persistence_dependencies()" in runtime_source
 
 
 def test_bootstrap_uses_single_crocodile_composition_entrypoint():
