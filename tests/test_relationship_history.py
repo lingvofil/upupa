@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from tests import test_smoke_imports  # noqa: F401
+
 from features.chronicle.models import ChronicleEvent
 from features.social_graph.relationship_history import assemble_relationship_history
 from features.social_graph.relationships import RelationshipSnapshot, RelationshipView
