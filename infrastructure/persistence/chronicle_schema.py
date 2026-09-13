@@ -175,9 +175,6 @@ def init_chronicle_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "chronicle_backfill_state", "scanned_messages", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "chronicle_backfill_state", "total_messages", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "chronicle_backfill_state", "queued_candidates", "INTEGER NOT NULL DEFAULT 0")
-    _ensure_column(
-        conn,
-        "chronicle_backfill_state",
-        "strategy_version",
-        f"INTEGER NOT NULL DEFAULT {BACKFILL_STRATEGY_VERSION}",
-    )
+    # Existing rows came from strategy v1, so the additive migration must mark
+    # them as v1. Fresh databases get DEFAULT 2 from SCHEMA above.
+    _ensure_column(conn, "chronicle_backfill_state", "strategy_version", "INTEGER NOT NULL DEFAULT 1")
