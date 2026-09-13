@@ -35,7 +35,6 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_controls()
     configure_crocodile_single_words()
     configure_crocodile_modes()
-    party_state.configure_crocodile_party_state()
     persistence.configure_crocodile_persistence_dependencies(
         party_state.crocodile_persistence_dependencies()
     )
