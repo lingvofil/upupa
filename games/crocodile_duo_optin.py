@@ -13,7 +13,6 @@ from games import crocodile, crocodile_persistence
 
 _configured = False
 _base_game_keyboard = None
-_original_handle_callback = None
 
 
 def _artist_ids(session: dict) -> list[int]:
@@ -118,10 +117,11 @@ async def _edit_without_duo_button(callback, chat_id: str) -> None:
         logging.exception("[croc-duo] failed to update original game keyboard chat=%s", chat_id)
 
 
-async def handle_duo_opt_in_callback(callback) -> Any:
+async def handle_duo_opt_in_callback(callback, next_handler) -> Any:
+    """Handle duo callbacks or delegate unchanged callbacks downstream."""
     data = callback.data or ""
     if not data.startswith("cr_duo_"):
-        return await _original_handle_callback(callback)
+        return await next_handler(callback)
 
     if data.startswith("cr_duo_invite_"):
         chat_id = data[len("cr_duo_invite_"):]
@@ -223,13 +223,10 @@ def enrich_restored_session_with_duo_opt_in(
 
 
 def configure_crocodile_duo_opt_in(*, base_game_keyboard) -> None:
-    """Install callback routing and bind the explicit pre-duo keyboard renderer."""
-    global _configured, _base_game_keyboard, _original_handle_callback
+    """Bind explicit dependencies used by the duo opt-in layer."""
+    global _configured, _base_game_keyboard
     if _configured:
         return
 
     _base_game_keyboard = base_game_keyboard
-    _original_handle_callback = crocodile.handle_callback
-
-    crocodile.handle_callback = handle_duo_opt_in_callback
     _configured = True
