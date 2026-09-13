@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 
 
+BACKFILL_STRATEGY_VERSION = 2
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chronicle_candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +105,11 @@ CREATE TABLE IF NOT EXISTS chronicle_backfill_state (
     ai_requests INTEGER NOT NULL DEFAULT 0,
     requested_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    scanned_messages INTEGER NOT NULL DEFAULT 0,
+    total_messages INTEGER NOT NULL DEFAULT 0,
+    queued_candidates INTEGER NOT NULL DEFAULT 0,
+    strategy_version INTEGER NOT NULL DEFAULT 2
 );
 CREATE TABLE IF NOT EXISTS chronicle_backfill_phrases (
     chat_id INTEGER NOT NULL,
@@ -116,6 +123,38 @@ CREATE TABLE IF NOT EXISTS chronicle_backfill_phrases (
 CREATE INDEX IF NOT EXISTS idx_chronicle_phrase_frequency
     ON chronicle_backfill_phrases(chat_id, occurrences DESC);
 
+CREATE TABLE IF NOT EXISTS chronicle_backfill_clusters (
+    chat_id INTEGER NOT NULL,
+    cluster_key TEXT NOT NULL,
+    history_first_id INTEGER NOT NULL,
+    history_last_id INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    message_count INTEGER NOT NULL,
+    participants_json TEXT NOT NULL DEFAULT '[]',
+    source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+    anchor_message_id INTEGER,
+    anchor_text TEXT NOT NULL DEFAULT '',
+    anchor_user_id INTEGER,
+    anchor_display_name TEXT NOT NULL DEFAULT '',
+    anchor_username TEXT,
+    reaction_count INTEGER NOT NULL DEFAULT 0,
+    base_score REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(chat_id, cluster_key)
+);
+CREATE INDEX IF NOT EXISTS idx_chronicle_backfill_cluster_score
+    ON chronicle_backfill_clusters(chat_id, base_score DESC);
+
+CREATE TABLE IF NOT EXISTS chronicle_backfill_cluster_phrases (
+    chat_id INTEGER NOT NULL,
+    cluster_key TEXT NOT NULL,
+    phrase TEXT NOT NULL,
+    PRIMARY KEY(chat_id, cluster_key, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_chronicle_backfill_cluster_phrase
+    ON chronicle_backfill_cluster_phrases(chat_id, phrase);
+
 CREATE TABLE IF NOT EXISTS chronicle_metrics (
     name TEXT PRIMARY KEY,
     value INTEGER NOT NULL DEFAULT 0
@@ -123,5 +162,22 @@ CREATE TABLE IF NOT EXISTS chronicle_metrics (
 """
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_chronicle_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Production may already have the v1 Chronicle tables. Keep the migration
+    # additive so rolling forward does not destroy already saved events.
+    _ensure_column(conn, "chronicle_backfill_state", "scanned_messages", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "chronicle_backfill_state", "total_messages", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "chronicle_backfill_state", "queued_candidates", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(
+        conn,
+        "chronicle_backfill_state",
+        "strategy_version",
+        f"INTEGER NOT NULL DEFAULT {BACKFILL_STRATEGY_VERSION}",
+    )
