@@ -5,6 +5,19 @@ from __future__ import annotations
 
 DND_HELP_BLOCK = (
     "<b>🧙‍♂️ ДНД</b>\n"
+    "<code>упупа днд</code> / <code>упупа начни историю</code> - создать новую игру и выбрать режим\n"
+    "<code>днд</code> - снова показать открытое лобби с текущими участниками\n"
+    "<code>днд старт</code> - ведущему перейти к выбору сюжета\n"
+    "<code>герой</code> / <code>днд герой</code> - твой профиль, репутация и инвентарь\n"
+    "<code>инвентарь</code> / <code>днд инвентарь</code> - твои реальные вещи и артефакты\n"
+    "<code>днд связи</code> - важные сюжетные NPC и что связывает их с партией\n"
+    "<code>днд сюжет</code> - текущий сюжет, сцена, угроза и что сейчас ждём от игроков\n"
+    "<code>днд конец</code> - закончить сюжет\n"
+    "Команды состояния работают и между партиями: тогда показывается последнее сохранённое состояние."
+)
+
+_PREVIOUS_DND_HELP_BLOCK = (
+    "<b>🧙‍♂️ ДНД</b>\n"
     "<code>упупа днд</code> / <code>упупа начни историю</code> - начать ебучий сюжет в днд\n"
     "<code>мой герой</code> - твой текущий или последний сохранённый профиль и репутация\n"
     "<code>инвентарь</code> - твои реальные вещи и артефакты\n"
@@ -14,20 +27,23 @@ DND_HELP_BLOCK = (
     "Команды состояния работают и между партиями: тогда показывается последнее сохранённое состояние."
 )
 
+_OLD_SHORT_BLOCK = (
+    "<b>🧙‍♂️ ДНД</b>\n"
+    "<code>упупа начни историю</code> - начать ебучий сюжет в днд\n"
+    "<code>упупа заверши историю</code> / <code>упупа закончи историю</code> - закончить сюжет"
+)
+
 
 def install_dnd_help(help_texts_module) -> None:
-    """Заменить старый короткий D&D-блок на актуальный список команд."""
+    """Заменить старый D&D-блок на актуальный список команд."""
     section = help_texts_module.HELP_DICT.get("creative", "")
-    if "<code>мой герой</code>" in section and "<code>упупа днд</code>" in section:
+    if "<code>днд сюжет</code>" in section and "<code>днд конец</code>" in section:
         return
 
-    old_block = (
-        "<b>🧙‍♂️ ДНД</b>\n"
-        "<code>упупа начни историю</code> - начать ебучий сюжет в днд\n"
-        "<code>упупа заверши историю</code> / <code>упупа закончи историю</code> - закончить сюжет"
-    )
-    if old_block in section:
-        section = section.replace(old_block, DND_HELP_BLOCK, 1)
+    if _PREVIOUS_DND_HELP_BLOCK in section:
+        section = section.replace(_PREVIOUS_DND_HELP_BLOCK, DND_HELP_BLOCK, 1)
+    elif _OLD_SHORT_BLOCK in section:
+        section = section.replace(_OLD_SHORT_BLOCK, DND_HELP_BLOCK, 1)
     else:
         section = section.rstrip() + "\n\n" + DND_HELP_BLOCK
 

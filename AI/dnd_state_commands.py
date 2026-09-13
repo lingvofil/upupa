@@ -1,18 +1,24 @@
 """Read-only player-facing access to persistent DnD campaign state."""
 from __future__ import annotations
 
+import logging
+import re
+
 from aiogram import BaseMiddleware
 
 
 _STATE_ALIASES = {
-    "hero": {"мой герой", "упупа мой герой"},
-    "inventory": {"инвентарь", "упупа инвентарь"},
-    "npcs": {"наши знакомые", "упупа наши знакомые"},
-    "status": {"что происходит", "упупа что происходит"},
+    "hero": {"герой", "днд герой"},
+    "inventory": {"инвентарь", "днд инвентарь"},
+    "npcs": {"днд связи"},
+    "status": {"днд сюжет"},
 }
 _START_ALIASES = {"упупа днд"}
+_END_ALIASES = {"днд конец"}
+_LEGACY_END_ALIASES = {"упупа заверши историю", "упупа закончи историю"}
 _LOBBY_MENU_ALIASES = {"днд"}
 _LOBBY_START_ALIASES = {"днд старт"}
+_NPC_TAG_RE = re.compile(r"\[NPC:[^\]]*\]", re.I)
 
 _STATE_LABELS = {
     "WAITING_MODE": "выбираем режим егры",
@@ -46,6 +52,10 @@ def command_kind(text: str | None) -> str | None:
     normalized = _normalize_command(text)
     if normalized in _START_ALIASES:
         return "start"
+    if normalized in _END_ALIASES:
+        return "end"
+    if any(normalized == alias or normalized.startswith(alias + " ") for alias in _LEGACY_END_ALIASES):
+        return "legacy_end"
     if normalized in _LOBBY_START_ALIASES:
         return "lobby_start"
     if normalized in _LOBBY_MENU_ALIASES:
@@ -160,8 +170,9 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         profile = (getattr(session, "character_profiles", {}) or {}).get(key) or {}
         reputation = (getattr(session, "reputations", {}) or {}).get(key) or []
+        items = (getattr(session, "inventories", {}) or {}).get(key) or []
         name = _player_name(session, user_id, user_name)
-        lines = [f"🎭 Мой герой — {name}", "Источник: текущая егра."]
+        lines = [f"🎭 Мой герой — {name}"]
         profile_lines = _format_profile(profile)
         if profile_lines:
             lines.extend(profile_lines)
@@ -170,13 +181,15 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
         rep_text = _format_reputation(reputation)
         if rep_text:
             lines.append(f"🏷 Репутация: {rep_text}")
+        lines.append("🎒 Инвентарь")
+        lines.extend(_inventory_items(items) or ["Пусто."])
         return "\n".join(lines)
 
     history = campaign._player_history(chat_id, user_id)
     if not history:
         return "🎭 Героя пока нет: ты ещё не сохранился ни в одной завершённой егре этого чата."
 
-    lines = [f"🎭 Мой герой — {history.get('name') or user_name or 'Егрок'}", "Источник: последнее сохранённое состояние."]
+    lines = [f"🎭 Мой герой — {history.get('name') or user_name or 'Егрок'}"]
     profile_lines = _format_profile(history.get("profile"))
     if profile_lines:
         lines.extend(profile_lines)
@@ -188,6 +201,8 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
     adventures = history.get("adventures") or []
     if adventures:
         lines.append(f"📚 Завершённых приключений в памяти: {len(adventures)}")
+    lines.append("🎒 Инвентарь")
+    lines.extend(_inventory_items(history.get("inventory")) or ["Пусто."])
     return "\n".join(lines)
 
 
@@ -241,8 +256,54 @@ def _format_npcs(npc_memory: dict | None, *, limit: int = 12) -> list[str]:
             details.append(" / ".join(notes[-2:]))
         lines.append(f"• {name}" + (f" — {'; '.join(details)}" if details else ""))
     if len(values) > limit:
-        lines.append(f"…и ещё {len(values) - limit} знакомых в памяти.")
+        lines.append(f"…и ещё {len(values) - limit} персонажей в памяти.")
     return lines
+
+
+async def _repair_active_npc_memory(dnd, chat_id: int) -> None:
+    session = _active_session(dnd, chat_id)
+    if session is None:
+        return
+    campaign = _campaign_module(dnd)
+
+    # Recover only historical NPC tags. Replaying all metadata would apply old
+    # THREAT deltas a second time and could corrupt the live campaign state.
+    before = len(getattr(session, "npc_memory", {}) or {})
+    for item in getattr(session, "conversation", []) or []:
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        npc_tags = _NPC_TAG_RE.findall(str(item.get("content") or ""))
+        if npc_tags:
+            campaign._apply_metadata(session, "\n".join(npc_tags))
+    if len(getattr(session, "npc_memory", {}) or {}) > before:
+        dnd.persist_dnd_sessions()
+
+    if getattr(session, "npc_memory", {}) or {}:
+        return
+    scenes = [str(scene).strip() for scene in (getattr(session, "scene_log", []) or [])[-12:] if str(scene).strip()]
+    if not scenes:
+        return
+
+    participant_names = [
+        str(item.get("name") or "").strip()
+        for item in (getattr(session, "participants", {}) or {}).values()
+        if str(item.get("name") or "").strip()
+    ]
+    prompt = (
+        "Служебное восстановление связей D&D. Проанализируй ТОЛЬКО реальные сцены ниже и найди именованных NPC, "
+        "с которыми партия уже взаимодействовала. Игроков не считай NPC. Не выдумывай новых персонажей. "
+        "Для каждого найденного NPC верни отдельную строку строго в формате "
+        "[NPC:Имя;EVENT:кратко что связывает с партией;NOTE:последний важный факт]. "
+        "Если именованных NPC нет, ответь только NONE. Никаких ACTION-тегов и пояснений.\n"
+        f"ИГРОКИ: {', '.join(participant_names) or 'не указаны'}\n"
+        "СЦЕНЫ:\n" + "\n---\n".join(scenes)
+    )
+    try:
+        raw = await campaign._ephemeral_generate(dnd, session, prompt)
+        campaign._apply_metadata(session, raw)
+        dnd.persist_dnd_sessions()
+    except Exception:
+        logging.exception("DnD NPC memory repair failed chat_id=%s", chat_id)
 
 
 def render_npcs(dnd, chat_id: int) -> str:
@@ -250,16 +311,16 @@ def render_npcs(dnd, chat_id: int) -> str:
     session = _active_session(dnd, chat_id)
     if session is not None:
         memory = getattr(session, "npc_memory", {}) or {}
-        lines = ["🤝 Наши знакомые", "Источник: текущая егра."]
+        lines = ["🤝 Связи", "Источник: текущая егра."]
     else:
         latest = campaign._latest_campaign(chat_id)
         if not latest:
-            return "🤝 Знакомых пока нет: завершённых кампаний в этом чате не найдено."
+            return "🤝 Связей пока нет: завершённых кампаний в этом чате не найдено."
         memory = latest.get("npc_memory") or {}
-        lines = ["🤝 Наши знакомые", "Источник: последняя завершённая егра."]
+        lines = ["🤝 Связи", "Источник: последняя завершённая егра."]
 
     formatted = _format_npcs(memory)
-    lines.extend(formatted or ["Пока никого не запомнили. Социальный успех, хули."])
+    lines.extend(formatted or ["Пока ни одного сюжетного NPC не запомнили."])
     return "\n".join(lines)
 
 
@@ -396,12 +457,21 @@ class DndStateCommandMiddleware(BaseMiddleware):
         if chat is None or user is None or not hasattr(event, "answer"):
             return await handler(event, data)
 
+        if kind == "end":
+            await _repair_active_npc_memory(dnd, int(chat.id))
+            await dnd.cmd_stop_dnd(event)
+            return None
+        if kind == "legacy_end":
+            await event.answer("Команда завершения теперь — «днд конец».")
+            return None
         if kind == "lobby_menu":
             await _repost_lobby(event, dnd)
             return None
         if kind == "lobby_start":
             await _start_lobby_from_message(event, dnd)
             return None
+        if kind == "npcs":
+            await _repair_active_npc_memory(dnd, int(chat.id))
 
         text = render_state_command(
             kind,
@@ -415,7 +485,7 @@ class DndStateCommandMiddleware(BaseMiddleware):
 
 
 def configure_dnd_state_commands(dnd_router) -> None:
-    """Register state access before participant-completion middleware."""
+    """Register state access before DnD's action collector can treat them as moves."""
     if getattr(dnd_router, "_upupa_dnd_state_commands_configured", False):
         return
     dnd_router.message.outer_middleware(DndStateCommandMiddleware())
