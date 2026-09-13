@@ -187,7 +187,10 @@ def test_new_item_without_requested_effect_keeps_original_shape():
     _apply(session, "[ITEM:ADD;PLAYER:1;NAME:камень;KIND:item]")
 
     item = session.inventories["1"][0]
-    assert item == {"name": "камень", "kind": "item"}
+    assert item == {"name": "камень", "kind": "item", "quantity": 1}
+    assert "effect" not in item
+    assert "bonus_per_unit" not in item
+    assert "trait" not in item
     assert format_inventory_entry(item) == "камень"
 
 
