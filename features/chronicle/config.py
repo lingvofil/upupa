@@ -60,11 +60,18 @@ MAX_EVENTS_PER_24H = _int("UPUPA_CHRONICLE_MAX_EVENTS_PER_24H", 6, minimum=1)
 MAX_EVENTS_PER_USER_24H = _int("UPUPA_CHRONICLE_MAX_EVENTS_PER_USER_24H", 3, minimum=1)
 DISPLAY_EVENT_LIMIT = _int("UPUPA_CHRONICLE_DISPLAY_EVENT_LIMIT", 8, minimum=1)
 
-BACKFILL_BATCH_SIZE = _int("UPUPA_CHRONICLE_BACKFILL_BATCH_SIZE", 500, minimum=50)
+# Retrospective indexing is deliberately split into a full cheap local scan and
+# a bounded AI classification phase. BACKFILL_LOOKBACK_DAYS remains for env
+# compatibility but is no longer used to truncate managed history: the history
+# repository's retention/deletion policy is the source of truth.
+BACKFILL_BATCH_SIZE = _int("UPUPA_CHRONICLE_BACKFILL_BATCH_SIZE", 1000, minimum=100)
+BACKFILL_SCAN_BATCHES_PER_TICK = _int("UPUPA_CHRONICLE_BACKFILL_SCAN_BATCHES_PER_TICK", 4, minimum=1)
 BACKFILL_LOOKBACK_DAYS = _int("UPUPA_CHRONICLE_BACKFILL_LOOKBACK_DAYS", 3650, minimum=1)
-BACKFILL_MAX_AI_REQUESTS = _int("UPUPA_CHRONICLE_BACKFILL_MAX_AI_REQUESTS", 20, minimum=0)
+BACKFILL_MAX_AI_REQUESTS = _int("UPUPA_CHRONICLE_BACKFILL_MAX_AI_REQUESTS", 30, minimum=0)
+# Kept for compatibility with existing deployments; ranking is now global and
+# no longer queues this many candidates per individual scan batch.
 BACKFILL_MAX_CANDIDATES_PER_BATCH = _int(
     "UPUPA_CHRONICLE_BACKFILL_MAX_CANDIDATES_PER_BATCH", 2, minimum=1
 )
-BACKFILL_MIN_SCORE = _float("UPUPA_CHRONICLE_BACKFILL_MIN_SCORE", 4.5)
+BACKFILL_MIN_SCORE = _float("UPUPA_CHRONICLE_BACKFILL_MIN_SCORE", 3.8)
 BACKFILL_CLUSTER_GAP_SECONDS = _int("UPUPA_CHRONICLE_BACKFILL_CLUSTER_GAP_SECONDS", 480, minimum=60)
