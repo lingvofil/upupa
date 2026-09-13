@@ -151,13 +151,11 @@ class UpupaApplication:
         from features.proactive import proactive_loop
         from features.world.interactions import visit_expiration_loop
         from games import crocodile
-        from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
-        from games.crocodile_controls import configure_crocodile_controls
         from games.crocodile_persistence import (
             crocodile_session_persistence_loop,
             restore_crocodile_sessions,
         )
-        from games.crocodile_single_words import configure_crocodile_single_words
+        from games.crocodile_runtime import configure_crocodile_runtime
         from games.crocodile_socket_server import crocodile_socket_server_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
@@ -170,9 +168,7 @@ class UpupaApplication:
         configure_dnd_target_mentions()
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
-        configure_crocodile_controls()
-        configure_crocodile_single_words()
-        configure_crocodile_canvas_restore()
+        configure_crocodile_runtime()
         restore_dnd_sessions(self.bot)
         restore_crocodile_sessions()
         crocodile._scores_load()

@@ -301,9 +301,6 @@ def configure_crocodile_controls() -> None:
     if _configured:
         return
 
-    # Keep persistence's existing socket-room hardening and score paths active.
-    persistence.configure_crocodile_runtime()
-
     crocodile.get_game_keyboard = get_game_keyboard_with_previous
     crocodile.start_new_game = start_new_game_with_controls
     crocodile.handle_start_game = handle_start_game_with_controls
