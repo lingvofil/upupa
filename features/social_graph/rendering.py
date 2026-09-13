@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 import math
+from pathlib import Path
 import random
 import unicodedata
 from typing import Mapping
@@ -22,18 +23,22 @@ ASYMMETRY_RATIO = 1.75
 CRINGE_AVATAR_SIZE = 170
 CRINGE_AVATAR_RADIUS = CRINGE_AVATAR_SIZE // 2
 CRINGE_LABEL_MAX_WIDTH = 270
+SOCIAL_GRAPH_FONT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "assets"
+    / "fonts"
+    / "BerlinSansFBCyrillic-Regular.ttf"
+)
 
 
 def _load_font(size: int):
-    for candidate in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "DejaVuSans.ttf",
-    ):
-        try:
-            return ImageFont.truetype(candidate, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+    """Load the bundled Cyrillic font instead of relying on host system fonts."""
+    try:
+        return ImageFont.truetype(str(SOCIAL_GRAPH_FONT_PATH), size=size)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Bundled social-graph font is unavailable: {SOCIAL_GRAPH_FONT_PATH}"
+        ) from exc
 
 
 def _glyph_signature(font, char: str):
