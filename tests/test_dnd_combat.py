@@ -58,6 +58,29 @@ def test_ability_modifier_and_sheet_derive_hp_and_ac():
     assert sheet["status"] == "alive"
 
 
+def test_stats_are_sorted_descending_and_rendered_as_vertical_block():
+    stats = {
+        "STR": 8,
+        "DEX": 16,
+        "CON": 10,
+        "INT": 14,
+        "WIS": 12,
+        "CHA": 13,
+    }
+
+    assert combat._stats_line(stats) == (
+        "ЛОВ 16 (+3) · ИНТ 14 (+2) · ХАР 13 (+1) · МДР 12 (+1) · ТЕЛ 10 (+0) · СИЛ 8 (-1)"
+    )
+    assert combat._stats_block(stats) == (
+        "  Ловкость — 16 (+3)\n"
+        "  Интеллект — 14 (+2)\n"
+        "  Харизма — 13 (+1)\n"
+        "  Мудрость — 12 (+1)\n"
+        "  Телосложение — 10 (+0)\n"
+        "  Сила — 8 (-1)"
+    )
+
+
 def test_stats_payload_accepts_only_standard_array_per_hero():
     raw = (
         '{"1":{"STR":16,"DEX":14,"CON":13,"INT":12,"WIS":10,"CHA":8},'
