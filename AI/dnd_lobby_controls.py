@@ -50,6 +50,61 @@ def _clear_participant_session_state(session, user_id: int) -> None:
             value.pop(key, None)
 
 
+async def _leave_campaign(callback, dnd, campaign) -> None:
+    if not callback.message:
+        await callback.answer("Кнопка потерялась.")
+        return
+    session = dnd.dnd_sessions.get(callback.message.chat.id)
+    if not session or session.mode != "participants" or session.state != "LOBBY":
+        await callback.answer("Кампания уже началась — выйти через лобби поздно.", show_alert=True)
+        return
+
+    user_id = int(callback.from_user.id)
+    key = str(user_id)
+    if key not in session.participants:
+        await callback.answer("Ты и так не участвуешь.", show_alert=True)
+        return
+
+    session.participants.pop(key, None)
+    _clear_participant_session_state(session, user_id)
+    dnd.persist_dnd_sessions()
+    await callback.answer("Вышел из кампании.")
+    await campaign._refresh_lobby(session, callback.bot)
+
+
+async def _rebuild_character(callback, dnd, campaign) -> None:
+    if not callback.message:
+        await callback.answer("Кнопка потерялась.")
+        return
+    session = dnd.dnd_sessions.get(callback.message.chat.id)
+    if not session or session.mode != "participants" or session.state != "LOBBY":
+        await callback.answer("Кампания уже началась — персонаж зафиксирован.", show_alert=True)
+        return
+
+    user_id = int(callback.from_user.id)
+    key = str(user_id)
+    if key not in session.participants:
+        await callback.answer("Сначала нажми «Участвовать».", show_alert=True)
+        return
+
+    campaign._ensure(session)
+    session.character_profiles[key] = {}
+    session.profile_options.pop(key, None)
+    dnd.persist_dnd_sessions()
+    await callback.answer("Пересобираю персонажа.")
+    await campaign._refresh_lobby(session, callback.bot)
+
+    options = await campaign._generate_profile_options(dnd, session, user_id, "style")
+    await callback.message.answer(
+        campaign._profile_choice_text(
+            "style",
+            options,
+            heading="♻️ Пересобираем. Выбери",
+        ),
+        reply_markup=campaign._profile_keyboard(user_id, "style", options),
+    )
+
+
 def install_dnd_lobby_controls(dnd_router) -> None:
     """Add lobby buttons and callbacks once, after campaign mechanics are configured."""
     if getattr(dnd_router, "_upupa_dnd_lobby_controls_configured", False):
@@ -67,57 +122,10 @@ def install_dnd_lobby_controls(dnd_router) -> None:
     dnd._lobby_keyboard = lambda: lobby_keyboard()
 
     async def leave_callback(callback):
-        if not callback.message:
-            await callback.answer("Кнопка потерялась.")
-            return
-        session = dnd.dnd_sessions.get(callback.message.chat.id)
-        if not session or session.mode != "participants" or session.state != "LOBBY":
-            await callback.answer("Кампания уже началась — выйти через лобби поздно.", show_alert=True)
-            return
-
-        user_id = int(callback.from_user.id)
-        key = str(user_id)
-        if key not in session.participants:
-            await callback.answer("Ты и так не участвуешь.", show_alert=True)
-            return
-
-        session.participants.pop(key, None)
-        _clear_participant_session_state(session, user_id)
-        dnd.persist_dnd_sessions()
-        await callback.answer("Вышел из кампании.")
-        await campaign._refresh_lobby(session, callback.bot)
+        await _leave_campaign(callback, dnd, campaign)
 
     async def rebuild_callback(callback):
-        if not callback.message:
-            await callback.answer("Кнопка потерялась.")
-            return
-        session = dnd.dnd_sessions.get(callback.message.chat.id)
-        if not session or session.mode != "participants" or session.state != "LOBBY":
-            await callback.answer("Кампания уже началась — персонаж зафиксирован.", show_alert=True)
-            return
-
-        user_id = int(callback.from_user.id)
-        key = str(user_id)
-        if key not in session.participants:
-            await callback.answer("Сначала нажми «Участвовать».", show_alert=True)
-            return
-
-        campaign._ensure(session)
-        session.character_profiles[key] = {}
-        session.profile_options.pop(key, None)
-        dnd.persist_dnd_sessions()
-        await callback.answer("Пересобираю персонажа.")
-        await campaign._refresh_lobby(session, callback.bot)
-
-        options = await campaign._generate_profile_options(dnd, session, user_id, "style")
-        await callback.message.answer(
-            campaign._profile_choice_text(
-                "style",
-                options,
-                heading="♻️ Пересобираем. Выбери",
-            ),
-            reply_markup=campaign._profile_keyboard(user_id, "style", options),
-        )
+        await _rebuild_character(callback, dnd, campaign)
 
     dnd_router.callback_query.register(leave_callback, F.data == _LEAVE_CALLBACK)
     dnd_router.callback_query.register(rebuild_callback, F.data == _REBUILD_CALLBACK)
