@@ -16,7 +16,6 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "configure_crocodile_controls()",
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
-        "configure_crocodile_party_state()",
         "persistence.configure_crocodile_persistence_dependencies(",
         "configure_crocodile_party_controls()",
         "configure_crocodile_duo_opt_in()",
@@ -56,7 +55,7 @@ def test_crocodile_installers_do_not_compose_other_installers():
     assert "configure_crocodile_telephone_role_announcements()" not in skip
 
 
-def test_party_state_does_not_assign_into_persistence_module():
+def test_party_state_does_not_assign_into_runtime_modules():
     state_source = _source("games/crocodile_party_state.py")
     tree = ast.parse(state_source)
     assigned = []
@@ -71,18 +70,29 @@ def test_party_state_does_not_assign_into_persistence_module():
             if (
                 isinstance(target, ast.Attribute)
                 and isinstance(target.value, ast.Name)
-                and target.value.id == "persistence"
+                and target.value.id in {"persistence", "crocodile_modes"}
             ):
-                assigned.append(target.attr)
+                assigned.append((target.value.id, target.attr))
 
     assert assigned == []
     assert "configure_crocodile_persistence_dependencies(" not in state_source
+    assert "configure_crocodile_party_state" not in state_source
+    assert "_original_start_duel_vote" not in state_source
+    assert "_start_duel_vote_with_deadline" not in state_source
 
     runtime_source = _source("games/crocodile_runtime.py")
     assert runtime_source.count(
         "persistence.configure_crocodile_persistence_dependencies("
     ) == 1
     assert "party_state.crocodile_persistence_dependencies()" in runtime_source
+    assert "configure_crocodile_party_state" not in runtime_source
+
+
+def test_duel_vote_deadline_is_owned_by_modes():
+    modes_source = _source("games/crocodile_modes.py")
+    assert modes_source.count(
+        'duel["vote_deadline"] = time.time() + DUEL_VOTE_SECONDS'
+    ) == 1
 
 
 def test_bootstrap_uses_single_crocodile_composition_entrypoint():

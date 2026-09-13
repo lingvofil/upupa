@@ -436,6 +436,7 @@ async def _start_duel_vote(chat_id: str, duel: dict) -> None:
     duel["vote_task"] = crocodile._start_background_task(
         _duel_vote_timer(chat_id, duel), name=f"crocodile-duel-vote:{chat_id}"
     )
+    duel["vote_deadline"] = time.time() + DUEL_VOTE_SECONDS
 
 
 async def _duel_vote_timer(chat_id: str, duel: dict) -> None:
