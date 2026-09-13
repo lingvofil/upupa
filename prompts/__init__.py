@@ -8,8 +8,10 @@
 """
 from prompts import help_texts as _help_texts
 from prompts.dnd_help import install_dnd_help
+from prompts.social_help import install_social_memory_help
 
 install_dnd_help(_help_texts)
+install_social_memory_help(_help_texts)
 HELP_DICT = _help_texts.HELP_DICT
 HELP_TEXT = _help_texts.HELP_TEXT
 

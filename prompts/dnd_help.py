@@ -10,6 +10,7 @@ DND_HELP_BLOCK = (
     "<code>днд старт</code> - ведущему перейти к выбору сюжета\n"
     "<code>герой</code> / <code>днд герой</code> - твой профиль, репутация и инвентарь\n"
     "<code>инвентарь</code> / <code>днд инвентарь</code> - твои реальные вещи и артефакты\n"
+    "<code>передать [предмет]</code> / <code>отдать [предмет]</code> (реплаем) - передать вещь или артефакт другому игроку; количество можно указать числом\n"
     "<code>днд связи</code> - важные сюжетные NPC и что связывает их с партией\n"
     "<code>днд сюжет</code> - текущий сюжет, сцена, угроза и что сейчас ждём от игроков\n"
     "<code>днд конец</code> - закончить сюжет\n"
@@ -37,7 +38,11 @@ _OLD_SHORT_BLOCK = (
 def install_dnd_help(help_texts_module) -> None:
     """Заменить старый D&D-блок на актуальный список команд."""
     section = help_texts_module.HELP_DICT.get("creative", "")
-    if "<code>днд сюжет</code>" in section and "<code>днд конец</code>" in section:
+    if (
+        "<code>днд сюжет</code>" in section
+        and "<code>днд конец</code>" in section
+        and "<code>передать [предмет]</code>" in section
+    ):
         return
 
     if _PREVIOUS_DND_HELP_BLOCK in section:
