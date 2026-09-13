@@ -179,6 +179,28 @@ def _batch_phrase_map(clusters: list[dict]) -> dict[str, tuple[int, datetime, li
     }
 
 
+def _diversify_ranked(ranked: list[dict], limit: int) -> list[dict]:
+    """Keep one strongest occurrence per recurring meme before filling AI slots.
+
+    A repeated catchphrase can create many high-scoring clusters. Sending every
+    occurrence to AI wastes the bounded budget and crowds out unrelated history.
+    Non-recurring clusters remain independently eligible.
+    """
+    selected: list[dict] = []
+    seen_memes: set[str] = set()
+    for cluster in ranked:
+        phrases = [str(item) for item in cluster.get("recurring_phrases", []) if item]
+        signature = phrases[0] if phrases else None
+        if signature and signature in seen_memes:
+            continue
+        if signature:
+            seen_memes.add(signature)
+        selected.append(cluster)
+        if len(selected) >= max(0, int(limit)):
+            break
+    return selected
+
+
 async def _scan_one_batch(
     state: dict,
     *,
@@ -231,12 +253,17 @@ async def _promote_ranked_candidates(
     candidate_store: SQLiteChronicleCandidateStore,
     backfill_store: SQLiteChronicleBackfillStore,
 ) -> int:
-    ranked = await asyncio.to_thread(
+    budget = config.BACKFILL_MAX_AI_REQUESTS
+    # Fetch a wider globally ranked pool before diversification. This prevents a
+    # single catchphrase with many occurrences from occupying all top-N rows.
+    pool_limit = max(budget, budget * 20)
+    ranked_pool = await asyncio.to_thread(
         backfill_store.top_clusters,
         chat_id,
-        limit=config.BACKFILL_MAX_AI_REQUESTS,
+        limit=pool_limit,
         min_score=config.BACKFILL_MIN_SCORE,
     )
+    ranked = _diversify_ranked(ranked_pool, budget)
     now = datetime.now(timezone.utc)
     queued = 0
     for cluster in ranked:
