@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from tests import test_smoke_imports
+
+# Import is intentionally side-effect-only: it installs fake env values and
+# mocks heavyweight optional libraries before the modules below are imported.
+del test_smoke_imports
 
 from features.song import hf_yue2 as yue2
 from features.social_graph import rendering
