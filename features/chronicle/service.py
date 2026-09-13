@@ -268,18 +268,20 @@ async def finalize_candidate(candidate: ChronicleCandidate) -> str | None:
         return None
     now = datetime.now(timezone.utc)
     since_day = now - timedelta(hours=24)
-    event_count = await asyncio.to_thread(event_store.count_since, candidate.chat_id, since_day)
-    if event_count >= config.MAX_EVENTS_PER_24H and candidate.score < config.SAVE_THRESHOLD + 2:
-        await asyncio.to_thread(candidate_store.mark_candidate, candidate.id, "rejected", "daily_cap")
-        return None
-    latest = await asyncio.to_thread(event_store.latest_created_at, candidate.chat_id)
-    if latest and now - latest < timedelta(seconds=config.COOLDOWN_SECONDS) and candidate.score < config.SAVE_THRESHOLD + 2:
-        await asyncio.to_thread(candidate_store.mark_candidate, candidate.id, "rejected", "cooldown")
-        return None
+    is_backfill = candidate.source == "backfill"
+    if not is_backfill:
+        event_count = await asyncio.to_thread(event_store.count_since, candidate.chat_id, since_day)
+        if event_count >= config.MAX_EVENTS_PER_24H and candidate.score < config.SAVE_THRESHOLD + 2:
+            await asyncio.to_thread(candidate_store.mark_candidate, candidate.id, "rejected", "daily_cap")
+            return None
+        latest = await asyncio.to_thread(event_store.latest_created_at, candidate.chat_id)
+        if latest and now - latest < timedelta(seconds=config.COOLDOWN_SECONDS) and candidate.score < config.SAVE_THRESHOLD + 2:
+            await asyncio.to_thread(candidate_store.mark_candidate, candidate.id, "rejected", "cooldown")
+            return None
     context = await asyncio.to_thread(_load_context, candidate)
     _augment_people(candidate, context)
     candidate_store.metric("chronicle_ai_requests_total")
-    if candidate.source == "backfill":
+    if is_backfill:
         await asyncio.to_thread(backfill_store.update, candidate.chat_id, ai_requests_delta=1)
     decision = await classify_candidate(candidate, context)
     if decision.reason == "ai_error":
@@ -306,7 +308,7 @@ async def finalize_candidate(candidate: ChronicleCandidate) -> str | None:
     people = [item for item in candidate.metadata.get("participants", []) if isinstance(item, dict) and int(item.get("id", -1)) in selected]
     if not people:
         people = list(candidate.metadata.get("participants", []))
-    if len(selected) == 1 and selected:
+    if not is_backfill and len(selected) == 1 and selected:
         sole = next(iter(selected))
         count = await asyncio.to_thread(event_store.participant_count_since, candidate.chat_id, sole, since_day)
         if count >= config.MAX_EVENTS_PER_USER_24H and importance < config.SAVE_THRESHOLD + 2:
