@@ -96,12 +96,12 @@ def test_leave_campaign_removes_participant_and_pregame_character_state():
     assert callback.answers[0][0] == "Вышел из кампании."
 
 
-def test_rebuild_character_clears_profile_and_starts_fresh_style_choice():
+def test_rebuild_character_clears_profile_and_starts_with_gender_choice():
     session = _session()
     dnd = FakeDnd(session)
     callback = FakeCallback(session)
     refreshed = []
-    generated = ["новый один", "новый два", "новый три", "новый четыре", "новый пять"]
+    generated = ["мужской", "женский"]
 
     def ensure(target_session):
         assert target_session is session
@@ -112,14 +112,14 @@ def test_rebuild_character_clears_profile_and_starts_fresh_style_choice():
     async def generate_profile_options(_dnd, target_session, user_id, step):
         assert target_session is session
         assert user_id == 1
-        assert step == "style"
+        assert step == "gender"
         assert target_session.character_profiles["1"] == {}
         assert "1" not in target_session.profile_options
-        target_session.profile_options["1"] = {"style": list(generated)}
+        target_session.profile_options["1"] = {"gender": list(generated)}
         return list(generated)
 
     def choice_text(step, options, heading):
-        assert step == "style"
+        assert step == "gender"
         assert options == generated
         return f"{heading}: " + " | ".join(options)
 
@@ -137,12 +137,28 @@ def test_rebuild_character_clears_profile_and_starts_fresh_style_choice():
     asyncio.run(controls._rebuild_character(callback, dnd, campaign))
 
     assert session.character_profiles["1"] == {}
-    assert session.profile_options["1"]["style"] == generated
+    assert session.profile_options["1"]["gender"] == generated
     assert dnd.persist_calls == 1
     assert refreshed and refreshed[0][0] is session
     assert callback.answers[0][0] == "Пересобираю персонажа."
     assert callback.message.answers[0][0].startswith("♻️ Пересобираем. Выбери")
-    assert callback.message.answers[0][1] == (1, "style", tuple(generated))
+    assert callback.message.answers[0][1] == (1, "gender", tuple(generated))
+
+
+def test_gender_context_is_added_to_later_profile_generation():
+    session = SimpleNamespace(character_profiles={"7": {"gender": "женский"}})
+
+    prompt = controls._with_gender_context("base prompt", session, 7, "style")
+
+    assert "Пол персонажа уже выбран: женский" in prompt
+    assert "согласуй слова по роду" in prompt
+    assert controls._with_gender_context("gender prompt", session, 7, "gender") == "gender prompt"
+
+
+def test_gender_context_is_not_added_before_gender_is_chosen():
+    session = SimpleNamespace(character_profiles={"7": {}})
+
+    assert controls._with_gender_context("base prompt", session, 7, "style") == "base prompt"
 
 
 def test_lobby_controls_are_blocked_after_campaign_start():
