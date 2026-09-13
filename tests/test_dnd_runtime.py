@@ -1,37 +1,36 @@
-import pytest
+from pathlib import Path
 
 from tests import test_smoke_imports
 
 del test_smoke_imports
 
-from AI import dnd_completion
-from AI.dnd_runtime import isolated_completion_middleware_class
+from AI.dnd_completion import DndCompletionPolicy, DndParticipantCompletionMiddleware
 
 
-def test_runtime_completion_class_is_private_and_restored():
-    base_class = dnd_completion.DndParticipantCompletionMiddleware
-    base_expected_ids = base_class._expected_ids
-
-    with isolated_completion_middleware_class() as runtime_class:
-        assert runtime_class is dnd_completion.DndParticipantCompletionMiddleware
-        assert runtime_class is not base_class
-        assert issubclass(runtime_class, base_class)
-
-        runtime_class._expected_ids = staticmethod(lambda *_args: {999})
-
-        assert runtime_class._expected_ids(None, None, None) == {999}
-        assert base_class._expected_ids is base_expected_ids
-
-    assert dnd_completion.DndParticipantCompletionMiddleware is base_class
-    assert base_class._expected_ids is base_expected_ids
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_completion_class_is_restored_after_installer_failure():
-    base_class = dnd_completion.DndParticipantCompletionMiddleware
+def test_completion_policy_is_instance_dependency():
+    policy = DndCompletionPolicy()
+    middleware = DndParticipantCompletionMiddleware(policy=policy)
 
-    with pytest.raises(RuntimeError, match="installer failed"):
-        with isolated_completion_middleware_class() as runtime_class:
-            assert dnd_completion.DndParticipantCompletionMiddleware is runtime_class
-            raise RuntimeError("installer failed")
+    assert middleware.policy is policy
+    assert DndParticipantCompletionMiddleware().policy is not policy
 
-    assert dnd_completion.DndParticipantCompletionMiddleware is base_class
+
+def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation():
+    campaign_source = (ROOT / "AI" / "dnd_campaign.py").read_text(encoding="utf-8")
+    combat_source = (ROOT / "AI" / "dnd_combat.py").read_text(encoding="utf-8")
+    runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+
+    assert "completion_policy.after_participant_joined" in campaign_source
+    assert "DndParticipantCompletionMiddleware._precollect_action_reply" not in campaign_source
+    assert "old_precollect =" not in campaign_source
+
+    assert "completion_policy.filter_expected_ids" in combat_source
+    assert "DndParticipantCompletionMiddleware._expected_ids" not in combat_source
+    assert "original_expected =" not in combat_source
+
+    assert "DndCompletionPolicy()" in runtime_source
+    assert "isolated_completion_middleware_class" not in runtime_source
+    assert "middleware_class=" not in runtime_source
