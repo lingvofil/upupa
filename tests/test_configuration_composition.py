@@ -106,19 +106,27 @@ def test_optional_provider_fails_only_when_requested(monkeypatch):
 
 def test_dnd_runtime_composition_is_owned_by_bootstrap():
     bootstrap_source = (ROOT / "app" / "bootstrap.py").read_text(encoding="utf-8")
+    runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+    completion_source = (ROOT / "AI" / "dnd_completion.py").read_text(encoding="utf-8")
     style_source = (ROOT / "AI" / "dnd_style.py").read_text(encoding="utf-8")
     mentions_source = (ROOT / "AI" / "dnd_target_mentions.py").read_text(encoding="utf-8")
 
-    completion_call = "configure_dnd_completion(dnd_router)"
+    runtime_call = "configure_dnd_runtime()"
     style_call = "configure_dnd_style()"
     agency_call = "configure_dnd_player_agency()"
     mentions_call = "configure_dnd_target_mentions()"
 
-    assert "from AI.dnd_completion import configure_dnd_completion" in bootstrap_source
+    assert "from AI.dnd_runtime import configure_dnd_runtime" in bootstrap_source
     assert "from AI.dnd_player_agency import configure_dnd_player_agency" in bootstrap_source
-    assert completion_call in bootstrap_source
-    assert bootstrap_source.index(completion_call) < bootstrap_source.index(style_call)
+    assert runtime_call in bootstrap_source
+    assert bootstrap_source.index(runtime_call) < bootstrap_source.index(style_call)
     assert bootstrap_source.index(style_call) < bootstrap_source.index(agency_call)
     assert bootstrap_source.index(agency_call) < bootstrap_source.index(mentions_call)
+
+    assert "configure_dnd_campaign(dnd, router)" in runtime_source
+    assert "install_dnd_combat(router)" in runtime_source
+    assert "with isolated_completion_middleware_class()" in runtime_source
+    assert "from AI.dnd_campaign" not in completion_source
+    assert "from AI.dnd_combat" not in completion_source
     assert "configure_dnd_completion" not in style_source
     assert "configure_dnd_player_agency" not in mentions_source

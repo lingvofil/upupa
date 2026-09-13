@@ -320,21 +320,14 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             )
 
 
-def configure_dnd_completion(dnd_router) -> None:
-    """Attach participant completion middleware and DnD generation guards once."""
+def configure_dnd_completion(dnd_router, *, middleware_class=None) -> None:
+    """Attach only participant completion middleware and its generation guard."""
     if getattr(dnd_router, "_upupa_dnd_completion_configured", False):
         return
 
     from AI import dnd
-    from AI.dnd_campaign import configure_dnd_campaign
-    from AI.dnd_combat import install_dnd_combat
-    from AI.dnd_healing_choice import install_dnd_healing_choice
-    from AI.dnd_inventory_fun import install_fun_inventory
-    from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
-    from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_state_commands import configure_dnd_state_commands
 
-    install_fun_inventory()
     original_generate_session_response = dnd.generate_session_response
 
     async def generate_with_participant_context(session, prompt: str) -> str:
@@ -345,25 +338,34 @@ def configure_dnd_completion(dnd_router) -> None:
         )
 
     dnd.generate_session_response = generate_with_participant_context
+    dnd._upupa_dnd_participant_generate = generate_with_participant_context
 
     # State queries and the short start alias must run before action collection,
     # otherwise a reply like «Мой герой» can become an in-game move.
     configure_dnd_state_commands(dnd_router)
-    middleware = DndParticipantCompletionMiddleware()
+    middleware_type = middleware_class or DndParticipantCompletionMiddleware
+    middleware = middleware_type()
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)
-    configure_dnd_campaign(dnd, dnd_router)
-    install_dnd_lobby_controls(dnd_router)
-    install_dnd_combat(dnd_router)
-    install_dnd_healing_choice(dnd_router)
-    install_dnd_inventory_reliability(dnd)
+    dnd_router._upupa_dnd_completion_middleware = middleware
+    dnd_router._upupa_dnd_completion_configured = True
+
+
+def configure_dnd_campaign_compat(dnd) -> None:
+    """Preserve lightweight test/dummy sessions after campaign generation is installed."""
+    if getattr(dnd, "_upupa_dnd_campaign_compat_configured", False):
+        return
+
+    participant_generate = getattr(dnd, "_upupa_dnd_participant_generate", None)
+    if participant_generate is None:
+        raise RuntimeError("DnD completion must be configured before campaign compatibility")
 
     campaign_generate_session_response = dnd.generate_session_response
 
     async def generate_with_campaign_compat(session, prompt: str) -> str:
         if not hasattr(session, "conversation"):
-            return await generate_with_participant_context(session, prompt)
+            return await participant_generate(session, prompt)
         return await campaign_generate_session_response(session, prompt)
 
     dnd.generate_session_response = generate_with_campaign_compat
-    dnd_router._upupa_dnd_completion_configured = True
+    dnd._upupa_dnd_campaign_compat_configured = True
