@@ -1,18 +1,19 @@
-"""Integrated relationship history built from durable relationship and Chronicle data.
+"""Integrated relationship history built from existing durable data sources.
 
-This module deliberately does not read the raw chat history.  It assembles a
-pair timeline from the relationship snapshots that already exist in the social
-graph and Chronicle events that already include both participants.  External
-game/social events are therefore included automatically when they were saved
-through Chronicle's universal external-candidate entry point.
+The service deliberately does not read or re-analyse raw chat messages.  It
+assembles a pair timeline from relationship snapshots, Chronicle events and
+small read-only adapters registered by modules that already persist their own
+social/game events.  The adapters expose existing records; this module does not
+copy them into a third store.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 import re
-from typing import Iterable
 
 from features.chronicle.models import ChronicleEvent
 from features.social_graph.relationships import (
@@ -22,9 +23,26 @@ from features.social_graph.relationships import (
 )
 
 
-MAX_TIMELINE_ITEMS = 12
+MAX_TIMELINE_ITEMS = 10
 _SNAPSHOT_CHRONICLE_WINDOW = timedelta(hours=36)
+_EVENT_MATCH_WINDOW = timedelta(hours=24)
 _WORD_RE = re.compile(r"[\wа-яё]+", re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class SharedRelationshipEvent:
+    """Normalized view over an event already persisted by another module."""
+
+    timestamp: datetime
+    event_type: str
+    title: str
+    summary: str
+    source: str
+    priority: int = 60
+
+
+SharedEventProvider = Callable[[int, int, int], Iterable[SharedRelationshipEvent]]
+_shared_event_providers: dict[str, SharedEventProvider] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +61,31 @@ class RelationshipHistory:
     view: RelationshipView
     snapshots: tuple[RelationshipSnapshot, ...]
     timeline: tuple[RelationshipTimelineItem, ...]
+
+
+def register_shared_relationship_event_provider(name: str, provider: SharedEventProvider) -> None:
+    """Register an idempotent read-only adapter for another module's persisted events."""
+    key = str(name or "").strip().casefold()
+    if not key:
+        raise ValueError("shared relationship event provider name is required")
+    _shared_event_providers[key] = provider
+
+
+def list_shared_relationship_events(chat_id: int, user_a_id: int, user_b_id: int) -> tuple[SharedRelationshipEvent, ...]:
+    events: list[SharedRelationshipEvent] = []
+    for name, provider in tuple(_shared_event_providers.items()):
+        try:
+            events.extend(provider(int(chat_id), int(user_a_id), int(user_b_id)) or ())
+        except Exception as exc:
+            logging.warning("Relationship shared-event provider failed provider=%s: %s", name, exc)
+    return tuple(events)
+
+
+def _short_text(value: str, limit: int = 320) -> str:
+    compact = " ".join(str(value or "").split()).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
 
 
 def _snapshot_summary(previous: RelationshipSnapshot, current: RelationshipSnapshot) -> tuple[str, str] | None:
@@ -122,13 +165,13 @@ def _snapshot_items(snapshots: Iterable[RelationshipSnapshot]) -> list[Relations
 def _chronicle_items(events: Iterable[ChronicleEvent]) -> list[RelationshipTimelineItem]:
     items = []
     for event in events:
-        summary = event.summary.strip() or "Событие попало в Летопись без отдельного описания."
+        summary = _short_text(event.summary) or "Событие попало в Летопись без отдельного описания."
         source = f"chronicle:{event.source or 'unknown'}"
         items.append(
             RelationshipTimelineItem(
                 timestamp=event.event_started_at,
                 event_type=f"chronicle_{event.category}",
-                title=event.title.strip() or "Событие из Летописи",
+                title=_short_text(event.title, 160) or "Событие из Летописи",
                 summary=summary,
                 source=source,
                 priority=100 + int(max(0.0, min(99.0, event.importance_score))),
@@ -138,20 +181,36 @@ def _chronicle_items(events: Iterable[ChronicleEvent]) -> list[RelationshipTimel
     return items
 
 
+def _shared_items(events: Iterable[SharedRelationshipEvent]) -> list[RelationshipTimelineItem]:
+    return [
+        RelationshipTimelineItem(
+            timestamp=event.timestamp,
+            event_type=event.event_type,
+            title=_short_text(event.title, 160) or "Совместное событие",
+            summary=_short_text(event.summary) or "Сохранённое совместное событие.",
+            source=event.source,
+            priority=max(0, min(99, int(event.priority))),
+        )
+        for event in events
+    ]
+
+
 def _normalized_tokens(value: str) -> set[str]:
     return {token.casefold() for token in _WORD_RE.findall(value) if len(token) >= 3}
 
 
-def _same_chronicle_event(left: RelationshipTimelineItem, right: RelationshipTimelineItem) -> bool:
-    if left.chronicle_event is None or right.chronicle_event is None:
-        return False
-    if left.chronicle_event.id == right.chronicle_event.id:
-        return True
-    left_messages = set(left.chronicle_event.source_message_ids)
-    right_messages = set(right.chronicle_event.source_message_ids)
-    if left_messages and right_messages and left_messages.intersection(right_messages):
-        return True
-    if abs(left.timestamp - right.timestamp) > timedelta(hours=18):
+def _same_event(left: RelationshipTimelineItem, right: RelationshipTimelineItem) -> bool:
+    left_event = left.chronicle_event
+    right_event = right.chronicle_event
+    if left_event is not None and right_event is not None:
+        if left_event.id == right_event.id:
+            return True
+        left_messages = set(left_event.source_message_ids)
+        right_messages = set(right_event.source_message_ids)
+        if left_messages and right_messages and left_messages.intersection(right_messages):
+            return True
+
+    if abs(left.timestamp - right.timestamp) > _EVENT_MATCH_WINDOW:
         return False
     left_tokens = _normalized_tokens(f"{left.title} {left.summary}")
     right_tokens = _normalized_tokens(f"{right.title} {right.summary}")
@@ -163,30 +222,37 @@ def _same_chronicle_event(left: RelationshipTimelineItem, right: RelationshipTim
 
 def _deduplicate(items: Iterable[RelationshipTimelineItem]) -> list[RelationshipTimelineItem]:
     chronicle: list[RelationshipTimelineItem] = []
+    shared: list[RelationshipTimelineItem] = []
     snapshots: list[RelationshipTimelineItem] = []
+
     for item in sorted(items, key=lambda value: (value.timestamp, -value.priority)):
-        if item.chronicle_event is None:
+        if item.source == "relationship_snapshot":
             snapshots.append(item)
             continue
+        target = chronicle if item.chronicle_event is not None else shared
         duplicate_index = next(
-            (index for index, existing in enumerate(chronicle) if _same_chronicle_event(existing, item)),
+            (index for index, existing in enumerate(target) if _same_event(existing, item)),
             None,
         )
         if duplicate_index is None:
-            chronicle.append(item)
-        elif item.priority > chronicle[duplicate_index].priority:
-            chronicle[duplicate_index] = item
+            target.append(item)
+        elif item.priority > target[duplicate_index].priority:
+            target[duplicate_index] = item
+
+    # Chronicle is the richest normalized record.  If a module-specific event
+    # describes the same real episode, keep Chronicle only.
+    shared = [item for item in shared if not any(_same_event(item, event) for event in chronicle)]
 
     # A relationship snapshot commonly reflects a Chronicle event that happened
-    # just before somebody asked for the relationship card.  In that case the
-    # Chronicle entry is the richer record and wins instead of showing the same
-    # real-world episode twice.
-    filtered_snapshots = [
+    # just before somebody asked for the relationship card.  The Chronicle row is
+    # more useful to the user, so avoid a second generic timeline item nearby.
+    snapshots = [
         snapshot
         for snapshot in snapshots
         if not any(abs(snapshot.timestamp - event.timestamp) <= _SNAPSHOT_CHRONICLE_WINDOW for event in chronicle)
     ]
-    result = [*chronicle, *filtered_snapshots]
+
+    result = [*chronicle, *shared, *snapshots]
     result.sort(key=lambda item: item.timestamp)
     return result[-MAX_TIMELINE_ITEMS:]
 
@@ -194,11 +260,13 @@ def _deduplicate(items: Iterable[RelationshipTimelineItem]) -> list[Relationship
 def assemble_relationship_history(
     view: RelationshipView,
     snapshots: Iterable[RelationshipSnapshot],
+    shared_events: Iterable[SharedRelationshipEvent] = (),
 ) -> RelationshipHistory:
     snapshot_tuple = tuple(snapshots)
     timeline = _deduplicate([
         *_snapshot_items(snapshot_tuple),
         *_chronicle_items(view.shared_events),
+        *_shared_items(shared_events),
     ])
     return RelationshipHistory(view=view, snapshots=snapshot_tuple, timeline=tuple(timeline))
 
@@ -212,4 +280,5 @@ async def get_integrated_relationship_history(
     view, snapshots = await get_relationship_history(chat_id, user_a_id, user_b_id)
     if view is None:
         return None
-    return assemble_relationship_history(view, snapshots)
+    shared_events = list_shared_relationship_events(chat_id, user_a_id, user_b_id)
+    return assemble_relationship_history(view, snapshots, shared_events)
