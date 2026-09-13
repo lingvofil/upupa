@@ -51,7 +51,33 @@ def _event_date(value) -> str:
     return f"{local.day} {months[local.month - 1]}"
 
 
-def _format(message: types.Message, events, target_label: str | None) -> str:
+def _backfill_progress(state: dict | None) -> str | None:
+    if not state:
+        return None
+    status = str(state.get("status") or "")
+    if status == "completed":
+        return None
+    if status in {"pending", "running"}:
+        return "⏳ Ретроспектива: готовлю первичный индекс доступной истории чата."
+    if status == "scanning":
+        scanned = max(0, int(state.get("scanned_messages") or 0))
+        total = max(0, int(state.get("total_messages") or 0))
+        if total:
+            percent = min(100, round(scanned * 100 / total))
+            return f"⏳ Ретроспектива: локально просмотрено {scanned} из {total} сообщений ({percent}%)."
+        return f"⏳ Ретроспектива: локально просмотрено {scanned} сообщений."
+    if status == "ranking":
+        return "⏳ Ретроспектива: локальный проход завершён, ранжирую самые сильные эпизоды."
+    if status == "classifying":
+        done = max(0, int(state.get("ai_requests") or 0))
+        queued = max(0, int(state.get("queued_candidates") or 0))
+        if queued:
+            return f"⏳ Ретроспектива: вся доступная история просмотрена; проверяю лучшие эпизоды через AI ({min(done, queued)}/{queued})."
+        return "⏳ Ретроспектива: вся доступная история просмотрена; проверяю лучшие эпизоды через AI."
+    return "⏳ Ретроспективная индексация истории ещё идёт."
+
+
+def _format(message: types.Message, events, target_label: str | None, progress: str | None = None) -> str:
     header = "📜 <b>Летопись чата</b>" if target_label is None else f"📜 <b>Летопись {escape(target_label)}</b>"
     lines = [header]
     for event in events:
@@ -61,6 +87,8 @@ def _format(message: types.Message, events, target_label: str | None) -> str:
         url = _message_url(message, event.anchor_message_id)
         if url:
             lines.append(f'<a href="{escape(url, quote=True)}">↗ к месту преступления</a>')
+    if progress:
+        lines.extend(["", escape(progress)])
     return "\n".join(lines)
 
 
@@ -73,7 +101,7 @@ async def handle_chronicle(message: types.Message):
         await message.reply("📜 Летопись сейчас отключена.")
         return
 
-    await request_backfill(message.chat.id)
+    backfill_state = await request_backfill(message.chat.id)
     _kind, username = _command_kind(message) or ("chronicle", None)
     user_id: int | None = None
     target_label: str | None = None
@@ -91,7 +119,22 @@ async def handle_chronicle(message: types.Message):
         user_id=user_id,
         username=username,
     )
+    progress = _backfill_progress(backfill_state)
     if not events:
+        if progress:
+            subject = f" для {target_label}" if target_label else ""
+            await message.reply(f"📜 Пока готовых событий{subject} нет.\n{progress}")
+            return
+        if backfill_state and backfill_state.get("status") == "completed":
+            if target_label:
+                await message.reply(
+                    f"📜 Первичный просмотр доступной истории завершён. Для {target_label} ничего достаточно значимого не отобралось."
+                )
+            else:
+                await message.reply(
+                    "📜 Первичный просмотр всей доступной истории завершён, но достаточно сильных событий пока не нашлось. Новые события продолжаю ловить вживую."
+                )
+            return
         if target_label:
             await message.reply(
                 "Летопись молчит. Пока что этот гражданин исторических преступлений не совершал."
@@ -103,7 +146,7 @@ async def handle_chronicle(message: types.Message):
         return
 
     await message.reply(
-        _format(message, events, target_label),
+        _format(message, events, target_label, progress),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
