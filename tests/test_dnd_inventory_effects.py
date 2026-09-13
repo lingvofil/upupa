@@ -2,13 +2,14 @@ from types import SimpleNamespace
 
 from AI import dnd_campaign
 from AI.dnd_inventory_effects import (
+    INVENTORY_EFFECT_MIGRATION_VERSION,
     INVENTORY_EFFECT_RULES,
-    INVENTORY_EFFECT_VERSION,
     apply_item_effect_metadata,
-    backfill_archive_data,
     backfill_inventory_items,
     format_inventory_effect,
     format_inventory_entry,
+    migrate_archive_data,
+    migrate_session_inventory,
     render_inventory_lines,
 )
 from AI.dnd_inventory_fun import apply_stackable_metadata, transfer_between_inventories
@@ -50,7 +51,6 @@ def test_stack_bonus_scales_with_quantity():
     assert item["quantity"] == 5
     assert item["bonus_per_unit"] == 1
     assert item["trait"] == "прожорливости"
-    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
     assert format_inventory_effect(item) == "+5 к прожорливости"
     assert format_inventory_entry(item) == "5 ложек — +5 к прожорливости"
     assert render_inventory_lines([item]) == ["• 5 ложек — +5 к прожорливости"]
@@ -67,7 +67,6 @@ def test_freeform_effect_is_shown_for_artifact():
 
     item = session.inventories["1"][0]
     assert item["effect"] == "звенит рядом с болотной нечистью"
-    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
     assert format_inventory_entry(item) == (
         "Перстень мокрого барона — звенит рядом с болотной нечистью"
     )
@@ -115,16 +114,15 @@ def test_legacy_inventory_is_backfilled_with_short_characteristics():
     spoon, ring = items
     assert spoon["bonus_per_unit"] == 1
     assert spoon["trait"] == "прожорливости"
-    assert spoon["effect_version"] == INVENTORY_EFFECT_VERSION
-    assert ring["effect_version"] == INVENTORY_EFFECT_VERSION
     assert ring["effect"] == "подозрительно отзывается на магическую хрень"
     assert render_inventory_lines(items) == [
         "• 5 ложек — +5 к прожорливости",
         "✨ Перстень мокрого барона — подозрительно отзывается на магическую хрень",
     ]
+    assert backfill_inventory_items(items) is False
 
 
-def test_legacy_archive_backfill_updates_players_and_campaign_snapshots_once():
+def test_legacy_archive_migration_updates_history_once_and_preserves_future_plain_items():
     archive = {
         "chats": {
             "-100": {
@@ -145,7 +143,8 @@ def test_legacy_archive_backfill_updates_players_and_campaign_snapshots_once():
         }
     }
 
-    assert backfill_archive_data(archive) is True
+    assert migrate_archive_data(archive) is True
+    assert archive["inventory_effects_version"] == INVENTORY_EFFECT_MIGRATION_VERSION
 
     history = archive["chats"]["-100"]["players"]["1"]
     penalty = history["inventory"][0]
@@ -160,18 +159,35 @@ def test_legacy_archive_backfill_updates_players_and_campaign_snapshots_once():
     assert archived_key["effect"] == "открывает что-то важное, но явно не бесплатно"
     assert socks["bonus_per_unit"] == 1
     assert socks["trait"] == "гардеробному превосходству"
-    assert backfill_archive_data(archive) is False
+
+    future_plain = {"name": "камень", "kind": "item"}
+    history["inventory"].append(future_plain)
+    assert migrate_archive_data(archive) is False
+    assert future_plain == {"name": "камень", "kind": "item"}
 
 
-def test_new_item_without_requested_effect_stays_plain_and_is_marked_checked():
+def test_legacy_active_session_migrates_once_and_preserves_future_plain_items():
+    old_item = {"name": "пизд", "kind": "item", "quantity": 5}
+    session = SimpleNamespace(inventories={"1": [old_item]})
+
+    assert migrate_session_inventory(session) is True
+    assert session.inventory_effects_version == INVENTORY_EFFECT_MIGRATION_VERSION
+    assert old_item["bonus_per_unit"] == 1
+    assert old_item["trait"] == "травматическому опыту"
+
+    future_plain = {"name": "камень", "kind": "item"}
+    session.inventories["1"].append(future_plain)
+    assert migrate_session_inventory(session) is False
+    assert future_plain == {"name": "камень", "kind": "item"}
+
+
+def test_new_item_without_requested_effect_keeps_original_shape():
     session = _session()
 
     _apply(session, "[ITEM:ADD;PLAYER:1;NAME:камень;KIND:item]")
 
     item = session.inventories["1"][0]
-    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
-    assert "effect" not in item
-    assert "bonus_per_unit" not in item
+    assert item == {"name": "камень", "kind": "item"}
     assert format_inventory_entry(item) == "камень"
 
 
