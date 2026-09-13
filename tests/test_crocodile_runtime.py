@@ -19,7 +19,8 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
-        "duo_optin.configure_crocodile_duo_opt_in()",
+        "crocodile.get_game_keyboard = _compose_game_keyboard(",
+        "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
         "configure_crocodile_admin_controls()",
         "configure_crocodile_telephone_mentions()",
@@ -156,6 +157,40 @@ def test_duo_opt_in_does_not_replace_party_menu():
         "party_controls.menu_keyboard = _compose_party_menu_keyboard("
     ) == 1
     assert "duo_optin.decorate_party_menu_without_default_duo" in runtime_source
+
+
+def test_duo_opt_in_does_not_replace_game_keyboard():
+    duo_source = _source("games/crocodile_duo_optin.py")
+    tree = ast.parse(duo_source)
+    assigned = []
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "crocodile"
+            ):
+                assigned.append(target.attr)
+
+    assert "get_game_keyboard" not in assigned
+    assert "_original_get_game_keyboard" not in duo_source
+    assert "get_game_keyboard_with_duo_opt_in" not in duo_source
+    assert "decorate_game_keyboard_with_duo_opt_in" in duo_source
+    assert "_base_game_keyboard" in duo_source
+
+    runtime_source = _source("games/crocodile_runtime.py")
+    assert runtime_source.count(
+        "crocodile.get_game_keyboard = _compose_game_keyboard("
+    ) == 1
+    assert "base_game_keyboard = crocodile.get_game_keyboard" in runtime_source
+    assert "duo_optin.decorate_game_keyboard_with_duo_opt_in" in runtime_source
+    assert "base_game_keyboard=base_game_keyboard" in runtime_source
 
 
 def test_duel_vote_deadline_is_owned_by_modes():
