@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
-
-import pytest
 
 from features.chronicle.models import ChronicleEvent
 from features.social_graph import relationships
@@ -65,8 +64,7 @@ def test_relationship_state_is_durable_and_directional(tmp_path):
     assert 1.0 < row["xp"] < 1.5  # second same-day signal is diminished
 
 
-@pytest.mark.asyncio
-async def test_tension_comes_from_grounded_conflict_events_not_interaction_volume(monkeypatch):
+def test_tension_comes_from_grounded_conflict_events_not_interaction_volume(monkeypatch):
     row = {
         "user_a_id": 1,
         "user_b_id": 2,
@@ -99,7 +97,7 @@ async def test_tension_comes_from_grounded_conflict_events_not_interaction_volum
     monkeypatch.setattr(relationships, "list_chronicle_events", no_events)
     monkeypatch.setattr(relationships, "save_relationship_snapshot", no_snapshot)
 
-    plain = (await relationships.get_relationships(-100))[0]
+    plain = asyncio.run(relationships.get_relationships(-100))[0]
     assert plain.affinity > 60
     assert plain.tension == 0
 
@@ -107,13 +105,12 @@ async def test_tension_comes_from_grounded_conflict_events_not_interaction_volum
         return [_event(category="conflict")]
 
     monkeypatch.setattr(relationships, "list_chronicle_events", conflict_events)
-    conflict = (await relationships.get_relationships(-100))[0]
+    conflict = asyncio.run(relationships.get_relationships(-100))[0]
     assert conflict.tension > 0
     assert conflict.shared_event_count == 1
 
 
-@pytest.mark.asyncio
-async def test_chronicle_can_restore_pair_even_without_retained_raw_interactions(monkeypatch):
+def test_chronicle_can_restore_pair_even_without_retained_raw_interactions(monkeypatch):
     async def no_rows(chat_id, *, user_id=None):
         return []
 
@@ -127,7 +124,7 @@ async def test_chronicle_can_restore_pair_even_without_retained_raw_interactions
     monkeypatch.setattr(relationships, "list_chronicle_events", old_event)
     monkeypatch.setattr(relationships, "save_relationship_snapshot", no_snapshot)
 
-    views = await relationships.get_relationships(-100)
+    views = asyncio.run(relationships.get_relationships(-100))
     assert len(views) == 1
     assert (views[0].user_a_id, views[0].user_b_id) == (10, 20)
     assert views[0].shared_event_count == 1
