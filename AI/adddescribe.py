@@ -2,20 +2,18 @@
 
 import base64
 import logging
-import os
 import textwrap
-import requests
 import random
 import asyncio
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import types
-from aiogram.types import FSInputFile
+from aiogram.types import BufferedInputFile
 
 from core.loader import bot
-from core.settings import API_TOKEN
 from core.state import chat_settings
 from infrastructure.ai.clients import model, gigachat_model, groq_ai
+from infrastructure.media_io import download_telegram_bytes
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 def get_active_model(chat_id: str) -> str:
@@ -58,21 +56,18 @@ async def handle_add_text_command(message: types.Message):
         else:
             logging.info("Генерируем текст через AI")
             generated_text = await process_image(image_bytes, message.chat.id)
-        
-        modified_image_path = overlay_text_on_image(image_bytes, generated_text)
-        
-        photo_file = FSInputFile(modified_image_path)
+
+        modified_image = await asyncio.to_thread(
+            overlay_text_on_image,
+            image_bytes,
+            generated_text,
+        )
+        photo_file = BufferedInputFile(modified_image, filename="modified_image.jpg")
         await message.reply_photo(photo_file)
 
     except Exception as e:
         logging.error(f"Ошибка в handle_add_text_command: {e}", exc_info=True)
-        await message.reply(f"Произошла непредвиденная ошибка при обработке изображения.")
-    finally:
-        if os.path.exists("modified_image.jpg"):
-            try:
-                os.remove("modified_image.jpg")
-            except OSError as e:
-                logging.error(f"Не удалось удалить временный файл modified_image.jpg: {e}")
+        await message.reply("Произошла непредвиденная ошибка при обработке изображения.")
 
 def extract_user_text(message: types.Message) -> str | None:
     """
@@ -133,20 +128,10 @@ async def process_image_description(bot, message: types.Message) -> tuple[bool, 
 
 async def download_image(bot, file_id: str) -> bytes | None:
     """
-    Загружает изображение по file_id
+    Загружает изображение по file_id через Bot API без ручной сборки URL.
     """
     try:
-        file = await bot.get_file(file_id)
-        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
-        logging.info(f"Загружаем изображение с URL: {file_url}")
-        
-        response = requests.get(file_url)
-        if response.status_code == 200:
-            return response.content
-        else:
-            logging.error(f"Ошибка загрузки изображения: статус {response.status_code}")
-            return None
-            
+        return await download_telegram_bytes(bot, file_id)
     except Exception as e:
         logging.error(f"Ошибка в download_image: {e}", exc_info=True)
         return None
@@ -221,13 +206,7 @@ async def get_photo_from_message(message: types.Message):
     return None
 
 async def download_telegram_image(bot, photo):
-    file = await bot.get_file(photo.file_id)
-    file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
-    logging.info(f"Загружаем изображение с URL: {file_url}")
-    response = requests.get(file_url)
-    if response.status_code != 200:
-        raise Exception("Не удалось загрузить изображение.")
-    return response.content
+    return await download_telegram_bytes(bot, photo.file_id)
 
 async def process_image(image_bytes: bytes, chat_id: int) -> str:
     """
@@ -270,7 +249,8 @@ def get_text_size(font, text):
     height = bbox[3] - bbox[1]
     return width, height
 
-def overlay_text_on_image(image_bytes: bytes, text: str) -> str:
+def overlay_text_on_image(image_bytes: bytes, text: str) -> bytes:
+    """Накладывает текст и возвращает JPEG в памяти без общего temp-файла."""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(image)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -293,6 +273,6 @@ def overlay_text_on_image(image_bytes: bytes, text: str) -> str:
         x = (image.width - text_width) / 2
         draw.text((x, y), line, font=font, fill="white")
         y += line_height + 10
-    output_path = "modified_image.jpg"
-    image.save(output_path)
-    return output_path
+    output = BytesIO()
+    image.save(output, format="JPEG")
+    return output.getvalue()

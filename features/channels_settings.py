@@ -1,10 +1,10 @@
-import os
 import random
 import logging
-import requests
 from aiogram import types
-from aiogram.types import FSInputFile
+from aiogram.types import BufferedInputFile
 from playwright.async_api import async_playwright
+
+from infrastructure.media_io import download_url_bytes
 
 # =============================================================================
 # НОВАЯ ФУНКЦИЯ-ОРКЕСТРАТОР
@@ -215,28 +215,22 @@ async def _download_random_media(url, include_post_title=False):
         raise
 
 async def _send_media_file(message, media_url, media_type, caption=None):
-    """Sends a media file to the chat."""
+    """Скачивает и отправляет медиа без блокировки event loop и temp-файлов."""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
     }
     try:
-        response = requests.get(media_url, headers=headers, stream=True)
-        response.raise_for_status()
-        
+        media_data = await download_url_bytes(media_url, headers=headers)
         file_extension = 'mp4' if media_type == 'video' else 'jpg'
-        file_name = f"temp_media.{file_extension}"
-        
-        with open(file_name, 'wb') as file:
-            file.write(response.content)
-        
-        media = FSInputFile(file_name)
-        
+        media = BufferedInputFile(
+            media_data,
+            filename=f"channel_media.{file_extension}",
+        )
+
         if media_type == 'video':
             await message.answer_video(media, caption=caption)
         else:
             await message.answer_photo(media, caption=caption)
-            
-        os.remove(file_name)
     except Exception as e:
         logging.error(f"Ошибка при отправке медиафайла: {str(e)}")
         raise
