@@ -290,7 +290,7 @@ class SQLiteSocialGraphRepository:
                 chat_id,user_a_id,user_b_id,xp,interaction_count,reply_count,mention_count,
                 reaction_count,a_to_b_count,b_to_a_count,a_to_b_weight,b_to_a_weight,
                 first_interaction_at,last_interaction_at,updated_at
-            ) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(chat_id,user_a_id,user_b_id) DO UPDATE SET
                 xp=xp+excluded.xp,
                 interaction_count=interaction_count+1,
