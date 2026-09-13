@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 import logging
 import re
 
@@ -9,7 +10,12 @@ from aiogram import Router, types
 from aiogram.types import BufferedInputFile
 
 from core.settings import BLOCKED_USERS
-from features.social_graph.ai import interpret_centrality, interpret_personal_summary
+from features.social_graph.ai import (
+    interpret_centrality,
+    interpret_personal_summary,
+    interpret_relationship,
+    narrate_relationship_history,
+)
 from features.social_graph.analysis import (
     aggregate_edges,
     build_personal_summary,
@@ -27,10 +33,13 @@ from features.social_graph.interaction_analysis import (
     build_edge_interaction_profiles,
     edge_keywords,
 )
+from features.social_graph.relationship_history import (
+    RelationshipTimelineItem,
+    get_integrated_relationship_history,
+)
 from features.social_graph.relationships import (
     RelationshipView,
     get_relationship,
-    get_relationship_history,
     get_relationships,
 )
 from features.social_graph.rendering import render_cringe_graph_png_async, render_graph_png_async
@@ -46,6 +55,10 @@ from features.social_graph.service import (
 router = Router(name="social_graph")
 CRINGE_GRAPH_CAPTION = "рожи и художественная хуита"
 _USERNAME_RE = re.compile(r"@([A-Za-z0-9_]{3,})")
+_MONTHS = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
 
 
 def _is_command(message: types.Message, command: str) -> bool:
@@ -116,6 +129,82 @@ def _relationship_description(view: RelationshipView) -> str:
     if view.affinity >= 60:
         return "Устойчивая взаимная вовлечённость без необходимости устраивать гражданскую войну."
     return "Связь уже видна, но до отдельного сериала про этих двоих пока далеко."
+
+
+def _scale_label(value: int) -> str:
+    if value < 20:
+        return "низкая"
+    if value < 45:
+        return "умеренная"
+    if value < 70:
+        return "высокая"
+    return "очень высокая"
+
+
+def _reciprocity_label(value: float) -> str:
+    if value < 0.25:
+        return "почти односторонняя"
+    if value < 0.55:
+        return "неровная"
+    if value < 0.80:
+        return "высокая"
+    return "почти зеркальная"
+
+
+def _telegram_message_link(chat_id: int, message_id: int | None) -> str | None:
+    if message_id is None:
+        return None
+    raw = str(int(chat_id))
+    if not raw.startswith("-100"):
+        return None
+    return f"https://t.me/c/{raw[4:]}/{int(message_id)}"
+
+
+def _chronicle_event_html(view: RelationshipView) -> str | None:
+    if not view.shared_events:
+        return None
+    event = max(view.shared_events, key=lambda item: item.importance_score)
+    title = escape(event.title)
+    message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
+    link = _telegram_message_link(view.chat_id, message_id)
+    if link:
+        title = f'<a href="{link}">«{title}»</a>'
+    else:
+        title = f"«{title}»"
+    return f"Главный исторический эпизод: <b>{title}</b>"
+
+
+def _history_command(message: types.Message) -> str:
+    if _starts_command(message, "история отношений"):
+        return "история отношений"
+    return "история"
+
+
+def _month_heading(item: RelationshipTimelineItem) -> str:
+    month = _MONTHS[item.timestamp.month - 1].capitalize()
+    return f"{month} {item.timestamp.year}"
+
+
+def _timeline_html(items: tuple[RelationshipTimelineItem, ...]) -> list[str]:
+    lines: list[str] = []
+    current_month = None
+    for item in items:
+        month = (item.timestamp.year, item.timestamp.month)
+        if month != current_month:
+            if lines:
+                lines.append("")
+            lines.append(f"<b>{_month_heading(item)}</b>")
+            current_month = month
+        title = escape(item.title)
+        if item.chronicle_event is not None:
+            event = item.chronicle_event
+            message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
+            link = _telegram_message_link(event.chat_id, message_id)
+            if link:
+                title = f'<a href="{link}">{title}</a>'
+        lines.append(f"• <b>{item.timestamp.day} — {title}</b>")
+        lines.append(escape(item.summary))
+    return lines
 
 
 async def _resolve_relationship_pair(message: types.Message, command: str) -> tuple[int, int] | None:
@@ -240,22 +329,24 @@ async def handle_relationship(message: types.Message):
         await message.reply("У этой пары пока недостаточно общей истории: ни устойчивых взаимодействий, ни общего события в Летописи.")
         return
 
+    comment = await interpret_relationship(view, str(message.chat.id)) or _relationship_description(view)
     lines = [
-        f"❤️ <b>{_pair_name(view)}</b>",
+        f"❤️ <b>{escape(_pair_name(view))}</b>",
         "",
-        f"Уровень: <b>{view.level}/15</b>",
-        f"Тип: <b>{view.archetype}</b>",
-        f"Близость: <b>{view.affinity}/100</b>",
-        f"Напряжение: <b>{view.tension}/100</b>",
-        f"Взаимность: <b>{round(view.reciprocity * 100)}%</b>",
+        f"Уровень <b>{view.level}/15</b> — «<b>{escape(view.archetype)}</b>».",
+        (
+            f"Близость {_scale_label(view.affinity)} (<b>{view.affinity}/100</b>), "
+            f"напряжение {_scale_label(view.tension)} (<b>{view.tension}/100</b>), "
+            f"взаимность {_reciprocity_label(view.reciprocity)} (<b>{round(view.reciprocity * 100)}%</b>)."
+        ),
+        f"Сейчас: <b>{escape(view.trend)}</b>.",
         "",
-        _relationship_description(view),
+        escape(comment),
     ]
-    if view.shared_events:
-        main_event = max(view.shared_events, key=lambda event: event.importance_score)
-        lines.extend(("", f"Главный эпизод: <b>«{main_event.title}»</b>"))
-    lines.extend(("", f"Тренд: <b>{view.trend}</b>"))
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    main_event = _chronicle_event_html(view)
+    if main_event:
+        lines.extend(("", main_event))
+    await message.reply("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(lambda message: _is_command(message, "мои отношения"))
@@ -269,8 +360,8 @@ async def handle_my_relationships(message: types.Message):
     lines = ["❤️ <b>Твои главные отношения</b>", ""]
     for index, view in enumerate(views[:6], 1):
         lines.append(
-            f"{index}. <b>{_other_name(view, message.from_user.id)}</b> — "
-            f"уровень {view.level}, {view.archetype}; {view.trend}."
+            f"{index}. <b>{escape(_other_name(view, message.from_user.id))}</b> — "
+            f"уровень {view.level}, {escape(view.archetype)}; {escape(view.trend)}."
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
 
@@ -293,52 +384,58 @@ async def handle_chat_relationships(message: types.Message):
     rising = max(views, key=lambda item: item.recent_7d - item.previous_21d / 3.0)
 
     lines = ["🕸 <b>Отношения чата</b>", ""]
-    lines.append(f"❤️ Самые близкие: <b>{_pair_name(closest)}</b> — {closest.archetype}")
+    lines.append(f"❤️ Самые близкие: <b>{escape(_pair_name(closest))}</b> — {escape(closest.archetype)}")
     if conflict.tension > 0:
-        lines.append(f"⚔️ Самые напряжённые: <b>{_pair_name(conflict)}</b> — {conflict.archetype}")
+        lines.append(f"⚔️ Самые напряжённые: <b>{escape(_pair_name(conflict))}</b> — {escape(conflict.archetype)}")
     if mutual is not None:
-        lines.append(f"🤝 Самые взаимные: <b>{_pair_name(mutual)}</b> — {round(mutual.reciprocity * 100)}%")
+        lines.append(f"🤝 Самые взаимные: <b>{escape(_pair_name(mutual))}</b> — {round(mutual.reciprocity * 100)}%")
     if one_sided is not None and one_sided.reciprocity < 0.65:
-        lines.append(f"🫠 Самая односторонняя связь: <b>{_pair_name(one_sided)}</b>")
+        lines.append(f"🫠 Самая односторонняя связь: <b>{escape(_pair_name(one_sided))}</b>")
     if rising.recent_7d > 0:
-        lines.append(f"📈 Быстрее всех оживают: <b>{_pair_name(rising)}</b> — {rising.trend}")
+        lines.append(f"📈 Быстрее всех оживают: <b>{escape(_pair_name(rising))}</b> — {escape(rising.trend)}")
     if strongest is not closest:
-        lines.append(f"🏛 Главная институция: <b>{_pair_name(strongest)}</b> — уровень {strongest.level}/15")
+        lines.append(f"🏛 Главная институция: <b>{escape(_pair_name(strongest))}</b> — уровень {strongest.level}/15")
     await message.reply("\n".join(lines), parse_mode="HTML")
 
 
-@router.message(lambda message: _starts_command(message, "история отношений"))
+@router.message(lambda message: _starts_command(message, "история"))
 async def handle_relationship_history(message: types.Message):
     if not await _ensure_available(message):
         return
-    pair = await _resolve_relationship_pair(message, "история отношений")
+    command = _history_command(message)
+    pair = await _resolve_relationship_pair(message, command)
     if pair is None:
-        await message.reply("Ответь «история отношений» на сообщение человека или укажи @user / двух @user.")
-        return
-    view, snapshots = await get_relationship_history(message.chat.id, *pair)
-    if view is None:
-        await message.reply("Истории этой пары пока нет.")
+        await message.reply("Ответь командой «история» на сообщение человека или напиши «история @user» / «история @user1 @user2».")
         return
 
-    lines = [f"📜 <b>История отношений: {_pair_name(view)}</b>", ""]
-    events = sorted(view.shared_events, key=lambda event: event.event_started_at, reverse=True)[:8]
-    if events:
-        for event in events:
-            lines.append(f"• {event.event_started_at:%d.%m.%Y} — <b>{event.title}</b>")
+    history = await get_integrated_relationship_history(message.chat.id, *pair)
+    if history is None:
+        await message.reply("📖 История пока короткая. Эти двое существуют в одном чате, но сериал ещё не начался.")
+        return
+
+    view = history.view
+    meaningful_timeline = tuple(
+        item for item in history.timeline if item.event_type != "relationship_snapshot"
+    )
+    lines = [f"📖 <b>{escape(_pair_name(view))}</b>", ""]
+
+    if meaningful_timeline:
+        narrative = await narrate_relationship_history(view, meaningful_timeline, str(message.chat.id))
+        if narrative:
+            lines.extend((escape(narrative), ""))
+        lines.extend(_timeline_html(meaningful_timeline))
     else:
-        lines.append("Пока без отдельных легендарных эпизодов в Летописи.")
+        lines.append(
+            "Подробная история пока не накоплена. Текущее состояние уже считается, "
+            "но значимых сохранённых переходов или совместных событий ещё нет."
+        )
 
-    if len(snapshots) >= 2:
-        latest = snapshots[0]
-        oldest = snapshots[-1]
-        if latest.level != oldest.level or latest.archetype != oldest.archetype:
-            lines.extend((
-                "",
-                f"Динамика снимков: уровень {oldest.level} → {latest.level}; "
-                f"{oldest.archetype} → {latest.archetype}.",
-            ))
-    lines.extend(("", f"Сейчас: <b>{view.archetype}</b>, уровень <b>{view.level}/15</b>, {view.trend}."))
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    lines.extend((
+        "",
+        "<b>Сейчас</b>",
+        f"Уровень <b>{view.level}/15</b> — «<b>{escape(view.archetype)}</b>»; {escape(view.trend)}.",
+    ))
+    await message.reply("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(lambda message: _is_command(message, "мои связи"))
