@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 
 _configured = False
 
@@ -28,6 +30,41 @@ def _compose_restored_session_enrichers(*enrichers):
     return enrich
 
 
+def _compose_extra_persistors(*persistors):
+    callbacks = tuple(callback for callback in persistors if callback is not None)
+
+    def persist(*, force: bool = False) -> bool:
+        changed = False
+        for callback in callbacks:
+            try:
+                if callback(force=force):
+                    changed = True
+            except Exception:
+                logging.exception(
+                    "[crocodile] extra persistence callback failed: %r", callback
+                )
+        return changed
+
+    return persist
+
+
+def _compose_extra_restorers(*restorers):
+    callbacks = tuple(callback for callback in restorers if callback is not None)
+
+    def restore() -> int:
+        restored = 0
+        for callback in callbacks:
+            try:
+                restored += int(callback() or 0)
+            except Exception:
+                logging.exception(
+                    "[crocodile] extra restore callback failed: %r", callback
+                )
+        return restored
+
+    return restore
+
+
 def _compose_party_menu_keyboard(base_menu, *decorators):
     callbacks = tuple(callback for callback in decorators if callback is not None)
 
@@ -50,6 +87,7 @@ def configure_crocodile_runtime() -> None:
     from games import crocodile_party_controls as party_controls
     from games import crocodile_party_state as party_state
     from games import crocodile_persistence as persistence
+    from games import reverse_crocodile_persistence as reverse_persistence
     from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
     from games.crocodile_controls import configure_crocodile_controls
@@ -80,8 +118,14 @@ def configure_crocodile_runtime() -> None:
                 duo_optin.enrich_restored_session_with_duo_opt_in,
                 party_dependencies.enrich_restored_session,
             ),
-            persist_extra_state=party_dependencies.persist_extra_state,
-            restore_extra_state=party_dependencies.restore_extra_state,
+            persist_extra_state=_compose_extra_persistors(
+                party_dependencies.persist_extra_state,
+                reverse_persistence.persist_reverse_crocodile_sessions,
+            ),
+            restore_extra_state=_compose_extra_restorers(
+                party_dependencies.restore_extra_state,
+                reverse_persistence.restore_reverse_crocodile_sessions,
+            ),
         )
     )
     party_controls.configure_crocodile_party_controls()
