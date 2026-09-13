@@ -29,6 +29,7 @@ jobs:
             AI/dnd_runtime.py \
             games/crocodile_persistence.py \
             games/crocodile_party_state.py \
+            games/crocodile_duo_optin.py \
             games/crocodile_runtime.py \
             scripts/backup_runtime_state.py \
             scripts/restore_history_journal.py \
@@ -77,6 +78,7 @@ jobs:
           tests/test_social_graph_picture_labels.py
           tests/test_crocodile_session_persistence.py
           tests/test_crocodile_party_resilience.py
+          tests/test_crocodile_duo_optin.py
           tests/test_crocodile_runtime.py
           -q
       - name: Verify Windows tests did not write Crocodile party state to repo root
