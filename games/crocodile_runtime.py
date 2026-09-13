@@ -28,6 +28,18 @@ def _compose_restored_session_enrichers(*enrichers):
     return enrich
 
 
+def _compose_party_menu_keyboard(base_menu, *decorators):
+    callbacks = tuple(callback for callback in decorators if callback is not None)
+
+    def render(chat_id):
+        keyboard = base_menu(chat_id)
+        for callback in callbacks:
+            keyboard = callback(keyboard)
+        return keyboard
+
+    return render
+
+
 def configure_crocodile_runtime() -> None:
     """Install Crocodile runtime layers once in their dependency order."""
     global _configured
@@ -35,13 +47,13 @@ def configure_crocodile_runtime() -> None:
         return
 
     from games import crocodile_duo_optin as duo_optin
+    from games import crocodile_party_controls as party_controls
     from games import crocodile_party_state as party_state
     from games import crocodile_persistence as persistence
     from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
     from games.crocodile_controls import configure_crocodile_controls
     from games.crocodile_modes import configure_crocodile_modes
-    from games.crocodile_party_controls import configure_crocodile_party_controls
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
@@ -72,7 +84,11 @@ def configure_crocodile_runtime() -> None:
             restore_extra_state=party_dependencies.restore_extra_state,
         )
     )
-    configure_crocodile_party_controls()
+    party_controls.configure_crocodile_party_controls()
+    party_controls.menu_keyboard = _compose_party_menu_keyboard(
+        party_controls.menu_keyboard,
+        duo_optin.decorate_party_menu_without_default_duo,
+    )
     duo_optin.configure_crocodile_duo_opt_in()
     configure_crocodile_ui_enhancements()
     configure_crocodile_admin_controls()
