@@ -112,7 +112,9 @@ def install_dnd_lobby_controls(dnd_router) -> None:
 
     from AI import dnd
     from AI import dnd_campaign as campaign
+    from AI.dnd_profile_gender_grounding import install_dnd_profile_gender_grounding
 
+    install_dnd_profile_gender_grounding()
     original_lobby_keyboard = campaign._lobby_keyboard
 
     def lobby_keyboard(session=None):
