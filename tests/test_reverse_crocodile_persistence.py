@@ -20,7 +20,11 @@ def test_reverse_crocodile_sessions_survive_restart_for_every_mode(
     from games import reverse_crocodile_persistence as persistence
 
     state_path = tmp_path / "reverse_crocodile_state.json"
-    monkeypatch.setattr(persistence, "REVERSE_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        persistence.base_persistence,
+        "CROCODILE_STATE_PATH",
+        tmp_path / "crocodile_sessions.json",
+    )
     monkeypatch.setattr(persistence, "_last_payload", None)
     monkeypatch.setattr(persistence, "_restored", False)
 
@@ -130,7 +134,11 @@ def test_reverse_persistence_skips_unpublished_round(tmp_path, monkeypatch):
     from games import reverse_crocodile_persistence as persistence
 
     state_path = tmp_path / "reverse_crocodile_state.json"
-    monkeypatch.setattr(persistence, "REVERSE_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        persistence.base_persistence,
+        "CROCODILE_STATE_PATH",
+        tmp_path / "crocodile_sessions.json",
+    )
     monkeypatch.setattr(persistence, "_last_payload", None)
 
     reverse.games.clear()
