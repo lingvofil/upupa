@@ -151,24 +151,56 @@ def test_stale_legacy_duo_button_no_longer_allows_direct_join(monkeypatch):
         crocodile.game_sessions.pop("-42", None)
 
 
-def test_duo_invite_open_is_persisted_until_join(monkeypatch):
+def test_duo_invite_open_is_persisted_until_join():
     from games import crocodile_duo_optin as duo
 
-    monkeypatch.setattr(
-        duo,
-        "_original_session_to_record",
-        lambda chat_id, session: {"chat_id": chat_id, "drawer_id": session["drawer_id"]},
-    )
-    monkeypatch.setattr(
-        duo,
-        "_original_session_from_record",
-        lambda record: (str(record["chat_id"]), {"drawer_id": record["drawer_id"]}),
-    )
     session = {"drawer_id": 1, "duo_invite_open": True}
+    record = {"chat_id": "-42", "drawer_id": 1}
 
-    record = duo._session_to_record_with_duo_opt_in("-42", session)
-    chat_id, restored = duo._session_from_record_with_duo_opt_in(record)
+    record = duo.enrich_session_record_with_duo_opt_in("-42", session, record)
+    chat_id, restored = duo.enrich_restored_session_with_duo_opt_in(
+        record,
+        "-42",
+        {"drawer_id": 1},
+    )
 
     assert record["duo_invite_open"] is True
     assert chat_id == "-42"
     assert restored["duo_invite_open"] is True
+
+
+def test_duo_opt_in_and_party_metadata_compose_in_legacy_order():
+    from games import crocodile_duo_optin as duo
+    from games import crocodile_party_state as party_state
+    from games import crocodile_runtime as runtime
+
+    party_dependencies = party_state.crocodile_persistence_dependencies()
+    record_enricher = runtime._compose_session_record_enrichers(
+        duo.enrich_session_record_with_duo_opt_in,
+        party_dependencies.enrich_session_record,
+    )
+    restored_enricher = runtime._compose_restored_session_enrichers(
+        duo.enrich_restored_session_with_duo_opt_in,
+        party_dependencies.enrich_restored_session,
+    )
+    session = {
+        "drawer_id": 1,
+        "drawer_ids": [1],
+        "drawer_names": ["Первый"],
+        "duo_invite_open": True,
+    }
+
+    record = record_enricher("-42", session, {"chat_id": "-42", "drawer_id": 1})
+    chat_id, restored = restored_enricher(
+        record,
+        "-42",
+        {"drawer_id": 1},
+    )
+
+    assert record["duo_invite_open"] is True
+    assert record["drawer_ids"] == [1]
+    assert record["drawer_names"] == ["Первый"]
+    assert chat_id == "-42"
+    assert restored["duo_invite_open"] is True
+    assert restored["drawer_ids"] == [1]
+    assert restored["drawer_names"] == ["Первый"]
