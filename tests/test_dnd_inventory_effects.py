@@ -3,7 +3,10 @@ from types import SimpleNamespace
 from AI import dnd_campaign
 from AI.dnd_inventory_effects import (
     INVENTORY_EFFECT_RULES,
+    INVENTORY_EFFECT_VERSION,
     apply_item_effect_metadata,
+    backfill_archive_data,
+    backfill_inventory_items,
     format_inventory_effect,
     format_inventory_entry,
     render_inventory_lines,
@@ -47,6 +50,7 @@ def test_stack_bonus_scales_with_quantity():
     assert item["quantity"] == 5
     assert item["bonus_per_unit"] == 1
     assert item["trait"] == "прожорливости"
+    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
     assert format_inventory_effect(item) == "+5 к прожорливости"
     assert format_inventory_entry(item) == "5 ложек — +5 к прожорливости"
     assert render_inventory_lines([item]) == ["• 5 ложек — +5 к прожорливости"]
@@ -63,6 +67,7 @@ def test_freeform_effect_is_shown_for_artifact():
 
     item = session.inventories["1"][0]
     assert item["effect"] == "звенит рядом с болотной нечистью"
+    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
     assert format_inventory_entry(item) == (
         "Перстень мокрого барона — звенит рядом с болотной нечистью"
     )
@@ -91,6 +96,83 @@ def test_partial_transfer_keeps_effect_and_rescales_stack_bonus():
 
     assert format_inventory_entry(inventories["1"][0]) == "3 ложки — +3 к прожорливости"
     assert format_inventory_entry(inventories["2"][0]) == "2 ложки — +2 к прожорливости"
+
+
+def test_legacy_inventory_is_backfilled_with_short_characteristics():
+    items = [
+        {
+            "name": "ложка",
+            "few": "ложки",
+            "many": "ложек",
+            "kind": "item",
+            "quantity": 5,
+        },
+        {"name": "Перстень мокрого барона", "kind": "artifact"},
+    ]
+
+    assert backfill_inventory_items(items) is True
+
+    spoon, ring = items
+    assert spoon["bonus_per_unit"] == 1
+    assert spoon["trait"] == "прожорливости"
+    assert spoon["effect_version"] == INVENTORY_EFFECT_VERSION
+    assert ring["effect_version"] == INVENTORY_EFFECT_VERSION
+    assert ring["effect"] == "подозрительно отзывается на магическую хрень"
+    assert render_inventory_lines(items) == [
+        "• 5 ложек — +5 к прожорливости",
+        "✨ Перстень мокрого барона — подозрительно отзывается на магическую хрень",
+    ]
+
+
+def test_legacy_archive_backfill_updates_players_and_campaign_snapshots_once():
+    archive = {
+        "chats": {
+            "-100": {
+                "players": {
+                    "1": {
+                        "inventory": ["штраф", {"name": "Ключ судьбы", "kind": "artifact"}],
+                        "artifacts": [{"name": "Ключ судьбы", "kind": "artifact"}],
+                    }
+                },
+                "campaigns": [
+                    {
+                        "inventories": {
+                            "1": [{"name": "носок", "kind": "item", "quantity": 3}]
+                        }
+                    }
+                ],
+            }
+        }
+    }
+
+    assert backfill_archive_data(archive) is True
+
+    history = archive["chats"]["-100"]["players"]["1"]
+    penalty = history["inventory"][0]
+    key = history["inventory"][1]
+    archived_key = history["artifacts"][0]
+    socks = archive["chats"]["-100"]["campaigns"][0]["inventories"]["1"][0]
+
+    assert penalty["name"] == "штраф"
+    assert penalty["bonus_per_unit"] == -1
+    assert penalty["trait"] == "финансовому благополучию"
+    assert key["effect"] == "открывает что-то важное, но явно не бесплатно"
+    assert archived_key["effect"] == "открывает что-то важное, но явно не бесплатно"
+    assert socks["bonus_per_unit"] == 1
+    assert socks["trait"] == "гардеробному превосходству"
+    assert backfill_archive_data(archive) is False
+
+
+def test_new_item_without_requested_effect_stays_plain_and_is_marked_checked():
+    session = _session()
+
+    _apply(session, "[ITEM:ADD;PLAYER:1;NAME:камень;KIND:item]")
+
+    item = session.inventories["1"][0]
+    assert item["effect_version"] == INVENTORY_EFFECT_VERSION
+    assert "effect" not in item
+    assert "bonus_per_unit" not in item
+    assert format_inventory_entry(item) == "камень"
 
 
 def test_effect_rules_keep_flavor_bonus_out_of_direct_d20_math():
