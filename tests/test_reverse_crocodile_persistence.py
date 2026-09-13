@@ -35,8 +35,13 @@ def test_reverse_crocodile_sessions_survive_restart_for_every_mode(
 
     chat_id = "-1001234567890"
     now = time.monotonic()
+    word = (
+        "Без труда не вытащишь и рыбку из пруда"
+        if mode == "proverbs"
+        else "лабиринт"
+    )
     session = {
-        "word": "Без труда не вытащишь и рыбку из пруда" if mode == "proverbs" else "лабиринт",
+        "word": word,
         "difficulty": "hard",
         "image": b"persisted-image-bytes",
         "message_id": 4242,
@@ -85,6 +90,37 @@ def test_reverse_crocodile_sessions_survive_restart_for_every_mode(
             assert any("reveal" in name for name in started_tasks)
         else:
             assert len(started_tasks) == 1
+    finally:
+        reverse.games.clear()
+
+
+def test_reverse_timer_payload_stays_stable_while_countdowns_run(monkeypatch):
+    from games import reverse_crocodile as reverse
+    from games import reverse_crocodile_persistence as persistence
+
+    chat_id = "-77"
+    session = {
+        "word": "ревность",
+        "difficulty": "medium",
+        "image": b"image",
+        "message_id": 12,
+        "started_at": 900.0,
+        "hints": 1,
+        "revealed_positions": set(),
+        "last_hint_at": 980.0,
+    }
+    reverse.games.clear()
+    reverse.games[chat_id] = session
+    try:
+        monkeypatch.setattr(persistence.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(persistence.time, "time", lambda: 5000.0)
+        first = persistence._serialize_current_state()
+
+        monkeypatch.setattr(persistence.time, "monotonic", lambda: 1030.0)
+        monkeypatch.setattr(persistence.time, "time", lambda: 5030.0)
+        second = persistence._serialize_current_state()
+
+        assert second == first
     finally:
         reverse.games.clear()
 
