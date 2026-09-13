@@ -7,7 +7,11 @@ from types import SimpleNamespace
 from tests import test_smoke_imports  # noqa: F401
 
 from features.chronicle.models import ChronicleEvent
-from features.social_graph.relationship_history import assemble_relationship_history
+from features.social_graph.relationship_history import (
+    SharedRelationshipEvent,
+    _dnd_archive_events,
+    assemble_relationship_history,
+)
 from features.social_graph.relationships import RelationshipSnapshot, RelationshipView
 
 
@@ -122,6 +126,57 @@ def test_external_game_events_are_reused_through_chronicle_source():
     assert len(history.timeline) == 1
     assert history.timeline[0].source == "chronicle:dnd"
     assert history.timeline[0].event_type == "chronicle_game"
+
+
+def test_archived_dnd_campaign_is_reused_without_copying_it(monkeypatch):
+    from AI import dnd_campaign
+
+    monkeypatch.setattr(dnd_campaign, "_load_archive", lambda _dnd: None)
+    monkeypatch.setattr(
+        dnd_campaign,
+        "_chat_history",
+        lambda _chat_id: {
+            "campaigns": [
+                {
+                    "completed_at": "2026-05-12T18:30:00+00:00",
+                    "selected_plot": "Побег из проклятого санатория",
+                    "epilogue": "Alice и Bob выбрались, но унесли с собой очень плохую репутацию.",
+                    "profiles": {"1": {"style": "a"}, "2": {"style": "b"}, "3": {"style": "c"}},
+                },
+                {
+                    "completed_at": "2026-05-13T18:30:00+00:00",
+                    "selected_plot": "Чужая кампания",
+                    "epilogue": "Bob играл без Alice.",
+                    "profiles": {"2": {"style": "b"}, "3": {"style": "c"}},
+                },
+            ]
+        },
+    )
+
+    events = _dnd_archive_events(-1001707530786, 1, 2)
+
+    assert len(events) == 1
+    assert events[0].source == "dnd_archive"
+    assert events[0].event_type == "game_dnd"
+    assert "Побег из проклятого санатория" in events[0].title
+
+
+def test_chronicle_wins_over_duplicate_module_event():
+    when = datetime(2026, 5, 10, tzinfo=timezone.utc)
+    chronicle = _event(when=when, source="dnd", title="Провал в подземелье")
+    shared = SharedRelationshipEvent(
+        timestamp=when + timedelta(minutes=5),
+        event_type="game_dnd",
+        title="Провал в подземелье",
+        summary="Пара устроила заметный эпизод, который сохранила Летопись.",
+        source="dnd_archive",
+        priority=75,
+    )
+
+    history = assemble_relationship_history(_view((chronicle,)), (), (shared,))
+
+    assert len(history.timeline) == 1
+    assert history.timeline[0].source == "chronicle:dnd"
 
 
 def test_relationship_history_ai_receives_only_precomputed_facts():
