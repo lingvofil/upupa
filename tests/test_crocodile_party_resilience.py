@@ -13,26 +13,13 @@ def _message(chat_id: int, user_id: int, name: str = "Игрок", text: str = "
     )
 
 
-def test_duo_persistence_roundtrip_keeps_both_drawers(monkeypatch):
+def test_duo_persistence_roundtrip_keeps_both_drawers():
     from games import crocodile_party_state as state
 
-    monkeypatch.setattr(
-        state,
-        "_original_session_to_record",
-        lambda chat_id, session: {
-            "chat_id": chat_id,
-            "word": session["word"],
-            "drawer_id": session["drawer_id"],
-        },
-    )
-    monkeypatch.setattr(
-        state,
-        "_original_session_from_record",
-        lambda record: (
-            str(record["chat_id"]),
-            {"word": record["word"], "drawer_id": record["drawer_id"]},
-        ),
-    )
+    dependencies = state.crocodile_persistence_dependencies()
+    assert dependencies.enrich_session_record is not None
+    assert dependencies.enrich_restored_session is not None
+
     session = {
         "word": "кот",
         "drawer_id": 11,
@@ -41,14 +28,59 @@ def test_duo_persistence_roundtrip_keeps_both_drawers(monkeypatch):
         "drawer_names": ["Первый", "Второй"],
         "mode": "duo",
     }
+    base_record = {
+        "chat_id": "-42",
+        "word": session["word"],
+        "drawer_id": session["drawer_id"],
+    }
 
-    record = state._session_to_record_with_duo("-42", session)
-    chat_id, restored = state._session_from_record_with_duo(record)
+    record = dependencies.enrich_session_record("-42", session, base_record)
+    chat_id, restored = dependencies.enrich_restored_session(
+        record,
+        "-42",
+        {"word": record["word"], "drawer_id": record["drawer_id"]},
+    )
 
     assert chat_id == "-42"
     assert restored["drawer_ids"] == [11, 22]
     assert restored["drawer_names"] == ["Первый", "Второй"]
     assert restored["mode"] == "duo"
+
+
+def test_persistence_dependency_flushes_extra_state_when_regular_state_is_unchanged(
+    monkeypatch,
+):
+    from games import crocodile_persistence as persistence
+
+    persist_extra = MagicMock(return_value=True)
+    dependencies = persistence.CrocodilePersistenceDependencies(
+        persist_extra_state=persist_extra
+    )
+    monkeypatch.setattr(persistence, "_persistence_dependencies", dependencies)
+    monkeypatch.setattr(persistence, "_serialize_current_state", lambda: "{}")
+    monkeypatch.setattr(persistence, "_last_payload", "{}")
+
+    assert persistence.persist_crocodile_sessions() is True
+    persist_extra.assert_called_once_with(force=False)
+
+
+def test_persistence_dependency_restores_extra_state_before_regular_file_check(
+    tmp_path,
+    monkeypatch,
+):
+    from games import crocodile_persistence as persistence
+
+    restore_extra = MagicMock(return_value=2)
+    dependencies = persistence.CrocodilePersistenceDependencies(
+        restore_extra_state=restore_extra
+    )
+    monkeypatch.setattr(persistence, "_persistence_dependencies", dependencies)
+    monkeypatch.setattr(persistence, "configure_crocodile_runtime", MagicMock())
+    monkeypatch.setattr(persistence, "migrate_crocodile_scores", MagicMock())
+    monkeypatch.setattr(persistence, "_state_path", lambda: tmp_path / "missing.json")
+
+    assert persistence.restore_crocodile_sessions() == 0
+    restore_extra.assert_called_once_with()
 
 
 def test_party_state_roundtrip_restores_duel_phone_and_canvases(tmp_path, monkeypatch):
