@@ -74,11 +74,11 @@ async def download_url_bytes(
             content_length = response.headers.get("Content-Length")
             if content_length:
                 try:
-                    _validate_size(int(content_length), max_bytes)
+                    declared_size = int(content_length)
                 except ValueError:
-                    # Некорректный Content-Length не должен ломать загрузку:
-                    # фактический размер всё равно контролируется по чанкам.
-                    pass
+                    declared_size = None
+                if declared_size is not None:
+                    _validate_size(declared_size, max_bytes)
 
             chunks: list[bytes] = []
             total = 0
