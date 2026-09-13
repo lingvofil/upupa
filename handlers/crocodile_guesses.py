@@ -7,7 +7,7 @@ from games import (
     crocodile,
     crocodile_modes,
     reverse_crocodile,
-    reverse_crocodile_modes,
+    reverse_crocodile_guessing,
 )
 
 
@@ -59,6 +59,6 @@ async def handle_duel_crocodile_answer(message: types.Message) -> None:
 async def handle_reverse_crocodile_answer(message: types.Message) -> None:
     session = reverse_crocodile.games.get(str(message.chat.id)) or {}
     if session.get("mode") not in (None, "word"):
-        await reverse_crocodile_modes.check_answer(message)
+        await reverse_crocodile_guessing.check_special_answer(message)
     else:
         await reverse_crocodile.check_answer(message)
