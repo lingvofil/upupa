@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 
+
+TRANSFER_RE = re.compile(
+    r"^(?:упупа\s+)?(?:передать|отдать)\s+(?:(\d+)\s+)?(.+?)\s*$",
+    re.I,
+)
 
 FUN_INVENTORY_RULES = """
 Инвентарь хранит не только полезный лут, но и смешные следы реально случившихся событий.
@@ -14,7 +20,16 @@ FUN_INVENTORY_RULES = """
 [ITEM:ADD;PLAYER:123;NAME:пизд;FEW:пизда;MANY:пиздов;KIND:item]
 После пяти таких реальных событий инвентарь покажет «5 пиздов».
 Уникальные KIND:artifact не стакаются и по-прежнему должны быть действительно уникальными вещами.
+Артефакты — редкая, но штатная награда прямо ВО ВРЕМЯ игры, а не декоративная строчка эпилога.
+Ориентир для обычной полной кампании — примерно 1–2 новых артефакта на всю группу, только за действительно значимый трофей,
+победу, находку, сделку или последствие решения. Не раздавай их по таймеру и не выдумывай без сюжетной причины.
+Как только герой фактически получает такой уникальный наследуемый предмет, в ЭТОМ ЖЕ ответе обязательно добавляй
+[ITEM:ADD;PLAYER:123;NAME:название;KIND:artifact]. Не откладывай выдачу до эпилога: эпилог не меняет инвентарь.
 """.strip()
+
+
+class InventoryTransferError(ValueError):
+    pass
 
 
 def _quantity(item) -> int:
@@ -81,6 +96,61 @@ def render_inventory_lines(items) -> list[str]:
     return result
 
 
+def _ensure_artifact_awards(session) -> dict[str, list[str]]:
+    awards = getattr(session, "artifact_awards", None)
+    if not isinstance(awards, dict):
+        awards = {}
+        session.artifact_awards = awards
+    for key, values in list(awards.items()):
+        if not isinstance(values, list):
+            awards[str(key)] = []
+    return awards
+
+
+def _artifact_snapshot(session) -> set[tuple[str, str]]:
+    result = set()
+    for player, items in (getattr(session, "inventories", {}) or {}).items():
+        for item in items or []:
+            if _kind(item) == "artifact" and _name(item):
+                result.add((str(player), _name(item).casefold()))
+    return result
+
+
+def _record_new_artifact_awards(session, before: set[tuple[str, str]]) -> None:
+    awards = _ensure_artifact_awards(session)
+    after = _artifact_snapshot(session)
+    for player, normalized_name in sorted(after - before):
+        item_name = next(
+            (
+                _name(item)
+                for item in (getattr(session, "inventories", {}) or {}).get(player, [])
+                if _kind(item) == "artifact" and _name(item).casefold() == normalized_name
+            ),
+            normalized_name,
+        )
+        bucket = awards.setdefault(player, [])
+        if not any(str(value).casefold() == item_name.casefold() for value in bucket):
+            bucket.append(item_name)
+
+
+def _artifact_progress_line(session) -> str:
+    awards = _ensure_artifact_awards(session)
+    names = [str(name) for values in awards.values() for name in values if str(name).strip()]
+    count = len(names)
+    try:
+        scene_count = int(getattr(session, "scene_count", 0) or 0)
+    except (TypeError, ValueError):
+        scene_count = 0
+    if count == 0 and scene_count >= 4:
+        return (
+            "- Новых артефактов этой кампании пока 0. Не выдавай подарок из воздуха, но при ближайшем действительно "
+            "заслуженном уникальном трофее обязательно оформи его KIND:artifact сразу в сцене."
+        )
+    if count == 0:
+        return "- Новых артефактов этой кампании пока 0; не форсируй их до сюжетно заслуженного момента."
+    return f"- Новых артефактов этой кампании: {count} ({', '.join(names[-3:])}). Не раздавай новые ради квоты."
+
+
 def _inventory_context(campaign, session) -> str:
     campaign._ensure(session)
     out = []
@@ -89,7 +159,8 @@ def _inventory_context(campaign, session) -> str:
         names = [name for name in names if name]
         if names:
             out.append(f"- ID {key}: {', '.join(names)}")
-    return "\n".join(out) or "- нет"
+    out.append(_artifact_progress_line(session))
+    return "\n".join(out)
 
 
 def _snapshot_inventory(session) -> dict[tuple[str, str], dict]:
@@ -143,10 +214,184 @@ def _stack_item(base_item, *, name: str, quantity: int, fields: dict) -> dict:
     return item
 
 
+def _normalize_item_query(value: str) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def parse_transfer_command(text: str | None) -> tuple[int, str] | None:
+    match = TRANSFER_RE.match(str(text or "").strip())
+    if not match:
+        return None
+    quantity = int(match.group(1) or 1)
+    if quantity <= 0:
+        return None
+    quantity = min(quantity, 999)
+    item_name = str(match.group(2) or "").strip()
+    if len(item_name) >= 2 and item_name[0] == item_name[-1] and item_name[0] in {'"', "'", "«", "“"}:
+        item_name = item_name[1:-1].strip()
+    return (quantity, item_name) if item_name else None
+
+
+def _item_aliases(item) -> set[str]:
+    aliases = {_normalize_item_query(_name(item))}
+    if isinstance(item, dict):
+        for key in ("few", "many", "plural"):
+            value = _normalize_item_query(item.get(key))
+            if value:
+                aliases.add(value)
+    return {value for value in aliases if value}
+
+
+def _find_transfer_item_index(items, query: str) -> int | None:
+    needle = _normalize_item_query(query)
+    exact = [index for index, item in enumerate(items or []) if needle in _item_aliases(item)]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise InventoryTransferError("Нашлось несколько вещей с таким названием — уточни.")
+    fuzzy = []
+    if len(needle) >= 3:
+        for index, item in enumerate(items or []):
+            aliases = _item_aliases(item)
+            if any(needle in alias or alias in needle for alias in aliases):
+                fuzzy.append(index)
+    if len(fuzzy) == 1:
+        return fuzzy[0]
+    if len(fuzzy) > 1:
+        raise InventoryTransferError("Нашлось несколько похожих вещей — напиши название точнее.")
+    return None
+
+
+def transfer_between_inventories(inventories, sender_id: int, target_id: int, item_query: str, quantity: int = 1) -> tuple[str, str]:
+    sender = str(int(sender_id))
+    target = str(int(target_id))
+    if sender == target:
+        raise InventoryTransferError("Самому себе передавать бессмысленно.")
+    try:
+        quantity = int(quantity)
+    except (TypeError, ValueError):
+        quantity = 1
+    if quantity < 1:
+        raise InventoryTransferError("Количество должно быть больше нуля.")
+
+    source_items = inventories.setdefault(sender, [])
+    source_index = _find_transfer_item_index(source_items, item_query)
+    if source_index is None:
+        raise InventoryTransferError(f"В инвентаре нет «{item_query}».")
+
+    source_item = source_items[source_index]
+    item_name = _name(source_item)
+    item_kind = _kind(source_item)
+    available = _quantity(source_item)
+    if quantity > available:
+        raise InventoryTransferError(f"Столько нет: «{format_inventory_item(source_item)}».")
+    if item_kind == "artifact" and quantity != 1:
+        raise InventoryTransferError("Артефакт уникальный — его можно передать только целиком.")
+
+    target_items = inventories.setdefault(target, [])
+    target_index = _find_item_index(target_items, item_name)
+    if item_kind == "artifact" and target_index is not None:
+        raise InventoryTransferError("У получателя уже есть такой артефакт.")
+
+    moved = dict(source_item) if isinstance(source_item, dict) else {"name": item_name, "kind": item_kind}
+    moved["name"] = item_name
+    moved["kind"] = item_kind
+    if quantity > 1:
+        moved["quantity"] = quantity
+    else:
+        moved.pop("quantity", None)
+
+    remaining = available - quantity
+    if remaining <= 0:
+        source_items.pop(source_index)
+    else:
+        source_items[source_index] = _stack_item(source_item, name=item_name, quantity=remaining, fields={})
+
+    if target_index is None:
+        target_items.append(moved)
+    elif item_kind != "artifact":
+        fields = {
+            "KIND": item_kind,
+            "FEW": moved.get("few") if isinstance(moved, dict) else None,
+            "MANY": moved.get("many") if isinstance(moved, dict) else None,
+            "PLURAL": moved.get("plural") if isinstance(moved, dict) else None,
+        }
+        target_items[target_index] = _stack_item(
+            target_items[target_index],
+            name=item_name,
+            quantity=_quantity(target_items[target_index]) + quantity,
+            fields={key: value for key, value in fields.items() if value},
+        )
+
+    return format_inventory_item(moved), item_kind
+
+
+def _sync_archived_artifacts(history: dict) -> None:
+    history["artifacts"] = [
+        deepcopy(item)
+        for item in (history.get("inventory") or [])
+        if _kind(item) == "artifact"
+    ]
+
+
+def transfer_inventory(dnd, chat_id: int, sender_id: int, target_id: int, item_query: str, quantity: int = 1) -> tuple[str, str, str]:
+    from AI import dnd_campaign as campaign
+
+    campaign._load_archive(dnd)
+    session = dnd.dnd_sessions.get(int(chat_id))
+    sender_key = str(int(sender_id))
+    target_key = str(int(target_id))
+
+    if session is not None and getattr(session, "mode", None) == "participants":
+        participants = getattr(session, "participants", {}) or {}
+        sender_active = sender_key in participants
+        target_active = target_key in participants
+        if sender_active or target_active:
+            if not sender_active or not target_active:
+                raise InventoryTransferError("Пока идёт кампания, передавать игровой инвентарь можно только между её участниками.")
+            campaign._ensure(session)
+            display, item_kind = transfer_between_inventories(
+                session.inventories,
+                sender_id,
+                target_id,
+                item_query,
+                quantity,
+            )
+            dnd.persist_dnd_sessions()
+            return display, item_kind, "session"
+
+    sender_history = campaign._player_history(chat_id, sender_id)
+    target_history = campaign._player_history(chat_id, target_id)
+    if not sender_history:
+        raise InventoryTransferError("У тебя нет сохранённого D&D-инвентаря в этом чате.")
+    if not target_history:
+        raise InventoryTransferError("У получателя ещё нет сохранённого D&D-персонажа в этом чате.")
+
+    inventories = {
+        sender_key: sender_history.setdefault("inventory", []),
+        target_key: target_history.setdefault("inventory", []),
+    }
+    display, item_kind = transfer_between_inventories(
+        inventories,
+        sender_id,
+        target_id,
+        item_query,
+        quantity,
+    )
+    sender_history["inventory"] = inventories[sender_key]
+    target_history["inventory"] = inventories[target_key]
+    _sync_archived_artifacts(sender_history)
+    _sync_archived_artifacts(target_history)
+    campaign._save_archive(dnd)
+    return display, item_kind, "archive"
+
+
 def apply_stackable_metadata(campaign, original_apply, session, text):
     """Preserve campaign metadata behavior while stacking repeated ordinary ITEM tags."""
     campaign._ensure(session)
+    _ensure_artifact_awards(session)
     before = _snapshot_inventory(session)
+    before_artifacts = _artifact_snapshot(session)
     cleaned, notices = original_apply(session, text)
     valid_players = _valid_players(session)
     deltas: dict[tuple[str, str], dict] = {}
@@ -214,6 +459,7 @@ def apply_stackable_metadata(campaign, original_apply, session, text):
             ]
             notices.append(f"🎒 {player_name}: теперь {display}")
 
+    _record_new_artifact_awards(session, before_artifacts)
     return cleaned, notices
 
 
@@ -225,6 +471,24 @@ def install_fun_inventory() -> None:
     if getattr(campaign, "_upupa_fun_inventory_installed", False):
         return
 
+    original_ensure = campaign._ensure
+
+    def ensure(session):
+        original_ensure(session)
+        _ensure_artifact_awards(session)
+
+    campaign._ensure = ensure
+
+    original_state = campaign._state
+
+    def state(session):
+        row = original_state(session)
+        _ensure_artifact_awards(session)
+        row["artifact_awards"] = session.artifact_awards
+        return row
+
+    campaign._state = state
+
     original_apply = campaign._apply_metadata
 
     def apply_metadata(session, text):
@@ -235,4 +499,67 @@ def install_fun_inventory() -> None:
     if FUN_INVENTORY_RULES not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{FUN_INVENTORY_RULES}"
     state_commands._inventory_items = render_inventory_lines
+
+    original_render_inventory = state_commands.render_inventory
+
+    def render_inventory(dnd, chat_id, user_id):
+        text = original_render_inventory(dnd, chat_id, user_id)
+        return text + (
+            "\n\n↪️ Передача: ответь на сообщение игрока «передать <название>». "
+            "Для стака можно, например, «передать 2 штрафа»."
+        )
+
+    state_commands.render_inventory = render_inventory
+
+    original_state_middleware_call = state_commands.DndStateCommandMiddleware.__call__
+
+    async def state_middleware_call(self, handler, event, data):
+        parsed = parse_transfer_command(getattr(event, "text", None))
+        if parsed is None:
+            return await original_state_middleware_call(self, handler, event, data)
+
+        from AI import dnd
+
+        chat = getattr(event, "chat", None)
+        sender = getattr(event, "from_user", None)
+        replied = getattr(event, "reply_to_message", None)
+        target = getattr(replied, "from_user", None) if replied else None
+        if chat is None or sender is None or not hasattr(event, "answer"):
+            return await original_state_middleware_call(self, handler, event, data)
+        if target is None:
+            await event.answer("↪️ Ответь командой «передать <предмет>» на сообщение того, кому отдаёшь вещь.")
+            return None
+        if getattr(target, "is_bot", False):
+            await event.answer("🤖 Боту инвентарь не нужен.")
+            return None
+        if int(target.id) == int(sender.id):
+            await event.answer("🎒 Самому себе передавать бессмысленно.")
+            return None
+
+        quantity, item_query = parsed
+        try:
+            display, item_kind, source = transfer_inventory(
+                dnd,
+                int(chat.id),
+                int(sender.id),
+                int(target.id),
+                item_query,
+                quantity,
+            )
+        except InventoryTransferError as exc:
+            await event.answer(f"🎒 {exc}")
+            return None
+
+        target_name = getattr(target, "first_name", None) or getattr(target, "full_name", None) or "получателю"
+        icon = "✨" if item_kind == "artifact" else "🎒"
+        suffix = ""
+        if source == "archive":
+            suffix = (
+                "\nСохранённый инвентарь обновлён вне егры. В новую отдельную кампанию автоматически наследуются только ✨ артефакты; "
+                "обычный лут целиком возвращается при продолжении прошлой кампании."
+            )
+        await event.answer(f"{icon} Передано {target_name}: {display}.{suffix}")
+        return None
+
+    state_commands.DndStateCommandMiddleware.__call__ = state_middleware_call
     campaign._upupa_fun_inventory_installed = True
