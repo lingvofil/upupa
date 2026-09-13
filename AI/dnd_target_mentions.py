@@ -68,15 +68,6 @@ def configure_dnd_target_mentions(dnd_module=None) -> None:
         from AI import dnd as dnd_module
 
     dnd = dnd_module
-
-    # Target mentions are configured after the full DnD generation stack, so this
-    # is also a stable startup hook for the per-player agency guard. Isolated
-    # mention-test doubles do not necessarily expose the generation pipeline.
-    if hasattr(dnd, "generate_session_response"):
-        from AI.dnd_player_agency import configure_dnd_player_agency
-
-        configure_dnd_player_agency(dnd)
-
     if getattr(dnd, "_upupa_dnd_target_mentions_configured", False):
         return
 
