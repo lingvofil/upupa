@@ -14,8 +14,6 @@ from games import crocodile, crocodile_persistence
 _configured = False
 _original_get_game_keyboard = None
 _original_handle_callback = None
-_original_session_to_record = None
-_original_session_from_record = None
 _original_party_menu_keyboard = None
 
 
@@ -197,25 +195,32 @@ async def handle_duo_opt_in_callback(callback) -> Any:
     )
 
 
-def _session_to_record_with_duo_opt_in(chat_id: str, session: dict) -> dict:
-    record = _original_session_to_record(chat_id, session)
+def enrich_session_record_with_duo_opt_in(
+    chat_id: str,
+    session: dict,
+    record: dict,
+) -> dict:
+    """Persist an open duo invitation without replacing the base serializer."""
     if session.get("duo_invite_open") and len(_artist_ids(session)) < 2:
         record["duo_invite_open"] = True
     return record
 
 
-def _session_from_record_with_duo_opt_in(record: dict) -> tuple[str, dict]:
-    chat_id, session = _original_session_from_record(record)
+def enrich_restored_session_with_duo_opt_in(
+    record: dict,
+    chat_id: str,
+    session: dict,
+) -> tuple[str, dict]:
+    """Restore an open duo invitation after the base session is decoded."""
     if bool(record.get("duo_invite_open")) and len(_artist_ids(session)) < 2:
         session["duo_invite_open"] = True
     return chat_id, session
 
 
 def configure_crocodile_duo_opt_in() -> None:
-    """Install the opt-in layer after Crocodile modes and party persistence."""
+    """Install the opt-in UI/callback layer after Crocodile party controls."""
     global _configured
     global _original_get_game_keyboard, _original_handle_callback
-    global _original_session_to_record, _original_session_from_record
     global _original_party_menu_keyboard
     if _configured:
         return
@@ -224,13 +229,9 @@ def configure_crocodile_duo_opt_in() -> None:
 
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_handle_callback = crocodile.handle_callback
-    _original_session_to_record = crocodile_persistence._session_to_record
-    _original_session_from_record = crocodile_persistence._session_from_record
     _original_party_menu_keyboard = crocodile_party_controls.menu_keyboard
 
     crocodile.get_game_keyboard = get_game_keyboard_with_duo_opt_in
     crocodile.handle_callback = handle_duo_opt_in_callback
-    crocodile_persistence._session_to_record = _session_to_record_with_duo_opt_in
-    crocodile_persistence._session_from_record = _session_from_record_with_duo_opt_in
     crocodile_party_controls.menu_keyboard = unified_menu_keyboard_without_default_duo
     _configured = True
