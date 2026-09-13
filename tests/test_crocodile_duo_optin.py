@@ -115,6 +115,23 @@ def test_duo_game_keyboard_composes_before_ui_clear_next(monkeypatch):
         crocodile.game_sessions.pop(str(chat_id), None)
 
 
+def test_non_duo_callback_delegates_to_explicit_downstream_handler():
+    from games import crocodile_duo_optin as duo
+    from games import crocodile_runtime as runtime
+
+    callback = _callback("cr_n_-42", 1)
+    downstream = AsyncMock(return_value="handled-by-modes")
+    handler = runtime._compose_callback_handler(
+        downstream,
+        duo.handle_duo_opt_in_callback,
+    )
+
+    result = asyncio.run(handler(callback))
+
+    assert result == "handled-by-modes"
+    downstream.assert_awaited_once_with(callback)
+
+
 def test_non_artist_cannot_open_duo_invitation(monkeypatch):
     from games import crocodile
     from games import crocodile_duo_optin as duo
@@ -124,13 +141,15 @@ def test_non_artist_cannot_open_duo_invitation(monkeypatch):
         "drawer_name": "Первый",
     }
     persist = MagicMock()
+    downstream = AsyncMock()
     monkeypatch.setattr(duo, "_persist_regular_state", persist)
     callback = _callback("cr_duo_invite_-42", 2, "Второй")
 
     try:
-        asyncio.run(duo.handle_duo_opt_in_callback(callback))
+        asyncio.run(duo.handle_duo_opt_in_callback(callback, downstream))
         assert "duo_invite_open" not in crocodile.game_sessions["-42"]
         persist.assert_not_called()
+        downstream.assert_not_awaited()
         callback.answer.assert_awaited_once_with(
             "Сначала текущий художник должен сам позвать напарника.",
             show_alert=True,
@@ -149,6 +168,7 @@ def test_primary_artist_must_invite_before_second_can_join(monkeypatch):
     }
     crocodile.game_sessions["-42"] = session
     persist = MagicMock()
+    downstream = AsyncMock()
     monkeypatch.setattr(duo, "_persist_regular_state", persist)
     monkeypatch.setattr(duo, "_base_game_keyboard", _base_keyboard)
 
@@ -157,14 +177,14 @@ def test_primary_artist_must_invite_before_second_can_join(monkeypatch):
     second = _callback("cr_duo_join_-42", 2, "Второй")
 
     try:
-        asyncio.run(duo.handle_duo_opt_in_callback(early_join))
+        asyncio.run(duo.handle_duo_opt_in_callback(early_join, downstream))
         assert "drawer_ids" not in session
         early_join.answer.assert_awaited_once_with(
             "Первый художник ещё не открывал совместное рисование.",
             show_alert=True,
         )
 
-        asyncio.run(duo.handle_duo_opt_in_callback(primary))
+        asyncio.run(duo.handle_duo_opt_in_callback(primary, downstream))
         assert session["duo_invite_open"] is True
         invite_markup = primary.message.answer.await_args.kwargs["reply_markup"]
         assert invite_markup.inline_keyboard[0][0].callback_data == "cr_duo_join_-42"
@@ -176,12 +196,13 @@ def test_primary_artist_must_invite_before_second_can_join(monkeypatch):
             for button in row
         )
 
-        asyncio.run(duo.handle_duo_opt_in_callback(second))
+        asyncio.run(duo.handle_duo_opt_in_callback(second, downstream))
         assert session["drawer_ids"] == [1, 2]
         assert session["drawer_names"] == ["Первый", "Второй"]
         assert session["mode"] == "duo"
         assert "duo_invite_open" not in session
         assert persist.call_count == 2
+        downstream.assert_not_awaited()
     finally:
         crocodile.game_sessions.pop("-42", None)
 
@@ -195,13 +216,15 @@ def test_stale_legacy_duo_button_no_longer_allows_direct_join(monkeypatch):
         "drawer_name": "Первый",
     }
     persist = MagicMock()
+    downstream = AsyncMock()
     monkeypatch.setattr(duo, "_persist_regular_state", persist)
     callback = _callback("cr_duo_-42", 2, "Второй")
 
     try:
-        asyncio.run(duo.handle_duo_opt_in_callback(callback))
+        asyncio.run(duo.handle_duo_opt_in_callback(callback, downstream))
         assert "drawer_ids" not in crocodile.game_sessions["-42"]
         persist.assert_not_called()
+        downstream.assert_not_awaited()
     finally:
         crocodile.game_sessions.pop("-42", None)
 
