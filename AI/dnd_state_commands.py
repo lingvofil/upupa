@@ -11,6 +11,8 @@ _STATE_ALIASES = {
     "status": {"что происходит", "упупа что происходит"},
 }
 _START_ALIASES = {"упупа днд"}
+_LOBBY_MENU_ALIASES = {"днд"}
+_LOBBY_START_ALIASES = {"днд старт"}
 
 _STATE_LABELS = {
     "WAITING_MODE": "выбираем режим егры",
@@ -44,6 +46,10 @@ def command_kind(text: str | None) -> str | None:
     normalized = _normalize_command(text)
     if normalized in _START_ALIASES:
         return "start"
+    if normalized in _LOBBY_START_ALIASES:
+        return "lobby_start"
+    if normalized in _LOBBY_MENU_ALIASES:
+        return "lobby_menu"
     for kind, aliases in _STATE_ALIASES.items():
         if normalized in aliases:
             return kind
@@ -51,7 +57,7 @@ def command_kind(text: str | None) -> str | None:
 
 
 def is_state_command(text: str | None) -> bool:
-    return command_kind(text) in _STATE_ALIASES
+    return command_kind(text) is not None
 
 
 def _campaign_module(dnd):
@@ -66,6 +72,63 @@ def _active_session(dnd, chat_id: int):
     if session is not None:
         _campaign_module(dnd)._ensure(session)
     return session
+
+
+def _open_participant_lobby(dnd, chat_id: int):
+    session = dnd.dnd_sessions.get(int(chat_id))
+    if not session or getattr(session, "mode", None) != "participants" or getattr(session, "state", None) != "LOBBY":
+        return None
+    _campaign_module(dnd)._ensure(session)
+    return session
+
+
+async def _repost_lobby(event, dnd) -> None:
+    session = _open_participant_lobby(dnd, int(event.chat.id))
+    if session is None:
+        await event.answer("Сейчас открытого лобби ДНД нет. Запусти его через «упупа днд».")
+        return
+
+    campaign = _campaign_module(dnd)
+    prompt = await event.answer(
+        campaign._lobby_text(session),
+        reply_markup=campaign._lobby_keyboard(session),
+    )
+    session.lobby_message_id = prompt.message_id
+    dnd.persist_dnd_sessions()
+
+
+async def _start_lobby_from_message(event, dnd) -> None:
+    session = _open_participant_lobby(dnd, int(event.chat.id))
+    if session is None:
+        await event.answer("Сейчас открытого лобби ДНД нет.")
+        return
+
+    user_id = int(event.from_user.id)
+    starter_user_id = getattr(session, "starter_user_id", None)
+    if starter_user_id is None or user_id != int(starter_user_id):
+        await event.answer("Запустить игру может только ведущий.")
+        return
+    if not (getattr(session, "participants", {}) or {}):
+        await event.answer("Сначала хотя бы кто-нибудь должен нажать «Участвовать».")
+        return
+
+    campaign = _campaign_module(dnd)
+    missing = campaign._missing_profiles(session)
+    if missing:
+        await event.answer("Не готовы: " + ", ".join(missing[:4]))
+        return
+
+    session.plot_options = await campaign._plot_choices(dnd, session)
+    session.state = "WAITING_PLOT"
+    dnd.persist_dnd_sessions()
+    options = session.plot_options
+    text = "🎬 Выбери сюжет:\n\n" + "\n".join(
+        f"{index + 1}. {option}" for index, option in enumerate(options)
+    )
+    await event.answer(
+        text,
+        reply_markup=campaign._plot_keyboard(options, False),
+    )
 
 
 def _player_name(session, user_id: int, fallback: str | None = None) -> str:
@@ -332,6 +395,13 @@ class DndStateCommandMiddleware(BaseMiddleware):
         user = getattr(event, "from_user", None)
         if chat is None or user is None or not hasattr(event, "answer"):
             return await handler(event, data)
+
+        if kind == "lobby_menu":
+            await _repost_lobby(event, dnd)
+            return None
+        if kind == "lobby_start":
+            await _start_lobby_from_message(event, dnd)
+            return None
 
         text = render_state_command(
             kind,
