@@ -83,6 +83,40 @@ def test_persistence_dependency_restores_extra_state_before_regular_file_check(
     restore_extra.assert_called_once_with()
 
 
+def test_duel_vote_deadline_is_set_once_by_modes(monkeypatch):
+    from games import crocodile, crocodile_modes
+
+    duel = {"phase": "answer_resolved", "votes": {}}
+    created_tasks = []
+
+    def start_background_task(coro, *, name):
+        coro.close()
+        created_tasks.append(name)
+        return object()
+
+    monkeypatch.setattr(crocodile_modes.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        crocodile_modes,
+        "bot",
+        SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock()),
+    )
+    monkeypatch.setattr(crocodile, "_start_background_task", start_background_task)
+    crocodile_modes.canvas_sessions.clear()
+
+    asyncio.run(crocodile_modes._start_duel_vote("-42", duel))
+
+    assert duel["phase"] == "voting"
+    assert duel["vote_deadline"] == 1000.0 + crocodile_modes.DUEL_VOTE_SECONDS
+    first_task = duel["vote_task"]
+    assert created_tasks == ["crocodile-duel-vote:-42"]
+
+    asyncio.run(crocodile_modes._start_duel_vote("-42", duel))
+
+    assert duel["vote_deadline"] == 1000.0 + crocodile_modes.DUEL_VOTE_SECONDS
+    assert duel["vote_task"] is first_task
+    assert created_tasks == ["crocodile-duel-vote:-42"]
+
+
 def test_party_state_roundtrip_restores_duel_phone_and_canvases(tmp_path, monkeypatch):
     from games import crocodile_modes
     from games import crocodile_party_state as state
