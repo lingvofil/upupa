@@ -69,8 +69,19 @@ def _refresh_gemini_chat_session(dnd, session) -> None:
     )
 
 
+class DndCompletionPolicy:
+    """Explicit extension points for campaign/combat completion behavior."""
+
+    def __init__(self):
+        self.after_participant_joined = None
+        self.filter_expected_ids = None
+
+
 class DndParticipantCompletionMiddleware(BaseMiddleware):
     """Collect participant replies robustly and finish complete group decisions early."""
+
+    def __init__(self, policy=None):
+        self.policy = policy or DndCompletionPolicy()
 
     async def __call__(self, handler, event, data):
         from AI import dnd
@@ -90,13 +101,15 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             logging.exception("DnD participant auto-finalize failed event=%r", event)
         return result
 
-    @staticmethod
-    def _expected_ids(dnd, session, target_user_ids) -> set[int]:
+    def _expected_ids(self, dnd, session, target_user_ids) -> set[int]:
         if not dnd._is_participant_mode(session):
             return set()
         participants = dnd._participant_ids(session)
         targets = {int(value) for value in (target_user_ids or [])}
-        return participants & targets if targets else participants
+        expected = participants & targets if targets else participants
+        if self.policy.filter_expected_ids is not None:
+            expected = set(self.policy.filter_expected_ids(dnd, session, expected))
+        return expected
 
     async def _precollect_action_reply(self, dnd, bot, event) -> None:
         chat = getattr(event, "chat", None)
@@ -133,6 +146,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         participants = dnd._participant_ids(session)
         targets = list(getattr(session, "action_target_user_ids", []) or [])
         user_name = getattr(user, "first_name", None) or f"егрок {user_id}"
+        joined = False
 
         if user_id not in participants:
             session.participants[str(user_id)] = {
@@ -148,6 +162,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
                 user_name,
                 bool(targets),
             )
+            joined = True
 
             if targets:
                 expected = self._expected_ids(dnd, session, targets)
@@ -156,6 +171,9 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
                     chat_id,
                     f"{user_name}, ты влез в егру. Но щас ход {names or 'других егроков'}: "
                     "твой ответ не учтён — жди следующей движухи.",
+                )
+                await self._after_participant_joined(
+                    dnd, bot, event, session, user_id, user_name
                 )
                 return
 
@@ -186,6 +204,17 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             user_id,
             prompt_message_id,
         )
+        if joined:
+            await self._after_participant_joined(
+                dnd, bot, event, session, user_id, user_name
+            )
+
+    async def _after_participant_joined(
+        self, dnd, bot, event, session, user_id: int, user_name: str
+    ) -> None:
+        callback = self.policy.after_participant_joined
+        if callback is not None:
+            await callback(dnd, bot, event, session, user_id, user_name)
 
     async def _maybe_finalize(self, event, bot, dnd) -> None:
         poll_id = getattr(event, "poll_id", None)
@@ -320,7 +349,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             )
 
 
-def configure_dnd_completion(dnd_router, *, middleware_class=None) -> None:
+def configure_dnd_completion(dnd_router, *, policy=None) -> None:
     """Attach only participant completion middleware and its generation guard."""
     if getattr(dnd_router, "_upupa_dnd_completion_configured", False):
         return
@@ -343,8 +372,7 @@ def configure_dnd_completion(dnd_router, *, middleware_class=None) -> None:
     # State queries and the short start alias must run before action collection,
     # otherwise a reply like «Мой герой» can become an in-game move.
     configure_dnd_state_commands(dnd_router)
-    middleware_type = middleware_class or DndParticipantCompletionMiddleware
-    middleware = middleware_type()
+    middleware = DndParticipantCompletionMiddleware(policy=policy)
     dnd_router.message.outer_middleware(middleware)
     dnd_router.poll_answer.outer_middleware(middleware)
     dnd_router._upupa_dnd_completion_middleware = middleware
