@@ -29,6 +29,7 @@ def test_metaphysical_plot_guard_rejects_reality_breaks_and_doubles():
     allowed = (
         "Банда гоблинов украла городской водопровод и требует выкуп.",
         "Проклятый маяк каждую ночь заманивает корабли на скалы.",
+        "Воин наносит двойной удар по воротам и ломает засов.",
     )
 
     assert all(feature._metaphysical_plot(text) for text in forbidden)
