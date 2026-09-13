@@ -23,10 +23,6 @@ _BYTES_MARKER = "__upupa_bytes_b64__"
 _configured = False
 _restored = False
 _last_payload: str | None = None
-_original_persist_sessions = None
-_original_configure_runtime = None
-_original_session_to_record = None
-_original_session_from_record = None
 _original_start_duel_vote = None
 
 
@@ -212,8 +208,11 @@ def restore_party_modes() -> int:
     return count
 
 
-def _session_to_record_with_duo(chat_id: str, session: dict) -> dict:
-    record = _original_session_to_record(chat_id, session)
+def _enrich_session_record_with_duo(
+    chat_id: str,
+    session: dict,
+    record: dict,
+) -> dict:
     raw_ids = session.get("drawer_ids")
     if isinstance(raw_ids, (list, tuple, set)):
         ids = []
@@ -237,8 +236,11 @@ def _session_to_record_with_duo(chat_id: str, session: dict) -> dict:
     return record
 
 
-def _session_from_record_with_duo(record: dict) -> tuple[str, dict]:
-    chat_id, session = _original_session_from_record(record)
+def _enrich_restored_session_with_duo(
+    record: dict,
+    chat_id: str,
+    session: dict,
+) -> tuple[str, dict]:
     raw_ids = record.get("drawer_ids")
     if isinstance(raw_ids, list):
         ids = []
@@ -265,19 +267,14 @@ def _session_from_record_with_duo(record: dict) -> tuple[str, dict]:
     return chat_id, session
 
 
-def _persist_sessions_with_party(*, force: bool = False) -> bool:
-    regular_changed = bool(_original_persist_sessions(force=force))
-    try:
-        party_changed = persist_party_modes(force=force)
-    except Exception:
-        logging.exception("[croc-party] failed to persist party state")
-        party_changed = False
-    return regular_changed or party_changed
-
-
-def _configure_runtime_with_party_restore() -> None:
-    _original_configure_runtime()
-    restore_party_modes()
+def crocodile_persistence_dependencies() -> persistence.CrocodilePersistenceDependencies:
+    """Describe party-state persistence hooks for the top-level runtime composer."""
+    return persistence.CrocodilePersistenceDependencies(
+        enrich_session_record=_enrich_session_record_with_duo,
+        enrich_restored_session=_enrich_restored_session_with_duo,
+        persist_extra_state=persist_party_modes,
+        restore_extra_state=restore_party_modes,
+    )
 
 
 async def _start_duel_vote_with_deadline(chat_id: str, duel: dict) -> None:
@@ -288,23 +285,11 @@ async def _start_duel_vote_with_deadline(chat_id: str, duel: dict) -> None:
 
 
 def configure_crocodile_party_state() -> None:
-    """Extend the existing Crocodile persistence loop with party-mode state."""
-    global _configured
-    global _original_persist_sessions, _original_configure_runtime
-    global _original_session_to_record, _original_session_from_record
-    global _original_start_duel_vote
+    """Install the remaining party-state duel-vote wrapper."""
+    global _configured, _original_start_duel_vote
     if _configured:
         return
 
-    _original_persist_sessions = persistence.persist_crocodile_sessions
-    _original_configure_runtime = persistence.configure_crocodile_runtime
-    _original_session_to_record = persistence._session_to_record
-    _original_session_from_record = persistence._session_from_record
     _original_start_duel_vote = crocodile_modes._start_duel_vote
-
-    persistence._session_to_record = _session_to_record_with_duo
-    persistence._session_from_record = _session_from_record_with_duo
-    persistence.persist_crocodile_sessions = _persist_sessions_with_party
-    persistence.configure_crocodile_runtime = _configure_runtime_with_party_restore
     crocodile_modes._start_duel_vote = _start_duel_vote_with_deadline
     _configured = True
