@@ -41,6 +41,7 @@ def _fake_dnd():
         participants={
             "1": {"user_id": 1, "name": "Алиса <Быстрая>"},
             "2": {"user_id": 2, "name": "Боря"},
+            "3": {"user_id": 3, "name": "Вася"},
         },
     )
     open_calls = []
@@ -92,7 +93,7 @@ def test_targeted_input_tags_player_and_keeps_action_flow():
     assert open_calls == [(bot, session.chat_id, [1])]
 
 
-def test_targeted_roll_and_poll_tag_every_target():
+def test_targeted_roll_and_poll_tag_up_to_two_targets():
     fake, session, _open_calls, parse_calls = _fake_dnd()
     configure_dnd_target_mentions(fake)
     bot = FakeBot()
@@ -118,6 +119,35 @@ def test_targeted_roll_and_poll_tag_every_target():
     assert 'tg://user?id=1' in bot.messages[1][1]
     assert 'tg://user?id=2' in bot.messages[1][1]
     assert "ваш выбор" in bot.messages[1][1]
+    assert len(parse_calls) == 2
+
+
+def test_three_or_more_targets_are_not_tagged_but_action_flow_continues():
+    fake, session, open_calls, parse_calls = _fake_dnd()
+    configure_dnd_target_mentions(fake)
+    bot = FakeBot()
+
+    result = asyncio.run(
+        fake.open_action_window(bot, session.chat_id, target_user_ids=[1, 2, 3])
+    )
+    asyncio.run(
+        fake.parse_and_execute_turn(
+            bot,
+            session.chat_id,
+            "Проверка [ACTION:ROLL;TYPE:CHECK;TARGETS:1,2,3;DC:10;MODE:NORMAL]",
+        )
+    )
+    asyncio.run(
+        fake.parse_and_execute_turn(
+            bot,
+            session.chat_id,
+            "Выбор [ACTION:POLL;TARGETS:1,2,3;OPTIONS:A;B]",
+        )
+    )
+
+    assert result == "opened"
+    assert bot.messages == []
+    assert open_calls == [(bot, session.chat_id, [1, 2, 3])]
     assert len(parse_calls) == 2
 
 
