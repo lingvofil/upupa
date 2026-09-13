@@ -81,7 +81,7 @@ def test_generation_wrapper_is_idempotent_and_passes_guarded_prompt():
     assert prompts[0][1].count(DND_PLAYER_AGENCY_MARKER) == 1
 
 
-def test_target_mentions_startup_hook_installs_agency_guard():
+def test_agency_and_target_mentions_compose_explicitly():
     prompts = []
 
     async def original_generate(session, prompt):
@@ -102,9 +102,11 @@ def test_target_mentions_startup_hook_installs_agency_guard():
         _is_participant_mode=lambda session: session.mode == "participants",
     )
 
+    configure_dnd_player_agency(fake_dnd)
     configure_dnd_target_mentions(fake_dnd)
     result = asyncio.run(fake_dnd.generate_session_response(_session(), "Резолв хода"))
 
     assert result == "ok"
     assert fake_dnd._upupa_dnd_player_agency_configured is True
+    assert fake_dnd._upupa_dnd_target_mentions_configured is True
     assert DND_PLAYER_AGENCY_MARKER in prompts[0]
