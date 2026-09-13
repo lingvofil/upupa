@@ -12,7 +12,7 @@ from games import crocodile, crocodile_persistence
 
 
 _configured = False
-_original_get_game_keyboard = None
+_base_game_keyboard = None
 _original_handle_callback = None
 
 
@@ -62,9 +62,12 @@ def _join_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
     )
 
 
-def get_game_keyboard_with_duo_opt_in(chat_id: int) -> InlineKeyboardMarkup:
-    """Show an invite action first; a join action appears only after artist opt-in."""
-    keyboard = _strip_duo_buttons(_original_get_game_keyboard(chat_id))
+def decorate_game_keyboard_with_duo_opt_in(
+    chat_id: int,
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Show an artist-controlled duo action on an already rendered game keyboard."""
+    keyboard = _strip_duo_buttons(keyboard)
     session = crocodile.game_sessions.get(str(chat_id))
     if session and len(_artist_ids(session)) >= 2:
         return keyboard
@@ -107,7 +110,9 @@ def _persist_regular_state() -> None:
 
 async def _edit_without_duo_button(callback, chat_id: str) -> None:
     try:
-        keyboard = _strip_duo_buttons(_original_get_game_keyboard(int(chat_id)))
+        if _base_game_keyboard is None:
+            raise RuntimeError("duo base game keyboard is not configured")
+        keyboard = _strip_duo_buttons(_base_game_keyboard(int(chat_id)))
         await callback.message.edit_reply_markup(reply_markup=keyboard)
     except Exception:
         logging.exception("[croc-duo] failed to update original game keyboard chat=%s", chat_id)
@@ -217,16 +222,14 @@ def enrich_restored_session_with_duo_opt_in(
     return chat_id, session
 
 
-def configure_crocodile_duo_opt_in() -> None:
-    """Install the opt-in game-keyboard and callback layer."""
-    global _configured
-    global _original_get_game_keyboard, _original_handle_callback
+def configure_crocodile_duo_opt_in(*, base_game_keyboard) -> None:
+    """Install callback routing and bind the explicit pre-duo keyboard renderer."""
+    global _configured, _base_game_keyboard, _original_handle_callback
     if _configured:
         return
 
-    _original_get_game_keyboard = crocodile.get_game_keyboard
+    _base_game_keyboard = base_game_keyboard
     _original_handle_callback = crocodile.handle_callback
 
-    crocodile.get_game_keyboard = get_game_keyboard_with_duo_opt_in
     crocodile.handle_callback = handle_duo_opt_in_callback
     _configured = True
