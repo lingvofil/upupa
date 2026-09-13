@@ -25,30 +25,56 @@ _last_payload: str | None = None
 _restored = False
 
 
-def _clamp_remaining(value: object, total: float) -> float:
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        seconds = total
-    return max(0.0, min(total, seconds))
-
-
-def _remaining_from_monotonic(
-    started_at: object,
-    total: float,
+def _wall_time_for_monotonic(
+    session: dict,
+    source_key: str,
     *,
-    now: float,
+    marker_key: str,
+    wall_key: str,
+    now_monotonic: float,
+    now_wall: float,
+) -> float | None:
+    """Map a monotonic event time to a stable wall-clock timestamp.
+
+    The derived value is cached on the hot session and recomputed only when the
+    source monotonic timestamp changes. This keeps the serialized payload stable
+    between real state changes instead of rewriting the file every persistence
+    tick just because a countdown is running.
+    """
+    source = session.get(source_key)
+    if source is None:
+        session.pop(marker_key, None)
+        session.pop(wall_key, None)
+        return None
+    source_value = float(source)
+    cached_marker = session.get(marker_key)
+    cached_wall = session.get(wall_key)
+    if cached_marker != source_value or not isinstance(cached_wall, (int, float)):
+        elapsed = max(0.0, now_monotonic - source_value)
+        cached_wall = now_wall - elapsed
+        session[marker_key] = source_value
+        session[wall_key] = cached_wall
+    return float(cached_wall)
+
+
+def _restore_monotonic_time(
+    wall_time: object,
+    *,
+    now_monotonic: float,
+    now_wall: float,
 ) -> float:
-    if started_at is None:
-        return total
-    try:
-        elapsed = max(0.0, now - float(started_at))
-    except (TypeError, ValueError):
-        return total
-    return max(0.0, total - elapsed)
+    event_wall = float(wall_time)
+    elapsed = max(0.0, now_wall - event_wall)
+    return now_monotonic - elapsed
 
 
-def _session_to_record(chat_id: str, session: dict, *, now: float) -> dict:
+def _session_to_record(
+    chat_id: str,
+    session: dict,
+    *,
+    now_monotonic: float,
+    now_wall: float,
+) -> dict:
     word = str(session.get("word") or "").strip()
     if not word:
         raise ValueError("missing reverse Crocodile answer")
@@ -65,7 +91,25 @@ def _session_to_record(chat_id: str, session: dict, *, now: float) -> dict:
     if mode not in _VALID_MODES:
         raise ValueError(f"unsupported reverse Crocodile mode: {mode}")
 
-    last_hint_at = session.get("last_hint_at")
+    started_wall_time = _wall_time_for_monotonic(
+        session,
+        "started_at",
+        marker_key="_persist_started_source",
+        wall_key="_persist_started_wall_time",
+        now_monotonic=now_monotonic,
+        now_wall=now_wall,
+    )
+    if started_wall_time is None:
+        raise ValueError("missing reverse Crocodile start time")
+    last_hint_wall_time = _wall_time_for_monotonic(
+        session,
+        "last_hint_at",
+        marker_key="_persist_hint_source",
+        wall_key="_persist_hint_wall_time",
+        now_monotonic=now_monotonic,
+        now_wall=now_wall,
+    )
+
     return {
         "chat_id": str(int(chat_id)),
         "word": word,
@@ -79,23 +123,17 @@ def _session_to_record(chat_id: str, session: dict, *, now: float) -> dict:
         ),
         "revealed_tiles": max(0, int(session.get("revealed_tiles") or 0)),
         "reveal_order": [int(index) for index in session.get("reveal_order", [])],
-        "surrender_remaining": _remaining_from_monotonic(
-            session.get("started_at"),
-            reverse.SURRENDER_DELAY_SECONDS,
-            now=now,
-        ),
-        "had_last_hint": last_hint_at is not None,
-        "hint_remaining": _remaining_from_monotonic(
-            last_hint_at,
-            reverse.HINT_COOLDOWN_SECONDS,
-            now=now,
-        )
-        if last_hint_at is not None
-        else 0.0,
+        "started_wall_time": started_wall_time,
+        "last_hint_wall_time": last_hint_wall_time,
     }
 
 
-def _session_from_record(record: dict, *, now: float) -> tuple[str, dict]:
+def _session_from_record(
+    record: dict,
+    *,
+    now_monotonic: float,
+    now_wall: float,
+) -> tuple[str, dict]:
     chat_id = str(int(record["chat_id"]))
     if chat_id == "0":
         raise ValueError("invalid chat id")
@@ -116,33 +154,35 @@ def _session_from_record(record: dict, *, now: float) -> tuple[str, dict]:
     if message_id <= 0:
         raise ValueError("invalid message id")
 
-    surrender_remaining = _clamp_remaining(
-        record.get("surrender_remaining"),
-        reverse.SURRENDER_DELAY_SECONDS,
+    started_wall_time = float(record["started_wall_time"])
+    started_at = _restore_monotonic_time(
+        started_wall_time,
+        now_monotonic=now_monotonic,
+        now_wall=now_wall,
     )
-    started_elapsed = reverse.SURRENDER_DELAY_SECONDS - surrender_remaining
 
+    last_hint_wall_time = record.get("last_hint_wall_time")
     last_hint_at = None
-    if bool(record.get("had_last_hint")):
-        hint_remaining = _clamp_remaining(
-            record.get("hint_remaining"),
-            reverse.HINT_COOLDOWN_SECONDS,
+    if last_hint_wall_time is not None:
+        last_hint_wall_time = float(last_hint_wall_time)
+        last_hint_at = _restore_monotonic_time(
+            last_hint_wall_time,
+            now_monotonic=now_monotonic,
+            now_wall=now_wall,
         )
-        hint_elapsed = reverse.HINT_COOLDOWN_SECONDS - hint_remaining
-        last_hint_at = now - hint_elapsed
 
     revealed_positions = {
         int(index) for index in (record.get("revealed_positions") or [])
     }
     reveal_order = [int(index) for index in (record.get("reveal_order") or [])]
 
-    return chat_id, {
+    session = {
         "word": word,
         "difficulty": str(record.get("difficulty") or "medium"),
         "mode": mode,
         "image": image,
         "message_id": message_id,
-        "started_at": now - started_elapsed,
+        "started_at": started_at,
         "mode_task": None,
         "round_task": None,
         "hints": max(0, int(record.get("hints") or 0)),
@@ -151,19 +191,33 @@ def _session_from_record(record: dict, *, now: float) -> tuple[str, dict]:
         "last_hint_at": last_hint_at,
         "revealed_tiles": max(0, int(record.get("revealed_tiles") or 0)),
         "reveal_order": reveal_order,
+        "_persist_started_source": started_at,
+        "_persist_started_wall_time": started_wall_time,
     }
+    if last_hint_at is not None:
+        session["_persist_hint_source"] = last_hint_at
+        session["_persist_hint_wall_time"] = last_hint_wall_time
+    return chat_id, session
 
 
 def _serialize_current_state() -> str:
     records = []
-    now = time.monotonic()
+    now_monotonic = time.monotonic()
+    now_wall = time.time()
     for chat_id, session in sorted(reverse.games.items()):
         # start_game/start_mode publish the Telegram card after installing the
         # in-memory session. Do not persist that tiny incomplete window.
         if not session.get("message_id"):
             continue
         try:
-            records.append(_session_to_record(chat_id, session, now=now))
+            records.append(
+                _session_to_record(
+                    chat_id,
+                    session,
+                    now_monotonic=now_monotonic,
+                    now_wall=now_wall,
+                )
+            )
         except Exception:
             logging.exception(
                 "[rcroc-state] failed to serialize session chat=%s", chat_id
@@ -211,7 +265,8 @@ def _resume_session_tasks(chat_id: str, session: dict) -> None:
 
     if (
         mode == "reveal"
-        and int(session.get("revealed_tiles") or 0) < modes.REVEAL_COLS * modes.REVEAL_ROWS
+        and int(session.get("revealed_tiles") or 0)
+        < modes.REVEAL_COLS * modes.REVEAL_ROWS
     ):
         session["mode_task"] = _start_restored_task(
             modes._reveal_loop(chat_id, session),
@@ -245,10 +300,15 @@ def restore_reverse_crocodile_sessions() -> int:
         return 0
 
     restored: dict[str, dict] = {}
-    now = time.monotonic()
+    now_monotonic = time.monotonic()
+    now_wall = time.time()
     for record in payload.get("sessions") or []:
         try:
-            chat_id, session = _session_from_record(record, now=now)
+            chat_id, session = _session_from_record(
+                record,
+                now_monotonic=now_monotonic,
+                now_wall=now_wall,
+            )
             restored[chat_id] = session
         except Exception:
             logging.exception(
