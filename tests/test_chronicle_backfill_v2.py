@@ -137,8 +137,27 @@ def test_global_phrase_counts_span_multiple_scan_batches(tmp_path):
 
     assert len(ranked) == 5
     assert all(item["phrase_total"] == 5 for item in ranked)
-    assert all(item["final_score"] > item["base_score"] for item in ranked)
+    assert all(item["final_score"] >= 3.0 for item in ranked)
     assert all(phrase in item["recurring_phrases"] for item in ranked)
+
+
+def test_repeated_meme_occurrences_do_not_consume_all_ai_slots():
+    from features.chronicle.backfill import _diversify_ranked
+
+    ranked = [
+        {"cluster_key": "meme-first", "recurring_phrases": ["легендарный чайник опять"]},
+        {"cluster_key": "meme-second", "recurring_phrases": ["легендарный чайник опять"]},
+        {"cluster_key": "other-meme", "recurring_phrases": ["боря снова обещал приехать"]},
+        {"cluster_key": "strong-dialogue", "recurring_phrases": []},
+    ]
+
+    selected = _diversify_ranked(ranked, 3)
+
+    assert [item["cluster_key"] for item in selected] == [
+        "meme-first",
+        "other-meme",
+        "strong-dialogue",
+    ]
 
 
 def test_backfill_completion_cleans_only_working_index(tmp_path):
