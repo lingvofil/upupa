@@ -10,7 +10,6 @@ from games import crocodile_modes, crocodile_party_controls
 
 _configured = False
 _original_telephone_callback = None
-_original_menu_callback = None
 
 
 def _callback_user_id(callback) -> int | None:
@@ -63,15 +62,15 @@ async def telephone_callback_with_skip_permissions(callback) -> Any:
     return await _original_telephone_callback(callback)
 
 
-async def menu_callback_with_skip_permissions(callback) -> Any:
+async def menu_callback_with_skip_permissions(callback, next_handler) -> Any:
     """Apply the same rule to the unified-menu skip button."""
     if (callback.data or "") != "cmenu_skip":
-        return await _original_menu_callback(callback)
+        return await next_handler(callback)
 
     chat_id = str(callback.message.chat.id)
     game = crocodile_modes.telephone_games.get(chat_id)
     if not game or game.get("phase") != "playing":
-        return await _original_menu_callback(callback)
+        return await next_handler(callback)
 
     user_id = _callback_user_id(callback)
     if not can_skip_telephone_player(game, user_id):
@@ -80,7 +79,7 @@ async def menu_callback_with_skip_permissions(callback) -> Any:
             show_alert=True,
         )
 
-    # The old menu handler admits only chain participants. ADMIN_ID is an
+    # The base menu handler admits only chain participants. ADMIN_ID is an
     # operational override and may intentionally be outside the chain, so the
     # admin path must perform the existing skip operation directly.
     try:
@@ -92,17 +91,15 @@ async def menu_callback_with_skip_permissions(callback) -> Any:
         await crocodile_party_controls._skip_telephone(chat_id, game)
         return
 
-    return await _original_menu_callback(callback)
+    return await next_handler(callback)
 
 
 def configure_crocodile_telephone_skip_permissions() -> None:
-    """Install the permission gate after admin/UI/resilience wrappers."""
-    global _configured, _original_telephone_callback, _original_menu_callback
+    """Install the direct telephone permission gate after ordinary wrappers."""
+    global _configured, _original_telephone_callback
     if _configured:
         return
 
     _original_telephone_callback = crocodile_modes.handle_telephone_callback
-    _original_menu_callback = crocodile_party_controls.handle_menu_callback
     crocodile_modes.handle_telephone_callback = telephone_callback_with_skip_permissions
-    crocodile_party_controls.handle_menu_callback = menu_callback_with_skip_permissions
     _configured = True
