@@ -10,7 +10,7 @@ from aiogram import Router, types
 
 from core.settings import APP_TIMEZONE_NAME
 from features.chronicle import config
-from features.chronicle.service import list_events, request_backfill
+from features.chronicle.runtime import list_events, request_backfill
 
 
 router = Router(name="chronicle")
