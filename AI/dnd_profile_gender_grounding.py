@@ -28,7 +28,7 @@ GROUNDING_RULES = (
 )
 
 _METAPHYSICAL_PATTERNS = (
-    re.compile(r"\bдвойн\w*", re.I),
+    re.compile(r"\bдвойник\w*|\bдвойниц\w*", re.I),
     re.compile(r"\b(?:копи[яи]|дубликат\w*)\b.{0,30}\b(?:геро\w*|персонаж\w*|участник\w*)", re.I),
     re.compile(r"\b(?:разрыв\w*|разлом\w*|трещин\w*|сло[йя])\b.{0,40}\bреальност\w*", re.I),
     re.compile(r"\b(?:альтернативн\w*|параллельн\w*)\b.{0,30}\b(?:реальност\w*|мир\w*)", re.I),
@@ -67,6 +67,7 @@ def install_dnd_profile_gender_grounding() -> None:
     """Patch campaign mechanics after the base campaign layer has been configured."""
     from AI import dnd
     from AI import dnd_campaign as campaign
+    from AI import dnd_combat as combat
     from AI import dnd_state_commands as state_commands
 
     if getattr(campaign, "_upupa_dnd_profile_gender_grounding_installed", False):
@@ -128,8 +129,6 @@ def install_dnd_profile_gender_grounding() -> None:
 
     campaign._profile_text = profile_text
 
-    original_missing_profiles = campaign._missing_profiles
-
     def missing_profiles(session):
         campaign._ensure(session)
         missing = []
@@ -142,15 +141,16 @@ def install_dnd_profile_gender_grounding() -> None:
 
     campaign._missing_profiles = missing_profiles
 
-    original_lobby_text = campaign._lobby_text
-
     def lobby_text(session):
         campaign._ensure(session)
-        roster = "\n".join(
-            ("✅" if name not in missing_profiles(session) else "🧩") + " " + name
-            for participant in session.participants.values()
-            for name in [participant.get("name") or "Игрок"]
-        ) or "Пока никто не записался."
+        rows = []
+        for participant in session.participants.values():
+            key = str(int(participant["user_id"]))
+            name = participant.get("name") or "Игрок"
+            profile = session.character_profiles.get(key) or {}
+            ready = campaign._profile_complete(profile) and _normalize_gender(profile.get(GENDER_STEP))
+            rows.append(("✅" if ready else "🧩") + " " + name)
+        roster = "\n".join(rows) or "Пока никто не записался."
         return (
             f"👥 Игра с участниками чата.\nВедущий: {session.starter_name}\n\n"
             f"Участники:\n{roster}\n\n"
@@ -273,6 +273,19 @@ def install_dnd_profile_gender_grounding() -> None:
 
     campaign._plot_generation_prompt = plot_generation_prompt
     campaign.FORBIDDEN_PLOT_PATTERNS = tuple(campaign.FORBIDDEN_PLOT_PATTERNS) + _METAPHYSICAL_PATTERNS
+
+    # Combat/healing wrappers are installed later and inspect attacks before delegating.
+    # Make a forbidden metaphysical draft look like a non-attack so it reaches the
+    # grounding guard below before any story text can be sent to the chat.
+    original_parse_attack = combat._parse_attack
+
+    def parse_attack(response):
+        story = campaign.ACTION_RE.sub("", campaign.META_RE.sub("", str(response or ""))).strip()
+        if _metaphysical_plot(story):
+            return None
+        return original_parse_attack(response)
+
+    combat._parse_attack = parse_attack
 
     original_parse_turn = dnd.parse_and_execute_turn
 
