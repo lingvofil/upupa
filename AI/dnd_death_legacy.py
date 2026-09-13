@@ -64,6 +64,14 @@ def history_is_dead(campaign, chat_id: int, user_id: int) -> bool:
     return bool(history.get("dead"))
 
 
+def _uses_active_inventory(dnd, chat_id: int, user_id: int) -> bool:
+    session = dnd.dnd_sessions.get(int(chat_id))
+    if not session or getattr(session, "mode", None) != "participants":
+        return False
+    participants = getattr(session, "participants", {}) or {}
+    return str(int(user_id)) in participants
+
+
 async def _start_fresh_profile(campaign, dnd, callback, session, user_id: int, *, edit=False) -> None:
     key = str(int(user_id))
     campaign._ensure(session)
@@ -87,6 +95,7 @@ def install_dnd_death_legacy(dnd_router) -> None:
     from AI import dnd
     from AI import dnd_campaign as campaign
     from AI import dnd_combat as combat
+    from AI import dnd_inventory_fun as inventory_fun
     from AI import dnd_state_commands as state_commands
 
     if getattr(campaign, "_upupa_dnd_death_legacy_installed", False):
@@ -198,6 +207,69 @@ def install_dnd_death_legacy(dnd_router) -> None:
         return original_history_stats(campaign_module, session, user_id)
 
     combat._history_stats = history_stats
+
+    # The corpse inventory stays in the archive as historical evidence, but it
+    # is not a usable player inventory. A newly created active hero gets a fresh
+    # session inventory and is therefore unaffected by this tombstone guard.
+    original_render_inventory = state_commands.render_inventory
+
+    def render_inventory(dnd_module, chat_id, user_id):
+        if (
+            not _uses_active_inventory(dnd_module, chat_id, user_id)
+            and history_is_dead(campaign, chat_id, user_id)
+        ):
+            return (
+                "🎒 Инвентарь недоступен: этот персонаж погиб.\n"
+                "Его вещи остались только в архиве приключения и больше не являются игровым имуществом."
+            )
+        return original_render_inventory(dnd_module, chat_id, user_id)
+
+    state_commands.render_inventory = render_inventory
+
+    original_transfer_inventory = inventory_fun.transfer_inventory
+
+    def transfer_inventory(dnd_module, chat_id, sender_id, target_id, item_query, quantity=1):
+        session = dnd_module.dnd_sessions.get(int(chat_id))
+        participants = (
+            getattr(session, "participants", {}) or {}
+            if session is not None and getattr(session, "mode", None) == "participants"
+            else {}
+        )
+        sender_key = str(int(sender_id))
+        target_key = str(int(target_id))
+
+        # If either side belongs to the current participant campaign, preserve
+        # the normal active-session rules (including the requirement that both
+        # sides are participants). The old death flag belongs to the previous
+        # hero and must not block the newly created active character.
+        if sender_key in participants or target_key in participants:
+            return original_transfer_inventory(
+                dnd_module,
+                chat_id,
+                sender_id,
+                target_id,
+                item_query,
+                quantity,
+            )
+
+        if history_is_dead(campaign, chat_id, sender_id):
+            raise inventory_fun.InventoryTransferError(
+                "Инвентарь погибшего героя недоступен: передавать его вещи нельзя."
+            )
+        if history_is_dead(campaign, chat_id, target_id):
+            raise inventory_fun.InventoryTransferError(
+                "Последний герой получателя погиб: передавать вещи в его архив нельзя. Сначала нужен новый герой."
+            )
+        return original_transfer_inventory(
+            dnd_module,
+            chat_id,
+            sender_id,
+            target_id,
+            item_query,
+            quantity,
+        )
+
+    inventory_fun.transfer_inventory = transfer_inventory
 
     # Historical hero views should make the tombstone explicit instead of
     # looking like an active reusable character sheet.
