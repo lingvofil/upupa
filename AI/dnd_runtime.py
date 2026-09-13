@@ -13,6 +13,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_healing_choice import install_dnd_healing_choice
+    from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
     from AI.dnd_inventory_effects import install_dnd_inventory_effects
     from AI.dnd_inventory_fun import install_fun_inventory
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
@@ -34,6 +35,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_healing_choice(router)
     install_dnd_inventory_reliability(dnd)
     install_dnd_inventory_effects(dnd)
+    install_dnd_inventory_effect_refinement(dnd)
     install_dnd_artifact_guard(dnd)
     configure_dnd_any_bot_replies(router)
 
