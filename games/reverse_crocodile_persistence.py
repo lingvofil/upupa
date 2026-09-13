@@ -9,20 +9,24 @@ import logging
 import time
 from pathlib import Path
 
-from core.paths import CROCODILE_STATE_PATH
 from games import crocodile
+from games import crocodile_persistence as base_persistence
 from games import reverse_crocodile as reverse
 from games import reverse_crocodile_modes as modes
 from games.reverse_crocodile_phrases import normalize_mode
 
 
 STATE_VERSION = 1
-REVERSE_STATE_PATH = Path(CROCODILE_STATE_PATH).with_name(
-    "reverse_crocodile_state.json"
-)
 _VALID_MODES = {"word", "reveal", "movie", "cartoon", "proverbs", "pun"}
 _last_payload: str | None = None
 _restored = False
+
+
+def _state_path() -> Path:
+    """Keep reverse state beside the canonical Crocodile session state."""
+    return Path(base_persistence.CROCODILE_STATE_PATH).with_name(
+        "reverse_crocodile_state.json"
+    )
 
 
 def _wall_time_for_monotonic(
@@ -238,10 +242,11 @@ def persist_reverse_crocodile_sessions(*, force: bool = False) -> bool:
     if not force and payload == _last_payload:
         return False
 
-    REVERSE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = REVERSE_STATE_PATH.with_suffix(REVERSE_STATE_PATH.suffix + ".tmp")
+    path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(payload, encoding="utf-8")
-    temp_path.replace(REVERSE_STATE_PATH)
+    temp_path.replace(path)
     _last_payload = payload
     return True
 
@@ -285,18 +290,17 @@ def restore_reverse_crocodile_sessions() -> int:
     if _restored:
         return len(reverse.games)
     _restored = True
-    if not REVERSE_STATE_PATH.is_file():
+    path = _state_path()
+    if not path.is_file():
         _last_payload = None
         return 0
 
     try:
-        payload = json.loads(REVERSE_STATE_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("version") != STATE_VERSION:
             raise ValueError("unsupported reverse Crocodile state")
     except Exception:
-        logging.exception(
-            "[rcroc-state] failed to read state path=%s", REVERSE_STATE_PATH
-        )
+        logging.exception("[rcroc-state] failed to read state path=%s", path)
         return 0
 
     restored: dict[str, dict] = {}
