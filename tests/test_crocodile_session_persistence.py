@@ -7,6 +7,7 @@ import pytest
 
 from tests import test_smoke_imports  # noqa: F401
 from games import crocodile
+from games import crocodile_party_state as party_state
 from games import crocodile_persistence as persistence
 
 
@@ -30,10 +31,12 @@ def _configure_temp_state(monkeypatch, tmp_path):
     state_path = tmp_path / "crocodile_sessions.json"
     scores_path = tmp_path / "crocodile_scores.json"
     word_history_path = tmp_path / "crocodile_word_history.json"
+    party_state_path = tmp_path / "crocodile_party_state.json"
     legacy_scores_path = tmp_path / "games" / "crocodile_scores.json"
     monkeypatch.setattr(persistence, "CROCODILE_STATE_PATH", state_path)
     monkeypatch.setattr(persistence, "CROCODILE_SCORES_PATH", scores_path)
     monkeypatch.setattr(persistence, "CROCODILE_WORD_HISTORY_PATH", word_history_path)
+    monkeypatch.setattr(party_state, "PARTY_STATE_PATH", party_state_path)
     monkeypatch.setattr(
         persistence,
         "LEGACY_CROCODILE_SCORES_PATH",
