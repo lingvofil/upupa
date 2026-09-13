@@ -8,6 +8,7 @@ import re
 
 
 _ACTION_TAG_RE = re.compile(r"\[ACTION:(.*?)\]", flags=re.IGNORECASE | re.DOTALL)
+_MAX_MENTION_TARGETS = 2
 
 
 def _unwrap_bot(bot):
@@ -34,7 +35,7 @@ def _mention_html(dnd, session, target_user_ids) -> str:
 
 async def _notify_targets(bot, dnd, session, target_user_ids, *, singular: str, plural: str) -> None:
     targets = [int(value) for value in (target_user_ids or [])]
-    if not targets:
+    if not targets or len(targets) > _MAX_MENTION_TARGETS:
         return
     mentions = _mention_html(dnd, session, targets)
     if not mentions:
@@ -62,7 +63,7 @@ def _targets_from_action(dnd, session, command: str) -> list[int]:
 
 
 def configure_dnd_target_mentions(dnd_module=None) -> None:
-    """Tag TARGETS for INPUT, ROLL and POLL without changing action semantics."""
+    """Tag at most two TARGETS for INPUT, ROLL and POLL without changing action semantics."""
     if dnd_module is None:
         from AI import dnd as dnd_module
 
