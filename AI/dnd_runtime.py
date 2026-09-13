@@ -7,6 +7,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     """Compose DnD mechanics once with explicit completion policy dependencies."""
     from AI import dnd
     from AI import dnd_completion as completion
+    from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
     from AI.dnd_campaign import configure_dnd_campaign
     from AI.dnd_combat import install_dnd_combat
@@ -34,6 +35,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_inventory_reliability(dnd)
     install_dnd_inventory_effects(dnd)
     install_dnd_artifact_guard(dnd)
+    configure_dnd_any_bot_replies(router)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
