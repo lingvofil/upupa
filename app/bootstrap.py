@@ -144,6 +144,7 @@ class UpupaApplication:
             restore_dnd_sessions,
         )
         from AI.dnd_completion import configure_dnd_completion
+        from AI.dnd_player_agency import configure_dnd_player_agency
         from AI.dnd_style import configure_dnd_style
         from AI.dnd_target_mentions import configure_dnd_target_mentions
         from AI.quiz import schedule_daily_quiz
@@ -163,9 +164,10 @@ class UpupaApplication:
         from services.holidays import schedule_daily_holidays
 
         # DnD composition is explicit here: mechanics/completion first, then
-        # presentation style, then mention/player-agency guards.
+        # presentation style, player-agency guard and target notifications.
         configure_dnd_completion(dnd_router)
         configure_dnd_style()
+        configure_dnd_player_agency()
         configure_dnd_target_mentions()
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
