@@ -5,6 +5,7 @@ from AI import dnd_inventory_fun as inventory_fun
 
 
 INVENTORY_EFFECTS_MARKER = "ХАРАКТЕРИСТИКИ ПРЕДМЕТОВ УПУПЫ"
+INVENTORY_EFFECT_MIGRATION_VERSION = 1
 INVENTORY_EFFECT_RULES = f"""
 {INVENTORY_EFFECTS_MARKER}: у нового предмета или артефакта можно указать короткую характеристику, если она делает вещь
 понятнее, полезнее или смешнее. Не выдумывай характеристику только ради заполнения поля.
@@ -19,6 +20,19 @@ TRAIT и EFFECT должны быть очень короткими, без то
 Если характеристика предмета действительно релевантна сцене, можешь учитывать её повествовательно или обоснованно дать
 преимущество/помеху существующей проверке. Не превращай шуточный «+5 к прожорливости» в универсальный боевой бонус.
 """.strip()
+
+_GENERIC_ITEM_EFFECTS = (
+    "пригодится в самый неподходящий момент",
+    "повышает уверенность в сомнительных планах",
+    "выглядит бесполезно ровно до момента, когда понадобится",
+    "официально считается частью плана, какого именно — неизвестно",
+)
+_GENERIC_ARTIFACT_EFFECTS = (
+    "явно хранит больше истории, чем объясняет",
+    "подозрительно реагирует на серьёзные неприятности",
+    "слишком важен, чтобы просто валяться в кармане",
+    "ведёт себя так, будто у него есть собственный план",
+)
 
 
 def _clean_text(value, *, limit: int) -> str:
@@ -50,6 +64,178 @@ def _effect(item) -> str:
     return _clean_text(item.get("effect"), limit=100)
 
 
+def _parse_bonus(value) -> int | None:
+    try:
+        bonus = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if bonus == 0:
+        return None
+    return max(-9, min(9, bonus))
+
+
+def _version(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _has_explicit_effect(item) -> bool:
+    return bool((_bonus_per_unit(item) is not None and _trait(item)) or _effect(item))
+
+
+def _pick_by_name(name: str, options: tuple[str, ...]) -> str:
+    normalized = str(name or "").casefold()
+    score = sum((index + 1) * ord(char) for index, char in enumerate(normalized))
+    return options[score % len(options)]
+
+
+def _contains_any(value: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in value for needle in needles)
+
+
+def _legacy_effect_fields(item) -> dict[str, object]:
+    """Give pre-effect inventories a deterministic, harmless flavor property."""
+    name = inventory_fun._name(item)
+    normalized = name.casefold()
+    kind = inventory_fun._kind(item)
+    quantity = inventory_fun._quantity(item)
+
+    if kind == "artifact":
+        if _contains_any(normalized, ("кольц", "перст", "амул", "талисман", "медальон")):
+            effect = "подозрительно отзывается на магическую хрень"
+        elif _contains_any(normalized, ("меч", "нож", "кинжал", "топор", "молот", "дубин", "оруж")):
+            effect = "делает угрозы заметно убедительнее"
+        elif "ключ" in normalized:
+            effect = "открывает что-то важное, но явно не бесплатно"
+        elif _contains_any(normalized, ("книг", "свит", "дневник", "тетрад")):
+            effect = "знает больше, чем прилично рассказывать вслух"
+        else:
+            effect = _pick_by_name(name, _GENERIC_ARTIFACT_EFFECTS)
+        return {"EFFECT": effect}
+
+    if _contains_any(
+        normalized,
+        ("ложк", "вилк", "тарел", "еда", "пицц", "бургер", "хлеб", "сыр", "колбас", "арбуз", "банан", "яблок"),
+    ):
+        return {"BONUS": 1, "TRAIT": "прожорливости"}
+    if _contains_any(normalized, ("пиво", "ром", "водк", "вино", "бутыл", "алког")):
+        return {"BONUS": 1, "TRAIT": "сомнительным решениям"}
+    if _contains_any(normalized, ("штраф", "долг", "кредит", "квитанц", "счёт", "счет")):
+        return {"BONUS": -1, "TRAIT": "финансовому благополучию"}
+    if _contains_any(normalized, ("пизд", "подзат", "синяк", "шиш", "рана", "травм")):
+        return {"BONUS": 1, "TRAIT": "травматическому опыту"}
+    if _contains_any(normalized, ("носок", "ботин", "тапок", "кроссов", "туфл", "штан", "трус")):
+        return {"BONUS": 1, "TRAIT": "гардеробному превосходству"}
+    if _contains_any(normalized, ("ключ", "отмыч", "отвёртк", "отвертк", "лопат", "верёвк", "веревк", "скотч")):
+        return {"BONUS": 1, "TRAIT": "бытовой находчивости"}
+    if quantity > 1:
+        return {"BONUS": 1, "TRAIT": "коллекционерству"}
+    return {"EFFECT": _pick_by_name(name, _GENERIC_ITEM_EFFECTS)}
+
+
+def _apply_effect_fields(item: dict, fields: dict) -> bool:
+    changed = False
+    bonus = _parse_bonus(fields.get("BONUS"))
+    trait = _clean_text(fields.get("TRAIT"), limit=60)
+    effect = _clean_text(fields.get("EFFECT"), limit=100)
+
+    if bonus is not None and trait:
+        if item.get("bonus_per_unit") != bonus or item.get("trait") != trait:
+            item["bonus_per_unit"] = bonus
+            item["trait"] = trait
+            changed = True
+    if effect and item.get("effect") != effect:
+        item["effect"] = effect
+        changed = True
+    return changed
+
+
+def backfill_legacy_inventory_item(item) -> tuple[dict | object, bool]:
+    """Upgrade one pre-effects inventory entry without changing its gameplay math."""
+    if _has_explicit_effect(item):
+        return item, False
+
+    if isinstance(item, dict):
+        upgraded = item
+    else:
+        name = inventory_fun._name(item)
+        if not name:
+            return item, False
+        upgraded = {"name": name, "kind": inventory_fun._kind(item)}
+
+    changed = upgraded is not item
+    changed = _apply_effect_fields(upgraded, _legacy_effect_fields(upgraded)) or changed
+    return upgraded, changed
+
+
+def backfill_inventory_items(items) -> bool:
+    """Upgrade a mutable legacy inventory list in place."""
+    if not isinstance(items, list):
+        return False
+    changed = False
+    for index, current in enumerate(list(items)):
+        upgraded, item_changed = backfill_legacy_inventory_item(current)
+        if upgraded is not current:
+            items[index] = upgraded
+        changed = item_changed or changed
+    return changed
+
+
+def backfill_archive_data(archive) -> bool:
+    """Upgrade inventory payloads inside an archive regardless of schema version."""
+    if not isinstance(archive, dict):
+        return False
+    chats = archive.get("chats")
+    if not isinstance(chats, dict):
+        return False
+
+    changed = False
+    for chat in chats.values():
+        if not isinstance(chat, dict):
+            continue
+        players = chat.get("players") or {}
+        if isinstance(players, dict):
+            for history in players.values():
+                if not isinstance(history, dict):
+                    continue
+                changed = backfill_inventory_items(history.get("inventory")) or changed
+                changed = backfill_inventory_items(history.get("artifacts")) or changed
+        for campaign_row in chat.get("campaigns") or []:
+            if not isinstance(campaign_row, dict):
+                continue
+            inventories = campaign_row.get("inventories") or {}
+            if not isinstance(inventories, dict):
+                continue
+            for items in inventories.values():
+                changed = backfill_inventory_items(items) or changed
+    return changed
+
+
+def migrate_archive_data(archive) -> bool:
+    """Run the legacy archive migration once, without touching future plain items."""
+    if not isinstance(archive, dict):
+        return False
+    if _version(archive.get("inventory_effects_version")) >= INVENTORY_EFFECT_MIGRATION_VERSION:
+        return False
+    backfill_archive_data(archive)
+    archive["inventory_effects_version"] = INVENTORY_EFFECT_MIGRATION_VERSION
+    return True
+
+
+def migrate_session_inventory(session) -> bool:
+    """Upgrade inventories restored from a pre-effects active session exactly once."""
+    if _version(getattr(session, "inventory_effects_version", 0)) >= INVENTORY_EFFECT_MIGRATION_VERSION:
+        return False
+    inventories = getattr(session, "inventories", {}) or {}
+    if isinstance(inventories, dict):
+        for items in inventories.values():
+            backfill_inventory_items(items)
+    session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
+    return True
+
+
 def format_inventory_effect(item) -> str:
     """Render optional item metadata without treating it as a core d20 modifier."""
     parts = []
@@ -79,33 +265,6 @@ def render_inventory_lines(items) -> list[str]:
         if text:
             result.append(("✨ " if inventory_fun._kind(item) == "artifact" else "• ") + text)
     return result
-
-
-def _parse_bonus(value) -> int | None:
-    try:
-        bonus = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    if bonus == 0:
-        return None
-    return max(-9, min(9, bonus))
-
-
-def _apply_effect_fields(item: dict, fields: dict) -> bool:
-    changed = False
-    bonus = _parse_bonus(fields.get("BONUS"))
-    trait = _clean_text(fields.get("TRAIT"), limit=60)
-    effect = _clean_text(fields.get("EFFECT"), limit=100)
-
-    if bonus is not None and trait:
-        if item.get("bonus_per_unit") != bonus or item.get("trait") != trait:
-            item["bonus_per_unit"] = bonus
-            item["trait"] = trait
-            changed = True
-    if effect and item.get("effect") != effect:
-        item["effect"] = effect
-        changed = True
-    return changed
 
 
 def _valid_players(session) -> set[str]:
@@ -182,6 +341,35 @@ def _inventory_context(campaign, session) -> str:
     return "\n".join(out)
 
 
+def _install_session_schema_migration(campaign) -> None:
+    """Persist a session-level schema marker without changing individual item records."""
+    original_ensure = campaign._ensure
+    original_state = campaign._state
+    original_restore_state = campaign._restore_state
+
+    def ensure(session):
+        original_ensure(session)
+        if not hasattr(session, "inventory_effects_version"):
+            session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
+
+    def state(session):
+        row = original_state(session)
+        row["inventory_effects_version"] = _version(
+            getattr(session, "inventory_effects_version", INVENTORY_EFFECT_MIGRATION_VERSION)
+        )
+        return row
+
+    def restore_state(session, data):
+        stored_version = _version((data or {}).get("inventory_effects_version")) if isinstance(data, dict) else 0
+        original_restore_state(session, data)
+        session.inventory_effects_version = stored_version
+        migrate_session_inventory(session)
+
+    campaign._ensure = ensure
+    campaign._state = state
+    campaign._restore_state = restore_state
+
+
 def install_dnd_inventory_effects(dnd) -> None:
     """Install optional inventory properties after stacking and reliability wrappers."""
     from AI import dnd_campaign as campaign
@@ -190,6 +378,11 @@ def install_dnd_inventory_effects(dnd) -> None:
     if getattr(campaign, "_upupa_dnd_inventory_effects_installed", False):
         return
 
+    campaign._load_archive(dnd)
+    if migrate_archive_data(getattr(campaign, "_archive", None)):
+        campaign._save_archive(dnd)
+
+    _install_session_schema_migration(campaign)
     original_apply = campaign._apply_metadata
 
     def apply_metadata(session, text):
