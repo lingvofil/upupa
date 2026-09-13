@@ -27,6 +27,7 @@ jobs:
             infrastructure \
             AI/dnd_completion.py \
             AI/dnd_runtime.py \
+            games/crocodile_runtime.py \
             scripts/backup_runtime_state.py \
             scripts/restore_history_journal.py \
             scripts/production_healthcheck.py \
@@ -42,7 +43,8 @@ jobs:
             tests/test_production_hardening.py \
             tests/test_portability_regressions.py \
             tests/test_dnd_completion_policy.py \
-            tests/test_dnd_runtime.py
+            tests/test_dnd_runtime.py \
+            tests/test_crocodile_runtime.py
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q

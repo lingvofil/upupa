@@ -43,11 +43,12 @@ def test_old_phrase_history_is_discarded_from_single_word_cycle(monkeypatch):
     assert written == [["кот", "дом"]]
 
 
-def test_bootstrap_installs_single_word_picker_before_crocodile_restore():
-    source = (
-        Path(__file__).resolve().parents[1] / "app" / "bootstrap.py"
-    ).read_text(encoding="utf-8")
+def test_runtime_installs_single_word_picker_before_crocodile_restore():
+    root = Path(__file__).resolve().parents[1]
+    runtime_source = (root / "games" / "crocodile_runtime.py").read_text(encoding="utf-8")
+    bootstrap_source = (root / "app" / "bootstrap.py").read_text(encoding="utf-8")
 
-    configure_pos = source.index("configure_crocodile_single_words()")
-    restore_pos = source.index("restore_crocodile_sessions()")
+    assert "configure_crocodile_single_words()" in runtime_source
+    configure_pos = bootstrap_source.index("configure_crocodile_runtime()")
+    restore_pos = bootstrap_source.index("restore_crocodile_sessions()")
     assert configure_pos < restore_pos

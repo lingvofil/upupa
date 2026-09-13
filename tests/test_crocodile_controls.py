@@ -139,11 +139,12 @@ def test_control_fields_are_persisted_with_active_session():
     assert restored["previous_words"] == ["кот", "дом"]
 
 
-def test_bootstrap_installs_controls_before_restoring_crocodile_sessions():
-    source = (
-        Path(__file__).resolve().parents[1] / "app" / "bootstrap.py"
-    ).read_text(encoding="utf-8")
+def test_runtime_installs_controls_before_bootstrap_restores_crocodile_sessions():
+    root = Path(__file__).resolve().parents[1]
+    runtime_source = (root / "games" / "crocodile_runtime.py").read_text(encoding="utf-8")
+    bootstrap_source = (root / "app" / "bootstrap.py").read_text(encoding="utf-8")
 
-    configure_pos = source.index("configure_crocodile_controls()")
-    restore_pos = source.index("restore_crocodile_sessions()")
+    assert "configure_crocodile_controls()" in runtime_source
+    configure_pos = bootstrap_source.index("configure_crocodile_runtime()")
+    restore_pos = bootstrap_source.index("restore_crocodile_sessions()")
     assert configure_pos < restore_pos

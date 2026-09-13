@@ -68,10 +68,10 @@ def test_mini_app_first_join_restores_server_frame_before_snapshots():
     assert "sendSnap(true);" in reconnect_block
 
 
-def test_bootstrap_installs_restore_before_session_restore_and_socket_start():
+def test_bootstrap_configures_runtime_before_session_restore_and_socket_start():
     source = (ROOT / "app" / "bootstrap.py").read_text(encoding="utf-8")
 
-    configure_pos = source.index("configure_crocodile_canvas_restore()")
+    configure_pos = source.index("configure_crocodile_runtime()")
     restore_pos = source.index("restore_crocodile_sessions()")
     socket_pos = source.rindex("crocodile_socket_server_loop")
 
