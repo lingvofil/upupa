@@ -37,7 +37,8 @@ jobs:
             tests/test_dependency_versions.py \
             tests/test_dynamic_task_ownership.py \
             tests/test_architecture_guardrails.py \
-            tests/test_production_hardening.py
+            tests/test_production_hardening.py \
+            tests/test_portability_regressions.py
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
@@ -45,3 +46,22 @@ jobs:
           --cov=features --cov=games --cov=handlers --cov=services --cov=prompts
           --cov-report=term-missing
           --cov-fail-under=30
+
+  portability-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+      - name: Run Windows portability regressions
+        run: >-
+          python -m pytest
+          tests/test_portability_regressions.py
+          tests/test_social_graph_picture_labels.py
+          tests/test_crocodile_session_persistence.py
+          -q
