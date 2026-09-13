@@ -330,6 +330,7 @@ def configure_dnd_completion(dnd_router) -> None:
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_fun import install_fun_inventory
+    from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_state_commands import configure_dnd_state_commands
 
@@ -355,6 +356,7 @@ def configure_dnd_completion(dnd_router) -> None:
     install_dnd_lobby_controls(dnd_router)
     install_dnd_combat(dnd_router)
     install_dnd_healing_choice(dnd_router)
+    install_dnd_inventory_reliability(dnd)
 
     campaign_generate_session_response = dnd.generate_session_response
 
