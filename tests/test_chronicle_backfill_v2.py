@@ -69,6 +69,35 @@ def test_ai_budget_no_longer_stops_local_history_scan(tmp_path):
     assert state["status"] == "scanning"
 
 
+def test_historical_backfill_candidates_are_not_expired_by_live_ttl(tmp_path):
+    _path, candidates, _backfill = build_stores(tmp_path)
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=30)
+    backfill_id = candidates.upsert_candidate(
+        chat_id=-10020,
+        candidate_key="backfill:v2:1:2",
+        timestamp=old,
+        due_at=now - timedelta(minutes=1),
+        score_floor=6.0,
+        source="backfill",
+    )
+    live_id = candidates.upsert_candidate(
+        chat_id=-10020,
+        candidate_key="m:99",
+        timestamp=old,
+        due_at=now - timedelta(minutes=1),
+        score_floor=6.0,
+        source="live",
+    )
+
+    expired = candidates.expire(now - timedelta(hours=48))
+    due_ids = {candidate.id for candidate in candidates.due_candidates(now, limit=10)}
+
+    assert expired == 1
+    assert backfill_id in due_ids
+    assert live_id not in due_ids
+
+
 def test_global_phrase_counts_span_multiple_scan_batches(tmp_path):
     _path, _candidates, backfill = build_stores(tmp_path)
     chat_id = -1003
