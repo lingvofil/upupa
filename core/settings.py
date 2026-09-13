@@ -86,6 +86,19 @@ except ImportError:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
+# Optional feature keys may be added to config_private independently from the
+# legacy required import block above. Environment variables take precedence.
+try:
+    import config_private as _config_private
+except ImportError:
+    _config_private = None
+
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or (
+    getattr(_config_private, "OPENWEATHER_API_KEY", None)
+    if _config_private is not None
+    else None
+)
+
 # New deployments may use Hugging Face's conventional HF_TOKEN name, while
 # older Upupa code and config_private keep using HUGGINGFACE_TOKEN.
 HUGGINGFACE_TOKEN = os.getenv("HF_TOKEN") or HUGGINGFACE_TOKEN

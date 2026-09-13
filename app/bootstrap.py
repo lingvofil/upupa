@@ -24,7 +24,7 @@ REQUIRED_BACKGROUND_TASKS = (
     *(f"daily-quiz:{chat_id}" for chat_id in QUIZ_CHAT_IDS),
     "birthday-scheduler", "holiday-scheduler", "proactive-loop", "channel-scheduler",
     "world-visit-expiration", "crocodile-session-persistence", "history-maintenance",
-    "resource-snapshot",
+    "resource-snapshot", "crocodile-socket-server",
 )
 
 _main_router: Router | None = None
