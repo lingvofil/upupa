@@ -20,10 +20,8 @@ PARTY_STATE_PATH = Path(CROCODILE_STATE_PATH).with_name("crocodile_party_state.j
 _TRANSIENT_KEYS = {"vote_task", "_canvas_token"}
 _BYTES_MARKER = "__upupa_bytes_b64__"
 
-_configured = False
 _restored = False
 _last_payload: str | None = None
-_original_start_duel_vote = None
 
 
 def _json_safe(value: Any) -> Any:
@@ -275,21 +273,3 @@ def crocodile_persistence_dependencies() -> persistence.CrocodilePersistenceDepe
         persist_extra_state=persist_party_modes,
         restore_extra_state=restore_party_modes,
     )
-
-
-async def _start_duel_vote_with_deadline(chat_id: str, duel: dict) -> None:
-    was_voting = duel.get("phase") == "voting"
-    await _original_start_duel_vote(chat_id, duel)
-    if not was_voting and duel.get("phase") == "voting":
-        duel["vote_deadline"] = time.time() + crocodile_modes.DUEL_VOTE_SECONDS
-
-
-def configure_crocodile_party_state() -> None:
-    """Install the remaining party-state duel-vote wrapper."""
-    global _configured, _original_start_duel_vote
-    if _configured:
-        return
-
-    _original_start_duel_vote = crocodile_modes._start_duel_vote
-    crocodile_modes._start_duel_vote = _start_duel_vote_with_deadline
-    _configured = True
