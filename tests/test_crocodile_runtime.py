@@ -20,6 +20,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "party_controls.configure_crocodile_party_controls()",
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
         "crocodile.get_game_keyboard = _compose_game_keyboard(",
+        "crocodile.handle_callback = _compose_callback_handler(",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
         "configure_crocodile_admin_controls()",
@@ -191,6 +192,42 @@ def test_duo_opt_in_does_not_replace_game_keyboard():
     assert "base_game_keyboard = crocodile.get_game_keyboard" in runtime_source
     assert "duo_optin.decorate_game_keyboard_with_duo_opt_in" in runtime_source
     assert "base_game_keyboard=base_game_keyboard" in runtime_source
+
+
+def test_duo_opt_in_does_not_replace_callback_handler():
+    duo_source = _source("games/crocodile_duo_optin.py")
+    tree = ast.parse(duo_source)
+    assigned = []
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "crocodile"
+            ):
+                assigned.append(target.attr)
+
+    assert "handle_callback" not in assigned
+    assert "_original_handle_callback" not in duo_source
+    assert "next_handler" in duo_source
+
+    runtime_source = _source("games/crocodile_runtime.py")
+    assert runtime_source.count(
+        "crocodile.handle_callback = _compose_callback_handler("
+    ) == 1
+    assert "base_callback_handler = crocodile.handle_callback" in runtime_source
+    assert "duo_optin.handle_duo_opt_in_callback" in runtime_source
+    callback_wiring = runtime_source.index(
+        "crocodile.handle_callback = _compose_callback_handler("
+    )
+    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()")
+    assert callback_wiring < ui_install
 
 
 def test_duel_vote_deadline_is_owned_by_modes():
