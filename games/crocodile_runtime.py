@@ -65,6 +65,18 @@ def _compose_extra_restorers(*restorers):
     return restore
 
 
+def _compose_game_keyboard(base_keyboard, *decorators):
+    callbacks = tuple(callback for callback in decorators if callback is not None)
+
+    def render(chat_id):
+        keyboard = base_keyboard(chat_id)
+        for callback in callbacks:
+            keyboard = callback(chat_id, keyboard)
+        return keyboard
+
+    return render
+
+
 def _compose_party_menu_keyboard(base_menu, *decorators):
     callbacks = tuple(callback for callback in decorators if callback is not None)
 
@@ -83,6 +95,7 @@ def configure_crocodile_runtime() -> None:
     if _configured:
         return
 
+    from games import crocodile
     from games import crocodile_duo_optin as duo_optin
     from games import crocodile_party_controls as party_controls
     from games import crocodile_party_state as party_state
@@ -107,6 +120,7 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_controls()
     configure_crocodile_single_words()
     configure_crocodile_modes()
+    base_game_keyboard = crocodile.get_game_keyboard
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
         persistence.CrocodilePersistenceDependencies(
@@ -133,7 +147,13 @@ def configure_crocodile_runtime() -> None:
         party_controls.menu_keyboard,
         duo_optin.decorate_party_menu_without_default_duo,
     )
-    duo_optin.configure_crocodile_duo_opt_in()
+    crocodile.get_game_keyboard = _compose_game_keyboard(
+        base_game_keyboard,
+        duo_optin.decorate_game_keyboard_with_duo_opt_in,
+    )
+    duo_optin.configure_crocodile_duo_opt_in(
+        base_game_keyboard=base_game_keyboard,
+    )
     configure_crocodile_ui_enhancements()
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
