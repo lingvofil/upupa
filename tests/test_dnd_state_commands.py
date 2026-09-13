@@ -6,6 +6,7 @@ from tests import test_smoke_imports
 del test_smoke_imports
 
 from AI import dnd, dnd_campaign
+from AI import dnd_state_commands as state_commands
 from AI.dnd_completion import DndParticipantCompletionMiddleware
 from AI.dnd_state_commands import (
     DndStateCommandMiddleware,
@@ -130,11 +131,19 @@ def _active_session(chat_id=-100950):
 
 
 def test_command_aliases_accept_requested_phrases_and_punctuation():
-    assert command_kind("Мой герой") == "hero"
+    assert command_kind("герой") == "hero"
+    assert command_kind("ДНД герой!!!") == "hero"
     assert command_kind("инвентарь!!!") == "inventory"
-    assert command_kind("Наши знакомые") == "npcs"
-    assert command_kind("Что происходит?") == "status"
+    assert command_kind("днд инвентарь") == "inventory"
+    assert command_kind("днд связи") == "npcs"
+    assert command_kind("днд сюжет?") == "status"
+    assert command_kind("днд конец") == "end"
     assert command_kind("УПУПА ДНД") == "start"
+    assert command_kind("упупа заверши историю") == "legacy_end"
+    assert command_kind("упупа закончи историю пожалуйста") == "legacy_end"
+    assert command_kind("мой герой") is None
+    assert command_kind("наши знакомые") is None
+    assert command_kind("что происходит") is None
     assert command_kind("упупа днд что-нибудь") is None
 
 
@@ -146,7 +155,7 @@ def test_active_hero_and_inventory_use_live_state_not_archive(monkeypatch):
     hero = render_hero(fake_dnd, session.chat_id, 7, "Семён")
     inventory = render_inventory(fake_dnd, session.chat_id, 7)
 
-    assert "Источник: текущая егра" in hero
+    assert "Источник:" not in hero
     assert "курьер запретных реликвий" in hero
     assert "поссорился с часовней" in hero
     assert "бухгалтер некромантии" not in hero
@@ -165,11 +174,12 @@ def test_commands_fall_back_to_saved_state_without_active_game(monkeypatch):
     npcs = render_npcs(fake_dnd, -100950)
     status = render_status(fake_dnd, -100950)
 
-    assert "последнее сохранённое состояние" in hero
+    assert "Источник:" not in hero
     assert "бухгалтер некромантии" in hero
     assert "Завершённых приключений в памяти: 1" in hero
     assert "ржавая ложка" in inventory
     assert "✨ Корона Подъезда" in inventory
+    assert "🤝 Связи" in npcs
     assert "Капитан Ржа" in npcs
     assert "теперь не доверяет Семёну" in npcs
     assert "Активной егры сейчас нет" in status
@@ -206,13 +216,14 @@ def test_active_npcs_do_not_mix_in_previous_campaign(monkeypatch):
 
     text = render_npcs(fake_dnd, session.chat_id)
 
+    assert "🤝 Связи" in text
     assert "Источник: текущая егра" in text
     assert "Марфа Без Паспорта" in text
     assert "Капитан Ржа" not in text
 
 
 def test_state_middleware_intercepts_command_without_calling_downstream(monkeypatch):
-    message = FakeMessage("Что происходит?")
+    message = FakeMessage("днд сюжет")
     called = []
     monkeypatch.setattr(
         "AI.dnd_state_commands.render_state_command",
@@ -248,6 +259,70 @@ def test_short_dnd_alias_delegates_to_existing_start_handler(monkeypatch):
     assert starts == [message]
 
 
+def test_dnd_end_delegates_and_legacy_end_only_points_to_new_command(monkeypatch):
+    ended = []
+
+    async def fake_stop(event):
+        ended.append(event.text)
+
+    monkeypatch.setattr(dnd, "cmd_stop_dnd", fake_stop)
+
+    async def handler(_event, _data):
+        raise AssertionError("DnD end command must not fall through")
+
+    current = FakeMessage("днд конец")
+    result = asyncio.run(DndStateCommandMiddleware()(handler, current, {"bot": FakeBot()}))
+    assert result is None
+    assert ended == ["днд конец"]
+
+    legacy = FakeMessage("упупа заверши историю пожалуйста")
+    result = asyncio.run(DndStateCommandMiddleware()(handler, legacy, {"bot": FakeBot()}))
+    assert result is None
+    assert ended == ["днд конец"]
+    assert legacy.answers == [("Команда завершения теперь — «днд конец».", {})]
+
+
+def test_dnd_links_repairs_empty_memory_from_saved_scenes(monkeypatch):
+    session = _active_session()
+    session.npc_memory = {}
+    session.conversation = []
+    session.scene_log = ["Партия договорилась с Капитаном Ржой: он спрятал их от стражи."]
+    persisted = []
+
+    async def ephemeral(_dnd, _session, prompt):
+        assert "Капитаном Ржой" in prompt
+        return "[NPC:Капитан Ржа;EVENT:помог скрыться;NOTE:спрятал партию от стражи]"
+
+    def apply_metadata(target, text):
+        if "[NPC:Капитан Ржа" in text:
+            target.npc_memory["капитан ржа"] = {
+                "name": "Капитан Ржа",
+                "event": "помог скрыться",
+                "notes": ["спрятал партию от стражи"],
+            }
+        return text, []
+
+    fake_campaign = SimpleNamespace(
+        _ensure=lambda _session: None,
+        _ephemeral_generate=ephemeral,
+        _apply_metadata=apply_metadata,
+    )
+    monkeypatch.setattr(dnd, "dnd_sessions", {session.chat_id: session})
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: persisted.append(True))
+    monkeypatch.setattr(state_commands, "_campaign_module", lambda _dnd: fake_campaign)
+
+    async def handler(_event, _data):
+        raise AssertionError("DnD links command must not fall through")
+
+    message = FakeMessage("днд связи", chat_id=session.chat_id)
+    result = asyncio.run(DndStateCommandMiddleware()(handler, message, {"bot": FakeBot()}))
+
+    assert result is None
+    assert persisted
+    assert "Капитан Ржа" in message.answers[0][0]
+    assert "спрятал партию от стражи" in message.answers[0][0]
+
+
 def test_state_query_reply_is_not_precollected_as_player_action(monkeypatch):
     chat_id = -100951
     session = SimpleNamespace(
@@ -269,7 +344,7 @@ def test_state_query_reply_is_not_precollected_as_player_action(monkeypatch):
         chat=SimpleNamespace(id=chat_id),
         from_user=SimpleNamespace(id=7, first_name="Семён"),
         reply_to_message=SimpleNamespace(message_id=777),
-        text="Мой герой",
+        text="днд герой",
         caption=None,
     )
 
