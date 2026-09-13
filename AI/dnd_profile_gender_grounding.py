@@ -217,6 +217,24 @@ def install_dnd_profile_gender_grounding() -> None:
 
     campaign._profile_prompt = profile_prompt
 
+    original_auto_profile = campaign._auto_profile
+
+    async def auto_profile(dnd_module, session, user_id):
+        old = campaign._player_history(session.chat_id, user_id) or {}
+        old_profile = dict(old.get("profile") or {})
+        if legacy_profile_complete(old_profile) and not _normalize_gender(old_profile.get(GENDER_STEP)):
+            campaign._apply_heritage(
+                session,
+                user_id,
+                continuation=bool(getattr(session, "continuation_mode", False)),
+            )
+            old_profile[GENDER_STEP] = random.choice(GENDER_OPTIONS)
+            session.character_profiles[str(int(user_id))] = old_profile
+            return old_profile
+        return await original_auto_profile(dnd_module, session, user_id)
+
+    campaign._auto_profile = auto_profile
+
     original_lobby_text = campaign._lobby_text
 
     def lobby_text(session):
