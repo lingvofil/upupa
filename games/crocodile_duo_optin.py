@@ -14,7 +14,6 @@ from games import crocodile, crocodile_persistence
 _configured = False
 _original_get_game_keyboard = None
 _original_handle_callback = None
-_original_party_menu_keyboard = None
 
 
 def _artist_ids(session: dict) -> list[int]:
@@ -81,9 +80,10 @@ def get_game_keyboard_with_duo_opt_in(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def unified_menu_keyboard_without_default_duo(chat_id: int | str) -> InlineKeyboardMarkup:
-    """Do not advertise duo as a start mode; it is unlocked by the first artist."""
-    keyboard = _original_party_menu_keyboard(chat_id)
+def decorate_party_menu_without_default_duo(
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Render classic as a single-player start; duo is unlocked by the artist."""
     rows: list[list[InlineKeyboardButton]] = []
     for row in keyboard.inline_keyboard:
         rendered: list[InlineKeyboardButton] = []
@@ -218,20 +218,15 @@ def enrich_restored_session_with_duo_opt_in(
 
 
 def configure_crocodile_duo_opt_in() -> None:
-    """Install the opt-in UI/callback layer after Crocodile party controls."""
+    """Install the opt-in game-keyboard and callback layer."""
     global _configured
     global _original_get_game_keyboard, _original_handle_callback
-    global _original_party_menu_keyboard
     if _configured:
         return
 
-    from games import crocodile_party_controls
-
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_handle_callback = crocodile.handle_callback
-    _original_party_menu_keyboard = crocodile_party_controls.menu_keyboard
 
     crocodile.get_game_keyboard = get_game_keyboard_with_duo_opt_in
     crocodile.handle_callback = handle_duo_opt_in_callback
-    crocodile_party_controls.menu_keyboard = unified_menu_keyboard_without_default_duo
     _configured = True

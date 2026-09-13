@@ -79,6 +79,7 @@ jobs:
           tests/test_crocodile_session_persistence.py
           tests/test_crocodile_party_resilience.py
           tests/test_crocodile_duo_optin.py
+          tests/test_crocodile_duo_menu.py
           tests/test_crocodile_runtime.py
           -q
       - name: Verify Windows tests did not write Crocodile party state to repo root
