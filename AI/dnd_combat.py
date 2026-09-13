@@ -555,14 +555,13 @@ def _hero_combat_lines(session, user_id: int) -> list[str]:
     return lines
 
 
-def install_dnd_combat(dnd_router) -> None:
+def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
     if getattr(dnd_router, "_upupa_dnd_combat_configured", False):
         return
 
     from AI import dnd
     from AI import dnd_campaign as campaign
     from AI import dnd_state_commands as state_commands
-    from AI.dnd_completion import DndParticipantCompletionMiddleware
 
     original_ensure = campaign._ensure
 
@@ -693,14 +692,12 @@ def install_dnd_combat(dnd_router) -> None:
 
     dnd._can_user_act = can_user_act
 
-    original_expected = DndParticipantCompletionMiddleware._expected_ids
+    if completion_policy is not None:
+        def filter_expected_ids(dnd_module, session, expected):
+            living = _living_ids(session)
+            return {user_id for user_id in expected if user_id in living}
 
-    def expected_ids(dnd_module, session, target_user_ids):
-        expected = original_expected(dnd_module, session, target_user_ids)
-        living = _living_ids(session)
-        return {user_id for user_id in expected if user_id in living}
-
-    DndParticipantCompletionMiddleware._expected_ids = staticmethod(expected_ids)
+        completion_policy.filter_expected_ids = filter_expected_ids
 
     original_from_record = dnd.GameSession.from_record.__func__
 

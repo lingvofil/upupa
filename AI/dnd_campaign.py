@@ -1048,7 +1048,7 @@ def _notices(text, notices):
     return body + (("\n" + m.group(0)) if m else "")
 
 
-def configure_dnd_campaign(dnd, router):
+def configure_dnd_campaign(dnd, router, *, completion_policy=None):
     if getattr(dnd, "_upupa_dnd_campaign_configured", False):
         return
     _load_archive(dnd)
@@ -1143,20 +1143,18 @@ def configure_dnd_campaign(dnd, router):
 
     dnd.finalize_group_actions = finalize
 
-    from AI.dnd_completion import DndParticipantCompletionMiddleware
-    old_precollect = DndParticipantCompletionMiddleware._precollect_action_reply
+    async def after_participant_joined(
+        dnd_module, bot, event, session, user_id, user_name
+    ):
+        profile = await _auto_profile(dnd_module, session, user_id)
+        dnd_module.persist_dnd_sessions()
+        await bot.send_message(
+            session.chat_id,
+            f"🎭 {user_name} врывается сразу. Профиль выдан автоматически: {_profile_text(profile)}.",
+        )
 
-    async def precollect(self, dnd_module, bot, event):
-        chat = getattr(event, "chat", None); user = getattr(event, "from_user", None); session = dnd_module.dnd_sessions.get(int(chat.id)) if chat else None
-        uid = int(user.id) if user else None; was_new = bool(session and uid is not None and str(uid) not in session.participants)
-        result = await old_precollect(self, dnd_module, bot, event); session = dnd_module.dnd_sessions.get(int(chat.id)) if chat else None
-        if was_new and session and str(uid) in session.participants:
-            profile = await _auto_profile(dnd_module, session, uid)
-            dnd_module.persist_dnd_sessions()
-            await bot.send_message(session.chat_id, f"🎭 {user.first_name} врывается сразу. Профиль выдан автоматически: {_profile_text(profile)}.")
-        return result
-
-    DndParticipantCompletionMiddleware._precollect_action_reply = precollect
+    if completion_policy is not None:
+        completion_policy.after_participant_joined = after_participant_joined
 
     router.callback_query.outer_middleware(CampaignCallbackMiddleware())
 
