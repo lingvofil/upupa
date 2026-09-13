@@ -127,11 +127,13 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_telephone_roles import configure_crocodile_telephone_roles
     from games.crocodile_telephone_skip_permissions import (
         configure_crocodile_telephone_skip_permissions,
+        menu_callback_with_skip_permissions,
     )
     from games.crocodile_ui_enhancements import (
         configure_crocodile_ui_enhancements,
         decorate_party_menu_with_ratings,
         handle_crocodile_callback_with_ui,
+        handle_party_menu_callback_with_ratings,
     )
 
     persistence.configure_crocodile_runtime()
@@ -162,10 +164,16 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
+    base_party_menu_handler = party_controls.handle_menu_callback
     party_controls.menu_keyboard = _compose_party_menu_keyboard(
         party_controls.menu_keyboard,
         duo_optin.decorate_party_menu_without_default_duo,
         decorate_party_menu_with_ratings,
+    )
+    party_controls.handle_menu_callback = _compose_callback_handler(
+        base_party_menu_handler,
+        handle_party_menu_callback_with_ratings,
+        menu_callback_with_skip_permissions,
     )
     crocodile.get_game_keyboard = _compose_game_keyboard(
         base_game_keyboard,
