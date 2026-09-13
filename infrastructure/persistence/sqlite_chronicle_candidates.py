@@ -215,7 +215,7 @@ class SQLiteChronicleCandidateStore:
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """UPDATE chronicle_candidates SET status='rejected',reject_reason='expired'
-                   WHERE status='observing' AND last_activity_at<?""",
+                   WHERE status='observing' AND source!='backfill' AND last_activity_at<?""",
                 (ts(older_than),),
             )
             return max(0, cursor.rowcount)

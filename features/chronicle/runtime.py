@@ -70,8 +70,10 @@ async def capture_reaction_count(update):
 
 
 async def request_backfill(chat_id: int):
+    """Request initial indexing and return its current persistent status."""
     ensure_background_loop()
-    return await service.request_backfill(chat_id)
+    await service.request_backfill(chat_id)
+    return await asyncio.to_thread(service._stores()[2].state, int(chat_id))
 
 
 async def list_events(chat_id: int, **kwargs):
