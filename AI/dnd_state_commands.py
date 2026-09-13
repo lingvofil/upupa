@@ -114,8 +114,7 @@ async def _start_lobby_from_message(event, dnd) -> None:
         return
 
     user_id = int(event.from_user.id)
-    starter_user_id = getattr(session, "starter_user_id", None)
-    if starter_user_id is None or user_id != int(starter_user_id):
+    if not dnd._user_is_host(session, user_id):
         await event.answer("Запустить игру может только ведущий.")
         return
     if not (getattr(session, "participants", {}) or {}):

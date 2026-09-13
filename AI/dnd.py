@@ -20,6 +20,7 @@ from aiogram.types import (
 
 from AI.summarize import _get_chat_messages
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
+from core.settings import ADMIN_ID
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
@@ -1207,9 +1208,16 @@ def _callback_session(callback: CallbackQuery):
     return dnd_sessions.get(callback.message.chat.id)
 
 
-def _callback_is_host(callback: CallbackQuery, session) -> bool:
+def _user_is_host(session, user_id: int) -> bool:
+    """Return host privileges without mutating persistent session identity."""
+    if int(user_id) == int(ADMIN_ID):
+        return True
     starter_user_id = getattr(session, "starter_user_id", None)
-    return starter_user_id is not None and int(callback.from_user.id) == int(starter_user_id)
+    return starter_user_id is not None and int(user_id) == int(starter_user_id)
+
+
+def _callback_is_host(callback: CallbackQuery, session) -> bool:
+    return _user_is_host(session, int(callback.from_user.id))
 
 
 @dnd_router.callback_query(F.data == "dnd:mode:abstract")
@@ -1328,7 +1336,7 @@ def _is_backstory_reply(message: Message) -> bool:
     ):
         return False
     starter_user_id = getattr(session, "starter_user_id", None)
-    if starter_user_id is not None and int(message.from_user.id) != int(starter_user_id):
+    if starter_user_id is not None and not _user_is_host(session, int(message.from_user.id)):
         return False
     prompt_message_id = getattr(session, "backstory_prompt_message_id", None)
     if not prompt_message_id or not message.reply_to_message:
@@ -1522,8 +1530,7 @@ async def handle_dnd_next(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session:
         return
-    starter_user_id = getattr(session, "starter_user_id", None)
-    if starter_user_id is None or int(message.from_user.id) != int(starter_user_id):
+    if not _user_is_host(session, int(message.from_user.id)):
         await message.answer("«Дальше» может сказать только ведущий.")
         return
     if session.state == "WAITING_ACTION":
