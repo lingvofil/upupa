@@ -1,8 +1,9 @@
-"""Telegram transport for the social graph commands and reaction updates."""
+"""Telegram transport for the social graph and long-lived relationship commands."""
 
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import Router, types
 from aiogram.types import BufferedInputFile
@@ -26,17 +27,25 @@ from features.social_graph.interaction_analysis import (
     build_edge_interaction_profiles,
     edge_keywords,
 )
+from features.social_graph.relationships import (
+    RelationshipView,
+    get_relationship,
+    get_relationship_history,
+    get_relationships,
+)
 from features.social_graph.rendering import render_cringe_graph_png_async, render_graph_png_async
 from features.social_graph.service import (
     REPLY_WEIGHT,
     capture_reaction,
     get_graph_data,
     is_social_graph_enabled,
+    resolve_relationship_usernames,
 )
 
 
 router = Router(name="social_graph")
 CRINGE_GRAPH_CAPTION = "рожи и художественная хуита"
+_USERNAME_RE = re.compile(r"@([A-Za-z0-9_]{3,})")
 
 
 def _is_command(message: types.Message, command: str) -> bool:
@@ -46,6 +55,13 @@ def _is_command(message: types.Message, command: str) -> bool:
         and message.from_user.id not in BLOCKED_USERS
         and message.text.strip().lower() == command
     )
+
+
+def _starts_command(message: types.Message, command: str) -> bool:
+    if not message.text or not message.from_user or message.from_user.id in BLOCKED_USERS:
+        return False
+    text = message.text.strip().lower()
+    return text == command or text.startswith(command + " ")
 
 
 def _is_cringe_graph_command(message: types.Message) -> bool:
@@ -76,6 +92,55 @@ def _central_reason(item) -> str:
         f"имеет суммарную силу связей {_format_weight(item.weighted_degree)} "
         f"с {item.unique_neighbors} участниками"
     )
+
+
+def _pair_name(view: RelationshipView) -> str:
+    return f"{view.user_a_name} ↔ {view.user_b_name}"
+
+
+def _other_name(view: RelationshipView, user_id: int) -> str:
+    return view.user_b_name if view.user_a_id == int(user_id) else view.user_a_name
+
+
+def _relationship_description(view: RelationshipView) -> str:
+    if view.reciprocity < 0.35 and view.interaction_count >= 6:
+        active = view.user_a_name if view.a_to_b_count > view.b_to_a_count else view.user_b_name
+        quiet = view.user_b_name if active == view.user_a_name else view.user_a_name
+        return f"{active} заметно чаще инициирует контакт. {quiet} держит социальную оборону."
+    if view.affinity >= 65 and view.tension >= 50:
+        return "Связь крепкая, а спокойствие в неё, похоже, просто не завезли."
+    if view.tension >= 55:
+        return "Заметная часть общей истории проходит через подтверждённые конфликтные эпизоды."
+    if view.shared_event_count >= 2:
+        return "Это уже не просто счётчик reply: пара регулярно попадает в общую историю чата."
+    if view.affinity >= 60:
+        return "Устойчивая взаимная вовлечённость без необходимости устраивать гражданскую войну."
+    return "Связь уже видна, но до отдельного сериала про этих двоих пока далеко."
+
+
+async def _resolve_relationship_pair(message: types.Message, command: str) -> tuple[int, int] | None:
+    text = (message.text or "").strip()
+    tail = text[len(command):].strip() if text.lower().startswith(command) else ""
+    usernames = _USERNAME_RE.findall(tail)
+    if usernames:
+        resolved = await resolve_relationship_usernames(message.chat.id, usernames[:2])
+        people = []
+        for username in usernames[:2]:
+            person = resolved.get(username.lower())
+            if person is not None:
+                people.append(int(person[0]))
+        if len(usernames) >= 2:
+            if len(people) < 2:
+                return None
+            return people[0], people[1]
+        if people and int(message.from_user.id) != people[0]:
+            return int(message.from_user.id), people[0]
+
+    replied = getattr(message, "reply_to_message", None)
+    target = getattr(replied, "from_user", None) if replied else None
+    if target and not target.is_bot and int(target.id) != int(message.from_user.id):
+        return int(message.from_user.id), int(target.id)
+    return None
 
 
 async def _ensure_available(message: types.Message) -> bool:
@@ -160,6 +225,120 @@ async def handle_cringe_social_graph(message: types.Message):
         caption=CRINGE_GRAPH_CAPTION,
     )
     await message.answer(build_cringe_graph_explanation(view, profiles, data.names))
+
+
+@router.message(lambda message: _starts_command(message, "отношения") and not _is_command(message, "отношения чата"))
+async def handle_relationship(message: types.Message):
+    if not await _ensure_available(message):
+        return
+    pair = await _resolve_relationship_pair(message, "отношения")
+    if pair is None:
+        await message.reply("Ответь командой «отношения» на сообщение человека или напиши «отношения @user» / «отношения @user1 @user2».")
+        return
+    view = await get_relationship(message.chat.id, *pair)
+    if view is None:
+        await message.reply("У этой пары пока недостаточно общей истории: ни устойчивых взаимодействий, ни общего события в Летописи.")
+        return
+
+    lines = [
+        f"❤️ <b>{_pair_name(view)}</b>",
+        "",
+        f"Уровень: <b>{view.level}/15</b>",
+        f"Тип: <b>{view.archetype}</b>",
+        f"Близость: <b>{view.affinity}/100</b>",
+        f"Напряжение: <b>{view.tension}/100</b>",
+        f"Взаимность: <b>{round(view.reciprocity * 100)}%</b>",
+        "",
+        _relationship_description(view),
+    ]
+    if view.shared_events:
+        main_event = max(view.shared_events, key=lambda event: event.importance_score)
+        lines.extend(("", f"Главный эпизод: <b>«{main_event.title}»</b>"))
+    lines.extend(("", f"Тренд: <b>{view.trend}</b>"))
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(lambda message: _is_command(message, "мои отношения"))
+async def handle_my_relationships(message: types.Message):
+    if not await _ensure_available(message):
+        return
+    views = await get_relationships(message.chat.id, user_id=message.from_user.id)
+    if not views:
+        await message.reply("У тебя пока не накопилось отношений, которые можно уверенно показать.")
+        return
+    lines = ["❤️ <b>Твои главные отношения</b>", ""]
+    for index, view in enumerate(views[:6], 1):
+        lines.append(
+            f"{index}. <b>{_other_name(view, message.from_user.id)}</b> — "
+            f"уровень {view.level}, {view.archetype}; {view.trend}."
+        )
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(lambda message: _is_command(message, "отношения чата"))
+async def handle_chat_relationships(message: types.Message):
+    if not await _ensure_available(message):
+        return
+    views = await get_relationships(message.chat.id)
+    if not views:
+        await message.reply("У чата пока недостаточно общей истории для рейтинга отношений.")
+        return
+
+    closest = max(views, key=lambda item: (item.affinity, item.level))
+    strongest = max(views, key=lambda item: (item.level, item.strength))
+    conflict = max(views, key=lambda item: item.tension)
+    mutual_pool = [item for item in views if item.interaction_count >= 4]
+    mutual = max(mutual_pool, key=lambda item: item.reciprocity) if mutual_pool else None
+    one_sided = min(mutual_pool, key=lambda item: item.reciprocity) if mutual_pool else None
+    rising = max(views, key=lambda item: item.recent_7d - item.previous_21d / 3.0)
+
+    lines = ["🕸 <b>Отношения чата</b>", ""]
+    lines.append(f"❤️ Самые близкие: <b>{_pair_name(closest)}</b> — {closest.archetype}")
+    if conflict.tension > 0:
+        lines.append(f"⚔️ Самые напряжённые: <b>{_pair_name(conflict)}</b> — {conflict.archetype}")
+    if mutual is not None:
+        lines.append(f"🤝 Самые взаимные: <b>{_pair_name(mutual)}</b> — {round(mutual.reciprocity * 100)}%")
+    if one_sided is not None and one_sided.reciprocity < 0.65:
+        lines.append(f"🫠 Самая односторонняя связь: <b>{_pair_name(one_sided)}</b>")
+    if rising.recent_7d > 0:
+        lines.append(f"📈 Быстрее всех оживают: <b>{_pair_name(rising)}</b> — {rising.trend}")
+    if strongest is not closest:
+        lines.append(f"🏛 Главная институция: <b>{_pair_name(strongest)}</b> — уровень {strongest.level}/15")
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(lambda message: _starts_command(message, "история отношений"))
+async def handle_relationship_history(message: types.Message):
+    if not await _ensure_available(message):
+        return
+    pair = await _resolve_relationship_pair(message, "история отношений")
+    if pair is None:
+        await message.reply("Ответь «история отношений» на сообщение человека или укажи @user / двух @user.")
+        return
+    view, snapshots = await get_relationship_history(message.chat.id, *pair)
+    if view is None:
+        await message.reply("Истории этой пары пока нет.")
+        return
+
+    lines = [f"📜 <b>История отношений: {_pair_name(view)}</b>", ""]
+    events = sorted(view.shared_events, key=lambda event: event.event_started_at, reverse=True)[:8]
+    if events:
+        for event in events:
+            lines.append(f"• {event.event_started_at:%d.%m.%Y} — <b>{event.title}</b>")
+    else:
+        lines.append("Пока без отдельных легендарных эпизодов в Летописи.")
+
+    if len(snapshots) >= 2:
+        latest = snapshots[0]
+        oldest = snapshots[-1]
+        if latest.level != oldest.level or latest.archetype != oldest.archetype:
+            lines.extend((
+                "",
+                f"Динамика снимков: уровень {oldest.level} → {latest.level}; "
+                f"{oldest.archetype} → {latest.archetype}.",
+            ))
+    lines.extend(("", f"Сейчас: <b>{view.archetype}</b>, уровень <b>{view.level}/15</b>, {view.trend}."))
+    await message.reply("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(lambda message: _is_command(message, "мои связи"))
