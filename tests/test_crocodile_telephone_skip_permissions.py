@@ -91,43 +91,43 @@ def test_direct_skip_delegates_for_host_current_and_admin(monkeypatch):
         permissions.crocodile_modes.telephone_games.pop(cid, None)
 
 
-def test_menu_skip_blocks_non_current_participant(monkeypatch):
+def test_menu_skip_blocks_non_current_participant():
     from games import crocodile_telephone_skip_permissions as permissions
 
     cid = "-42"
     game = _game(permissions.ADMIN_ID)
     permissions.crocodile_modes.telephone_games[cid] = game
-    original = AsyncMock()
-    monkeypatch.setattr(permissions, "_original_menu_callback", original)
+    downstream = AsyncMock()
     callback = _callback("cmenu_skip", 303)
 
     try:
-        asyncio.run(permissions.menu_callback_with_skip_permissions(callback))
+        asyncio.run(permissions.menu_callback_with_skip_permissions(callback, downstream))
         callback.answer.assert_awaited_once_with(
             "Пропустить может только ведущий или текущий игрок",
             show_alert=True,
         )
-        original.assert_not_awaited()
+        downstream.assert_not_awaited()
     finally:
         permissions.crocodile_modes.telephone_games.pop(cid, None)
 
 
-def test_menu_skip_delegates_for_host_and_current_player(monkeypatch):
+def test_menu_skip_delegates_for_host_and_current_player():
     from games import crocodile_telephone_skip_permissions as permissions
 
     cid = "-42"
     game = _game(permissions.ADMIN_ID)
     permissions.crocodile_modes.telephone_games[cid] = game
-    original = AsyncMock(return_value="delegated")
-    monkeypatch.setattr(permissions, "_original_menu_callback", original)
+    downstream = AsyncMock(return_value="delegated")
 
     try:
         for user_id in (101, 202):
-            original.reset_mock()
+            downstream.reset_mock()
             callback = _callback("cmenu_skip", user_id)
-            result = asyncio.run(permissions.menu_callback_with_skip_permissions(callback))
+            result = asyncio.run(
+                permissions.menu_callback_with_skip_permissions(callback, downstream)
+            )
             assert result == "delegated"
-            original.assert_awaited_once_with(callback)
+            downstream.assert_awaited_once_with(callback)
     finally:
         permissions.crocodile_modes.telephone_games.pop(cid, None)
 
@@ -138,16 +138,29 @@ def test_menu_skip_admin_can_override_without_being_participant(monkeypatch):
     cid = "-42"
     game = _game(permissions.ADMIN_ID)
     permissions.crocodile_modes.telephone_games[cid] = game
-    original = AsyncMock()
+    downstream = AsyncMock()
     skip = AsyncMock()
-    monkeypatch.setattr(permissions, "_original_menu_callback", original)
     monkeypatch.setattr(permissions.crocodile_party_controls, "_skip_telephone", skip)
     callback = _callback("cmenu_skip", permissions.ADMIN_ID)
 
     try:
-        asyncio.run(permissions.menu_callback_with_skip_permissions(callback))
+        asyncio.run(permissions.menu_callback_with_skip_permissions(callback, downstream))
         callback.answer.assert_awaited_once_with("Пропускаем (админ)")
         skip.assert_awaited_once_with(cid, game)
-        original.assert_not_awaited()
+        downstream.assert_not_awaited()
     finally:
         permissions.crocodile_modes.telephone_games.pop(cid, None)
+
+
+def test_menu_non_skip_delegates_once():
+    from games import crocodile_telephone_skip_permissions as permissions
+
+    callback = _callback("cmenu_duel", 101)
+    downstream = AsyncMock(return_value="delegated")
+
+    result = asyncio.run(
+        permissions.menu_callback_with_skip_permissions(callback, downstream)
+    )
+
+    assert result == "delegated"
+    downstream.assert_awaited_once_with(callback)
