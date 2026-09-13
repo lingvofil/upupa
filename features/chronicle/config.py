@@ -73,5 +73,8 @@ BACKFILL_MAX_AI_REQUESTS = _int("UPUPA_CHRONICLE_BACKFILL_MAX_AI_REQUESTS", 30, 
 BACKFILL_MAX_CANDIDATES_PER_BATCH = _int(
     "UPUPA_CHRONICLE_BACKFILL_MAX_CANDIDATES_PER_BATCH", 2, minimum=1
 )
-BACKFILL_MIN_SCORE = _float("UPUPA_CHRONICLE_BACKFILL_MIN_SCORE", 3.8)
+# A phrase repeated across five separate conversational clusters scores just
+# above this threshold even if each occurrence is only one short message. AI is
+# still the final conservative gate, so local memes are not lost at prefilter.
+BACKFILL_MIN_SCORE = _float("UPUPA_CHRONICLE_BACKFILL_MIN_SCORE", 3.0)
 BACKFILL_CLUSTER_GAP_SECONDS = _int("UPUPA_CHRONICLE_BACKFILL_CLUSTER_GAP_SECONDS", 480, minimum=60)
