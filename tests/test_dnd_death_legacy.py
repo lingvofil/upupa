@@ -12,7 +12,7 @@ def test_backfill_death_flags_uses_latest_campaign_state():
         "chats": {
             "-100": {
                 "players": {
-                    "1": {"profile": {"style": "старый герой"}},
+                    "1": {"profile": {"style": "старый герой"}, "dead": True},
                     "2": {"profile": {"style": "погибший герой"}},
                 },
                 "campaigns": [
