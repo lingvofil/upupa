@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 
-from AI import dnd_inventory_effects as effects
 from AI import dnd_inventory_fun as inventory_fun
 
 
@@ -134,7 +133,10 @@ def refine_inventory_item(item) -> bool:
 def refine_inventory_items(items) -> bool:
     if not isinstance(items, list):
         return False
-    return any(refine_inventory_item(item) for item in items)
+    changed = False
+    for item in items:
+        changed = refine_inventory_item(item) or changed
+    return changed
 
 
 def refine_archive_data(archive) -> bool:
