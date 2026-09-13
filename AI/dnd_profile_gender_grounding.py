@@ -1,8 +1,7 @@
-"""Gender profile choice and hard story-grounding rules for participant DnD."""
+"""Gender choice and hard story-grounding rules for participant DnD."""
 from __future__ import annotations
 
-import json
-import random
+import logging
 import re
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -64,28 +63,6 @@ def _metaphysical_plot(text: str) -> bool:
     return any(pattern.search(str(text or "")) for pattern in _METAPHYSICAL_PATTERNS)
 
 
-def _profile_from_generated_payload(campaign, raw):
-    """Upgrade the old four-field auto-profile payload with a normalized gender."""
-    text = campaign.ACTION_RE.sub("", campaign.META_RE.sub("", str(raw or ""))).strip()
-    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
-    try:
-        data = json.loads(fenced) if fenced.startswith("{") else None
-    except (TypeError, ValueError, json.JSONDecodeError):
-        data = None
-    if not isinstance(data, dict):
-        return None
-
-    legacy_steps = ("style", "strength", "weakness", "special")
-    profile = {
-        step: campaign._clean_generated_value(data.get(step), max_chars=100)
-        for step in legacy_steps
-    }
-    if not all(profile.values()):
-        return None
-    profile[GENDER_STEP] = _normalize_gender(data.get(GENDER_STEP)) or random.choice(GENDER_OPTIONS)
-    return profile
-
-
 def install_dnd_profile_gender_grounding() -> None:
     """Patch campaign mechanics after the base campaign layer has been configured."""
     from AI import dnd
@@ -95,10 +72,7 @@ def install_dnd_profile_gender_grounding() -> None:
     if getattr(campaign, "_upupa_dnd_profile_gender_grounding_installed", False):
         return
 
-    legacy_steps = tuple(step for step in campaign.PROFILE_STEPS if step != GENDER_STEP)
-    campaign.PROFILE_STEPS = legacy_steps + (GENDER_STEP,)
     campaign.PROFILE_LABELS[GENDER_STEP] = "пол"
-    campaign.EMERGENCY_PROFILE_OPTIONS[GENDER_STEP] = GENDER_OPTIONS
     state_commands._PROFILE_LABELS[GENDER_STEP] = "Пол"
 
     campaign.RULES = campaign.RULES.replace(_OLD_META_RULE, GROUNDING_RULES)
@@ -106,19 +80,6 @@ def install_dnd_profile_gender_grounding() -> None:
         dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.replace(_OLD_META_RULE, GROUNDING_RULES)
     elif _GROUNDING_MARKER not in dnd.DND_SYSTEM_PROMPT:
         dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + GROUNDING_RULES
-
-    original_options_are_valid = campaign._options_are_valid
-
-    def options_are_valid(options, *, expected=campaign.PROFILE_OPTION_COUNT, similarity_limit=0.82):
-        if tuple(options or ()) == GENDER_OPTIONS:
-            return True
-        return original_options_are_valid(
-            options,
-            expected=expected,
-            similarity_limit=similarity_limit,
-        )
-
-    campaign._options_are_valid = options_are_valid
 
     original_generate_profile_options = campaign._generate_profile_options
 
@@ -167,21 +128,38 @@ def install_dnd_profile_gender_grounding() -> None:
 
     campaign._profile_text = profile_text
 
-    original_parse_generated_profile = campaign._parse_generated_profile
+    original_missing_profiles = campaign._missing_profiles
 
-    def parse_generated_profile(raw):
-        profile = original_parse_generated_profile(raw)
-        if profile:
-            gender = _normalize_gender(profile.get(GENDER_STEP))
-            if gender:
-                profile[GENDER_STEP] = gender
-                return profile
-        return _profile_from_generated_payload(campaign, raw)
+    def missing_profiles(session):
+        campaign._ensure(session)
+        missing = []
+        for participant in session.participants.values():
+            key = str(int(participant["user_id"]))
+            profile = session.character_profiles.get(key) or {}
+            if not campaign._profile_complete(profile) or not _normalize_gender(profile.get(GENDER_STEP)):
+                missing.append(participant.get("name") or key)
+        return missing
 
-    campaign._parse_generated_profile = parse_generated_profile
+    campaign._missing_profiles = missing_profiles
 
-    def legacy_profile_complete(profile) -> bool:
-        return bool(profile and all(profile.get(step) for step in legacy_steps))
+    original_lobby_text = campaign._lobby_text
+
+    def lobby_text(session):
+        campaign._ensure(session)
+        roster = "\n".join(
+            ("✅" if name not in missing_profiles(session) else "🧩") + " " + name
+            for participant in session.participants.values()
+            for name in [participant.get("name") or "Игрок"]
+        ) or "Пока никто не записался."
+        return (
+            f"👥 Игра с участниками чата.\nВедущий: {session.starter_name}\n\n"
+            f"Участники:\n{roster}\n\n"
+            "После «Участвовать» выбери образ, сильную сторону, слабость, особый приём и пол. "
+            "Затем ведущий выбирает сюжет."
+        )
+
+    campaign._lobby_text = lobby_text
+    dnd._lobby_text = lobby_text
 
     original_profile_prompt = campaign._profile_prompt
 
@@ -190,62 +168,93 @@ def install_dnd_profile_gender_grounding() -> None:
         key = str(user_id)
         campaign._ensure(session)
         current = session.character_profiles.get(key) or {}
-
-        if legacy_profile_complete(current) and not _normalize_gender(current.get(GENDER_STEP)):
+        if campaign._profile_complete(current) and not _normalize_gender(current.get(GENDER_STEP)):
             options = await campaign._generate_profile_options(dnd_module, session, user_id, GENDER_STEP)
             await callback.message.answer(
-                campaign._profile_choice_text(GENDER_STEP, options),
+                campaign._profile_choice_text(GENDER_STEP, options, heading="🎭 Осталось выбрать"),
                 reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, options),
             )
             dnd_module.persist_dnd_sessions()
             return
-
-        old = campaign._player_history(session.chat_id, user_id) or {}
-        old_profile = dict(old.get("profile") or {})
-        if legacy_profile_complete(old_profile) and not _normalize_gender(old_profile.get(GENDER_STEP)):
-            campaign._apply_heritage(session, user_id)
-            session.character_profiles[key] = old_profile
-            options = await campaign._generate_profile_options(dnd_module, session, user_id, GENDER_STEP)
-            await callback.message.answer(
-                "🎭 Старый персонаж сохранён. Осталось выбрать пол.",
-                reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, options),
-            )
-            dnd_module.persist_dnd_sessions()
-            return
-
         return await original_profile_prompt(dnd_module, callback, session)
 
     campaign._profile_prompt = profile_prompt
 
-    original_auto_profile = campaign._auto_profile
+    original_profile_callback = campaign._profile_callback
 
-    async def auto_profile(dnd_module, session, user_id):
-        old = campaign._player_history(session.chat_id, user_id) or {}
-        old_profile = dict(old.get("profile") or {})
-        if legacy_profile_complete(old_profile) and not _normalize_gender(old_profile.get(GENDER_STEP)):
-            campaign._apply_heritage(
-                session,
-                user_id,
-                continuation=bool(getattr(session, "continuation_mode", False)),
+    async def profile_callback(callback, dnd_module):
+        session = dnd_module.dnd_sessions.get(callback.message.chat.id) if callback.message else None
+        parts = str(callback.data or "").split(":")
+        user_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        action = parts[3] if len(parts) > 3 else ""
+        token = parts[4] if len(parts) > 4 else ""
+
+        if not session or session.mode != "participants" or session.state != "LOBBY":
+            return await original_profile_callback(callback, dnd_module)
+        if int(callback.from_user.id) != user_id or str(user_id) not in session.participants:
+            return await original_profile_callback(callback, dnd_module)
+
+        if action == "reuse":
+            old = campaign._player_history(session.chat_id, user_id) or {}
+            profile = dict(old.get("profile") or {})
+            if campaign._profile_complete(profile) and not _normalize_gender(profile.get(GENDER_STEP)):
+                session.character_profiles[str(user_id)] = profile
+                session.profile_options.pop(str(user_id), None)
+                dnd_module.persist_dnd_sessions()
+                await callback.answer("Вернул. Осталось выбрать пол.")
+                options = await campaign._generate_profile_options(dnd_module, session, user_id, GENDER_STEP)
+                await callback.message.edit_text(
+                    campaign._profile_choice_text(GENDER_STEP, options, heading="🎭 Теперь выбери"),
+                    reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, options),
+                )
+                return
+
+        if action == "special" and token != "regen":
+            options = list(session.profile_options.get(str(user_id), {}).get(action) or [])
+            if campaign._options_are_valid(options):
+                try:
+                    value = options[int(token)]
+                except (ValueError, IndexError):
+                    return await original_profile_callback(callback, dnd_module)
+                profile = session.character_profiles.setdefault(str(user_id), {})
+                profile[action] = value
+                dnd_module.persist_dnd_sessions()
+                await callback.answer("Записал.")
+                gender_options = await campaign._generate_profile_options(
+                    dnd_module, session, user_id, GENDER_STEP
+                )
+                await callback.message.edit_text(
+                    campaign._profile_choice_text(GENDER_STEP, gender_options, heading="🎭 Теперь выбери"),
+                    reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, gender_options),
+                )
+                return
+
+        if action == GENDER_STEP:
+            try:
+                gender = GENDER_OPTIONS[int(token)]
+            except (ValueError, IndexError):
+                await callback.answer("Кнопка протухла.")
+                return
+            profile = session.character_profiles.setdefault(str(user_id), {})
+            profile[GENDER_STEP] = gender
+            session.profile_options.pop(str(user_id), None)
+            dnd_module.persist_dnd_sessions()
+            await callback.answer("Записал.")
+            if campaign._profile_complete(profile):
+                await callback.message.edit_text("✅ Персонаж готов: " + campaign._profile_text(profile))
+                await campaign._refresh_lobby(session, callback.bot)
+                return
+            step = next((item for item in campaign.PROFILE_STEPS if not profile.get(item)), "style")
+            next_options = await campaign._generate_profile_options(dnd_module, session, user_id, step)
+            await callback.message.edit_text(
+                campaign._profile_choice_text(step, next_options, heading="🎭 Теперь выбери"),
+                reply_markup=campaign._profile_keyboard(user_id, step, next_options),
             )
-            old_profile[GENDER_STEP] = random.choice(GENDER_OPTIONS)
-            session.character_profiles[str(int(user_id))] = old_profile
-            return old_profile
-        return await original_auto_profile(dnd_module, session, user_id)
+            return
 
-    campaign._auto_profile = auto_profile
+        return await original_profile_callback(callback, dnd_module)
 
-    original_lobby_text = campaign._lobby_text
-
-    def lobby_text(session):
-        text = original_lobby_text(session)
-        return text.replace(
-            "выбери образ, сильную сторону, слабость и особый приём.",
-            "выбери образ, сильную сторону, слабость, особый приём и пол.",
-        )
-
-    campaign._lobby_text = lobby_text
-    dnd._lobby_text = lobby_text
+    campaign._profile_callback = profile_callback
 
     original_campaign_context = campaign._campaign_context
 
@@ -265,4 +274,42 @@ def install_dnd_profile_gender_grounding() -> None:
     campaign._plot_generation_prompt = plot_generation_prompt
     campaign.FORBIDDEN_PLOT_PATTERNS = tuple(campaign.FORBIDDEN_PLOT_PATTERNS) + _METAPHYSICAL_PATTERNS
 
+    original_parse_turn = dnd.parse_and_execute_turn
+
+    async def parse_turn(bot, chat_id, response):
+        session = dnd.dnd_sessions.get(chat_id)
+        candidate = str(response or "")
+        if session and dnd._is_participant_mode(session):
+            for attempt in range(3):
+                story = campaign.ACTION_RE.sub("", campaign.META_RE.sub("", candidate)).strip()
+                if not _metaphysical_plot(story):
+                    break
+                logging.warning(
+                    "DnD metaphysical draft rejected chat_id=%s attempt=%s",
+                    chat_id,
+                    attempt + 1,
+                )
+                conversation = getattr(session, "conversation", None)
+                if (
+                    isinstance(conversation, list)
+                    and conversation
+                    and conversation[-1].get("role") == "assistant"
+                    and conversation[-1].get("content") == candidate
+                ):
+                    conversation.pop()
+                rewrite_prompt = (
+                    "Предыдущий черновик нарушил жёсткое ограничение сюжета. Перепиши продолжение этой же сцены "
+                    "без разрывов реальности, двойников, параллельных миров, симуляций, четвёртой стены и мета-твистов. "
+                    "Сохрани конкретные действия и последствия, но объясняй их только причинностью внутри мира. "
+                    "Верни нормальный игровой кусок и корректный ACTION-тег.\n" + GROUNDING_RULES
+                )
+                candidate = await dnd.generate_session_response(session, rewrite_prompt)
+            else:
+                candidate = (
+                    "Ситуация остаётся конкретной и материальной: герои видят перед собой последствия своих решений "
+                    "и могут выбрать следующий ход.\n[ACTION:INPUT]"
+                )
+        return await original_parse_turn(bot, chat_id, candidate)
+
+    dnd.parse_and_execute_turn = parse_turn
     campaign._upupa_dnd_profile_gender_grounding_installed = True
