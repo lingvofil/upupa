@@ -30,7 +30,7 @@ def _callback(data: str, user_id: int, name: str = "Игрок"):
     )
 
 
-def test_duo_keyboard_shows_artist_invite_before_join(monkeypatch):
+def test_duo_keyboard_shows_artist_invite_before_join():
     from games import crocodile
     from games import crocodile_duo_optin as duo
 
@@ -39,10 +39,12 @@ def test_duo_keyboard_shows_artist_invite_before_join(monkeypatch):
         "drawer_id": 1,
         "drawer_name": "Первый",
     }
-    monkeypatch.setattr(duo, "_original_get_game_keyboard", _base_keyboard)
 
     try:
-        keyboard = duo.get_game_keyboard_with_duo_opt_in(chat_id)
+        keyboard = duo.decorate_game_keyboard_with_duo_opt_in(
+            chat_id,
+            _base_keyboard(chat_id),
+        )
         duo_buttons = [
             button
             for row in keyboard.inline_keyboard
@@ -54,7 +56,10 @@ def test_duo_keyboard_shows_artist_invite_before_join(monkeypatch):
         assert "решает художник" in duo_buttons[0].text
 
         crocodile.game_sessions[str(chat_id)]["duo_invite_open"] = True
-        keyboard = duo.get_game_keyboard_with_duo_opt_in(chat_id)
+        keyboard = duo.decorate_game_keyboard_with_duo_opt_in(
+            chat_id,
+            _base_keyboard(chat_id),
+        )
         callbacks = [
             button.callback_data
             for row in keyboard.inline_keyboard
@@ -63,6 +68,49 @@ def test_duo_keyboard_shows_artist_invite_before_join(monkeypatch):
         ]
         assert "cr_duo_join_-42" in callbacks
         assert "cr_duo_invite_-42" not in callbacks
+    finally:
+        crocodile.game_sessions.pop(str(chat_id), None)
+
+
+def test_duo_game_keyboard_composes_before_ui_clear_next(monkeypatch):
+    from games import crocodile
+    from games import crocodile_duo_optin as duo
+    from games import crocodile_runtime as runtime
+    from games import crocodile_ui_enhancements as ui
+
+    chat_id = -42
+    crocodile.game_sessions[str(chat_id)] = {
+        "drawer_id": 1,
+        "drawer_name": "Первый",
+    }
+
+    def base_keyboard(cid: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Другое", callback_data=f"cr_n_{cid}")],
+                [InlineKeyboardButton(text="👥 Рисовать вдвоём", callback_data=f"cr_duo_{cid}")],
+            ]
+        )
+
+    renderer = runtime._compose_game_keyboard(
+        base_keyboard,
+        duo.decorate_game_keyboard_with_duo_opt_in,
+    )
+    monkeypatch.setattr(ui, "_original_get_game_keyboard", renderer)
+
+    try:
+        keyboard = ui.get_game_keyboard_with_clear_next(chat_id)
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        callbacks = [button.callback_data for button in buttons if button.callback_data]
+        next_button = next(
+            button
+            for button in buttons
+            if button.callback_data == f"cr_n_{chat_id}"
+        )
+
+        assert next_button.text == "⏭ Следующее"
+        assert "cr_duo_invite_-42" in callbacks
+        assert "cr_duo_-42" not in callbacks
     finally:
         crocodile.game_sessions.pop(str(chat_id), None)
 
@@ -102,7 +150,7 @@ def test_primary_artist_must_invite_before_second_can_join(monkeypatch):
     crocodile.game_sessions["-42"] = session
     persist = MagicMock()
     monkeypatch.setattr(duo, "_persist_regular_state", persist)
-    monkeypatch.setattr(duo, "_original_get_game_keyboard", _base_keyboard)
+    monkeypatch.setattr(duo, "_base_game_keyboard", _base_keyboard)
 
     early_join = _callback("cr_duo_join_-42", 2, "Второй")
     primary = _callback("cr_duo_invite_-42", 1, "Первый")
@@ -120,6 +168,13 @@ def test_primary_artist_must_invite_before_second_can_join(monkeypatch):
         assert session["duo_invite_open"] is True
         invite_markup = primary.message.answer.await_args.kwargs["reply_markup"]
         assert invite_markup.inline_keyboard[0][0].callback_data == "cr_duo_join_-42"
+
+        edited_markup = primary.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+        assert all(
+            not str(button.callback_data or "").startswith("cr_duo_")
+            for row in edited_markup.inline_keyboard
+            for button in row
+        )
 
         asyncio.run(duo.handle_duo_opt_in_callback(second))
         assert session["drawer_ids"] == [1, 2]
