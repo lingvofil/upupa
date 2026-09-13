@@ -22,7 +22,6 @@ _configured = False
 _original_start_new_game = None
 _original_get_game_keyboard = None
 _original_get_end_game_keyboard = None
-_original_handle_callback = None
 _original_check_answer = None
 _original_party_menu_keyboard = None
 _original_party_menu_callback = None
@@ -328,7 +327,8 @@ async def _handle_attributed_like(callback, token: str) -> None:
             logging.exception("[croc-ui] failed to credit artist like token=%s", token)
 
 
-async def handle_crocodile_callback_with_ui(callback) -> Any:
+async def handle_crocodile_callback_with_ui(callback, next_handler) -> Any:
+    """Handle UI callbacks or delegate unchanged callbacks downstream."""
     data = callback.data or ""
     if data.startswith("cr_like_"):
         return await _handle_attributed_like(callback, data[len("cr_like_"):])
@@ -348,7 +348,7 @@ async def handle_crocodile_callback_with_ui(callback) -> Any:
             return await callback.answer(f"🎯 Твоё слово: {word.upper()}", show_alert=True)
         return await callback.answer("Готовим холст")
 
-    return await _original_handle_callback(callback)
+    return await next_handler(callback)
 
 
 async def check_answer_with_like_context(message) -> bool:
@@ -391,8 +391,8 @@ def configure_crocodile_ui_enhancements() -> None:
     """Install the final Crocodile UI layer after party and duo extensions."""
     global _configured
     global _original_start_new_game, _original_get_game_keyboard
-    global _original_get_end_game_keyboard, _original_handle_callback
-    global _original_check_answer, _original_party_menu_keyboard
+    global _original_get_end_game_keyboard, _original_check_answer
+    global _original_party_menu_keyboard
     global _original_party_menu_callback, _original_final_frame_handler
     if _configured:
         return
@@ -400,7 +400,6 @@ def configure_crocodile_ui_enhancements() -> None:
     _original_start_new_game = crocodile.start_new_game
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_get_end_game_keyboard = crocodile.get_end_game_keyboard
-    _original_handle_callback = crocodile.handle_callback
     _original_check_answer = crocodile.check_answer
     _original_party_menu_keyboard = crocodile_party_controls.menu_keyboard
     _original_party_menu_callback = crocodile_party_controls.handle_menu_callback
@@ -409,7 +408,6 @@ def configure_crocodile_ui_enhancements() -> None:
     crocodile.start_new_game = start_new_game_with_instant_word
     crocodile.get_game_keyboard = get_game_keyboard_with_clear_next
     crocodile.get_end_game_keyboard = get_end_game_keyboard_with_attribution
-    crocodile.handle_callback = handle_crocodile_callback_with_ui
     crocodile.check_answer = check_answer_with_like_context
     crocodile_party_controls.menu_keyboard = menu_keyboard_with_ratings
     crocodile_party_controls.handle_menu_callback = handle_party_menu_callback_with_ratings

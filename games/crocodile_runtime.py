@@ -128,7 +128,10 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_telephone_skip_permissions import (
         configure_crocodile_telephone_skip_permissions,
     )
-    from games.crocodile_ui_enhancements import configure_crocodile_ui_enhancements
+    from games.crocodile_ui_enhancements import (
+        configure_crocodile_ui_enhancements,
+        handle_crocodile_callback_with_ui,
+    )
 
     persistence.configure_crocodile_runtime()
     configure_crocodile_controls()
@@ -169,6 +172,7 @@ def configure_crocodile_runtime() -> None:
     crocodile.handle_callback = _compose_callback_handler(
         base_callback_handler,
         duo_optin.handle_duo_opt_in_callback,
+        handle_crocodile_callback_with_ui,
     )
     duo_optin.configure_crocodile_duo_opt_in(
         base_game_keyboard=base_game_keyboard,
