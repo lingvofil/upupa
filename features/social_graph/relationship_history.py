@@ -2,16 +2,16 @@
 
 The service deliberately does not read or re-analyse raw chat messages.  It
 assembles a pair timeline from relationship snapshots, Chronicle events and
-small read-only adapters registered by modules that already persist their own
-social/game events.  The adapters expose existing records; this module does not
-copy them into a third store.
+small read-only adapters over records already persisted by other modules.  The
+adapters expose existing records; this module does not copy them into a third
+store.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import re
 
@@ -269,6 +269,43 @@ def assemble_relationship_history(
         *_shared_items(shared_events),
     ])
     return RelationshipHistory(view=view, snapshots=snapshot_tuple, timeline=tuple(timeline))
+
+
+def _dnd_archive_events(chat_id: int, user_a_id: int, user_b_id: int) -> tuple[SharedRelationshipEvent, ...]:
+    """Read completed DnD campaigns without coupling DnD writes to the social graph."""
+    from AI import dnd, dnd_campaign
+
+    dnd_campaign._load_archive(dnd)
+    campaigns = dnd_campaign._chat_history(chat_id).get("campaigns") or []
+    pair = {str(int(user_a_id)), str(int(user_b_id))}
+    events: list[SharedRelationshipEvent] = []
+    for row in campaigns:
+        profiles = set((row.get("profiles") or {}).keys())
+        character_sheets = set((row.get("character_sheets") or {}).keys())
+        if not pair.issubset(profiles | character_sheets):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(row.get("completed_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        plot = _short_text(row.get("selected_plot") or "D&D-кампания", 150)
+        summary = row.get("epilogue") or row.get("finale") or plot
+        events.append(
+            SharedRelationshipEvent(
+                timestamp=timestamp,
+                event_type="game_dnd",
+                title=f"D&D: {plot}",
+                summary=str(summary),
+                source="dnd_archive",
+                priority=75,
+            )
+        )
+    return tuple(events)
+
+
+register_shared_relationship_event_provider("dnd_archive", _dnd_archive_events)
 
 
 async def get_integrated_relationship_history(
