@@ -38,11 +38,11 @@ def test_old_generic_artifacts_get_stable_but_varied_properties():
         "Сфера Л",
         "Сфера М",
     ]
-    effects = [concrete_effect({"name": name, "kind": "artifact"}) for name in names]
+    generated = [concrete_effect({"name": name, "kind": "artifact"}) for name in names]
 
-    assert len(set(effects)) >= 8
-    assert all(effect not in OLD_PLACEHOLDER_EFFECTS for effect in effects)
-    assert effects[0] == concrete_effect({"name": names[0], "kind": "artifact"})
+    assert len(set(generated)) >= 8
+    assert all(effect not in OLD_PLACEHOLDER_EFFECTS for effect in generated)
+    assert generated[0] == concrete_effect({"name": names[0], "kind": "artifact"})
 
 
 def test_authored_effect_is_never_rewritten():
@@ -109,20 +109,28 @@ def test_archive_refinement_rewrites_old_placeholders_everywhere():
     assert refine_archive_data(archive) is False
 
 
-def test_active_session_refinement_rewrites_only_placeholders():
-    placeholder = {
+def test_active_session_refinement_rewrites_all_placeholders_and_preserves_authored():
+    first_placeholder = {
         "name": "Непонятная хрень",
         "kind": "artifact",
         "effect": "подозрительно реагирует на серьёзные неприятности",
+    }
+    second_placeholder = {
+        "name": "Ещё более непонятная хрень",
+        "kind": "artifact",
+        "effect": "явно хранит больше истории, чем объясняет",
     }
     authored = {
         "name": "Рабочий фонарь",
         "kind": "item",
         "effect": "слепит охранника на близкой дистанции",
     }
-    session = SimpleNamespace(inventories={"1": [placeholder, authored]})
+    session = SimpleNamespace(
+        inventories={"1": [first_placeholder, second_placeholder, authored]}
+    )
 
     assert refine_session_inventory(session) is True
-    assert placeholder["effect"] not in OLD_PLACEHOLDER_EFFECTS
+    assert first_placeholder["effect"] not in OLD_PLACEHOLDER_EFFECTS
+    assert second_placeholder["effect"] not in OLD_PLACEHOLDER_EFFECTS
     assert authored["effect"] == "слепит охранника на близкой дистанции"
     assert refine_session_inventory(session) is False
