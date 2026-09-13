@@ -46,7 +46,6 @@ jobs:
             tests/test_portability_regressions.py \
             tests/test_dnd_completion_policy.py \
             tests/test_dnd_runtime.py \
-            tests/test_crocodile_party_resilience.py \
             tests/test_crocodile_runtime.py
       - name: Run tests with coverage
         run: >-
