@@ -15,11 +15,11 @@ from games import crocodile_persistence as persistence
 STOP_UNLOCK_SECONDS = 5 * 60
 WORD_BACK_HISTORY_LIMIT = 30
 
-_original_start_new_game = crocodile.start_new_game
 _original_handle_callback = crocodile.handle_callback
 _original_get_game_keyboard = crocodile.get_game_keyboard
 _original_session_to_record = persistence._session_to_record
 _original_session_from_record = persistence._session_from_record
+_base_start_new_game = None
 _configured = False
 
 
@@ -118,18 +118,35 @@ async def start_new_game_with_controls(
     chat_id: int,
     user_id: int,
     user_full_name: str,
+    next_handler,
 ) -> bool:
+    """Apply round ownership state around an explicitly supplied start handler."""
     cid = str(chat_id)
     current_session = crocodile.game_sessions.get(cid)
     if current_session and not can_stop_round(current_session, user_id):
         return False
 
-    await _original_start_new_game(chat_id, user_id, user_full_name)
+    await next_handler(chat_id, user_id, user_full_name)
     session = crocodile.game_sessions.get(cid)
     if session is not None:
         session["started_at"] = time.time()
         session["previous_words"] = []
     return True
+
+
+async def _start_new_game_with_configured_controls(
+    chat_id: int,
+    user_id: int,
+    user_full_name: str,
+) -> bool:
+    if _base_start_new_game is None:
+        raise RuntimeError("Crocodile controls start-game dependency is not configured")
+    return await start_new_game_with_controls(
+        chat_id,
+        user_id,
+        user_full_name,
+        _base_start_new_game,
+    )
 
 
 async def handle_start_game_with_controls(message: types.Message):
@@ -147,7 +164,7 @@ async def handle_start_game_with_controls(message: types.Message):
         await message.reply("Не удалось определить, кто запускает игру.")
         return
 
-    await start_new_game_with_controls(
+    await _start_new_game_with_configured_controls(
         message.chat.id,
         user.id,
         user.full_name,
@@ -231,7 +248,7 @@ async def handle_callback_with_controls(cb: types.CallbackQuery):
                 return await cb.answer(lock_message, show_alert=True)
 
         await cb.answer("Готовим холст...")
-        await start_new_game_with_controls(
+        await _start_new_game_with_configured_controls(
             cb.message.chat.id,
             cb.from_user.id,
             cb.from_user.full_name,
@@ -295,14 +312,14 @@ def session_from_record_with_controls(record: dict) -> tuple[str, dict]:
     return chat_id, session
 
 
-def configure_crocodile_controls() -> None:
-    """Install Crocodile ownership/word controls before session restore."""
-    global _configured
+def configure_crocodile_controls(*, base_start_new_game) -> None:
+    """Install Crocodile controls while keeping start-game composition explicit."""
+    global _configured, _base_start_new_game
     if _configured:
         return
 
+    _base_start_new_game = base_start_new_game
     crocodile.get_game_keyboard = get_game_keyboard_with_previous
-    crocodile.start_new_game = start_new_game_with_controls
     crocodile.handle_start_game = handle_start_game_with_controls
     crocodile.handle_text_stop = handle_text_stop_with_controls
     crocodile.handle_callback = handle_callback_with_controls

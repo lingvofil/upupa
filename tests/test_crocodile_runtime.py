@@ -13,13 +13,15 @@ def test_crocodile_runtime_owns_extension_composition_order():
     source = _source("games/crocodile_runtime.py")
     calls = [
         "persistence.configure_crocodile_runtime()",
-        "configure_crocodile_controls()",
+        "base_start_new_game = crocodile.start_new_game",
+        "configure_crocodile_controls(base_start_new_game=base_start_new_game)",
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
         "crocodile.get_game_keyboard = _compose_game_keyboard(",
+        "crocodile.start_new_game = _compose_start_new_game(",
         "crocodile.handle_callback = _compose_callback_handler(",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",

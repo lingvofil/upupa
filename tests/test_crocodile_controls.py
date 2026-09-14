@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401
 from games import crocodile
@@ -45,17 +46,73 @@ def test_legacy_round_without_started_at_is_not_relocked_after_restart():
 def test_starting_another_crocodile_cannot_bypass_stop_lock(monkeypatch):
     crocodile.game_sessions[CHAT_ID] = _session(started_at=1_000.0)
     monkeypatch.setattr(controls.time, "time", lambda: 1_100.0)
+    downstream = AsyncMock()
 
     async def scenario():
         return await controls.start_new_game_with_controls(
             int(CHAT_ID),
             OTHER_ID,
             "Другой",
+            downstream,
         )
 
     try:
         assert asyncio.run(scenario()) is False
+        downstream.assert_not_awaited()
         assert crocodile.game_sessions[CHAT_ID]["drawer_id"] == DRAWER_ID
+    finally:
+        crocodile.game_sessions.clear()
+
+
+def test_controls_start_initializes_round_state_after_base_start(monkeypatch):
+    monkeypatch.setattr(controls.time, "time", lambda: 1_234.5)
+
+    async def base_start(chat_id, user_id, user_name):
+        crocodile.game_sessions[str(chat_id)] = {
+            "word": "барсук",
+            "drawer_id": user_id,
+            "drawer_name": user_name,
+        }
+
+    try:
+        result = asyncio.run(
+            controls.start_new_game_with_controls(
+                int(CHAT_ID),
+                DRAWER_ID,
+                "Художник",
+                base_start,
+            )
+        )
+        session = crocodile.game_sessions[CHAT_ID]
+        assert result is True
+        assert session["started_at"] == 1_234.5
+        assert session["previous_words"] == []
+    finally:
+        crocodile.game_sessions.clear()
+
+
+def test_command_start_keeps_internal_base_controls_path(monkeypatch):
+    async def base_start(chat_id, user_id, user_name):
+        crocodile.game_sessions[str(chat_id)] = {
+            "word": "барсук",
+            "drawer_id": user_id,
+            "drawer_name": user_name,
+        }
+
+    base = AsyncMock(side_effect=base_start)
+    public_entrypoint = AsyncMock()
+    monkeypatch.setattr(controls, "_base_start_new_game", base)
+    monkeypatch.setattr(crocodile, "start_new_game", public_entrypoint)
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=int(CHAT_ID)),
+        from_user=SimpleNamespace(id=DRAWER_ID, full_name="Художник"),
+        reply=AsyncMock(),
+    )
+
+    try:
+        asyncio.run(controls.handle_start_game_with_controls(message))
+        base.assert_awaited_once_with(int(CHAT_ID), DRAWER_ID, "Художник")
+        public_entrypoint.assert_not_awaited()
     finally:
         crocodile.game_sessions.clear()
 
@@ -144,7 +201,10 @@ def test_runtime_installs_controls_before_bootstrap_restores_crocodile_sessions(
     runtime_source = (root / "games" / "crocodile_runtime.py").read_text(encoding="utf-8")
     bootstrap_source = (root / "app" / "bootstrap.py").read_text(encoding="utf-8")
 
-    assert "configure_crocodile_controls()" in runtime_source
+    assert (
+        "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
+        in runtime_source
+    )
     configure_pos = bootstrap_source.index("configure_crocodile_runtime()")
     restore_pos = bootstrap_source.index("restore_crocodile_sessions()")
     assert configure_pos < restore_pos

@@ -149,7 +149,10 @@ def configure_crocodile_runtime() -> None:
     from games import reverse_crocodile_persistence as reverse_persistence
     from games.crocodile_admin_controls import configure_crocodile_admin_controls
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
-    from games.crocodile_controls import configure_crocodile_controls
+    from games.crocodile_controls import (
+        configure_crocodile_controls,
+        start_new_game_with_controls,
+    )
     from games.crocodile_modes import configure_crocodile_modes
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
@@ -172,12 +175,12 @@ def configure_crocodile_runtime() -> None:
     )
 
     persistence.configure_crocodile_runtime()
-    configure_crocodile_controls()
+    base_start_new_game = crocodile.start_new_game
+    configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
     base_game_keyboard = crocodile.get_game_keyboard
     base_end_game_keyboard = crocodile.get_end_game_keyboard
-    base_start_new_game = crocodile.start_new_game
     base_callback_handler = crocodile.handle_callback
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
@@ -223,6 +226,7 @@ def configure_crocodile_runtime() -> None:
     )
     crocodile.start_new_game = _compose_start_new_game(
         base_start_new_game,
+        start_new_game_with_controls,
         start_new_game_with_instant_word,
     )
     crocodile.handle_callback = _compose_callback_handler(
