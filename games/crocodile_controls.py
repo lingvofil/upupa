@@ -16,7 +16,6 @@ STOP_UNLOCK_SECONDS = 5 * 60
 WORD_BACK_HISTORY_LIMIT = 30
 
 _original_handle_callback = crocodile.handle_callback
-_original_get_game_keyboard = crocodile.get_game_keyboard
 _original_session_to_record = persistence._session_to_record
 _original_session_from_record = persistence._session_from_record
 _base_start_new_game = None
@@ -94,8 +93,11 @@ def take_previous_word(session: dict) -> str | None:
     return previous or None
 
 
-def get_game_keyboard_with_previous(chat_id: int) -> InlineKeyboardMarkup:
-    keyboard = _original_get_game_keyboard(chat_id)
+def decorate_game_keyboard_with_previous(
+    chat_id: int,
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Add previous-word navigation to an already rendered game keyboard."""
     rows = [list(row) for row in keyboard.inline_keyboard]
     if len(rows) < 2 or len(rows[1]) < 3:
         return keyboard
@@ -319,7 +321,6 @@ def configure_crocodile_controls(*, base_start_new_game) -> None:
         return
 
     _base_start_new_game = base_start_new_game
-    crocodile.get_game_keyboard = get_game_keyboard_with_previous
     crocodile.handle_start_game = handle_start_game_with_controls
     crocodile.handle_text_stop = handle_text_stop_with_controls
     crocodile.handle_callback = handle_callback_with_controls
