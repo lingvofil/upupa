@@ -123,6 +123,55 @@ def _compose_callback_handler(base_handler, *routers):
     return handler
 
 
+def _compose_stop_lock_remaining_seconds(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        def remaining(
+            session,
+            user_id,
+            *,
+            now=None,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return _wrapper(session, user_id, _next, now=now)
+
+        handler = remaining
+    return handler
+
+
+def _compose_party_stop_handler(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def stop(chat_id, user_id, _wrapper=wrapper, _next=next_handler):
+            return await _wrapper(chat_id, user_id, _next)
+
+        handler = stop
+    return handler
+
+
+def _compose_menu_keyboard_handler(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        def render(chat_id, _wrapper=wrapper, _next=next_handler):
+            return _wrapper(chat_id, _next)
+
+        handler = render
+    return handler
+
+
 def _compose_check_answer(base_handler, *wrappers):
     handler = base_handler
     for wrapper in wrappers:
@@ -226,13 +275,25 @@ def configure_crocodile_runtime() -> None:
         return
 
     from games import crocodile
+    from games import crocodile_controls
     from games import crocodile_modes
     from games import crocodile_duo_optin as duo_optin
     from games import crocodile_party_controls as party_controls
     from games import crocodile_party_state as party_state
     from games import crocodile_persistence as persistence
+    from games import reverse_crocodile as reverse
+    from games import reverse_crocodile_modes as reverse_modes
     from games import reverse_crocodile_persistence as reverse_persistence
-    from games.crocodile_admin_controls import configure_crocodile_admin_controls
+    from games.crocodile_admin_controls import (
+        configure_crocodile_admin_controls,
+        handle_duel_callback_with_admin,
+        handle_telephone_callback_with_admin,
+        menu_keyboard_with_admin_emergency_stop,
+        reverse_callback_with_admin,
+        reverse_modes_callback_with_admin,
+        stop_active_party_with_admin,
+        stop_lock_remaining_seconds_with_admin,
+    )
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
     from games.crocodile_controls import (
         configure_crocodile_controls,
@@ -376,6 +437,34 @@ def configure_crocodile_runtime() -> None:
         base_game_keyboard=pre_duo_game_keyboard,
     )
     configure_crocodile_ui_enhancements()
+    crocodile_controls.stop_lock_remaining_seconds = _compose_stop_lock_remaining_seconds(
+        crocodile_controls.stop_lock_remaining_seconds,
+        stop_lock_remaining_seconds_with_admin,
+    )
+    crocodile_modes.handle_telephone_callback = _compose_callback_handler(
+        crocodile_modes.handle_telephone_callback,
+        handle_telephone_callback_with_admin,
+    )
+    crocodile_modes.handle_duel_callback = _compose_callback_handler(
+        crocodile_modes.handle_duel_callback,
+        handle_duel_callback_with_admin,
+    )
+    party_controls._stop_active_party = _compose_party_stop_handler(
+        party_controls._stop_active_party,
+        stop_active_party_with_admin,
+    )
+    party_controls.menu_keyboard = _compose_menu_keyboard_handler(
+        party_controls.menu_keyboard,
+        menu_keyboard_with_admin_emergency_stop,
+    )
+    reverse.handle_callback = _compose_callback_handler(
+        reverse.handle_callback,
+        reverse_callback_with_admin,
+    )
+    reverse_modes.handle_callback = _compose_callback_handler(
+        reverse_modes.handle_callback,
+        reverse_modes_callback_with_admin,
+    )
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
     configure_crocodile_telephone_skip_permissions()
