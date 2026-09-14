@@ -151,6 +151,7 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
     from games.crocodile_controls import (
         configure_crocodile_controls,
+        decorate_game_keyboard_with_previous,
         start_new_game_with_controls,
     )
     from games.crocodile_modes import configure_crocodile_modes
@@ -176,7 +177,13 @@ def configure_crocodile_runtime() -> None:
 
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
+    raw_game_keyboard = crocodile.get_game_keyboard
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
+    controls_game_keyboard = _compose_game_keyboard(
+        raw_game_keyboard,
+        decorate_game_keyboard_with_previous,
+    )
+    crocodile.get_game_keyboard = controls_game_keyboard
     configure_crocodile_single_words()
     configure_crocodile_modes()
     base_game_keyboard = crocodile.get_game_keyboard
