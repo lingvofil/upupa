@@ -266,34 +266,31 @@ def test_round_token_rejects_canvas_from_previous_round(monkeypatch):
             socket_state.clear()
             socket_state.update(data)
 
-    async def fake_original_authorize(_sid, _data, *, bind_room=False):
+    async def fake_next_authorize(_sid, _data, *, bind_room=False):
         return "m100", "-100", current["session"]
 
     monkeypatch.setattr(crocodile, "sio", FakeSio())
-    monkeypatch.setattr(
-        persistence,
-        "_original_authorize_socket_room",
-        fake_original_authorize,
-    )
 
     asyncio.run(
-        persistence._authorize_socket_room_for_current_round(
+        persistence.authorize_socket_room_for_current_round(
             "socket-1",
             {"room": "m100"},
+            fake_next_authorize,
             bind_room=True,
         )
     )
     old_token = socket_state["crocodile_round_token"]
     assert old_token
 
-    # Та же вкладка и тот же пользователь могли бы пройти старую проверку по
+    # Та же вкладка и тот же пользователь могли бы пройти базовую проверку по
     # chat_id/drawer_id, но новый раунд получает другой runtime token.
     current["session"] = {}
     with pytest.raises(crocodile.WebAppAuthError):
         asyncio.run(
-            persistence._authorize_socket_room_for_current_round(
+            persistence.authorize_socket_room_for_current_round(
                 "socket-1",
                 {"room": "m100"},
+                fake_next_authorize,
                 bind_room=False,
             )
         )
