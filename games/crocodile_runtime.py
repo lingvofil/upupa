@@ -170,6 +170,7 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_controls,
     )
     from games.crocodile_modes import (
+        check_regular_answer_with_archive,
         configure_crocodile_modes,
         decorate_game_keyboard_with_legacy_duo,
         handle_regular_callback,
@@ -199,10 +200,10 @@ def configure_crocodile_runtime() -> None:
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
     raw_callback_handler = crocodile.handle_callback
+    raw_check_answer = crocodile.check_answer
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
-    base_check_answer = crocodile.check_answer
     pre_duo_game_keyboard = _compose_game_keyboard(
         raw_game_keyboard,
         decorate_game_keyboard_with_previous,
@@ -266,7 +267,8 @@ def configure_crocodile_runtime() -> None:
         handle_crocodile_callback_with_ui,
     )
     crocodile.check_answer = _compose_check_answer(
-        base_check_answer,
+        raw_check_answer,
+        check_regular_answer_with_archive,
         check_answer_with_like_context,
     )
     duo_optin.configure_crocodile_duo_opt_in(
