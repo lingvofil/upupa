@@ -257,6 +257,7 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_telephone_skip_permissions import (
         configure_crocodile_telephone_skip_permissions,
         menu_callback_with_skip_permissions,
+        telephone_callback_with_skip_permissions,
     )
     from games.crocodile_ui_enhancements import (
         check_answer_with_like_context,
@@ -326,6 +327,11 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
+    base_telephone_callback = crocodile_modes.handle_telephone_callback
+    crocodile_modes.handle_telephone_callback = _compose_callback_handler(
+        base_telephone_callback,
+        telephone_callback_with_skip_permissions,
+    )
     base_party_menu_handler = party_controls.handle_menu_callback
     party_controls.menu_keyboard = _compose_party_menu_keyboard(
         party_controls.menu_keyboard,
