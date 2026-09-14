@@ -152,6 +152,7 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_controls import (
         configure_crocodile_controls,
         decorate_game_keyboard_with_previous,
+        handle_callback_with_controls,
         start_new_game_with_controls,
     )
     from games.crocodile_modes import (
@@ -181,7 +182,12 @@ def configure_crocodile_runtime() -> None:
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
+    raw_callback_handler = crocodile.handle_callback
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
+    crocodile.handle_callback = _compose_callback_handler(
+        raw_callback_handler,
+        handle_callback_with_controls,
+    )
     configure_crocodile_single_words()
     configure_crocodile_modes()
     pre_duo_game_keyboard = _compose_game_keyboard(
