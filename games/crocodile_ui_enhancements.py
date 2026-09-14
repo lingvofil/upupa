@@ -19,7 +19,6 @@ from games import crocodile_ratings
 
 
 _configured = False
-_original_start_new_game = None
 _original_check_answer = None
 _original_final_frame_handler = None
 
@@ -90,9 +89,14 @@ async def _send_word_privately(user_id: int, word: str) -> bool:
         return False
 
 
-async def start_new_game_with_instant_word(chat_id: int, user_id: int, user_full_name: str):
-    """Start normally and immediately reveal the selected word to the artist."""
-    result = await _original_start_new_game(chat_id, user_id, user_full_name)
+async def start_new_game_with_instant_word(
+    chat_id: int,
+    user_id: int,
+    user_full_name: str,
+    next_handler,
+):
+    """Start through the existing chain and immediately reveal the selected word."""
+    result = await next_handler(chat_id, user_id, user_full_name)
     word = _word_from_session(chat_id)
     if word and not _suppress_private_word.get():
         await _send_word_privately(user_id, word)
@@ -395,16 +399,13 @@ async def final_frame_with_like_context(sid, data):
 def configure_crocodile_ui_enhancements() -> None:
     """Install the remaining Crocodile UI behavior after explicit composition."""
     global _configured
-    global _original_start_new_game, _original_check_answer
-    global _original_final_frame_handler
+    global _original_check_answer, _original_final_frame_handler
     if _configured:
         return
 
-    _original_start_new_game = crocodile.start_new_game
     _original_check_answer = crocodile.check_answer
     _original_final_frame_handler = crocodile_modes.final_frame_with_modes
 
-    crocodile.start_new_game = start_new_game_with_instant_word
     crocodile.check_answer = check_answer_with_like_context
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True
