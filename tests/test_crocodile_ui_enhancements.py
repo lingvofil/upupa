@@ -124,13 +124,21 @@ def test_direct_start_sends_word_privately(monkeypatch):
             "drawer_id": user_id,
             "drawer_name": user_name,
         }
+        return "started"
 
     send_word = AsyncMock(return_value=True)
-    monkeypatch.setattr(ui, "_original_start_new_game", fake_original)
     monkeypatch.setattr(ui, "_send_word_privately", send_word)
 
     try:
-        asyncio.run(ui.start_new_game_with_instant_word(-42, 123, "Первый"))
+        result = asyncio.run(
+            ui.start_new_game_with_instant_word(
+                -42,
+                123,
+                "Первый",
+                fake_original,
+            )
+        )
+        assert result == "started"
         send_word.assert_awaited_once_with(123, "носорог")
     finally:
         crocodile.game_sessions.pop("-42", None)
