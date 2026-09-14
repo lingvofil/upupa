@@ -82,6 +82,7 @@ jobs:
           tests/test_crocodile_duo_menu.py
           tests/test_crocodile_controls_keyboard_composition.py
           tests/test_crocodile_runtime.py
+          tests/test_crocodile_check_answer_composition.py
           -q
       - name: Verify Windows tests did not write Crocodile party state to repo root
         run: python -c "from pathlib import Path; assert not Path('crocodile_party_state.json').exists()"
