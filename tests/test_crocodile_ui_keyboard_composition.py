@@ -93,8 +93,7 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
         end_wiring,
     )
     ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements(\n"
-        "        base_final_frame_handler=base_final_frame_handler,",
+        "configure_crocodile_ui_enhancements()",
         attribution,
     )
 
