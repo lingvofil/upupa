@@ -19,7 +19,6 @@ from games import crocodile_ratings
 
 
 _configured = False
-_original_final_frame_handler = None
 
 _suppress_private_word: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "crocodile_suppress_private_word", default=False
@@ -373,7 +372,7 @@ async def check_answer_with_like_context(message, next_handler) -> bool:
         _final_like_context.reset(token)
 
 
-async def final_frame_with_like_context(sid, data):
+async def final_frame_with_like_context(sid, data, next_handler):
     context = None
     try:
         _canonical, session_key = crocodile_modes.normalize_crocodile_room(
@@ -391,19 +390,14 @@ async def final_frame_with_like_context(sid, data):
 
     token = _final_like_context.set(context)
     try:
-        return await _original_final_frame_handler(sid, data)
+        return await next_handler(sid, data)
     finally:
         _final_like_context.reset(token)
 
 
-def configure_crocodile_ui_enhancements(*, base_final_frame_handler) -> None:
-    """Install the remaining Crocodile UI behavior after explicit composition."""
+def configure_crocodile_ui_enhancements() -> None:
+    """Mark UI extensions configured after explicit runtime composition."""
     global _configured
-    global _original_final_frame_handler
     if _configured:
         return
-
-    _original_final_frame_handler = base_final_frame_handler
-
-    crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True
