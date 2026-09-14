@@ -92,8 +92,7 @@ def test_start_game_is_composed_only_in_runtime():
     controls_wrapper = runtime_source.index("start_new_game_with_controls,", wiring)
     ui_wrapper = runtime_source.index("start_new_game_with_instant_word,", controls_wrapper)
     ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements(\n"
-        "        base_final_frame_handler=base_final_frame_handler,",
+        "configure_crocodile_ui_enhancements()",
         ui_wrapper,
     )
 
