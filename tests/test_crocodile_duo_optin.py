@@ -72,7 +72,7 @@ def test_duo_keyboard_shows_artist_invite_before_join():
         crocodile.game_sessions.pop(str(chat_id), None)
 
 
-def test_duo_game_keyboard_composes_before_ui_clear_next(monkeypatch):
+def test_duo_game_keyboard_composes_before_ui_clear_next():
     from games import crocodile
     from games import crocodile_duo_optin as duo
     from games import crocodile_runtime as runtime
@@ -95,11 +95,11 @@ def test_duo_game_keyboard_composes_before_ui_clear_next(monkeypatch):
     renderer = runtime._compose_game_keyboard(
         base_keyboard,
         duo.decorate_game_keyboard_with_duo_opt_in,
+        ui.decorate_game_keyboard_with_clear_next,
     )
-    monkeypatch.setattr(ui, "_original_get_game_keyboard", renderer)
 
     try:
-        keyboard = ui.get_game_keyboard_with_clear_next(chat_id)
+        keyboard = renderer(chat_id)
         buttons = [button for row in keyboard.inline_keyboard for button in row]
         callbacks = [button.callback_data for button in buttons if button.callback_data]
         next_button = next(
