@@ -191,9 +191,11 @@ def test_duo_opt_in_does_not_replace_game_keyboard():
     assert runtime_source.count(
         "crocodile.get_game_keyboard = _compose_game_keyboard("
     ) == 1
-    assert "base_game_keyboard = crocodile.get_game_keyboard" in runtime_source
+    assert "raw_game_keyboard = crocodile.get_game_keyboard" in runtime_source
+    assert "pre_duo_game_keyboard = _compose_game_keyboard(" in runtime_source
+    assert "decorate_game_keyboard_with_legacy_duo" in runtime_source
     assert "duo_optin.decorate_game_keyboard_with_duo_opt_in" in runtime_source
-    assert "base_game_keyboard=base_game_keyboard" in runtime_source
+    assert "base_game_keyboard=pre_duo_game_keyboard" in runtime_source
 
 
 def test_duo_opt_in_does_not_replace_callback_handler():

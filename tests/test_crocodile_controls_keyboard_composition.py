@@ -32,7 +32,7 @@ def _assigned_attributes(source: str, module_name: str) -> list[str]:
     return assigned
 
 
-def test_controls_keyboard_pipeline_keeps_previous_duo_and_clear_next(monkeypatch):
+def test_game_keyboard_pipeline_keeps_previous_duo_and_clear_next():
     from games import crocodile
     from games import crocodile_controls as controls
     from games import crocodile_duo_optin as duo
@@ -58,16 +58,16 @@ def test_controls_keyboard_pipeline_keeps_previous_duo_and_clear_next(monkeypatc
             ]
         )
 
-    controls_renderer = runtime._compose_game_keyboard(
+    renderer = runtime._compose_game_keyboard(
         base_keyboard,
         controls.decorate_game_keyboard_with_previous,
+        modes.decorate_game_keyboard_with_legacy_duo,
+        duo.decorate_game_keyboard_with_duo_opt_in,
+        ui.decorate_game_keyboard_with_clear_next,
     )
-    monkeypatch.setattr(modes, "_original_get_game_keyboard", controls_renderer)
 
     try:
-        pre_duo = modes.get_game_keyboard_with_duo(chat_id)
-        keyboard = duo.decorate_game_keyboard_with_duo_opt_in(chat_id, pre_duo)
-        keyboard = ui.decorate_game_keyboard_with_clear_next(chat_id, keyboard)
+        keyboard = renderer(chat_id)
         buttons = [button for row in keyboard.inline_keyboard for button in row]
         callbacks = [button.callback_data for button in buttons if button.callback_data]
 
@@ -83,46 +83,94 @@ def test_controls_keyboard_pipeline_keeps_previous_duo_and_clear_next(monkeypatc
         crocodile.game_sessions.pop(str(chat_id), None)
 
 
-def test_controls_game_keyboard_is_composed_only_in_runtime_before_modes():
+def test_modes_legacy_duo_decorator_preserves_existing_keyboard():
+    from games import crocodile_modes as modes
+
+    chat_id = -42
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎨 Холст", url="https://example.com")],
+            [InlineKeyboardButton(text="↩️ Предыдущее", callback_data=f"cr_p_{chat_id}")],
+        ]
+    )
+
+    decorated = modes.decorate_game_keyboard_with_legacy_duo(chat_id, keyboard)
+    callbacks = [
+        button.callback_data
+        for row in decorated.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+
+    assert f"cr_p_{chat_id}" in callbacks
+    assert f"cr_duo_{chat_id}" in callbacks
+
+
+def test_game_keyboard_entrypoint_is_composed_only_in_runtime():
     controls_source = _source("games/crocodile_controls.py")
+    modes_source = _source("games/crocodile_modes.py")
     runtime_source = _source("games/crocodile_runtime.py")
 
-    assigned = _assigned_attributes(controls_source, "crocodile")
-    assert "get_game_keyboard" not in assigned
+    controls_assigned = _assigned_attributes(controls_source, "crocodile")
+    modes_assigned = _assigned_attributes(modes_source, "crocodile")
+    assert "get_game_keyboard" not in controls_assigned
+    assert "get_game_keyboard" not in modes_assigned
     assert "_original_get_game_keyboard" not in controls_source
+    assert "_original_get_game_keyboard" not in modes_source
     assert "get_game_keyboard_with_previous" not in controls_source
+    assert "get_game_keyboard_with_duo" not in modes_source
     assert "decorate_game_keyboard_with_previous" in controls_source
+    assert "decorate_game_keyboard_with_legacy_duo" in modes_source
 
     raw_capture = runtime_source.index("raw_game_keyboard = crocodile.get_game_keyboard")
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
     )
-    controls_compose = runtime_source.index(
-        "controls_game_keyboard = _compose_game_keyboard("
-    )
-    decorator = runtime_source.index(
-        "decorate_game_keyboard_with_previous,",
-        controls_compose,
-    )
-    controls_wiring = runtime_source.index(
-        "crocodile.get_game_keyboard = controls_game_keyboard"
-    )
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    post_modes_capture = runtime_source.index(
-        "base_game_keyboard = crocodile.get_game_keyboard",
-        modes_install,
+    pre_duo = runtime_source.index("pre_duo_game_keyboard = _compose_game_keyboard(")
+    pre_previous = runtime_source.index(
+        "decorate_game_keyboard_with_previous,",
+        pre_duo,
     )
-    final_wiring = runtime_source.index(
-        "crocodile.get_game_keyboard = _compose_game_keyboard("
+    pre_legacy = runtime_source.index(
+        "decorate_game_keyboard_with_legacy_duo,",
+        pre_previous,
+    )
+    final_assignment = "crocodile.get_game_keyboard = _compose_game_keyboard("
+    assert runtime_source.count(final_assignment) == 1
+    final_wiring = runtime_source.index(final_assignment)
+    final_previous = runtime_source.index(
+        "decorate_game_keyboard_with_previous,",
+        final_wiring,
+    )
+    final_legacy = runtime_source.index(
+        "decorate_game_keyboard_with_legacy_duo,",
+        final_previous,
+    )
+    final_duo = runtime_source.index(
+        "duo_optin.decorate_game_keyboard_with_duo_opt_in,",
+        final_legacy,
+    )
+    final_ui = runtime_source.index(
+        "decorate_game_keyboard_with_clear_next,",
+        final_duo,
+    )
+    duo_dependency = runtime_source.index(
+        "base_game_keyboard=pre_duo_game_keyboard,",
+        final_ui,
     )
 
     assert (
         raw_capture
         < controls_install
-        < controls_compose
-        < decorator
-        < controls_wiring
         < modes_install
-        < post_modes_capture
+        < pre_duo
+        < pre_previous
+        < pre_legacy
         < final_wiring
+        < final_previous
+        < final_legacy
+        < final_duo
+        < final_ui
+        < duo_dependency
     )

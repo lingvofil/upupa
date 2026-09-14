@@ -154,7 +154,10 @@ def configure_crocodile_runtime() -> None:
         decorate_game_keyboard_with_previous,
         start_new_game_with_controls,
     )
-    from games.crocodile_modes import configure_crocodile_modes
+    from games.crocodile_modes import (
+        configure_crocodile_modes,
+        decorate_game_keyboard_with_legacy_duo,
+    )
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
@@ -179,14 +182,13 @@ def configure_crocodile_runtime() -> None:
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
-    controls_game_keyboard = _compose_game_keyboard(
-        raw_game_keyboard,
-        decorate_game_keyboard_with_previous,
-    )
-    crocodile.get_game_keyboard = controls_game_keyboard
     configure_crocodile_single_words()
     configure_crocodile_modes()
-    base_game_keyboard = crocodile.get_game_keyboard
+    pre_duo_game_keyboard = _compose_game_keyboard(
+        raw_game_keyboard,
+        decorate_game_keyboard_with_previous,
+        decorate_game_keyboard_with_legacy_duo,
+    )
     base_end_game_keyboard = crocodile.get_end_game_keyboard
     base_callback_handler = crocodile.handle_callback
     party_dependencies = party_state.crocodile_persistence_dependencies()
@@ -223,7 +225,9 @@ def configure_crocodile_runtime() -> None:
         menu_callback_with_skip_permissions,
     )
     crocodile.get_game_keyboard = _compose_game_keyboard(
-        base_game_keyboard,
+        raw_game_keyboard,
+        decorate_game_keyboard_with_previous,
+        decorate_game_keyboard_with_legacy_duo,
         duo_optin.decorate_game_keyboard_with_duo_opt_in,
         decorate_game_keyboard_with_clear_next,
     )
@@ -242,7 +246,7 @@ def configure_crocodile_runtime() -> None:
         handle_crocodile_callback_with_ui,
     )
     duo_optin.configure_crocodile_duo_opt_in(
-        base_game_keyboard=base_game_keyboard,
+        base_game_keyboard=pre_duo_game_keyboard,
     )
     configure_crocodile_ui_enhancements()
     configure_crocodile_admin_controls()
