@@ -19,7 +19,6 @@ from games import crocodile_ratings
 
 
 _configured = False
-_original_check_answer = None
 _original_final_frame_handler = None
 
 _suppress_private_word: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -360,7 +359,8 @@ async def handle_crocodile_callback_with_ui(callback, next_handler) -> Any:
     return await next_handler(callback)
 
 
-async def check_answer_with_like_context(message) -> bool:
+async def check_answer_with_like_context(message, next_handler) -> bool:
+    """Expose the current artists to final-keyboard attribution around answer handling."""
     chat_id = str(message.chat.id)
     session = crocodile.game_sessions.get(chat_id)
     context = None
@@ -368,7 +368,7 @@ async def check_answer_with_like_context(message) -> bool:
         context = {"chat_id": chat_id, "artists": _session_artists(session)}
     token = _final_like_context.set(context)
     try:
-        return await _original_check_answer(message)
+        return await next_handler(message)
     finally:
         _final_like_context.reset(token)
 
@@ -399,13 +399,11 @@ async def final_frame_with_like_context(sid, data):
 def configure_crocodile_ui_enhancements() -> None:
     """Install the remaining Crocodile UI behavior after explicit composition."""
     global _configured
-    global _original_check_answer, _original_final_frame_handler
+    global _original_final_frame_handler
     if _configured:
         return
 
-    _original_check_answer = crocodile.check_answer
     _original_final_frame_handler = crocodile_modes.final_frame_with_modes
 
-    crocodile.check_answer = check_answer_with_like_context
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True
