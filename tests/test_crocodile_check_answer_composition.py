@@ -180,6 +180,9 @@ def test_runtime_owns_check_answer_entrypoint_and_wrapper_order():
     raw_handler = runtime_source.index("raw_check_answer,", wiring)
     modes_wrapper = runtime_source.index("check_regular_answer_with_archive,", wiring)
     ui_wrapper = runtime_source.index("check_answer_with_like_context,", wiring)
-    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()")
+    ui_install = runtime_source.index(
+        "configure_crocodile_ui_enhancements(\n"
+        "        base_final_frame_handler=base_final_frame_handler,"
+    )
     assert raw_capture < modes_install < wiring
     assert wiring < raw_handler < modes_wrapper < ui_wrapper < ui_install

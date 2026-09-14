@@ -188,6 +188,25 @@ def _compose_socket_snapshot(base_handler, *wrappers):
     return handler
 
 
+def _compose_socket_final_frame(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def final_frame(
+            sid,
+            data,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return await _wrapper(sid, data, _next)
+
+        handler = final_frame
+    return handler
+
+
 def _compose_party_menu_keyboard(base_menu, *decorators):
     callbacks = tuple(callback for callback in decorators if callback is not None)
 
@@ -225,6 +244,7 @@ def configure_crocodile_runtime() -> None:
         check_regular_answer_with_archive,
         configure_crocodile_modes,
         decorate_game_keyboard_with_legacy_duo,
+        final_frame_with_modes,
         handle_regular_callback,
         snapshot_with_modes,
     )
@@ -251,6 +271,7 @@ def configure_crocodile_runtime() -> None:
 
     raw_authorize_socket_room = crocodile._authorize_socket_room
     raw_snapshot = crocodile.snapshot
+    raw_final_frame = crocodile.final_frame
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
@@ -267,6 +288,10 @@ def configure_crocodile_runtime() -> None:
     crocodile.sio.on(
         "snapshot",
         handler=_compose_socket_snapshot(raw_snapshot, snapshot_with_modes),
+    )
+    base_final_frame_handler = _compose_socket_final_frame(
+        raw_final_frame,
+        final_frame_with_modes,
     )
     pre_duo_game_keyboard = _compose_game_keyboard(
         raw_game_keyboard,
@@ -338,7 +363,9 @@ def configure_crocodile_runtime() -> None:
     duo_optin.configure_crocodile_duo_opt_in(
         base_game_keyboard=pre_duo_game_keyboard,
     )
-    configure_crocodile_ui_enhancements()
+    configure_crocodile_ui_enhancements(
+        base_final_frame_handler=base_final_frame_handler,
+    )
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
     configure_crocodile_telephone_skip_permissions()

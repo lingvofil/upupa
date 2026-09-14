@@ -92,6 +92,10 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
         "decorate_end_game_keyboard_with_attribution",
         end_wiring,
     )
-    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()", attribution)
+    ui_install = runtime_source.index(
+        "configure_crocodile_ui_enhancements(\n"
+        "        base_final_frame_handler=base_final_frame_handler,",
+        attribution,
+    )
 
     assert game_wiring < duo < clear_next < end_wiring < attribution < ui_install

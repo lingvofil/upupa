@@ -25,7 +25,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "crocodile.start_new_game = _compose_start_new_game(",
         "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,",
         "duo_optin.configure_crocodile_duo_opt_in(",
-        "configure_crocodile_ui_enhancements()",
+        "configure_crocodile_ui_enhancements(\n        base_final_frame_handler=base_final_frame_handler,",
         "configure_crocodile_admin_controls()",
         "configure_crocodile_telephone_mentions()",
         "configure_crocodile_telephone_skip_permissions()",
@@ -254,7 +254,10 @@ def test_callback_pipeline_is_owned_by_runtime():
         "handle_crocodile_callback_with_ui",
         duo_router,
     )
-    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()")
+    ui_install = runtime_source.index(
+        "configure_crocodile_ui_enhancements(\n"
+        "        base_final_frame_handler=base_final_frame_handler,"
+    )
 
     assert (
         raw_capture

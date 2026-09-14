@@ -97,6 +97,6 @@ def test_runtime_owns_snapshot_registration_and_modes_is_wrapper_only():
     assert raw_capture < modes_install < registration < composition
     assert runtime_source.count('crocodile.sio.on(\n        "snapshot",') == 1
 
-    # final_frame remains deliberately outside this slice.
-    assert "_original_final_frame" in modes_source
-    assert 'crocodile.sio.on("final_frame", handler=final_frame_with_modes)' in modes_source
+    # final_frame now has its own explicit composition slice.
+    assert "_original_final_frame" not in modes_source
+    assert 'crocodile.sio.on("final_frame"' not in modes_source

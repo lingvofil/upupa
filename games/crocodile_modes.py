@@ -33,7 +33,6 @@ canvas_sessions: dict[str, dict] = {}
 duel_games: dict[str, dict] = {}
 telephone_games: dict[str, dict] = {}
 
-_original_final_frame = None
 _configured = False
 
 
@@ -250,11 +249,13 @@ async def snapshot_with_modes(sid, data, next_handler, callback=None):
     return result
 
 
-async def final_frame_with_modes(sid, data):
+async def final_frame_with_modes(sid, data, next_handler):
     try:
-        _canonical, session_key = normalize_crocodile_room(data.get("room") if isinstance(data, dict) else None)
+        _canonical, session_key = normalize_crocodile_room(
+            data.get("room") if isinstance(data, dict) else None
+        )
     except WebAppAuthError:
-        return await _original_final_frame(sid, data)
+        return await next_handler(sid, data)
 
     if ":" in session_key:
         try:
@@ -277,10 +278,16 @@ async def final_frame_with_modes(sid, data):
     if session:
         try:
             image = base64.b64decode(str(data.get("image") or "").split(",", 1)[-1])
-            archive = (int(session_key), image, str(session.get("word") or ""), session_artist_names(session), str(session.get("mode") or "classic"))
+            archive = (
+                int(session_key),
+                image,
+                str(session.get("word") or ""),
+                session_artist_names(session),
+                str(session.get("mode") or "classic"),
+            )
         except Exception:
             archive = None
-    result = await _original_final_frame(sid, data)
+    result = await next_handler(sid, data)
     if archive:
         await record_drawing(*archive)
     return result
@@ -678,11 +685,9 @@ async def handle_telephone_callback(callback) -> None:
 
 def configure_crocodile_modes() -> None:
     """Install mode extensions after persistence/controls and before canvas restore."""
-    global _configured, _original_final_frame
+    global _configured
     if _configured:
         return
-    _original_final_frame = crocodile.final_frame
 
-    crocodile.sio.on("final_frame", handler=final_frame_with_modes)
     crocodile.sio.on("submit_text", handler=submit_telephone_text)
     _configured = True

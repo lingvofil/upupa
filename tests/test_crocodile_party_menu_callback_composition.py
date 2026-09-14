@@ -117,7 +117,11 @@ def test_party_menu_callback_is_composed_only_in_runtime():
         "menu_callback_with_skip_permissions",
         ui_router,
     )
-    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()", skip_router)
+    ui_install = runtime_source.index(
+        "configure_crocodile_ui_enhancements(\n"
+        "        base_final_frame_handler=base_final_frame_handler,",
+        skip_router,
+    )
     skip_install = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
         ui_install,
