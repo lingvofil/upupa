@@ -3,6 +3,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from tests import test_smoke_imports  # noqa: F401
 from games import crocodile
 from games import crocodile_controls as controls
@@ -162,7 +164,20 @@ def test_stop_button_is_rejected_for_other_user_before_five_minutes(monkeypatch)
 
 
 def test_previous_word_button_and_history():
-    keyboard = controls.get_game_keyboard_with_previous(int(CHAT_ID))
+    base_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎨 Холст", url="https://example.com")],
+            [
+                InlineKeyboardButton(text="👁 Слово", callback_data=f"cr_w_{CHAT_ID}"),
+                InlineKeyboardButton(text="⏭ Другое", callback_data=f"cr_n_{CHAT_ID}"),
+                InlineKeyboardButton(text="🛑 Стоп", callback_data=f"cr_stop_{CHAT_ID}"),
+            ],
+        ]
+    )
+    keyboard = controls.decorate_game_keyboard_with_previous(
+        int(CHAT_ID),
+        base_keyboard,
+    )
     callback_data = [
         button.callback_data
         for row in keyboard.inline_keyboard
@@ -170,6 +185,8 @@ def test_previous_word_button_and_history():
         if button.callback_data
     ]
     assert f"cr_p_{CHAT_ID}" in callback_data
+    assert f"cr_stop_{CHAT_ID}" in callback_data
+    assert keyboard.inline_keyboard[1][1].callback_data == f"cr_n_{CHAT_ID}"
 
     session = _session()
     controls.remember_current_word(session)
