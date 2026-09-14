@@ -2,6 +2,7 @@ import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
 
@@ -11,6 +12,35 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _message(user_id: int, text: str):
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=-42),
+        message_id=777,
+        text=text,
+        from_user=SimpleNamespace(id=user_id, full_name=f"Игрок {user_id}"),
+    )
+
+
+def _check_answer_assignments(path: Path) -> list[int]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    lines = []
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr == "check_answer"
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "crocodile"
+            ):
+                lines.append(node.lineno)
+    return lines
 
 
 def test_ui_answer_context_wraps_downstream_and_resets_afterwards():
@@ -47,34 +77,109 @@ def test_ui_answer_context_wraps_downstream_and_resets_afterwards():
     assert ui._final_like_context.get() is None
 
 
-def test_ui_does_not_own_check_answer_entrypoint():
-    ui_source = _source("games/crocodile_ui_enhancements.py")
-    tree = ast.parse(ui_source)
-    assigned = []
-    for node in ast.walk(tree):
-        targets = []
-        if isinstance(node, (ast.Assign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        for target in targets:
-            if (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "crocodile"
-            ):
-                assigned.append(target.attr)
+def test_modes_answer_wrapper_blocks_both_duo_artists(monkeypatch):
+    from games import crocodile
+    from games import crocodile_modes as modes
 
-    assert "check_answer" not in assigned
-    assert "_original_check_answer" not in ui_source
-    assert "check_answer_with_like_context(message, next_handler)" in ui_source
+    chat_id = "-42"
+    previous = crocodile.game_sessions.pop(chat_id, None)
+    crocodile.game_sessions[chat_id] = {
+        "word": "барсук",
+        "drawer_id": 1,
+        "drawer_name": "Первый + Второй",
+        "drawer_ids": [1, 2],
+        "drawer_names": ["Первый", "Второй"],
+        "mode": "duo",
+        "last_preview_bytes": b"image",
+    }
+    record = AsyncMock()
+    monkeypatch.setattr(modes, "record_drawing", record)
+
+    try:
+        for user_id in (1, 2):
+            downstream = AsyncMock(return_value=True)
+            handled = asyncio.run(
+                modes.check_regular_answer_with_archive(
+                    _message(user_id, "это барсук"), downstream
+                )
+            )
+            assert handled is True
+            downstream.assert_not_awaited()
+        record.assert_not_awaited()
+    finally:
+        crocodile.game_sessions.pop(chat_id, None)
+        if previous is not None:
+            crocodile.game_sessions[chat_id] = previous
+
+
+def test_modes_answer_wrapper_archives_only_successful_guess(monkeypatch):
+    from games import crocodile
+    from games import crocodile_modes as modes
+
+    chat_id = "-42"
+    previous = crocodile.game_sessions.pop(chat_id, None)
+    crocodile.game_sessions[chat_id] = {
+        "word": "барсук",
+        "drawer_id": 1,
+        "drawer_name": "Первый + Второй",
+        "drawer_ids": [1, 2],
+        "drawer_names": ["Первый", "Второй"],
+        "mode": "duo",
+        "last_preview_bytes": b"image",
+    }
+    record = AsyncMock()
+    monkeypatch.setattr(modes, "record_drawing", record)
+    message = _message(3, "это барсук")
+
+    try:
+        rejected = AsyncMock(return_value=False)
+        assert asyncio.run(modes.check_regular_answer_with_archive(message, rejected)) is False
+        rejected.assert_awaited_once_with(message)
+        record.assert_not_awaited()
+
+        accepted = AsyncMock(return_value=True)
+        assert asyncio.run(modes.check_regular_answer_with_archive(message, accepted)) is True
+        accepted.assert_awaited_once_with(message)
+        record.assert_awaited_once_with(
+            -42,
+            b"image",
+            "барсук",
+            ["Первый", "Второй"],
+            "duo",
+        )
+    finally:
+        crocodile.game_sessions.pop(chat_id, None)
+        if previous is not None:
+            crocodile.game_sessions[chat_id] = previous
+
+
+def test_runtime_owns_check_answer_entrypoint_and_wrapper_order():
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        if relative == "games/crocodile_runtime.py":
+            continue
+        for line in _check_answer_assignments(path):
+            violations.append(f"{relative}:{line}")
+
+    assert not violations, (
+        "crocodile.check_answer должен собираться только в games/crocodile_runtime.py: "
+        + ", ".join(violations)
+    )
+
+    modes_source = _source("games/crocodile_modes.py")
+    assert "_original_check_answer" not in modes_source
+    assert "check_regular_answer_with_archive(message, next_handler)" in modes_source
 
     runtime_source = _source("games/crocodile_runtime.py")
     assignment = "crocodile.check_answer = _compose_check_answer("
     assert runtime_source.count(assignment) == 1
+    raw_capture = runtime_source.index("raw_check_answer = crocodile.check_answer")
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    base_capture = runtime_source.index("base_check_answer = crocodile.check_answer")
     wiring = runtime_source.index(assignment)
-    wrapper = runtime_source.index("check_answer_with_like_context,", wiring)
+    raw_handler = runtime_source.index("raw_check_answer,", wiring)
+    modes_wrapper = runtime_source.index("check_regular_answer_with_archive,", wiring)
+    ui_wrapper = runtime_source.index("check_answer_with_like_context,", wiring)
     ui_install = runtime_source.index("configure_crocodile_ui_enhancements()")
-    assert modes_install < base_capture < wiring < wrapper < ui_install
+    assert raw_capture < modes_install < wiring
+    assert wiring < raw_handler < modes_wrapper < ui_wrapper < ui_install
