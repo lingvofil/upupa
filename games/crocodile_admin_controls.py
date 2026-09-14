@@ -13,17 +13,10 @@ from typing import Any
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from core.settings import ADMIN_ID
-from games import crocodile, crocodile_controls, crocodile_modes, crocodile_party_controls
+from games import crocodile, crocodile_modes, crocodile_party_controls
 
 
 _configured = False
-_original_stop_lock_remaining_seconds = None
-_original_handle_telephone_callback = None
-_original_handle_duel_callback = None
-_original_stop_active_party = None
-_original_menu_keyboard = None
-_original_reverse_callback = None
-_original_reverse_modes_callback = None
 
 
 def is_crocodile_admin(user_id: int | str | None) -> bool:
@@ -41,20 +34,21 @@ def _callback_user_id(callback) -> int | None:
 def stop_lock_remaining_seconds_with_admin(
     session: dict,
     user_id: int,
+    next_handler,
     *,
     now: float | None = None,
 ) -> float:
     """The owner can stop/replace a regular round immediately."""
     if is_crocodile_admin(user_id):
         return 0.0
-    return _original_stop_lock_remaining_seconds(session, user_id, now=now)
+    return next_handler(session, user_id, now=now)
 
 
-async def handle_telephone_callback_with_admin(callback) -> Any:
+async def handle_telephone_callback_with_admin(callback, next_handler) -> Any:
     """Allow the owner to start/cancel/skip a telephone chain as a fallback."""
     data = callback.data or ""
     if not is_crocodile_admin(_callback_user_id(callback)):
-        return await _original_handle_telephone_callback(callback)
+        return await next_handler(callback)
 
     if data.startswith("ctel_skip_"):
         chat_id = data[len("ctel_skip_"):]
@@ -89,10 +83,10 @@ async def handle_telephone_callback_with_admin(callback) -> Any:
         await crocodile_modes._send_telephone_step(chat_id, game)
         return
 
-    return await _original_handle_telephone_callback(callback)
+    return await next_handler(callback)
 
 
-async def handle_duel_callback_with_admin(callback) -> Any:
+async def handle_duel_callback_with_admin(callback, next_handler) -> Any:
     """Allow the owner to cancel a duel in any phase."""
     data = callback.data or ""
     if (
@@ -106,7 +100,7 @@ async def handle_duel_callback_with_admin(callback) -> Any:
         await callback.answer("Отменено администратором")
         await crocodile_party_controls._cancel_duel(chat_id, duel)
         return
-    return await _original_handle_duel_callback(callback)
+    return await next_handler(callback)
 
 
 async def _stop_reverse_as_admin(chat_id: str) -> bool:
@@ -127,10 +121,14 @@ async def _stop_reverse_as_admin(chat_id: str) -> bool:
     return True
 
 
-async def stop_active_party_with_admin(chat_id: str, user_id: int) -> tuple[bool, str]:
+async def stop_active_party_with_admin(
+    chat_id: str,
+    user_id: int,
+    next_handler,
+) -> tuple[bool, str]:
     """Owner fallback for stopping any active Crocodile mode."""
     if not is_crocodile_admin(user_id):
-        return await _original_stop_active_party(chat_id, user_id)
+        return await next_handler(chat_id, user_id)
 
     chat_id = str(chat_id)
     telephone = crocodile_modes.telephone_games.get(chat_id)
@@ -153,9 +151,12 @@ async def stop_active_party_with_admin(chat_id: str, user_id: int) -> tuple[bool
     return False, "Игра не запущена."
 
 
-def menu_keyboard_with_admin_emergency_stop(chat_id: int | str) -> InlineKeyboardMarkup:
+def menu_keyboard_with_admin_emergency_stop(
+    chat_id: int | str,
+    next_handler,
+) -> InlineKeyboardMarkup:
     """Expose the missing emergency-stop entry while reverse mode is active."""
-    keyboard = _original_menu_keyboard(chat_id)
+    keyboard = next_handler(chat_id)
     if not crocodile_party_controls._reverse_active(str(chat_id)):
         return keyboard
     if any(
@@ -184,7 +185,7 @@ def menu_keyboard_with_admin_emergency_stop(chat_id: int | str) -> InlineKeyboar
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def reverse_callback_with_admin(callback) -> Any:
+async def reverse_callback_with_admin(callback, next_handler) -> Any:
     """Owner may use the normal surrender button without waiting five minutes."""
     data = callback.data or ""
     if (
@@ -195,10 +196,10 @@ async def reverse_callback_with_admin(callback) -> Any:
         if await _stop_reverse_as_admin(chat_id):
             return await callback.answer("Остановлено администратором")
         return await callback.answer("Игра уже закончилась")
-    return await _original_reverse_callback(callback)
+    return await next_handler(callback)
 
 
-async def reverse_modes_callback_with_admin(callback) -> Any:
+async def reverse_modes_callback_with_admin(callback, next_handler) -> Any:
     """Owner may stop themed/progressive reverse modes immediately too."""
     data = callback.data or ""
     if (
@@ -210,35 +211,12 @@ async def reverse_modes_callback_with_admin(callback) -> Any:
         if await _stop_reverse_as_admin(chat_id):
             return await callback.answer("Остановлено администратором")
         return await callback.answer("Игра уже закончилась")
-    return await _original_reverse_modes_callback(callback)
+    return await next_handler(callback)
 
 
 def configure_crocodile_admin_controls() -> None:
-    """Install owner fallbacks after all ordinary Crocodile wrappers."""
+    """Mark owner fallbacks configured after explicit runtime composition."""
     global _configured
-    global _original_stop_lock_remaining_seconds
-    global _original_handle_telephone_callback, _original_handle_duel_callback
-    global _original_stop_active_party, _original_menu_keyboard
-    global _original_reverse_callback, _original_reverse_modes_callback
     if _configured:
         return
-
-    from games import reverse_crocodile as reverse
-    from games import reverse_crocodile_modes as reverse_modes
-
-    _original_stop_lock_remaining_seconds = crocodile_controls.stop_lock_remaining_seconds
-    _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
-    _original_handle_duel_callback = crocodile_modes.handle_duel_callback
-    _original_stop_active_party = crocodile_party_controls._stop_active_party
-    _original_menu_keyboard = crocodile_party_controls.menu_keyboard
-    _original_reverse_callback = reverse.handle_callback
-    _original_reverse_modes_callback = reverse_modes.handle_callback
-
-    crocodile_controls.stop_lock_remaining_seconds = stop_lock_remaining_seconds_with_admin
-    crocodile_modes.handle_telephone_callback = handle_telephone_callback_with_admin
-    crocodile_modes.handle_duel_callback = handle_duel_callback_with_admin
-    crocodile_party_controls._stop_active_party = stop_active_party_with_admin
-    crocodile_party_controls.menu_keyboard = menu_keyboard_with_admin_emergency_stop
-    reverse.handle_callback = reverse_callback_with_admin
-    reverse_modes.handle_callback = reverse_modes_callback_with_admin
     _configured = True
