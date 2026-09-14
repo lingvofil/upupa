@@ -33,14 +33,17 @@ def test_party_menu_keeps_legacy_duo_ratings_admin_order(monkeypatch):
         duo.decorate_party_menu_without_default_duo,
         ui.decorate_party_menu_with_ratings,
     )
-    monkeypatch.setattr(admin, "_original_menu_keyboard", renderer)
+    renderer = runtime._compose_menu_keyboard_handler(
+        renderer,
+        admin.menu_keyboard_with_admin_emergency_stop,
+    )
     monkeypatch.setattr(
         admin.crocodile_party_controls,
         "_reverse_active",
         lambda chat_id: True,
     )
 
-    keyboard = admin.menu_keyboard_with_admin_emergency_stop(-42)
+    keyboard = renderer(-42)
     buttons = [button for row in keyboard.inline_keyboard for button in row]
     callbacks = [button.callback_data for button in buttons]
 
@@ -90,5 +93,24 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         "configure_crocodile_ui_enhancements()",
         ratings,
     )
-    admin_install = runtime_source.index("configure_crocodile_admin_controls()", ui_install)
-    assert wiring < duo < ratings < ui_install < admin_install
+    admin_wiring = runtime_source.index(
+        "party_controls.menu_keyboard = _compose_menu_keyboard_handler(",
+        ui_install,
+    )
+    admin_wrapper = runtime_source.index(
+        "menu_keyboard_with_admin_emergency_stop,",
+        admin_wiring,
+    )
+    admin_install = runtime_source.index(
+        "configure_crocodile_admin_controls()",
+        admin_wrapper,
+    )
+    assert (
+        wiring
+        < duo
+        < ratings
+        < ui_install
+        < admin_wiring
+        < admin_wrapper
+        < admin_install
+    )
