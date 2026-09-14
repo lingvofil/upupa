@@ -77,6 +77,18 @@ def _compose_game_keyboard(base_keyboard, *decorators):
     return render
 
 
+def _compose_end_game_keyboard(base_keyboard, *decorators):
+    callbacks = tuple(callback for callback in decorators if callback is not None)
+
+    def render(likes=0):
+        keyboard = base_keyboard(likes)
+        for callback in callbacks:
+            keyboard = callback(likes, keyboard)
+        return keyboard
+
+    return render
+
+
 def _compose_callback_handler(base_handler, *routers):
     handler = base_handler
     for router in routers:
@@ -131,6 +143,8 @@ def configure_crocodile_runtime() -> None:
     )
     from games.crocodile_ui_enhancements import (
         configure_crocodile_ui_enhancements,
+        decorate_end_game_keyboard_with_attribution,
+        decorate_game_keyboard_with_clear_next,
         decorate_party_menu_with_ratings,
         handle_crocodile_callback_with_ui,
         handle_party_menu_callback_with_ratings,
@@ -141,6 +155,7 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_single_words()
     configure_crocodile_modes()
     base_game_keyboard = crocodile.get_game_keyboard
+    base_end_game_keyboard = crocodile.get_end_game_keyboard
     base_callback_handler = crocodile.handle_callback
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
@@ -178,6 +193,11 @@ def configure_crocodile_runtime() -> None:
     crocodile.get_game_keyboard = _compose_game_keyboard(
         base_game_keyboard,
         duo_optin.decorate_game_keyboard_with_duo_opt_in,
+        decorate_game_keyboard_with_clear_next,
+    )
+    crocodile.get_end_game_keyboard = _compose_end_game_keyboard(
+        base_end_game_keyboard,
+        decorate_end_game_keyboard_with_attribution,
     )
     crocodile.handle_callback = _compose_callback_handler(
         base_callback_handler,
