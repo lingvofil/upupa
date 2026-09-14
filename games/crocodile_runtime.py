@@ -89,6 +89,26 @@ def _compose_end_game_keyboard(base_keyboard, *decorators):
     return render
 
 
+def _compose_start_new_game(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def start(
+            chat_id,
+            user_id,
+            user_full_name,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return await _wrapper(chat_id, user_id, user_full_name, _next)
+
+        handler = start
+    return handler
+
+
 def _compose_callback_handler(base_handler, *routers):
     handler = base_handler
     for router in routers:
@@ -148,6 +168,7 @@ def configure_crocodile_runtime() -> None:
         decorate_party_menu_with_ratings,
         handle_crocodile_callback_with_ui,
         handle_party_menu_callback_with_ratings,
+        start_new_game_with_instant_word,
     )
 
     persistence.configure_crocodile_runtime()
@@ -156,6 +177,7 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_modes()
     base_game_keyboard = crocodile.get_game_keyboard
     base_end_game_keyboard = crocodile.get_end_game_keyboard
+    base_start_new_game = crocodile.start_new_game
     base_callback_handler = crocodile.handle_callback
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
@@ -198,6 +220,10 @@ def configure_crocodile_runtime() -> None:
     crocodile.get_end_game_keyboard = _compose_end_game_keyboard(
         base_end_game_keyboard,
         decorate_end_game_keyboard_with_attribution,
+    )
+    crocodile.start_new_game = _compose_start_new_game(
+        base_start_new_game,
+        start_new_game_with_instant_word,
     )
     crocodile.handle_callback = _compose_callback_handler(
         base_callback_handler,
