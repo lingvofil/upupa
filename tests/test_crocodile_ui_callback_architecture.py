@@ -33,18 +33,22 @@ def test_ui_enhancements_do_not_replace_callback_handler():
     assert "handle_crocodile_callback_with_ui(callback, next_handler)" in ui_source
 
 
-def test_runtime_composes_duo_then_ui_after_modes_callback_chain():
+def test_runtime_composes_modes_then_duo_then_ui_in_single_callback_chain():
     runtime_source = _source("games/crocodile_runtime.py")
-    final_assignment = (
+    assignment = (
         "crocodile.handle_callback = _compose_callback_handler(\n"
-        "        base_callback_handler,"
+        "        raw_callback_handler,"
     )
 
-    assert runtime_source.count(final_assignment) == 1
-    callback_wiring = runtime_source.index(final_assignment)
+    assert runtime_source.count(assignment) == 1
+    callback_wiring = runtime_source.index(assignment)
+    modes_router = runtime_source.index(
+        "handle_regular_callback",
+        callback_wiring,
+    )
     duo_router = runtime_source.index(
         "duo_optin.handle_duo_opt_in_callback",
-        callback_wiring,
+        modes_router,
     )
     ui_router = runtime_source.index(
         "handle_crocodile_callback_with_ui",
@@ -55,4 +59,4 @@ def test_runtime_composes_duo_then_ui_after_modes_callback_chain():
         ui_router,
     )
 
-    assert callback_wiring < duo_router < ui_router < ui_install
+    assert callback_wiring < modes_router < duo_router < ui_router < ui_install
