@@ -23,7 +23,6 @@ _original_start_new_game = None
 _original_get_game_keyboard = None
 _original_get_end_game_keyboard = None
 _original_check_answer = None
-_original_party_menu_callback = None
 _original_final_frame_handler = None
 
 _suppress_private_word: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -226,7 +225,8 @@ def _rating_text(kind: str, chat_id: int | str) -> str:
     return "🏆 Неизвестный рейтинг."
 
 
-async def handle_party_menu_callback_with_ratings(callback) -> Any:
+async def handle_party_menu_callback_with_ratings(callback, next_handler) -> Any:
+    """Handle UI-owned menu callbacks or delegate unchanged callbacks downstream."""
     data = callback.data or ""
     chat_id = str(callback.message.chat.id)
 
@@ -274,7 +274,7 @@ async def handle_party_menu_callback_with_ratings(callback) -> Any:
             await callback.answer("Готовим холст")
         return
 
-    return await _original_party_menu_callback(callback)
+    return await next_handler(callback)
 
 
 def _message_like_key(callback) -> str:
@@ -393,7 +393,7 @@ def configure_crocodile_ui_enhancements() -> None:
     global _configured
     global _original_start_new_game, _original_get_game_keyboard
     global _original_get_end_game_keyboard, _original_check_answer
-    global _original_party_menu_callback, _original_final_frame_handler
+    global _original_final_frame_handler
     if _configured:
         return
 
@@ -401,13 +401,11 @@ def configure_crocodile_ui_enhancements() -> None:
     _original_get_game_keyboard = crocodile.get_game_keyboard
     _original_get_end_game_keyboard = crocodile.get_end_game_keyboard
     _original_check_answer = crocodile.check_answer
-    _original_party_menu_callback = crocodile_party_controls.handle_menu_callback
     _original_final_frame_handler = crocodile_modes.final_frame_with_modes
 
     crocodile.start_new_game = start_new_game_with_instant_word
     crocodile.get_game_keyboard = get_game_keyboard_with_clear_next
     crocodile.get_end_game_keyboard = get_end_game_keyboard_with_attribution
     crocodile.check_answer = check_answer_with_like_context
-    crocodile_party_controls.handle_menu_callback = handle_party_menu_callback_with_ratings
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True

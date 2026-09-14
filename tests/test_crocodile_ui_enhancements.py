@@ -94,12 +94,26 @@ def test_unified_classic_start_reveals_word_in_callback_alert(monkeypatch):
     monkeypatch.setattr(crocodile_party_controls, "has_active_party", lambda chat_id: False)
     monkeypatch.setattr(crocodile, "start_new_game", fake_start)
     callback = _callback("cmenu_classic")
+    downstream = AsyncMock()
 
     try:
-        asyncio.run(ui.handle_party_menu_callback_with_ratings(callback))
+        asyncio.run(ui.handle_party_menu_callback_with_ratings(callback, downstream))
         callback.answer.assert_awaited_once_with("🎯 Твоё слово: БАРСУК", show_alert=True)
+        downstream.assert_not_awaited()
     finally:
         crocodile.game_sessions.pop("-42", None)
+
+
+def test_ui_menu_callback_delegates_unowned_action_once():
+    from games import crocodile_ui_enhancements as ui
+
+    callback = _callback("cmenu_duel")
+    downstream = AsyncMock(return_value="delegated")
+
+    result = asyncio.run(ui.handle_party_menu_callback_with_ratings(callback, downstream))
+
+    assert result == "delegated"
+    downstream.assert_awaited_once_with(callback)
 
 
 def test_direct_start_sends_word_privately(monkeypatch):
