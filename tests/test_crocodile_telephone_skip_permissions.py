@@ -1,8 +1,12 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _callback(data: str, user_id: int, chat_id: int = -42):
@@ -48,47 +52,67 @@ def test_skip_permission_denies_other_participant_and_outsider():
     assert permissions.can_skip_telephone_player(game, 404) is False
 
 
-def test_direct_skip_blocks_non_current_participant(monkeypatch):
+def test_direct_skip_blocks_non_current_participant():
     from games import crocodile_telephone_skip_permissions as permissions
 
     cid = "-42"
     game = _game(permissions.ADMIN_ID)
     permissions.crocodile_modes.telephone_games[cid] = game
-    original = AsyncMock()
-    monkeypatch.setattr(permissions, "_original_telephone_callback", original)
+    downstream = AsyncMock()
     callback = _callback(f"ctel_skip_{cid}", 303)
 
     try:
-        asyncio.run(permissions.telephone_callback_with_skip_permissions(callback))
+        asyncio.run(
+            permissions.telephone_callback_with_skip_permissions(
+                callback,
+                downstream,
+            )
+        )
         callback.answer.assert_awaited_once_with(
             "Пропустить может только ведущий или текущий игрок",
             show_alert=True,
         )
-        original.assert_not_awaited()
+        downstream.assert_not_awaited()
     finally:
         permissions.crocodile_modes.telephone_games.pop(cid, None)
 
 
-def test_direct_skip_delegates_for_host_current_and_admin(monkeypatch):
+def test_direct_skip_delegates_for_host_current_and_admin():
     from games import crocodile_telephone_skip_permissions as permissions
 
     cid = "-42"
     game = _game(permissions.ADMIN_ID)
     permissions.crocodile_modes.telephone_games[cid] = game
-    original = AsyncMock(return_value="delegated")
-    monkeypatch.setattr(permissions, "_original_telephone_callback", original)
+    downstream = AsyncMock(return_value="delegated")
 
     try:
         for user_id in (101, 202, permissions.ADMIN_ID):
-            original.reset_mock()
+            downstream.reset_mock()
             callback = _callback(f"ctel_skip_{cid}", user_id)
             result = asyncio.run(
-                permissions.telephone_callback_with_skip_permissions(callback)
+                permissions.telephone_callback_with_skip_permissions(
+                    callback,
+                    downstream,
+                )
             )
             assert result == "delegated"
-            original.assert_awaited_once_with(callback)
+            downstream.assert_awaited_once_with(callback)
     finally:
         permissions.crocodile_modes.telephone_games.pop(cid, None)
+
+
+def test_direct_non_skip_delegates_once():
+    from games import crocodile_telephone_skip_permissions as permissions
+
+    callback = _callback("ctel_join_-42", 101)
+    downstream = AsyncMock(return_value="delegated")
+
+    result = asyncio.run(
+        permissions.telephone_callback_with_skip_permissions(callback, downstream)
+    )
+
+    assert result == "delegated"
+    downstream.assert_awaited_once_with(callback)
 
 
 def test_menu_skip_blocks_non_current_participant():
@@ -164,3 +188,40 @@ def test_menu_non_skip_delegates_once():
 
     assert result == "delegated"
     downstream.assert_awaited_once_with(callback)
+
+
+def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
+    permissions_source = (
+        ROOT / "games" / "crocodile_telephone_skip_permissions.py"
+    ).read_text(encoding="utf-8")
+    runtime_source = (ROOT / "games" / "crocodile_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_original_telephone_callback" not in permissions_source
+    assert "crocodile_modes.handle_telephone_callback =" not in permissions_source
+    assert (
+        "async def telephone_callback_with_skip_permissions(callback, next_handler)"
+        in permissions_source
+    )
+    assert "return await next_handler(callback)" in permissions_source
+
+    party_install = runtime_source.index("party_controls.configure_crocodile_party_controls()")
+    capture = runtime_source.index(
+        "base_telephone_callback = crocodile_modes.handle_telephone_callback",
+        party_install,
+    )
+    assignment = "crocodile_modes.handle_telephone_callback = _compose_callback_handler("
+    wiring = runtime_source.index(assignment, capture)
+    base = runtime_source.index("base_telephone_callback,", wiring)
+    permissions = runtime_source.index(
+        "telephone_callback_with_skip_permissions,",
+        base,
+    )
+    installer = runtime_source.index(
+        "configure_crocodile_telephone_skip_permissions()",
+        permissions,
+    )
+
+    assert runtime_source.count(assignment) == 1
+    assert party_install < capture < wiring < base < permissions < installer
