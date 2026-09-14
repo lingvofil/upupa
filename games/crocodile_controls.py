@@ -15,7 +15,6 @@ from games import crocodile_persistence as persistence
 STOP_UNLOCK_SECONDS = 5 * 60
 WORD_BACK_HISTORY_LIMIT = 30
 
-_original_handle_callback = crocodile.handle_callback
 _original_session_to_record = persistence._session_to_record
 _original_session_from_record = persistence._session_from_record
 _base_start_new_game = None
@@ -237,7 +236,7 @@ async def _set_previous_word(
     return await cb.answer(f"Вернул: {previous.upper()}", show_alert=True)
 
 
-async def handle_callback_with_controls(cb: types.CallbackQuery):
+async def handle_callback_with_controls(cb: types.CallbackQuery, next_handler):
     data = cb.data or ""
 
     if data == "btn_want_draw":
@@ -258,7 +257,7 @@ async def handle_callback_with_controls(cb: types.CallbackQuery):
         return
 
     if not data.startswith("cr_"):
-        return await _original_handle_callback(cb)
+        return await next_handler(cb)
 
     chat_id = data.split("_")[-1]
     session = crocodile.game_sessions.get(chat_id)
@@ -277,7 +276,7 @@ async def handle_callback_with_controls(cb: types.CallbackQuery):
         if lock_message:
             return await cb.answer(lock_message, show_alert=True)
 
-    return await _original_handle_callback(cb)
+    return await next_handler(cb)
 
 
 def session_to_record_with_controls(chat_id: str, session: dict) -> dict:
@@ -323,7 +322,6 @@ def configure_crocodile_controls(*, base_start_new_game) -> None:
     _base_start_new_game = base_start_new_game
     crocodile.handle_start_game = handle_start_game_with_controls
     crocodile.handle_text_stop = handle_text_stop_with_controls
-    crocodile.handle_callback = handle_callback_with_controls
 
     persistence._session_to_record = session_to_record_with_controls
     persistence._session_from_record = session_from_record_with_controls
