@@ -55,7 +55,8 @@ def test_runtime_composes_modes_then_duo_then_ui_in_single_callback_chain():
         duo_router,
     )
     ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements()",
+        "configure_crocodile_ui_enhancements(\n"
+        "        base_final_frame_handler=base_final_frame_handler,",
         ui_router,
     )
 
