@@ -16,7 +16,6 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "base_start_new_game = crocodile.start_new_game",
         "raw_callback_handler = crocodile.handle_callback",
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)",
-        "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,",
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
         "persistence.configure_crocodile_persistence_dependencies(",
@@ -24,7 +23,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
         "crocodile.get_game_keyboard = _compose_game_keyboard(",
         "crocodile.start_new_game = _compose_start_new_game(",
-        "crocodile.handle_callback = _compose_callback_handler(\n        base_callback_handler,",
+        "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
         "configure_crocodile_admin_controls()",
@@ -200,72 +199,56 @@ def test_duo_opt_in_does_not_replace_game_keyboard():
     assert "base_game_keyboard=pre_duo_game_keyboard" in runtime_source
 
 
-def test_controls_callback_is_composed_before_modes_and_duo_ui():
-    controls_source = _source("games/crocodile_controls.py")
-    controls_tree = ast.parse(controls_source)
-    assigned = []
+def test_callback_pipeline_is_owned_by_runtime():
+    module_sources = {
+        "controls": _source("games/crocodile_controls.py"),
+        "modes": _source("games/crocodile_modes.py"),
+        "duo": _source("games/crocodile_duo_optin.py"),
+        "ui": _source("games/crocodile_ui_enhancements.py"),
+    }
 
-    for node in ast.walk(controls_tree):
-        targets = []
-        if isinstance(node, (ast.Assign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        for target in targets:
-            if (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "crocodile"
-            ):
-                assigned.append(target.attr)
+    for source in module_sources.values():
+        tree = ast.parse(source)
+        assigned = []
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "crocodile"
+                ):
+                    assigned.append(target.attr)
+        assert "handle_callback" not in assigned
 
-    assert "handle_callback" not in assigned
-    assert "_original_handle_callback" not in controls_source
-    assert "handle_callback_with_controls(cb: types.CallbackQuery, next_handler)" in controls_source
-
-    duo_source = _source("games/crocodile_duo_optin.py")
-    duo_tree = ast.parse(duo_source)
-    duo_assigned = []
-    for node in ast.walk(duo_tree):
-        targets = []
-        if isinstance(node, (ast.Assign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        for target in targets:
-            if (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "crocodile"
-            ):
-                duo_assigned.append(target.attr)
-    assert "handle_callback" not in duo_assigned
-    assert "_original_handle_callback" not in duo_source
-    assert "next_handler" in duo_source
+    assert "_original_handle_callback" not in module_sources["controls"]
+    assert "_original_handle_callback" not in module_sources["modes"]
+    assert "_original_handle_callback" not in module_sources["duo"]
+    assert "_original_handle_callback" not in module_sources["ui"]
+    assert "handle_callback_with_controls(cb: types.CallbackQuery, next_handler)" in module_sources["controls"]
+    assert "handle_regular_callback(callback, next_handler)" in module_sources["modes"]
+    assert "next_handler" in module_sources["duo"]
+    assert "handle_crocodile_callback_with_ui(callback, next_handler)" in module_sources["ui"]
 
     runtime_source = _source("games/crocodile_runtime.py")
-    assert runtime_source.count(
-        "crocodile.handle_callback = _compose_callback_handler("
-    ) == 2
+    assignment = "crocodile.handle_callback = _compose_callback_handler("
+    assert runtime_source.count(assignment) == 1
+
     raw_capture = runtime_source.index("raw_callback_handler = crocodile.handle_callback")
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
     )
-    controls_wiring = runtime_source.index(
-        "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,"
-    )
-    controls_router = runtime_source.index(
-        "handle_callback_with_controls,",
-        controls_wiring,
-    )
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    base_capture = runtime_source.index("base_callback_handler = crocodile.handle_callback")
-    final_wiring = runtime_source.index(
-        "crocodile.handle_callback = _compose_callback_handler(\n        base_callback_handler,"
-    )
+    callback_wiring = runtime_source.index(assignment)
+    controls_router = runtime_source.index("handle_callback_with_controls,", callback_wiring)
+    modes_router = runtime_source.index("handle_regular_callback,", controls_router)
     duo_router = runtime_source.index(
         "duo_optin.handle_duo_opt_in_callback",
-        final_wiring,
+        modes_router,
     )
     ui_router = runtime_source.index(
         "handle_crocodile_callback_with_ui",
@@ -276,11 +259,10 @@ def test_controls_callback_is_composed_before_modes_and_duo_ui():
     assert (
         raw_capture
         < controls_install
-        < controls_wiring
-        < controls_router
         < modes_install
-        < base_capture
-        < final_wiring
+        < callback_wiring
+        < controls_router
+        < modes_router
         < duo_router
         < ui_router
         < ui_install
