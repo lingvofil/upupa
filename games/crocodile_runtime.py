@@ -226,6 +226,7 @@ def configure_crocodile_runtime() -> None:
         return
 
     from games import crocodile
+    from games import crocodile_modes
     from games import crocodile_duo_optin as duo_optin
     from games import crocodile_party_controls as party_controls
     from games import crocodile_party_state as party_state
