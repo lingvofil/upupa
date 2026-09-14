@@ -264,6 +264,7 @@ def configure_crocodile_runtime() -> None:
         decorate_end_game_keyboard_with_attribution,
         decorate_game_keyboard_with_clear_next,
         decorate_party_menu_with_ratings,
+        final_frame_with_like_context,
         handle_crocodile_callback_with_ui,
         handle_party_menu_callback_with_ratings,
         start_new_game_with_instant_word,
@@ -289,9 +290,13 @@ def configure_crocodile_runtime() -> None:
         "snapshot",
         handler=_compose_socket_snapshot(raw_snapshot, snapshot_with_modes),
     )
-    base_final_frame_handler = _compose_socket_final_frame(
-        raw_final_frame,
-        final_frame_with_modes,
+    crocodile.sio.on(
+        "final_frame",
+        handler=_compose_socket_final_frame(
+            raw_final_frame,
+            final_frame_with_modes,
+            final_frame_with_like_context,
+        ),
     )
     pre_duo_game_keyboard = _compose_game_keyboard(
         raw_game_keyboard,
@@ -363,9 +368,7 @@ def configure_crocodile_runtime() -> None:
     duo_optin.configure_crocodile_duo_opt_in(
         base_game_keyboard=pre_duo_game_keyboard,
     )
-    configure_crocodile_ui_enhancements(
-        base_final_frame_handler=base_final_frame_handler,
-    )
+    configure_crocodile_ui_enhancements()
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
     configure_crocodile_telephone_skip_permissions()

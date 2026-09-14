@@ -118,8 +118,7 @@ def test_party_menu_callback_is_composed_only_in_runtime():
         ui_router,
     )
     ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements(\n"
-        "        base_final_frame_handler=base_final_frame_handler,",
+        "configure_crocodile_ui_enhancements()",
         skip_router,
     )
     skip_install = runtime_source.index(

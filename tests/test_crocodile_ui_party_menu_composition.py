@@ -87,8 +87,7 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
     )
     ratings = runtime_source.index("decorate_party_menu_with_ratings", duo)
     ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements(\n"
-        "        base_final_frame_handler=base_final_frame_handler,",
+        "configure_crocodile_ui_enhancements()",
         ratings,
     )
     admin_install = runtime_source.index("configure_crocodile_admin_controls()", ui_install)
