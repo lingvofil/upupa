@@ -36,7 +36,6 @@ telephone_games: dict[str, dict] = {}
 _original_authorize_socket_room = None
 _original_snapshot = None
 _original_final_frame = None
-_original_check_answer = None
 _configured = False
 
 
@@ -285,7 +284,7 @@ async def final_frame_with_modes(sid, data):
     return result
 
 
-async def check_regular_answer_with_archive(message) -> bool:
+async def check_regular_answer_with_archive(message, next_handler) -> bool:
     cid = str(message.chat.id)
     session = crocodile.game_sessions.get(cid)
     if session and message.text and is_session_drawer(
@@ -302,7 +301,7 @@ async def check_regular_answer_with_archive(message) -> bool:
             session_artist_names(session),
             str(session.get("mode") or "classic"),
         )
-    handled = await _original_check_answer(message)
+    handled = await next_handler(message)
     if handled and archive:
         await record_drawing(*archive)
     return handled
@@ -678,16 +677,13 @@ async def handle_telephone_callback(callback) -> None:
 def configure_crocodile_modes() -> None:
     """Install mode extensions after persistence/controls and before canvas restore."""
     global _configured, _original_authorize_socket_room, _original_snapshot, _original_final_frame
-    global _original_check_answer
     if _configured:
         return
     _original_authorize_socket_room = crocodile._authorize_socket_room
     _original_snapshot = crocodile.snapshot
     _original_final_frame = crocodile.final_frame
-    _original_check_answer = crocodile.check_answer
 
     crocodile._authorize_socket_room = _authorize_socket_room_with_modes
-    crocodile.check_answer = check_regular_answer_with_archive
     crocodile.sio.on("snapshot", handler=snapshot_with_modes)
     crocodile.sio.on("final_frame", handler=final_frame_with_modes)
     crocodile.sio.on("submit_text", handler=submit_telephone_text)
