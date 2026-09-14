@@ -223,17 +223,18 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_instant_word,
     )
 
+    raw_authorize_socket_room = crocodile._authorize_socket_room
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
     raw_callback_handler = crocodile.handle_callback
     raw_check_answer = crocodile.check_answer
-    raw_authorize_socket_room = crocodile._authorize_socket_room
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
     crocodile._authorize_socket_room = _compose_socket_room_authorizer(
         raw_authorize_socket_room,
+        persistence.authorize_socket_room_for_current_round,
         authorize_socket_room_with_modes,
     )
     pre_duo_game_keyboard = _compose_game_keyboard(
