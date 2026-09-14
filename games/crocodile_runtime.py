@@ -163,6 +163,31 @@ def _compose_socket_room_authorizer(base_handler, *wrappers):
     return handler
 
 
+def _compose_socket_snapshot(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def snapshot(
+            sid,
+            data,
+            callback=None,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return await _wrapper(
+                sid,
+                data,
+                _next,
+                callback=callback,
+            )
+
+        handler = snapshot
+    return handler
+
+
 def _compose_party_menu_keyboard(base_menu, *decorators):
     callbacks = tuple(callback for callback in decorators if callback is not None)
 
@@ -201,6 +226,7 @@ def configure_crocodile_runtime() -> None:
         configure_crocodile_modes,
         decorate_game_keyboard_with_legacy_duo,
         handle_regular_callback,
+        snapshot_with_modes,
     )
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
@@ -224,6 +250,7 @@ def configure_crocodile_runtime() -> None:
     )
 
     raw_authorize_socket_room = crocodile._authorize_socket_room
+    raw_snapshot = crocodile.snapshot
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
     raw_game_keyboard = crocodile.get_game_keyboard
@@ -236,6 +263,10 @@ def configure_crocodile_runtime() -> None:
         raw_authorize_socket_room,
         persistence.authorize_socket_room_for_current_round,
         authorize_socket_room_with_modes,
+    )
+    crocodile.sio.on(
+        "snapshot",
+        handler=_compose_socket_snapshot(raw_snapshot, snapshot_with_modes),
     )
     pre_duo_game_keyboard = _compose_game_keyboard(
         raw_game_keyboard,
