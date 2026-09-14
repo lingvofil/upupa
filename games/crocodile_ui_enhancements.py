@@ -396,14 +396,14 @@ async def final_frame_with_like_context(sid, data):
         _final_like_context.reset(token)
 
 
-def configure_crocodile_ui_enhancements() -> None:
+def configure_crocodile_ui_enhancements(*, base_final_frame_handler) -> None:
     """Install the remaining Crocodile UI behavior after explicit composition."""
     global _configured
     global _original_final_frame_handler
     if _configured:
         return
 
-    _original_final_frame_handler = crocodile_modes.final_frame_with_modes
+    _original_final_frame_handler = base_final_frame_handler
 
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True
