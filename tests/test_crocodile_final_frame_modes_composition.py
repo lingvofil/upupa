@@ -104,7 +104,45 @@ def test_modes_final_frame_delegates_invalid_room_to_downstream():
     downstream.assert_awaited_once_with("sid-invalid", data)
 
 
-def test_modes_final_frame_is_explicitly_composed_before_transitional_ui_layer():
+def test_ui_final_frame_wraps_regular_round_with_like_context():
+    from games import crocodile
+    from games import crocodile_ui_enhancements as ui
+
+    previous = crocodile.game_sessions.pop("-42", None)
+    crocodile.game_sessions["-42"] = {
+        "drawer_id": 1,
+        "drawer_name": "Первый + Второй",
+        "drawer_ids": [1, 2],
+        "drawer_names": ["Первый", "Второй"],
+    }
+    observed = []
+    data = {"room": "m42", "image": "ignored"}
+
+    async def downstream(sid, payload):
+        observed.append((sid, payload, ui._final_like_context.get()))
+        return "finished"
+
+    try:
+        result = asyncio.run(
+            ui.final_frame_with_like_context("sid-ui", data, downstream)
+        )
+    finally:
+        crocodile.game_sessions.pop("-42", None)
+        if previous is not None:
+            crocodile.game_sessions["-42"] = previous
+
+    assert result == "finished"
+    assert observed == [
+        (
+            "sid-ui",
+            data,
+            {"chat_id": "-42", "artists": [(1, "Первый"), (2, "Второй")]},
+        )
+    ]
+    assert ui._final_like_context.get() is None
+
+
+def test_final_frame_pipeline_is_owned_and_registered_only_by_runtime():
     modes_source = (ROOT / "games" / "crocodile_modes.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "games" / "crocodile_runtime.py").read_text(
         encoding="utf-8"
@@ -118,22 +156,32 @@ def test_modes_final_frame_is_explicitly_composed_before_transitional_ui_layer()
     assert "async def final_frame_with_modes(sid, data, next_handler):" in modes_source
     assert "result = await next_handler(sid, data)" in modes_source
 
+    assert "_original_final_frame_handler" not in ui_source
+    assert 'crocodile.sio.on("final_frame"' not in ui_source
+    assert "async def final_frame_with_like_context(sid, data, next_handler):" in ui_source
+    assert "return await next_handler(sid, data)" in ui_source
+    assert "def configure_crocodile_ui_enhancements()" in ui_source
+
     raw_capture = runtime_source.index("raw_final_frame = crocodile.final_frame")
     modes_install = runtime_source.index("configure_crocodile_modes()")
+    registration = runtime_source.index('crocodile.sio.on(\n        "final_frame",')
     composition = runtime_source.index(
-        "base_final_frame_handler = _compose_socket_final_frame("
+        "handler=_compose_socket_final_frame(",
+        registration,
     )
     raw_handler = runtime_source.index("raw_final_frame,", composition)
     modes_wrapper = runtime_source.index("final_frame_with_modes,", raw_handler)
-    ui_install = runtime_source.index(
-        "configure_crocodile_ui_enhancements(\n"
-        "        base_final_frame_handler=base_final_frame_handler,"
+    ui_wrapper = runtime_source.index("final_frame_with_like_context,", modes_wrapper)
+    ui_install = runtime_source.index("configure_crocodile_ui_enhancements()", ui_wrapper)
+
+    assert (
+        raw_capture
+        < modes_install
+        < registration
+        < composition
+        < raw_handler
+        < modes_wrapper
+        < ui_wrapper
+        < ui_install
     )
-
-    assert raw_capture < modes_install < composition < raw_handler < modes_wrapper < ui_install
-
-    # Transitional owner: the next isolated slice removes this UI hidden handler.
-    assert "_original_final_frame_handler" in ui_source
-    assert "_original_final_frame_handler = base_final_frame_handler" in ui_source
-    assert ui_source.count('crocodile.sio.on("final_frame"') == 1
-    assert "def configure_crocodile_ui_enhancements(*, base_final_frame_handler)" in ui_source
+    assert runtime_source.count('crocodile.sio.on(\n        "final_frame",') == 1
