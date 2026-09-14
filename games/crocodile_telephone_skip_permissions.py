@@ -9,7 +9,6 @@ from games import crocodile_modes, crocodile_party_controls
 
 
 _configured = False
-_original_telephone_callback = None
 
 
 def _callback_user_id(callback) -> int | None:
@@ -47,8 +46,8 @@ def can_skip_telephone_player(game: dict, user_id: int | str | None) -> bool:
     return False
 
 
-async def telephone_callback_with_skip_permissions(callback) -> Any:
-    """Gate the direct ``ctel_skip_*`` button before existing wrappers."""
+async def telephone_callback_with_skip_permissions(callback, next_handler) -> Any:
+    """Gate the direct ``ctel_skip_*`` button before downstream handlers."""
     data = callback.data or ""
     if data.startswith("ctel_skip_"):
         chat_id = data[len("ctel_skip_"):]
@@ -59,7 +58,7 @@ async def telephone_callback_with_skip_permissions(callback) -> Any:
                     "Пропустить может только ведущий или текущий игрок",
                     show_alert=True,
                 )
-    return await _original_telephone_callback(callback)
+    return await next_handler(callback)
 
 
 async def menu_callback_with_skip_permissions(callback, next_handler) -> Any:
@@ -95,11 +94,8 @@ async def menu_callback_with_skip_permissions(callback, next_handler) -> Any:
 
 
 def configure_crocodile_telephone_skip_permissions() -> None:
-    """Install the direct telephone permission gate after ordinary wrappers."""
-    global _configured, _original_telephone_callback
+    """Mark skip permissions configured after explicit runtime composition."""
+    global _configured
     if _configured:
         return
-
-    _original_telephone_callback = crocodile_modes.handle_telephone_callback
-    crocodile_modes.handle_telephone_callback = telephone_callback_with_skip_permissions
     _configured = True
