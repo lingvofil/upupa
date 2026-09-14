@@ -158,6 +158,7 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_modes import (
         configure_crocodile_modes,
         decorate_game_keyboard_with_legacy_duo,
+        handle_regular_callback,
     )
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
@@ -184,10 +185,6 @@ def configure_crocodile_runtime() -> None:
     raw_game_keyboard = crocodile.get_game_keyboard
     raw_callback_handler = crocodile.handle_callback
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
-    crocodile.handle_callback = _compose_callback_handler(
-        raw_callback_handler,
-        handle_callback_with_controls,
-    )
     configure_crocodile_single_words()
     configure_crocodile_modes()
     pre_duo_game_keyboard = _compose_game_keyboard(
@@ -196,7 +193,6 @@ def configure_crocodile_runtime() -> None:
         decorate_game_keyboard_with_legacy_duo,
     )
     base_end_game_keyboard = crocodile.get_end_game_keyboard
-    base_callback_handler = crocodile.handle_callback
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
         persistence.CrocodilePersistenceDependencies(
@@ -247,7 +243,9 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_instant_word,
     )
     crocodile.handle_callback = _compose_callback_handler(
-        base_callback_handler,
+        raw_callback_handler,
+        handle_callback_with_controls,
+        handle_regular_callback,
         duo_optin.handle_duo_opt_in_callback,
         handle_crocodile_callback_with_ui,
     )

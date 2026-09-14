@@ -36,7 +36,6 @@ telephone_games: dict[str, dict] = {}
 _original_authorize_socket_room = None
 _original_snapshot = None
 _original_final_frame = None
-_original_handle_callback = None
 _original_check_answer = None
 _configured = False
 
@@ -117,10 +116,10 @@ def decorate_game_keyboard_with_legacy_duo(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def handle_regular_callback(callback) -> Any:
+async def handle_regular_callback(callback, next_handler) -> Any:
     data = callback.data or ""
     if not data.startswith("cr_duo_"):
-        return await _original_handle_callback(callback)
+        return await next_handler(callback)
 
     chat_id = data[len("cr_duo_"):]
     session = crocodile.game_sessions.get(chat_id)
@@ -679,17 +678,15 @@ async def handle_telephone_callback(callback) -> None:
 def configure_crocodile_modes() -> None:
     """Install mode extensions after persistence/controls and before canvas restore."""
     global _configured, _original_authorize_socket_room, _original_snapshot, _original_final_frame
-    global _original_handle_callback, _original_check_answer
+    global _original_check_answer
     if _configured:
         return
     _original_authorize_socket_room = crocodile._authorize_socket_room
     _original_snapshot = crocodile.snapshot
     _original_final_frame = crocodile.final_frame
-    _original_handle_callback = crocodile.handle_callback
     _original_check_answer = crocodile.check_answer
 
     crocodile._authorize_socket_room = _authorize_socket_room_with_modes
-    crocodile.handle_callback = handle_regular_callback
     crocodile.check_answer = check_regular_answer_with_archive
     crocodile.sio.on("snapshot", handler=snapshot_with_modes)
     crocodile.sio.on("final_frame", handler=final_frame_with_modes)
