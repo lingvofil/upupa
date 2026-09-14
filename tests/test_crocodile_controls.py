@@ -155,12 +155,24 @@ def test_stop_button_is_rejected_for_other_user_before_five_minutes(monkeypatch)
             self.answers.append((text, kwargs))
 
     callback = FakeCallback()
+    downstream = AsyncMock()
     try:
-        asyncio.run(controls.handle_callback_with_controls(callback))
+        asyncio.run(controls.handle_callback_with_controls(callback, downstream))
         assert crocodile.game_sessions[CHAT_ID]["drawer_id"] == DRAWER_ID
         assert callback.answers[0][1]["show_alert"] is True
+        downstream.assert_not_awaited()
     finally:
         crocodile.game_sessions.clear()
+
+
+def test_controls_callback_delegates_unknown_action_once():
+    callback = SimpleNamespace(data="unrelated")
+    downstream = AsyncMock(return_value="handled-downstream")
+
+    result = asyncio.run(controls.handle_callback_with_controls(callback, downstream))
+
+    assert result == "handled-downstream"
+    downstream.assert_awaited_once_with(callback)
 
 
 def test_previous_word_button_and_history():
