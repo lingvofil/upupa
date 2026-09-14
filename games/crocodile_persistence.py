@@ -40,7 +40,6 @@ _last_payload: str | None = None
 
 _original_pick_word = crocodile._pick_word
 _original_stop_session = crocodile._stop_session
-_original_authorize_socket_room = crocodile._authorize_socket_room
 _runtime_guards_configured = False
 
 
@@ -84,14 +83,16 @@ def _ensure_runtime_session_token(session: dict) -> str:
     return token
 
 
-async def _authorize_socket_room_for_current_round(sid, data, *, bind_room: bool = False):
+async def authorize_socket_room_for_current_round(
+    sid, data, next_handler, *, bind_room: bool = False
+):
     """Bind a socket to one concrete round, not just to a Telegram chat.
 
-    The original authorization verifies the Telegram user and room. The extra
+    The downstream authorization verifies the Telegram user and room. The extra
     token prevents a canvas left open from a previous round from becoming valid
     again when the same user happens to draw the next round in the same chat.
     """
-    room, chat_id, session = await _original_authorize_socket_room(
+    room, chat_id, session = await next_handler(
         sid,
         data,
         bind_room=bind_room,
@@ -216,7 +217,6 @@ def configure_crocodile_runtime() -> None:
 
     if not _runtime_guards_configured:
         crocodile._stop_session = _stop_session_and_close_canvas_room
-        crocodile._authorize_socket_room = _authorize_socket_room_for_current_round
         _runtime_guards_configured = True
 
 
