@@ -137,6 +137,32 @@ def _compose_check_answer(base_handler, *wrappers):
     return handler
 
 
+def _compose_socket_room_authorizer(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def authorize(
+            sid,
+            data,
+            *,
+            bind_room=False,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return await _wrapper(
+                sid,
+                data,
+                _next,
+                bind_room=bind_room,
+            )
+
+        handler = authorize
+    return handler
+
+
 def _compose_party_menu_keyboard(base_menu, *decorators):
     callbacks = tuple(callback for callback in decorators if callback is not None)
 
@@ -170,6 +196,7 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_controls,
     )
     from games.crocodile_modes import (
+        authorize_socket_room_with_modes,
         check_regular_answer_with_archive,
         configure_crocodile_modes,
         decorate_game_keyboard_with_legacy_duo,
@@ -201,9 +228,14 @@ def configure_crocodile_runtime() -> None:
     raw_game_keyboard = crocodile.get_game_keyboard
     raw_callback_handler = crocodile.handle_callback
     raw_check_answer = crocodile.check_answer
+    raw_authorize_socket_room = crocodile._authorize_socket_room
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
+    crocodile._authorize_socket_room = _compose_socket_room_authorizer(
+        raw_authorize_socket_room,
+        authorize_socket_room_with_modes,
+    )
     pre_duo_game_keyboard = _compose_game_keyboard(
         raw_game_keyboard,
         decorate_game_keyboard_with_previous,
