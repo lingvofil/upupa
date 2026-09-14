@@ -212,16 +212,33 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         party_install,
     )
     assignment = "crocodile_modes.handle_telephone_callback = _compose_callback_handler("
-    wiring = runtime_source.index(assignment, capture)
-    base = runtime_source.index("base_telephone_callback,", wiring)
+    permissions_wiring = runtime_source.index(assignment, capture)
+    base = runtime_source.index("base_telephone_callback,", permissions_wiring)
     permissions = runtime_source.index(
         "telephone_callback_with_skip_permissions,",
         base,
     )
+    admin_wiring = runtime_source.index(
+        assignment,
+        permissions_wiring + len(assignment),
+    )
+    admin_wrapper = runtime_source.index(
+        "handle_telephone_callback_with_admin,",
+        admin_wiring,
+    )
     installer = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
-        permissions,
+        admin_wrapper,
     )
 
-    assert runtime_source.count(assignment) == 1
-    assert party_install < capture < wiring < base < permissions < installer
+    assert runtime_source.count(assignment) == 2
+    assert (
+        party_install
+        < capture
+        < permissions_wiring
+        < base
+        < permissions
+        < admin_wiring
+        < admin_wrapper
+        < installer
+    )
