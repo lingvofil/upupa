@@ -20,8 +20,6 @@ from games import crocodile_ratings
 
 _configured = False
 _original_start_new_game = None
-_original_get_game_keyboard = None
-_original_get_end_game_keyboard = None
 _original_check_answer = None
 _original_final_frame_handler = None
 
@@ -101,8 +99,11 @@ async def start_new_game_with_instant_word(chat_id: int, user_id: int, user_full
     return result
 
 
-def get_game_keyboard_with_clear_next(chat_id: int) -> InlineKeyboardMarkup:
-    keyboard = _original_get_game_keyboard(chat_id)
+def decorate_game_keyboard_with_clear_next(
+    chat_id: int,
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Rename the existing next-word action without owning keyboard creation."""
     rows: list[list[InlineKeyboardButton]] = []
     for row in keyboard.inline_keyboard:
         rendered: list[InlineKeyboardButton] = []
@@ -138,8 +139,11 @@ def _like_button_with_token(keyboard: InlineKeyboardMarkup, token: str) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_end_game_keyboard_with_attribution(likes: int = 0) -> InlineKeyboardMarkup:
-    keyboard = _original_get_end_game_keyboard(likes)
+def decorate_end_game_keyboard_with_attribution(
+    likes: int,
+    keyboard: InlineKeyboardMarkup,
+) -> InlineKeyboardMarkup:
+    """Attach the current rating target to an already rendered final keyboard."""
     token = _active_like_token.get()
     if not token:
         context = _final_like_context.get()
@@ -389,23 +393,18 @@ async def final_frame_with_like_context(sid, data):
 
 
 def configure_crocodile_ui_enhancements() -> None:
-    """Install the remaining Crocodile UI layer after explicit menu composition."""
+    """Install the remaining Crocodile UI behavior after explicit composition."""
     global _configured
-    global _original_start_new_game, _original_get_game_keyboard
-    global _original_get_end_game_keyboard, _original_check_answer
+    global _original_start_new_game, _original_check_answer
     global _original_final_frame_handler
     if _configured:
         return
 
     _original_start_new_game = crocodile.start_new_game
-    _original_get_game_keyboard = crocodile.get_game_keyboard
-    _original_get_end_game_keyboard = crocodile.get_end_game_keyboard
     _original_check_answer = crocodile.check_answer
     _original_final_frame_handler = crocodile_modes.final_frame_with_modes
 
     crocodile.start_new_game = start_new_game_with_instant_word
-    crocodile.get_game_keyboard = get_game_keyboard_with_clear_next
-    crocodile.get_end_game_keyboard = get_end_game_keyboard_with_attribution
     crocodile.check_answer = check_answer_with_like_context
     crocodile.sio.on("final_frame", handler=final_frame_with_like_context)
     _configured = True

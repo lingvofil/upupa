@@ -22,21 +22,17 @@ def _callback(data: str, user_id: int = 1, name: str = "Первый"):
     )
 
 
-def test_game_keyboard_renames_other_to_next(monkeypatch):
+def test_game_keyboard_renames_other_to_next():
     from games import crocodile_ui_enhancements as ui
 
-    monkeypatch.setattr(
-        ui,
-        "_original_get_game_keyboard",
-        lambda chat_id: InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="👁 Слово", callback_data=f"cr_w_{chat_id}")],
-                [InlineKeyboardButton(text="🔄 Другое", callback_data=f"cr_n_{chat_id}")],
-            ]
-        ),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👁 Слово", callback_data="cr_w_-42")],
+            [InlineKeyboardButton(text="🔄 Другое", callback_data="cr_n_-42")],
+        ]
     )
 
-    keyboard = ui.get_game_keyboard_with_clear_next(-42)
+    keyboard = ui.decorate_game_keyboard_with_clear_next(-42, keyboard)
     buttons = [button for row in keyboard.inline_keyboard for button in row]
     next_button = next(button for button in buttons if button.callback_data == "cr_n_-42")
     assert next_button.text == "⏭ Следующее"
@@ -143,14 +139,10 @@ def test_direct_start_sends_word_privately(monkeypatch):
 def test_final_like_button_gets_persistent_target_token(monkeypatch):
     from games import crocodile_ui_enhancements as ui
 
-    monkeypatch.setattr(
-        ui,
-        "_original_get_end_game_keyboard",
-        lambda likes=0: InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=f"❤️ {likes}", callback_data="btn_like")]
-            ]
-        ),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❤️ 0", callback_data="btn_like")]
+        ]
     )
     create_target = MagicMock(return_value="abc123")
     monkeypatch.setattr(ui.crocodile_ratings, "create_like_target", create_target)
@@ -158,7 +150,7 @@ def test_final_like_button_gets_persistent_target_token(monkeypatch):
         {"chat_id": "-42", "artists": [(1, "Первый"), (2, "Второй")]}
     )
     try:
-        keyboard = ui.get_end_game_keyboard_with_attribution(0)
+        keyboard = ui.decorate_end_game_keyboard_with_attribution(0, keyboard)
     finally:
         ui._final_like_context.reset(ctx)
 
