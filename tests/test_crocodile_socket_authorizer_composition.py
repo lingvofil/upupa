@@ -122,24 +122,41 @@ def test_modes_authorizer_binds_and_revalidates_synthetic_room(monkeypatch):
         modes.canvas_sessions.pop(key, None)
 
 
-def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
+def test_modes_no_longer_owns_socket_authorizer_entrypoint():
     violations = []
+    allowed_owners = {
+        "games/crocodile_runtime.py",
+        # Transitional pre-existing round-token guard. It is captured by runtime
+        # before the modes wrapper and will be extracted in its own small slice.
+        "games/crocodile_persistence.py",
+    }
     for path in sorted((ROOT / "games").glob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
-        if relative == "games/crocodile_runtime.py":
+        if relative in allowed_owners:
             continue
         for line in _attribute_assignments(path, "_authorize_socket_room"):
             violations.append(f"{relative}:{line}")
 
     assert not violations, (
-        "crocodile._authorize_socket_room должен собираться только в "
-        "games/crocodile_runtime.py: " + ", ".join(violations)
+        "Новые скрытые владельцы crocodile._authorize_socket_room запрещены: "
+        + ", ".join(violations)
     )
 
     modes_source = (ROOT / "games" / "crocodile_modes.py").read_text(encoding="utf-8")
     assert "_original_authorize_socket_room" not in modes_source
+    assert not _attribute_assignments(
+        ROOT / "games" / "crocodile_modes.py", "_authorize_socket_room"
+    )
     assert "authorize_socket_room_with_modes(" in modes_source
     assert "next_handler" in modes_source
+
+    persistence_source = (ROOT / "games" / "crocodile_persistence.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "crocodile._authorize_socket_room = _authorize_socket_room_for_current_round"
+        in persistence_source
+    )
 
     runtime_source = (ROOT / "games" / "crocodile_runtime.py").read_text(
         encoding="utf-8"
@@ -149,6 +166,7 @@ def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     )
     assert runtime_source.count(assignment) == 1
 
+    persistence_install = runtime_source.index("persistence.configure_crocodile_runtime()")
     raw_capture = runtime_source.index(
         "raw_authorize_socket_room = crocodile._authorize_socket_room"
     )
@@ -157,5 +175,5 @@ def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     raw_handler = runtime_source.index("raw_authorize_socket_room,", wiring)
     modes_wrapper = runtime_source.index("authorize_socket_room_with_modes,", wiring)
 
-    assert raw_capture < modes_install < wiring
+    assert persistence_install < raw_capture < modes_install < wiring
     assert wiring < raw_handler < modes_wrapper
