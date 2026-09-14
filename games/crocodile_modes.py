@@ -33,7 +33,6 @@ canvas_sessions: dict[str, dict] = {}
 duel_games: dict[str, dict] = {}
 telephone_games: dict[str, dict] = {}
 
-_original_snapshot = None
 _original_final_frame = None
 _configured = False
 
@@ -213,13 +212,15 @@ def canvas_join_payload(session: dict) -> dict[str, Any]:
     return payload
 
 
-async def snapshot_with_modes(sid, data, callback=None):
+async def snapshot_with_modes(sid, data, next_handler, callback=None):
     try:
-        _canonical, session_key = normalize_crocodile_room(data.get("room") if isinstance(data, dict) else None)
+        _canonical, session_key = normalize_crocodile_room(
+            data.get("room") if isinstance(data, dict) else None
+        )
     except WebAppAuthError:
-        return await _original_snapshot(sid, data, callback=callback)
+        return await next_handler(sid, data, callback=callback)
     if ":" not in session_key:
-        return await _original_snapshot(sid, data, callback=callback)
+        return await next_handler(sid, data, callback=callback)
 
     try:
         _room, _key, session = await crocodile._authorize_socket_room(sid, data)
@@ -677,13 +678,11 @@ async def handle_telephone_callback(callback) -> None:
 
 def configure_crocodile_modes() -> None:
     """Install mode extensions after persistence/controls and before canvas restore."""
-    global _configured, _original_snapshot, _original_final_frame
+    global _configured, _original_final_frame
     if _configured:
         return
-    _original_snapshot = crocodile.snapshot
     _original_final_frame = crocodile.final_frame
 
-    crocodile.sio.on("snapshot", handler=snapshot_with_modes)
     crocodile.sio.on("final_frame", handler=final_frame_with_modes)
     crocodile.sio.on("submit_text", handler=submit_telephone_text)
     _configured = True
