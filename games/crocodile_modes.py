@@ -33,7 +33,6 @@ canvas_sessions: dict[str, dict] = {}
 duel_games: dict[str, dict] = {}
 telephone_games: dict[str, dict] = {}
 
-_original_authorize_socket_room = None
 _original_snapshot = None
 _original_final_frame = None
 _configured = False
@@ -150,20 +149,22 @@ async def handle_regular_callback(callback, next_handler) -> Any:
     )
 
 
-async def _authorize_socket_room_with_modes(sid, data, *, bind_room: bool = False):
+async def authorize_socket_room_with_modes(
+    sid, data, next_handler, *, bind_room: bool = False
+):
     requested = data.get("room") if isinstance(data, dict) else None
     if requested:
         canonical, session_key = normalize_crocodile_room(requested)
         if ":" not in session_key:
-            return await _original_authorize_socket_room(sid, data, bind_room=bind_room)
+            return await next_handler(sid, data, bind_room=bind_room)
     else:
         socket_session = await crocodile.sio.get_session(sid)
         bound = socket_session.get("room")
         if not bound:
-            return await _original_authorize_socket_room(sid, data, bind_room=bind_room)
+            return await next_handler(sid, data, bind_room=bind_room)
         canonical, session_key = normalize_crocodile_room(bound)
         if ":" not in session_key:
-            return await _original_authorize_socket_room(sid, data, bind_room=bind_room)
+            return await next_handler(sid, data, bind_room=bind_room)
 
     socket_session = await crocodile.sio.get_session(sid)
     try:
@@ -676,14 +677,12 @@ async def handle_telephone_callback(callback) -> None:
 
 def configure_crocodile_modes() -> None:
     """Install mode extensions after persistence/controls and before canvas restore."""
-    global _configured, _original_authorize_socket_room, _original_snapshot, _original_final_frame
+    global _configured, _original_snapshot, _original_final_frame
     if _configured:
         return
-    _original_authorize_socket_room = crocodile._authorize_socket_room
     _original_snapshot = crocodile.snapshot
     _original_final_frame = crocodile.final_frame
 
-    crocodile._authorize_socket_room = _authorize_socket_room_with_modes
     crocodile.sio.on("snapshot", handler=snapshot_with_modes)
     crocodile.sio.on("final_frame", handler=final_frame_with_modes)
     crocodile.sio.on("submit_text", handler=submit_telephone_text)
