@@ -25,7 +25,7 @@ INVENTORY_RELIABILITY_RULES = f"""
 _ITEM_TAG_RE = re.compile(r"\[ITEM:(ADD|REMOVE);([^\]]*)\]", re.I)
 _QTY_RE = re.compile(r";QTY:(\d+)", re.I)
 _LOOT_SIGNAL_RE = re.compile(
-    r"(?:\bвзял\w*|\bбер[её]т\w*|\bzабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
+    r"(?:\bвзял\w*|\bбер[её]т\w*|\bзабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
     r"\bукрал\w*|\bстыр\w*|\bутащ\w*|\bприсво\w*|\bкупил\w*|\bвымен\w*|\bподар\w*|"
     r"\bтрофе\w*|\bартефакт\w*|\bложк\w*|\bкарман\w*|\bинвентар\w*|\bштраф\w*|"
     r"\bпроклят\w*|\bпизд\w*)",
@@ -190,7 +190,7 @@ async def _audit_missing_inventory_tags(dnd, campaign, original_generate, sessio
                 logging.exception("DnD inventory audit Gemini restore failed")
 
 
-def install_dnd_inventory_reliability(dnd) -> None:
+def install_dnd_inventory_reliability(dnd, *, metadata_policy=None) -> None:
     """Make confirmed item acquisition mechanically reliable for participant campaigns."""
     from AI import dnd_campaign as campaign
 
@@ -211,12 +211,14 @@ def install_dnd_inventory_reliability(dnd) -> None:
     if INVENTORY_RELIABILITY_MARKER not in dnd.DND_SYSTEM_PROMPT:
         dnd.DND_SYSTEM_PROMPT = f"{dnd.DND_SYSTEM_PROMPT.rstrip()}\n\n{INVENTORY_RELIABILITY_RULES}"
 
-    original_apply_metadata = campaign._apply_metadata
+    if metadata_policy is None:
+        from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
-    def apply_metadata(session, text):
-        return original_apply_metadata(session, _expand_quantity_tags(text))
-
-    campaign._apply_metadata = apply_metadata
+        metadata_policy = configure_dnd_metadata(
+            campaign,
+            DndMetadataPolicy(campaign._apply_metadata),
+        )
+    metadata_policy.add_preprocessor(_expand_quantity_tags)
 
     original_generate = dnd.generate_session_response
 
