@@ -1,6 +1,7 @@
 """Gender choice and hard story-grounding rules for participant DnD."""
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -63,6 +64,98 @@ def _metaphysical_plot(text: str) -> bool:
     return any(pattern.search(str(text or "")) for pattern in _METAPHYSICAL_PATTERNS)
 
 
+def _profile_option_bundle_prompt(session, user_id, campaign) -> str:
+    key = str(int(user_id))
+    participant = session.participants.get(key, {})
+    profile = session.character_profiles.get(key, {})
+    gender = _normalize_gender(profile.get(GENDER_STEP)) or "не указан"
+    return (
+        "Служебная генерация вариантов лёгкого профиля персонажа Упупы. Это не игровой ход: "
+        "никаких ACTION-тегов и сюжета.\n"
+        f"Игрок: {participant.get('name') or user_id}. Пол персонажа: {gender}.\n"
+        "Сгенерируй ОДНИМ ответом варианты для четырёх категорий: style, strength, weakness, special. "
+        f"В каждой категории должно быть РОВНО {campaign.PROFILE_OPTION_COUNT} коротких вариантов примерно по 2–7 слов. "
+        "Внутри каждой категории варианты должны заметно различаться, а любые варианты из разных категорий — нормально "
+        "сочетаться между собой и с выбранным полом, чтобы игрок мог свободно собрать цельного персонажа. "
+        "Можно быть смешным, странным и слегка абсурдным. Не используй числовые характеристики, классы, уровни, "
+        "заклинательные списки и D&D-математику.\n"
+        "Верни ТОЛЬКО JSON-объект без markdown и пояснений: "
+        '{"style":["..."],"strength":["..."],"weakness":["..."],"special":["..."]}.'
+    )
+
+
+def _parse_profile_option_bundle(raw, campaign):
+    text = campaign.ACTION_RE.sub("", campaign.META_RE.sub("", str(raw or ""))).strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    bundle = {}
+    for step in campaign.PROFILE_STEPS:
+        values = data.get(step)
+        if not isinstance(values, list):
+            return None
+        options = [campaign._clean_generated_value(value, max_chars=100) for value in values]
+        if not campaign._options_are_valid(options):
+            return None
+        bundle[step] = options
+    return bundle
+
+
+async def _generate_profile_option_bundle(campaign, dnd_module, session, user_id):
+    campaign._ensure(session)
+    key = str(int(user_id))
+    cached = session.profile_options.setdefault(key, {})
+    if all(campaign._options_are_valid(list(cached.get(step) or [])) for step in campaign.PROFILE_STEPS):
+        return cached
+
+    prompt = _profile_option_bundle_prompt(session, user_id, campaign)
+    last_error = None
+    for attempt in range(campaign.PROFILE_GENERATION_RETRIES):
+        try:
+            raw = await campaign._ephemeral_generate(dnd_module, session, prompt)
+            bundle = _parse_profile_option_bundle(raw, campaign)
+            if bundle:
+                cached.update(bundle)
+                if dnd_module.dnd_sessions.get(session.chat_id) is session:
+                    dnd_module.persist_dnd_sessions()
+                return cached
+            last_error = "invalid profile option bundle"
+            logging.warning(
+                "DnD profile option bundle rejected chat_id=%s user_id=%s attempt=%s",
+                session.chat_id,
+                user_id,
+                attempt + 1,
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            logging.exception(
+                "DnD profile option bundle generation failed chat_id=%s user_id=%s attempt=%s",
+                session.chat_id,
+                user_id,
+                attempt + 1,
+            )
+
+    logging.error(
+        "DnD profile option bundle emergency fallback chat_id=%s user_id=%s cause=%s",
+        session.chat_id,
+        user_id,
+        last_error,
+    )
+    for step in campaign.PROFILE_STEPS:
+        pool = list(campaign.EMERGENCY_PROFILE_OPTIONS[step])
+        cached[step] = campaign.random.sample(pool, k=campaign.PROFILE_OPTION_COUNT)
+    if dnd_module.dnd_sessions.get(session.chat_id) is session:
+        dnd_module.persist_dnd_sessions()
+    return cached
+
+
 def install_dnd_profile_gender_grounding() -> None:
     """Patch campaign mechanics after the base campaign layer has been configured."""
     from AI import dnd
@@ -82,23 +175,39 @@ def install_dnd_profile_gender_grounding() -> None:
     elif _GROUNDING_MARKER not in dnd.DND_SYSTEM_PROMPT:
         dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + GROUNDING_RULES
 
+    original_profile_generation_prompt = campaign._profile_generation_prompt
+
+    def profile_generation_prompt(session, user_id, step, exclude=None):
+        base = original_profile_generation_prompt(session, user_id, step, exclude=exclude)
+        profile = session.character_profiles.get(str(int(user_id)), {})
+        gender = _normalize_gender(profile.get(GENDER_STEP))
+        if gender:
+            base += f"\nПол персонажа уже выбран: {gender}. Учитывай его в формулировках."
+        return base
+
+    campaign._profile_generation_prompt = profile_generation_prompt
+
     original_generate_profile_options = campaign._generate_profile_options
 
     async def generate_profile_options(dnd_module, session, user_id, step, exclude=None):
-        if step != GENDER_STEP:
-            return await original_generate_profile_options(
-                dnd_module,
-                session,
-                user_id,
-                step,
-                exclude=exclude,
-            )
         campaign._ensure(session)
-        options = list(GENDER_OPTIONS)
-        session.profile_options.setdefault(str(int(user_id)), {})[GENDER_STEP] = options
-        if dnd_module.dnd_sessions.get(session.chat_id) is session:
-            dnd_module.persist_dnd_sessions()
-        return options
+        key = str(int(user_id))
+        if step == GENDER_STEP:
+            options = list(GENDER_OPTIONS)
+            session.profile_options.setdefault(key, {})[GENDER_STEP] = options
+            if dnd_module.dnd_sessions.get(session.chat_id) is session:
+                dnd_module.persist_dnd_sessions()
+            return options
+        cached = list(session.profile_options.get(key, {}).get(step) or [])
+        if exclude is None and campaign._options_are_valid(cached):
+            return cached
+        return await original_generate_profile_options(
+            dnd_module,
+            session,
+            user_id,
+            step,
+            exclude=exclude,
+        )
 
     campaign._generate_profile_options = generate_profile_options
 
@@ -154,7 +263,7 @@ def install_dnd_profile_gender_grounding() -> None:
         return (
             f"👥 Игра с участниками чата.\nВедущий: {session.starter_name}\n\n"
             f"Участники:\n{roster}\n\n"
-            "После «Участвовать» выбери образ, сильную сторону, слабость, особый приём и пол. "
+            "После «Участвовать» выбери пол, затем образ, сильную сторону, слабость и особый приём. "
             "Затем ведущий выбирает сюжет."
         )
 
@@ -176,6 +285,18 @@ def install_dnd_profile_gender_grounding() -> None:
             )
             dnd_module.persist_dnd_sessions()
             return
+        old = campaign._player_history(session.chat_id, user_id) or {}
+        if campaign._profile_complete(old.get("profile")):
+            return await original_profile_prompt(dnd_module, callback, session)
+        if not _normalize_gender(current.get(GENDER_STEP)):
+            options = await campaign._generate_profile_options(dnd_module, session, user_id, GENDER_STEP)
+            await callback.message.answer(
+                campaign._profile_choice_text(GENDER_STEP, options),
+                reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, options),
+            )
+            dnd_module.persist_dnd_sessions()
+            return
+        await _generate_profile_option_bundle(campaign, dnd_module, session, user_id)
         return await original_profile_prompt(dnd_module, callback, session)
 
     campaign._profile_prompt = profile_prompt
@@ -209,7 +330,22 @@ def install_dnd_profile_gender_grounding() -> None:
                 )
                 return
 
-        if action == "special" and token != "regen":
+        if action == "edit":
+            session.character_profiles[str(user_id)] = {}
+            session.profile_options.pop(str(user_id), None)
+            dnd_module.persist_dnd_sessions()
+            await callback.answer("Пересобираю.")
+            gender_options = await campaign._generate_profile_options(
+                dnd_module, session, user_id, GENDER_STEP
+            )
+            await callback.message.edit_text(
+                campaign._profile_choice_text(GENDER_STEP, gender_options),
+                reply_markup=campaign._profile_keyboard(user_id, GENDER_STEP, gender_options),
+            )
+            return
+
+        profile = session.character_profiles.get(str(user_id), {})
+        if action == "special" and token != "regen" and not _normalize_gender(profile.get(GENDER_STEP)):
             options = list(session.profile_options.get(str(user_id), {}).get(action) or [])
             if campaign._options_are_valid(options):
                 try:
@@ -237,15 +373,17 @@ def install_dnd_profile_gender_grounding() -> None:
                 return
             profile = session.character_profiles.setdefault(str(user_id), {})
             profile[GENDER_STEP] = gender
-            session.profile_options.pop(str(user_id), None)
             dnd_module.persist_dnd_sessions()
-            await callback.answer("Записал.")
+            await callback.answer("Пол записал. Генерирую варианты.")
             if campaign._profile_complete(profile):
+                session.profile_options.pop(str(user_id), None)
+                dnd_module.persist_dnd_sessions()
                 await callback.message.edit_text("✅ Персонаж готов: " + campaign._profile_text(profile))
                 await campaign._refresh_lobby(session, callback.bot)
                 return
+            await _generate_profile_option_bundle(campaign, dnd_module, session, user_id)
             step = next((item for item in campaign.PROFILE_STEPS if not profile.get(item)), "style")
-            next_options = await campaign._generate_profile_options(dnd_module, session, user_id, step)
+            next_options = list(session.profile_options.get(str(user_id), {}).get(step) or [])
             await callback.message.edit_text(
                 campaign._profile_choice_text(step, next_options, heading="🎭 Теперь выбери"),
                 reply_markup=campaign._profile_keyboard(user_id, step, next_options),
