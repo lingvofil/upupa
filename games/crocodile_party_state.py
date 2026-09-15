@@ -85,7 +85,7 @@ def persist_party_modes(*, force: bool = False) -> bool:
     )
     if not force and payload == _last_payload:
         return False
-    JsonFileRepository(PARTY_STATE_PATH, indent=2).save(serializable)
+    JsonFileRepository(PARTY_STATE_PATH, indent=2).save(json.loads(payload))
     _last_payload = payload
     return True
 
