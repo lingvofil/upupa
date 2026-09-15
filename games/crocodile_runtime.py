@@ -212,6 +212,25 @@ def _compose_socket_room_authorizer(base_handler, *wrappers):
     return handler
 
 
+def _compose_socket_join_room(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def join_room(
+            sid,
+            data,
+            _wrapper=wrapper,
+            _next=next_handler,
+        ):
+            return await _wrapper(sid, data, _next)
+
+        handler = join_room
+    return handler
+
+
 def _compose_socket_snapshot(base_handler, *wrappers):
     handler = base_handler
     for wrapper in wrappers:
@@ -294,7 +313,10 @@ def configure_crocodile_runtime() -> None:
         stop_active_party_with_admin,
         stop_lock_remaining_seconds_with_admin,
     )
-    from games.crocodile_canvas_restore import configure_crocodile_canvas_restore
+    from games.crocodile_canvas_restore import (
+        configure_crocodile_canvas_restore,
+        join_room_with_canvas_restore,
+    )
     from games.crocodile_controls import (
         configure_crocodile_controls,
         decorate_game_keyboard_with_previous,
@@ -334,6 +356,7 @@ def configure_crocodile_runtime() -> None:
     )
 
     raw_authorize_socket_room = crocodile._authorize_socket_room
+    raw_join_room = crocodile.join_room
     raw_snapshot = crocodile.snapshot
     raw_final_frame = crocodile.final_frame
     persistence.configure_crocodile_runtime()
@@ -348,6 +371,13 @@ def configure_crocodile_runtime() -> None:
         raw_authorize_socket_room,
         persistence.authorize_socket_room_for_current_round,
         authorize_socket_room_with_modes,
+    )
+    crocodile.sio.on(
+        "join_room",
+        handler=_compose_socket_join_room(
+            raw_join_room,
+            join_room_with_canvas_restore,
+        ),
     )
     crocodile.sio.on(
         "snapshot",
