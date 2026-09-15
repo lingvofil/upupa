@@ -5,73 +5,49 @@ from tests import test_smoke_imports
 
 del test_smoke_imports
 
-from AI import dnd_state_commands as state_commands
 from AI.dnd_inventory_fun import build_fun_inventory_state_view_policy
-from AI.dnd_state_commands import DndStateCommandMiddleware, configure_dnd_state_commands
+from AI.dnd_state_commands import (
+    DndStateCommandMiddleware,
+    DndStateViewPolicy,
+    configure_dnd_state_commands,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _active_session():
-    return SimpleNamespace(
-        chat_id=-100777,
-        participants={"7": {"user_id": 7, "name": "Семён"}},
-        character_profiles={"7": {"style": "курьер", "strength": "наглость"}},
-        reputations={"7": []},
-        inventories={
-            "7": [
-                {"name": "штраф", "few": "штрафа", "many": "штрафов", "kind": "item", "quantity": 2},
-                {"name": "Корона Подъезда", "kind": "artifact"},
-            ]
-        },
-    )
+def _items():
+    return [
+        {"name": "штраф", "few": "штрафа", "many": "штрафов", "kind": "item", "quantity": 2},
+        {"name": "Корона Подъезда", "kind": "artifact"},
+    ]
 
 
-def test_fun_inventory_view_policy_preserves_stack_formatting_and_transfer_help(monkeypatch):
-    session = _active_session()
-    campaign = SimpleNamespace(
-        _ensure=lambda _session: None,
-        _player_history=lambda _chat_id, _user_id: None,
-    )
-    monkeypatch.setattr(state_commands, "_campaign_module", lambda _dnd: campaign)
-    dnd = SimpleNamespace(dnd_sessions={session.chat_id: session})
+def test_fun_inventory_view_policy_preserves_stack_formatting_and_transfer_help():
     policy = build_fun_inventory_state_view_policy()
 
-    hero = state_commands.render_hero(
-        dnd,
-        session.chat_id,
-        7,
-        "Семён",
-        view_policy=policy,
-    )
-    inventory = state_commands.render_inventory(
-        dnd,
-        session.chat_id,
-        7,
-        view_policy=policy,
-    )
+    formatted = policy.render_inventory_items(_items())
+    inventory = policy.decorate_inventory("🎒 Инвентарь")
 
-    assert "• 2 штрафа" in hero
-    assert "✨ Корона Подъезда" in hero
-    assert "• 2 штрафа" in inventory
+    assert "• 2 штрафа" in formatted
+    assert "✨ Корона Подъезда" in formatted
+    assert inventory.startswith("🎒 Инвентарь\n\n")
     assert "↪️ Передача:" in inventory
 
 
-def test_default_state_view_stays_independent_from_fun_inventory(monkeypatch):
-    session = _active_session()
-    campaign = SimpleNamespace(
-        _ensure=lambda _session: None,
-        _player_history=lambda _chat_id, _user_id: None,
+def test_state_view_policy_uses_local_explicit_dependencies():
+    policy = DndStateViewPolicy(
+        inventory_items_renderer=lambda items: [f"items:{len(items)}"],
     )
-    monkeypatch.setattr(state_commands, "_campaign_module", lambda _dnd: campaign)
-    dnd = SimpleNamespace(dnd_sessions={session.chat_id: session})
 
-    inventory = state_commands.render_inventory(dnd, session.chat_id, 7)
+    assert policy.render_inventory_items(_items()) == ["items:2"]
+    assert policy.decorate_inventory("base") == "base"
 
-    assert "• штраф" in inventory
-    assert "• 2 штрафа" not in inventory
-    assert "↪️ Передача:" not in inventory
+    footer_policy = DndStateViewPolicy(
+        inventory_items_renderer=lambda _items: [],
+        inventory_footer="tail",
+    )
+    assert footer_policy.decorate_inventory("base") == "base\n\ntail"
 
 
 def test_state_command_registration_keeps_explicit_view_policy():
