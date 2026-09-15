@@ -53,6 +53,17 @@ def _session(**overrides):
     return SimpleNamespace(**values)
 
 
+def _backstory_session(**overrides):
+    values = {
+        "mode": "abstract",
+        "state": "WAITING_BACKSTORY",
+        "starter_user_id": 1,
+        "backstory_prompt_message_id": 88,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_old_upupa_message_is_accepted_during_open_action_window():
     chat_id = -100700
     dnd.dnd_sessions[chat_id] = _session()
@@ -104,6 +115,53 @@ def test_old_bot_reply_keeps_target_and_command_guards():
         dnd.dnd_sessions.pop(chat_id, None)
 
 
+def test_old_upupa_message_is_accepted_for_custom_backstory():
+    chat_id = -100704
+    dnd.dnd_sessions[chat_id] = _backstory_session()
+    try:
+        message = FakeMessage(
+            chat_id=chat_id,
+            text="Я вырос в цирке и задолжал гусю.",
+            reply_message_id=12,
+        )
+        assert any_reply.is_any_bot_backstory_reply(message) is True
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_current_backstory_prompt_is_left_to_canonical_route():
+    chat_id = -100705
+    dnd.dnd_sessions[chat_id] = _backstory_session()
+    try:
+        message = FakeMessage(
+            chat_id=chat_id,
+            text="Моя предыстория",
+            reply_message_id=88,
+        )
+        assert any_reply.is_any_bot_backstory_reply(message) is False
+        assert dnd._is_backstory_reply(message) is True
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_relaxed_backstory_reply_keeps_host_and_bot_guards(monkeypatch):
+    chat_id = -100706
+    dnd.dnd_sessions[chat_id] = _backstory_session(starter_user_id=2)
+    monkeypatch.setattr(dnd, "_user_is_host", lambda _session, _user_id: False)
+    try:
+        not_host = FakeMessage(chat_id=chat_id, user_id=1, reply_message_id=12)
+        human_reply = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            reply_message_id=12,
+            reply_is_bot=False,
+        )
+        assert any_reply.is_any_bot_backstory_reply(not_host) is False
+        assert any_reply.is_any_bot_backstory_reply(human_reply) is False
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
 def test_relaxed_handler_delegates_to_canonical_action_collector(monkeypatch):
     calls = []
 
@@ -114,6 +172,20 @@ def test_relaxed_handler_delegates_to_canonical_action_collector(monkeypatch):
     message = FakeMessage(reply_message_id=12)
 
     asyncio.run(any_reply.handle_any_bot_action_reply(message))
+
+    assert calls == [message]
+
+
+def test_relaxed_backstory_handler_delegates_to_canonical_handler(monkeypatch):
+    calls = []
+
+    async def fake_handle(message):
+        calls.append(message)
+
+    monkeypatch.setattr(dnd, "handle_backstory", fake_handle)
+    message = FakeMessage(text="Своя предыстория", reply_message_id=12)
+
+    asyncio.run(any_reply.handle_any_bot_backstory_reply(message))
 
     assert calls == [message]
 
@@ -131,5 +203,6 @@ def test_route_configuration_is_idempotent():
     any_reply.configure_dnd_any_bot_replies(router)
 
     assert registrations == [
-        (any_reply.handle_any_bot_action_reply, any_reply.is_any_bot_action_reply)
+        (any_reply.handle_any_bot_action_reply, any_reply.is_any_bot_action_reply),
+        (any_reply.handle_any_bot_backstory_reply, any_reply.is_any_bot_backstory_reply),
     ]
