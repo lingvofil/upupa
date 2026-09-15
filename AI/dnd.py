@@ -1377,7 +1377,11 @@ async def handle_backstory(message: Message):
         _processing_backstories.discard(message.chat.id)
 
 
-@dnd_router.message(F.text.lower().contains("кидаю"))
+def _is_roll_command(message: Message) -> bool:
+    return bool(message.text and message.text.strip().casefold() == "кидаю")
+
+
+@dnd_router.message(_is_roll_command)
 async def handle_roll(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session or session.state != "WAITING_ROLL":
