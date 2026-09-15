@@ -207,6 +207,14 @@ def configure_crocodile_runtime() -> None:
     crocodile.SCORES_FILE = str(CROCODILE_SCORES_PATH)
     crocodile._pick_word = pick_crocodile_word
 
+    def save_scores() -> None:
+        try:
+            _write_scores(Path(crocodile.SCORES_FILE), crocodile._scores)
+        except Exception as exc:
+            logging.error("[scores] save failed: %s", exc, exc_info=True)
+
+    crocodile._scores_save = save_scores
+
     if not _runtime_guards_configured:
         crocodile._stop_session = _stop_session_and_close_canvas_room
         _runtime_guards_configured = True
