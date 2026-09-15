@@ -18,14 +18,18 @@ from AI.leveltravel_parsing import (
     parse_date_range,
     parse_search_command,
 )
+from AI.leveltravel_search_plan import (
+    LEVELTRAVEL_WEB_URL,
+    build_search_url,
+    generate_date_range_list,
+    generate_full_month_dates,
+)
 from core.settings import ADMIN_ID
 from infrastructure.ai.clients import groq_ai
 
 # =============================================================================
 # КОНСТАНТЫ
 # =============================================================================
-
-LEVELTRAVEL_WEB_URL = "https://level.travel"
 
 # Эвристики для AI анализа
 DESTINATION_INFO = {
@@ -39,115 +43,6 @@ DESTINATION_INFO = {
     "AE": {"party": False, "best_months": [10, 11, 12, 3, 4], "description": "небоскребы, шопинг, пляжи"},
     "EG": {"party": False, "best_months": [4, 5, 9, 10, 11], "description": "дайвинг, пустыня, история"},
 }
-
-
-def build_search_url(
-    country_code: str,
-    date: str,
-    adults: int,
-    nights: int,
-    search_type: str = SEARCH_TYPE_TOUR,
-    destination_slug: Optional[str] = None
-) -> str:
-    """
-    Строит URL для поиска туров или отелей.
-    
-    Args:
-        country_code: код страны (например, "VN")
-        date: дата вылета/заезда в формате DD.MM.YYYY
-        adults: количество взрослых
-        nights: количество ночей
-        search_type: "tour" (с перелетом) или "hotel" (только отель)
-    
-    Returns:
-        Полный URL для поиска
-    """
-    nights_min = max(1, nights - 1)
-    nights_max = nights + 1
-    
-    destination_part = destination_slug or f"Any-{country_code}"
-
-    if search_type == SEARCH_TYPE_HOTEL:
-        # URL для поиска отелей (без перелета)
-        # Пример: https://level.travel/search/Any-RU-to-Phu.Quoc-VN-departure-from-28.04.2026..02.05.2026-to-06.05.2026..10.05.2026-2-adults-0-kids-1..5-stars-hotel-type-30.04.2026-08.05.2026
-        try:
-            start_date = datetime.strptime(date, "%d.%m.%Y")
-            end_date = start_date + timedelta(days=nights)
-            
-            # Диапазоны дат (flex ±2 дня)
-            start_min = (start_date - timedelta(days=2)).strftime("%d.%m.%Y")
-            start_max = (start_date + timedelta(days=2)).strftime("%d.%m.%Y")
-            end_min = (end_date - timedelta(days=2)).strftime("%d.%m.%Y")
-            end_max = (end_date + timedelta(days=2)).strftime("%d.%m.%Y")
-            
-            return (
-                f"{LEVELTRAVEL_WEB_URL}/search/"
-                f"Any-RU-to-{destination_part}-"
-                f"departure-from-{start_min}..{start_max}-"
-                f"to-{end_min}..{end_max}-"
-                f"{adults}-adults-0-kids-"
-                f"1..5-stars-hotel-type-"
-                f"{date}-{end_date.strftime('%d.%m.%Y')}"
-            )
-        except Exception as e:
-            logging.error(f"Ошибка построения URL для отеля: {e}")
-            # Фолбек на обычный URL туров
-            return build_search_url(country_code, date, adults, nights, SEARCH_TYPE_TOUR)
-    else:
-        # URL для туров (с перелетом) - оригинальная логика
-        return (
-            f"{LEVELTRAVEL_WEB_URL}/search/"
-            f"Moscow-RU-to-{destination_part}-"
-            f"departure-{date}-"
-            f"for-{nights_min}..{nights_max}-nights-"
-            f"{adults}-adults-0-kids-"
-            f"1..5-stars-package-type"
-        )
-
-
-def generate_full_month_dates(month: Optional[int] = None) -> List[str]:
-    """Генерирует ВСЕ возможные даты вылета для месяца."""
-    dates = []
-    today = datetime.now()
-    
-    if month:
-        year = today.year if month >= today.month else today.year + 1
-        day = 1
-        while True:
-            try:
-                date = datetime(year, month, day)
-                if date >= today:
-                    dates.append(date.strftime("%d.%m.%Y"))
-                day += 1
-            except ValueError:
-                break
-    else:
-        for i in range(1, 31):
-            date = today + timedelta(days=i)
-            dates.append(date.strftime("%d.%m.%Y"))
-    
-    return dates
-
-
-def generate_date_range_list(start_date: str, end_date: str) -> List[str]:
-    """
-    Генерирует список всех дат вылета в указанном диапазоне.
-    Например, для 18.05.26-25.05.26 вернет: [18.05.26, 19.05.26, ..., 25.05.26]
-    """
-    try:
-        start = datetime.strptime(start_date, "%d.%m.%Y")
-        end = datetime.strptime(end_date, "%d.%m.%Y")
-        
-        dates = []
-        current = start
-        while current <= end:
-            dates.append(current.strftime("%d.%m.%Y"))
-            current += timedelta(days=1)
-        
-        return dates
-    except Exception as e:
-        logging.error(f"Ошибка генерации диапазона дат: {e}")
-        return [start_date]  # Фолбек
 
 
 async def quick_price_scan(
