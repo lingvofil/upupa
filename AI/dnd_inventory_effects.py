@@ -365,6 +365,17 @@ def _configure_session_schema_migration(state_policy) -> None:
     state_policy.add_restore_hook(_restore_inventory_effects_version)
 
 
+def configure_inventory_effect_rules(dnd, *, campaign=None) -> None:
+    """Compose inventory-effect prompt rules explicitly and idempotently."""
+    if campaign is None:
+        from AI import dnd_campaign as campaign
+
+    if INVENTORY_EFFECTS_MARKER not in campaign.RULES:
+        campaign.RULES = f"{campaign.RULES}\n{INVENTORY_EFFECT_RULES}"
+    if INVENTORY_EFFECTS_MARKER not in dnd.DND_SYSTEM_PROMPT:
+        dnd.DND_SYSTEM_PROMPT = f"{dnd.DND_SYSTEM_PROMPT.rstrip()}\n\n{INVENTORY_EFFECT_RULES}"
+
+
 def install_dnd_inventory_effects(dnd, *, metadata_policy=None, state_policy=None) -> None:
     """Install optional inventory properties after stacking and reliability composition."""
     from AI import dnd_campaign as campaign
@@ -406,10 +417,4 @@ def install_dnd_inventory_effects(dnd, *, metadata_policy=None, state_policy=Non
         )
 
     metadata_policy.add_postprocessor(postprocess_metadata)
-
-    if INVENTORY_EFFECTS_MARKER not in campaign.RULES:
-        campaign.RULES = f"{campaign.RULES}\n{INVENTORY_EFFECT_RULES}"
-    if INVENTORY_EFFECTS_MARKER not in dnd.DND_SYSTEM_PROMPT:
-        dnd.DND_SYSTEM_PROMPT = f"{dnd.DND_SYSTEM_PROMPT.rstrip()}\n\n{INVENTORY_EFFECT_RULES}"
-
     campaign._upupa_dnd_inventory_effects_installed = True
