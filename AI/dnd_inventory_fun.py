@@ -113,6 +113,12 @@ def build_fun_inventory_state_view_policy():
     )
 
 
+def configure_fun_inventory_rules(dnd) -> None:
+    """Add fun inventory rules to the composed DnD system prompt exactly once."""
+    if FUN_INVENTORY_RULES not in dnd.DND_SYSTEM_PROMPT:
+        dnd.DND_SYSTEM_PROMPT = f"{dnd.DND_SYSTEM_PROMPT.rstrip()}\n\n{FUN_INVENTORY_RULES}"
+
+
 def _ensure_artifact_awards(session) -> dict[str, list[str]]:
     awards = getattr(session, "artifact_awards", None)
     if not isinstance(awards, dict):
@@ -541,7 +547,7 @@ def apply_stackable_metadata(campaign, original_apply, session, text):
 
 
 def install_fun_inventory() -> None:
-    """Install campaign inventory extensions once."""
+    """Install campaign inventory mechanics once."""
     from AI import dnd_campaign as campaign
 
     if getattr(campaign, "_upupa_fun_inventory_installed", False):
@@ -572,6 +578,4 @@ def install_fun_inventory() -> None:
 
     campaign._apply_metadata = apply_metadata
     campaign._inventory_context = lambda session: _inventory_context(campaign, session)
-    if FUN_INVENTORY_RULES not in campaign.RULES:
-        campaign.RULES = f"{campaign.RULES}\n{FUN_INVENTORY_RULES}"
     campaign._upupa_fun_inventory_installed = True

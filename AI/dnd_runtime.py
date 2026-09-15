@@ -23,6 +23,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_inventory_fun import (
         build_fun_inventory_state_view_policy,
         configure_dnd_inventory_transfer,
+        configure_fun_inventory_rules,
         install_fun_inventory,
     )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
@@ -44,6 +45,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
+    configure_fun_inventory_rules(dnd)
     install_dnd_lobby_controls(router)
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_enemy_stats(dnd)
