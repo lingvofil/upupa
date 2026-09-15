@@ -42,6 +42,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
+    from AI.dnd_player_combat import install_dnd_player_combat
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_state_commands import configure_dnd_state_commands
@@ -85,6 +86,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_lobby_controls(router)
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_enemy_stats(dnd)
+    install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
     install_dnd_healing_choice(router)
     install_dnd_two_heals(router)
     install_dnd_two_heals_compat()
