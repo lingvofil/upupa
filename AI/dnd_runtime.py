@@ -14,6 +14,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
     from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
     from AI.dnd_combat import install_dnd_combat
+    from AI.dnd_current_turn_priority import install_dnd_current_turn_priority
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
@@ -81,6 +82,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # capture generate_session_response, so every later DnD layer inherits it.
     configure_dnd_generation_resilience(dnd)
     install_dnd_group_action_resilience(dnd)
+    install_dnd_current_turn_priority(dnd, campaign_marker=campaign.MARKER)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
