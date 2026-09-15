@@ -16,6 +16,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
+    from AI.dnd_generation_resilience import configure_dnd_generation_resilience
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
     from AI.dnd_inventory_descriptions import (
@@ -41,6 +42,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
+    from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
@@ -71,9 +73,14 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_dnd_inventory_transfer(router)
     state_view_policy = build_fun_inventory_state_view_policy()
     configure_dnd_state_commands(router, view_policy=state_view_policy)
+
+    # Install the bounded provider path before completion/campaign wrappers
+    # capture generate_session_response, so every later DnD layer inherits it.
+    configure_dnd_generation_resilience(dnd)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
+    configure_dnd_plot_resilience(campaign)
     configure_fun_inventory_rules(dnd)
     install_dnd_lobby_controls(router)
     install_dnd_combat(router, completion_policy=completion_policy)
