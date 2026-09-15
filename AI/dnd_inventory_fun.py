@@ -546,7 +546,7 @@ def apply_stackable_metadata(campaign, original_apply, session, text):
     return cleaned, notices
 
 
-def install_fun_inventory(*, state_policy=None) -> None:
+def install_fun_inventory(*, state_policy=None, metadata_policy=None) -> None:
     """Install campaign inventory mechanics once."""
     from AI import dnd_campaign as campaign
 
@@ -564,10 +564,16 @@ def install_fun_inventory(*, state_policy=None) -> None:
     state_policy.add_ensure_hook(_ensure_artifact_awards)
     state_policy.add_state_field("artifact_awards", _ensure_artifact_awards)
 
-    original_apply = campaign._apply_metadata
+    if metadata_policy is None:
+        from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
-    def apply_metadata(session, text):
-        return apply_stackable_metadata(campaign, original_apply, session, text)
+        metadata_policy = configure_dnd_metadata(
+            campaign,
+            DndMetadataPolicy(campaign._apply_metadata),
+        )
 
-    campaign._apply_metadata = apply_metadata
+    def process_metadata(session, text, next_apply):
+        return apply_stackable_metadata(campaign, next_apply, session, text)
+
+    metadata_policy.add_downstream_processor(process_metadata)
     campaign._upupa_fun_inventory_installed = True

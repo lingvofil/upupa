@@ -114,6 +114,7 @@ def test_fun_inventory_uses_state_policy_instead_of_state_monkeypatches():
     fun_source = (ROOT / "AI" / "dnd_inventory_fun.py").read_text(encoding="utf-8")
     policy_source = (ROOT / "AI" / "dnd_campaign_state.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+    fun_install = "    install_fun_inventory(\n"
 
     assert "campaign._ensure =" not in fun_source
     assert "campaign._state =" not in fun_source
@@ -125,7 +126,8 @@ def test_fun_inventory_uses_state_policy_instead_of_state_monkeypatches():
     assert "campaign_state_policy = DndCampaignStatePolicy(" in runtime_source
     assert "campaign._restore_state," in runtime_source
     assert "configure_dnd_campaign_state(campaign, campaign_state_policy)" in runtime_source
-    assert "install_fun_inventory(state_policy=campaign_state_policy)" in runtime_source
+    assert fun_install in runtime_source
+    assert "state_policy=campaign_state_policy" in runtime_source
     assert runtime_source.index("configure_dnd_campaign_state(campaign, campaign_state_policy)") < runtime_source.index(
-        "install_fun_inventory(state_policy=campaign_state_policy)"
+        fun_install
     )
