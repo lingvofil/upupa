@@ -61,6 +61,7 @@ def test_inventory_context_is_composed_without_extension_monkeypatches():
     effects_source = (ROOT / "AI" / "dnd_inventory_effects.py").read_text(encoding="utf-8")
     policy_source = (ROOT / "AI" / "dnd_inventory_context.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+    effects_install = "install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)"
 
     assert "campaign._inventory_context =" not in fun_source
     assert "campaign._inventory_context =" not in effects_source
@@ -70,7 +71,7 @@ def test_inventory_context_is_composed_without_extension_monkeypatches():
     assert "inventory_context_policy.renderer = render_inventory_effect_context" in runtime_source
     assert runtime_source.index("install_fun_inventory()") < runtime_source.index(
         "configure_dnd_inventory_context(campaign, inventory_context_policy)"
-    ) < runtime_source.index("install_dnd_inventory_effects(dnd)")
-    assert runtime_source.index("install_dnd_inventory_effects(dnd)") < runtime_source.index(
+    ) < runtime_source.index(effects_install)
+    assert runtime_source.index(effects_install) < runtime_source.index(
         "inventory_context_policy.renderer = render_inventory_effect_context"
     )
