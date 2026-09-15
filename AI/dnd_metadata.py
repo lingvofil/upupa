@@ -3,12 +3,13 @@ from __future__ import annotations
 
 
 class DndMetadataPolicy:
-    """Apply ordered text preprocessors and result postprocessors around metadata parsing."""
+    """Compose ordered around-processors, text preprocessors and result postprocessors."""
 
     def __init__(self, downstream):
         self.downstream = downstream
         self.preprocessors = []
         self.postprocessors = []
+        self.around_processors = []
 
     def add_preprocessor(self, preprocessor):
         if preprocessor not in self.preprocessors:
@@ -20,7 +21,12 @@ class DndMetadataPolicy:
             self.postprocessors.append(postprocessor)
         return self
 
-    def apply(self, session, text):
+    def add_around_processor(self, around_processor):
+        if around_processor not in self.around_processors:
+            self.around_processors.append(around_processor)
+        return self
+
+    def _apply_core(self, session, text):
         original_text = text
         current = text
         for preprocessor in self.preprocessors:
@@ -29,6 +35,19 @@ class DndMetadataPolicy:
         for postprocessor in self.postprocessors:
             cleaned, notices = postprocessor(session, original_text, cleaned, notices)
         return cleaned, notices
+
+    def apply(self, session, text):
+        def invoke(index, current_session, current_text):
+            if index >= len(self.around_processors):
+                return self._apply_core(current_session, current_text)
+            around_processor = self.around_processors[index]
+            return around_processor(
+                current_session,
+                current_text,
+                lambda next_session, next_text: invoke(index + 1, next_session, next_text),
+            )
+
+        return invoke(0, session, text)
 
 
 def configure_dnd_metadata(campaign, policy: DndMetadataPolicy) -> DndMetadataPolicy:
