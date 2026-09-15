@@ -76,8 +76,7 @@ def test_dnd_provider_call_runs_outside_event_loop_thread():
 
     result = asyncio.run(dnd.generate_session_response(Session(), "hello"))
 
-    assert result.startswith("reply:")
-    assert result.endswith("hello")
+    assert result == "reply:hello"
     assert provider_threads
     assert provider_threads[0] != event_loop_thread
 
