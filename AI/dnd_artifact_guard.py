@@ -95,18 +95,24 @@ def apply_artifact_guard(campaign, original_apply, session, text):
     return cleaned, notices
 
 
-def install_dnd_artifact_guard(dnd) -> None:
+def install_dnd_artifact_guard(dnd, *, metadata_policy=None) -> None:
     from AI import dnd_campaign as campaign
 
     if getattr(campaign, "_upupa_dnd_artifact_guard_installed", False):
         return
 
-    original_apply = campaign._apply_metadata
+    if metadata_policy is None:
+        from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
-    def apply_metadata(session, text):
-        return apply_artifact_guard(campaign, original_apply, session, text)
+        metadata_policy = configure_dnd_metadata(
+            campaign,
+            DndMetadataPolicy(campaign._apply_metadata),
+        )
 
-    campaign._apply_metadata = apply_metadata
+    def around_metadata(session, text, next_apply):
+        return apply_artifact_guard(campaign, next_apply, session, text)
+
+    metadata_policy.add_around_processor(around_metadata)
     if ARTIFACT_GUARD_MARKER not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{ARTIFACT_GUARD_RULES}"
     if ARTIFACT_GUARD_MARKER not in dnd.DND_SYSTEM_PROMPT:
