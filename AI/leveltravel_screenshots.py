@@ -1,11 +1,22 @@
 import logging
-import os
+from pathlib import Path
 import re
+import tempfile
 from typing import List
 
 from playwright.async_api import async_playwright
 
 from AI.leveltravel_parsing import SEARCH_TYPE_TOUR
+
+
+def _screenshot_paths(hotel_name: str) -> tuple[Path, Path]:
+    screenshots_dir = Path(tempfile.gettempdir()) / "tour_screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^\w\s-]", "", hotel_name)[:50]
+    return (
+        screenshots_dir / f"{safe_name}_1_calendar.png",
+        screenshots_dir / f"{safe_name}_2_rooms.png",
+    )
 
 
 async def capture_hotel_screenshots(
@@ -83,14 +94,10 @@ async def capture_hotel_screenshots(
                 )
                 await page.wait_for_timeout(1000)
 
-                screenshots_dir = "/tmp/tour_screenshots"
-                os.makedirs(screenshots_dir, exist_ok=True)
-                safe_name = re.sub(r"[^\w\s-]", "", hotel_name)[:50]
+                path1, path2 = _screenshot_paths(hotel_name)
 
-                path1 = f"{screenshots_dir}/{safe_name}_1_calendar.png"
-                await page.screenshot(path=path1, full_page=False, type="png")
-                paths.append(path1)
-                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
+                await page.screenshot(path=str(path1), full_page=False, type="png")
+                paths.append(str(path1))
 
                 await page.set_viewport_size({"width": 1920, "height": 2000})
 
@@ -136,7 +143,7 @@ async def capture_hotel_screenshots(
 
                     if box:
                         await page.screenshot(
-                            path=path2,
+                            path=str(path2),
                             full_page=False,
                             clip={
                                 "x": 0,
@@ -145,13 +152,13 @@ async def capture_hotel_screenshots(
                                 "height": 1500,
                             },
                         )
-                        paths.append(path2)
+                        paths.append(str(path2))
                     else:
                         logging.warning(
                             "Не удалось получить координаты bounding_box"
                         )
-                        await page.screenshot(path=path2, full_page=False)
-                        paths.append(path2)
+                        await page.screenshot(path=str(path2), full_page=False)
+                        paths.append(str(path2))
                 else:
                     logging.warning(
                         f"Элемент {target_selector} не найден после ожидания"
