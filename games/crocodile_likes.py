@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
 
+from core.json_repository import JsonFileRepository
 from core.loader import bot
 from core.paths import CROCODILE_STATE_PATH
 
@@ -80,18 +80,10 @@ def _get_registry() -> dict[str, dict[str, Any]]:
 
 
 def _save_registry(registry: dict[str, dict[str, Any]]) -> None:
-    tmp_path = LIKES_FILE.with_suffix(LIKES_FILE.suffix + ".tmp")
     try:
-        LIKES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as file:
-            json.dump(registry, file, ensure_ascii=False, separators=(",", ":"))
-        os.replace(tmp_path, LIKES_FILE)
+        JsonFileRepository(LIKES_FILE, indent=None).save(registry)
     except Exception as exc:
         logging.warning("[crocodile] failed to save like registry: %s", exc)
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _register_like(
