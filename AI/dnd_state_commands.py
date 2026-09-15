@@ -1,6 +1,7 @@
 """Read-only player-facing access to persistent DnD campaign state."""
 from __future__ import annotations
 
+from contextvars import ContextVar
 import logging
 import re
 
@@ -19,6 +20,7 @@ _LEGACY_END_ALIASES = {"упупа заверши историю", "упупа �
 _LOBBY_MENU_ALIASES = {"днд"}
 _LOBBY_START_ALIASES = {"днд старт"}
 _NPC_TAG_RE = re.compile(r"\[NPC:[^\]]*\]", re.I)
+_ACTIVE_STATE_VIEW_POLICY = ContextVar("dnd_state_view_policy", default=None)
 
 _STATE_LABELS = {
     "WAITING_MODE": "выбираем режим егры",
@@ -178,21 +180,17 @@ class DndStateViewPolicy:
 
 
 def _view_policy(view_policy=None) -> DndStateViewPolicy:
-    return view_policy if view_policy is not None else DndStateViewPolicy()
+    if view_policy is not None:
+        return view_policy
+    active = _ACTIVE_STATE_VIEW_POLICY.get()
+    return active if active is not None else DndStateViewPolicy()
 
 
-def render_hero(
-    dnd,
-    chat_id: int,
-    user_id: int,
-    user_name: str | None = None,
-    *,
-    view_policy=None,
-) -> str:
+def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     key = str(int(user_id))
-    view = _view_policy(view_policy)
+    view = _view_policy()
 
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         profile = (getattr(session, "character_profiles", {}) or {}).get(key) or {}
@@ -247,11 +245,11 @@ def _inventory_items(items) -> list[str]:
     return result
 
 
-def render_inventory(dnd, chat_id: int, user_id: int, *, view_policy=None) -> str:
+def render_inventory(dnd, chat_id: int, user_id: int) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     key = str(int(user_id))
-    view = _view_policy(view_policy)
+    view = _view_policy()
 
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         items = (getattr(session, "inventories", {}) or {}).get(key) or []
@@ -463,15 +461,19 @@ def render_state_command(
     *,
     view_policy=None,
 ) -> str:
-    if kind == "hero":
-        return render_hero(dnd, chat_id, user_id, user_name, view_policy=view_policy)
-    if kind == "inventory":
-        return render_inventory(dnd, chat_id, user_id, view_policy=view_policy)
-    if kind == "npcs":
-        return render_npcs(dnd, chat_id)
-    if kind == "status":
-        return render_status(dnd, chat_id)
-    raise ValueError(f"Unknown DnD state command: {kind}")
+    token = _ACTIVE_STATE_VIEW_POLICY.set(_view_policy(view_policy))
+    try:
+        if kind == "hero":
+            return render_hero(dnd, chat_id, user_id, user_name)
+        if kind == "inventory":
+            return render_inventory(dnd, chat_id, user_id)
+        if kind == "npcs":
+            return render_npcs(dnd, chat_id)
+        if kind == "status":
+            return render_status(dnd, chat_id)
+        raise ValueError(f"Unknown DnD state command: {kind}")
+    finally:
+        _ACTIVE_STATE_VIEW_POLICY.reset(token)
 
 
 class DndStateCommandMiddleware(BaseMiddleware):
