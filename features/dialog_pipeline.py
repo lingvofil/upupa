@@ -58,6 +58,21 @@ def _media_group_is_followup(message: Message) -> bool:
     return False
 
 
+async def _account_human_message(message: Message) -> bool:
+    """Register and account for one human Telegram message exactly once."""
+    if not situational_summary._register_incoming_message(message):
+        return False
+
+    if not message.from_user or message.from_user.is_bot:
+        return False
+
+    await save_user_message(message)
+    record_participant_message(message)
+    await track_message_statistics(message)
+    add_chat(message.chat.id, message.chat.title, message.chat.username)
+    return True
+
+
 async def _generate_live_situational_reaction(chat_id: int) -> str | None:
     """Generate the R3 situational summary from the dedicated live-chat buffer."""
     history = list(situational_summary._context_for_chat(chat_id))
@@ -71,27 +86,9 @@ async def _generate_live_situational_reaction(chat_id: int) -> str | None:
     )
 
 
-async def process_random_reactions_once(
-    message: Message,
-    *,
-    register_message: bool = True,
-    allow_reactions: bool = True,
-) -> bool:
-    """Account for one Telegram message and optionally run random reactions."""
-    if register_message and not situational_summary._register_incoming_message(message):
-        return False
-
-    if not message.from_user or message.from_user.is_bot:
-        return False
-
-    # Accounting remains per Telegram Message, including every item in an album.
-    await save_user_message(message)
-    record_participant_message(message)
-    await track_message_statistics(message)
-    add_chat(message.chat.id, message.chat.title, message.chat.username)
-
-    # Album follow-up items must not multiply probabilistic reactions.
-    if not allow_reactions:
+async def process_random_reactions_once(message: Message) -> bool:
+    """Run accounting and random reactions exactly once for one Telegram message."""
+    if not await _account_human_message(message):
         return False
 
     chat_id = str(message.chat.id)
@@ -239,19 +236,10 @@ async def process_general_dialog_message(message: Message) -> None:
 
 async def process_dialog_pipeline(message: Message) -> bool:
     """Run the canonical reaction -> direct-dialog sequence."""
-    # Deduplicate exact Telegram redelivery before any accounting/dialog work.
-    if not situational_summary._register_incoming_message(message):
-        return False
-
-    media_group_followup = _media_group_is_followup(message)
-    if await process_random_reactions_once(
-        message,
-        register_message=False,
-        allow_reactions=not media_group_followup,
-    ):
-        return True
-
-    if media_group_followup:
+    if _media_group_is_followup(message):
+        # Album items are still individual Telegram messages for history/stats,
+        # but only the first item is one conversational/reaction event.
+        await _account_human_message(message)
         logging.debug(
             "[dialog] media group follow-up skipped chat=%s group=%s message=%s",
             message.chat.id,
@@ -259,6 +247,9 @@ async def process_dialog_pipeline(message: Message) -> bool:
             getattr(message, "message_id", None),
         )
         return False
+
+    if await process_random_reactions_once(message):
+        return True
 
     await process_general_dialog_message(message)
     return False
