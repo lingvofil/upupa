@@ -370,8 +370,8 @@ def _install_session_schema_migration(campaign) -> None:
     campaign._restore_state = restore_state
 
 
-def install_dnd_inventory_effects(dnd) -> None:
-    """Install optional inventory properties after stacking and reliability wrappers."""
+def install_dnd_inventory_effects(dnd, *, metadata_policy=None) -> None:
+    """Install optional inventory properties after stacking and reliability composition."""
     from AI import dnd_campaign as campaign
 
     if getattr(campaign, "_upupa_dnd_inventory_effects_installed", False):
@@ -382,12 +382,23 @@ def install_dnd_inventory_effects(dnd) -> None:
         campaign._save_archive(dnd)
 
     _install_session_schema_migration(campaign)
-    original_apply = campaign._apply_metadata
+    if metadata_policy is None:
+        from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
-    def apply_metadata(session, text):
-        return apply_item_effect_metadata(campaign, original_apply, session, text)
+        metadata_policy = configure_dnd_metadata(
+            campaign,
+            DndMetadataPolicy(campaign._apply_metadata),
+        )
 
-    campaign._apply_metadata = apply_metadata
+    def postprocess_metadata(session, text, cleaned, notices):
+        return apply_item_effect_metadata(
+            campaign,
+            lambda _session, _text: (cleaned, notices),
+            session,
+            text,
+        )
+
+    metadata_policy.add_postprocessor(postprocess_metadata)
 
     if INVENTORY_EFFECTS_MARKER not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{INVENTORY_EFFECT_RULES}"
