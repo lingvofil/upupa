@@ -388,7 +388,6 @@ def install_dnd_inventory_effects(dnd) -> None:
         return apply_item_effect_metadata(campaign, original_apply, session, text)
 
     campaign._apply_metadata = apply_metadata
-    campaign._inventory_context = lambda session: _inventory_context(campaign, session)
 
     if INVENTORY_EFFECTS_MARKER not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{INVENTORY_EFFECT_RULES}"

@@ -577,5 +577,4 @@ def install_fun_inventory() -> None:
         return apply_stackable_metadata(campaign, original_apply, session, text)
 
     campaign._apply_metadata = apply_metadata
-    campaign._inventory_context = lambda session: _inventory_context(campaign, session)
     campaign._upupa_fun_inventory_installed = True
