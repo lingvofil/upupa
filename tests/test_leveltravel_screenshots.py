@@ -95,9 +95,9 @@ def test_capture_screenshots_owns_browser_and_paths(monkeypatch, tmp_path):
         lambda: manager,
     )
     monkeypatch.setattr(
-        leveltravel_screenshots.os,
-        "makedirs",
-        lambda *args, **kwargs: None,
+        leveltravel_screenshots.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
     )
 
     paths = asyncio.run(
@@ -109,16 +109,17 @@ def test_capture_screenshots_owns_browser_and_paths(monkeypatch, tmp_path):
         )
     )
 
-    assert paths == ["/tmp/tour_screenshots/Hotel  Test_1_calendar.png"]
+    expected_calendar = (
+        tmp_path / "tour_screenshots" / "Hotel  Test_1_calendar.png"
+    )
+    assert paths == [str(expected_calendar)]
     assert page.goto_calls == [
         (
             "https://level.travel/hotels/test",
             {"timeout": 60000, "wait_until": "domcontentloaded"},
         )
     ]
-    assert page.screenshot_calls[0]["path"].endswith(
-        "Hotel  Test_1_calendar.png"
-    )
+    assert page.screenshot_calls[0]["path"] == str(expected_calendar)
     assert page.viewports == [
         {"width": 1920, "height": 2000},
         {"width": 1920, "height": 1080},

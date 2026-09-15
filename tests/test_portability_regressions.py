@@ -13,6 +13,7 @@ from tests import test_smoke_imports
 # mocks heavyweight optional libraries before the modules below are imported.
 del test_smoke_imports
 
+from AI import leveltravel_screenshots
 from features.song import hf_yue2 as yue2
 from features.social_graph import rendering
 import scripts.backup_runtime_state as backup
@@ -158,3 +159,18 @@ def test_crocodile_party_runtime_path_is_project_canonical():
     from games import crocodile_party_state as party_state
 
     assert party_state.PARTY_STATE_PATH == PROJECT_ROOT / "crocodile_party_state.json"
+
+
+def test_leveltravel_screenshot_paths_use_platform_temp_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        leveltravel_screenshots.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+
+    calendar_path, rooms_path = leveltravel_screenshots._screenshot_paths("Отель: Тест / 5*")
+
+    expected_dir = tmp_path / "tour_screenshots"
+    assert expected_dir.is_dir()
+    assert calendar_path == expected_dir / "Отель Тест  5_1_calendar.png"
+    assert rooms_path == expected_dir / "Отель Тест  5_2_rooms.png"
