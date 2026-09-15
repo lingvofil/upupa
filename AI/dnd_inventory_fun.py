@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import re
 
 from aiogram import BaseMiddleware
@@ -540,22 +541,27 @@ def apply_stackable_metadata(campaign, original_apply, session, text):
     return cleaned, notices
 
 
-def install_fun_inventory() -> None:
-    """Install campaign inventory extensions once."""
-    from AI import dnd_campaign as campaign
+@dataclass(frozen=True)
+class FunInventoryCampaignComposition:
+    """Pure description of the campaign wrappers required by fun inventory."""
 
-    if getattr(campaign, "_upupa_fun_inventory_installed", False):
-        return
+    ensure: object
+    state: object
+    apply_metadata: object
+    inventory_context: object
+    rules: str
 
+
+def build_fun_inventory_campaign_composition(campaign) -> FunInventoryCampaignComposition:
+    """Build campaign wrappers without mutating the campaign module."""
     original_ensure = campaign._ensure
+    original_state = campaign._state
+    original_apply = campaign._apply_metadata
+    base_rules = str(campaign.RULES)
 
     def ensure(session):
         original_ensure(session)
         _ensure_artifact_awards(session)
-
-    campaign._ensure = ensure
-
-    original_state = campaign._state
 
     def state(session):
         row = original_state(session)
@@ -563,15 +569,20 @@ def install_fun_inventory() -> None:
         row["artifact_awards"] = session.artifact_awards
         return row
 
-    campaign._state = state
-
-    original_apply = campaign._apply_metadata
-
     def apply_metadata(session, text):
         return apply_stackable_metadata(campaign, original_apply, session, text)
 
-    campaign._apply_metadata = apply_metadata
-    campaign._inventory_context = lambda session: _inventory_context(campaign, session)
-    if FUN_INVENTORY_RULES not in campaign.RULES:
-        campaign.RULES = f"{campaign.RULES}\n{FUN_INVENTORY_RULES}"
-    campaign._upupa_fun_inventory_installed = True
+    def inventory_context(session):
+        return _inventory_context(campaign, session)
+
+    rules = base_rules
+    if FUN_INVENTORY_RULES not in rules:
+        rules = f"{rules}\n{FUN_INVENTORY_RULES}"
+
+    return FunInventoryCampaignComposition(
+        ensure=ensure,
+        state=state,
+        apply_metadata=apply_metadata,
+        inventory_context=inventory_context,
+        rules=rules,
+    )
