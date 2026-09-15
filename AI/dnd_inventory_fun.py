@@ -29,6 +29,11 @@ FUN_INVENTORY_RULES = """
 [ITEM:ADD;PLAYER:123;NAME:название;KIND:artifact]. Не откладывай выдачу до эпилога: эпилог не меняет инвентарь.
 """.strip()
 
+INVENTORY_TRANSFER_HELP = (
+    "↪️ Передача: ответь на сообщение игрока «передать <название>». "
+    "Для стака можно, например, «передать 2 штрафа»."
+)
+
 
 class InventoryTransferError(ValueError):
     pass
@@ -96,6 +101,16 @@ def render_inventory_lines(items) -> list[str]:
         if text:
             result.append(("✨ " if _kind(item) == "artifact" else "• ") + text)
     return result
+
+
+def build_fun_inventory_state_view_policy():
+    """Build the state-command formatting dependency for the fun inventory layer."""
+    from AI.dnd_state_commands import DndStateViewPolicy
+
+    return DndStateViewPolicy(
+        inventory_items_renderer=render_inventory_lines,
+        inventory_footer=INVENTORY_TRANSFER_HELP,
+    )
 
 
 def _ensure_artifact_awards(session) -> dict[str, list[str]]:
@@ -526,9 +541,8 @@ def apply_stackable_metadata(campaign, original_apply, session, text):
 
 
 def install_fun_inventory() -> None:
-    """Install inventory extensions once, without changing the base campaign module."""
+    """Install campaign inventory extensions once."""
     from AI import dnd_campaign as campaign
-    from AI import dnd_state_commands as state_commands
 
     if getattr(campaign, "_upupa_fun_inventory_installed", False):
         return
@@ -560,16 +574,4 @@ def install_fun_inventory() -> None:
     campaign._inventory_context = lambda session: _inventory_context(campaign, session)
     if FUN_INVENTORY_RULES not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{FUN_INVENTORY_RULES}"
-    state_commands._inventory_items = render_inventory_lines
-
-    original_render_inventory = state_commands.render_inventory
-
-    def render_inventory(dnd, chat_id, user_id):
-        text = original_render_inventory(dnd, chat_id, user_id)
-        return text + (
-            "\n\n↪️ Передача: ответь на сообщение игрока «передать <название>». "
-            "Для стака можно, например, «передать 2 штрафа»."
-        )
-
-    state_commands.render_inventory = render_inventory
     campaign._upupa_fun_inventory_installed = True
