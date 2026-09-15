@@ -31,6 +31,7 @@ class FakeMessage:
         self.text = text
         self.caption = None
         self.bot = FakeBot(bot_id)
+        self.answers = []
         self.reply_to_message = (
             SimpleNamespace(
                 message_id=reply_message_id,
@@ -39,6 +40,9 @@ class FakeMessage:
             if reply_message_id is not None
             else None
         )
+
+    async def answer(self, text):
+        self.answers.append(text)
 
 
 def _session(**overrides):
@@ -59,6 +63,27 @@ def _backstory_session(**overrides):
         "state": "WAITING_BACKSTORY",
         "starter_user_id": 1,
         "backstory_prompt_message_id": 88,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _poll_session(**overrides):
+    values = {
+        "mode": "participants",
+        "state": "WAITING_POLL",
+        "participants": {
+            "1": {"user_id": 1, "name": "Алиса"},
+            "2": {"user_id": 2, "name": "Боб"},
+        },
+        "current_poll_id": "poll-1",
+        "pending_poll": {
+            "poll_id": "poll-1",
+            "message_id": 123,
+            "options": ["Лезть в окно", "Стучать в дверь"],
+            "target_user_ids": [],
+            "votes": {},
+        },
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -162,6 +187,44 @@ def test_relaxed_backstory_reply_keeps_host_and_bot_guards(monkeypatch):
         dnd.dnd_sessions.pop(chat_id, None)
 
 
+def test_poll_reply_to_upupa_is_not_silently_lost():
+    chat_id = -100707
+    dnd.dnd_sessions[chat_id] = _poll_session()
+    try:
+        message = FakeMessage(chat_id=chat_id, text="ну и что теперь", reply_message_id=12)
+        assert any_reply.is_any_bot_poll_reply(message) is True
+        asyncio.run(any_reply.handle_any_bot_poll_reply(message))
+        assert message.answers
+        assert "голосование" in message.answers[-1].casefold()
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_poll_reply_number_is_recorded_as_vote(monkeypatch):
+    chat_id = -100708
+    dnd.dnd_sessions[chat_id] = _poll_session()
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    try:
+        message = FakeMessage(chat_id=chat_id, text="2", reply_message_id=12)
+        asyncio.run(any_reply.handle_any_bot_poll_reply(message))
+        assert dnd.dnd_sessions[chat_id].pending_poll["votes"] == {"1": 1}
+        assert "Стучать в дверь" in message.answers[-1]
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_poll_reply_still_requires_this_bot():
+    chat_id = -100709
+    dnd.dnd_sessions[chat_id] = _poll_session()
+    try:
+        human = FakeMessage(chat_id=chat_id, reply_message_id=12, reply_is_bot=False)
+        other_bot = FakeMessage(chat_id=chat_id, reply_message_id=12, reply_user_id=555)
+        assert any_reply.is_any_bot_poll_reply(human) is False
+        assert any_reply.is_any_bot_poll_reply(other_bot) is False
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
 def test_relaxed_handler_delegates_to_canonical_action_collector(monkeypatch):
     calls = []
 
@@ -205,4 +268,5 @@ def test_route_configuration_is_idempotent():
     assert registrations == [
         (any_reply.handle_any_bot_action_reply, any_reply.is_any_bot_action_reply),
         (any_reply.handle_any_bot_backstory_reply, any_reply.is_any_bot_backstory_reply),
+        (any_reply.handle_any_bot_poll_reply, any_reply.is_any_bot_poll_reply),
     ]
