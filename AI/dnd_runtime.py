@@ -50,9 +50,14 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         campaign._restore_state,
     )
     configure_dnd_campaign_state(campaign, campaign_state_policy)
-    install_fun_inventory(state_policy=campaign_state_policy)
-    metadata_policy = DndMetadataPolicy(campaign._apply_metadata)
-    configure_dnd_metadata(campaign, metadata_policy)
+    metadata_policy = configure_dnd_metadata(
+        campaign,
+        DndMetadataPolicy(campaign._apply_metadata),
+    )
+    install_fun_inventory(
+        state_policy=campaign_state_policy,
+        metadata_policy=metadata_policy,
+    )
     inventory_context_policy = DndInventoryContextPolicy(render_fun_inventory_context)
     configure_dnd_inventory_context(campaign, inventory_context_policy)
     configure_dnd_inventory_transfer(router)
