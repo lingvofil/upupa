@@ -74,11 +74,22 @@ class GroqWrapper:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         presence_penalty: float = 0.0,
+        max_retries: int | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> str:
         if not self.client:
             return "Ключ Groq не настроен"
         try:
-            completion = self.client.chat.completions.create(
+            client = self.client
+            if max_retries is not None or request_timeout_seconds is not None:
+                options = {}
+                if max_retries is not None:
+                    options["max_retries"] = int(max_retries)
+                if request_timeout_seconds is not None:
+                    options["timeout"] = float(request_timeout_seconds)
+                client = client.with_options(**options)
+
+            completion = client.chat.completions.create(
                 model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
