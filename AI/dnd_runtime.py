@@ -68,7 +68,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
-    install_dnd_artifact_guard(dnd)
+    install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
 
     completion.configure_dnd_campaign_compat(dnd)
