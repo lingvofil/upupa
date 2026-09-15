@@ -42,6 +42,44 @@ def test_metadata_policy_keeps_artifact_quantity_at_one_and_dedupes_preprocessor
     assert seen[0] == "[ITEM:ADD;PLAYER:1;NAME:Ложка Судьбы;KIND:artifact]"
 
 
+def test_metadata_policy_runs_downstream_processor_between_pre_and_post_processing():
+    seen = []
+
+    def downstream(_session, text):
+        seen.append(("downstream", text))
+        return "clean", ["base"]
+
+    def preprocessor(text):
+        seen.append(("pre", text))
+        return f"{text}|pre"
+
+    def processor(session, text, next_apply):
+        seen.append(("processor-before", text))
+        cleaned, notices = next_apply(session, f"{text}|stack")
+        seen.append(("processor-after", cleaned))
+        return cleaned, notices + ["stack"]
+
+    def postprocessor(_session, original_text, cleaned, notices):
+        seen.append(("post", original_text))
+        return cleaned, notices + ["post"]
+
+    policy = DndMetadataPolicy(downstream)
+    policy.add_preprocessor(preprocessor)
+    policy.add_downstream_processor(processor)
+    policy.add_downstream_processor(processor)
+    policy.add_postprocessor(postprocessor)
+
+    assert policy.apply(SimpleNamespace(), "raw") == ("clean", ["base", "stack", "post"])
+    assert len(policy.downstream_processors) == 1
+    assert seen == [
+        ("pre", "raw"),
+        ("processor-before", "raw|pre"),
+        ("downstream", "raw|pre|stack"),
+        ("processor-after", "clean"),
+        ("post", "raw"),
+    ]
+
+
 def test_metadata_policy_runs_postprocessor_after_downstream_with_original_text():
     seen = []
 
@@ -145,16 +183,16 @@ def test_artifact_guard_runs_before_metadata_core_and_adds_notice_after_it():
     ]
 
 
-def test_inventory_effect_postprocessor_preserves_qty_then_effect_order():
+def test_inventory_effect_postprocessor_preserves_qty_stack_then_effect_order():
     session = SimpleNamespace(
         mode="participants",
         participants={"1": {"user_id": 1, "name": "Ложечник"}},
     )
 
-    def stacked_apply(current_session, text):
+    def stack_processor(current_session, text, next_apply):
         return apply_stackable_metadata(
             dnd_campaign,
-            dnd_campaign._apply_metadata,
+            next_apply,
             current_session,
             text,
         )
@@ -167,7 +205,8 @@ def test_inventory_effect_postprocessor_preserves_qty_then_effect_order():
             original_text,
         )
 
-    policy = DndMetadataPolicy(stacked_apply)
+    policy = DndMetadataPolicy(dnd_campaign._apply_metadata)
+    policy.add_downstream_processor(stack_processor)
     policy.add_preprocessor(_expand_quantity_tags)
     policy.add_postprocessor(effect_postprocessor)
     tag = (
@@ -198,30 +237,34 @@ def test_metadata_configuration_keeps_one_stable_campaign_delegator():
 
 
 def test_inventory_metadata_extensions_use_policy_instead_of_monkeypatching_apply():
+    fun_source = (ROOT / "AI" / "dnd_inventory_fun.py").read_text(encoding="utf-8")
     reliability_source = (ROOT / "AI" / "dnd_inventory_reliability.py").read_text(encoding="utf-8")
     effects_source = (ROOT / "AI" / "dnd_inventory_effects.py").read_text(encoding="utf-8")
     guard_source = (ROOT / "AI" / "dnd_artifact_guard.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
     policy_source = (ROOT / "AI" / "dnd_metadata.py").read_text(encoding="utf-8")
-    fun_install = "install_fun_inventory(state_policy=campaign_state_policy)"
+    fun_install = "    install_fun_inventory(\n"
     effects_install = "    install_dnd_inventory_effects(\n"
 
+    assert "campaign._apply_metadata =" not in fun_source
     assert "campaign._apply_metadata =" not in reliability_source
     assert "campaign._apply_metadata =" not in effects_source
     assert "campaign._apply_metadata =" not in guard_source
+    assert "metadata_policy.add_downstream_processor(process_metadata)" in fun_source
     assert "metadata_policy.add_preprocessor(_expand_quantity_tags)" in reliability_source
     assert "metadata_policy.add_postprocessor(postprocess_metadata)" in effects_source
     assert "metadata_policy.add_around_processor(around_metadata)" in guard_source
     assert "campaign._apply_metadata =" in policy_source
-    assert "metadata_policy = DndMetadataPolicy(campaign._apply_metadata)" in runtime_source
-    assert "configure_dnd_metadata(campaign, metadata_policy)" in runtime_source
+    assert "metadata_policy = configure_dnd_metadata(" in runtime_source
+    assert "DndMetadataPolicy(campaign._apply_metadata)" in runtime_source
+    assert fun_install in runtime_source
+    assert "metadata_policy=metadata_policy" in runtime_source
     assert "install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)" in runtime_source
     assert effects_install in runtime_source
-    assert "metadata_policy=metadata_policy" in runtime_source
     assert "state_policy=campaign_state_policy" in runtime_source
     assert "install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)" in runtime_source
-    assert runtime_source.index(fun_install) < runtime_source.index(
-        "metadata_policy = DndMetadataPolicy(campaign._apply_metadata)"
+    assert runtime_source.index("metadata_policy = configure_dnd_metadata(") < runtime_source.index(
+        fun_install
     ) < runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)")
     assert runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)") < runtime_source.index(
         effects_install
