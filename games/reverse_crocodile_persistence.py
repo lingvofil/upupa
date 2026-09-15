@@ -9,6 +9,7 @@ import logging
 import time
 from pathlib import Path
 
+from core.json_repository import JsonFileRepository
 from games import crocodile
 from games import crocodile_persistence as base_persistence
 from games import reverse_crocodile as reverse
@@ -243,10 +244,7 @@ def persist_reverse_crocodile_sessions(*, force: bool = False) -> bool:
         return False
 
     path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(payload, encoding="utf-8")
-    temp_path.replace(path)
+    JsonFileRepository(path, indent=2).save(json.loads(payload))
     _last_payload = payload
     return True
 
