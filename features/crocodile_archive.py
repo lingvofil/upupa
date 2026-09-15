@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
 from pathlib import Path
 
 from aiogram.types import BufferedInputFile, InputMediaPhoto
 
+from core.json_repository import JsonFileRepository
 from core.paths import CROCODILE_STATE_PATH
 
 
@@ -31,10 +31,7 @@ def _load() -> list[dict]:
 
 
 def _save(rows: list[dict]) -> None:
-    GALLERY_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = MANIFEST_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, MANIFEST_PATH)
+    JsonFileRepository(MANIFEST_PATH, indent=2).save(rows)
 
 
 def _trim(rows: list[dict]) -> list[dict]:
