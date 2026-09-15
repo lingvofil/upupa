@@ -203,6 +203,7 @@ def test_inventory_metadata_extensions_use_policy_instead_of_monkeypatching_appl
     guard_source = (ROOT / "AI" / "dnd_artifact_guard.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
     policy_source = (ROOT / "AI" / "dnd_metadata.py").read_text(encoding="utf-8")
+    fun_install = "install_fun_inventory(state_policy=campaign_state_policy)"
 
     assert "campaign._apply_metadata =" not in reliability_source
     assert "campaign._apply_metadata =" not in effects_source
@@ -216,7 +217,7 @@ def test_inventory_metadata_extensions_use_policy_instead_of_monkeypatching_appl
     assert "install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)" in runtime_source
     assert "install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)" in runtime_source
     assert "install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)" in runtime_source
-    assert runtime_source.index("install_fun_inventory()") < runtime_source.index(
+    assert runtime_source.index(fun_install) < runtime_source.index(
         "metadata_policy = DndMetadataPolicy(campaign._apply_metadata)"
     ) < runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)")
     assert runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)") < runtime_source.index(
