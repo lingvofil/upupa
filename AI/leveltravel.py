@@ -14,6 +14,7 @@ from AI.leveltravel_parsing import (
 from AI.leveltravel_presentation import format_tours_message
 from AI.leveltravel_provider import deep_parse_date, quick_price_scan
 from AI.leveltravel_ranking import DESTINATION_INFO, analyze_tours_with_ai
+from AI.leveltravel_screenshots import capture_hotel_screenshots
 from AI.leveltravel_search import direct_deep_search, nights_match, two_phase_search
 from AI.leveltravel_search_plan import (
     LEVELTRAVEL_WEB_URL,
