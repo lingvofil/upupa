@@ -22,6 +22,7 @@ from AI.leveltravel_search_plan import (
     generate_date_range_list,
     generate_full_month_dates,
 )
+from AI.leveltravel_service import execute_search, rank_search_results
 from AI.leveltravel_transport import send_search_results
 from core.settings import ADMIN_ID
 
@@ -89,13 +90,7 @@ async def process_search_command(message: types.Message, command_type: str = "т
                 parse_mode="HTML",
             )
 
-            result = await direct_deep_search(
-                countries=params["countries"],
-                start_date=start_date,
-                adults=params["adults"],
-                nights=params["nights"],
-                search_type=search_type,
-            )
+            result = await execute_search(params, search_type)
 
             hotels = result["hotels"]
             date_stats = result["date_stats"]
@@ -116,7 +111,7 @@ async def process_search_command(message: types.Message, command_type: str = "т
                 parse_mode="HTML",
             )
 
-            best_tours = await analyze_tours_with_ai(hotels, date_stats, params)
+            best_tours = await rank_search_results(hotels, date_stats, params)
         else:
             if len(params["countries"]) > 1:
                 await message.reply(
@@ -152,13 +147,7 @@ async def process_search_command(message: types.Message, command_type: str = "т
                 parse_mode="HTML",
             )
 
-            result = await two_phase_search(
-                country_code=country["code"],
-                month=params.get("month"),
-                adults=params["adults"],
-                nights=params["nights"],
-                search_type=search_type,
-            )
+            result = await execute_search(params, search_type)
 
             hotels = result["hotels"]
             date_stats = result["date_stats"]
@@ -180,7 +169,7 @@ async def process_search_command(message: types.Message, command_type: str = "т
                 parse_mode="HTML",
             )
 
-            best_tours = await analyze_tours_with_ai(hotels, date_stats, params)
+            best_tours = await rank_search_results(hotels, date_stats, params)
 
         await send_search_results(
             message,
