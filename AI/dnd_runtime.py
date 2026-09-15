@@ -32,6 +32,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
+    from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
@@ -43,6 +44,8 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
     install_fun_inventory()
+    metadata_policy = DndMetadataPolicy(campaign._apply_metadata)
+    configure_dnd_metadata(campaign, metadata_policy)
     inventory_context_policy = DndInventoryContextPolicy(render_fun_inventory_context)
     configure_dnd_inventory_context(campaign, inventory_context_policy)
     configure_dnd_inventory_transfer(router)
@@ -60,7 +63,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_two_heals_compat()
     install_dnd_death_legacy(router)
     install_dnd_epilogue_image(dnd)
-    install_dnd_inventory_reliability(dnd)
+    install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)
     install_dnd_inventory_effects(dnd)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
@@ -71,4 +74,5 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
     router._upupa_dnd_inventory_context_policy = inventory_context_policy
+    router._upupa_dnd_metadata_policy = metadata_policy
     router._upupa_dnd_runtime_configured = True
