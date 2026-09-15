@@ -373,7 +373,6 @@ def _install_session_schema_migration(campaign) -> None:
 def install_dnd_inventory_effects(dnd) -> None:
     """Install optional inventory properties after stacking and reliability wrappers."""
     from AI import dnd_campaign as campaign
-    from AI import dnd_state_commands as state_commands
 
     if getattr(campaign, "_upupa_dnd_inventory_effects_installed", False):
         return
@@ -390,7 +389,6 @@ def install_dnd_inventory_effects(dnd) -> None:
 
     campaign._apply_metadata = apply_metadata
     campaign._inventory_context = lambda session: _inventory_context(campaign, session)
-    state_commands._inventory_items = render_inventory_lines
 
     if INVENTORY_EFFECTS_MARKER not in campaign.RULES:
         campaign.RULES = f"{campaign.RULES}\n{INVENTORY_EFFECT_RULES}"
