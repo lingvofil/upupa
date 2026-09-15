@@ -2,13 +2,22 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from playwright.async_api import async_playwright
 from aiogram import types
 from aiogram.types import FSInputFile, InputMediaPhoto
 import json
 import os
 
+from AI.leveltravel_parsing import (
+    DESTINATION_MAPPING,
+    MONTH_MAPPING,
+    SEARCH_TYPE_HOTEL,
+    SEARCH_TYPE_TOUR,
+    calculate_nights,
+    parse_date_range,
+    parse_search_command,
+)
 from core.settings import ADMIN_ID
 from infrastructure.ai.clients import groq_ai
 
@@ -17,49 +26,6 @@ from infrastructure.ai.clients import groq_ai
 # =============================================================================
 
 LEVELTRAVEL_WEB_URL = "https://level.travel"
-
-# Типы поиска
-SEARCH_TYPE_TOUR = "tour"  # Тур с перелетом
-SEARCH_TYPE_HOTEL = "hotel"  # Только отель (без перелета)
-
-# Маппинг месяцев
-MONTH_MAPPING = {
-    "январь": 1, "января": 1,
-    "февраль": 2, "февраля": 2,
-    "март": 3, "марта": 3,
-    "апрель": 4, "апреля": 4,
-    "май": 5, "мая": 5,
-    "июнь": 6, "июня": 6,
-    "июль": 7, "июля": 7,
-    "август": 8, "августа": 8,
-    "сентябрь": 9, "сентября": 9,
-    "октябрь": 10, "октября": 10,
-    "ноябрь": 11, "ноября": 11,
-    "декабрь": 12, "декабря": 12,
-}
-
-# Маппинг направлений
-DESTINATION_MAPPING = {
-    "северный гоа": {"country_code": "IN", "location_slug": None},
-    "гоа": {"country_code": "IN", "location_slug": None},
-    "мальдивы": {"country_code": "MV", "location_slug": None},
-    "шри-ланка": {"country_code": "LK", "location_slug": None},
-    "шриланка": {"country_code": "LK", "location_slug": None},
-    "вьетнам": {"country_code": "VN", "location_slug": None},
-    "фукуок": {"country_code": "VN", "location_slug": "Phu.Quoc-VN"},
-    "нячанг": {"country_code": "VN", "location_slug": "Nha.Trang-VN"},
-    "турция": {"country_code": "TR", "location_slug": None},
-    "бали": {"country_code": "ID", "location_slug": None},
-    "индонезия": {"country_code": "ID", "location_slug": None},
-    "таиланд": {"country_code": "TH", "location_slug": None},
-    "пхукет": {"country_code": "TH", "location_slug": None},
-    "паттайя": {"country_code": "TH", "location_slug": None},
-    "оаэ": {"country_code": "AE", "location_slug": None},
-    "дубай": {"country_code": "AE", "location_slug": None},
-    "египет": {"country_code": "EG", "location_slug": None},
-    "хургада": {"country_code": "EG", "location_slug": None},
-    "шарм": {"country_code": "EG", "location_slug": None},
-}
 
 # Эвристики для AI анализа
 DESTINATION_INFO = {
@@ -73,156 +39,6 @@ DESTINATION_INFO = {
     "AE": {"party": False, "best_months": [10, 11, 12, 3, 4], "description": "небоскребы, шопинг, пляжи"},
     "EG": {"party": False, "best_months": [4, 5, 9, 10, 11], "description": "дайвинг, пустыня, история"},
 }
-
-
-def parse_date_range(text: str) -> Optional[Tuple[str, str]]:
-    """
-    Парсит диапазон дат из строки.
-    Поддерживаемые форматы:
-    - 18.05.26-25.05.26
-    - 18.05.2026-25.05.2026
-    - 18.05-25.05
-    
-    Returns: (start_date, end_date) в формате DD.MM.YYYY или None
-    """
-    # Паттерн для полной даты с годом
-    pattern_full = r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{2,4})'
-    # Паттерн для даты без года (используем текущий/следующий год)
-    pattern_short = r'(\d{1,2})\.(\d{1,2})\s*-\s*(\d{1,2})\.(\d{1,2})'
-    
-    match_full = re.search(pattern_full, text)
-    if match_full:
-        d1, m1, y1, d2, m2, y2 = match_full.groups()
-        # Если год двузначный, добавляем 2000
-        y1 = int(y1) if len(y1) == 4 else 2000 + int(y1)
-        y2 = int(y2) if len(y2) == 4 else 2000 + int(y2)
-        
-        try:
-            start = datetime(y1, int(m1), int(d1))
-            end = datetime(y2, int(m2), int(d2))
-            return (start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y"))
-        except ValueError:
-            return None
-    
-    match_short = re.search(pattern_short, text)
-    if match_short:
-        d1, m1, d2, m2 = match_short.groups()
-        current_year = datetime.now().year
-        
-        try:
-            start = datetime(current_year, int(m1), int(d1))
-            end = datetime(current_year, int(m2), int(d2))
-            
-            # Если даты в прошлом, берем следующий год
-            if start < datetime.now():
-                start = start.replace(year=current_year + 1)
-                end = end.replace(year=current_year + 1)
-            
-            return (start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y"))
-        except ValueError:
-            return None
-    
-    return None
-
-
-def calculate_nights(start_date: str, end_date: str) -> int:
-    """Вычисляет количество ночей между датами."""
-    try:
-        start = datetime.strptime(start_date, "%d.%m.%Y")
-        end = datetime.strptime(end_date, "%d.%m.%Y")
-        return (end - start).days
-    except Exception:
-        return 7  # Дефолт
-
-
-def parse_search_command(text: str, search_type: str = SEARCH_TYPE_TOUR) -> Dict:
-    """
-    Парсит команду поиска ("туры" или "отели").
-    
-    НОВОЕ: 
-    - Поддержка точных дат (18.05.26-25.05.26)
-    - Поддержка множественных направлений (фукуок гоа мальдивы)
-    - Разделение логики для туров и отелей
-    
-    Args:
-        text: текст команды
-        search_type: "tour" или "hotel"
-    
-    Возвращает:
-    {
-        "month": int или None,
-        "countries": [{"code": "IN", "name": "гоа"}, ...],
-        "adults": int,
-        "nights": int,
-        "exact_dates": {"start": "18.05.2026", "end": "25.05.2026"} или None,
-        "search_type": "tour" или "hotel"
-    }
-    """
-    text_lower = text.lower().strip()
-    
-    # Убираем префикс команды
-    if text_lower.startswith("туры"):
-        text_lower = text_lower[4:].strip()
-    elif text_lower.startswith("отели"):
-        text_lower = text_lower[5:].strip()
-    
-    params = {
-        "month": None,
-        "countries": [],
-        "adults": 2,
-        "nights": 10,
-        "exact_dates": None,
-        "search_type": search_type
-    }
-    
-    # 1. Проверяем наличие точных дат
-    date_range = parse_date_range(text_lower)
-    if date_range:
-        params["exact_dates"] = {"start": date_range[0], "end": date_range[1]}
-        params["nights"] = calculate_nights(date_range[0], date_range[1])
-        logging.info(f"Найдены точные даты: {date_range[0]} - {date_range[1]} ({params['nights']} ночей)")
-    
-    # 2. Ищем ночи (если не заданы через даты)
-    nights_match = re.search(r'(\d+)\s*(?:ночей|ночи|ночь|н\b)', text_lower)
-    if nights_match and not params["exact_dates"]:
-        params["nights"] = int(nights_match.group(1))
-        text_lower = text_lower.replace(nights_match.group(0), "")
-    
-    # 3. Поиск месяца (если нет точных дат)
-    if not params["exact_dates"]:
-        for word in text_lower.split():
-            if word in MONTH_MAPPING:
-                params["month"] = MONTH_MAPPING[word]
-                break
-    
-    # 4. Поиск ВСЕХ направлений в тексте
-    for dest_name in sorted(DESTINATION_MAPPING.keys(), key=len, reverse=True):
-        if dest_name in text_lower:
-            dest_meta = DESTINATION_MAPPING[dest_name]
-            code = dest_meta["country_code"]
-            location_slug = dest_meta.get("location_slug")
-
-            if location_slug is None and any(
-                c["code"] == code and c.get("location_slug") for c in params["countries"]
-            ):
-                continue
-
-            if not any(
-                c["code"] == code and c.get("location_slug") == location_slug
-                for c in params["countries"]
-            ):
-                params["countries"].append({
-                    "code": code,
-                    "name": dest_name,
-                    "location_slug": location_slug
-                })
-    
-    # 5. Поиск взрослых
-    numbers = re.findall(r'\b([1-9])\b', text_lower)
-    if numbers:
-        params["adults"] = int(numbers[0])
-    
-    return params
 
 
 def build_search_url(
@@ -436,7 +252,7 @@ async def capture_hotel_screenshots(
                     () => {
                         const selectors = [
                             '[class*="CookieConsent"]', 
-                            '[class*="WidgetContainer"]', 
+                            '[class*="WidgetContainer"]',
                             '#jivo-iframe-container',
                             '[class*="StickyButton"]',
                             '[class*="HeaderWrapper"]',
