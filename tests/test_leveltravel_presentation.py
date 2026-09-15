@@ -49,7 +49,7 @@ def test_format_tours_message_preserves_single_destination_layout():
         "• Максимум: 180,000 ₽\n"
         "\n\n<b>1. <a href='https://level.travel/hotels/test'>Test Hotel</a></b>\n"
         "🎯 <i>Value King</i>\n"
-        "⭐⭐⭐⭐ | 📅 18.05.2026-25.05.2026\n"
+        "⭐️⭐️⭐️⭐️ | 📅 18.05.2026-25.05.2026\n"
         "📊 Рейтинг Level.Travel: 8.7\n"
         "📍 Phu Quoc\n"
         "🤖 <i>Хороший баланс</i>\n"
