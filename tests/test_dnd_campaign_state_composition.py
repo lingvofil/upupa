@@ -23,7 +23,9 @@ def test_campaign_state_policy_persists_and_restores_artifact_awards():
     try:
         if hasattr(dnd_campaign, "_upupa_dnd_campaign_state_policy"):
             delattr(dnd_campaign, "_upupa_dnd_campaign_state_policy")
-        policy = _configure_artifact_awards(DndCampaignStatePolicy(original_ensure, original_state))
+        policy = _configure_artifact_awards(
+            DndCampaignStatePolicy(original_ensure, original_state, original_restore)
+        )
         assert configure_dnd_campaign_state(dnd_campaign, policy) is policy
 
         session = SimpleNamespace(artifact_awards={"1": ["Ботинок Истины"]})
@@ -31,11 +33,12 @@ def test_campaign_state_policy_persists_and_restores_artifact_awards():
         assert state["artifact_awards"] == {"1": ["Ботинок Истины"]}
 
         restored = SimpleNamespace()
-        original_restore(restored, state)
+        dnd_campaign._restore_state(restored, state)
         assert restored.artifact_awards == {"1": ["Ботинок Истины"]}
     finally:
         dnd_campaign._ensure = original_ensure
         dnd_campaign._state = original_state
+        dnd_campaign._restore_state = original_restore
         if previous_policy is None:
             if hasattr(dnd_campaign, "_upupa_dnd_campaign_state_policy"):
                 delattr(dnd_campaign, "_upupa_dnd_campaign_state_policy")
@@ -66,16 +69,45 @@ def test_campaign_state_configuration_is_idempotent():
     campaign = SimpleNamespace(
         _ensure=lambda _session: None,
         _state=lambda _session: {"base": True},
+        _restore_state=lambda _session, _data: None,
     )
-    first = DndCampaignStatePolicy(campaign._ensure, campaign._state)
+    first = DndCampaignStatePolicy(campaign._ensure, campaign._state, campaign._restore_state)
     configured = configure_dnd_campaign_state(campaign, first)
     ensure_delegator = campaign._ensure
     state_delegator = campaign._state
+    restore_delegator = campaign._restore_state
 
-    second = DndCampaignStatePolicy(lambda _session: None, lambda _session: {"other": True})
+    second = DndCampaignStatePolicy(
+        lambda _session: None,
+        lambda _session: {"other": True},
+        lambda _session, _data: None,
+    )
     assert configure_dnd_campaign_state(campaign, second) is configured
     assert campaign._ensure is ensure_delegator
     assert campaign._state is state_delegator
+    assert campaign._restore_state is restore_delegator
+
+
+def test_campaign_state_configuration_can_add_restore_delegator_later():
+    base_restore = lambda _session, _data: None
+    campaign = SimpleNamespace(
+        _ensure=lambda _session: None,
+        _state=lambda _session: {},
+        _restore_state=base_restore,
+    )
+    configured = configure_dnd_campaign_state(
+        campaign,
+        DndCampaignStatePolicy(campaign._ensure, campaign._state),
+    )
+    assert campaign._restore_state is base_restore
+
+    upgraded = configure_dnd_campaign_state(
+        campaign,
+        DndCampaignStatePolicy(campaign._ensure, campaign._state, campaign._restore_state),
+    )
+    assert upgraded is configured
+    assert configured.downstream_restore is base_restore
+    assert campaign._restore_state == configured.restore
 
 
 def test_fun_inventory_uses_state_policy_instead_of_state_monkeypatches():
@@ -89,7 +121,9 @@ def test_fun_inventory_uses_state_policy_instead_of_state_monkeypatches():
     assert 'state_policy.add_state_field("artifact_awards", _ensure_artifact_awards)' in fun_source
     assert "campaign._ensure = policy.ensure" in policy_source
     assert "campaign._state = policy.state" in policy_source
-    assert "campaign_state_policy = DndCampaignStatePolicy(campaign._ensure, campaign._state)" in runtime_source
+    assert "campaign._restore_state = policy.restore" in policy_source
+    assert "campaign_state_policy = DndCampaignStatePolicy(" in runtime_source
+    assert "campaign._restore_state," in runtime_source
     assert "configure_dnd_campaign_state(campaign, campaign_state_policy)" in runtime_source
     assert "install_fun_inventory(state_policy=campaign_state_policy)" in runtime_source
     assert runtime_source.index("configure_dnd_campaign_state(campaign, campaign_state_policy)") < runtime_source.index(
