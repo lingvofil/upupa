@@ -16,10 +16,18 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
-    from AI.dnd_inventory_effects import install_dnd_inventory_effects
-    from AI.dnd_inventory_fun import configure_dnd_inventory_transfer, install_fun_inventory
+    from AI.dnd_inventory_effects import (
+        install_dnd_inventory_effects,
+        render_inventory_lines as render_inventory_effect_lines,
+    )
+    from AI.dnd_inventory_fun import (
+        build_fun_inventory_state_view_policy,
+        configure_dnd_inventory_transfer,
+        install_fun_inventory,
+    )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
+    from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
 
@@ -31,6 +39,8 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # completion behavior explicit instead of mutating middleware classes.
     install_fun_inventory()
     configure_dnd_inventory_transfer(router)
+    state_view_policy = build_fun_inventory_state_view_policy()
+    configure_dnd_state_commands(router, view_policy=state_view_policy)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
@@ -44,6 +54,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_epilogue_image(dnd)
     install_dnd_inventory_reliability(dnd)
     install_dnd_inventory_effects(dnd)
+    state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
     install_dnd_artifact_guard(dnd)
     configure_dnd_any_bot_replies(router)

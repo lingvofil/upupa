@@ -1,6 +1,7 @@
 """Read-only player-facing access to persistent DnD campaign state."""
 from __future__ import annotations
 
+from contextvars import ContextVar
 import logging
 import re
 
@@ -19,6 +20,7 @@ _LEGACY_END_ALIASES = {"упупа заверши историю", "упупа �
 _LOBBY_MENU_ALIASES = {"днд"}
 _LOBBY_START_ALIASES = {"днд старт"}
 _NPC_TAG_RE = re.compile(r"\[NPC:[^\]]*\]", re.I)
+_ACTIVE_STATE_VIEW_POLICY = ContextVar("dnd_state_view_policy", default=None)
 
 _STATE_LABELS = {
     "WAITING_MODE": "выбираем режим егры",
@@ -161,10 +163,34 @@ def _format_reputation(values) -> str | None:
     return "; ".join(reputation[-6:])
 
 
+class DndStateViewPolicy:
+    """Formatting hooks for state commands, supplied explicitly by the runtime."""
+
+    def __init__(self, *, inventory_items_renderer=None, inventory_footer: str | None = None):
+        self.inventory_items_renderer = inventory_items_renderer or _inventory_items
+        self.inventory_footer = str(inventory_footer or "").strip()
+
+    def render_inventory_items(self, items) -> list[str]:
+        return list(self.inventory_items_renderer(items) or [])
+
+    def decorate_inventory(self, text: str) -> str:
+        if not self.inventory_footer:
+            return text
+        return f"{text}\n\n{self.inventory_footer}"
+
+
+def _view_policy(view_policy=None) -> DndStateViewPolicy:
+    if view_policy is not None:
+        return view_policy
+    active = _ACTIVE_STATE_VIEW_POLICY.get()
+    return active if active is not None else DndStateViewPolicy()
+
+
 def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     key = str(int(user_id))
+    view = _view_policy()
 
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         profile = (getattr(session, "character_profiles", {}) or {}).get(key) or {}
@@ -181,7 +207,7 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
         if rep_text:
             lines.append(f"🏷 Репутация: {rep_text}")
         lines.append("🎒 Инвентарь")
-        lines.extend(_inventory_items(items) or ["Пусто."])
+        lines.extend(view.render_inventory_items(items) or ["Пусто."])
         return "\n".join(lines)
 
     history = campaign._player_history(chat_id, user_id)
@@ -201,7 +227,7 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
     if adventures:
         lines.append(f"📚 Завершённых приключений в памяти: {len(adventures)}")
     lines.append("🎒 Инвентарь")
-    lines.extend(_inventory_items(history.get("inventory")) or ["Пусто."])
+    lines.extend(view.render_inventory_items(history.get("inventory")) or ["Пусто."])
     return "\n".join(lines)
 
 
@@ -223,6 +249,7 @@ def render_inventory(dnd, chat_id: int, user_id: int) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     key = str(int(user_id))
+    view = _view_policy()
 
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         items = (getattr(session, "inventories", {}) or {}).get(key) or []
@@ -230,13 +257,13 @@ def render_inventory(dnd, chat_id: int, user_id: int) -> str:
     else:
         history = campaign._player_history(chat_id, user_id)
         if not history:
-            return "🎒 Инвентарь пуст: сохранённых вещей у тебя в этом чате нет."
+            return view.decorate_inventory("🎒 Инвентарь пуст: сохранённых вещей у тебя в этом чате нет.")
         items = history.get("inventory") or []
         lines = ["🎒 Инвентарь", "Источник: последнее сохранённое состояние."]
 
-    formatted = _inventory_items(items)
+    formatted = view.render_inventory_items(items)
     lines.extend(formatted or ["Пусто. Даже фантика не нажили."])
-    return "\n".join(lines)
+    return view.decorate_inventory("\n".join(lines))
 
 
 def _format_npcs(npc_memory: dict | None, *, limit: int = 12) -> list[str]:
@@ -425,20 +452,35 @@ def render_status(dnd, chat_id: int) -> str:
     return "\n\n".join(blocks)
 
 
-def render_state_command(kind: str, dnd, chat_id: int, user_id: int, user_name: str | None = None) -> str:
-    if kind == "hero":
-        return render_hero(dnd, chat_id, user_id, user_name)
-    if kind == "inventory":
-        return render_inventory(dnd, chat_id, user_id)
-    if kind == "npcs":
-        return render_npcs(dnd, chat_id)
-    if kind == "status":
-        return render_status(dnd, chat_id)
-    raise ValueError(f"Unknown DnD state command: {kind}")
+def render_state_command(
+    kind: str,
+    dnd,
+    chat_id: int,
+    user_id: int,
+    user_name: str | None = None,
+    *,
+    view_policy=None,
+) -> str:
+    token = _ACTIVE_STATE_VIEW_POLICY.set(_view_policy(view_policy))
+    try:
+        if kind == "hero":
+            return render_hero(dnd, chat_id, user_id, user_name)
+        if kind == "inventory":
+            return render_inventory(dnd, chat_id, user_id)
+        if kind == "npcs":
+            return render_npcs(dnd, chat_id)
+        if kind == "status":
+            return render_status(dnd, chat_id)
+        raise ValueError(f"Unknown DnD state command: {kind}")
+    finally:
+        _ACTIVE_STATE_VIEW_POLICY.reset(token)
 
 
 class DndStateCommandMiddleware(BaseMiddleware):
     """Intercept state queries before DnD's action collector can treat them as moves."""
+
+    def __init__(self, view_policy=None):
+        self.view_policy = _view_policy(view_policy)
 
     async def __call__(self, handler, event, data):
         kind = command_kind(getattr(event, "text", None))
@@ -478,14 +520,18 @@ class DndStateCommandMiddleware(BaseMiddleware):
             int(chat.id),
             int(user.id),
             getattr(user, "first_name", None),
+            view_policy=self.view_policy,
         )
         await event.answer(text)
         return None
 
 
-def configure_dnd_state_commands(dnd_router) -> None:
+def configure_dnd_state_commands(dnd_router, *, view_policy=None) -> None:
     """Register state access before DnD's action collector can treat them as moves."""
     if getattr(dnd_router, "_upupa_dnd_state_commands_configured", False):
         return
-    dnd_router.message.outer_middleware(DndStateCommandMiddleware())
+    middleware = DndStateCommandMiddleware(view_policy=view_policy)
+    dnd_router.message.outer_middleware(middleware)
+    dnd_router._upupa_dnd_state_command_middleware = middleware
+    dnd_router._upupa_dnd_state_view_policy = middleware.view_policy
     dnd_router._upupa_dnd_state_commands_configured = True
