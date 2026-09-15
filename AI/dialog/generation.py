@@ -127,6 +127,15 @@ def _format_reply_author(message: types.Message) -> str:
     return "неизвестный автор"
 
 
+def _get_attached_bot_id(message: types.Message) -> int | None:
+    """Return the Telegram ID of the bot attached to an incoming Message, if available."""
+    try:
+        attached_bot = message.bot
+    except (AttributeError, RuntimeError):
+        return None
+    return getattr(attached_bot, "id", None)
+
+
 def _format_poll_reply_context(poll) -> str:
     question = (getattr(poll, "question", None) or "").strip()
     options = list(getattr(poll, "options", None) or [])
@@ -160,7 +169,20 @@ def format_reply_context(message: types.Message) -> str:
     if not replied:
         return ""
 
+    reply_author = getattr(replied, "from_user", None)
+    bot_user_id = _get_attached_bot_id(message)
+    is_own_bot_message = (
+        reply_author is not None
+        and bot_user_id is not None
+        and getattr(reply_author, "id", None) == bot_user_id
+    )
+
     parts = [f"Автор сообщения: {_format_reply_author(replied)}"]
+    if is_own_bot_message:
+        parts.append(
+            "Важно: это сообщение написал ты сам — текущий Telegram-бот Упупа, "
+            "а не пользователь чата и не другой бот."
+        )
 
     text = (getattr(replied, "text", None) or getattr(replied, "caption", None) or "").strip()
     if text:
