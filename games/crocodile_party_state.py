@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.json_repository import JsonFileRepository
 from core.paths import CROCODILE_STATE_PATH
 from games import crocodile, crocodile_modes
 from games import crocodile_persistence as persistence
@@ -75,18 +76,16 @@ def _party_payload() -> dict[str, Any]:
 
 def persist_party_modes(*, force: bool = False) -> bool:
     global _last_payload
+    serializable = _json_safe(_party_payload())
     payload = json.dumps(
-        _json_safe(_party_payload()),
+        serializable,
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
     )
     if not force and payload == _last_payload:
         return False
-    PARTY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PARTY_STATE_PATH.with_suffix(PARTY_STATE_PATH.suffix + ".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(PARTY_STATE_PATH)
+    JsonFileRepository(PARTY_STATE_PATH, indent=2).save(serializable)
     _last_payload = payload
     return True
 
