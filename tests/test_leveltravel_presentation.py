@@ -94,6 +94,68 @@ def test_format_tours_message_preserves_multi_destination_hotel_header():
     assert "💰 <b>55,000 ₽</b> ✅" in result
 
 
+def test_format_search_header_matches_transport_layout():
+    params = {
+        "search_type": leveltravel.SEARCH_TYPE_TOUR,
+        "country_name": "гоа",
+        "adults": 2,
+        "nights": 8,
+    }
+    date_stats = {
+        "searched_dates": 11,
+        "min_price": 91000,
+        "median_price": 105500,
+        "max_price": 140000,
+    }
+
+    assert leveltravel_presentation.format_search_header(
+        params,
+        date_stats,
+        include_screenshot_note=True,
+    ) == (
+        "🏖 <b>Топ подборка: Гоа</b>\n"
+        "📍 Тип: Туры\n"
+        "👥 2 взр. | 🌙 8 ночей\n\n"
+        "📊 <b>Анализ:</b>\n"
+        "• Проверено дат: 11\n"
+        "• Минимум: 91,000 ₽\n"
+        "• Медиана: 105,500 ₽\n"
+        "• Максимум: 140,000 ₽\n\n"
+        "📸 В каждом сообщении 2 скриншота:\n"
+        "1. Календарь цен\n"
+        "2. Варианты номеров\n"
+    )
+
+
+def test_format_tour_card_matches_transport_layout():
+    params = {"nights": 7}
+    tour = {
+        "hotel_name": "Hotel",
+        "link": "https://level.travel/hotels/hotel",
+        "scenario": "Дешевле медианы",
+        "country_name": "фукуок",
+        "date": "18.05.2026",
+        "nights": 7,
+        "stars": 3,
+        "rating": 8.2,
+        "location": "Long Beach",
+        "ai_reason": "Хорошая цена",
+        "price": 99000,
+        "price_vs_median": -7,
+    }
+
+    assert leveltravel_presentation.format_tour_card(tour, 2, params) == (
+        "<b>2. <a href='https://level.travel/hotels/hotel'>Hotel</a></b>\n"
+        "🎯 <i>Дешевле медианы</i>\n"
+        "🌍 Фукуок\n"
+        "⭐️⭐️⭐️ | 📅 18.05.2026-25.05.2026\n"
+        "📊 Рейтинг Level.Travel: 8.2\n"
+        "📍 Long Beach\n"
+        "🤖 <i>Хорошая цена</i>\n"
+        "💰 <b>99,000 ₽</b> ✅"
+    )
+
+
 def test_leveltravel_reexports_presentation_api():
     assert (
         leveltravel.format_tours_message
