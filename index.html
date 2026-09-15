@@ -370,6 +370,9 @@
   let undoStack = [];
   let redoStack = [];
   let isDirty = false;
+  let hasJoinedRoom = false;
+  let roomReady = false;
+  let activeUiMode = "draw";
   let canvasZoom = MIN_CANVAS_ZOOM;
   let canvasPanX = 0;
   let canvasPanY = 0;
@@ -560,6 +563,108 @@
     return pCanvas.toDataURL("image/jpeg", 0.65);
   }
 
+  function isTelephoneRoom() {
+    return /_t\d+$/.test(String(roomId || ""));
+  }
+
+  function configureTurnFinishButton() {
+    const finishButton = document.querySelector('button[onclick="finish()"]');
+    if (!finishButton || !isTelephoneRoom()) return;
+    finishButton.textContent = "✅ Завершить ход";
+    finishButton.setAttribute("aria-label", "Завершить свой ход");
+    finishButton.classList.remove("btn-red");
+    finishButton.style.background = "#34c759";
+    finishButton.style.color = "#fff";
+  }
+
+  function activateTelephoneTextMode(response) {
+    activeUiMode = "text";
+    roomReady = true;
+    hasJoinedRoom = true;
+    canvas.style.display = "none";
+    const toolbar = document.getElementById("toolbar");
+    if (toolbar) toolbar.style.display = "none";
+
+    let panel = document.getElementById("telephoneTextPanel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "telephoneTextPanel";
+      panel.style.cssText = "min-height:100vh;background:#222;color:#fff;padding:20px;display:flex;flex-direction:column;gap:14px;font-family:system-ui,-apple-system,sans-serif;overflow:auto";
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.textContent = response.prompt || "Напиши ответ";
+    title.style.cssText = "font-size:20px;font-weight:800;line-height:1.3";
+    panel.appendChild(title);
+
+    if (response.reference_image) {
+      const img = document.createElement("img");
+      img.src = response.reference_image;
+      img.alt = "Предыдущий рисунок";
+      img.style.cssText = "width:100%;max-height:58vh;object-fit:contain;background:#fff;border-radius:14px";
+      panel.appendChild(img);
+    }
+
+    const input = document.createElement("textarea");
+    input.maxLength = 120;
+    input.rows = 3;
+    input.placeholder = "Пиши сюда…";
+    input.style.cssText = "width:100%;font-size:18px;padding:14px;border-radius:12px;border:0;resize:none;user-select:text;-webkit-user-select:text";
+    panel.appendChild(input);
+
+    const submit = document.createElement("button");
+    submit.textContent = "✅ Завершить ход";
+    submit.style.cssText = "font-size:18px;font-weight:800;padding:14px;border:0;border-radius:12px;background:#34c759;color:#fff";
+    panel.appendChild(submit);
+    submit.onclick = () => {
+      const text = input.value.trim();
+      if (!text) {
+        showTelegramAlert("Сначала что-нибудь напиши.");
+        return;
+      }
+      submit.disabled = true;
+      socket.emit("submit_text", { room: roomId, text: text }, (result) => {
+        if (result && result.ok) {
+          closeWebApp();
+          return;
+        }
+        submit.disabled = false;
+        showTelegramAlert((result && result.error) || "Не удалось отправить ответ.");
+      });
+    };
+    setTimeout(() => input.focus(), 100);
+  }
+
+  function restoreServerCanvas(imageData) {
+    return new Promise((resolve) => {
+      if (!imageData) {
+        resolve(false);
+        return;
+      }
+
+      resize();
+      const image = new Image();
+      image.onload = () => {
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+        resetHistory();
+        activeUiMode = "draw";
+        isDirty = false;
+        roomReady = true;
+        hasJoinedRoom = true;
+        resolve(true);
+      };
+      image.onerror = () => resolve(false);
+      image.src = imageData;
+    });
+  }
+
   // --- SOCKET ---
   // Start with HTTP polling and upgrade to WebSocket when the Telegram WebView/network
   // supports it. WebSocket-only mode was flaky on some mobile launches.
@@ -584,8 +689,37 @@
         socket.disconnect();
         return;
       }
-      // Publish the actual local canvas after every reconnect. This also repairs
-      // a preview that stayed blank while the connection was unavailable.
+
+      configureTurnFinishButton();
+      const nextUiMode = response.ui_mode === "text" ? "text" : "draw";
+      if (nextUiMode === "text") {
+        activeUiMode = "text";
+        roomReady = true;
+        if (!hasJoinedRoom || !document.getElementById("telephoneTextPanel")) {
+          activateTelephoneTextMode(response);
+        } else {
+          hasJoinedRoom = true;
+        }
+        return;
+      }
+
+      activeUiMode = "draw";
+      if (!hasJoinedRoom) {
+        roomReady = false;
+        restoreServerCanvas(response.image).then((restored) => {
+          if (!restored) {
+            console.error("Failed to restore active canvas");
+            showTelegramAlert("Не удалось восстановить текущий рисунок. Открой холст ещё раз.");
+            socket.disconnect();
+            return;
+          }
+          if (response.word) showWordPopup(response.word);
+        });
+        return;
+      }
+
+      // A reconnect inside the same already-restored WebApp keeps local strokes.
+      roomReady = true;
       isDirty = true;
       sendSnap(true);
     });
@@ -596,8 +730,8 @@
     if (snapTimeout) clearTimeout(snapTimeout);
     snapTimeout = null;
     snapInFlight = false;
-    // Never lose a pending drawing because the transport disappeared mid-snapshot.
-    isDirty = true;
+    // Never lose pending drawing changes because the transport disappeared.
+    if (activeUiMode === "draw") isDirty = true;
   });
 
   socket.on("connect_error", (err) => {
@@ -796,6 +930,10 @@
   let snapTimeout = null;
 
   function sendSnap(force = false) {
+    if (!roomReady || activeUiMode !== "draw") {
+      console.log("Skip snap: canvas not ready");
+      return;
+    }
     if (!socket.connected) {
       console.log("Skip snap: no socket");
       return;
@@ -867,6 +1005,7 @@
   }
 
   function beginStroke(clientX, clientY) {
+    if (!roomReady || activeUiMode !== "draw") return;
     drawing = true;
     strokeChanged = false;
     last = getPosFromClient(clientX, clientY);
@@ -1143,6 +1282,10 @@
   };
 
   window.finish = () => {
+    if (!roomReady || activeUiMode !== "draw") {
+      showTelegramAlert("Рисунок ещё восстанавливается.");
+      return;
+    }
     const img = canvas.toDataURL("image/jpeg", 0.85);
     socket.emit("final_frame", { room: roomId, image: img });
     setTimeout(closeWebApp, 500);
