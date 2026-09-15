@@ -27,6 +27,7 @@ DND_GEMINI_QUEUE_TIMEOUT_SECONDS = 5.0
 DND_GEMINI_ATTEMPTS = 2
 DND_GEMINI_CIRCUIT_SECONDS = 45.0
 DND_GROQ_FALLBACK_TIMEOUT_SECONDS = 18.0
+DND_GROQ_HTTP_TIMEOUT_SECONDS = 15.0
 DND_AUX_HTTP_TIMEOUT_MS = 12_000
 DND_AUX_GOVERNOR_TIMEOUT_SECONDS = 14.0
 DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
@@ -348,6 +349,8 @@ def _run_groq_sync(
             fallback_prompt,
             max_tokens=max_tokens,
             temperature=DND_GROQ_FALLBACK_TEMPERATURE,
+            max_retries=0,
+            request_timeout_seconds=DND_GROQ_HTTP_TIMEOUT_SECONDS,
         )
     text = str(text or "").strip()
     if not text or text == "Ключ Groq не настроен":
