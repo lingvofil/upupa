@@ -48,6 +48,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_state_commands import configure_dnd_state_commands
+    from AI.dnd_turn_priority import configure_dnd_turn_priority
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
 
@@ -77,9 +78,12 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy = build_fun_inventory_state_view_policy()
     configure_dnd_state_commands(router, view_policy=state_view_policy)
 
-    # Install the bounded provider path before completion/campaign wrappers
-    # capture generate_session_response, so every later DnD layer inherits it.
+    # Install the bounded provider path first. Turn-priority is deliberately
+    # installed before campaign wrapping: campaign will append its large state
+    # context, then this inner wrapper re-appends the actual current actions at
+    # the very end seen by Gemini/Groq.
     configure_dnd_generation_resilience(dnd)
+    configure_dnd_turn_priority(dnd)
     install_dnd_group_action_resilience(dnd)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
