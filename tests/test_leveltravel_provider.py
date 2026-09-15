@@ -1,4 +1,4 @@
-import pytest
+import asyncio
 
 from AI import leveltravel, leveltravel_provider
 
@@ -95,17 +95,18 @@ def _install_fake_playwright(monkeypatch, evaluate_result):
     return page, context, browser, chromium
 
 
-@pytest.mark.asyncio
-async def test_quick_price_scan_uses_search_plan_and_closes_browser(monkeypatch):
+def test_quick_price_scan_uses_search_plan_and_closes_browser(monkeypatch):
     page, context, browser, chromium = _install_fake_playwright(monkeypatch, 123456)
 
-    price = await leveltravel_provider.quick_price_scan(
-        "VN",
-        "18.05.2026",
-        2,
-        7,
-        leveltravel.SEARCH_TYPE_TOUR,
-        destination_slug="Phu.Quoc-VN",
+    price = asyncio.run(
+        leveltravel_provider.quick_price_scan(
+            "VN",
+            "18.05.2026",
+            2,
+            7,
+            leveltravel.SEARCH_TYPE_TOUR,
+            destination_slug="Phu.Quoc-VN",
+        )
     )
 
     assert price == 123456
@@ -119,8 +120,7 @@ async def test_quick_price_scan_uses_search_plan_and_closes_browser(monkeypatch)
     assert browser.closed is True
 
 
-@pytest.mark.asyncio
-async def test_deep_parse_date_returns_provider_rows_and_scrolls(monkeypatch):
+def test_deep_parse_date_returns_provider_rows_and_scrolls(monkeypatch):
     rows = [
         {
             "hotel_name": "Test Hotel",
@@ -134,13 +134,15 @@ async def test_deep_parse_date_returns_provider_rows_and_scrolls(monkeypatch):
     ]
     page, context, browser, _ = _install_fake_playwright(monkeypatch, rows)
 
-    result = await leveltravel_provider.deep_parse_date(
-        "VN",
-        "18.05.2026",
-        2,
-        7,
-        leveltravel.SEARCH_TYPE_HOTEL,
-        destination_slug="Phu.Quoc-VN",
+    result = asyncio.run(
+        leveltravel_provider.deep_parse_date(
+            "VN",
+            "18.05.2026",
+            2,
+            7,
+            leveltravel.SEARCH_TYPE_HOTEL,
+            destination_slug="Phu.Quoc-VN",
+        )
     )
 
     assert result == rows
