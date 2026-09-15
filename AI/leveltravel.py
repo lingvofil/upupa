@@ -3,7 +3,6 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-from playwright.async_api import async_playwright
 from aiogram import types
 from aiogram.types import FSInputFile, InputMediaPhoto
 import json
@@ -19,6 +18,7 @@ from AI.leveltravel_parsing import (
     parse_search_command,
 )
 from AI.leveltravel_provider import deep_parse_date, quick_price_scan
+from AI.leveltravel_screenshots import capture_hotel_screenshots
 from AI.leveltravel_search_plan import (
     LEVELTRAVEL_WEB_URL,
     build_search_url,
@@ -44,171 +44,6 @@ DESTINATION_INFO = {
     "AE": {"party": False, "best_months": [10, 11, 12, 3, 4], "description": "небоскребы, шопинг, пляжи"},
     "EG": {"party": False, "best_months": [4, 5, 9, 10, 11], "description": "дайвинг, пустыня, история"},
 }
-
-
-async def capture_hotel_screenshots(
-    hotel_link: str,
-    hotel_name: str,
-    nights: int,
-    search_type: str = SEARCH_TYPE_TOUR
-) -> List[str]:
-    """Создает ДВА скриншота: календарь и варианты номеров."""
-    paths = []
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                viewport={'width': 1920, 'height': 1080},
-                locale='ru-RU',
-                timezone_id='Europe/Moscow'
-            )
-            page = await context.new_page()
-            
-            try:
-                logging.info(f"Создаю скриншоты для {hotel_name} (тип: {search_type})")
-                await page.goto(hotel_link, timeout=60000, wait_until='domcontentloaded')
-                
-                # Скрываем все лишнее
-                await page.evaluate("""
-                    () => {
-                        const selectors = [
-                            '[class*="CookieConsent"]', 
-                            '[class*="WidgetContainer"]',
-                            '#jivo-iframe-container',
-                            '[class*="StickyButton"]',
-                            '[class*="HeaderWrapper"]',
-                            '[class*="StickyFilter"]',
-                            '[class*="StickyPrice"]',
-                            '[class*="Floating"]'
-                        ];
-                        selectors.forEach(s => {
-                            const el = document.querySelector(s);
-                            if (el) el.style.display = 'none';
-                        });
-                    }
-                """)
-
-                try:
-                    await page.wait_for_selector(
-                        '[class*="Calendar"], [class*="PriceGrid"], [class*="HotelHeader"], .hotel-content', 
-                        timeout=20000
-                    )
-                except Exception:
-                    logging.warning(f"Контент для {hotel_name} не найден по селекторам")
-                
-                await page.wait_for_timeout(2000)
-                
-                # СКРИНШОТ 1: Календарь / общий вид
-                await page.evaluate("""
-                    () => {
-                        const target = document.querySelector('[class*="Calendar"]') || 
-                                       document.querySelector('[class*="PriceGrid"]') ||
-                                       document.querySelector('[class*="HotelHeader"]');
-                        if (target) {
-                            target.scrollIntoView({ behavior: 'auto', block: 'center' });
-                        }
-                    }
-                """)
-                await page.wait_for_timeout(1000)
-
-                screenshots_dir = "/tmp/tour_screenshots"
-                os.makedirs(screenshots_dir, exist_ok=True)
-                safe_name = re.sub(r'[^\w\s-]', '', hotel_name)[:50]
-                
-                path1 = f"{screenshots_dir}/{safe_name}_1_calendar.png"
-                await page.screenshot(path=path1, full_page=False, type='png')
-                paths.append(path1)
-                path2 = f"{screenshots_dir}/{safe_name}_2_rooms.png"
-
-                # --- НАЧАЛО БЛОКА ВТОРОГО СКРИНШОТА (FIXED) ---
-
-                # 1. Увеличиваем высоту
-                await page.set_viewport_size({'width': 1920, 'height': 2000})
-
-                # 2. Ждем исчезновения скелетонов/загрузчиков (КРИТИЧЕСКИ ВАЖНО)
-                # Это предотвращает ошибку "Element is not attached"
-                try:
-                    await page.wait_for_selector(
-                        '[class*="Skeleton"], [class*="Loader"], [class*="Placeholder"]', 
-                        state='detached', 
-                        timeout=5000
-                    )
-                except Exception:
-                    pass # Если скелетонов нет, идем дальше
-
-                # 3. Определяем селектор и ждем его появления
-                target_selector = 'article[class*="HotelRoomCard_roomCard"]'
-                try:
-                    # Ждем именно появления элемента в DOM
-                    await page.wait_for_selector(target_selector, state='attached', timeout=20000)
-                except Exception:
-                    # Фолбек, если селектор сменился
-                    target_selector = 'div[class*="HotelRoom"]:not([class*="Container"])'
-
-                # 4. Скрываем шапку через CSS (безопаснее, чем remove())
-                # display: none !important гарантирует, что шапка исчезнет визуально, но не сломает скрипты сайта
-                await page.add_style_tag(content="""
-                    header, [class*="Header"], [class*="Sticky"], [class*="Filter"], [class*="Head"], #header {
-                        display: none !important;
-                        opacity: 0 !important;
-                        pointer-events: none !important;
-                    }
-                """)
-                
-                # Даем браузеру время применить стили
-                await page.wait_for_timeout(500)
-
-                # 5. Получаем свежий хендл элемента
-                element = await page.query_selector(target_selector)
-                
-                if element:
-                    # Используем JS Scroll вместо Playwright scroll (он надежнее при динамике)
-                    await page.evaluate("el => el.scrollIntoView({block: 'center'})", element)
-                    
-                    # Ждем подгрузки картинок
-                    await page.wait_for_timeout(1500)
-
-                    # Получаем координаты СВЕЖЕГО элемента
-                    box = await element.bounding_box()
-                    
-                    if box:
-                        # Делаем скриншот с обрезкой (Clip)
-                        # box['y'] - это точная координата верха карточки
-                        await page.screenshot(
-                            path=path2,
-                            full_page=False,
-                            clip={
-                                'x': 0,
-                                'y': box['y'],    # Режем строго по верху карточки
-                                'width': 1920,
-                                'height': 1500
-                            }
-                        )
-                        paths.append(path2)
-                    else:
-                        logging.warning("Не удалось получить координаты bounding_box")
-                        # Аварийный вариант
-                        await page.screenshot(path=path2, full_page=False)
-                        paths.append(path2)
-                else:
-                    logging.warning(f"Элемент {target_selector} не найден после ожидания")
-
-                # Возвращаем viewport
-                await page.set_viewport_size({'width': 1920, 'height': 1080})
-
-                # --- КОНЕЦ БЛОКА ---
-                
-                logging.info(f"Скриншоты созданы: {len(paths)}")
-                return paths
-                
-            finally:
-                await context.close()
-                await browser.close()
-                
-    except Exception as e:
-        logging.error(f"Ошибка захвата экрана для {hotel_name}: {e}")
-        return paths
 
 
 def nights_match(tour_nights: int, target: int) -> bool:
