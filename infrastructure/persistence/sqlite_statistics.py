@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -70,7 +71,7 @@ class SQLiteStatisticsRepository:
         )
 
     def init_schema(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
@@ -108,7 +109,7 @@ class SQLiteStatisticsRepository:
         model_name: str,
         request_type: str,
     ) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO model_stats (chat_id, user_id, model_name, request_type)
@@ -127,7 +128,7 @@ class SQLiteStatisticsRepository:
         user_name: str,
         user_username: str | None,
     ) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO message_stats
@@ -152,7 +153,7 @@ class SQLiteStatisticsRepository:
         active_since: datetime,
     ) -> dict[int, datetime]:
         """Return the latest group-message timestamp for recently active chats."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 """
                 SELECT chat_id, MAX(message_timestamp)
@@ -202,7 +203,7 @@ class SQLiteStatisticsRepository:
         return f"User {user_id}"
 
     def get_stats(self, period_hours: int | None = None) -> dict[str, dict]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             params: list[Any] = []
             time_filter = ""
             if period_hours is not None:
@@ -278,7 +279,7 @@ class SQLiteStatisticsRepository:
             time_filter = "WHERE message_timestamp >= ?"
             params.append(datetime.now() - timedelta(hours=period_hours))
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 f"""
                 SELECT strftime('%H', message_timestamp), COUNT(*)
