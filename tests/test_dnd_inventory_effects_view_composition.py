@@ -35,10 +35,11 @@ def test_inventory_effect_renderer_works_as_explicit_state_view_dependency():
 def test_inventory_effects_do_not_mutate_state_command_renderer():
     effects_source = (ROOT / "AI" / "dnd_inventory_effects.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+    effects_install = "install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)"
 
     assert "state_commands._inventory_items =" not in effects_source
     assert "from AI import dnd_state_commands as state_commands" not in effects_source
     assert "state_view_policy.inventory_items_renderer = render_inventory_effect_lines" in runtime_source
-    assert runtime_source.index("install_dnd_inventory_effects(dnd)") < runtime_source.index(
+    assert runtime_source.index(effects_install) < runtime_source.index(
         "state_view_policy.inventory_items_renderer = render_inventory_effect_lines"
     )
