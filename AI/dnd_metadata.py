@@ -3,22 +3,32 @@ from __future__ import annotations
 
 
 class DndMetadataPolicy:
-    """Apply ordered text preprocessors before the captured metadata parser."""
+    """Apply ordered text preprocessors and result postprocessors around metadata parsing."""
 
     def __init__(self, downstream):
         self.downstream = downstream
         self.preprocessors = []
+        self.postprocessors = []
 
     def add_preprocessor(self, preprocessor):
         if preprocessor not in self.preprocessors:
             self.preprocessors.append(preprocessor)
         return self
 
+    def add_postprocessor(self, postprocessor):
+        if postprocessor not in self.postprocessors:
+            self.postprocessors.append(postprocessor)
+        return self
+
     def apply(self, session, text):
+        original_text = text
         current = text
         for preprocessor in self.preprocessors:
             current = preprocessor(current)
-        return self.downstream(session, current)
+        cleaned, notices = self.downstream(session, current)
+        for postprocessor in self.postprocessors:
+            cleaned, notices = postprocessor(session, original_text, cleaned, notices)
+        return cleaned, notices
 
 
 def configure_dnd_metadata(campaign, policy: DndMetadataPolicy) -> DndMetadataPolicy:
