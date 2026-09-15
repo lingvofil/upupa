@@ -19,6 +19,7 @@ from aiogram.types import (
 )
 
 from AI.summarize import _get_chat_messages
+from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
 from core.state import chat_settings
@@ -359,13 +360,7 @@ def persist_dnd_sessions() -> None:
         "version": 1,
         "sessions": [session.to_record() for session in dnd_sessions.values()],
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
+    JsonFileRepository(path, indent=2).save(payload)
 
 
 def choose_next_scene_type(session: GameSession) -> str:
