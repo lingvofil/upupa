@@ -30,7 +30,13 @@ DND_GROQ_FALLBACK_TIMEOUT_SECONDS = 18.0
 DND_AUX_HTTP_TIMEOUT_MS = 6_000
 DND_AUX_GOVERNOR_TIMEOUT_SECONDS = 8.0
 DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
-DND_FALLBACK_PROMPT_MAX_CHARS = 32_000
+# Groq's on-demand tier for the current fallback model is capped at 8k TPM.
+# Cyrillic DnD history can tokenize much denser than Latin text, so keep the
+# normal fallback comfortably below that ceiling and retry once even smaller.
+DND_FALLBACK_PROMPT_MAX_CHARS = 12_000
+DND_FALLBACK_RETRY_PROMPT_MAX_CHARS = 7_000
+DND_GROQ_FALLBACK_MAX_TOKENS = 900
+DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 700
 
 
 _state_lock = threading.Lock()
@@ -143,6 +149,18 @@ def _is_transient(error: Exception) -> bool:
     )
 
 
+def _is_request_too_large(error: Exception) -> bool:
+    """Return whether Groq rejected the fallback because the prompt is too large."""
+    code = _status_code(error)
+    text = str(error).casefold()
+    return (
+        code == 413
+        or "request too large" in text
+        or "tokens per minute" in text
+        or "requested" in text and "tpm" in text
+    )
+
+
 def _history_contents(session, prompt: str):
     contents = []
     for item in getattr(session, "conversation", None) or []:
@@ -228,7 +246,7 @@ def _run_gemini_sync(
     raise RuntimeError(f"DnD Gemini fast path failed: {errors[-1] if errors else 'unknown error'}")
 
 
-def _fallback_prompt(session, prompt: str) -> str:
+def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS) -> str:
     rows = []
     for item in getattr(session, "conversation", None) or []:
         if not isinstance(item, dict) or item.get("content") is None:
@@ -237,28 +255,74 @@ def _fallback_prompt(session, prompt: str) -> str:
         rows.append(f"{role}: {item['content']}")
     rows.append(f"user: {prompt}")
     full = "\n\n".join(rows)
-    if len(full) <= DND_FALLBACK_PROMPT_MAX_CHARS:
+    if len(full) <= max_chars:
         return full
 
-    head = rows[0] if rows else ""
-    tail_budget = max(4_000, DND_FALLBACK_PROMPT_MAX_CHARS - len(head) - 32)
-    tail = "\n\n".join(rows[1:])[-tail_budget:]
-    return f"{head}\n\n[...середина истории сокращена...]\n\n{tail}"
+    marker = "\n\n[...середина истории сокращена...]\n\n"
+    first = rows[0] if rows else ""
+    head_budget = min(len(first), min(4_000, max_chars // 3))
+    head = first[:head_budget]
+    tail_source = "\n\n".join(rows[1:]) if len(rows) > 1 else first
+    tail_budget = max(0, max_chars - len(head) - len(marker))
+    if tail_budget:
+        compact = f"{head}{marker}{tail_source[-tail_budget:]}"
+    else:
+        compact = head[:max_chars]
+    return compact[:max_chars]
 
 
-def _run_groq_sync(session, prompt: str) -> str:
+def _run_groq_sync(
+    session,
+    prompt: str,
+    *,
+    max_prompt_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
+    max_tokens: int = DND_GROQ_FALLBACK_MAX_TOKENS,
+) -> str:
     if not GROQ_API_KEY:
         raise RuntimeError("Groq is not configured")
+    fallback_prompt = _fallback_prompt(session, prompt, max_chars=max_prompt_chars)
     with ai_execution_lane("interactive"):
         text = groq_ai.generate_text(
-            _fallback_prompt(session, prompt),
-            max_tokens=900,
+            fallback_prompt,
+            max_tokens=max_tokens,
             temperature=0.8,
         )
     text = str(text or "").strip()
     if not text or text == "Ключ Groq не настроен":
         raise RuntimeError("Groq returned empty text")
     return text
+
+
+async def _run_groq_fallback(session, prompt: str) -> str:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_groq_sync,
+                session,
+                prompt,
+                max_prompt_chars=DND_FALLBACK_PROMPT_MAX_CHARS,
+                max_tokens=DND_GROQ_FALLBACK_MAX_TOKENS,
+            ),
+            timeout=DND_GROQ_FALLBACK_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        if not _is_request_too_large(exc):
+            raise
+        logging.warning(
+            "DnD Groq fallback request too large chat_id=%s; retrying compact prompt chars=%s",
+            getattr(session, "chat_id", None),
+            DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
+        )
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_groq_sync,
+                session,
+                prompt,
+                max_prompt_chars=DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
+                max_tokens=DND_GROQ_FALLBACK_RETRY_MAX_TOKENS,
+            ),
+            timeout=DND_GROQ_FALLBACK_TIMEOUT_SECONDS,
+        )
 
 
 async def _generate_main_text(session, prompt: str) -> str:
@@ -285,10 +349,7 @@ async def _generate_main_text(session, prompt: str) -> str:
         )
 
     try:
-        text = await asyncio.wait_for(
-            asyncio.to_thread(_run_groq_sync, session, prompt),
-            timeout=DND_GROQ_FALLBACK_TIMEOUT_SECONDS,
-        )
+        text = await _run_groq_fallback(session, prompt)
         logging.info(
             "DnD provider fallback success chat_id=%s provider=groq",
             getattr(session, "chat_id", None),
