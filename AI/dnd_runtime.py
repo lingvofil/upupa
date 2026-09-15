@@ -95,10 +95,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
     configure_inventory_description_rules(dnd)
-    install_dnd_inventory_descriptions(
-        metadata_policy=metadata_policy,
-        state_policy=campaign_state_policy,
-    )
+    install_dnd_inventory_descriptions(metadata_policy=metadata_policy)
     inventory_context_policy.renderer = render_inventory_description_context
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
