@@ -18,6 +18,12 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
+    from AI.dnd_inventory_descriptions import (
+        _inventory_context as render_inventory_description_context,
+        configure_inventory_description_rules,
+        install_dnd_inventory_descriptions,
+        render_inventory_lines as render_inventory_description_lines,
+    )
     from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
     from AI.dnd_inventory_effects import (
         _inventory_context as render_inventory_effect_context,
@@ -88,6 +94,13 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
+    configure_inventory_description_rules(dnd)
+    install_dnd_inventory_descriptions(
+        metadata_policy=metadata_policy,
+        state_policy=campaign_state_policy,
+    )
+    inventory_context_policy.renderer = render_inventory_description_context
+    state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
 
