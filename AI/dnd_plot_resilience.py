@@ -51,20 +51,20 @@ def _json_candidates(campaign, text: str) -> list[str | None]:
 
 
 def _numbered_candidates(campaign, text: str) -> list[str | None]:
+    matches = list(_INLINE_NUMBER_RE.finditer(text))
+    if len(matches) >= 2:
+        values = []
+        for index, match in enumerate(matches):
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            values.append(_clean(campaign, text[start:end]))
+        return values
+
     values = []
     for line in text.splitlines():
         match = _NUMBERED_LINE_RE.match(line)
         if match:
             values.append(_clean(campaign, match.group(1)))
-    if values:
-        return values
-
-    matches = list(_INLINE_NUMBER_RE.finditer(text))
-    if len(matches) >= 2:
-        for index, match in enumerate(matches):
-            start = match.end()
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            values.append(_clean(campaign, text[start:end]))
     return values
 
 
