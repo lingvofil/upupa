@@ -1,9 +1,6 @@
-import asyncio
 import logging
-import os
 
 from aiogram import types
-from aiogram.types import FSInputFile, InputMediaPhoto
 
 from AI.leveltravel_parsing import (
     DESTINATION_MAPPING,
@@ -14,14 +11,9 @@ from AI.leveltravel_parsing import (
     parse_date_range,
     parse_search_command,
 )
-from AI.leveltravel_presentation import (
-    format_search_header,
-    format_tour_card,
-    format_tours_message,
-)
+from AI.leveltravel_presentation import format_tours_message
 from AI.leveltravel_provider import deep_parse_date, quick_price_scan
 from AI.leveltravel_ranking import DESTINATION_INFO, analyze_tours_with_ai
-from AI.leveltravel_screenshots import capture_hotel_screenshots
 from AI.leveltravel_search import direct_deep_search, nights_match, two_phase_search
 from AI.leveltravel_search_plan import (
     LEVELTRAVEL_WEB_URL,
@@ -29,6 +21,7 @@ from AI.leveltravel_search_plan import (
     generate_date_range_list,
     generate_full_month_dates,
 )
+from AI.leveltravel_transport import send_search_results
 from core.settings import ADMIN_ID
 
 
@@ -188,94 +181,14 @@ async def process_search_command(message: types.Message, command_type: str = "т
 
             best_tours = await analyze_tours_with_ai(hotels, date_stats, params)
 
-        await status_msg.edit_text(
-            f"✅ <b>Анализ завершен!</b>\n"
-            f"Отобрано {len(best_tours)} лучших предложений\n\n"
-            f"⏳ Создаю скриншоты и формирую отчет...",
-            parse_mode="HTML",
-        )
-
-        header = format_search_header(
+        await send_search_results(
+            message,
+            status_msg,
+            best_tours,
             params,
             date_stats,
             search_info,
-            include_screenshot_note=True,
-        )
-
-        await status_msg.delete()
-        await message.reply(header, parse_mode="HTML")
-
-        for i, tour in enumerate(best_tours, 1):
-            try:
-                link = tour.get("link", "#")
-                name = tour.get("hotel_name", "Отель")
-                nights = tour.get("nights", params.get("nights", 0))
-                tour_text = format_tour_card(tour, i, params)
-
-                screenshot_paths = []
-                if link and link != "#":
-                    screenshot_paths = await capture_hotel_screenshots(
-                        link,
-                        name,
-                        nights,
-                        search_type,
-                    )
-
-                if screenshot_paths:
-                    try:
-                        media_group = []
-                        for idx, path in enumerate(screenshot_paths):
-                            if os.path.exists(path):
-                                caption = tour_text if idx == 0 else None
-                                media_group.append(
-                                    InputMediaPhoto(
-                                        media=FSInputFile(path),
-                                        caption=caption,
-                                        parse_mode="HTML",
-                                    )
-                                )
-
-                        if media_group:
-                            await message.reply_media_group(media=media_group)
-                        else:
-                            await message.reply(
-                                tour_text,
-                                parse_mode="HTML",
-                                disable_web_page_preview=True,
-                            )
-
-                        for path in screenshot_paths:
-                            if os.path.exists(path):
-                                try:
-                                    os.remove(path)
-                                except Exception:
-                                    pass
-
-                    except Exception as e:
-                        logging.error(
-                            f"Ошибка отправки медиагруппы для {name}: {e}"
-                        )
-                        await message.reply(
-                            tour_text,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                else:
-                    await message.reply(
-                        tour_text,
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
-
-                await asyncio.sleep(1.5)
-
-            except Exception as e:
-                logging.error(f"Критическая ошибка отправки тура #{i}: {e}")
-                continue
-
-        logging.info(
-            f"Отправлено {len(best_tours)} туров/отелей пользователю "
-            f"{message.from_user.id}"
+            search_type,
         )
 
     except Exception as e:
