@@ -21,6 +21,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
     from AI.dnd_inventory_effects import (
         _inventory_context as render_inventory_effect_context,
+        configure_inventory_effect_rules,
         install_dnd_inventory_effects,
         render_inventory_lines as render_inventory_effect_lines,
     )
@@ -81,6 +82,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         metadata_policy=metadata_policy,
         state_policy=campaign_state_policy,
     )
+    configure_inventory_effect_rules(dnd)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
