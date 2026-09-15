@@ -6,6 +6,7 @@ from __future__ import annotations
 def configure_dnd_runtime(dnd_router=None) -> None:
     """Compose DnD mechanics once with explicit completion policy dependencies."""
     from AI import dnd
+    from AI import dnd_campaign as campaign
     from AI import dnd_completion as completion
     from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
@@ -21,9 +22,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         render_inventory_lines as render_inventory_effect_lines,
     )
     from AI.dnd_inventory_fun import (
+        build_fun_inventory_campaign_composition,
         build_fun_inventory_state_view_policy,
         configure_dnd_inventory_transfer,
-        install_fun_inventory,
     )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
@@ -37,7 +38,17 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
-    install_fun_inventory()
+    campaign_composition = getattr(campaign, "_upupa_fun_inventory_composition", None)
+    if campaign_composition is None:
+        campaign_composition = build_fun_inventory_campaign_composition(campaign)
+        campaign._ensure = campaign_composition.ensure
+        campaign._state = campaign_composition.state
+        campaign._apply_metadata = campaign_composition.apply_metadata
+        campaign._inventory_context = campaign_composition.inventory_context
+        campaign.RULES = campaign_composition.rules
+        campaign._upupa_fun_inventory_composition = campaign_composition
+        campaign._upupa_fun_inventory_installed = True
+
     configure_dnd_inventory_transfer(router)
     state_view_policy = build_fun_inventory_state_view_policy()
     configure_dnd_state_commands(router, view_policy=state_view_policy)
