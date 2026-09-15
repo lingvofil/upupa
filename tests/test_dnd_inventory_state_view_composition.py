@@ -5,6 +5,7 @@ from tests import test_smoke_imports
 
 del test_smoke_imports
 
+from AI import dnd_state_commands as state_commands
 from AI.dnd_inventory_fun import build_fun_inventory_state_view_policy
 from AI.dnd_state_commands import (
     DndStateCommandMiddleware,
@@ -50,6 +51,30 @@ def test_state_view_policy_uses_local_explicit_dependencies():
     assert footer_policy.decorate_inventory("base") == "base\n\ntail"
 
 
+def test_render_state_command_scopes_policy_through_legacy_wrapper(monkeypatch):
+    policy = build_fun_inventory_state_view_policy()
+    seen = []
+
+    def legacy_render_inventory(_dnd, _chat_id, _user_id):
+        active = state_commands._view_policy()
+        seen.append(active)
+        return active.decorate_inventory("legacy inventory")
+
+    monkeypatch.setattr(state_commands, "render_inventory", legacy_render_inventory)
+
+    result = state_commands.render_state_command(
+        "inventory",
+        SimpleNamespace(),
+        -100,
+        7,
+        view_policy=policy,
+    )
+
+    assert seen == [policy]
+    assert "legacy inventory" in result
+    assert "↪️ Передача:" in result
+
+
 def test_state_command_registration_keeps_explicit_view_policy():
     registered = []
     router = SimpleNamespace(
@@ -68,13 +93,16 @@ def test_state_command_registration_keeps_explicit_view_policy():
 
 def test_inventory_state_view_is_composed_without_state_command_monkeypatches():
     inventory_source = (ROOT / "AI" / "dnd_inventory_fun.py").read_text(encoding="utf-8")
+    state_source = (ROOT / "AI" / "dnd_state_commands.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
 
     assert "state_commands._inventory_items =" not in inventory_source
     assert "state_commands.render_inventory =" not in inventory_source
     assert "original_render_inventory" not in inventory_source
+    assert "_ACTIVE_STATE_VIEW_POLICY = ContextVar" in state_source
     assert "build_fun_inventory_state_view_policy()" in runtime_source
     assert "configure_dnd_state_commands(router, view_policy=state_view_policy)" in runtime_source
+    assert "state_view_policy.inventory_items_renderer = render_inventory_effect_lines" in runtime_source
     assert runtime_source.index("configure_dnd_inventory_transfer(router)") < runtime_source.index(
         "configure_dnd_state_commands(router, view_policy=state_view_policy)"
     ) < runtime_source.index("completion.configure_dnd_completion(router, policy=completion_policy)")
