@@ -31,15 +31,20 @@ def test_every_world_main_menu_exposes_sanctions_and_court():
     from features.world.hub_ui import build_world_main_markup
     from handlers import world_expansion, world_hub, world_interactions
 
-    # handlers.__init__ intentionally installs one canonical menu into all
-    # historical hub routers because world_interactions matches first.
-    assert world_interactions._main_markup is build_world_main_markup
-    assert world_expansion._main_markup is build_world_main_markup
-    assert world_hub._main_markup is build_world_main_markup
+    def menu_signature(markup):
+        return [
+            (button.text, button.callback_data)
+            for row in markup.inline_keyboard
+            for button in row
+        ]
 
-    markup = world_interactions._main_markup()
-    texts = [button.text for row in markup.inline_keyboard for button in row]
-    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    expected = menu_signature(build_world_main_markup())
+    assert menu_signature(world_interactions._main_markup()) == expected
+    assert menu_signature(world_expansion._main_markup()) == expected
+    assert menu_signature(world_hub._main_markup()) == expected
+
+    texts = [text for text, _callback in expected]
+    callbacks = [callback for _text, callback in expected]
 
     assert '🚫 Санкции' in texts
     assert '⚖️ Международный суд' in texts

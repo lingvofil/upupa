@@ -20,6 +20,7 @@ from features.world.expansion import (
     list_international_cases,
     list_state_sanctions,
 )
+from features.world.hub_ui import build_world_main_markup
 from features.world.permissions import is_chat_admin
 from features.world.service import format_diplomacy, get_world_service
 from handlers.world import _require_world, _title
@@ -39,17 +40,7 @@ def _back_markup() -> types.InlineKeyboardMarkup:
 
 
 def _main_markup() -> types.InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🏳 Моё государство", callback_data="worldhub:mine")
-    builder.button(text="🌐 Государства", callback_data="worldhub:states")
-    builder.button(text="🤝 Дипломатия", callback_data="worldhub:diplomacy")
-    builder.button(text="🚫 Санкции", callback_data="worldhub:sanctions")
-    builder.button(text="⚖️ Международный суд", callback_data="worldhub:court")
-    builder.button(text="🗺 Карта мира", callback_data="worldhub:map")
-    builder.button(text="📰 Мировые новости", callback_data="worldhub:news")
-    builder.button(text="📜 Хроника", callback_data="worldhub:chronicle")
-    builder.adjust(2)
-    return builder.as_markup()
+    return build_world_main_markup()
 
 
 async def _is_diplomat(chat_id: int, user_id: int) -> bool:

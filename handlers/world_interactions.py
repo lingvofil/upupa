@@ -15,6 +15,7 @@ from AI.summarize import _generate_with_active_model
 from core.loader import bot
 from core.upupa_utils import normalize_upupa_command
 from features.world.authority import calculate_authority
+from features.world.hub_ui import build_world_main_markup
 from features.world.interactions import insult_cooldown_remaining, record_interaction_event
 from features.world.permissions import is_chat_admin, is_strict_chat_admin
 from features.world.service import format_diplomacy, get_world_service
@@ -51,16 +52,7 @@ def _is_visit_showcase_reply(message: types.Message) -> bool:
 
 
 def _main_markup() -> types.InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🏳 Моё государство", callback_data="worldhub:mine")
-    builder.button(text="🌐 Государства", callback_data="worldhub:states")
-    builder.button(text="🤝 Дипломатия", callback_data="worldhub:diplomacy")
-    builder.button(text="🎩 Назначить посла", callback_data="worldx:ambassador")
-    builder.button(text="🗺 Карта мира", callback_data="worldhub:map")
-    builder.button(text="📰 Мировые новости", callback_data="worldhub:news")
-    builder.button(text="📜 Хроника", callback_data="worldhub:chronicle")
-    builder.adjust(2, 2, 2, 1)
-    return builder.as_markup()
+    return build_world_main_markup()
 
 
 def _diplomacy_markup() -> types.InlineKeyboardMarkup:

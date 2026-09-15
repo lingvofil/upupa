@@ -9,14 +9,6 @@ from handlers import (
     birthdays, court, ai_summary, ai_prompts, video, channel, chronicle_reactions, chronicle,
     social_graph, radio, song, dialog,
 )
-from features.world.hub_ui import build_world_main_markup
-
-# Несколько исторических World-роутеров умеют рисовать главное меню и матчятся
-# в разном порядке. Подменяем их локальные builders одной канонической функцией,
-# чтобы более ранний world_interactions не мог снова спрятать новые разделы.
-world_interactions._main_markup = build_world_main_markup
-world_expansion._main_markup = build_world_main_markup
-world_hub._main_markup = build_world_main_markup
 
 ROUTERS = [
     # Правильный ответ активного Кракадила важнее любой одноимённой команды.

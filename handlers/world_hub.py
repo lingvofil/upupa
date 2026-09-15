@@ -13,6 +13,7 @@ from core.loader import bot
 from core.upupa_utils import normalize_upupa_command
 from features.world.activity import get_top_active_citizen
 from features.world.authority import authority_from_counts, calculate_authority
+from features.world.hub_ui import build_world_main_markup
 from features.world.identity import ensure_state_identities, ensure_state_identity
 from features.world.news import SIGNIFICANT_EVENT_TYPES, format_event_fact, generate_world_news
 from features.world.permissions import is_chat_admin, is_strict_chat_admin
@@ -42,15 +43,7 @@ def _is_exact(message: types.Message, *commands: str) -> bool:
 
 
 def _main_markup() -> types.InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🏳 Моё государство", callback_data="worldhub:mine")
-    builder.button(text="🌐 Государства", callback_data="worldhub:states")
-    builder.button(text="🤝 Дипломатия", callback_data="worldhub:diplomacy")
-    builder.button(text="🗺 Карта мира", callback_data="worldhub:map")
-    builder.button(text="📰 Мировые новости", callback_data="worldhub:news")
-    builder.button(text="📜 Хроника", callback_data="worldhub:chronicle")
-    builder.adjust(2)
-    return builder.as_markup()
+    return build_world_main_markup()
 
 
 def _back_markup(target: str = "main") -> types.InlineKeyboardMarkup:
