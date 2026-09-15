@@ -11,6 +11,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
     from AI.dnd_campaign import configure_dnd_campaign
+    from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
@@ -43,7 +44,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
-    install_fun_inventory()
+    campaign_state_policy = DndCampaignStatePolicy(campaign._ensure, campaign._state)
+    configure_dnd_campaign_state(campaign, campaign_state_policy)
+    install_fun_inventory(state_policy=campaign_state_policy)
     metadata_policy = DndMetadataPolicy(campaign._apply_metadata)
     configure_dnd_metadata(campaign, metadata_policy)
     inventory_context_policy = DndInventoryContextPolicy(render_fun_inventory_context)
@@ -73,6 +76,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
+    router._upupa_dnd_campaign_state_policy = campaign_state_policy
     router._upupa_dnd_inventory_context_policy = inventory_context_policy
     router._upupa_dnd_metadata_policy = metadata_policy
     router._upupa_dnd_runtime_configured = True
