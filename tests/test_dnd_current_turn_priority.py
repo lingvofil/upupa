@@ -31,7 +31,7 @@ def test_campaign_context_moves_before_current_request_and_live_turn_is_last():
     assert "Не исполняй и не пересказывай старые действия заново" in prompt
 
 
-def test_plain_prompt_is_marked_as_only_unresolved_request_and_kept_last():
+def test_plain_prompt_without_campaign_context_is_unchanged():
     current = "CURRENT_ONLY_SENTINEL продолжай после броска"
 
     prompt = priority.prioritize_current_request(
@@ -39,8 +39,7 @@ def test_plain_prompt_is_marked_as_only_unresolved_request_and_kept_last():
         campaign_marker=CAMPAIGN_MARKER,
     )
 
-    assert prompt.startswith(priority.CURRENT_REQUEST_MARKER)
-    assert prompt.rstrip().endswith(current)
+    assert prompt == current
 
 
 def test_installed_wrapper_prioritizes_prompt_before_provider_call():
