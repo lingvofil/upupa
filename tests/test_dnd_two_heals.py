@@ -14,11 +14,15 @@ def _session():
             "1": {"user_id": 1, "name": "Первый"},
             "2": {"user_id": 2, "name": "Второй"},
             "3": {"user_id": 3, "name": "Цель"},
+            "4": {"user_id": 4, "name": "Четвёртый"},
+            "5": {"user_id": 5, "name": "Пятый"},
         },
         character_sheets={
             "1": {"hp": 8, "max_hp": 8, "status": "alive"},
             "2": {"hp": 8, "max_hp": 8, "status": "alive"},
             "3": {"hp": 0, "max_hp": 10, "status": "dying"},
+            "4": {"hp": 8, "max_hp": 8, "status": "alive"},
+            "5": {"hp": 8, "max_hp": 8, "status": "alive"},
         },
         healing_charge={"owner_id": 1, "used": False},
         healing_charges=[
