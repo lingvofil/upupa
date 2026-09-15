@@ -26,11 +26,9 @@ def prioritize_current_request(prompt: str, *, campaign_marker: str) -> str:
             f"{current_request.strip()}"
         )
 
-    return (
-        f"{CURRENT_REQUEST_MARKER}.\n"
-        f"{CURRENT_REQUEST_GUARD}\n\n"
-        f"{text.strip()}"
-    )
+    # Calls outside the campaign wrapper (tests, low-level provider probes and
+    # other direct uses) must preserve the provider contract byte-for-byte.
+    return text
 
 
 def install_dnd_current_turn_priority(dnd, *, campaign_marker: str) -> None:
