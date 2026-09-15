@@ -44,7 +44,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
-    campaign_state_policy = DndCampaignStatePolicy(campaign._ensure, campaign._state)
+    campaign_state_policy = DndCampaignStatePolicy(
+        campaign._ensure,
+        campaign._state,
+        campaign._restore_state,
+    )
     configure_dnd_campaign_state(campaign, campaign_state_policy)
     install_fun_inventory(state_policy=campaign_state_policy)
     metadata_policy = DndMetadataPolicy(campaign._apply_metadata)
@@ -67,7 +71,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_death_legacy(router)
     install_dnd_epilogue_image(dnd)
     install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)
-    install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)
+    install_dnd_inventory_effects(
+        dnd,
+        metadata_policy=metadata_policy,
+        state_policy=campaign_state_policy,
+    )
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
