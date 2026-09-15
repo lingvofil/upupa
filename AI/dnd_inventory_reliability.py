@@ -25,7 +25,7 @@ INVENTORY_RELIABILITY_RULES = f"""
 _ITEM_TAG_RE = re.compile(r"\[ITEM:(ADD|REMOVE);([^\]]*)\]", re.I)
 _QTY_RE = re.compile(r";QTY:(\d+)", re.I)
 _LOOT_SIGNAL_RE = re.compile(
-    r"(?:\bвзял\w*|\bбер[её]т\w*|\bzабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
+    r"(?:\bвзял\w*|\bбер[её]т\w*|\bзабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
     r"\bукрал\w*|\bстыр\w*|\bутащ\w*|\bприсво\w*|\bкупил\w*|\bвымен\w*|\bподар\w*|"
     r"\bтрофе\w*|\bартефакт\w*|\bложк\w*|\bкарман\w*|\bинвентар\w*|\bштраф\w*|"
     r"\bпроклят\w*|\bпизд\w*)",
@@ -146,48 +146,32 @@ def _insert_tags_before_action(campaign, response: str, tags: list[str]) -> str:
     return f"{before}\n{block}\n{after}".strip()
 
 
-def _restore_gemini_state(dnd, session) -> None:
-    if getattr(session, "active_model", None) != "gemini" or not hasattr(dnd, "model"):
-        return
-    history = []
-    for item in getattr(session, "conversation", None) or []:
-        if not isinstance(item, dict) or item.get("content") is None:
-            continue
-        role = "model" if item.get("role") in {"assistant", "model"} else "user"
-        history.append({"role": role, "parts": [str(item["content"])]})
-    session.chat_session = dnd.model.start_chat(chat_id=session.chat_id, history=history)
-
-
-async def _audit_missing_inventory_tags(dnd, campaign, original_generate, session, prompt: str, response: str) -> str:
+async def _audit_missing_inventory_tags(dnd, campaign, session, prompt: str, response: str) -> str:
     if not _should_audit(session, prompt, response):
         return response
-    conversation = getattr(session, "conversation", None)
-    before = len(conversation) if isinstance(conversation, list) else None
-    try:
-        audit = await original_generate(session, _audit_prompt(campaign, session, prompt, response))
-        tags = _validated_item_tags(campaign, session, audit)
-        if tags:
-            logging.info(
-                "DnD inventory repair chat_id=%s tags=%s",
-                getattr(session, "chat_id", None),
-                tags,
-            )
-            return _insert_tags_before_action(campaign, response, tags)
+
+    from AI.dnd_generation_resilience import generate_auxiliary_text
+
+    audit = await generate_auxiliary_text(
+        session,
+        _audit_prompt(campaign, session, prompt, response),
+    )
+    if not audit:
+        logging.info(
+            "DnD inventory audit skipped chat_id=%s",
+            getattr(session, "chat_id", None),
+        )
         return response
-    except Exception:
-        logging.exception("DnD inventory audit failed chat_id=%s", getattr(session, "chat_id", None))
-        return response
-    finally:
-        if before is not None and isinstance(conversation, list) and len(conversation) > before:
-            del conversation[before:]
-            try:
-                dnd.persist_dnd_sessions()
-            except Exception:
-                logging.exception("DnD inventory audit state restore failed")
-            try:
-                _restore_gemini_state(dnd, session)
-            except Exception:
-                logging.exception("DnD inventory audit Gemini restore failed")
+
+    tags = _validated_item_tags(campaign, session, audit)
+    if tags:
+        logging.info(
+            "DnD inventory repair chat_id=%s tags=%s",
+            getattr(session, "chat_id", None),
+            tags,
+        )
+        return _insert_tags_before_action(campaign, response, tags)
+    return response
 
 
 def install_dnd_inventory_reliability(dnd, *, metadata_policy=None) -> None:
@@ -227,7 +211,6 @@ def install_dnd_inventory_reliability(dnd, *, metadata_policy=None) -> None:
         return await _audit_missing_inventory_tags(
             dnd,
             campaign,
-            original_generate,
             session,
             prompt,
             response,
