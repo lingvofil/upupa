@@ -20,6 +20,7 @@ import secrets
 import time
 from typing import Callable
 
+from core.json_repository import JsonFileRepository
 from core.paths import CROCODILE_STATE_PATH
 from games import crocodile
 
@@ -143,18 +144,9 @@ def _load_word_history() -> list[str]:
 
 
 def _write_word_history(used: list[str]) -> None:
-    path = Path(CROCODILE_WORD_HISTORY_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(
-            {"version": WORD_HISTORY_VERSION, "used": used},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    JsonFileRepository(Path(CROCODILE_WORD_HISTORY_PATH), indent=2).save(
+        {"version": WORD_HISTORY_VERSION, "used": used}
     )
-    temp_path.replace(path)
 
 
 def pick_crocodile_word() -> str:
@@ -276,13 +268,7 @@ def _merge_score_tables(
 
 
 def _write_scores(path: Path, scores: dict[str, dict[str, dict]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(scores, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
+    JsonFileRepository(path, indent=2).save(scores)
 
 
 def migrate_crocodile_scores() -> bool:
@@ -426,11 +412,7 @@ def persist_crocodile_sessions(*, force: bool = False) -> bool:
     payload = _serialize_current_state()
     regular_changed = force or payload != _last_payload
     if regular_changed:
-        path = _state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
-        temp_path.write_text(payload, encoding="utf-8")
-        temp_path.replace(path)
+        JsonFileRepository(_state_path(), indent=2).save(json.loads(payload))
         _last_payload = payload
 
     extra_changed = False
