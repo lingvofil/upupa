@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
+from aiogram import BaseMiddleware
+
 
 TRANSFER_RE = re.compile(
     r"^(?:упупа\s+)?(?:передать|отдать)\s+(?:(\d+)\s+)?(.+?)\s*$",
@@ -386,6 +388,66 @@ def transfer_inventory(dnd, chat_id: int, sender_id: int, target_id: int, item_q
     return display, item_kind, "archive"
 
 
+class DndInventoryTransferMiddleware(BaseMiddleware):
+    """Handle explicit inventory transfers before DnD state/action middleware."""
+
+    async def __call__(self, handler, event, data):
+        parsed = parse_transfer_command(getattr(event, "text", None))
+        if parsed is None:
+            return await handler(event, data)
+
+        chat = getattr(event, "chat", None)
+        sender = getattr(event, "from_user", None)
+        replied = getattr(event, "reply_to_message", None)
+        target = getattr(replied, "from_user", None) if replied else None
+        if chat is None or sender is None or not hasattr(event, "answer"):
+            return await handler(event, data)
+        if target is None:
+            await event.answer("↪️ Ответь командой «передать <предмет>» на сообщение того, кому отдаёшь вещь.")
+            return None
+        if getattr(target, "is_bot", False):
+            await event.answer("🤖 Боту инвентарь не нужен.")
+            return None
+        if int(target.id) == int(sender.id):
+            await event.answer("🎒 Самому себе передавать бессмысленно.")
+            return None
+
+        from AI import dnd
+
+        quantity, item_query = parsed
+        try:
+            display, item_kind, source = transfer_inventory(
+                dnd,
+                int(chat.id),
+                int(sender.id),
+                int(target.id),
+                item_query,
+                quantity,
+            )
+        except InventoryTransferError as exc:
+            await event.answer(f"🎒 {exc}")
+            return None
+
+        target_name = getattr(target, "first_name", None) or getattr(target, "full_name", None) or "получателю"
+        icon = "✨" if item_kind == "artifact" else "🎒"
+        suffix = ""
+        if source == "archive":
+            suffix = (
+                "\nСохранённый инвентарь обновлён вне егры. В новую отдельную кампанию автоматически наследуются только ✨ артефакты; "
+                "обычный лут целиком возвращается при продолжении прошлой кампании."
+            )
+        await event.answer(f"{icon} Передано {target_name}: {display}.{suffix}")
+        return None
+
+
+def configure_dnd_inventory_transfer(dnd_router) -> None:
+    """Register transfer handling before state commands and action collection."""
+    if getattr(dnd_router, "_upupa_dnd_inventory_transfer_configured", False):
+        return
+    dnd_router.message.outer_middleware(DndInventoryTransferMiddleware())
+    dnd_router._upupa_dnd_inventory_transfer_configured = True
+
+
 def apply_stackable_metadata(campaign, original_apply, session, text):
     """Preserve campaign metadata behavior while stacking repeated ordinary ITEM tags."""
     campaign._ensure(session)
@@ -510,56 +572,4 @@ def install_fun_inventory() -> None:
         )
 
     state_commands.render_inventory = render_inventory
-
-    original_state_middleware_call = state_commands.DndStateCommandMiddleware.__call__
-
-    async def state_middleware_call(self, handler, event, data):
-        parsed = parse_transfer_command(getattr(event, "text", None))
-        if parsed is None:
-            return await original_state_middleware_call(self, handler, event, data)
-
-        from AI import dnd
-
-        chat = getattr(event, "chat", None)
-        sender = getattr(event, "from_user", None)
-        replied = getattr(event, "reply_to_message", None)
-        target = getattr(replied, "from_user", None) if replied else None
-        if chat is None or sender is None or not hasattr(event, "answer"):
-            return await original_state_middleware_call(self, handler, event, data)
-        if target is None:
-            await event.answer("↪️ Ответь командой «передать <предмет>» на сообщение того, кому отдаёшь вещь.")
-            return None
-        if getattr(target, "is_bot", False):
-            await event.answer("🤖 Боту инвентарь не нужен.")
-            return None
-        if int(target.id) == int(sender.id):
-            await event.answer("🎒 Самому себе передавать бессмысленно.")
-            return None
-
-        quantity, item_query = parsed
-        try:
-            display, item_kind, source = transfer_inventory(
-                dnd,
-                int(chat.id),
-                int(sender.id),
-                int(target.id),
-                item_query,
-                quantity,
-            )
-        except InventoryTransferError as exc:
-            await event.answer(f"🎒 {exc}")
-            return None
-
-        target_name = getattr(target, "first_name", None) or getattr(target, "full_name", None) or "получателю"
-        icon = "✨" if item_kind == "artifact" else "🎒"
-        suffix = ""
-        if source == "archive":
-            suffix = (
-                "\nСохранённый инвентарь обновлён вне егры. В новую отдельную кампанию автоматически наследуются только ✨ артефакты; "
-                "обычный лут целиком возвращается при продолжении прошлой кампании."
-            )
-        await event.answer(f"{icon} Передано {target_name}: {display}.{suffix}")
-        return None
-
-    state_commands.DndStateCommandMiddleware.__call__ = state_middleware_call
     campaign._upupa_fun_inventory_installed = True

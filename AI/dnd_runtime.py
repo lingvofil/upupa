@@ -17,7 +17,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
     from AI.dnd_inventory_effects import install_dnd_inventory_effects
-    from AI.dnd_inventory_fun import install_fun_inventory
+    from AI.dnd_inventory_fun import configure_dnd_inventory_transfer, install_fun_inventory
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_two_heals import install_dnd_two_heals
@@ -30,6 +30,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
     install_fun_inventory()
+    configure_dnd_inventory_transfer(router)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)

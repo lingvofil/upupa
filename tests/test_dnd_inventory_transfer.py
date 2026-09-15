@@ -1,17 +1,24 @@
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from AI import dnd_campaign
 from AI.dnd_inventory_fun import (
+    DndInventoryTransferMiddleware,
     FUN_INVENTORY_RULES,
     InventoryTransferError,
     _artifact_progress_line,
     apply_stackable_metadata,
+    configure_dnd_inventory_transfer,
     parse_transfer_command,
     transfer_between_inventories,
     transfer_inventory,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _session():
@@ -28,6 +35,18 @@ def _session():
     )
     dnd_campaign._ensure(session)
     return session
+
+
+class FakeTransferMessage:
+    def __init__(self, text, *, sender_id=1, target=None):
+        self.text = text
+        self.chat = SimpleNamespace(id=-100)
+        self.from_user = SimpleNamespace(id=sender_id, first_name="Детектор")
+        self.reply_to_message = SimpleNamespace(from_user=target) if target is not None else None
+        self.answers = []
+
+    async def answer(self, text, **kwargs):
+        self.answers.append((text, kwargs))
 
 
 def test_parse_transfer_command_supports_quantity_and_alias():
@@ -132,3 +151,61 @@ def test_archive_transfer_reassigns_persistent_artifact(monkeypatch):
     assert players["1"]["artifacts"] == []
     assert players["2"]["inventory"] == [{"name": "Ботинок Истины", "kind": "artifact"}]
     assert players["2"]["artifacts"] == [{"name": "Ботинок Истины", "kind": "artifact"}]
+
+
+def test_transfer_middleware_delegates_non_transfer_messages():
+    message = FakeTransferMessage("осматриваю сундук")
+    called = []
+
+    async def handler(event, data):
+        called.append((event, data))
+        return "downstream"
+
+    payload = {"marker": 1}
+    result = asyncio.run(DndInventoryTransferMiddleware()(handler, message, payload))
+
+    assert result == "downstream"
+    assert called == [(message, payload)]
+    assert message.answers == []
+
+
+def test_transfer_middleware_consumes_transfer_without_reply():
+    message = FakeTransferMessage("передать Ботинок Истины")
+    called = []
+
+    async def handler(_event, _data):
+        called.append(True)
+        return "downstream"
+
+    result = asyncio.run(DndInventoryTransferMiddleware()(handler, message, {}))
+
+    assert result is None
+    assert called == []
+    assert message.answers == [
+        ("↪️ Ответь командой «передать <предмет>» на сообщение того, кому отдаёшь вещь.", {})
+    ]
+
+
+def test_transfer_middleware_registration_is_idempotent():
+    registered = []
+    router = SimpleNamespace(
+        message=SimpleNamespace(outer_middleware=lambda middleware: registered.append(middleware))
+    )
+
+    configure_dnd_inventory_transfer(router)
+    configure_dnd_inventory_transfer(router)
+
+    assert len(registered) == 1
+    assert isinstance(registered[0], DndInventoryTransferMiddleware)
+
+
+def test_inventory_transfer_is_composed_without_state_middleware_class_patch():
+    inventory_source = (ROOT / "AI" / "dnd_inventory_fun.py").read_text(encoding="utf-8")
+    runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+
+    assert "DndStateCommandMiddleware.__call__" not in inventory_source
+    assert "original_state_middleware_call" not in inventory_source
+    assert "configure_dnd_inventory_transfer(router)" in runtime_source
+    assert runtime_source.index("configure_dnd_inventory_transfer(router)") < runtime_source.index(
+        "completion.configure_dnd_completion(router, policy=completion_policy)"
+    )
