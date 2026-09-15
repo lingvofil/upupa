@@ -13,8 +13,11 @@ def test_dnd_help_lists_current_commands():
     assert "<code>днд инвентарь</code>" in section
     assert "<code>днд связи</code>" in section
     assert "<code>днд сюжет</code>" in section
+    assert "<code>враги</code>" in section
+    assert "<code>днд враги</code>" in section
     assert "<code>днд конец</code>" in section
     assert "работают и между партиями" in section
+    assert "Команда врагов работает только по текущему бою" in section
 
 
 def test_dnd_help_stops_advertising_replaced_triggers():
@@ -31,3 +34,4 @@ def test_exported_full_help_contains_dnd_state_commands():
     assert "<code>днд герой</code>" in HELP_TEXT
     assert "<code>днд связи</code>" in HELP_TEXT
     assert "<code>днд сюжет</code>" in HELP_TEXT
+    assert "<code>днд враги</code>" in HELP_TEXT
