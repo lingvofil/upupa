@@ -29,6 +29,56 @@ def test_main_generation_falls_back_to_groq_after_fast_gemini_failure(monkeypatc
     assert result == "fallback ok"
 
 
+def test_main_generation_retries_groq_with_compact_prompt_after_413(monkeypatch):
+    session = _session()
+    calls = []
+
+    def fail_gemini(*_args, **_kwargs):
+        raise RuntimeError("503 Service Unavailable")
+
+    def groq_with_first_request_too_large(
+        _session,
+        _prompt,
+        *,
+        max_prompt_chars,
+        max_tokens,
+    ):
+        calls.append((max_prompt_chars, max_tokens))
+        if len(calls) == 1:
+            error = RuntimeError("413 Request too large for tokens per minute (TPM)")
+            error.status_code = 413
+            raise error
+        return "compact fallback ok"
+
+    monkeypatch.setattr(resilience, "_run_gemini_sync", fail_gemini)
+    monkeypatch.setattr(resilience, "_run_groq_sync", groq_with_first_request_too_large)
+
+    result = asyncio.run(resilience._generate_main_text(session, "продолжай"))
+
+    assert result == "compact fallback ok"
+    assert calls == [
+        (resilience.DND_FALLBACK_PROMPT_MAX_CHARS, resilience.DND_GROQ_FALLBACK_MAX_TOKENS),
+        (
+            resilience.DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
+            resilience.DND_GROQ_FALLBACK_RETRY_MAX_TOKENS,
+        ),
+    ]
+
+
+def test_fallback_prompt_is_strictly_bounded_and_keeps_latest_request():
+    session = _session()
+    session.conversation = [
+        {"role": "user", "content": "СИСТЕМА " + "я" * 10_000},
+        {"role": "assistant", "content": "старая сцена " + "э" * 10_000},
+    ]
+
+    prompt = resilience._fallback_prompt(session, "ПОСЛЕДНИЙ ХОД", max_chars=7_000)
+
+    assert len(prompt) <= 7_000
+    assert "ПОСЛЕДНИЙ ХОД" in prompt
+    assert "середина истории сокращена" in prompt
+
+
 def test_configured_generator_appends_one_canonical_exchange(monkeypatch):
     persisted = []
 

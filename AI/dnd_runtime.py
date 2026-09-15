@@ -17,6 +17,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
+    from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
     from AI.dnd_inventory_descriptions import (
@@ -78,6 +79,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Install the bounded provider path before completion/campaign wrappers
     # capture generate_session_response, so every later DnD layer inherits it.
     configure_dnd_generation_resilience(dnd)
+    install_dnd_group_action_resilience(dnd)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
