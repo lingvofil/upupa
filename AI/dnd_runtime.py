@@ -12,6 +12,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
     from AI.dnd_campaign import configure_dnd_campaign
     from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+    from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
@@ -89,6 +90,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_enemy_stats(dnd)
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
+    install_dnd_cinematic_combat(dnd)
     install_dnd_healing_choice(router)
     install_dnd_two_heals(router)
     install_dnd_two_heals_compat()
