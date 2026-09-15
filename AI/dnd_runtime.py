@@ -6,6 +6,7 @@ from __future__ import annotations
 def configure_dnd_runtime(dnd_router=None) -> None:
     """Compose DnD mechanics once with explicit completion policy dependencies."""
     from AI import dnd
+    from AI import dnd_campaign as campaign
     from AI import dnd_completion as completion
     from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
@@ -15,12 +16,15 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_healing_choice import install_dnd_healing_choice
+    from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
     from AI.dnd_inventory_effect_refinement import install_dnd_inventory_effect_refinement
     from AI.dnd_inventory_effects import (
+        _inventory_context as render_inventory_effect_context,
         install_dnd_inventory_effects,
         render_inventory_lines as render_inventory_effect_lines,
     )
     from AI.dnd_inventory_fun import (
+        _inventory_context as render_fun_inventory_context,
         build_fun_inventory_state_view_policy,
         configure_dnd_inventory_transfer,
         configure_fun_inventory_rules,
@@ -39,6 +43,8 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
     install_fun_inventory()
+    inventory_context_policy = DndInventoryContextPolicy(render_fun_inventory_context)
+    configure_dnd_inventory_context(campaign, inventory_context_policy)
     configure_dnd_inventory_transfer(router)
     state_view_policy = build_fun_inventory_state_view_policy()
     configure_dnd_state_commands(router, view_policy=state_view_policy)
@@ -56,6 +62,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_epilogue_image(dnd)
     install_dnd_inventory_reliability(dnd)
     install_dnd_inventory_effects(dnd)
+    inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
     install_dnd_artifact_guard(dnd)
@@ -63,4 +70,5 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
+    router._upupa_dnd_inventory_context_policy = inventory_context_policy
     router._upupa_dnd_runtime_configured = True
