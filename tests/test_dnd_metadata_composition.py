@@ -1,6 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+from AI import dnd_campaign
+from AI.dnd_inventory_effects import apply_item_effect_metadata, format_inventory_entry
+from AI.dnd_inventory_fun import apply_stackable_metadata
 from AI.dnd_inventory_reliability import _expand_quantity_tags
 from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
@@ -38,6 +41,69 @@ def test_metadata_policy_keeps_artifact_quantity_at_one_and_dedupes_preprocessor
     assert seen[0] == "[ITEM:ADD;PLAYER:1;NAME:Ложка Судьбы;KIND:artifact]"
 
 
+def test_metadata_policy_runs_postprocessor_after_downstream_with_original_text():
+    seen = []
+
+    def downstream(_session, text):
+        seen.append(("downstream", text))
+        return "clean", ["base"]
+
+    def postprocessor(_session, original_text, cleaned, notices):
+        seen.append(("postprocessor", original_text))
+        return cleaned, notices + ["post"]
+
+    policy = DndMetadataPolicy(downstream)
+    policy.add_preprocessor(_expand_quantity_tags)
+    policy.add_postprocessor(postprocessor)
+    policy.add_postprocessor(postprocessor)
+    tag = "[ITEM:ADD;PLAYER:1;NAME:ложка;QTY:2;KIND:item]"
+
+    assert policy.apply(SimpleNamespace(), tag) == ("clean", ["base", "post"])
+    assert len(policy.postprocessors) == 1
+    assert "QTY:" not in seen[0][1]
+    assert seen[1] == ("postprocessor", tag)
+
+
+def test_inventory_effect_postprocessor_preserves_qty_then_effect_order():
+    session = SimpleNamespace(
+        mode="participants",
+        participants={"1": {"user_id": 1, "name": "Ложечник"}},
+    )
+
+    def stacked_apply(current_session, text):
+        return apply_stackable_metadata(
+            dnd_campaign,
+            dnd_campaign._apply_metadata,
+            current_session,
+            text,
+        )
+
+    def effect_postprocessor(current_session, original_text, cleaned, notices):
+        return apply_item_effect_metadata(
+            dnd_campaign,
+            lambda _session, _text: (cleaned, notices),
+            current_session,
+            original_text,
+        )
+
+    policy = DndMetadataPolicy(stacked_apply)
+    policy.add_preprocessor(_expand_quantity_tags)
+    policy.add_postprocessor(effect_postprocessor)
+    tag = (
+        "[ITEM:ADD;PLAYER:1;NAME:ложка;QTY:5;FEW:ложки;MANY:ложек;KIND:item;"
+        "BONUS:1;TRAIT:прожорливости]"
+    )
+
+    _cleaned, notices = policy.apply(session, tag)
+
+    item = session.inventories["1"][0]
+    assert item["quantity"] == 5
+    assert item["bonus_per_unit"] == 1
+    assert item["trait"] == "прожорливости"
+    assert format_inventory_entry(item) == "5 ложек — +5 к прожорливости"
+    assert any("5 ложек — +5 к прожорливости" in notice for notice in notices)
+
+
 def test_metadata_configuration_keeps_one_stable_campaign_delegator():
     campaign = SimpleNamespace(_apply_metadata=lambda _session, text: (text, []))
     first = DndMetadataPolicy(campaign._apply_metadata)
@@ -50,20 +116,24 @@ def test_metadata_configuration_keeps_one_stable_campaign_delegator():
     assert campaign._apply_metadata(SimpleNamespace(), "hello") == ("hello", [])
 
 
-def test_inventory_reliability_uses_metadata_policy_instead_of_monkeypatching_apply():
+def test_inventory_metadata_extensions_use_policy_instead_of_monkeypatching_apply():
     reliability_source = (ROOT / "AI" / "dnd_inventory_reliability.py").read_text(encoding="utf-8")
+    effects_source = (ROOT / "AI" / "dnd_inventory_effects.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
     policy_source = (ROOT / "AI" / "dnd_metadata.py").read_text(encoding="utf-8")
 
     assert "campaign._apply_metadata =" not in reliability_source
+    assert "campaign._apply_metadata =" not in effects_source
     assert "metadata_policy.add_preprocessor(_expand_quantity_tags)" in reliability_source
+    assert "metadata_policy.add_postprocessor(postprocess_metadata)" in effects_source
     assert "campaign._apply_metadata =" in policy_source
     assert "metadata_policy = DndMetadataPolicy(campaign._apply_metadata)" in runtime_source
     assert "configure_dnd_metadata(campaign, metadata_policy)" in runtime_source
     assert "install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)" in runtime_source
+    assert "install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)" in runtime_source
     assert runtime_source.index("install_fun_inventory()") < runtime_source.index(
         "metadata_policy = DndMetadataPolicy(campaign._apply_metadata)"
     ) < runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)")
     assert runtime_source.index("install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)") < runtime_source.index(
-        "install_dnd_inventory_effects(dnd)"
+        "install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)"
     ) < runtime_source.index("install_dnd_artifact_guard(dnd)")

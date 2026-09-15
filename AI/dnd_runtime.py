@@ -64,7 +64,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_death_legacy(router)
     install_dnd_epilogue_image(dnd)
     install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)
-    install_dnd_inventory_effects(dnd)
+    install_dnd_inventory_effects(dnd, metadata_policy=metadata_policy)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
     install_dnd_inventory_effect_refinement(dnd)
