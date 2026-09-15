@@ -17,7 +17,7 @@ EFFECT не обязан быть механическим бонусом и н�
 
 
 def _described_copy(item):
-    """Return an item suitable for display even when persisted metadata is missing."""
+    """Return a display-only copy with a deterministic characteristic when missing."""
     if effects._has_explicit_effect(item):
         return item
     if isinstance(item, dict):
@@ -35,32 +35,8 @@ def _described_copy(item):
     return described
 
 
-def _ensure_item_description(inventory: list, index: int) -> bool:
-    current = inventory[index]
-    if effects._has_explicit_effect(current):
-        return False
-    described = _described_copy(current)
-    if described is current:
-        return False
-    inventory[index] = described
-    return True
-
-
-def ensure_session_inventory_descriptions(session) -> bool:
-    """Materialize fallback characteristics for plain items already in a session."""
-    inventories = getattr(session, "inventories", {}) or {}
-    if not isinstance(inventories, dict):
-        return False
-    changed = False
-    for items in inventories.values():
-        if not isinstance(items, list):
-            continue
-        for index in range(len(items)):
-            changed = _ensure_item_description(items, index) or changed
-    return changed
-
-
 def format_inventory_entry(item) -> str:
+    """Render a characteristic without mutating the persisted inventory object."""
     return effects.format_inventory_entry(_described_copy(item))
 
 
@@ -87,7 +63,7 @@ def _inventory_context(campaign, session) -> str:
 
 
 def apply_missing_item_descriptions(campaign, session, text, cleaned, notices):
-    """Fill omitted ITEM:ADD characteristics and refresh the user-visible acquisition notice."""
+    """Refresh ITEM:ADD notices with a fallback characteristic without changing stored items."""
     valid_players = effects._valid_players(session)
     for match in campaign.META_RE.finditer(str(text or "")):
         kind, payload = match.group(1).upper(), match.group(2)
@@ -105,13 +81,10 @@ def apply_missing_item_descriptions(campaign, session, text, cleaned, notices):
         index = inventory_fun._find_item_index(inventory, item_name)
         if index is None:
             continue
-        if _ensure_item_description(inventory, index):
-            current = inventory[index]
-            if isinstance(current, dict):
-                effects._refresh_notice(notices, session, player, current)
+        described = _described_copy(inventory[index])
+        if isinstance(described, dict):
+            effects._refresh_notice(notices, session, player, described)
 
-    # Also repairs plain items restored from sessions created after the v1 migration.
-    ensure_session_inventory_descriptions(session)
     return cleaned, notices
 
 
@@ -126,8 +99,8 @@ def configure_inventory_description_rules(dnd, *, campaign=None) -> None:
         dnd.DND_SYSTEM_PROMPT = f"{dnd.DND_SYSTEM_PROMPT.rstrip()}\n\n{INVENTORY_DESCRIPTION_RULES}"
 
 
-def install_dnd_inventory_descriptions(*, metadata_policy, state_policy) -> None:
-    """Install fallback persistence for both new and restored inventory entries."""
+def install_dnd_inventory_descriptions(*, metadata_policy) -> None:
+    """Install display fallback for acquisition notices; persistence remains unchanged."""
     from AI import dnd_campaign as campaign
 
     if getattr(campaign, "_upupa_dnd_inventory_descriptions_installed", False):
@@ -136,10 +109,5 @@ def install_dnd_inventory_descriptions(*, metadata_policy, state_policy) -> None
     def postprocess(session, text, cleaned, notices):
         return apply_missing_item_descriptions(campaign, session, text, cleaned, notices)
 
-    def restore(session, _data):
-        ensure_session_inventory_descriptions(session)
-
     metadata_policy.add_postprocessor(postprocess)
-    state_policy.add_ensure_hook(ensure_session_inventory_descriptions)
-    state_policy.add_restore_hook(restore)
     campaign._upupa_dnd_inventory_descriptions_installed = True
