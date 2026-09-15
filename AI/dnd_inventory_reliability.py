@@ -25,7 +25,7 @@ INVENTORY_RELIABILITY_RULES = f"""
 _ITEM_TAG_RE = re.compile(r"\[ITEM:(ADD|REMOVE);([^\]]*)\]", re.I)
 _QTY_RE = re.compile(r";QTY:(\d+)", re.I)
 _LOOT_SIGNAL_RE = re.compile(
-    r"(?:\bвзял\w*|\bбер[её]т\w*|\bзабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
+    r"(?:\bвзял\w*|\bбер[её]т\w*|\bzабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
     r"\bукрал\w*|\bстыр\w*|\bутащ\w*|\bприсво\w*|\bкупил\w*|\bвымен\w*|\bподар\w*|"
     r"\bтрофе\w*|\bартефакт\w*|\bложк\w*|\bкарман\w*|\bинвентар\w*|\bштраф\w*|"
     r"\bпроклят\w*|\bпизд\w*)",
