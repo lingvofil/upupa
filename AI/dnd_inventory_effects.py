@@ -341,36 +341,31 @@ def _inventory_context(campaign, session) -> str:
     return "\n".join(out)
 
 
-def _install_session_schema_migration(campaign) -> None:
-    """Persist a session-level schema marker without changing individual item records."""
-    original_ensure = campaign._ensure
-    original_state = campaign._state
-    original_restore_state = campaign._restore_state
-
-    def ensure(session):
-        original_ensure(session)
-        if not hasattr(session, "inventory_effects_version"):
-            session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
-
-    def state(session):
-        row = original_state(session)
-        row["inventory_effects_version"] = _version(
-            getattr(session, "inventory_effects_version", INVENTORY_EFFECT_MIGRATION_VERSION)
-        )
-        return row
-
-    def restore_state(session, data):
-        stored_version = _version((data or {}).get("inventory_effects_version")) if isinstance(data, dict) else 0
-        original_restore_state(session, data)
-        session.inventory_effects_version = stored_version
-        migrate_session_inventory(session)
-
-    campaign._ensure = ensure
-    campaign._state = state
-    campaign._restore_state = restore_state
+def _ensure_inventory_effects_version(session) -> None:
+    if not hasattr(session, "inventory_effects_version"):
+        session.inventory_effects_version = INVENTORY_EFFECT_MIGRATION_VERSION
 
 
-def install_dnd_inventory_effects(dnd, *, metadata_policy=None) -> None:
+def _inventory_effects_version_state(session) -> int:
+    return _version(
+        getattr(session, "inventory_effects_version", INVENTORY_EFFECT_MIGRATION_VERSION)
+    )
+
+
+def _restore_inventory_effects_version(session, data) -> None:
+    stored_version = _version((data or {}).get("inventory_effects_version")) if isinstance(data, dict) else 0
+    session.inventory_effects_version = stored_version
+    migrate_session_inventory(session)
+
+
+def _configure_session_schema_migration(state_policy) -> None:
+    """Persist and migrate the session-level inventory effects schema marker."""
+    state_policy.add_ensure_hook(_ensure_inventory_effects_version)
+    state_policy.add_state_field("inventory_effects_version", _inventory_effects_version_state)
+    state_policy.add_restore_hook(_restore_inventory_effects_version)
+
+
+def install_dnd_inventory_effects(dnd, *, metadata_policy=None, state_policy=None) -> None:
     """Install optional inventory properties after stacking and reliability composition."""
     from AI import dnd_campaign as campaign
 
@@ -381,7 +376,19 @@ def install_dnd_inventory_effects(dnd, *, metadata_policy=None) -> None:
     if migrate_archive_data(getattr(campaign, "_archive", None)):
         campaign._save_archive(dnd)
 
-    _install_session_schema_migration(campaign)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
+    _configure_session_schema_migration(state_policy)
+
     if metadata_policy is None:
         from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
 
