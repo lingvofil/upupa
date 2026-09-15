@@ -37,6 +37,14 @@ DND_FALLBACK_PROMPT_MAX_CHARS = 12_000
 DND_FALLBACK_RETRY_PROMPT_MAX_CHARS = 7_000
 DND_GROQ_FALLBACK_MAX_TOKENS = 900
 DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 700
+DND_GROQ_FALLBACK_TEMPERATURE = 0.55
+DND_FALLBACK_CONTINUITY_GUARD = (
+    "АВАРИЙНЫЙ РЕЖИМ DND. Блок CURRENT REQUEST ниже — главный источник истины. "
+    "Сначала разреши заявленные действия игроков и продолжи ровно текущую сцену. "
+    "Не вводи нового врага, локацию, катастрофу или сюжетную ветку только ради разнообразия "
+    "или указания РЕЖИССЁР СЦЕНЫ. РЕЖИССЁР СЦЕНЫ задаёт подачу, а не заменяет причинность. "
+    "Не игнорируй действия игроков даже если часть старой истории сокращена."
+)
 
 
 _state_lock = threading.Lock()
@@ -246,6 +254,29 @@ def _run_gemini_sync(
     raise RuntimeError(f"DnD Gemini fast path failed: {errors[-1] if errors else 'unknown error'}")
 
 
+def _bounded_head_tail(
+    text: str,
+    budget: int,
+    *,
+    head_ratio: float = 0.55,
+    marker: str = "\n\n[...середина истории сокращена...]\n\n",
+) -> str:
+    """Keep both the start and end of an oversized continuity-critical block."""
+    value = str(text or "")
+    budget = max(0, int(budget))
+    if not budget or not value:
+        return ""
+    if len(value) <= budget:
+        return value
+    if budget <= len(marker) + 2:
+        return value[:budget]
+
+    payload_budget = budget - len(marker)
+    head_size = max(1, min(payload_budget - 1, int(payload_budget * head_ratio)))
+    tail_size = payload_budget - head_size
+    return value[:head_size] + marker + value[-tail_size:]
+
+
 def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS) -> str:
     rows = []
     for item in getattr(session, "conversation", None) or []:
@@ -253,21 +284,52 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
             continue
         role = "assistant" if item.get("role") in {"assistant", "model"} else "user"
         rows.append(f"{role}: {item['content']}")
-    rows.append(f"user: {prompt}")
-    full = "\n\n".join(rows)
+
+    current = str(prompt or "")
+    full_rows = [DND_FALLBACK_CONTINUITY_GUARD, *rows, f"user: {current}"]
+    full = "\n\n".join(full_rows)
     if len(full) <= max_chars:
         return full
 
-    marker = "\n\n[...середина истории сокращена...]\n\n"
-    first = rows[0] if rows else ""
-    head_budget = min(len(first), min(4_000, max_chars // 3))
-    head = first[:head_budget]
-    tail_source = "\n\n".join(rows[1:]) if len(rows) > 1 else first
-    tail_budget = max(0, max_chars - len(head) - len(marker))
-    if tail_budget:
-        compact = f"{head}{marker}{tail_source[-tail_budget:]}"
-    else:
-        compact = head[:max_chars]
+    system = rows[0] if rows else ""
+    recent_history = "\n\n".join(rows[1:]) if len(rows) > 1 else ""
+    labels = (
+        "SYSTEM EXCERPT:\n",
+        "RECENT HISTORY:\n",
+        "CURRENT REQUEST:\n",
+    )
+    separator = "\n\n"
+    fixed = (
+        len(DND_FALLBACK_CONTINUITY_GUARD)
+        + sum(len(label) for label in labels)
+        + 3 * len(separator)
+    )
+    available = max(0, int(max_chars) - fixed)
+    if available < 64:
+        emergency = (
+            DND_FALLBACK_CONTINUITY_GUARD
+            + separator
+            + labels[2]
+            + current
+        )
+        return _bounded_head_tail(emergency, max_chars, head_ratio=0.35)
+
+    current_budget = int(available * 0.55)
+    history_budget = int(available * 0.25)
+    system_budget = available - current_budget - history_budget
+
+    system_excerpt = _bounded_head_tail(system, system_budget, head_ratio=0.55)
+    history_excerpt = recent_history[-history_budget:] if history_budget else ""
+    current_excerpt = _bounded_head_tail(current, current_budget, head_ratio=0.62)
+
+    compact = separator.join(
+        (
+            DND_FALLBACK_CONTINUITY_GUARD,
+            labels[0] + system_excerpt,
+            labels[1] + history_excerpt,
+            labels[2] + current_excerpt,
+        )
+    )
     return compact[:max_chars]
 
 
@@ -285,7 +347,7 @@ def _run_groq_sync(
         text = groq_ai.generate_text(
             fallback_prompt,
             max_tokens=max_tokens,
-            temperature=0.8,
+            temperature=DND_GROQ_FALLBACK_TEMPERATURE,
         )
     text = str(text or "").strip()
     if not text or text == "Ключ Groq не настроен":

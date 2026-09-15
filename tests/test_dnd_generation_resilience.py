@@ -79,6 +79,31 @@ def test_fallback_prompt_is_strictly_bounded_and_keeps_latest_request():
     assert "середина истории сокращена" in prompt
 
 
+def test_compact_fallback_keeps_group_actions_and_current_state_from_same_request():
+    session = _session()
+    session.conversation = [
+        {"role": "user", "content": "СИСТЕМНЫЕ ПРАВИЛА " + "с" * 12_000},
+        {"role": "assistant", "content": "ПРЕДЫДУЩАЯ СЦЕНА " + "п" * 8_000},
+    ]
+    current = (
+        "Игроки заявили действия одновременно:\n"
+        "- Six7ape: ACTIONS_SENTINEL машет руками\n"
+        "- Детектор: надевает волшебный плащ\n"
+        "- M&M: лезет вперёд\n"
+        + "контекст " * 1_500
+        + "\nБОЕВОЕ СОСТОЯНИЕ: CURRENT_STATE_SENTINEL"
+    )
+
+    prompt = resilience._fallback_prompt(session, current, max_chars=7_000)
+
+    assert len(prompt) <= 7_000
+    assert "CURRENT REQUEST" in prompt
+    assert "ACTIONS_SENTINEL" in prompt
+    assert "CURRENT_STATE_SENTINEL" in prompt
+    assert "Не вводи нового врага" in prompt
+    assert "РЕЖИССЁР СЦЕНЫ задаёт подачу" in prompt
+
+
 def test_configured_generator_appends_one_canonical_exchange(monkeypatch):
     persisted = []
 
