@@ -10,8 +10,8 @@ def test_exact_dates_multiple_destinations_and_adults_are_preserved():
     assert params == {
         "month": None,
         "countries": [
-            {"code": "VN", "name": "фукуок", "location_slug": "Phu.Quoc-VN"},
             {"code": "MV", "name": "мальдивы", "location_slug": None},
+            {"code": "VN", "name": "фукуок", "location_slug": "Phu.Quoc-VN"},
             {"code": "IN", "name": "гоа", "location_slug": None},
         ],
         "adults": 3,
@@ -37,11 +37,12 @@ def test_month_search_keeps_explicit_nights_and_hotel_mode():
     assert params["search_type"] == "hotel"
 
 
-def test_specific_destination_wins_over_country_alias_for_same_country():
+def test_country_alias_and_specific_destination_keep_legacy_order():
     params = leveltravel.parse_search_command("туры вьетнам фукуок май 2")
 
     assert params["countries"] == [
-        {"code": "VN", "name": "фукуок", "location_slug": "Phu.Quoc-VN"}
+        {"code": "VN", "name": "вьетнам", "location_slug": None},
+        {"code": "VN", "name": "фукуок", "location_slug": "Phu.Quoc-VN"},
     ]
 
 
