@@ -8,7 +8,6 @@ Provides two related safeguards:
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -22,9 +21,6 @@ GROUP_TURN_RULES = (
     "подряд, если нет обязательного немедленного последствия или броска, следующий интерактивный ход делай общим. "
     "Не ставь два общих INPUT подряд и не ломай причинность только ради этой частоты."
 )
-
-_ACTION_RE = re.compile(r"\[ACTION:[A-Z_]+(?P<suffix>[^\]]*)\]", re.I | re.S)
-_TARGETS_RE = re.compile(r"(?:^|;)TARGETS:([0-9,\s]+)(?=;|$)", re.I)
 
 
 def _group_turn_context(session) -> str:
@@ -80,68 +76,6 @@ def _advance_past_skipped_targets(session, target_user_ids: list[int]) -> None:
             break
         cursor = (cursor + 1) % len(order)
     session.spotlight_cursor = cursor
-
-
-def _response_target_ids(response: str) -> list[int] | None:
-    """Return TARGETS from the first action tag, or None when no action tag exists."""
-    action_match = _ACTION_RE.search(str(response or ""))
-    if not action_match:
-        return None
-    suffix = ";" + str(action_match.group("suffix") or "").strip(";") + ";"
-    target_match = _TARGETS_RE.search(suffix)
-    if not target_match:
-        return []
-    result = []
-    for raw in target_match.group(1).split(","):
-        token = raw.strip()
-        if token.isdigit() and int(token) not in result:
-            result.append(int(token))
-    return result
-
-
-def _valid_skip_continuation(response: str, skipped_targets: list[int]) -> bool:
-    targets = _response_target_ids(response)
-    if targets is None:
-        return False
-    skipped = {int(value) for value in skipped_targets}
-    return not skipped.intersection(targets)
-
-
-async def _generate_skip_continuation(dnd, session, prompt: str, targets: list[int], who: str) -> str:
-    """Generate the post-skip scene without immediately assigning the skipped actor again."""
-    response_text = await dnd.generate_session_response(
-        session,
-        dnd.with_scene_direction(session, prompt),
-    )
-    if _valid_skip_continuation(response_text, targets):
-        return response_text
-
-    logging.warning(
-        "DnD skip continuation repeated skipped target chat_id=%s target_user_ids=%s; retrying once",
-        getattr(session, "chat_id", None),
-        targets,
-    )
-    retry_prompt = (
-        prompt
-        + "\n\nКРИТИЧНО: предыдущий черновик продолжения отброшен, потому что он снова назначил действие "
-        f"пропущенному игроку ({who}; ID: {', '.join(map(str, targets))}) либо не вернул ACTION-тег. "
-        "Сгенерируй НОВОЕ продолжение. В ближайшем техническом теге нельзя указывать эти ID в TARGETS. "
-        "Не проси их бросать кубик, выбирать вариант или совершать действие. Передай инициативу всей партии "
-        "через [ACTION:INPUT] без TARGETS либо другому доступному герою."
-    )
-    response_text = await dnd.generate_session_response(
-        session,
-        dnd.with_scene_direction(session, retry_prompt),
-    )
-    if _valid_skip_continuation(response_text, targets):
-        return response_text
-
-    logging.warning(
-        "DnD skip continuation repeated skipped target twice chat_id=%s target_user_ids=%s; using group fallback",
-        getattr(session, "chat_id", None),
-        targets,
-    )
-    return "Ситуация не ждёт: остальные герои перехватывают инициативу. Что делаете? [ACTION:INPUT]"
 
 
 def _skippable_state(session) -> tuple[str, list[int]] | None:
@@ -207,22 +141,16 @@ async def skip_absent_turn(dnd, bot, chat_id: int, requester_user_id: int) -> bo
     who = ", ".join(names) if names else ", ".join(f"ID {value}" for value in targets)
     await bot.send_message(chat_id, f"⏭️ {kind.capitalize()} {who} пропущен ведущим: игрока сейчас нет.")
 
-    prompt = (
-        f"Ведущий пропустил текущий адресный {kind}, потому что игрок недоступен. "
-        f"Пропущены персонажи: {who} (ID: {', '.join(map(str, targets))}). "
-        "Не придумывай и не исполняй действие за отсутствующего игрока, не бросай за него кубик, "
-        "не считай пропуск успехом или провалом и не наказывай персонажа за отсутствие. "
-        "Коротко продолжи сцену с текущего состояния и передай инициативу дальше. "
-        "По возможности следующий интерактивный момент сделай общим свободным ходом партии [ACTION:INPUT] без TARGETS; "
-        "если это нелогично, адресуй его другому доступному герою. Не возвращай пропущенный ход сразу."
-    )
+    # Do not ask the model to narrate an immediate continuation here. The scene
+    # still contains the unresolved addressed action, so the model can naturally
+    # repeat exactly the same TARGETS and recreate the skipped roll forever.
+    # Hand control to the whole party deterministically; the next generated scene
+    # will then start from actual player input and the already-advanced spotlight.
     try:
-        response_text = await _generate_skip_continuation(dnd, session, prompt, targets, who)
-        await dnd.parse_and_execute_turn(bot, chat_id, response_text)
-    except Exception:
-        logging.exception("DnD continuation after skipped turn failed chat_id=%s", chat_id)
-        await bot.send_message(chat_id, "Мастер завис после пропуска. Отдаю ход всей партии.")
         await dnd.open_action_window(bot, chat_id)
+    except Exception:
+        logging.exception("DnD opening group turn after skip failed chat_id=%s", chat_id)
+        await bot.send_message(chat_id, "Мастер завис после пропуска. Напишите действие всей партией.")
     return True
 
 
