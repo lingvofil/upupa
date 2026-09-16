@@ -93,8 +93,8 @@ def test_group_resolution_prompt_binds_roll_to_actor_and_marks_parse_context():
 
     assert len(prompts) == 1
     prompt = prompts[0]
-    assert "Алина (id=1): незаметно стащить жетон" in prompt
-    assert "M&M (id=2): завести тарантас" in prompt
+    assert "Алина: незаметно стащить жетон (id=1)" in prompt
+    assert "M&M: завести тарантас (id=2)" in prompt
     assert "не предрешай его исход" in prompt
     assert "TARGETS этого броска обязан содержать id именно того игрока" in prompt
     assert "не выдавай и не отнимай" in prompt
