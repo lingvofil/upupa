@@ -27,6 +27,7 @@ jobs:
             infrastructure \
             AI/dnd_completion.py \
             AI/dnd_runtime.py \
+            AI/leveltravel.py \
             AI/leveltravel_parsing.py \
             AI/leveltravel_presentation.py \
             AI/leveltravel_provider.py \
