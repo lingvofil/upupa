@@ -116,9 +116,17 @@ def _sentence_with_name(source: str, name: str) -> str:
     return matches[-1] if matches else ""
 
 
-def _classify_outcome(text: str) -> tuple[str, str, str] | None:
+def _classify_player_outcome(sentence: str, name: str) -> tuple[str, str, str] | None:
+    if not sentence or not name:
+        return None
+    escaped_name = re.escape(name)
     for key, icon, label, pattern in _OUTCOME_RULES:
-        if pattern.search(text):
+        # Status usually follows the name ("Петя погиб"), but Russian prose also
+        # allows the predicate immediately before it ("погиб Петя"). Keep both
+        # windows tight so another player's fate in the same sentence cannot leak in.
+        after = re.search(rf"{escaped_name}.{{0,36}}({pattern.pattern})", sentence, re.I)
+        before = re.search(rf"({pattern.pattern}).{{0,16}}{escaped_name}", sentence, re.I)
+        if after or before:
             return key, icon, label
     return None
 
@@ -151,7 +159,7 @@ def _player_outcomes(row: dict, chat: dict) -> list[dict[str, str]]:
             sentence = _sentence_with_name(source, name)
             if sentence:
                 break
-        classified = _classify_outcome(sentence) if sentence else None
+        classified = _classify_player_outcome(sentence, name) if sentence else None
         detail = _outcome_detail(sentence, name) if sentence else ""
         if classified:
             key, icon, label = classified
