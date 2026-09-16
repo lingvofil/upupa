@@ -15,10 +15,14 @@ async def generate_image_bytes(
 
     GigaChat receives the original prompt directly. If it fails, providers that
     work better with English receive the translated/enhanced prompt when
-    ``translate_fallback`` is true.
+    ``translate_fallback`` is true. DnD prompts are already deliberately written
+    for image generation, so they must never be compressed by translate_to_en().
     """
     from AI import picgeneration as pg
     from AI.gigachat_image import generate_gigachat_image
+
+    if log_context == "dnd":
+        translate_fallback = False
 
     try:
         image = await generate_gigachat_image(prompt)

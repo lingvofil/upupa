@@ -30,6 +30,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
     from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
     from AI.dnd_healing_choice import install_dnd_healing_choice
+    from AI.dnd_image_quality import install_dnd_image_quality
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
     from AI.dnd_inventory_descriptions import (
         _inventory_context as render_inventory_description_context,
@@ -53,9 +54,13 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
+    from AI.dnd_manual_healing import install_dnd_manual_healing
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
+    from AI.dnd_pacing import install_dnd_pacing
+    from AI.dnd_player_agency import configure_dnd_player_agency
     from AI.dnd_player_combat import install_dnd_player_combat
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
+    from AI.dnd_profile_ownership import install_dnd_profile_ownership
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
@@ -100,9 +105,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
     configure_dnd_campaign(dnd, router, completion_policy=completion_policy)
+    configure_dnd_player_agency(dnd)
     configure_dnd_plot_resilience(campaign)
     configure_fun_inventory_rules(dnd)
     install_dnd_lobby_controls(router)
+    install_dnd_profile_ownership(router)
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_enemy_stats(dnd)
     install_dnd_unknown_action_recovery(dnd)
@@ -113,7 +120,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_two_heals(router)
     install_dnd_two_heals_compat()
     install_dnd_scaled_heals(router)
+    install_dnd_manual_healing(router)
     install_dnd_death_legacy(router)
+    install_dnd_image_quality(dnd)
     install_dnd_epilogue_image(dnd)
     install_dnd_inventory_reliability(dnd, metadata_policy=metadata_policy)
     install_dnd_inventory_effects(
@@ -131,6 +140,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
+    install_dnd_pacing(dnd)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
