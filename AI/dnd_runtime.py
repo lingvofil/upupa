@@ -58,6 +58,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_manual_healing import install_dnd_manual_healing
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
     from AI.dnd_pacing import install_dnd_pacing
+    from AI.dnd_party_history import install_dnd_party_history
     from AI.dnd_player_agency import configure_dnd_player_agency
     from AI.dnd_player_combat import install_dnd_player_combat
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
@@ -102,6 +103,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_dnd_inventory_transfer(router)
     state_view_policy = build_fun_inventory_state_view_policy()
     configure_dnd_state_commands(router, view_policy=state_view_policy)
+    install_dnd_party_history(router)
 
     # Install the bounded provider path before completion/campaign wrappers
     # capture generate_session_response, so every later DnD layer inherits it.
