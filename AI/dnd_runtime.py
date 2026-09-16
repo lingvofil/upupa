@@ -66,6 +66,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_spotlight import install_dnd_spotlight
     from AI.dnd_state_commands import configure_dnd_state_commands
+    from AI.dnd_target_mentions import configure_dnd_target_mentions
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
     from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
@@ -145,6 +146,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
+
+    # Target notifications must be inside spotlight. Spotlight may safely add a
+    # missing TARGETS value; the mention layer must therefore see the normalized
+    # action, not announce the model's pre-normalization target first.
+    configure_dnd_target_mentions(dnd)
     install_dnd_spotlight(dnd, state_policy=campaign_state_policy)
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
