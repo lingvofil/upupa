@@ -21,20 +21,27 @@ def _set_archive(monkeypatch):
         "version": 1,
         "chats": {
             str(CHAT_ID): {
-                "players": {},
+                "players": {
+                    "101": {"name": "Детектор"},
+                    "202": {"name": "М&M"},
+                },
                 "campaigns": [
                     {
                         "completed_at": "2026-09-13T18:20:00+00:00",
                         "selected_plot": "Старый почтамт объявил войну адресатам",
                         "finale": "Письма победили, а партия ушла через окно.",
-                        "epilogue": "Герои получили пожизненную подписку на спам.",
+                        "epilogue": "Детектор сдох, захлебнувшись чернилами. М&M выбрался через окно с проклятым конвертом.",
+                        "profiles": {"101": {"style": "алхимик"}, "202": {"style": "гонщик"}},
+                        "inventories": {},
                         "scenes": ["Почтамт окончательно развалился."],
                     },
                     {
                         "completed_at": "2026-09-16T20:05:00+00:00",
                         "selected_plot": "Санаторий снова потерял этаж",
                         "finale": "Лифт признал поражение. [ACTION:END]",
-                        "epilogue": "Санаторий устоял, герои унесли ключ и дурную славу.",
+                        "epilogue": "Ну шо, дегенераты, вы остались живы — чисто по случайности.",
+                        "profiles": {"101": {"style": "алхимик"}, "202": {"style": "гонщик"}},
+                        "inventories": {},
                         "scenes": ["Все выбрались на крышу."],
                     },
                 ],
@@ -53,31 +60,56 @@ def test_party_history_command_accepts_punctuation():
     assert not is_party_history_command("днд сюжет")
 
 
-def test_render_party_history_includes_existing_archive_newest_first(monkeypatch):
+def test_render_party_history_is_readable_and_newest_first(monkeypatch):
     _set_archive(monkeypatch)
 
     text = render_party_history(dnd, CHAT_ID)
 
-    assert "В архиве: 2" in text
-    assert "16.09.2026 — Санаторий снова потерял этаж" in text
-    assert "13.09.2026 — Старый почтамт объявил войну адресатам" in text
+    assert "🎲 Партии DnD · 2" in text
+    assert "16.09.2026 · Санаторий снова потерял этаж" in text
+    assert "13.09.2026 · Старый почтамт объявил войну адресатам" in text
     assert text.index("16.09.2026") < text.index("13.09.2026")
-    assert "Санаторий устоял, герои унесли ключ и дурную славу" in text
-    assert "пожизненную подписку на спам" in text
+    assert "👥 Детектор, М&M" in text
+    assert "🏁 ✅ Все выжили." in text
+    assert "☠️ Детектор — погиб: захлебнувшись чернилами" in text
+    assert "✅ М&M — выжил: через окно с проклятым конвертом" in text
     assert "[ACTION:END]" not in text
 
 
-def test_render_party_history_uses_finale_then_scene_as_fallback(monkeypatch):
+def test_old_archive_resolves_names_from_player_history(monkeypatch):
     archive = _set_archive(monkeypatch)
-    rows = archive["chats"][str(CHAT_ID)]["campaigns"]
-    rows[0]["epilogue"] = ""
-    rows[1]["epilogue"] = ""
-    rows[1]["finale"] = ""
+    row = archive["chats"][str(CHAT_ID)]["campaigns"][0]
+    assert "participants" not in row
 
     text = render_party_history(dnd, CHAT_ID)
 
-    assert "Письма победили, а партия ушла через окно" in text
-    assert "Все выбрались на крышу" in text
+    assert "👥 Детектор, М&M" in text
+    assert "Детектор — погиб" in text
+    assert "М&M — выжил" in text
+
+
+def test_same_sentence_does_not_leak_one_players_death_to_another(monkeypatch):
+    archive = _set_archive(monkeypatch)
+    row = archive["chats"][str(CHAT_ID)]["campaigns"][0]
+    row["epilogue"] = "Детектор погиб под шкафом, а М&M выбрался наружу и унёс ключ."
+
+    text = render_party_history(dnd, CHAT_ID)
+
+    assert "☠️ Детектор — погиб" in text
+    assert "✅ М&M — выжил" in text
+    assert "☠️ М&M" not in text
+
+
+def test_render_party_history_falls_back_to_saved_text_without_players(monkeypatch):
+    archive = _set_archive(monkeypatch)
+    row = archive["chats"][str(CHAT_ID)]["campaigns"][0]
+    row["profiles"] = {}
+    row["inventories"] = {}
+    row["epilogue"] = ""
+
+    text = render_party_history(dnd, CHAT_ID)
+
+    assert "🏁 Письма победили, а партия ушла через окно." in text
 
 
 def test_render_party_history_empty_archive(monkeypatch):
