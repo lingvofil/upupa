@@ -4,6 +4,21 @@ from __future__ import annotations
 import logging
 
 
+def _format_group_actions_for_model(actions: list[dict]) -> str:
+    """Render group actions with stable actor IDs for the model only."""
+    lines = []
+    for item in actions:
+        name = item.get("name") or "Игрок"
+        action = item.get("action") or ""
+        try:
+            user_id = int(item.get("user_id"))
+        except (TypeError, ValueError):
+            lines.append(f"- {name}: {action}")
+        else:
+            lines.append(f"- {name}: {action} (id={user_id})")
+    return "\n".join(lines)
+
+
 def install_dnd_group_action_resilience(dnd) -> None:
     """Make group-action resolution transactional around model generation.
 
@@ -35,6 +50,7 @@ def install_dnd_group_action_resilience(dnd) -> None:
         session.state = "RESOLVING"
         dnd.persist_dnd_sessions()
         actions_text = dnd._format_group_actions(actions)
+        actions_prompt_text = _format_group_actions_for_model(actions)
         await bot.send_message(chat_id, f"🎭 Ход партии:\n{actions_text}")
 
         try:
@@ -44,9 +60,13 @@ def install_dnd_group_action_resilience(dnd) -> None:
                     session,
                     (
                         "Игроки заявили действия одновременно:\n"
-                        f"{actions_text}\n"
-                        "Разреши их в одной общей сцене: учти взаимодействие действий, "
-                        "противоречия и последствия. Продолжай до 100 слов."
+                        f"{actions_prompt_text}\n"
+                        "Свяжи их в одну общую сцену: учти взаимодействие действий и противоречия. "
+                        "Если для заявленного действия нужен бросок, не предрешай его исход: опиши только попытку "
+                        "и поставь [ACTION:ROLL]. TARGETS этого броска обязан содержать id именно того игрока, "
+                        "чьё действие проверяется. До результата броска не объявляй успех или провал этого действия, "
+                        "не выдавай и не отнимай из-за него предметы и не фиксируй другие зависящие от броска последствия. "
+                        "Действия с очевидным исходом можно разрешить сразу. Продолжай до 100 слов."
                     ),
                 ),
             )
@@ -75,12 +95,18 @@ def install_dnd_group_action_resilience(dnd) -> None:
         session.pending_actions = {}
         session.action_target_user_ids = []
         dnd.persist_dnd_sessions()
+        session._upupa_resolving_group_actions = True
         try:
             await dnd.parse_and_execute_turn(bot, chat_id, response_text)
         except Exception:
             logging.exception("DnD group action continuation failed chat_id=%s", chat_id)
             await bot.send_message(chat_id, "Мастер завис на коллективном безумии. Продолжаем с нового хода.")
             await dnd.open_action_window(bot, chat_id)
+        finally:
+            try:
+                del session._upupa_resolving_group_actions
+            except AttributeError:
+                pass
 
     dnd.finalize_group_actions = finalize_group_actions
     dnd._upupa_dnd_group_action_resilience_installed = True

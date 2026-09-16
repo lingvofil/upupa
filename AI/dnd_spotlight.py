@@ -179,6 +179,12 @@ def _replace_or_add_single_target(response: str, user_id: int) -> str:
 
 def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     """Return response with a fair target, consumed player ID, and whether it was rewritten."""
+    # A CHECK emitted while resolving already-declared group actions belongs to
+    # the actor of that declaration. Spotlight chooses new proactive initiative;
+    # it must not reassign an in-flight consequence to the next player in line.
+    if getattr(session, "_upupa_resolving_group_actions", False):
+        return str(response or ""), None, False
+
     _ensure(session)
     action, suffix, targets = _action_info(response)
     if action not in _PROACTIVE_ACTIONS:
