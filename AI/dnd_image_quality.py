@@ -12,7 +12,7 @@ DND_GIGACHAT_IMAGE_RETRY_DELAY_SECONDS = 1.0
 
 
 async def generate_dnd_image_bytes(prompt: str):
-    """Try GigaChat repeatedly, then use the shared DnD-aware fallback path."""
+    """Try GigaChat twice, then let the shared waterfall give it one last attempt."""
     from AI.gigachat_image import generate_gigachat_image
 
     for attempt in range(1, DND_GIGACHAT_IMAGE_ATTEMPTS + 1):
