@@ -124,6 +124,8 @@ def _apply_stat_fields(item: dict, fields: dict) -> bool:
 
 def apply_artifact_stat_metadata(campaign, session, text, cleaned, notices):
     """Attach STAT metadata after the ordinary ITEM pipeline created the artifact."""
+    from AI import dnd_inventory_effects as effects
+
     valid_players = set()
     for participant in (getattr(session, "participants", {}) or {}).values():
         try:
@@ -131,7 +133,6 @@ def apply_artifact_stat_metadata(campaign, session, text, cleaned, notices):
         except (KeyError, TypeError, ValueError):
             continue
 
-    touched = False
     for match in campaign.META_RE.finditer(str(text or "")):
         kind, payload = match.group(1).upper(), match.group(2)
         if kind != "ITEM":
@@ -148,10 +149,8 @@ def apply_artifact_stat_metadata(campaign, session, text, cleaned, notices):
         if index is None or not isinstance(inventory[index], dict):
             continue
         if _apply_stat_fields(inventory[index], fields):
-            touched = True
+            effects._refresh_notice(notices, session, player, inventory[index])
 
-    if touched:
-        sync_party(session)
     return cleaned, notices
 
 
@@ -164,10 +163,11 @@ def _format_bonus_suffix(item) -> str:
 
 
 def _artifact_bonus_line(session, user_id: int) -> str | None:
-    bonuses = artifact_bonuses(session, user_id)
-    if not bonuses:
+    sheet = (getattr(session, "character_sheets", {}) or {}).get(str(int(user_id))) or {}
+    bonuses = sheet.get("artifact_stat_bonuses") if isinstance(sheet, dict) else None
+    if not isinstance(bonuses, dict) or not bonuses:
         return None
-    chunks = [f"{ABILITY_LABELS[key]} +{bonuses[key]}" for key in ABILITY_KEYS if bonuses.get(key)]
+    chunks = [f"{ABILITY_LABELS[key]} +{int(bonuses[key])}" for key in ABILITY_KEYS if bonuses.get(key)]
     return "✨ От артефактов: " + ", ".join(chunks)
 
 
@@ -188,7 +188,8 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy) -> None:
 
     def postprocess(session, text, cleaned, notices):
         cleaned, notices = apply_artifact_stat_metadata(campaign, session, text, cleaned, notices)
-        if sync_party(session):
+        changed = sync_party(session)
+        if changed or "STAT_BONUS:" in str(text or "").upper():
             dnd.persist_dnd_sessions()
         return cleaned, notices
 
@@ -207,8 +208,20 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy) -> None:
 
     async def initialize_party_combat(dnd_module, bot, session):
         result = await original_initialize(dnd_module, bot, session)
-        if sync_party(session):
+        changed = sync_party(session)
+        if changed:
             dnd_module.persist_dnd_sessions()
+            lines = []
+            for participant in (getattr(session, "participants", {}) or {}).values():
+                try:
+                    user_id = int(participant["user_id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                line = _artifact_bonus_line(session, user_id)
+                if line:
+                    lines.append(f"• {participant.get('name') or user_id}: {line.removeprefix('✨ ')}")
+            if lines:
+                await bot.send_message(session.chat_id, "✨ Наследуемые артефакты усиливают характеристики:\n" + "\n".join(lines))
         return result
 
     combat.initialize_party_combat = initialize_party_combat
