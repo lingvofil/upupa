@@ -12,7 +12,7 @@ DND_GIGACHAT_IMAGE_RETRY_DELAY_SECONDS = 1.0
 
 
 async def generate_dnd_image_bytes(prompt: str):
-    """Try GigaChat repeatedly, then fall back without rewriting the DnD prompt."""
+    """Try GigaChat repeatedly, then use the shared DnD-aware fallback path."""
     from AI.gigachat_image import generate_gigachat_image
 
     for attempt in range(1, DND_GIGACHAT_IMAGE_ATTEMPTS + 1):
@@ -24,16 +24,12 @@ async def generate_dnd_image_bytes(prompt: str):
         if attempt < DND_GIGACHAT_IMAGE_ATTEMPTS:
             await asyncio.sleep(DND_GIGACHAT_IMAGE_RETRY_DELAY_SECONDS)
 
-    # The shared waterfall starts with GigaChat once more and only then goes to
-    # reserves. Crucially, preserve the original long DnD prompt: its composition
-    # and negative constraints must not be compressed by translate_to_en().
+    # The shared waterfall starts with GigaChat once more and then goes to
+    # reserves. log_context="dnd" also guarantees that the original long DnD
+    # prompt is preserved instead of being compressed by translate_to_en().
     from features.image_generation import generate_image_bytes
 
-    return await generate_image_bytes(
-        prompt,
-        translate_fallback=False,
-        log_context="dnd-fallback",
-    )
+    return await generate_image_bytes(prompt, log_context="dnd")
 
 
 def install_dnd_image_quality(dnd) -> None:
