@@ -5,7 +5,6 @@ AI/dnd_combat.py
 AI/dnd_two_heals_compat.py
 AI/picgeneration.py
 AI/random_reactions.py
-AI/tutu.py
 AI/voice.py
 AI/whatisthere.py
 AI/whoparody.py
