@@ -47,12 +47,25 @@ def _session(state="WAITING_ACTION", targets=None):
 
 
 def _fake_dnd(session, generated_prompts, parsed_responses, persist_calls):
+    opened_windows = []
+
     async def generate(_session, prompt):
         generated_prompts.append(prompt)
         return "Партия смотрит дальше. [ACTION:INPUT]"
 
     async def parse(_bot, _chat_id, response):
         parsed_responses.append(response)
+
+    async def open_action_window(bot, chat_id, target_user_ids=None):
+        targets = list(target_user_ids or [])
+        opened_windows.append((chat_id, targets))
+        session.state = "WAITING_ACTION"
+        session.pending_roll = None
+        session.action_target_user_ids = targets
+        session.pending_actions = {}
+        session.action_deadline = None
+        session.action_prompt_message_id = 501
+        await bot.send_message(chat_id, "🎭 Ход партии.")
 
     return SimpleNamespace(
         dnd_sessions={session.chat_id: session},
@@ -63,7 +76,8 @@ def _fake_dnd(session, generated_prompts, parsed_responses, persist_calls):
         generate_session_response=generate,
         with_scene_direction=lambda _session, prompt: prompt,
         parse_and_execute_turn=parse,
-        open_action_window=lambda *_args, **_kwargs: None,
+        open_action_window=open_action_window,
+        _opened_windows=opened_windows,
     )
 
 
@@ -78,15 +92,15 @@ def test_admin_can_skip_unanswered_targeted_action_and_spotlight_moves_on():
     consumed = asyncio.run(skip_absent_turn(dnd, bot, session.chat_id, 999))
 
     assert consumed is True
-    assert session.state == "RESOLVING"
+    assert session.state == "WAITING_ACTION"
     assert session.action_target_user_ids == []
     assert session.spotlight_cursor == 1
     assert session.spotlight_individual_streak == 1
-    assert generated_prompts
-    assert "не бросай за него кубик" in generated_prompts[0]
-    assert "[ACTION:INPUT] без TARGETS" in generated_prompts[0]
-    assert parsed_responses == ["Партия смотрит дальше. [ACTION:INPUT]"]
+    assert generated_prompts == []
+    assert parsed_responses == []
+    assert dnd._opened_windows == [(session.chat_id, [])]
     assert any("пропущен ведущим" in text for _, text, _ in bot.messages)
+    assert any("Ход партии" in text for _, text, _ in bot.messages)
     assert persist_calls
 
 
@@ -109,18 +123,21 @@ def test_admin_can_skip_targeted_roll_without_faking_a_result():
 
     assert consumed is True
     assert session.pending_roll is None
+    assert session.state == "WAITING_ACTION"
     assert session.spotlight_cursor == 1
-    assert "не считай пропуск успехом или провалом" in generated_prompts[0]
+    assert dnd._opened_windows == [(session.chat_id, [])]
+    assert generated_prompts == []
+    assert parsed_responses == []
 
 
-def test_skip_retries_when_model_immediately_targets_same_absent_player():
+def test_skip_never_asks_model_to_continue_the_unresolved_absent_player_scene():
     session = _session(state="WAITING_ROLL", targets=[])
     session.spotlight_cursor = 1
     session.action_target_user_ids = []
     session.pending_roll = {
         "type": "CHECK",
         "skill": "Атлетика",
-        "reason": "освободить Детектора",
+        "reason": "освободить Детектора из механической руки",
         "dc": 12,
         "mode": "NORMAL",
         "target_user_ids": [2],
@@ -128,58 +145,16 @@ def test_skip_retries_when_model_immediately_targets_same_absent_player():
     generated_prompts = []
     parsed_responses = []
     dnd = _fake_dnd(session, generated_prompts, parsed_responses, [])
-    responses = iter(
-        [
-            "Алина снова спасает Детектора. [ACTION:ROLL;TYPE:CHECK;SKILL:Атлетика;REASON:освободить;DC:12;MODE:NORMAL;TARGETS:2]",
-            "Остальные перехватывают инициативу. [ACTION:INPUT]",
-        ]
-    )
-
-    async def generate(_session, prompt):
-        generated_prompts.append(prompt)
-        return next(responses)
-
-    dnd.generate_session_response = generate
 
     consumed = asyncio.run(skip_absent_turn(dnd, FakeBot(), session.chat_id, 999))
 
     assert consumed is True
     assert session.spotlight_cursor == 0
-    assert len(generated_prompts) == 2
-    assert "предыдущий черновик продолжения отброшен" in generated_prompts[1]
-    assert "нельзя указывать эти ID в TARGETS" in generated_prompts[1]
-    assert parsed_responses == ["Остальные перехватывают инициативу. [ACTION:INPUT]"]
-
-
-def test_skip_falls_back_to_group_input_if_model_repeats_absent_player_twice():
-    session = _session(state="WAITING_ROLL", targets=[])
-    session.spotlight_cursor = 1
-    session.action_target_user_ids = []
-    session.pending_roll = {
-        "type": "CHECK",
-        "skill": "Атлетика",
-        "reason": "освободить Детектора",
-        "dc": 12,
-        "mode": "NORMAL",
-        "target_user_ids": [2],
-    }
-    generated_prompts = []
-    parsed_responses = []
-    dnd = _fake_dnd(session, generated_prompts, parsed_responses, [])
-
-    async def generate(_session, prompt):
-        generated_prompts.append(prompt)
-        return "Алина опять действует. [ACTION:ROLL;TYPE:CHECK;SKILL:Атлетика;REASON:освободить;DC:12;MODE:NORMAL;TARGETS:2]"
-
-    dnd.generate_session_response = generate
-
-    consumed = asyncio.run(skip_absent_turn(dnd, FakeBot(), session.chat_id, 999))
-
-    assert consumed is True
-    assert len(generated_prompts) == 2
-    assert parsed_responses == [
-        "Ситуация не ждёт: остальные герои перехватывают инициативу. Что делаете? [ACTION:INPUT]"
-    ]
+    assert session.state == "WAITING_ACTION"
+    assert session.action_target_user_ids == []
+    assert generated_prompts == []
+    assert parsed_responses == []
+    assert dnd._opened_windows == [(session.chat_id, [])]
 
 
 def test_admin_skip_closes_unanswered_targeted_poll():
@@ -207,6 +182,8 @@ def test_admin_skip_closes_unanswered_targeted_poll():
     assert "poll-1" not in dnd.poll_map
     assert session.pending_poll is None
     assert session.current_poll_id is None
+    assert session.state == "WAITING_ACTION"
+    assert dnd._opened_windows == [(session.chat_id, [])]
 
 
 def test_dalshe_does_not_swallow_general_party_turn_or_non_host():
