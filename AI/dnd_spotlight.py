@@ -113,21 +113,24 @@ def next_spotlight(session) -> int | None:
     return None
 
 
-def _advance_after(session, user_id: int) -> None:
+def _advance_after(session, user_id: int, *, poll: bool = False) -> None:
     order = _ensure_order(session)
     if order and int(user_id) in order:
         session.spotlight_cursor = (order.index(int(user_id)) + 1) % len(order)
     session.spotlight_last_player = int(user_id)
     session.spotlight_individual_streak = int(session.spotlight_individual_streak) + 1
-    session.spotlight_decisions_since_poll = int(session.spotlight_decisions_since_poll) + 1
+    if poll:
+        session.spotlight_decisions_since_poll = 0
+    else:
+        session.spotlight_decisions_since_poll = int(session.spotlight_decisions_since_poll) + 1
 
 
-def _note_group_decision(session, *, poll: bool = False) -> None:
+def _note_group_decision(session, *, poll: bool = False, count: bool = True) -> None:
     _ensure(session)
     session.spotlight_individual_streak = 0
     if poll:
         session.spotlight_decisions_since_poll = 0
-    else:
+    elif count:
         session.spotlight_decisions_since_poll = int(session.spotlight_decisions_since_poll) + 1
 
 
@@ -164,8 +167,8 @@ def _replace_or_add_single_target(response: str, user_id: int) -> str:
     if not match:
         return text
     action = match.group(1).upper()
-    suffix = match.group(2) or ""
-    normalized = ";" + suffix.strip(";")
+    suffix = (match.group(2) or "").strip(";")
+    normalized = f";{suffix}" if suffix else ""
     target_match = re.search(r";TARGETS:[0-9,\s]+(?=;|$)", normalized, re.I)
     if target_match:
         normalized = normalized[: target_match.start()] + f";TARGETS:{int(user_id)}" + normalized[target_match.end() :]
@@ -184,10 +187,11 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     if action == "ROLL" and _roll_type(suffix) == "SAVE":
         return str(response or ""), None, False
 
-    # Untargeted INPUT/POLL are genuinely collective. Multi-target actions are
-    # also treated as collective and do not consume one hero's spotlight.
+    # Untargeted INPUT/POLL are genuinely collective. A group INPUT is counted
+    # only when its replies are finalized, so a one-person "party" turn can
+    # still advance that person's spotlight exactly once.
     if action in {"INPUT", "POLL"} and len(targets) != 1:
-        _note_group_decision(session, poll=action == "POLL")
+        _note_group_decision(session, poll=action == "POLL", count=action == "POLL")
         return str(response or ""), None, False
     if len(targets) > 1:
         _note_group_decision(session, poll=action == "POLL")
@@ -202,7 +206,7 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     current = targets[0] if targets else None
     rewritten = current != expected
     guarded = _replace_or_add_single_target(response, expected) if rewritten else str(response or "")
-    _advance_after(session, expected)
+    _advance_after(session, expected, poll=action == "POLL")
     return guarded, expected, rewritten
 
 
