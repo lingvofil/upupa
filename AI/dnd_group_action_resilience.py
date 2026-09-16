@@ -15,7 +15,7 @@ def _format_group_actions_for_model(actions: list[dict]) -> str:
         except (TypeError, ValueError):
             lines.append(f"- {name}: {action}")
         else:
-            lines.append(f"- {name} (id={user_id}): {action}")
+            lines.append(f"- {name}: {action} (id={user_id})")
     return "\n".join(lines)
 
 
