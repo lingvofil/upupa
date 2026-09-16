@@ -70,6 +70,7 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
 def test_deploy_requires_successful_checks_of_the_same_commit():
     source = _source(".github/workflows/deploy.yml")
     checks = _source(".github/workflows/tests.yml")
+    pyflakes_gate = _source("scripts/run_pyflakes.py")
 
     assert "  test:\n    uses: ./.github/workflows/tests.yml\n" in source
     assert "  deploy:\n    needs: test\n" in source
@@ -82,7 +83,8 @@ def test_deploy_requires_successful_checks_of_the_same_commit():
     assert "  workflow_call:\n" in checks
     assert "          ref: ${{ github.sha }}" in checks
     assert "DEPLOY_SHA: ${{ github.sha }}" in source
-    assert "python -m pyflakes" in checks
+    assert "python scripts/run_pyflakes.py" in checks
+    assert '[sys.executable, "-m", "pyflakes", *paths]' in pyflakes_gate
     assert "python -m pytest tests/ -q" in checks
     assert "--cov-fail-under=30" in checks
 
