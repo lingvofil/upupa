@@ -11,15 +11,22 @@ _PARTY_HISTORY_ALIASES = {"днд партии"}
 _TECH_TAG_RE = re.compile(r"\[(?:ACTION|THREAT|NPC|ITEM|REP):[^\]]*\]", re.I)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _MAX_VISIBLE_PARTIES = 20
-_PLOT_LIMIT = 58
-_DETAIL_LIMIT = 88
+_PLOT_LIMIT = 56
+_DETAIL_LIMIT = 58
 
 _OUTCOME_RULES = (
-    ("dead", "☠️", "погиб", re.compile(r"\b(?:сдох\w*|погиб\w*|умер\w*|убит\w*|мертв\w*|мёртв\w*|захлеб\w*|утонул\w*|раздав\w*|завалил\w*|прикончил\w*)", re.I)),
-    ("captured", "⛓", "в плену", re.compile(r"\b(?:в плен\w*|пленен\w*|пленён\w*|схвачен\w*|заперт\w*|в клетк\w*|забрали\w*)", re.I)),
-    ("injured", "🩹", "ранен", re.compile(r"\b(?:ранен\w*|покалеч\w*|пробит\w*|сломал\w*|сломлен\w*|без сознания|лишил\w*)", re.I)),
-    ("alive", "✅", "выжил", re.compile(r"\b(?:выжил\w*|уцелел\w*|спасся\w*|выбрался\w*|остал\w* жив\w*)", re.I)),
+    ("dead", "☠️", "погиб", re.compile(
+        r"\b(?:сдох\w*|погиб\w*|умер\w*|убит\w*|мертв\w*|мёртв\w*|захлеб\w*|утонул\w*|"
+        r"раздав\w*|завалил\w*|прикончил\w*|тушк\w*|дыр\w*.{0,12}башк\w*)", re.I)),
+    ("captured", "⛓", "в плену", re.compile(
+        r"\b(?:в плен\w*|пленен\w*|пленён\w*|схвачен\w*|заперт\w*|в клетк\w*|забрали\w*)", re.I)),
+    ("injured", "🩹", "ранен", re.compile(
+        r"\b(?:ранен\w*|покалеч\w*|пробит\w*|пролом\w*|сломал\w*|без сознания|лишил\w*)", re.I)),
+    ("alive", "✅", "выжил", re.compile(
+        r"\b(?:выжил\w*|уцелел\w*|спасся\w*|выбрался\w*|остал\w* жив\w*)", re.I)),
 )
+_GROUP_ALIVE_RE = re.compile(r"\b(?:все\s+выжил\w*|все\s+остал\w*\s+жив\w*|вы\s+остал\w*\s+жив\w*|никто\s+не\s+погиб\w*)", re.I)
+_GROUP_DEAD_RE = re.compile(r"\b(?:все\s+(?:сдох\w*|погиб\w*|умер\w*)|никто\s+не\s+выжил\w*)", re.I)
 _STATUS_PREFIX_RE = re.compile(
     r"^(?:сдох\w*|погиб\w*|умер\w*|убит\w*|мертв\w*|мёртв\w*|захлеб\w*|утонул\w*|"
     r"в плен\w*|пленен\w*|пленён\w*|схвачен\w*|заперт\w*|забрали\w*|"
@@ -125,40 +132,62 @@ def _outcome_detail(sentence: str, name: str) -> str:
     return _compact_text(fragment, _DETAIL_LIMIT)
 
 
+def _group_outcome(sources: list[str]) -> str | None:
+    combined = " ".join(sources)
+    if _GROUP_DEAD_RE.search(combined):
+        return "dead"
+    if _GROUP_ALIVE_RE.search(combined):
+        return "alive"
+    return None
+
+
 def _player_outcomes(row: dict, chat: dict) -> list[dict[str, str]]:
     sources = _summary_sources(row)
+    group_key = _group_outcome(sources)
     outcomes = []
     for _player_id, name in _player_names(row, chat):
-        sentence = next((_sentence_with_name(source, name) for source in sources if _sentence_with_name(source, name)), "")
+        sentence = ""
+        for source in sources:
+            sentence = _sentence_with_name(source, name)
+            if sentence:
+                break
         classified = _classify_outcome(sentence) if sentence else None
         detail = _outcome_detail(sentence, name) if sentence else ""
         if classified:
             key, icon, label = classified
+        elif group_key == "alive":
+            key, icon, label = "alive", "✅", "выжил"
+        elif group_key == "dead":
+            key, icon, label = "dead", "☠️", "погиб"
         else:
-            key, icon, label = "unknown", "•", "финал отдельно не описан"
+            key, icon, label = "unknown", "•", ""
         outcomes.append({"name": name, "key": key, "icon": icon, "label": label, "detail": detail})
     return outcomes
 
 
-def _overall_outcome(row: dict, outcomes: list[dict[str, str]]) -> str:
+def _format_outcome(row: dict, outcomes: list[dict[str, str]]) -> str:
     if outcomes:
         keys = [item["key"] for item in outcomes]
         if all(key == "alive" for key in keys):
-            return "Все выжили."
+            return "✅ Все выжили."
         if all(key == "dead" for key in keys):
-            return "Никто не выжил."
-        dead = [item["name"] for item in outcomes if item["key"] == "dead"]
-        if dead:
-            rest = len(outcomes) - len(dead)
-            suffix = " Остальные пережили финал или их судьба описана ниже." if rest else ""
-            return f"Погибли: {', '.join(dead)}.{suffix}"
-        if any(item["key"] == "captured" for item in outcomes):
-            return "Финал пережили не все свободными: часть группы оказалась в плену."
-        if any(item["key"] == "injured" for item in outcomes):
-            return "Группа пережила финал, но не без потерь и травм."
+            return "☠️ Никто не выжил."
+
+        bits = []
+        for item in outcomes:
+            if item["key"] == "unknown" and not item["detail"]:
+                continue
+            status = f"{item['icon']} {item['name']}"
+            if item["label"]:
+                status += f" — {item['label']}"
+            if item["detail"]:
+                status += f": {item['detail']}"
+            bits.append(status)
+        if bits:
+            return "; ".join(bits)
 
     sources = _summary_sources(row)
-    return _compact_text(sources[0], 110) if sources else "Итог не сохранился."
+    return _compact_text(sources[0], 120) if sources else "Итог не сохранился."
 
 
 def render_party_history(dnd, chat_id: int) -> str:
@@ -176,10 +205,7 @@ def render_party_history(dnd, chat_id: int) -> str:
         lines.append(f"{index}. {_completed_date(row)} · {plot}")
         if outcomes:
             lines.append("   👥 " + ", ".join(item["name"] for item in outcomes))
-        lines.append("   🏁 " + _overall_outcome(row, outcomes))
-        for item in outcomes:
-            detail = f": {item['detail']}" if item["detail"] else ""
-            lines.append(f"   {item['icon']} {item['name']} — {item['label']}{detail}")
+        lines.append("   🏁 " + _format_outcome(row, outcomes))
         lines.append("")
 
     hidden = len(rows) - len(visible)
