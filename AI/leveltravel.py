@@ -3,24 +3,36 @@ import logging
 from aiogram import types
 
 from AI.leveltravel_parsing import (
-    DESTINATION_MAPPING,
+    DESTINATION_MAPPING as DESTINATION_MAPPING,
     MONTH_MAPPING,
     SEARCH_TYPE_HOTEL,
     SEARCH_TYPE_TOUR,
-    calculate_nights,
-    parse_date_range,
+    calculate_nights as calculate_nights,
+    parse_date_range as parse_date_range,
     parse_search_command,
 )
-from AI.leveltravel_presentation import format_tours_message
-from AI.leveltravel_provider import deep_parse_date, quick_price_scan
-from AI.leveltravel_ranking import DESTINATION_INFO, analyze_tours_with_ai
-from AI.leveltravel_screenshots import capture_hotel_screenshots
-from AI.leveltravel_search import direct_deep_search, nights_match, two_phase_search
+from AI.leveltravel_presentation import format_tours_message as format_tours_message
+from AI.leveltravel_provider import (
+    deep_parse_date as deep_parse_date,
+    quick_price_scan as quick_price_scan,
+)
+from AI.leveltravel_ranking import (
+    DESTINATION_INFO as DESTINATION_INFO,
+    analyze_tours_with_ai as analyze_tours_with_ai,
+)
+from AI.leveltravel_screenshots import (
+    capture_hotel_screenshots as capture_hotel_screenshots,
+)
+from AI.leveltravel_search import (
+    direct_deep_search as direct_deep_search,
+    nights_match as nights_match,
+    two_phase_search as two_phase_search,
+)
 from AI.leveltravel_search_plan import (
-    LEVELTRAVEL_WEB_URL,
-    build_search_url,
-    generate_date_range_list,
-    generate_full_month_dates,
+    LEVELTRAVEL_WEB_URL as LEVELTRAVEL_WEB_URL,
+    build_search_url as build_search_url,
+    generate_date_range_list as generate_date_range_list,
+    generate_full_month_dates as generate_full_month_dates,
 )
 from AI.leveltravel_service import execute_search, rank_search_results
 from AI.leveltravel_transport import send_search_results
