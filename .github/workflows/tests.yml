@@ -27,6 +27,15 @@ jobs:
             infrastructure \
             AI/dnd_completion.py \
             AI/dnd_runtime.py \
+            AI/leveltravel_parsing.py \
+            AI/leveltravel_presentation.py \
+            AI/leveltravel_provider.py \
+            AI/leveltravel_ranking.py \
+            AI/leveltravel_screenshots.py \
+            AI/leveltravel_search.py \
+            AI/leveltravel_search_plan.py \
+            AI/leveltravel_service.py \
+            AI/leveltravel_transport.py \
             games/crocodile_persistence.py \
             games/crocodile_party_state.py \
             games/crocodile_duo_optin.py \
