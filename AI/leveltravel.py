@@ -27,6 +27,29 @@ from AI.leveltravel_transport import send_search_results
 from core.settings import ADMIN_ID
 
 
+# These names are intentionally kept on the legacy facade for compatibility.
+# Referencing them here lets pyflakes distinguish supported re-exports from
+# accidental stale imports without changing the module's public namespace.
+_COMPAT_REEXPORTS = (
+    DESTINATION_MAPPING,
+    calculate_nights,
+    parse_date_range,
+    format_tours_message,
+    deep_parse_date,
+    quick_price_scan,
+    DESTINATION_INFO,
+    analyze_tours_with_ai,
+    capture_hotel_screenshots,
+    direct_deep_search,
+    nights_match,
+    two_phase_search,
+    LEVELTRAVEL_WEB_URL,
+    build_search_url,
+    generate_date_range_list,
+    generate_full_month_dates,
+)
+
+
 async def process_search_command(message: types.Message, command_type: str = "туры"):
     """
     Главный обработчик команды поиска туров/отелей.
