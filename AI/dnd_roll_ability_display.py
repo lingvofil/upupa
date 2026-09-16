@@ -25,19 +25,40 @@ def _fields(raw: str) -> dict[str, str]:
     return result
 
 
+def _infer_check_ability(reason: str) -> str:
+    text = str(reason or "").casefold()
+    if any(word in text for word in ("поднят", "поднять", "слом", "выбить", "удерж", "толк", "тащ", "перетащ", "борьб")):
+        return "STR"
+    if any(word in text for word in ("краст", "спрят", "ловк", "прыг", "перепрыг", "баланс", "метн", "уклон", "карман")):
+        return "DEX"
+    if any(word in text for word in ("вспомн", "знан", "расслед", "разгад", "прочит", "маг", "механизм", "изуч")):
+        return "INT"
+    if any(word in text for word in ("замет", "услыш", "почувств", "след", "интуиц", "прониц", "осмотр")):
+        return "WIS"
+    if any(word in text for word in ("убед", "обман", "запуг", "уговор", "выступ", "очаров", "соврат", "торг")):
+        return "CHA"
+    if any(word in text for word in ("выдерж", "терп", "устоять", "устоят", "долго", "изнур")):
+        return "CON"
+    return "WIS"
+
+
 def _ability_for_fields(fields: dict[str, str]) -> str:
     from AI import dnd_combat as combat
 
     explicit = str(fields.get("ABILITY") or "").upper()
     if explicit in ABILITY_LABELS:
         return explicit
-    roll = {
-        "type": str(fields.get("TYPE") or "CHECK").upper(),
-        "skill": fields.get("SKILL"),
-        "reason": fields.get("REASON") or "проверка по ситуации",
-        "ability": None,
-    }
-    return combat._ability_for_roll(roll) or "CON"
+
+    roll_type = str(fields.get("TYPE") or "CHECK").upper()
+    reason = fields.get("REASON") or "проверка по ситуации"
+    if roll_type == "SAVE":
+        return combat._infer_save_ability(reason)
+
+    skill = str(fields.get("SKILL") or "").casefold()
+    for name, ability in combat.SKILL_ABILITIES.items():
+        if name.casefold() == skill:
+            return ability
+    return _infer_check_ability(reason)
 
 
 def annotate_roll_ability(response: str) -> tuple[str, str | None]:
