@@ -88,6 +88,18 @@ def test_old_archive_resolves_names_from_player_history(monkeypatch):
     assert "М&M — выжил" in text
 
 
+def test_same_sentence_does_not_leak_one_players_death_to_another(monkeypatch):
+    archive = _set_archive(monkeypatch)
+    row = archive["chats"][str(CHAT_ID)]["campaigns"][0]
+    row["epilogue"] = "Детектор погиб под шкафом, а М&M выбрался наружу и унёс ключ."
+
+    text = render_party_history(dnd, CHAT_ID)
+
+    assert "☠️ Детектор — погиб" in text
+    assert "✅ М&M — выжил" in text
+    assert "☠️ М&M" not in text
+
+
 def test_render_party_history_falls_back_to_saved_text_without_players(monkeypatch):
     archive = _set_archive(monkeypatch)
     row = archive["chats"][str(CHAT_ID)]["campaigns"][0]
