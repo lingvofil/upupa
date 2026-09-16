@@ -52,6 +52,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
+    from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
 
     router = dnd_router or dnd.dnd_router
     if getattr(router, "_upupa_dnd_runtime_configured", False):
@@ -92,6 +93,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_lobby_controls(router)
     install_dnd_combat(router, completion_policy=completion_policy)
     install_dnd_enemy_stats(dnd)
+    install_dnd_unknown_action_recovery(dnd)
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
     install_dnd_enemy_command(dnd)
     install_dnd_cinematic_combat(dnd)
