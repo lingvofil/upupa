@@ -18,6 +18,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI import dnd_completion as completion
     from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
+    from AI.dnd_artifact_stats import install_dnd_artifact_stats
     from AI.dnd_campaign import configure_dnd_campaign
     from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
     from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
@@ -61,7 +62,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_player_combat import install_dnd_player_combat
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_profile_ownership import install_dnd_profile_ownership
+    from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
+    from AI.dnd_spotlight import install_dnd_spotlight
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
@@ -116,6 +119,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
     install_dnd_enemy_command(dnd)
     install_dnd_cinematic_combat(dnd)
+    install_dnd_roll_ability_display(dnd)
     install_dnd_healing_choice(router)
     install_dnd_two_heals(router)
     install_dnd_two_heals_compat()
@@ -133,6 +137,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_inventory_effect_rules(dnd)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
+    install_dnd_artifact_stats(dnd, metadata_policy=metadata_policy)
     install_dnd_inventory_effect_refinement(dnd)
     configure_inventory_description_rules(dnd)
     install_dnd_inventory_descriptions(metadata_policy=metadata_policy)
@@ -140,6 +145,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
+    install_dnd_spotlight(dnd, state_policy=campaign_state_policy)
+    # Pacing stays outermost so a blocked consecutive NPC attack becomes a
+    # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
 
     completion.configure_dnd_campaign_compat(dnd)
