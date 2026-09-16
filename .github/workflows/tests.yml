@@ -57,7 +57,10 @@ jobs:
             tests/test_portability_regressions.py \
             tests/test_dnd_completion_policy.py \
             tests/test_dnd_runtime.py \
-            tests/test_crocodile_runtime.py
+            tests/test_crocodile_runtime.py \
+            tests/test_leveltravel_integration.py
+      - name: Run integration smoke
+        run: python -m pytest tests/test_leveltravel_integration.py -q
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
