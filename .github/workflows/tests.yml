@@ -21,7 +21,11 @@ jobs:
       - name: Run static checks
         run: python scripts/run_pyflakes.py
       - name: Run integration smoke
-        run: python -m pytest tests/test_leveltravel_integration.py -q
+        run: >-
+          python -m pytest
+          tests/test_leveltravel_integration.py
+          tests/test_tutu_integration.py
+          -q
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -q
