@@ -87,7 +87,6 @@ async def two_phase_search(
     prices_phase2 = [
         t["price"] for t in all_parsed_tours if t.get("price", 0) > 0
     ]
-    sorted_prices_phase2 = sorted(prices_phase2) if prices_phase2 else []
 
     median_phase1 = sorted_prices_phase1[n1 // 2] if n1 > 0 else 0
 
