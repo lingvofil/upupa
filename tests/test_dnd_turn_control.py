@@ -113,6 +113,75 @@ def test_admin_can_skip_targeted_roll_without_faking_a_result():
     assert "не считай пропуск успехом или провалом" in generated_prompts[0]
 
 
+def test_skip_retries_when_model_immediately_targets_same_absent_player():
+    session = _session(state="WAITING_ROLL", targets=[])
+    session.spotlight_cursor = 1
+    session.action_target_user_ids = []
+    session.pending_roll = {
+        "type": "CHECK",
+        "skill": "Атлетика",
+        "reason": "освободить Детектора",
+        "dc": 12,
+        "mode": "NORMAL",
+        "target_user_ids": [2],
+    }
+    generated_prompts = []
+    parsed_responses = []
+    dnd = _fake_dnd(session, generated_prompts, parsed_responses, [])
+    responses = iter(
+        [
+            "Алина снова спасает Детектора. [ACTION:ROLL;TYPE:CHECK;SKILL:Атлетика;REASON:освободить;DC:12;MODE:NORMAL;TARGETS:2]",
+            "Остальные перехватывают инициативу. [ACTION:INPUT]",
+        ]
+    )
+
+    async def generate(_session, prompt):
+        generated_prompts.append(prompt)
+        return next(responses)
+
+    dnd.generate_session_response = generate
+
+    consumed = asyncio.run(skip_absent_turn(dnd, FakeBot(), session.chat_id, 999))
+
+    assert consumed is True
+    assert session.spotlight_cursor == 0
+    assert len(generated_prompts) == 2
+    assert "предыдущий черновик продолжения отброшен" in generated_prompts[1]
+    assert "нельзя указывать эти ID в TARGETS" in generated_prompts[1]
+    assert parsed_responses == ["Остальные перехватывают инициативу. [ACTION:INPUT]"]
+
+
+def test_skip_falls_back_to_group_input_if_model_repeats_absent_player_twice():
+    session = _session(state="WAITING_ROLL", targets=[])
+    session.spotlight_cursor = 1
+    session.action_target_user_ids = []
+    session.pending_roll = {
+        "type": "CHECK",
+        "skill": "Атлетика",
+        "reason": "освободить Детектора",
+        "dc": 12,
+        "mode": "NORMAL",
+        "target_user_ids": [2],
+    }
+    generated_prompts = []
+    parsed_responses = []
+    dnd = _fake_dnd(session, generated_prompts, parsed_responses, [])
+
+    async def generate(_session, prompt):
+        generated_prompts.append(prompt)
+        return "Алина опять действует. [ACTION:ROLL;TYPE:CHECK;SKILL:Атлетика;REASON:освободить;DC:12;MODE:NORMAL;TARGETS:2]"
+
+    dnd.generate_session_response = generate
+
+    consumed = asyncio.run(skip_absent_turn(dnd, FakeBot(), session.chat_id, 999))
+
+    assert consumed is True
+    assert len(generated_prompts) == 2
+    assert parsed_responses == [
+        "Ситуация не ждёт: остальные герои перехватывают инициативу. Что делаете? [ACTION:INPUT]"
+    ]
+
+
 def test_admin_skip_closes_unanswered_targeted_poll():
     session = _session(state="WAITING_POLL")
     session.action_target_user_ids = []
