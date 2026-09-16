@@ -13,6 +13,8 @@ SPOTLIGHT_RULES = f"""
 адресный INPUT, CHECK, PLAYER_ATTACK, CINEMATIC_ATTACK или личный POLL. Не отдавай два таких хода подряд одному герою,
 пока есть другие живые участники. Общий INPUT/POLL всей партии очередь не расходует. SAVE, атака врага и другие вынужденные
 реакции тоже не расходуют очередь: персонаж не теряет инициативу за то, что на него свалился потолок.
+TARGETS всегда должен совпадать с героем, для которого написан художественный текст: не описывай действие или проблему
+одного героя, а технический бросок не назначай другому. Если сюжет уже явно требует конкретного героя, сохраняй эту причинность.
 После двух индивидуальных инициатив подряд предпочитай общий сюжетный эпизод/ход партии, чтобы история снова собрала всех.
 Голосование используй для настоящей общей развилки, а не как меню каждого микродействия и не как замену обычному ходу.
 """.strip()
@@ -207,13 +209,23 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     if expected is None:
         return str(response or ""), None, False
 
-    # CHECK/attacks without TARGETS would otherwise become a race to type
-    # «кидаю». Make them deterministic. Addressed INPUT/POLL are rotated too.
-    current = targets[0] if targets else None
-    rewritten = current != expected
-    guarded = _replace_or_add_single_target(response, expected) if rewritten else str(response or "")
+    # Never rewrite an explicit TARGETS after the model has already authored the
+    # scene around that actor. Doing so makes the prose, mention and actual roll
+    # disagree. The prompt still asks for fair rotation; if it selects somebody
+    # else explicitly, preserve causality and leave the expected player queued.
+    if targets:
+        current = targets[0]
+        if current == expected:
+            _advance_after(session, current, poll=action == "POLL")
+            return str(response or ""), current, False
+        return str(response or ""), None, False
+
+    # Untargeted CHECK/attacks would otherwise become a race to type «кидаю».
+    # Assign only missing targets: this is safe because no actor was named in the
+    # technical action yet and therefore no existing TARGETS needs retargeting.
+    guarded = _replace_or_add_single_target(response, expected)
     _advance_after(session, expected, poll=action == "POLL")
-    return guarded, expected, rewritten
+    return guarded, expected, guarded != str(response or "")
 
 
 def _spotlight_context(session) -> str:
@@ -282,7 +294,7 @@ def install_dnd_spotlight(dnd, *, state_policy) -> None:
             guarded, expected, rewritten = enforce_spotlight(session, response)
             if rewritten:
                 logging.warning(
-                    "DnD rotated individual spotlight chat_id=%s expected_user_id=%s",
+                    "DnD assigned missing individual spotlight chat_id=%s expected_user_id=%s",
                     chat_id,
                     expected,
                 )

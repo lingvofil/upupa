@@ -25,7 +25,7 @@ def _session():
     )
 
 
-def test_spotlight_rotates_wrong_repeated_individual_target():
+def test_spotlight_preserves_explicit_target_and_keeps_expected_player_queued():
     session = _session()
 
     first, consumed, rewritten = enforce_spotlight(session, "Сцена [ACTION:INPUT;TARGETS:1]")
@@ -35,10 +35,38 @@ def test_spotlight_rotates_wrong_repeated_individual_target():
     assert next_spotlight(session) == 2
 
     second, consumed, rewritten = enforce_spotlight(session, "Ещё сцена [ACTION:INPUT;TARGETS:1]")
-    assert "[ACTION:INPUT;TARGETS:2]" in second
+    assert second.endswith("[ACTION:INPUT;TARGETS:1]")
+    assert "TARGETS:2" not in second
+    assert consumed is None
+    assert rewritten is False
+    assert next_spotlight(session) == 2
+
+    third, consumed, rewritten = enforce_spotlight(
+        session,
+        "Следующая проверка [ACTION:ROLL;TYPE:CHECK;SKILL:Ловкость рук;REASON:найти вещи;DC:12;MODE:NORMAL]",
+    )
+    assert "TARGETS:2" in third
     assert consumed == 2
     assert rewritten is True
     assert next_spotlight(session) == 3
+
+
+def test_spotlight_does_not_retarget_story_bound_roll():
+    session = _session()
+    session.spotlight_cursor = 1
+    response = (
+        "Детектор, у тебя из карманов всё высыпалось. "
+        "[ACTION:ROLL;TYPE:CHECK;TARGETS:1;SKILL:Ловкость рук;REASON:найти потерянные предметы;DC:12;MODE:NORMAL]"
+    )
+
+    guarded, consumed, rewritten = enforce_spotlight(session, response)
+
+    assert guarded == response
+    assert "TARGETS:1" in guarded
+    assert "TARGETS:2" not in guarded
+    assert consumed is None
+    assert rewritten is False
+    assert next_spotlight(session) == 2
 
 
 def test_spotlight_assigns_untargeted_check_but_not_save():
