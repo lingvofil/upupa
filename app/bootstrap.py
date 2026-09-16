@@ -28,26 +28,6 @@ REQUIRED_BACKGROUND_TASKS = (
 )
 
 _main_router: Router | None = None
-_dnd_roll_labels_configured = False
-
-
-def _critical_dnd_roll_note(result: int) -> str | None:
-    if result == 20:
-        return "КРИТИЧЕСКАЯ УДАЧА"
-    if result == 1:
-        return "КРИТИЧЕСКАЯ НЕУДАЧА"
-    return None
-
-
-def _configure_dnd_roll_labels() -> None:
-    global _dnd_roll_labels_configured
-    if _dnd_roll_labels_configured:
-        return
-
-    from AI import dnd
-
-    dnd._natural_roll_note = _critical_dnd_roll_note
-    _dnd_roll_labels_configured = True
 
 
 def _background_ai_factory(coro_factory):
@@ -227,7 +207,6 @@ class UpupaApplication:
 
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
-        _configure_dnd_roll_labels()
         main_router = get_main_router()
         attached = tuple(getattr(self.dispatcher, "sub_routers", ()))
 

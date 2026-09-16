@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 
+def _critical_dnd_roll_note(result: int) -> str | None:
+    if result == 20:
+        return "КРИТИЧЕСКАЯ УДАЧА"
+    if result == 1:
+        return "КРИТИЧЕСКАЯ НЕУДАЧА"
+    return None
+
+
 def configure_dnd_runtime(dnd_router=None) -> None:
     """Compose DnD mechanics once with explicit completion policy dependencies."""
     from AI import dnd
@@ -57,6 +65,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     router = dnd_router or dnd.dnd_router
     if getattr(router, "_upupa_dnd_runtime_configured", False):
         return
+
+    # Presentation-level roll labels belong to the DnD composition root rather
+    # than the generic application bootstrap mutating a private DnD function.
+    dnd._natural_roll_note = _critical_dnd_roll_note
 
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
