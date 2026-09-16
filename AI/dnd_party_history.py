@@ -9,9 +9,24 @@ from aiogram import BaseMiddleware
 
 _PARTY_HISTORY_ALIASES = {"днд партии"}
 _TECH_TAG_RE = re.compile(r"\[(?:ACTION|THREAT|NPC|ITEM|REP):[^\]]*\]", re.I)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _MAX_VISIBLE_PARTIES = 20
-_PLOT_LIMIT = 64
-_SUMMARY_LIMIT = 96
+_PLOT_LIMIT = 58
+_DETAIL_LIMIT = 88
+
+_OUTCOME_RULES = (
+    ("dead", "☠️", "погиб", re.compile(r"\b(?:сдох\w*|погиб\w*|умер\w*|убит\w*|мертв\w*|мёртв\w*|захлеб\w*|утонул\w*|раздав\w*|завалил\w*|прикончил\w*)", re.I)),
+    ("captured", "⛓", "в плену", re.compile(r"\b(?:в плен\w*|пленен\w*|пленён\w*|схвачен\w*|заперт\w*|в клетк\w*|забрали\w*)", re.I)),
+    ("injured", "🩹", "ранен", re.compile(r"\b(?:ранен\w*|покалеч\w*|пробит\w*|сломал\w*|сломлен\w*|без сознания|лишил\w*)", re.I)),
+    ("alive", "✅", "выжил", re.compile(r"\b(?:выжил\w*|уцелел\w*|спасся\w*|выбрался\w*|остал\w* жив\w*)", re.I)),
+)
+_STATUS_PREFIX_RE = re.compile(
+    r"^(?:сдох\w*|погиб\w*|умер\w*|убит\w*|мертв\w*|мёртв\w*|захлеб\w*|утонул\w*|"
+    r"в плен\w*|пленен\w*|пленён\w*|схвачен\w*|заперт\w*|забрали\w*|"
+    r"ранен\w*|покалеч\w*|выжил\w*|уцелел\w*|спасся\w*|выбрался\w*|остал\w* жив\w*)"
+    r"[\s,:;—-]*",
+    re.I,
+)
 
 
 def _normalize_command(text: str | None) -> str:
@@ -30,9 +45,13 @@ def _campaign_module(dnd):
     return dnd_campaign
 
 
-def _compact_text(value, limit: int) -> str:
+def _clean_text(value) -> str:
     text = _TECH_TAG_RE.sub("", str(value or ""))
-    text = " ".join(text.split()).strip()
+    return " ".join(text.split()).strip()
+
+
+def _compact_text(value, limit: int) -> str:
+    text = _clean_text(value)
     if not text:
         return ""
     if len(text) <= limit:
@@ -51,35 +70,122 @@ def _completed_date(row: dict) -> str:
     return parsed.strftime("%d.%m.%Y")
 
 
-def _campaign_summary(row: dict) -> str:
-    for candidate in (
-        row.get("epilogue"),
-        row.get("finale"),
-        (row.get("scenes") or [None])[-1],
-    ):
-        summary = _compact_text(candidate, _SUMMARY_LIMIT)
-        if summary:
-            return summary
-    return "Итог не сохранился. Видимо, мастер унёс его в могилу."
+def _summary_sources(row: dict) -> list[str]:
+    return [
+        text
+        for text in (
+            _clean_text(row.get("epilogue")),
+            _clean_text(row.get("finale")),
+            _clean_text((row.get("scenes") or [None])[-1]),
+        )
+        if text
+    ]
+
+
+def _player_names(row: dict, chat: dict) -> list[tuple[str, str]]:
+    snapshot = row.get("participants") or {}
+    profiles = row.get("profiles") or {}
+    inventories = row.get("inventories") or {}
+    keys = list(dict.fromkeys([*snapshot.keys(), *profiles.keys(), *inventories.keys()]))
+    historical_players = chat.get("players") or {}
+    result = []
+    for key in keys:
+        player = historical_players.get(str(key)) or {}
+        name = snapshot.get(str(key)) or player.get("name")
+        if isinstance(name, dict):
+            name = name.get("name")
+        name = _clean_text(name)
+        if name:
+            result.append((str(key), name))
+    return result
+
+
+def _sentence_with_name(source: str, name: str) -> str:
+    needle = name.casefold()
+    chunks = [chunk.strip() for chunk in _SENTENCE_SPLIT_RE.split(source) if chunk.strip()]
+    matches = [chunk for chunk in chunks if needle in chunk.casefold()]
+    if not matches and needle in source.casefold():
+        matches = [source]
+    return matches[-1] if matches else ""
+
+
+def _classify_outcome(text: str) -> tuple[str, str, str] | None:
+    for key, icon, label, pattern in _OUTCOME_RULES:
+        if pattern.search(text):
+            return key, icon, label
+    return None
+
+
+def _outcome_detail(sentence: str, name: str) -> str:
+    lowered = sentence.casefold()
+    index = lowered.find(name.casefold())
+    fragment = sentence[index + len(name):] if index >= 0 else sentence
+    fragment = fragment.lstrip(" ,:;—-–")
+    fragment = _STATUS_PREFIX_RE.sub("", fragment, count=1)
+    return _compact_text(fragment, _DETAIL_LIMIT)
+
+
+def _player_outcomes(row: dict, chat: dict) -> list[dict[str, str]]:
+    sources = _summary_sources(row)
+    outcomes = []
+    for _player_id, name in _player_names(row, chat):
+        sentence = next((_sentence_with_name(source, name) for source in sources if _sentence_with_name(source, name)), "")
+        classified = _classify_outcome(sentence) if sentence else None
+        detail = _outcome_detail(sentence, name) if sentence else ""
+        if classified:
+            key, icon, label = classified
+        else:
+            key, icon, label = "unknown", "•", "финал отдельно не описан"
+        outcomes.append({"name": name, "key": key, "icon": icon, "label": label, "detail": detail})
+    return outcomes
+
+
+def _overall_outcome(row: dict, outcomes: list[dict[str, str]]) -> str:
+    if outcomes:
+        keys = [item["key"] for item in outcomes]
+        if all(key == "alive" for key in keys):
+            return "Все выжили."
+        if all(key == "dead" for key in keys):
+            return "Никто не выжил."
+        dead = [item["name"] for item in outcomes if item["key"] == "dead"]
+        if dead:
+            rest = len(outcomes) - len(dead)
+            suffix = " Остальные пережили финал или их судьба описана ниже." if rest else ""
+            return f"Погибли: {', '.join(dead)}.{suffix}"
+        if any(item["key"] == "captured" for item in outcomes):
+            return "Финал пережили не все свободными: часть группы оказалась в плену."
+        if any(item["key"] == "injured" for item in outcomes):
+            return "Группа пережила финал, но не без потерь и травм."
+
+    sources = _summary_sources(row)
+    return _compact_text(sources[0], 110) if sources else "Итог не сохранился."
 
 
 def render_party_history(dnd, chat_id: int) -> str:
     campaign = _campaign_module(dnd)
-    rows = list((campaign._chat_history(chat_id).get("campaigns") or []))
+    chat = campaign._chat_history(chat_id)
+    rows = list((chat.get("campaigns") or []))
     if not rows:
         return "🎲 Прошедших партий в сохранённом архиве этого чата пока нет."
 
     visible = rows[-_MAX_VISIBLE_PARTIES:][::-1]
-    lines = ["🎲 Прошедшие партии", f"В архиве: {len(rows)}.", ""]
+    lines = [f"🎲 Партии DnD · {len(rows)}", ""]
     for index, row in enumerate(visible, start=1):
         plot = _compact_text(row.get("selected_plot"), _PLOT_LIMIT) or "Безымянная катастрофа"
-        lines.append(f"{index}. {_completed_date(row)} — {plot}")
-        lines.append(f"   ↳ {_campaign_summary(row)}")
+        outcomes = _player_outcomes(row, chat)
+        lines.append(f"{index}. {_completed_date(row)} · {plot}")
+        if outcomes:
+            lines.append("   👥 " + ", ".join(item["name"] for item in outcomes))
+        lines.append("   🏁 " + _overall_outcome(row, outcomes))
+        for item in outcomes:
+            detail = f": {item['detail']}" if item["detail"] else ""
+            lines.append(f"   {item['icon']} {item['name']} — {item['label']}{detail}")
+        lines.append("")
 
     hidden = len(rows) - len(visible)
     if hidden > 0:
-        lines.extend(("", f"…ещё {hidden} более старых записей не показано."))
-    return "\n".join(lines)
+        lines.append(f"…ещё {hidden} более старых записей не показано.")
+    return "\n".join(lines).rstrip()
 
 
 class DndPartyHistoryMiddleware(BaseMiddleware):
