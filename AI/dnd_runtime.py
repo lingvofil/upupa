@@ -67,6 +67,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_spotlight import install_dnd_spotlight
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_target_mentions import configure_dnd_target_mentions
+    from AI.dnd_turn_control import install_dnd_turn_control
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
     from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
@@ -152,6 +153,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # action, not announce the model's pre-normalization target first.
     configure_dnd_target_mentions(dnd)
     install_dnd_spotlight(dnd, state_policy=campaign_state_policy)
+    install_dnd_turn_control(dnd, router)
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
