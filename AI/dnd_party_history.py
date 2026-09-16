@@ -10,6 +10,7 @@ from aiogram import BaseMiddleware
 _PARTY_HISTORY_ALIASES = {"днд партии"}
 _TECH_TAG_RE = re.compile(r"\[(?:ACTION|THREAT|NPC|ITEM|REP):[^\]]*\]", re.I)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+_CLAUSE_SPLIT_RE = re.compile(r"\s*;\s*|,\s*(?:а|но|зато|пока)\s+", re.I)
 _MAX_VISIBLE_PARTIES = 20
 _PLOT_LIMIT = 56
 _DETAIL_LIMIT = 58
@@ -116,25 +117,25 @@ def _sentence_with_name(source: str, name: str) -> str:
     return matches[-1] if matches else ""
 
 
+def _player_clause(sentence: str, name: str) -> str:
+    needle = name.casefold()
+    clauses = [chunk.strip() for chunk in _CLAUSE_SPLIT_RE.split(sentence) if chunk.strip()]
+    return next((chunk for chunk in clauses if needle in chunk.casefold()), sentence)
+
+
 def _classify_player_outcome(sentence: str, name: str) -> tuple[str, str, str] | None:
-    if not sentence or not name:
-        return None
-    escaped_name = re.escape(name)
+    clause = _player_clause(sentence, name)
     for key, icon, label, pattern in _OUTCOME_RULES:
-        # Status usually follows the name ("Петя погиб"), but Russian prose also
-        # allows the predicate immediately before it ("погиб Петя"). Keep both
-        # windows tight so another player's fate in the same sentence cannot leak in.
-        after = re.search(rf"{escaped_name}.{{0,36}}({pattern.pattern})", sentence, re.I)
-        before = re.search(rf"({pattern.pattern}).{{0,16}}{escaped_name}", sentence, re.I)
-        if after or before:
+        if pattern.search(clause):
             return key, icon, label
     return None
 
 
 def _outcome_detail(sentence: str, name: str) -> str:
-    lowered = sentence.casefold()
+    fragment = _player_clause(sentence, name)
+    lowered = fragment.casefold()
     index = lowered.find(name.casefold())
-    fragment = sentence[index + len(name):] if index >= 0 else sentence
+    fragment = fragment[index + len(name):] if index >= 0 else fragment
     fragment = fragment.lstrip(" ,:;—-–")
     fragment = _STATUS_PREFIX_RE.sub("", fragment, count=1)
     return _compact_text(fragment, _DETAIL_LIMIT)
