@@ -16,6 +16,7 @@ from typing import Optional
 import requests
 
 from core.settings import AIHORDE_API_KEY
+from infrastructure.ai.execution import run_ai_provider_call
 
 
 AIHORDE_API_URL = "https://aihorde.net/api/v2"
@@ -26,6 +27,7 @@ AIHORDE_MAX_WAIT_SECONDS = 120
 AIHORDE_SUBMIT_TIMEOUT_SECONDS = 30
 AIHORDE_STATUS_TIMEOUT_SECONDS = 20
 AIHORDE_DOWNLOAD_TIMEOUT_SECONDS = 60
+AIHORDE_REQUEST_TIMEOUT_SECONDS = 180
 AIHORDE_NEGATIVE_PROMPT = "blurry, deformed, bad anatomy, low quality"
 
 
@@ -145,6 +147,19 @@ def _generate_aihorde_image_sync(prompt: str) -> Optional[bytes]:
         return None
 
 
+def _generate_aihorde_image_governed(prompt: str) -> Optional[bytes]:
+    return run_ai_provider_call(
+        "aihorde.image.generate",
+        _generate_aihorde_image_sync,
+        prompt,
+        timeout_seconds=AIHORDE_REQUEST_TIMEOUT_SECONDS,
+    )
+
+
 async def generate_aihorde_image(prompt: str) -> Optional[bytes]:
-    """Async facade for the blocking AI Horde HTTP workflow."""
-    return await asyncio.to_thread(_generate_aihorde_image_sync, prompt)
+    """Run the blocking Horde workflow under the process-wide AI governor."""
+    try:
+        return await asyncio.to_thread(_generate_aihorde_image_governed, prompt)
+    except Exception as exc:
+        logging.warning("AI Horde governed request failed: %s", exc)
+        return None
