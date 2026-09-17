@@ -184,9 +184,27 @@ def format_reply_context(message: types.Message) -> str:
             "а не пользователь чата и не другой бот."
         )
 
+    quote = getattr(message, "quote", None)
+    quote_text = (getattr(quote, "text", None) or "").strip()
+    if quote_text:
+        if getattr(quote, "is_manual", False):
+            parts.append(
+                "Пользователь использовал Telegram Quote & Reply и специально выделил "
+                f"следующий фрагмент:\n{quote_text}\n"
+                "Это главный предмет текущего ответа; полный текст исходного сообщения ниже — фон."
+            )
+        else:
+            parts.append(
+                "Telegram передал цитируемый фрагмент ответа:\n"
+                f"{quote_text}\n"
+                "Считай этот фрагмент главным предметом текущего ответа; полный текст исходного "
+                "сообщения ниже — фон."
+            )
+
     text = (getattr(replied, "text", None) or getattr(replied, "caption", None) or "").strip()
     if text:
-        parts.append(f"Текст сообщения:\n{text}")
+        label = "Полный текст исходного сообщения (фон)" if quote_text else "Текст сообщения"
+        parts.append(f"{label}:\n{text}")
 
     poll = getattr(replied, "poll", None)
     if poll:
@@ -363,8 +381,10 @@ async def handle_bot_conversation(
         reply_context_block = (
             "\nНепосредственный контекст реплая:\n"
             f"{reply_context}\n"
-            "Пользователь отвечает именно на это сообщение. Считай его главным локальным контекстом "
-            "текущего вопроса, даже если общая история чата содержит другие темы.\n"
+            "Пользователь отвечает именно на это сообщение. Если Telegram передал выделенную "
+            "цитату, считай прежде всего её главным предметом текущего вопроса, а полный текст "
+            "исходного сообщения используй как фон. Если цитаты нет, считай всё сообщение "
+            "главным локальным контекстом, даже если общая история чата содержит другие темы.\n"
         )
 
     chat_history_formatted = format_chat_history(chat_id)
