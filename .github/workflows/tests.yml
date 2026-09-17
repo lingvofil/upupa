@@ -36,6 +36,22 @@ jobs:
       - name: Verify tests did not write Crocodile party state to repo root
         run: test ! -e crocodile_party_state.json
 
+  miniapp-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned Playwright and Chromium
+        run: |
+          python -m pip install "playwright==1.57.0"
+          python -m playwright install --with-deps chromium
+      - name: Run Crocodile Mini App browser smoke
+        run: python scripts/crocodile_browser_smoke.py
+
   portability-windows:
     runs-on: windows-latest
     steps:
