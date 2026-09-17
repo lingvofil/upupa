@@ -70,8 +70,30 @@ def test_channel_image_prompt_demands_two_lines_and_no_text_inside_image():
     assert "не упоминай батю" in prompt
 
 
-def test_channel_image_adapter_tries_gigachat_first(monkeypatch):
+def _install_fake_image_modules(monkeypatch, *, gigachat, horde, translate, pollinations):
     import AI
+
+    async def should_not_run(*_args, **_kwargs):
+        raise AssertionError("later fallback should not run")
+
+    fake_pg = SimpleNamespace(
+        translate_to_en=translate,
+        pollinations_generate=pollinations,
+        hf_generate=should_not_run,
+        cf_generate_t2i=should_not_run,
+    )
+    fake_gigachat = ModuleType("AI.gigachat_image")
+    fake_gigachat.generate_gigachat_image = gigachat
+    fake_horde = ModuleType("AI.aihorde_image")
+    fake_horde.generate_aihorde_image = horde
+
+    monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
+    monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
+    monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
+    monkeypatch.setitem(sys.modules, "AI.aihorde_image", fake_horde)
+
+
+def test_channel_image_adapter_tries_gigachat_first(monkeypatch):
     from features.channel.image_generation import generate_channel_image
 
     calls = []
@@ -79,6 +101,10 @@ def test_channel_image_adapter_tries_gigachat_first(monkeypatch):
     async def gigachat(prompt):
         calls.append(("gigachat", prompt))
         return b"gigachat-image"
+
+    async def horde(prompt):
+        calls.append(("aihorde", prompt))
+        return b"horde-image"
 
     async def translate(prompt):
         calls.append(("translate", prompt))
@@ -88,34 +114,72 @@ def test_channel_image_adapter_tries_gigachat_first(monkeypatch):
         calls.append(("pollinations", prompt))
         return b"pollinations-image"
 
-    fake_pg = SimpleNamespace(
-        translate_to_en=translate,
-        pollinations_generate=pollinations,
+    _install_fake_image_modules(
+        monkeypatch,
+        gigachat=gigachat,
+        horde=horde,
+        translate=translate,
+        pollinations=pollinations,
     )
-    fake_gigachat = ModuleType("AI.gigachat_image")
-    fake_gigachat.generate_gigachat_image = gigachat
-
-    monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
-    monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
-    monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
 
     image, provider = asyncio.run(generate_channel_image("червяк в офисе"))
 
     assert image == b"gigachat-image"
     assert provider == "gigachat"
-    assert calls == [
-        ("gigachat", "червяк в офисе"),
-    ]
+    assert calls == [("gigachat", "червяк в офисе")]
 
 
-def test_channel_image_adapter_falls_back_to_pollinations_after_gigachat(monkeypatch):
-    import AI
+def test_channel_image_adapter_falls_back_to_horde_second(monkeypatch):
     from features.channel.image_generation import generate_channel_image
 
     calls = []
 
     async def gigachat(prompt):
         calls.append(("gigachat", prompt))
+        return None
+
+    async def horde(prompt):
+        calls.append(("aihorde", prompt))
+        return b"horde-image"
+
+    async def translate(prompt):
+        calls.append(("translate", prompt))
+        return "translated prompt"
+
+    async def pollinations(prompt):
+        calls.append(("pollinations", prompt))
+        return b"pollinations-image"
+
+    _install_fake_image_modules(
+        monkeypatch,
+        gigachat=gigachat,
+        horde=horde,
+        translate=translate,
+        pollinations=pollinations,
+    )
+
+    image, provider = asyncio.run(generate_channel_image("червяк в офисе"))
+
+    assert image == b"horde-image"
+    assert provider == "aihorde"
+    assert calls == [
+        ("gigachat", "червяк в офисе"),
+        ("translate", "червяк в офисе"),
+        ("aihorde", "translated prompt"),
+    ]
+
+
+def test_channel_image_adapter_uses_pollinations_after_horde(monkeypatch):
+    from features.channel.image_generation import generate_channel_image
+
+    calls = []
+
+    async def gigachat(prompt):
+        calls.append(("gigachat", prompt))
+        return None
+
+    async def horde(prompt):
+        calls.append(("aihorde", prompt))
         return None
 
     async def translate(prompt):
@@ -126,16 +190,13 @@ def test_channel_image_adapter_falls_back_to_pollinations_after_gigachat(monkeyp
         calls.append(("pollinations", prompt))
         return b"pollinations-image"
 
-    fake_pg = SimpleNamespace(
-        translate_to_en=translate,
-        pollinations_generate=pollinations,
+    _install_fake_image_modules(
+        monkeypatch,
+        gigachat=gigachat,
+        horde=horde,
+        translate=translate,
+        pollinations=pollinations,
     )
-    fake_gigachat = ModuleType("AI.gigachat_image")
-    fake_gigachat.generate_gigachat_image = gigachat
-
-    monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
-    monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
-    monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
 
     image, provider = asyncio.run(generate_channel_image("червяк в офисе"))
 
@@ -144,6 +205,7 @@ def test_channel_image_adapter_falls_back_to_pollinations_after_gigachat(monkeyp
     assert calls == [
         ("gigachat", "червяк в офисе"),
         ("translate", "червяк в офисе"),
+        ("aihorde", "translated prompt"),
         ("pollinations", "translated prompt"),
     ]
 
@@ -171,7 +233,7 @@ def test_publish_image_uses_send_photo_and_stores_metadata(monkeypatch):
             "post_kind": "image",
             "chat_context_used": False,
             "image_prompt": "реалистичный червяк сидит в картонной коробке",
-            "image_provider": "pollinations",
+            "image_provider": "aihorde",
         }
 
     monkeypatch.setattr(service, "load_posts", lambda: [])
@@ -189,5 +251,5 @@ def test_publish_image_uses_send_photo_and_stores_metadata(monkeypatch):
     assert bot.photo_calls[0][0] == service.CHANNEL_TARGET
     assert bot.photo_calls[0][2] == "мне нормально"
     assert published_records[0]["post_kind"] == "image"
-    assert published_records[0]["image_provider"] == "pollinations"
+    assert published_records[0]["image_provider"] == "aihorde"
     assert published_records[0]["image_prompt"] == "реалистичный червяк сидит в картонной коробке"
