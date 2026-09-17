@@ -58,12 +58,16 @@ def test_deploy_targets_exact_sha_and_has_backup_healthcheck_and_rollback():
     assert "backup_runtime_state.py" in source
     assert '[[ -f "$BACKUP_DIR/manifest.json" ]]' in source
     assert source.index('BACKUP_DIR="$(') < source.index('git reset --hard "$TARGET_SHA"')
-    # Host-key verification is intentionally disabled to preserve the current
-    # zero-maintenance deploy path; private-key handling is still hardened.
-    assert "StrictHostKeyChecking=no" in source
-    assert "StrictHostKeyChecking=yes" not in source
-    assert "UserKnownHostsFile=/dev/null" in source
-    assert "SSH_KNOWN_HOSTS" not in source
+    assert "SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}" in source
+    assert "SSH_KNOWN_HOSTS is not configured" in source
+    assert "DEPLOY_KNOWN_HOSTS_PATH" in source
+    assert "StrictHostKeyChecking=yes" in source
+    assert "StrictHostKeyChecking=no" not in source
+    assert 'UserKnownHostsFile="${DEPLOY_KNOWN_HOSTS_PATH}"' in source
+    assert "UserKnownHostsFile=/dev/null" not in source
+    assert '[[ -s "${DEPLOY_KNOWN_HOSTS_PATH}" ]]' in source
+    assert 'rm -f "${DEPLOY_KEY_PATH}" "${DEPLOY_KNOWN_HOSTS_PATH}"' in source
+    assert "ssh-keyscan" not in source
     assert "trap rollback ERR" in source
 
 
