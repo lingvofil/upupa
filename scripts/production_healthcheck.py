@@ -83,12 +83,81 @@ def check_process(*, timeout: float, port: int = 8766, expected_pid: int | None 
     return payload
 
 
+def check_crocodile_mini_app(
+    *,
+    timeout: float,
+    base_url: str = "http://127.0.0.1:8080",
+    opener: Callable = urlopen,
+) -> dict:
+    """Verify the local Mini App page and an Engine.IO v4 polling handshake."""
+    base_url = str(base_url or "").rstrip("/")
+    if not base_url:
+        raise HealthCheckError("Crocodile Mini App base URL is not configured")
+
+    game_request = Request(
+        f"{base_url}/game",
+        headers={"User-Agent": "upupa-deploy-healthcheck/1"},
+    )
+    try:
+        with opener(game_request, timeout=timeout) as response:
+            html = response.read().decode("utf-8")
+    except (HTTPError, URLError, OSError):
+        raise HealthCheckError("Crocodile Mini App is unreachable") from None
+    except UnicodeDecodeError:
+        raise HealthCheckError("Crocodile Mini App returned invalid HTML") from None
+
+    required_markers = (
+        "<title>Crocodile</title>",
+        'id="canvas"',
+        "telegram-web-app.js",
+        "socket.io.min.js",
+    )
+    if any(marker not in html for marker in required_markers):
+        raise HealthCheckError("Crocodile Mini App returned invalid HTML")
+
+    handshake_request = Request(
+        f"{base_url}/socket.io/?EIO=4&transport=polling",
+        headers={"User-Agent": "upupa-deploy-healthcheck/1"},
+    )
+    try:
+        with opener(handshake_request, timeout=timeout) as response:
+            packet = response.read().decode("utf-8")
+    except (HTTPError, URLError, OSError, UnicodeDecodeError):
+        raise HealthCheckError(
+            "Crocodile Socket.IO handshake is unavailable or invalid"
+        ) from None
+
+    if not packet.startswith("0"):
+        raise HealthCheckError("Crocodile Socket.IO handshake is unavailable or invalid")
+    try:
+        handshake = json.loads(packet[1:])
+    except json.JSONDecodeError:
+        raise HealthCheckError(
+            "Crocodile Socket.IO handshake is unavailable or invalid"
+        ) from None
+
+    if not isinstance(handshake, dict) or not handshake.get("sid"):
+        raise HealthCheckError("Crocodile Socket.IO handshake is unavailable or invalid")
+    for field in ("pingInterval", "pingTimeout"):
+        if type(handshake.get(field)) is not int or handshake[field] <= 0:
+            raise HealthCheckError(
+                "Crocodile Socket.IO handshake is unavailable or invalid"
+            )
+
+    return handshake
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-dir", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--port", type=int, default=int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766")))
     parser.add_argument("--expected-pid", type=int, default=os.getenv("UPUPA_EXPECTED_PID"))
+    parser.add_argument(
+        "--crocodile-base",
+        default=os.getenv("UPUPA_CROCODILE_BASE", "http://127.0.0.1:8080"),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--api-base",
         default="https://api.telegram.org",
@@ -104,13 +173,17 @@ def main() -> int:
             timeout=args.timeout,
             api_base=args.api_base,
         )
+        check_crocodile_mini_app(
+            timeout=args.timeout,
+            base_url=args.crocodile_base,
+        )
     except HealthCheckError as error:
         print(f"healthcheck failed: {error}", file=sys.stderr)
         return 1
 
     print(
         f"healthcheck ok: process_pid={process['pid']} polling=ok databases=ok tasks=ok telegram=getMe "
-        f"bot_id={result['id']} username={result.get('username', 'unknown')}"
+        f"bot_id={result['id']} username={result.get('username', 'unknown')} mini_app=game+socketio"
     )
     return 0
 
