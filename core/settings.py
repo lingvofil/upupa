@@ -99,6 +99,14 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or (
     else None
 )
 
+# AI Horde supports anonymous access with the documented 0000000000 key. Keep
+# it as the default reserve while allowing a registered key to raise priority.
+AIHORDE_API_KEY = os.getenv("AIHORDE_API_KEY") or (
+    getattr(_config_private, "AIHORDE_API_KEY", None)
+    if _config_private is not None
+    else None
+) or "0000000000"
+
 # New deployments may use Hugging Face's conventional HF_TOKEN name, while
 # older Upupa code and config_private keep using HUGGINGFACE_TOKEN.
 HUGGINGFACE_TOKEN = os.getenv("HF_TOKEN") or HUGGINGFACE_TOKEN
@@ -206,4 +214,3 @@ GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
 
 # для чобыло
 GROQ_SUMMARIZATION_MODEL = "groq/compound-mini"
-
