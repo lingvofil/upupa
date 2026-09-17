@@ -300,21 +300,26 @@ def test_workflows_use_node24_actions_and_native_ssh_setup():
     assert "actions/setup-python@v5" not in tests_workflow
 
     assert "webfactory/ssh-agent" not in deploy_workflow
-    # User explicitly chose to keep host-key verification disabled so deploy
-    # remains zero-maintenance; ensure no SSH_KNOWN_HOSTS dependency returns.
-    assert "StrictHostKeyChecking=no" in deploy_workflow
-    assert "StrictHostKeyChecking=yes" not in deploy_workflow
-    assert "UserKnownHostsFile=/dev/null" in deploy_workflow
-    assert "SSH_KNOWN_HOSTS" not in deploy_workflow
+    assert "SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}" in deploy_workflow
+    assert "StrictHostKeyChecking=yes" in deploy_workflow
+    assert "StrictHostKeyChecking=no" not in deploy_workflow
+    assert 'UserKnownHostsFile="${DEPLOY_KNOWN_HOSTS_PATH}"' in deploy_workflow
+    assert "UserKnownHostsFile=/dev/null" not in deploy_workflow
+    assert "ssh-keyscan" not in deploy_workflow
     assert 'chmod 600 "${DEPLOY_KEY_PATH}"' in deploy_workflow
+    assert 'chmod 600 "${DEPLOY_KNOWN_HOSTS_PATH}"' in deploy_workflow
     assert "if: always()" in deploy_workflow
 
     # `runner` is unavailable in jobs.<job_id>.env and would make the workflow
-    # invalid before any job starts. Use a path based only on allowed `github`
+    # invalid before any job starts. Use paths based only on allowed `github`
     # context values at job-env evaluation time.
     assert "runner.temp" not in deploy_workflow
     assert (
         "DEPLOY_KEY_PATH: /tmp/upupa_deploy_key_${{ github.run_id }}_"
+        "${{ github.run_attempt }}" in deploy_workflow
+    )
+    assert (
+        "DEPLOY_KNOWN_HOSTS_PATH: /tmp/upupa_known_hosts_${{ github.run_id }}_"
         "${{ github.run_attempt }}" in deploy_workflow
     )
 
