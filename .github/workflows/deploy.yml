@@ -27,12 +27,14 @@ jobs:
       DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR || '/root/upupa' }}
       DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE || 'upupa_bot.service' }}
       DEPLOY_KEY_PATH: /tmp/upupa_deploy_key_${{ github.run_id }}_${{ github.run_attempt }}
+      DEPLOY_KNOWN_HOSTS_PATH: /tmp/upupa_known_hosts_${{ github.run_id }}_${{ github.run_attempt }}
 
     steps:
       - name: Configure SSH credentials
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -Eeuo pipefail
 
@@ -40,10 +42,15 @@ jobs:
             echo "::error::SSH_PRIVATE_KEY is not configured"
             exit 1
           fi
+          if [[ -z "${SSH_KNOWN_HOSTS}" ]]; then
+            echo "::error::SSH_KNOWN_HOSTS is not configured; production deploy requires a pinned VPS host key"
+            exit 1
+          fi
 
           printf '%s\n' "${SSH_PRIVATE_KEY}" > "${DEPLOY_KEY_PATH}"
           chmod 600 "${DEPLOY_KEY_PATH}"
-          echo "::warning::SSH host-key verification is disabled for deployment"
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${DEPLOY_KNOWN_HOSTS_PATH}"
+          chmod 600 "${DEPLOY_KNOWN_HOSTS_PATH}"
 
       - name: Deploy exact commit with backup, healthcheck and rollback
         shell: bash
@@ -56,14 +63,15 @@ jobs:
           [[ "${DEPLOY_APP_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]
           [[ "${DEPLOY_SERVICE}" =~ ^[A-Za-z0-9_.@-]+$ ]]
           [[ -f "${DEPLOY_KEY_PATH}" ]]
+          [[ -s "${DEPLOY_KNOWN_HOSTS_PATH}" ]]
 
           SSH_OPTIONS=(
             -i "${DEPLOY_KEY_PATH}"
             -o IdentitiesOnly=yes
             -o BatchMode=yes
             -o ConnectTimeout=15
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="${DEPLOY_KNOWN_HOSTS_PATH}"
           )
 
           echo "Deploying ${DEPLOY_SHA} to ${DEPLOY_USER}@${DEPLOY_HOST}..."
@@ -255,4 +263,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "${DEPLOY_KEY_PATH}"
+          rm -f "${DEPLOY_KEY_PATH}" "${DEPLOY_KNOWN_HOSTS_PATH}"
