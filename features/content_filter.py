@@ -1,7 +1,5 @@
-import asyncio
 import re
 from typing import Callable, Dict, Any, Awaitable
-from collections import defaultdict
 from datetime import timedelta
 
 from aiogram import BaseMiddleware, Bot

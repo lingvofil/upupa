@@ -8,11 +8,7 @@ AI/voice.py
 AI/whatisthere.py
 AI/whoparody.py
 features/channel/continuity.py
-features/common_settings.py
-features/content_filter.py
 games/crocodile.py
 games/crocodile_modes.py
 games/egra.py
-handlers/stats_lexicon.py
 handlers/world_interactions.py
-services/nameinfo.py

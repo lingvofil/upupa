@@ -1,5 +1,4 @@
 import aiohttp
-import json
 from transliterate import translit
 
 async def transliterate_to_english(name: str) -> str:
