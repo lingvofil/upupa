@@ -7,7 +7,7 @@ import logging
 import math
 import re
 
-from aiogram import F, Router, types
+from aiogram import Router, types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
