@@ -138,24 +138,6 @@ def _contains_answer(text: str, word: str) -> bool:
     normalized_word = _normalize_guess(word)
     if not normalized_text or not normalized_word:
         return False
-
-
-_check_answer_handler = _default_check_answer
-
-
-def get_check_answer_handler():
-    """Return the currently configured Crocodile answer checker."""
-    return _check_answer_handler
-
-
-def configure_check_answer_handler(handler) -> None:
-    """Install the composed Crocodile answer checker."""
-    global _check_answer_handler
-    _check_answer_handler = handler
-
-
-async def check_answer(msg: types.Message) -> bool:
-    return await _check_answer_handler(msg)
     pattern = rf"(?<!\w){re.escape(normalized_word)}(?!\w)"
     return re.search(pattern, normalized_text) is not None
 
@@ -936,3 +918,21 @@ async def _default_check_answer(msg: types.Message) -> bool:
         await _safe_react_to_guess(msg, CLOSE_GUESS_REACTION)
 
     return False
+
+
+_check_answer_handler = _default_check_answer
+
+
+def get_check_answer_handler():
+    """Return the currently configured Crocodile answer checker."""
+    return _check_answer_handler
+
+
+def configure_check_answer_handler(handler) -> None:
+    """Install the composed Crocodile answer checker."""
+    global _check_answer_handler
+    _check_answer_handler = handler
+
+
+async def check_answer(msg: types.Message) -> bool:
+    return await _check_answer_handler(msg)
