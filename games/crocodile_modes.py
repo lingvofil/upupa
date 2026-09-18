@@ -13,7 +13,6 @@ from typing import Any
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from core.loader import bot
-from core.settings import API_TOKEN
 from features.crocodile_archive import record_drawing
 from games import crocodile
 from games.webapp_auth import (
