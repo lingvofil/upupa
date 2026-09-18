@@ -10,7 +10,6 @@ from features.lexicon_settings import (
     extract_messages_by_full_name,
     extract_chat_messages
 )
-from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from core.state import chat_settings
 from infrastructure.ai.clients import (
     gigachat_model,
@@ -218,7 +217,7 @@ async def process_parody(message: types.Message, chat_id: int):
        messages = await extract_messages_by_full_name(full_name, chat_id, sample_size=20)
 
    if not messages:
-       await message.reply(f"Этот хуй еще не достоин")
+       await message.reply("Этот хуй еще не достоин")
        return
 
    parody_lines = random.sample(messages, len(messages))

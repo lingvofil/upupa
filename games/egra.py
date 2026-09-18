@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from aiogram import types, Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -59,7 +58,7 @@ async def send_final_button(chat_id: int, bot: Bot):
     builder = InlineKeyboardBuilder()
     builder.add(types.InlineKeyboardButton(
         text=last_option,
-        callback_data=f"egra_final_choice"
+        callback_data="egra_final_choice"
     ))
 
     msg = await bot.send_message(
