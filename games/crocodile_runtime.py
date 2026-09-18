@@ -362,7 +362,7 @@ def configure_crocodile_runtime() -> None:
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.get_start_new_game_handler()
     raw_game_keyboard = crocodile.get_game_keyboard_renderer()
-    raw_callback_handler = crocodile.handle_callback
+    raw_callback_handler = crocodile.get_callback_handler()
     raw_check_answer = crocodile.check_answer
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
@@ -459,12 +459,14 @@ def configure_crocodile_runtime() -> None:
             start_new_game_with_instant_word,
         )
     )
-    crocodile.handle_callback = _compose_callback_handler(
-        raw_callback_handler,
-        handle_callback_with_controls,
-        handle_regular_callback,
-        duo_optin.handle_duo_opt_in_callback,
-        handle_crocodile_callback_with_ui,
+    crocodile.configure_callback_handler(
+        _compose_callback_handler(
+            raw_callback_handler,
+            handle_callback_with_controls,
+            handle_regular_callback,
+            duo_optin.handle_duo_opt_in_callback,
+            handle_crocodile_callback_with_ui,
+        )
     )
     crocodile.check_answer = _compose_check_answer(
         raw_check_answer,

@@ -3,10 +3,26 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from games import crocodile
 
 
 def _callback(data: str):
     return SimpleNamespace(data=data)
+
+
+def test_callback_handler_configurator_drives_stable_entrypoint():
+    callback = _callback("configured")
+    original = crocodile.get_callback_handler()
+    configured = AsyncMock(return_value="configured-result")
+
+    try:
+        crocodile.configure_callback_handler(configured)
+        result = asyncio.run(crocodile.handle_callback(callback))
+    finally:
+        crocodile.configure_callback_handler(original)
+
+    assert result == "configured-result"
+    configured.assert_awaited_once_with(callback)
 
 
 def test_ui_callback_delegates_non_ui_actions_once():

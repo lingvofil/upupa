@@ -34,14 +34,35 @@ def test_ui_enhancements_do_not_replace_callback_handler():
 
 
 def test_runtime_composes_modes_then_duo_then_ui_in_single_callback_chain():
-    runtime_source = _source("games/crocodile_runtime.py")
-    assignment = (
-        "crocodile.handle_callback = _compose_callback_handler(\n"
-        "        raw_callback_handler,"
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "handle_callback"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "crocodile"
+                ):
+                    violations.append(f"{relative}:{node.lineno}")
+    assert not violations, (
+        "crocodile.handle_callback нельзя заменять прямым присваиванием; "
+        "используй configure_callback_handler(): " + ", ".join(violations)
     )
 
-    assert runtime_source.count(assignment) == 1
-    callback_wiring = runtime_source.index(assignment)
+    runtime_source = _source("games/crocodile_runtime.py")
+    wiring_entrypoint = "crocodile.configure_callback_handler("
+
+    assert runtime_source.count(wiring_entrypoint) == 1
+    assert "crocodile.handle_callback =" not in runtime_source
+    callback_wiring = runtime_source.index(wiring_entrypoint)
     modes_router = runtime_source.index(
         "handle_regular_callback",
         callback_wiring,
