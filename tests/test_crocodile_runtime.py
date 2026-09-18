@@ -14,7 +14,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
     calls = [
         "persistence.configure_crocodile_runtime()",
         "base_start_new_game = crocodile.get_start_new_game_handler()",
-        "raw_callback_handler = crocodile.handle_callback",
+        "raw_callback_handler = crocodile.get_callback_handler()",
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)",
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
@@ -23,7 +23,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
         "crocodile.configure_game_keyboard_renderer(",
         "crocodile.configure_start_new_game_handler(",
-        "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,",
+        "crocodile.configure_callback_handler(",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
         "configure_crocodile_admin_controls()",
@@ -236,15 +236,22 @@ def test_callback_pipeline_is_owned_by_runtime():
     assert "handle_crocodile_callback_with_ui(callback, next_handler)" in module_sources["ui"]
 
     runtime_source = _source("games/crocodile_runtime.py")
-    assignment = "crocodile.handle_callback = _compose_callback_handler("
-    assert runtime_source.count(assignment) == 1
+    wiring_entrypoint = "crocodile.configure_callback_handler("
+    assert runtime_source.count(wiring_entrypoint) == 1
+    assert "crocodile.handle_callback =" not in runtime_source
 
-    raw_capture = runtime_source.index("raw_callback_handler = crocodile.handle_callback")
+    crocodile_source = _source("games/crocodile.py")
+    assert "def get_callback_handler(" in crocodile_source
+    assert "def configure_callback_handler(" in crocodile_source
+
+    raw_capture = runtime_source.index(
+        "raw_callback_handler = crocodile.get_callback_handler()"
+    )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
     )
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    callback_wiring = runtime_source.index(assignment)
+    callback_wiring = runtime_source.index(wiring_entrypoint)
     controls_router = runtime_source.index("handle_callback_with_controls,", callback_wiring)
     modes_router = runtime_source.index("handle_regular_callback,", controls_router)
     duo_router = runtime_source.index(
