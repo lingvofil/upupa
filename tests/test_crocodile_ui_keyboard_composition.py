@@ -107,15 +107,16 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
     assert "decorate_game_keyboard_with_clear_next" in ui_source
     assert "decorate_end_game_keyboard_with_attribution" in ui_source
 
-    game_assignment = "crocodile.get_game_keyboard = _compose_game_keyboard("
+    game_entrypoint = "crocodile.configure_game_keyboard_renderer("
     end_wiring = "crocodile.configure_end_game_keyboard_renderer("
-    assert runtime_source.count(game_assignment) == 1
+    assert runtime_source.count(game_entrypoint) == 1
     assert runtime_source.count(end_wiring) == 1
+    assert "crocodile.get_game_keyboard =" not in runtime_source
     assert "crocodile.get_end_game_keyboard =" not in runtime_source
     assert "def get_end_game_keyboard_renderer(" in _source("games/crocodile.py")
     assert "def configure_end_game_keyboard_renderer(" in _source("games/crocodile.py")
 
-    game_wiring = runtime_source.index(game_assignment)
+    game_wiring = runtime_source.index(game_entrypoint)
     duo = runtime_source.index(
         "duo_optin.decorate_game_keyboard_with_duo_opt_in",
         game_wiring,
