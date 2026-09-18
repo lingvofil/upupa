@@ -89,6 +89,17 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
     assigned = _assigned_attributes(ui_source, "crocodile")
     assert "get_game_keyboard" not in assigned
     assert "get_end_game_keyboard" not in assigned
+
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if "get_end_game_keyboard" in _assigned_attributes(source, "crocodile"):
+            violations.append(relative)
+    assert not violations, (
+        "crocodile.get_end_game_keyboard нельзя заменять прямым присваиванием; "
+        "используй configure_end_game_keyboard_renderer(): " + ", ".join(violations)
+    )
     assert "_original_get_game_keyboard" not in ui_source
     assert "_original_get_end_game_keyboard" not in ui_source
     assert "get_game_keyboard_with_clear_next" not in ui_source
