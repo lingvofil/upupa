@@ -660,7 +660,7 @@ def configure_crocodile_party_controls() -> None:
     if _configured:
         return
 
-    _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
+    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
     _original_send_telephone_step = crocodile_modes._send_telephone_step
     _original_finish_telephone = crocodile_modes._finish_telephone
     _original_record_drawing = crocodile_modes.record_drawing
@@ -668,7 +668,7 @@ def configure_crocodile_party_controls() -> None:
     _original_start_telephone = crocodile_modes.start_telephone
 
     crocodile_modes.check_duel_answer = check_duel_answer_locked
-    crocodile_modes.handle_telephone_callback = handle_telephone_callback_resilient
+    crocodile_modes.configure_telephone_callback_handler(handle_telephone_callback_resilient)
     crocodile_modes._send_telephone_step = _send_telephone_step_with_controls
     crocodile_modes.record_drawing = _record_drawing_without_phone_leak
     crocodile_modes._finish_telephone = _finish_telephone_after_reveal
