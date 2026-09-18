@@ -1,7 +1,6 @@
 """Combat layer for participant-mode DnD: abilities, HP/AC, enemy attacks and one emergency heal."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import random
