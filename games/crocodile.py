@@ -701,7 +701,7 @@ async def start_socket_server():
 
 
 # ================== BOT LOGIC ==================
-async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
+async def _default_start_new_game(chat_id: int, user_id: int, user_full_name: str):
     """Запуск новой игры"""
     if not _scores:
         _scores_load()
@@ -740,6 +740,24 @@ async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
             _bump_loop(cid),
             name=f"crocodile-bump:{cid}",
         )
+
+
+_start_new_game_handler = _default_start_new_game
+
+
+def get_start_new_game_handler():
+    """Return the currently configured new-game handler."""
+    return _start_new_game_handler
+
+
+def configure_start_new_game_handler(handler) -> None:
+    """Install the composed new-game handler."""
+    global _start_new_game_handler
+    _start_new_game_handler = handler
+
+
+async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
+    return await _start_new_game_handler(chat_id, user_id, user_full_name)
 
 
 async def handle_start_game(message: types.Message):

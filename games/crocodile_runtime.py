@@ -360,7 +360,7 @@ def configure_crocodile_runtime() -> None:
     raw_snapshot = crocodile.snapshot
     raw_final_frame = crocodile.final_frame
     persistence.configure_crocodile_runtime()
-    base_start_new_game = crocodile.start_new_game
+    base_start_new_game = crocodile.get_start_new_game_handler()
     raw_game_keyboard = crocodile.get_game_keyboard_renderer()
     raw_callback_handler = crocodile.handle_callback
     raw_check_answer = crocodile.check_answer
@@ -452,10 +452,12 @@ def configure_crocodile_runtime() -> None:
             decorate_end_game_keyboard_with_attribution,
         )
     )
-    crocodile.start_new_game = _compose_start_new_game(
-        base_start_new_game,
-        start_new_game_with_controls,
-        start_new_game_with_instant_word,
+    crocodile.configure_start_new_game_handler(
+        _compose_start_new_game(
+            base_start_new_game,
+            start_new_game_with_controls,
+            start_new_game_with_instant_word,
+        )
     )
     crocodile.handle_callback = _compose_callback_handler(
         raw_callback_handler,

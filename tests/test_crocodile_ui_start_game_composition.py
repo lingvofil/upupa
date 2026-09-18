@@ -3,6 +3,7 @@ import asyncio
 from pathlib import Path
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from games import crocodile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +66,22 @@ def test_start_game_composer_preserves_controls_then_ui_order():
     ]
 
 
+def test_start_game_handler_configurator_drives_stable_entrypoint():
+    original = crocodile.get_start_new_game_handler()
+    seen = []
+
+    async def handler(chat_id, user_id, user_full_name):
+        seen.append((chat_id, user_id, user_full_name))
+        return "configured"
+
+    try:
+        crocodile.configure_start_new_game_handler(handler)
+        assert asyncio.run(crocodile.start_new_game(-42, 123, "Первый")) == "configured"
+        assert seen == [(-42, 123, "Первый")]
+    finally:
+        crocodile.configure_start_new_game_handler(original)
+
+
 def test_start_game_is_composed_only_in_runtime():
     controls_source = _source("games/crocodile_controls.py")
     ui_source = _source("games/crocodile_ui_enhancements.py")
@@ -81,14 +98,32 @@ def test_start_game_is_composed_only_in_runtime():
     assert "start_new_game_with_instant_word" in ui_source
     assert "next_handler" in ui_source
 
-    assignment = "crocodile.start_new_game = _compose_start_new_game("
-    assert runtime_source.count(assignment) == 1
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if "start_new_game" in _assigned_attributes(source, "crocodile"):
+            violations.append(relative)
+    assert not violations, (
+        "crocodile.start_new_game нельзя заменять прямым присваиванием; "
+        "используй configure_start_new_game_handler(): " + ", ".join(violations)
+    )
 
-    capture = runtime_source.index("base_start_new_game = crocodile.start_new_game")
+    crocodile_source = _source("games/crocodile.py")
+    assert "def get_start_new_game_handler(" in crocodile_source
+    assert "def configure_start_new_game_handler(" in crocodile_source
+
+    wiring_entrypoint = "crocodile.configure_start_new_game_handler("
+    assert runtime_source.count(wiring_entrypoint) == 1
+    assert "crocodile.start_new_game =" not in runtime_source
+
+    capture = runtime_source.index(
+        "base_start_new_game = crocodile.get_start_new_game_handler()"
+    )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
     )
-    wiring = runtime_source.index(assignment)
+    wiring = runtime_source.index(wiring_entrypoint)
     controls_wrapper = runtime_source.index("start_new_game_with_controls,", wiring)
     ui_wrapper = runtime_source.index("start_new_game_with_instant_word,", controls_wrapper)
     ui_install = runtime_source.index(
