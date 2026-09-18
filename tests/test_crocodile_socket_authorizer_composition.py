@@ -194,14 +194,12 @@ def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     violations = []
     for path in sorted((ROOT / "games").glob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
-        if relative == "games/crocodile_runtime.py":
-            continue
         for line in _attribute_assignments(path, "_authorize_socket_room"):
             violations.append(f"{relative}:{line}")
 
     assert not violations, (
-        "crocodile._authorize_socket_room должен собираться только в "
-        "games/crocodile_runtime.py: " + ", ".join(violations)
+        "crocodile._authorize_socket_room нельзя заменять прямым присваиванием; "
+        "используй configure_socket_room_authorizer(): " + ", ".join(violations)
     )
 
     modes_source = (ROOT / "games" / "crocodile_modes.py").read_text(encoding="utf-8")
