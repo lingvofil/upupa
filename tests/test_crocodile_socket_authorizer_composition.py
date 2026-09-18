@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from games import crocodile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -174,6 +175,21 @@ def test_round_token_authorizer_binds_and_revalidates_current_round(monkeypatch)
     downstream.assert_awaited_once_with("sid-regular", data, bind_room=False)
 
 
+def test_socket_authorizer_configurator_drives_stable_entrypoint():
+    original = crocodile.get_socket_room_authorizer()
+
+    async def configured(_sid, _data, *, bind_room=False):
+        return ("configured", str(bind_room), {})
+
+    try:
+        crocodile.configure_socket_room_authorizer(configured)
+        assert asyncio.run(
+            crocodile._authorize_socket_room("sid", {"room": "m42"}, bind_room=True)
+        ) == ("configured", "True", {})
+    finally:
+        crocodile.configure_socket_room_authorizer(original)
+
+
 def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     violations = []
     for path in sorted((ROOT / "games").glob("*.py")):
@@ -209,22 +225,29 @@ def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     runtime_source = (ROOT / "games" / "crocodile_runtime.py").read_text(
         encoding="utf-8"
     )
-    assignment = (
-        "crocodile._authorize_socket_room = _compose_socket_room_authorizer("
+    crocodile_source = (ROOT / "games" / "crocodile.py").read_text(
+        encoding="utf-8"
     )
-    assert runtime_source.count(assignment) == 1
+    assert "def get_socket_room_authorizer(" in crocodile_source
+    assert "def configure_socket_room_authorizer(" in crocodile_source
+    assert "crocodile._authorize_socket_room =" not in runtime_source
+
+    wiring = "crocodile.configure_socket_room_authorizer("
+    assert runtime_source.count(wiring) == 1
 
     raw_capture = runtime_source.index(
-        "raw_authorize_socket_room = crocodile._authorize_socket_room"
+        "raw_authorize_socket_room = crocodile.get_socket_room_authorizer()"
     )
     persistence_install = runtime_source.index("persistence.configure_crocodile_runtime()")
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    wiring = runtime_source.index(assignment)
-    raw_handler = runtime_source.index("raw_authorize_socket_room,", wiring)
+    wiring_pos = runtime_source.index(wiring)
+    raw_handler = runtime_source.index("raw_authorize_socket_room,", wiring_pos)
     round_wrapper = runtime_source.index(
-        "persistence.authorize_socket_room_for_current_round,", wiring
+        "persistence.authorize_socket_room_for_current_round,", wiring_pos
     )
-    modes_wrapper = runtime_source.index("authorize_socket_room_with_modes,", wiring)
+    modes_wrapper = runtime_source.index(
+        "authorize_socket_room_with_modes,", wiring_pos
+    )
 
-    assert raw_capture < persistence_install < modes_install < wiring
-    assert wiring < raw_handler < round_wrapper < modes_wrapper
+    assert raw_capture < persistence_install < modes_install < wiring_pos
+    assert wiring_pos < raw_handler < round_wrapper < modes_wrapper
