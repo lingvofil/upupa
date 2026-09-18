@@ -1,7 +1,3 @@
 # Existing production pyflakes debt discovered by the full sweep on 2026-09-16.
 # Keep this list shrinking: scripts/run_pyflakes.py fails if an entry becomes clean.
-AI/dnd_combat.py
 AI/whatisthere.py
-games/crocodile.py
-games/crocodile_modes.py
-handlers/world_interactions.py
