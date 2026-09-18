@@ -871,7 +871,7 @@ async def handle_callback(cb: types.CallbackQuery):
     return await _callback_handler(cb)
 
 
-async def check_answer(msg: types.Message) -> bool:
+async def _default_check_answer(msg: types.Message) -> bool:
     cid = str(msg.chat.id)
     sess = game_sessions.get(cid)
     if not sess or not msg.text:
@@ -918,3 +918,21 @@ async def check_answer(msg: types.Message) -> bool:
         await _safe_react_to_guess(msg, CLOSE_GUESS_REACTION)
 
     return False
+
+
+_check_answer_handler = _default_check_answer
+
+
+def get_check_answer_handler():
+    """Return the currently configured Crocodile answer checker."""
+    return _check_answer_handler
+
+
+def configure_check_answer_handler(handler) -> None:
+    """Install the composed Crocodile answer checker."""
+    global _check_answer_handler
+    _check_answer_handler = handler
+
+
+async def check_answer(msg: types.Message) -> bool:
+    return await _check_answer_handler(msg)

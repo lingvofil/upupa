@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from games import crocodile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,18 +154,31 @@ def test_modes_answer_wrapper_archives_only_successful_guess(monkeypatch):
             crocodile.game_sessions[chat_id] = previous
 
 
+def test_check_answer_handler_configurator_drives_stable_entrypoint():
+    message = _message(3, "барсук")
+    original = crocodile.get_check_answer_handler()
+    configured = AsyncMock(return_value=True)
+
+    try:
+        crocodile.configure_check_answer_handler(configured)
+        result = asyncio.run(crocodile.check_answer(message))
+    finally:
+        crocodile.configure_check_answer_handler(original)
+
+    assert result is True
+    configured.assert_awaited_once_with(message)
+
+
 def test_runtime_owns_check_answer_entrypoint_and_wrapper_order():
     violations = []
     for path in sorted((ROOT / "games").glob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
-        if relative == "games/crocodile_runtime.py":
-            continue
         for line in _check_answer_assignments(path):
             violations.append(f"{relative}:{line}")
 
     assert not violations, (
-        "crocodile.check_answer должен собираться только в games/crocodile_runtime.py: "
-        + ", ".join(violations)
+        "crocodile.check_answer нельзя заменять прямым присваиванием; "
+        "используй configure_check_answer_handler(): " + ", ".join(violations)
     )
 
     modes_source = _source("games/crocodile_modes.py")
@@ -172,11 +186,19 @@ def test_runtime_owns_check_answer_entrypoint_and_wrapper_order():
     assert "check_regular_answer_with_archive(message, next_handler)" in modes_source
 
     runtime_source = _source("games/crocodile_runtime.py")
-    assignment = "crocodile.check_answer = _compose_check_answer("
-    assert runtime_source.count(assignment) == 1
-    raw_capture = runtime_source.index("raw_check_answer = crocodile.check_answer")
+    wiring_entrypoint = "crocodile.configure_check_answer_handler("
+    assert runtime_source.count(wiring_entrypoint) == 1
+    assert "crocodile.check_answer =" not in runtime_source
+
+    crocodile_source = _source("games/crocodile.py")
+    assert "def get_check_answer_handler(" in crocodile_source
+    assert "def configure_check_answer_handler(" in crocodile_source
+
+    raw_capture = runtime_source.index(
+        "raw_check_answer = crocodile.get_check_answer_handler()"
+    )
     modes_install = runtime_source.index("configure_crocodile_modes()")
-    wiring = runtime_source.index(assignment)
+    wiring = runtime_source.index(wiring_entrypoint)
     raw_handler = runtime_source.index("raw_check_answer,", wiring)
     modes_wrapper = runtime_source.index("check_regular_answer_with_archive,", wiring)
     ui_wrapper = runtime_source.index("check_answer_with_like_context,", wiring)
