@@ -1,3 +1,4 @@
+import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
@@ -271,6 +272,30 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "party_controls.menu_keyboard = _compose_menu_keyboard_handler(" in runtime_source
     assert "reverse.handle_callback = _compose_callback_handler(" in runtime_source
     assert "reverse_modes.handle_callback = _compose_callback_handler(" in runtime_source
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "stop_lock_remaining_seconds"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "crocodile_controls"
+                ):
+                    violations.append(f"{relative}:{node.lineno}")
+    assert not violations, (
+        "crocodile_controls.stop_lock_remaining_seconds нельзя заменять прямым "
+        "присваиванием; используй configure_stop_lock_remaining_seconds_handler(): "
+        + ", ".join(violations)
+    )
+
     stop_lock_wiring = "crocodile_controls.configure_stop_lock_remaining_seconds_handler("
     assert runtime_source.count(stop_lock_wiring) == 1
     assert "crocodile_controls.stop_lock_remaining_seconds =" not in runtime_source
