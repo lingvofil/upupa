@@ -80,7 +80,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     # Presentation-level roll labels belong to the DnD composition root rather
     # than the generic application bootstrap mutating a private DnD function.
-    dnd._natural_roll_note = _critical_dnd_roll_note
+    dnd.configure_natural_roll_note(_critical_dnd_roll_note)
 
     # Preserve the historical installation order while making cross-layer
     # completion behavior explicit instead of mutating middleware classes.
