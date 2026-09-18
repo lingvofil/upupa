@@ -778,7 +778,7 @@ async def handle_text_stop(message: types.Message):
     )
 
 
-async def handle_callback(cb: types.CallbackQuery):
+async def _default_handle_callback(cb: types.CallbackQuery):
     """Обработчик всех callback-кнопок в игре Крокодил"""
     data = cb.data
     
@@ -851,6 +851,24 @@ async def handle_callback(cb: types.CallbackQuery):
                 disable_web_page_preview=True,
             )
             return await cb.answer("Остановлено")
+
+
+_callback_handler = _default_handle_callback
+
+
+def get_callback_handler():
+    """Return the currently configured Crocodile callback handler."""
+    return _callback_handler
+
+
+def configure_callback_handler(handler) -> None:
+    """Install the composed Crocodile callback handler."""
+    global _callback_handler
+    _callback_handler = handler
+
+
+async def handle_callback(cb: types.CallbackQuery):
+    return await _callback_handler(cb)
 
 
 async def check_answer(msg: types.Message) -> bool:
