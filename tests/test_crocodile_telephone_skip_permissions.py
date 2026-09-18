@@ -290,10 +290,32 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_admin,",
         admin_current,
     )
-    installer = runtime_source.index(
+    permissions_installer = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
         admin_wrapper,
     )
+    roles_installer = runtime_source.index(
+        "configure_crocodile_telephone_roles()",
+        permissions_installer,
+    )
+    announcements_installer = runtime_source.index(
+        "configure_crocodile_telephone_role_announcements()",
+        roles_installer,
+    )
+
+    roles_source = (ROOT / "games" / "crocodile_telephone_roles.py").read_text(
+        encoding="utf-8"
+    )
+    announcements_source = (
+        ROOT / "games" / "crocodile_telephone_role_announcements.py"
+    ).read_text(encoding="utf-8")
+    for source in (roles_source, announcements_source):
+        assert (
+            "_original_handle_telephone_callback = "
+            "crocodile_modes.get_telephone_callback_handler()"
+            in source
+        )
+        assert "crocodile_modes.configure_telephone_callback_handler(" in source
 
     assert runtime_source.count(wiring) == 2
     assert (
@@ -305,5 +327,7 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         < admin_wiring
         < admin_current
         < admin_wrapper
-        < installer
+        < permissions_installer
+        < roles_installer
+        < announcements_installer
     )
