@@ -28,7 +28,7 @@ def _session_started_at(session: dict) -> float:
         return 0.0
 
 
-def stop_lock_remaining_seconds(
+def _default_stop_lock_remaining_seconds(
     session: dict,
     user_id: int,
     *,
@@ -47,6 +47,29 @@ def stop_lock_remaining_seconds(
     current_time = time.time() if now is None else float(now)
     elapsed = max(0.0, current_time - started_at)
     return max(0.0, STOP_UNLOCK_SECONDS - elapsed)
+
+
+_stop_lock_remaining_seconds_handler = _default_stop_lock_remaining_seconds
+
+
+def get_stop_lock_remaining_seconds_handler():
+    """Return the currently configured round stop-lock calculator."""
+    return _stop_lock_remaining_seconds_handler
+
+
+def configure_stop_lock_remaining_seconds_handler(handler) -> None:
+    """Install the composed round stop-lock calculator."""
+    global _stop_lock_remaining_seconds_handler
+    _stop_lock_remaining_seconds_handler = handler
+
+
+def stop_lock_remaining_seconds(
+    session: dict,
+    user_id: int,
+    *,
+    now: float | None = None,
+) -> float:
+    return _stop_lock_remaining_seconds_handler(session, user_id, now=now)
 
 
 def can_stop_round(session: dict, user_id: int, *, now: float | None = None) -> bool:

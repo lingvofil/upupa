@@ -29,6 +29,19 @@ def _session(*, started_at=1_000.0):
     }
 
 
+def test_stop_lock_handler_configurator_drives_stable_entrypoint():
+    original = controls.get_stop_lock_remaining_seconds_handler()
+
+    def handler(session, user_id, *, now=None):
+        return 17.5
+
+    try:
+        controls.configure_stop_lock_remaining_seconds_handler(handler)
+        assert controls.stop_lock_remaining_seconds({}, OTHER_ID, now=123.0) == 17.5
+    finally:
+        controls.configure_stop_lock_remaining_seconds_handler(original)
+
+
 def test_crocodile_stop_is_immediate_for_drawer_and_delayed_for_others():
     session = _session(started_at=1_000.0)
 

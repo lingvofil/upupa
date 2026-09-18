@@ -479,9 +479,11 @@ def configure_crocodile_runtime() -> None:
         base_game_keyboard=pre_duo_game_keyboard,
     )
     configure_crocodile_ui_enhancements()
-    crocodile_controls.stop_lock_remaining_seconds = _compose_stop_lock_remaining_seconds(
-        crocodile_controls.stop_lock_remaining_seconds,
-        stop_lock_remaining_seconds_with_admin,
+    crocodile_controls.configure_stop_lock_remaining_seconds_handler(
+        _compose_stop_lock_remaining_seconds(
+            crocodile_controls.get_stop_lock_remaining_seconds_handler(),
+            stop_lock_remaining_seconds_with_admin,
+        )
     )
     crocodile_modes.handle_telephone_callback = _compose_callback_handler(
         crocodile_modes.handle_telephone_callback,
