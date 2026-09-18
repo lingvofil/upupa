@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -783,12 +784,25 @@ def _roll_outcome(result: int, dc: int | None) -> str | None:
     return "успех" if result >= dc else "провал"
 
 
-def _natural_roll_note(result: int) -> str | None:
+def _default_natural_roll_note(result: int) -> str | None:
     if result == 20:
         return "натуральная 20"
     if result == 1:
         return "натуральная 1"
     return None
+
+
+_natural_roll_note_formatter: Callable[[int], str | None] = _default_natural_roll_note
+
+
+def configure_natural_roll_note(formatter: Callable[[int], str | None]) -> None:
+    """Configure presentation text for natural d20 rolls."""
+    global _natural_roll_note_formatter
+    _natural_roll_note_formatter = formatter
+
+
+def _natural_roll_note(result: int) -> str | None:
+    return _natural_roll_note_formatter(result)
 
 
 def _poll_question(session, targets: list[int]) -> str:
