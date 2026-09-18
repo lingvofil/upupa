@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-from datetime import datetime
 import json
 import logging
 import os
@@ -23,7 +22,6 @@ from transliterate import translit
 
 from core.loader import bot
 from core.settings import (
-    API_TOKEN,
     CLOUDFLARE_ACCOUNT_ID,
     CLOUDFLARE_API_TOKEN,
     GROQ_VISION_MODEL,
