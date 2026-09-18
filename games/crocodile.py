@@ -435,7 +435,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
 
 
 # ================== КЛАВИАТУРЫ ==================
-def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+def _default_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     room_param = str(chat_id).replace("-", "m") if chat_id < 0 else str(chat_id)
     v = int(time.time())
     app_link = f"https://t.me/{BOT_USERNAME}/{WEB_APP_SHORT_NAME}?startapp={room_param}&v={v}"
@@ -449,6 +449,24 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+_game_keyboard_renderer = _default_game_keyboard
+
+
+def get_game_keyboard_renderer():
+    """Return the currently configured in-game keyboard renderer."""
+    return _game_keyboard_renderer
+
+
+def configure_game_keyboard_renderer(renderer) -> None:
+    """Install the composed in-game keyboard renderer."""
+    global _game_keyboard_renderer
+    _game_keyboard_renderer = renderer
+
+
+def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    return _game_keyboard_renderer(chat_id)
 
 
 def _default_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:

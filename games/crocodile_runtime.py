@@ -361,7 +361,7 @@ def configure_crocodile_runtime() -> None:
     raw_final_frame = crocodile.final_frame
     persistence.configure_crocodile_runtime()
     base_start_new_game = crocodile.start_new_game
-    raw_game_keyboard = crocodile.get_game_keyboard
+    raw_game_keyboard = crocodile.get_game_keyboard_renderer()
     raw_callback_handler = crocodile.handle_callback
     raw_check_answer = crocodile.check_answer
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
@@ -437,12 +437,14 @@ def configure_crocodile_runtime() -> None:
         handle_party_menu_callback_with_ratings,
         menu_callback_with_skip_permissions,
     )
-    crocodile.get_game_keyboard = _compose_game_keyboard(
-        raw_game_keyboard,
-        decorate_game_keyboard_with_previous,
-        decorate_game_keyboard_with_legacy_duo,
-        duo_optin.decorate_game_keyboard_with_duo_opt_in,
-        decorate_game_keyboard_with_clear_next,
+    crocodile.configure_game_keyboard_renderer(
+        _compose_game_keyboard(
+            raw_game_keyboard,
+            decorate_game_keyboard_with_previous,
+            decorate_game_keyboard_with_legacy_duo,
+            duo_optin.decorate_game_keyboard_with_duo_opt_in,
+            decorate_game_keyboard_with_clear_next,
+        )
     )
     crocodile.configure_end_game_keyboard_renderer(
         _compose_end_game_keyboard(

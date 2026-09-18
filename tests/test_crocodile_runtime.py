@@ -21,7 +21,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
         "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
-        "crocodile.get_game_keyboard = _compose_game_keyboard(",
+        "crocodile.configure_game_keyboard_renderer(",
         "crocodile.start_new_game = _compose_start_new_game(",
         "crocodile.handle_callback = _compose_callback_handler(\n        raw_callback_handler,",
         "duo_optin.configure_crocodile_duo_opt_in(",
@@ -190,9 +190,10 @@ def test_duo_opt_in_does_not_replace_game_keyboard():
 
     runtime_source = _source("games/crocodile_runtime.py")
     assert runtime_source.count(
-        "crocodile.get_game_keyboard = _compose_game_keyboard("
+        "crocodile.configure_game_keyboard_renderer("
     ) == 1
-    assert "raw_game_keyboard = crocodile.get_game_keyboard" in runtime_source
+    assert "crocodile.get_game_keyboard =" not in runtime_source
+    assert "raw_game_keyboard = crocodile.get_game_keyboard_renderer()" in runtime_source
     assert "pre_duo_game_keyboard = _compose_game_keyboard(" in runtime_source
     assert "decorate_game_keyboard_with_legacy_duo" in runtime_source
     assert "duo_optin.decorate_game_keyboard_with_duo_opt_in" in runtime_source
