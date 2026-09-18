@@ -355,7 +355,7 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_instant_word,
     )
 
-    raw_authorize_socket_room = crocodile._authorize_socket_room
+    raw_authorize_socket_room = crocodile.get_socket_room_authorizer()
     raw_join_room = crocodile.join_room
     raw_snapshot = crocodile.snapshot
     raw_final_frame = crocodile.final_frame
@@ -367,10 +367,12 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
-    crocodile._authorize_socket_room = _compose_socket_room_authorizer(
-        raw_authorize_socket_room,
-        persistence.authorize_socket_room_for_current_round,
-        authorize_socket_room_with_modes,
+    crocodile.configure_socket_room_authorizer(
+        _compose_socket_room_authorizer(
+            raw_authorize_socket_room,
+            persistence.authorize_socket_room_for_current_round,
+            authorize_socket_room_with_modes,
+        )
     )
     crocodile.sio.on(
         "join_room",
