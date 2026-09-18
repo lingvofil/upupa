@@ -464,7 +464,7 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
 
 
 # ================== SOCKET SECURITY ==================
-async def _authorize_socket_room(sid, data, *, bind_room: bool = False):
+async def _default_authorize_socket_room(sid, data, *, bind_room: bool = False):
     socket_session = await sio.get_session(sid)
     try:
         user_id = int(socket_session["telegram_user_id"])
@@ -503,6 +503,24 @@ async def _authorize_socket_room(sid, data, *, bind_room: bool = False):
         game_sessions,
     )
     return canonical_room, chat_id, game_sessions[chat_id]
+
+
+_socket_room_authorizer = _default_authorize_socket_room
+
+
+def get_socket_room_authorizer():
+    """Return the currently configured socket-room authorizer."""
+    return _socket_room_authorizer
+
+
+def configure_socket_room_authorizer(authorizer) -> None:
+    """Install the composed socket-room authorizer used by socket handlers."""
+    global _socket_room_authorizer
+    _socket_room_authorizer = authorizer
+
+
+async def _authorize_socket_room(sid, data, *, bind_room: bool = False):
+    return await _socket_room_authorizer(sid, data, bind_room=bind_room)
 
 
 # ================== SOCKET EVENTS ==================
