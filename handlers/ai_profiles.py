@@ -52,7 +52,7 @@ async def handle_chat_profile(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower() == "кто я")
 async def handle_user_profile(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     user_id = message.from_user.id
     chat_id = message.chat.id
     await process_user_profile(user_id, chat_id, message)
@@ -60,7 +60,7 @@ async def handle_user_profile(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith("пародия"))
 async def handle_parody(message: types.Message):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     chat_id = message.chat.id
     await process_parody(message, chat_id)
 
@@ -69,7 +69,7 @@ async def handle_parody(message: types.Message):
 @router.message(_should_start_participant_quiz)
 async def start_participant_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     processing_msg = await message.reply("ищем цитаты великих людей...")
     success, error_message = await process_participant_quiz_start(message, bot)
     await processing_msg.delete()
@@ -79,7 +79,7 @@ async def start_participant_quiz(message: Message, bot: Bot):
 @router.message(_should_start_quiz)
 async def start_quiz(message: Message, bot: Bot):
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     processing_msg = await message.reply("Генерирую вапросики...")
     success, error_message = await process_quiz_start(message, bot)
     await processing_msg.delete()

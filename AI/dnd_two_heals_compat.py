@@ -66,7 +66,6 @@ def _legacy_apply_heal_decision(combat, session, *, use_heal: bool):
 
 def install_dnd_two_heals_compat() -> None:
     """Keep old pending-decision records valid while new games use two charges."""
-    from AI import dnd_combat as combat
     from AI import dnd_healing_choice as healing_choice
     from AI import dnd_two_heals as two_heals
 

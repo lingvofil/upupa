@@ -2,7 +2,6 @@
 # Keep this list shrinking: scripts/run_pyflakes.py fails if an entry becomes clean.
 AI/adddescribe.py
 AI/dnd_combat.py
-AI/dnd_two_heals_compat.py
 AI/picgeneration.py
 AI/random_reactions.py
 AI/voice.py
@@ -14,10 +13,6 @@ features/content_filter.py
 games/crocodile.py
 games/crocodile_modes.py
 games/egra.py
-handlers/ai_profiles.py
-handlers/ai_vision.py
-handlers/media_search.py
 handlers/stats_lexicon.py
 handlers/world_interactions.py
-prompts/__init__.py
 services/nameinfo.py
