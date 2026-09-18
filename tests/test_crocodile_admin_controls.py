@@ -271,7 +271,12 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "party_controls.menu_keyboard = _compose_menu_keyboard_handler(" in runtime_source
     assert "reverse.handle_callback = _compose_callback_handler(" in runtime_source
     assert "reverse_modes.handle_callback = _compose_callback_handler(" in runtime_source
-    assert (
-        "crocodile_controls.stop_lock_remaining_seconds = _compose_stop_lock_remaining_seconds("
-        in runtime_source
+    stop_lock_wiring = "crocodile_controls.configure_stop_lock_remaining_seconds_handler("
+    assert runtime_source.count(stop_lock_wiring) == 1
+    assert "crocodile_controls.stop_lock_remaining_seconds =" not in runtime_source
+
+    controls_source = (ROOT / "games" / "crocodile_controls.py").read_text(
+        encoding="utf-8"
     )
+    assert "def get_stop_lock_remaining_seconds_handler(" in controls_source
+    assert "def configure_stop_lock_remaining_seconds_handler(" in controls_source
