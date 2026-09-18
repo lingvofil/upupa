@@ -65,7 +65,7 @@ async def process_leave_empty_chats(message: types.Message):
         
         try:
             # Получаем количество участников
-            chat_info = await bot.get_chat(chat_id)
+            await bot.get_chat(chat_id)
             member_count = await bot.get_chat_member_count(chat_id)
             
             # Если в чате только 2 участника (бот + 1 человек)
