@@ -69,7 +69,6 @@ async def cmd_stats_1h(message: Message):
 
 @router.message(F.text.lower() == "моя статистика")
 async def show_personal_stats(message: types.Message):
-    random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     logging.info(f"Команда 'моя статистика' вызвана пользователем {message.from_user.id} в чате {message.chat.id}")
     chat_id = str(message.chat.id)
