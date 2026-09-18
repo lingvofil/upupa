@@ -34,6 +34,29 @@ def test_ui_enhancements_do_not_replace_callback_handler():
 
 
 def test_runtime_composes_modes_then_duo_then_ui_in_single_callback_chain():
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "handle_callback"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "crocodile"
+                ):
+                    violations.append(f"{relative}:{node.lineno}")
+    assert not violations, (
+        "crocodile.handle_callback нельзя заменять прямым присваиванием; "
+        "используй configure_callback_handler(): " + ", ".join(violations)
+    )
+
     runtime_source = _source("games/crocodile_runtime.py")
     wiring_entrypoint = "crocodile.configure_callback_handler("
 
