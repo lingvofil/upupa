@@ -531,20 +531,17 @@ async def process_robotics_description(message: types.Message) -> tuple[bool, st
     """Анализ фото/видео/гиф с использованием Gemini Robotics."""
     try:
         target_message = message.reply_to_message if message.reply_to_message else message
-        file_id, file_name, mime_type = None, None, None
+        file_id, mime_type = None, None
 
         if target_message.photo:
             photo = target_message.photo[-1]
             file_id = photo.file_id
-            file_name = f"robotics_{photo.file_id}.jpg"
             mime_type = "image/jpeg"
         elif target_message.video:
             file_id = target_message.video.file_id
-            file_name = f"robotics_{file_id}.mp4"
             mime_type = "video/mp4"
         elif target_message.animation:
             file_id = target_message.animation.file_id
-            file_name = f"robotics_{file_id}.mp4"
             mime_type = "video/mp4"
 
         if not file_id:
