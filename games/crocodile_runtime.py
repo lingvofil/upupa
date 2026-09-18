@@ -421,10 +421,12 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
-    base_telephone_callback = crocodile_modes.handle_telephone_callback
-    crocodile_modes.handle_telephone_callback = _compose_callback_handler(
-        base_telephone_callback,
-        telephone_callback_with_skip_permissions,
+    base_telephone_callback = crocodile_modes.get_telephone_callback_handler()
+    crocodile_modes.configure_telephone_callback_handler(
+        _compose_callback_handler(
+            base_telephone_callback,
+            telephone_callback_with_skip_permissions,
+        )
     )
     base_party_menu_handler = party_controls.handle_menu_callback
     party_controls.menu_keyboard = _compose_party_menu_keyboard(
@@ -485,9 +487,11 @@ def configure_crocodile_runtime() -> None:
             stop_lock_remaining_seconds_with_admin,
         )
     )
-    crocodile_modes.handle_telephone_callback = _compose_callback_handler(
-        crocodile_modes.handle_telephone_callback,
-        handle_telephone_callback_with_admin,
+    crocodile_modes.configure_telephone_callback_handler(
+        _compose_callback_handler(
+            crocodile_modes.get_telephone_callback_handler(),
+            handle_telephone_callback_with_admin,
+        )
     )
     crocodile_modes.handle_duel_callback = _compose_callback_handler(
         crocodile_modes.handle_duel_callback,
