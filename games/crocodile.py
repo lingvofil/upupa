@@ -742,6 +742,24 @@ async def _default_start_new_game(chat_id: int, user_id: int, user_full_name: st
         )
 
 
+_start_new_game_handler = _default_start_new_game
+
+
+def get_start_new_game_handler():
+    """Return the currently configured new-game handler."""
+    return _start_new_game_handler
+
+
+def configure_start_new_game_handler(handler) -> None:
+    """Install the composed new-game handler."""
+    global _start_new_game_handler
+    _start_new_game_handler = handler
+
+
+async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
+    return await _start_new_game_handler(chat_id, user_id, user_full_name)
+
+
 async def handle_start_game(message: types.Message):
     await start_new_game(message.chat.id, message.from_user.id, message.from_user.full_name)
 
