@@ -9,7 +9,7 @@ import time
 import json
 import html
 import re
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
 from aiohttp import web
 import socketio
