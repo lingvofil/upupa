@@ -28,7 +28,7 @@ async def generate_text_response_for_voice(chat_id: str, user_query: str) -> str
     active_model = current_settings.get("active_model", "gemini")
 
     selected_prompt, prompt_name = get_current_chat_prompt(chat_id)
-    chat_history_formatted = format_chat_history(chat_id)
+    format_chat_history(chat_id)
 
     full_prompt = (
         f"{selected_prompt}\n\n"
