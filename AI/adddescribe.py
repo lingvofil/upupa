@@ -1,6 +1,5 @@
 #adddescribe.py
 
-import base64
 import logging
 import textwrap
 import random

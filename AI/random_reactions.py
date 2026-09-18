@@ -3,9 +3,7 @@ import os
 import random
 import logging
 import asyncio
-import json
 from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
-from aiogram import Bot
 
 from core.state import chat_settings, conversation_history
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
