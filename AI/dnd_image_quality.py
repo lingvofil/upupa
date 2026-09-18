@@ -1,32 +1,13 @@
-"""DnD-specific image path that strongly prefers GigaChat and preserves prompts."""
+"""DnD-specific image delivery that preserves the original scene prompt."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from aiogram.types import BufferedInputFile
 
 
-DND_GIGACHAT_IMAGE_ATTEMPTS = 2
-DND_GIGACHAT_IMAGE_RETRY_DELAY_SECONDS = 1.0
-
-
 async def generate_dnd_image_bytes(prompt: str):
-    """Try GigaChat twice, then let the shared waterfall give it one last attempt."""
-    from AI.gigachat_image import generate_gigachat_image
-
-    for attempt in range(1, DND_GIGACHAT_IMAGE_ATTEMPTS + 1):
-        data = await generate_gigachat_image(prompt)
-        if data:
-            logging.info("[dnd] image provider=gigachat attempt=%s", attempt)
-            return data, "gigachat"
-        logging.warning("[dnd] GigaChat image attempt %s/%s returned no image", attempt, DND_GIGACHAT_IMAGE_ATTEMPTS)
-        if attempt < DND_GIGACHAT_IMAGE_ATTEMPTS:
-            await asyncio.sleep(DND_GIGACHAT_IMAGE_RETRY_DELAY_SECONDS)
-
-    # The shared waterfall starts with GigaChat once more and then goes to
-    # reserves. log_context="dnd" also guarantees that the original long DnD
-    # prompt is preserved instead of being compressed by translate_to_en().
+    """Use the shared image waterfall without translating/compressing DnD prompts."""
     from features.image_generation import generate_image_bytes
 
     return await generate_image_bytes(prompt, log_context="dnd")

@@ -87,7 +87,22 @@ def test_install_replaces_kandinsky_provider_for_pun():
     assert callable(module.handle_kandinsky_generation_command)
 
 
-def test_waterfall_prefers_gigachat_without_translation_or_pollinations(monkeypatch):
+def _processing_message():
+    class ProcessingMessage:
+        def __init__(self):
+            self.edits = []
+            self.deleted = False
+
+        async def edit_text(self, text):
+            self.edits.append(text)
+
+        async def delete(self):
+            self.deleted = True
+
+    return ProcessingMessage()
+
+
+def test_waterfall_prefers_gigachat_without_translation_or_reserves(monkeypatch):
     sent = []
 
     async def fail_if_called(*args, **kwargs):
@@ -113,18 +128,7 @@ def test_waterfall_prefers_gigachat_without_translation_or_pollinations(monkeypa
 
     monkeypatch.setattr(gi, "generate_gigachat_image", fake_gigachat)
 
-    class ProcessingMessage:
-        def __init__(self):
-            self.edits = []
-            self.deleted = False
-
-        async def edit_text(self, text):
-            self.edits.append(text)
-
-        async def delete(self):
-            self.deleted = True
-
-    processing = ProcessingMessage()
+    processing = _processing_message()
     asyncio.run(
         module.robust_image_generation(
             message=object(),
@@ -136,3 +140,63 @@ def test_waterfall_prefers_gigachat_without_translation_or_pollinations(monkeypa
     assert processing.edits == ["Использую ебучий GigaChat..."]
     assert processing.deleted is True
     assert sent == [(b"generated-by-gigachat", "gigachat.png")]
+
+
+def test_direct_waterfall_uses_horde_second(monkeypatch):
+    from AI import aihorde_image
+
+    sent = []
+    calls = []
+
+    async def translate(prompt):
+        calls.append(("translate", prompt))
+        return "translated mushroom"
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("provider after AI Horde must not run")
+
+    async def send_generated_photo(message, data, filename):
+        sent.append((data, filename))
+
+    module = SimpleNamespace(
+        PIPELINE_ID="old",
+        kandinsky_api=object(),
+        translate_to_en=translate,
+        pollinations_generate=fail_if_called,
+        hf_generate=fail_if_called,
+        cf_generate_t2i=fail_if_called,
+        send_generated_photo=send_generated_photo,
+    )
+    gi.install_into_picgeneration(module)
+
+    async def fake_gigachat(prompt):
+        calls.append(("gigachat", prompt))
+        return None
+
+    async def fake_horde(prompt):
+        calls.append(("aihorde", prompt))
+        return b"generated-by-horde"
+
+    monkeypatch.setattr(gi, "generate_gigachat_image", fake_gigachat)
+    monkeypatch.setattr(aihorde_image, "generate_aihorde_image", fake_horde)
+
+    processing = _processing_message()
+    asyncio.run(
+        module.robust_image_generation(
+            message=object(),
+            prompt_ru="красный гриб",
+            processing_msg=processing,
+        )
+    )
+
+    assert calls == [
+        ("gigachat", "красный гриб"),
+        ("translate", "красный гриб"),
+        ("aihorde", "translated mushroom"),
+    ]
+    assert processing.edits == [
+        "Использую ебучий GigaChat...",
+        "Использую ебучий AI Horde...",
+    ]
+    assert processing.deleted is True
+    assert sent == [(b"generated-by-horde", "aihorde.webp")]

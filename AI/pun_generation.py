@@ -20,8 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from AI.gigachat_image import generate_gigachat_image
-
 
 _HISTORY_FILE = Path(__file__).resolve().parent.parent / "pun_history.json"
 _HISTORY_LIMIT = 120
@@ -311,31 +309,16 @@ async def _generate_pun_image(picgeneration_module, candidate: PunCandidate) -> 
         f"A creative surreal visual hybrid combining {candidate.first} and {candidate.second}, "
         "one coherent subject, humorous visual pun, detailed digital art, high resolution, no text"
     )
-    prompt_en = await picgeneration_module.translate_to_en(visual_prompt)
+    from features.image_generation import generate_image_bytes
 
-    image = await picgeneration_module.pollinations_generate(prompt_en)
-    if image:
-        logging.info("Pun image generated via Pollinations")
-        return image
-
-    image = await generate_gigachat_image(
-        f"Смешной визуальный гибрид двух сущностей: {candidate.first} и {candidate.second}. "
-        "Они должны быть объединены в один цельный объект. Без текста и надписей."
+    image, provider = await generate_image_bytes(
+        visual_prompt,
+        translate_fallback=False,
+        log_context="pun",
     )
     if image:
-        logging.info("Pun image generated via GigaChat")
-        return image
-
-    logging.info("Pun image: trying HuggingFace fallback")
-    image = await picgeneration_module.hf_generate(
-        prompt_en,
-        "black-forest-labs/FLUX.1-schnell",
-    )
-    if image:
-        return image
-
-    logging.info("Pun image: trying Cloudflare fallback")
-    return await picgeneration_module.cf_generate_t2i(prompt_en)
+        logging.info("Pun image generated via %s", provider)
+    return image
 
 
 def install_into_picgeneration(picgeneration_module) -> None:

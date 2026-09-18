@@ -11,14 +11,17 @@ async def generate_image_bytes(
     translate_fallback: bool = True,
     log_context: str = "image",
 ) -> tuple[bytes | None, str | None]:
-    """Generate image bytes through the project's standard GigaChat-first waterfall.
+    """Generate image bytes through the project's standard image waterfall.
 
-    GigaChat receives the original prompt directly. If it fails, providers that
-    work better with English receive the translated/enhanced prompt when
-    ``translate_fallback`` is true. DnD prompts are already deliberately written
-    for image generation, so they must never be compressed by translate_to_en().
+    GigaChat receives the original prompt directly. If it fails, AI Horde is
+    the first independent reserve, followed by Pollinations, Hugging Face and
+    Cloudflare. Providers after GigaChat receive the translated/enhanced prompt
+    when ``translate_fallback`` is true. DnD prompts are already deliberately
+    written for image generation, so they must never be compressed by
+    translate_to_en().
     """
     from AI import picgeneration as pg
+    from AI.aihorde_image import generate_aihorde_image
     from AI.gigachat_image import generate_gigachat_image
 
     if log_context == "dnd":
@@ -31,6 +34,11 @@ async def generate_image_bytes(
             return image, "gigachat"
 
         fallback_prompt = await pg.translate_to_en(prompt) if translate_fallback else prompt
+
+        image = await generate_aihorde_image(fallback_prompt)
+        if image:
+            logging.info("[%s] image provider=aihorde", log_context)
+            return image, "aihorde"
 
         image = await pg.pollinations_generate(fallback_prompt)
         if image:

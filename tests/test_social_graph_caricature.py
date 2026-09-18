@@ -59,7 +59,7 @@ def test_cringe_prompt_requests_only_anonymous_portrait_sheet():
     assert "Telegram" not in prompt
 
 
-def test_social_graph_image_fallback_reuses_same_english_prompt(monkeypatch):
+def test_social_graph_image_fallback_uses_horde_second_with_same_prompt(monkeypatch):
     import AI
     from features.social_graph.image_generation import generate_social_graph_image
 
@@ -69,33 +69,36 @@ def test_social_graph_image_fallback_reuses_same_english_prompt(monkeypatch):
         calls.append(("gigachat", prompt))
         return None
 
-    async def pollinations(prompt):
-        calls.append(("pollinations", prompt))
-        return b"pollinations-image"
+    async def horde(prompt):
+        calls.append(("aihorde", prompt))
+        return b"horde-image"
 
-    async def should_not_run(*_args):
+    async def should_not_run(*_args, **_kwargs):
         raise AssertionError("later fallback should not run")
 
     fake_pg = SimpleNamespace(
-        pollinations_generate=pollinations,
+        pollinations_generate=should_not_run,
         hf_generate=should_not_run,
         cf_generate_t2i=should_not_run,
     )
     fake_gigachat = ModuleType("AI.gigachat_image")
     fake_gigachat.generate_gigachat_image = gigachat
+    fake_horde = ModuleType("AI.aihorde_image")
+    fake_horde.generate_aihorde_image = horde
 
     monkeypatch.setitem(sys.modules, "AI.picgeneration", fake_pg)
     monkeypatch.setattr(AI, "picgeneration", fake_pg, raising=False)
     monkeypatch.setitem(sys.modules, "AI.gigachat_image", fake_gigachat)
+    monkeypatch.setitem(sys.modules, "AI.aihorde_image", fake_horde)
 
     prompt = "already English, no text"
     image, provider = asyncio.run(generate_social_graph_image(prompt))
 
-    assert image == b"pollinations-image"
-    assert provider == "pollinations"
+    assert image == b"horde-image"
+    assert provider == "aihorde"
     assert calls == [
         ("gigachat", prompt),
-        ("pollinations", prompt),
+        ("aihorde", prompt),
     ]
 
 

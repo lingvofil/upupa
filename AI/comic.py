@@ -2,8 +2,8 @@
 #
 # Команда "комикс" / "упупа комикс": берём переписку за 12 часов,
 # AI пишет сценарий из 4 панелей (сцена на английском для генератора картинок +
-# подпись на русском), генерируем 4 картинки через GigaChat-2 и склеиваем
-# лист 2x2 с подписями через Pillow.
+# подпись на русском), генерируем 4 картинки через общий image waterfall и
+# склеиваем лист 2x2 с подписями через Pillow.
 
 import asyncio
 import json
@@ -19,7 +19,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from AI.summarize import _get_chat_messages, _generate_with_active_model
-from AI.gigachat_image import generate_gigachat_image
 
 COMIC_HOURS = 12
 MIN_MESSAGES = 5
@@ -48,8 +47,15 @@ COMIC_SCRIPT_PROMPT = """Ты сценарист комиксов. По пере
 
 
 async def _generate_panel_image(scene: str) -> bytes | None:
-    """Генерирует одну панель через тот же GigaChat text-to-image, что и «нарисуй»."""
-    return await generate_gigachat_image(f"{PANEL_STYLE}, {scene}")
+    """Генерирует одну панель через общий GigaChat-first image waterfall."""
+    from features.image_generation import generate_image_bytes
+
+    image, _provider = await generate_image_bytes(
+        f"{PANEL_STYLE}, {scene}",
+        translate_fallback=False,
+        log_context="comic",
+    )
+    return image
 
 
 def _parse_panels(raw: str) -> list[dict]:
