@@ -87,7 +87,7 @@ async def handle_whatisthere_unified(message: types.Message):
         return
 
     random_action = random.choice(actions)
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     
     processing_text = get_processing_message(message)
     processing_msg = await message.reply(processing_text)
@@ -120,7 +120,7 @@ async def handle_robotics_description(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
     processing = await message.reply("Включаю модули анализа... (Robotics 1.5)")
-    success, response = await process_robotics_description(message)
+    _, response = await process_robotics_description(message)
     await processing.delete()
     await message.reply(response)
 
@@ -132,8 +132,7 @@ async def handle_robotics_description(message: types.Message):
     ) and message.from_user.id not in BLOCKED_USERS
 )
 async def describe_image(message: types.Message):
-    random_action = random.choice(actions)
-    success, response = await process_image_description(bot, message)
+    _, response = await process_image_description(bot, message)
     await message.reply(response)
 
 # ================== БЛОК 6.6: ГЕНЕРАЦИЯ И РЕДАКТИРОВАНИЕ ИЗОБРАЖЕНИЙ ==================

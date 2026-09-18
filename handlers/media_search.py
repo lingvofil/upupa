@@ -51,7 +51,6 @@ async def send_random_media(message: types.Message):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
 async def handle_image_search(message: Message):
-    random_action = random.choice(actions)
     query = message.text[len("найди"):].strip()
     success, response_message, image_data = await process_image_search(query)
     if success and image_data:
@@ -104,8 +103,7 @@ async def send_kotogif(message: types.Message):
     message.from_user.id not in BLOCKED_USERS
 )
 async def handle_name_info(message: types.Message):
-    random_action = random.choice(actions)
-    success, response = await process_name_info(message)
+    _, response = await process_name_info(message)
     await message.reply(response)
 
 @router.message(is_distortion_command)

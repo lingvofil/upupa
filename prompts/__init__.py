@@ -27,3 +27,33 @@ from prompts.personas import (
     get_prompt_by_name, get_available_prompts, get_prompts_list_text,
 )
 from prompts.chat_data import RANKS, STOPWORDS, CHANNEL_SETTINGS, queries, actions
+
+
+__all__ = [
+    "HELP_DICT",
+    "HELP_TEXT",
+    "PARODY_PROMPT",
+    "MEME_SYSTEM_PROMPT",
+    "PROMPTS_MEDIA",
+    "PROMPT_DESCRIBE",
+    "SPECIAL_PROMPT",
+    "PROMPT_SERIOUS_MODE",
+    "CUSTOM_PROMPT_TEMPLATE",
+    "USER_IMITATION_BASE_PROMPT",
+    "PROMPT_PIROZHOK",
+    "PROMPT_PIROZHOK1",
+    "PROMPT_POROSHOK",
+    "PROMPT_POROSHOK1",
+    "KEYWORDS",
+    "DIALOG_TRIGGER_KEYWORDS",
+    "PROMPTS_DICT",
+    "PROMPTS_TEXT",
+    "get_prompt_by_name",
+    "get_available_prompts",
+    "get_prompts_list_text",
+    "RANKS",
+    "STOPWORDS",
+    "CHANNEL_SETTINGS",
+    "queries",
+    "actions",
+]
