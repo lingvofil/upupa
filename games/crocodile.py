@@ -701,7 +701,7 @@ async def start_socket_server():
 
 
 # ================== BOT LOGIC ==================
-async def start_new_game(chat_id: int, user_id: int, user_full_name: str):
+async def _default_start_new_game(chat_id: int, user_id: int, user_full_name: str):
     """Запуск новой игры"""
     if not _scores:
         _scores_load()
