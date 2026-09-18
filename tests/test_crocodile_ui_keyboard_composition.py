@@ -4,6 +4,7 @@ from pathlib import Path
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+from games import crocodile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,25 @@ def test_end_game_keyboard_composition_preserves_likes_and_order():
     assert keyboard.inline_keyboard[0][0].callback_data == "decorated"
 
 
+def test_end_game_keyboard_renderer_configurator_drives_stable_entrypoint():
+    original = crocodile.get_end_game_keyboard_renderer()
+
+    def renderer(likes=0):
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"configured:{likes}", callback_data="configured")]
+            ]
+        )
+
+    try:
+        crocodile.configure_end_game_keyboard_renderer(renderer)
+        keyboard = crocodile.get_end_game_keyboard(9)
+        assert keyboard.inline_keyboard[0][0].text == "configured:9"
+        assert keyboard.inline_keyboard[0][0].callback_data == "configured"
+    finally:
+        crocodile.configure_end_game_keyboard_renderer(original)
+
+
 def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
     ui_source = _source("games/crocodile_ui_enhancements.py")
     runtime_source = _source("games/crocodile_runtime.py")
@@ -69,6 +89,17 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
     assigned = _assigned_attributes(ui_source, "crocodile")
     assert "get_game_keyboard" not in assigned
     assert "get_end_game_keyboard" not in assigned
+
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if "get_end_game_keyboard" in _assigned_attributes(source, "crocodile"):
+            violations.append(relative)
+    assert not violations, (
+        "crocodile.get_end_game_keyboard нельзя заменять прямым присваиванием; "
+        "используй configure_end_game_keyboard_renderer(): " + ", ".join(violations)
+    )
     assert "_original_get_game_keyboard" not in ui_source
     assert "_original_get_end_game_keyboard" not in ui_source
     assert "get_game_keyboard_with_clear_next" not in ui_source
@@ -77,9 +108,12 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
     assert "decorate_end_game_keyboard_with_attribution" in ui_source
 
     game_assignment = "crocodile.get_game_keyboard = _compose_game_keyboard("
-    end_assignment = "crocodile.get_end_game_keyboard = _compose_end_game_keyboard("
+    end_wiring = "crocodile.configure_end_game_keyboard_renderer("
     assert runtime_source.count(game_assignment) == 1
-    assert runtime_source.count(end_assignment) == 1
+    assert runtime_source.count(end_wiring) == 1
+    assert "crocodile.get_end_game_keyboard =" not in runtime_source
+    assert "def get_end_game_keyboard_renderer(" in _source("games/crocodile.py")
+    assert "def configure_end_game_keyboard_renderer(" in _source("games/crocodile.py")
 
     game_wiring = runtime_source.index(game_assignment)
     duo = runtime_source.index(
@@ -87,14 +121,14 @@ def test_ui_keyboard_entrypoints_are_composed_only_in_runtime():
         game_wiring,
     )
     clear_next = runtime_source.index("decorate_game_keyboard_with_clear_next", duo)
-    end_wiring = runtime_source.index(end_assignment, clear_next)
+    end_wiring_pos = runtime_source.index(end_wiring, clear_next)
     attribution = runtime_source.index(
         "decorate_end_game_keyboard_with_attribution",
-        end_wiring,
+        end_wiring_pos,
     )
     ui_install = runtime_source.index(
         "configure_crocodile_ui_enhancements()",
         attribution,
     )
 
-    assert game_wiring < duo < clear_next < end_wiring < attribution < ui_install
+    assert game_wiring < duo < clear_next < end_wiring_pos < attribution < ui_install

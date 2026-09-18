@@ -451,7 +451,7 @@ def get_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
+def _default_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура, которая показывается под финальным рисунком."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -461,6 +461,24 @@ def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+_end_game_keyboard_renderer = _default_end_game_keyboard
+
+
+def get_end_game_keyboard_renderer():
+    """Return the currently configured end-game keyboard renderer."""
+    return _end_game_keyboard_renderer
+
+
+def configure_end_game_keyboard_renderer(renderer) -> None:
+    """Install the composed end-game keyboard renderer."""
+    global _end_game_keyboard_renderer
+    _end_game_keyboard_renderer = renderer
+
+
+def get_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
+    return _end_game_keyboard_renderer(likes)
 
 
 # ================== SOCKET SECURITY ==================

@@ -398,7 +398,7 @@ def configure_crocodile_runtime() -> None:
         decorate_game_keyboard_with_previous,
         decorate_game_keyboard_with_legacy_duo,
     )
-    base_end_game_keyboard = crocodile.get_end_game_keyboard
+    base_end_game_keyboard = crocodile.get_end_game_keyboard_renderer()
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
         persistence.CrocodilePersistenceDependencies(
@@ -444,9 +444,11 @@ def configure_crocodile_runtime() -> None:
         duo_optin.decorate_game_keyboard_with_duo_opt_in,
         decorate_game_keyboard_with_clear_next,
     )
-    crocodile.get_end_game_keyboard = _compose_end_game_keyboard(
-        base_end_game_keyboard,
-        decorate_end_game_keyboard_with_attribution,
+    crocodile.configure_end_game_keyboard_renderer(
+        _compose_end_game_keyboard(
+            base_end_game_keyboard,
+            decorate_end_game_keyboard_with_attribution,
+        )
     )
     crocodile.start_new_game = _compose_start_new_game(
         base_start_new_game,
