@@ -106,6 +106,27 @@ def test_modes_legacy_duo_decorator_preserves_existing_keyboard():
     assert f"cr_duo_{chat_id}" in callbacks
 
 
+def test_game_keyboard_renderer_configurator_drives_stable_entrypoint():
+    from games import crocodile
+
+    original = crocodile.get_game_keyboard_renderer()
+
+    def renderer(chat_id):
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"configured:{chat_id}", callback_data="configured")]
+            ]
+        )
+
+    try:
+        crocodile.configure_game_keyboard_renderer(renderer)
+        keyboard = crocodile.get_game_keyboard(-42)
+        assert keyboard.inline_keyboard[0][0].text == "configured:-42"
+        assert keyboard.inline_keyboard[0][0].callback_data == "configured"
+    finally:
+        crocodile.configure_game_keyboard_renderer(original)
+
+
 def test_game_keyboard_entrypoint_is_composed_only_in_runtime():
     controls_source = _source("games/crocodile_controls.py")
     modes_source = _source("games/crocodile_modes.py")
@@ -122,7 +143,24 @@ def test_game_keyboard_entrypoint_is_composed_only_in_runtime():
     assert "decorate_game_keyboard_with_previous" in controls_source
     assert "decorate_game_keyboard_with_legacy_duo" in modes_source
 
-    raw_capture = runtime_source.index("raw_game_keyboard = crocodile.get_game_keyboard")
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if "get_game_keyboard" in _assigned_attributes(source, "crocodile"):
+            violations.append(relative)
+    assert not violations, (
+        "crocodile.get_game_keyboard нельзя заменять прямым присваиванием; "
+        "используй configure_game_keyboard_renderer(): " + ", ".join(violations)
+    )
+
+    crocodile_source = _source("games/crocodile.py")
+    assert "def get_game_keyboard_renderer(" in crocodile_source
+    assert "def configure_game_keyboard_renderer(" in crocodile_source
+
+    raw_capture = runtime_source.index(
+        "raw_game_keyboard = crocodile.get_game_keyboard_renderer()"
+    )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
     )
@@ -136,9 +174,10 @@ def test_game_keyboard_entrypoint_is_composed_only_in_runtime():
         "decorate_game_keyboard_with_legacy_duo,",
         pre_previous,
     )
-    final_assignment = "crocodile.get_game_keyboard = _compose_game_keyboard("
-    assert runtime_source.count(final_assignment) == 1
-    final_wiring = runtime_source.index(final_assignment)
+    final_entrypoint = "crocodile.configure_game_keyboard_renderer("
+    assert runtime_source.count(final_entrypoint) == 1
+    assert "crocodile.get_game_keyboard =" not in runtime_source
+    final_wiring = runtime_source.index(final_entrypoint)
     final_previous = runtime_source.index(
         "decorate_game_keyboard_with_previous,",
         final_wiring,
