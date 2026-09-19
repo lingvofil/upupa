@@ -404,7 +404,7 @@ def _callback_message_proxy(callback) -> SimpleNamespace:
     )
 
 
-async def _stop_active_party(chat_id: str, user_id: int) -> tuple[bool, str]:
+async def _default_stop_active_party(chat_id: str, user_id: int) -> tuple[bool, str]:
     telephone = crocodile_modes.telephone_games.get(chat_id)
     if telephone:
         if user_id not in _telephone_participants(telephone):
@@ -439,6 +439,24 @@ async def _stop_active_party(chat_id: str, user_id: int) -> tuple[bool, str]:
             "в карточке раунда."
         )
     return False, "Игра не запущена."
+
+
+_stop_active_party_handler = _default_stop_active_party
+
+
+def get_stop_active_party_handler():
+    """Return the currently configured unified party-stop handler."""
+    return _stop_active_party_handler
+
+
+def configure_stop_active_party_handler(handler) -> None:
+    """Install the composed unified party-stop handler."""
+    global _stop_active_party_handler
+    _stop_active_party_handler = handler
+
+
+async def _stop_active_party(chat_id: str, user_id: int) -> tuple[bool, str]:
+    return await _stop_active_party_handler(chat_id, user_id)
 
 
 async def stop_crocodile(message) -> None:
