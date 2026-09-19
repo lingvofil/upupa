@@ -493,9 +493,11 @@ def configure_crocodile_runtime() -> None:
             handle_telephone_callback_with_admin,
         )
     )
-    crocodile_modes.handle_duel_callback = _compose_callback_handler(
-        crocodile_modes.handle_duel_callback,
-        handle_duel_callback_with_admin,
+    crocodile_modes.configure_duel_callback_handler(
+        _compose_callback_handler(
+            crocodile_modes.get_duel_callback_handler(),
+            handle_duel_callback_with_admin,
+        )
     )
     party_controls._stop_active_party = _compose_party_stop_handler(
         party_controls._stop_active_party,

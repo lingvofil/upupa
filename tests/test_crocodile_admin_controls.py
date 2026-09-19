@@ -266,7 +266,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert first_telephone < second_telephone < admin_install
     assert "handle_telephone_callback_with_admin," in runtime_source[second_telephone:admin_install]
     assert "crocodile_modes.handle_telephone_callback =" not in runtime_source
-    assert "crocodile_modes.handle_duel_callback = _compose_callback_handler(" in runtime_source
+    duel_wiring = "crocodile_modes.configure_duel_callback_handler("
+    assert runtime_source.count(duel_wiring) == 1
+    assert "crocodile_modes.handle_duel_callback =" not in runtime_source
     assert "party_controls._stop_active_party = _compose_party_stop_handler(" in runtime_source
     assert "party_controls.menu_keyboard = _compose_menu_keyboard_handler(" in runtime_source
     assert "reverse.handle_callback = _compose_callback_handler(" in runtime_source
