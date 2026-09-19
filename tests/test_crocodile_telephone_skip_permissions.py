@@ -1,3 +1,4 @@
+import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,6 +191,23 @@ def test_menu_non_skip_delegates_once():
     downstream.assert_awaited_once_with(callback)
 
 
+def test_telephone_callback_configurator_drives_stable_entrypoint():
+    from games import crocodile_modes as modes
+
+    callback = _callback("configured", 101)
+    original = modes.get_telephone_callback_handler()
+    configured = AsyncMock(return_value="configured-result")
+
+    try:
+        modes.configure_telephone_callback_handler(configured)
+        result = asyncio.run(modes.handle_telephone_callback(callback))
+    finally:
+        modes.configure_telephone_callback_handler(original)
+
+    assert result == "configured-result"
+    configured.assert_awaited_once_with(callback)
+
+
 def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     permissions_source = (
         ROOT / "games" / "crocodile_telephone_skip_permissions.py"
@@ -206,32 +224,100 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     )
     assert "return await next_handler(callback)" in permissions_source
 
+    modes_source = (ROOT / "games" / "crocodile_modes.py").read_text(encoding="utf-8")
+    party_source = (ROOT / "games" / "crocodile_party_controls.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def get_telephone_callback_handler(" in modes_source
+    assert "def configure_telephone_callback_handler(" in modes_source
+    assert (
+        "_original_handle_telephone_callback = "
+        "crocodile_modes.get_telephone_callback_handler()"
+        in party_source
+    )
+    assert (
+        "crocodile_modes.configure_telephone_callback_handler("
+        "handle_telephone_callback_resilient)"
+        in party_source
+    )
+
+    violations = []
+    for path in sorted((ROOT / "games").glob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "handle_telephone_callback"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "crocodile_modes"
+                ):
+                    violations.append(f"{relative}:{node.lineno}")
+    assert not violations, (
+        "crocodile_modes.handle_telephone_callback нельзя заменять прямым "
+        "присваиванием; используй configure_telephone_callback_handler(): "
+        + ", ".join(violations)
+    )
+
     party_install = runtime_source.index("party_controls.configure_crocodile_party_controls()")
     capture = runtime_source.index(
-        "base_telephone_callback = crocodile_modes.handle_telephone_callback",
+        "base_telephone_callback = crocodile_modes.get_telephone_callback_handler()",
         party_install,
     )
-    assignment = "crocodile_modes.handle_telephone_callback = _compose_callback_handler("
-    permissions_wiring = runtime_source.index(assignment, capture)
+    wiring = "crocodile_modes.configure_telephone_callback_handler("
+    permissions_wiring = runtime_source.index(wiring, capture)
     base = runtime_source.index("base_telephone_callback,", permissions_wiring)
     permissions = runtime_source.index(
         "telephone_callback_with_skip_permissions,",
         base,
     )
     admin_wiring = runtime_source.index(
-        assignment,
-        permissions_wiring + len(assignment),
+        wiring,
+        permissions_wiring + len(wiring),
+    )
+    admin_current = runtime_source.index(
+        "crocodile_modes.get_telephone_callback_handler(),",
+        admin_wiring,
     )
     admin_wrapper = runtime_source.index(
         "handle_telephone_callback_with_admin,",
-        admin_wiring,
+        admin_current,
     )
-    installer = runtime_source.index(
+    permissions_installer = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
         admin_wrapper,
     )
+    roles_installer = runtime_source.index(
+        "configure_crocodile_telephone_roles()",
+        permissions_installer,
+    )
+    announcements_installer = runtime_source.index(
+        "configure_crocodile_telephone_role_announcements()",
+        roles_installer,
+    )
 
-    assert runtime_source.count(assignment) == 2
+    roles_source = (ROOT / "games" / "crocodile_telephone_roles.py").read_text(
+        encoding="utf-8"
+    )
+    announcements_source = (
+        ROOT / "games" / "crocodile_telephone_role_announcements.py"
+    ).read_text(encoding="utf-8")
+    for source in (roles_source, announcements_source):
+        assert (
+            "_original_handle_telephone_callback = "
+            "crocodile_modes.get_telephone_callback_handler()"
+            in source
+        )
+        assert "crocodile_modes.configure_telephone_callback_handler(" in source
+
+    assert runtime_source.count(wiring) == 2
     assert (
         party_install
         < capture
@@ -239,6 +325,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         < base
         < permissions
         < admin_wiring
+        < admin_current
         < admin_wrapper
-        < installer
+        < permissions_installer
+        < roles_installer
+        < announcements_installer
     )

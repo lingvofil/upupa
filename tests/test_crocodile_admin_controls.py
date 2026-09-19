@@ -254,19 +254,18 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "reverse_callback_with_admin(callback, next_handler)" in admin_source
     assert "reverse_modes_callback_with_admin(callback, next_handler)" in admin_source
 
-    permissions_assignment = (
-        "crocodile_modes.handle_telephone_callback = _compose_callback_handler("
-    )
-    first_telephone = runtime_source.index(permissions_assignment)
+    telephone_wiring = "crocodile_modes.configure_telephone_callback_handler("
+    first_telephone = runtime_source.index(telephone_wiring)
     second_telephone = runtime_source.index(
-        permissions_assignment,
-        first_telephone + len(permissions_assignment),
+        telephone_wiring,
+        first_telephone + len(telephone_wiring),
     )
     admin_install = runtime_source.index("configure_crocodile_admin_controls()")
 
-    assert runtime_source.count(permissions_assignment) == 2
+    assert runtime_source.count(telephone_wiring) == 2
     assert first_telephone < second_telephone < admin_install
     assert "handle_telephone_callback_with_admin," in runtime_source[second_telephone:admin_install]
+    assert "crocodile_modes.handle_telephone_callback =" not in runtime_source
     assert "crocodile_modes.handle_duel_callback = _compose_callback_handler(" in runtime_source
     assert "party_controls._stop_active_party = _compose_party_stop_handler(" in runtime_source
     assert "party_controls.menu_keyboard = _compose_menu_keyboard_handler(" in runtime_source

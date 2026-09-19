@@ -376,12 +376,12 @@ def configure_crocodile_telephone_roles() -> None:
         return
 
     _original_start_telephone = crocodile_modes.start_telephone
-    _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
+    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
     _original_party_status_text = crocodile_party_controls.party_status_text
     _original_skip_telephone = crocodile_party_controls._skip_telephone
 
     crocodile_modes.start_telephone = start_telephone_with_roles
-    crocodile_modes.handle_telephone_callback = handle_telephone_callback_with_roles
+    crocodile_modes.configure_telephone_callback_handler(handle_telephone_callback_with_roles)
     crocodile_modes._telephone_lobby_keyboard = telephone_lobby_keyboard
     crocodile_party_controls.party_status_text = party_status_text_with_roles
     crocodile_party_controls._skip_telephone = skip_telephone_with_roles

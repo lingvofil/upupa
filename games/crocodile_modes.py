@@ -647,7 +647,7 @@ async def _finish_telephone(chat_id: str, game: dict) -> None:
     await bot.send_message(int(chat_id), "🏁 Телефон окончательно испорчен. Можно начинать новый.")
 
 
-async def handle_telephone_callback(callback) -> None:
+async def _default_handle_telephone_callback(callback) -> None:
     data = callback.data or ""
     for prefix in ("ctel_join_", "ctel_start_", "ctel_cancel_"):
         if data.startswith(prefix):
@@ -680,6 +680,24 @@ async def handle_telephone_callback(callback) -> None:
     game["phase"] = "playing"
     await callback.answer("Поехали")
     await _send_telephone_step(cid, game)
+
+
+_telephone_callback_handler = _default_handle_telephone_callback
+
+
+def get_telephone_callback_handler():
+    """Return the currently configured broken-telephone callback handler."""
+    return _telephone_callback_handler
+
+
+def configure_telephone_callback_handler(handler) -> None:
+    """Install the composed broken-telephone callback handler."""
+    global _telephone_callback_handler
+    _telephone_callback_handler = handler
+
+
+async def handle_telephone_callback(callback) -> None:
+    return await _telephone_callback_handler(callback)
 
 
 def configure_crocodile_modes() -> None:

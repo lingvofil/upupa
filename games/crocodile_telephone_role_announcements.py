@@ -156,7 +156,7 @@ def configure_crocodile_telephone_role_announcements() -> None:
         return
 
     _original_start_telephone = crocodile_modes.start_telephone
-    _original_handle_telephone_callback = crocodile_modes.handle_telephone_callback
+    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
     crocodile_modes.start_telephone = start_telephone_with_role_announcement
-    crocodile_modes.handle_telephone_callback = telephone_callback_with_role_announcement
+    crocodile_modes.configure_telephone_callback_handler(telephone_callback_with_role_announcement)
     _configured = True
