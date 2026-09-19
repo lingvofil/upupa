@@ -429,10 +429,12 @@ def configure_crocodile_runtime() -> None:
         )
     )
     base_party_menu_handler = party_controls.handle_menu_callback
-    party_controls.menu_keyboard = _compose_party_menu_keyboard(
-        party_controls.menu_keyboard,
-        duo_optin.decorate_party_menu_without_default_duo,
-        decorate_party_menu_with_ratings,
+    party_controls.configure_menu_keyboard_renderer(
+        _compose_party_menu_keyboard(
+            party_controls.get_menu_keyboard_renderer(),
+            duo_optin.decorate_party_menu_without_default_duo,
+            decorate_party_menu_with_ratings,
+        )
     )
     party_controls.handle_menu_callback = _compose_callback_handler(
         base_party_menu_handler,
@@ -505,9 +507,11 @@ def configure_crocodile_runtime() -> None:
             stop_active_party_with_admin,
         )
     )
-    party_controls.menu_keyboard = _compose_menu_keyboard_handler(
-        party_controls.menu_keyboard,
-        menu_keyboard_with_admin_emergency_stop,
+    party_controls.configure_menu_keyboard_renderer(
+        _compose_menu_keyboard_handler(
+            party_controls.get_menu_keyboard_renderer(),
+            menu_keyboard_with_admin_emergency_stop,
+        )
     )
     reverse.handle_callback = _compose_callback_handler(
         reverse.handle_callback,
