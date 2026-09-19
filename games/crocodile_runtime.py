@@ -499,9 +499,11 @@ def configure_crocodile_runtime() -> None:
             handle_duel_callback_with_admin,
         )
     )
-    party_controls._stop_active_party = _compose_party_stop_handler(
-        party_controls._stop_active_party,
-        stop_active_party_with_admin,
+    party_controls.configure_stop_active_party_handler(
+        _compose_party_stop_handler(
+            party_controls.get_stop_active_party_handler(),
+            stop_active_party_with_admin,
+        )
     )
     party_controls.menu_keyboard = _compose_menu_keyboard_handler(
         party_controls.menu_keyboard,
