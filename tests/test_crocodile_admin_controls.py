@@ -309,7 +309,6 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "def get_stop_lock_remaining_seconds_handler(" in controls_source
     assert "def configure_stop_lock_remaining_seconds_handler(" in controls_source
 
-
     party_controls_source = (ROOT / "games" / "crocodile_party_controls.py").read_text(
         encoding="utf-8"
     )
