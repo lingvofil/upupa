@@ -473,7 +473,7 @@ async def _finish_duel_vote(chat_id: str, duel: dict) -> None:
     await bot.send_message(int(chat_id), text, parse_mode="HTML")
 
 
-async def handle_duel_callback(callback) -> None:
+async def _default_handle_duel_callback(callback) -> None:
     data = callback.data or ""
     if data.startswith("cduel_join_"):
         cid = data[len("cduel_join_"):]
@@ -510,6 +510,24 @@ async def handle_duel_callback(callback) -> None:
         slot = int(slot_text)
         duel["votes"][callback.from_user.id] = slot
         await callback.answer("Голос принят")
+
+
+_duel_callback_handler = _default_handle_duel_callback
+
+
+def get_duel_callback_handler():
+    """Return the currently configured duel callback handler."""
+    return _duel_callback_handler
+
+
+def configure_duel_callback_handler(handler) -> None:
+    """Install the composed duel callback handler."""
+    global _duel_callback_handler
+    _duel_callback_handler = handler
+
+
+async def handle_duel_callback(callback) -> None:
+    return await _duel_callback_handler(callback)
 
 
 # ---------------- telephone ----------------
