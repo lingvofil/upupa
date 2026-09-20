@@ -12,10 +12,14 @@ _MAX_MENTION_TARGETS = 2
 
 
 def _unwrap_bot(bot):
-    """Bypass the DnD style proxy for the small mechanical mention notification."""
+    """Bypass style while preserving durable Telegram side-effect tracking."""
     current = bot
     seen = set()
-    while hasattr(current, "_bot") and id(current) not in seen:
+    while id(current) not in seen:
+        if getattr(current, "_upupa_dnd_side_effect_proxy", False):
+            return current
+        if not hasattr(current, "_bot"):
+            break
         seen.add(id(current))
         nested = getattr(current, "_bot", None)
         if nested is None or nested is current:
