@@ -81,11 +81,14 @@ def _pending_generation_prompt(session) -> str | None:
 def _new_generation_request(session, prompt: str) -> dict:
     payload = str(prompt or "")
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    conversation = getattr(session, "conversation", None)
+    conversation_size = len(conversation) if isinstance(conversation, list) else None
     return {
         "id": f"gen:{int(time.time() * 1000)}:{digest}",
         "prompt": payload,
         "created_at": time.time(),
         "source_state": str(getattr(session, "state", "") or ""),
+        "conversation_size": conversation_size,
     }
 
 
@@ -417,6 +420,10 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
                     getattr(session, "chat_id", None),
                     session.pending_generation_request.get("id"),
                 )
+            rewind_to = session.pending_generation_request.get("conversation_size")
+            if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
+                if dnd._rewind_session_conversation(session, rewind_to):
+                    dnd.persist_dnd_sessions()
         else:
             effective_prompt = str(prompt or "")
             session.pending_generation_request = _new_generation_request(
