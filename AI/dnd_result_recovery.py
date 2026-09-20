@@ -257,10 +257,11 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
     original_open_action = dnd.open_action_window
 
     async def open_action_window(bot, chat_id, target_user_ids=None):
+        result = await original_open_action(bot, chat_id, target_user_ids=target_user_ids)
         session = dnd.dnd_sessions.get(chat_id)
-        if session is not None:
-            _clear_pending(session)
-        return await original_open_action(bot, chat_id, target_user_ids=target_user_ids)
+        if session is not None and _clear_pending(session):
+            dnd.persist_dnd_sessions()
+        return result
 
     dnd.open_action_window = open_action_window
 
