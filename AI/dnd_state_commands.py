@@ -144,7 +144,7 @@ async def _start_lobby_from_message(event, dnd) -> None:
 
 def _player_name(session, user_id: int, fallback: str | None = None) -> str:
     participant = (getattr(session, "participants", {}) or {}).get(str(int(user_id)), {}) if session else {}
-    return participant.get("name") or fallback or "Егрок"
+    return participant.get("name") or fallback or "Игрок"
 
 
 def _format_profile(profile: dict | None) -> list[str]:
@@ -214,7 +214,7 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
     if not history:
         return "🎭 Героя пока нет: ты ещё не сохранился ни в одной завершённой егре этого чата."
 
-    lines = [f"🎭 Мой герой — {history.get('name') or user_name or 'Егрок'}"]
+    lines = [f"🎭 Мой герой — {history.get('name') or user_name or 'Игрок'}"]
     profile_lines = _format_profile(history.get("profile"))
     if profile_lines:
         lines.extend(profile_lines)
@@ -253,7 +253,7 @@ def render_inventory(dnd, chat_id: int, user_id: int) -> str:
 
     if session is not None and key in (getattr(session, "participants", {}) or {}):
         items = (getattr(session, "inventories", {}) or {}).get(key) or []
-        lines = ["🎒 Инвентарь", "Источник: текущая егра."]
+        lines = ["🎒 Инвентарь", "Источник: текущая игра."]
     else:
         history = campaign._player_history(chat_id, user_id)
         if not history:
@@ -337,13 +337,13 @@ def render_npcs(dnd, chat_id: int) -> str:
     session = _active_session(dnd, chat_id)
     if session is not None:
         memory = getattr(session, "npc_memory", {}) or {}
-        lines = ["🤝 Связи", "Источник: текущая егра."]
+        lines = ["🤝 Связи", "Источник: текущая игра."]
     else:
         latest = campaign._latest_campaign(chat_id)
         if not latest:
             return "🤝 Связей пока нет: завершённых кампаний в этом чате не найдено."
         memory = latest.get("npc_memory") or {}
-        lines = ["🤝 Связи", "Источник: последняя завершённая егра."]
+        lines = ["🤝 Связи", "Источник: последняя завершённая игра."]
 
     formatted = _format_npcs(memory)
     lines.extend(formatted or ["Пока ни одного сюжетного NPC не запомнили."])
@@ -367,7 +367,7 @@ def _threat_line(threat: dict | None) -> str | None:
 
 def _active_detail(dnd, session) -> list[str]:
     state = getattr(session, "state", None)
-    lines = [f"Сейчас: {_STATE_LABELS.get(state, str(state or 'егра идёт'))}."]
+    lines = [f"Сейчас: {_STATE_LABELS.get(state, str(state or 'игра идёт'))}."]
     if state == "WAITING_ROLL":
         roll = getattr(session, "pending_roll", None) or {}
         reason = roll.get("reason")
@@ -400,7 +400,7 @@ def _active_detail(dnd, session) -> list[str]:
     elif state == "LOBBY":
         participants = list((getattr(session, "participants", {}) or {}).values())
         if participants:
-            lines.append("Уже влезли: " + ", ".join(str(item.get("name") or "Егрок") for item in participants) + ".")
+            lines.append("Уже влезли: " + ", ".join(str(item.get("name") or "Игрок") for item in participants) + ".")
     elif state == "WAITING_PLOT":
         options = getattr(session, "plot_options", []) or []
         if options:
@@ -412,7 +412,7 @@ def render_status(dnd, chat_id: int) -> str:
     campaign = _campaign_module(dnd)
     session = _active_session(dnd, chat_id)
     if session is not None:
-        blocks = ["🧭 Что происходит?", "Егра сейчас активна."]
+        blocks = ["🧭 Что происходит?", "Игра сейчас активна."]
         plot = getattr(session, "selected_plot", None)
         if plot:
             blocks.append(f"🎬 Сюжет\n{plot}")
