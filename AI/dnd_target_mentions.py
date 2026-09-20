@@ -16,7 +16,7 @@ def _unwrap_bot(bot):
     current = bot
     seen = set()
     while id(current) not in seen:
-        if getattr(current, "_upupa_dnd_side_effect_proxy", False):
+        if getattr(type(current), "_upupa_dnd_side_effect_proxy", False):
             return current
         if not hasattr(current, "_bot"):
             break
