@@ -168,14 +168,9 @@ def test_successful_parse_clears_durable_result():
 
 
 def test_failed_parse_keeps_snapshot_and_replay_restores_preapply_state():
-    policy = FakeStatePolicy()
-    dnd, session, calls, seen, _ = _fake_dnd(policy)
-    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
-    response = asyncio.run(dnd.generate_session_response(session, "ход"))
-
-    original_parse = dnd.parse_and_execute_turn
-    # unwrap by replacing the downstream captured function through a fresh fake
-    # configuration: first call mutates state then fails, replay succeeds.
+    response = "готовая сцена [ACTION:INPUT]"
+    # First parse mutates durable state and then crashes; replay must restore
+    # the pre-apply snapshot before applying the exact same response again.
     policy2 = FakeStatePolicy()
     session2 = FakeSession(policy2, chat_id=-1002)
     calls2 = {"generate": 0, "parse": 0, "persist": 0}
