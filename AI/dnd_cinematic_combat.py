@@ -22,7 +22,7 @@ CINEMATIC_COMBAT_RULES = f"""
 Если действие по сути остаётся обычной атакой, используй ACTION:PLAYER_ATTACK и стандартные HP/КБ.
 
 Для допустимого смертельного манёвра закончи сцену тегом:
-[ACTION:CINEMATIC_ATTACK;TARGETS:12345;ENEMY:огр;POWER:HIGH;HP:28;AC:14;ABILITY:STR;DC:16;MODE:NORMAL;METHOD:свалить огромный валун со скалы на огра;REASON:Алиса толкает валун в момент, когда огр проходит внизу]
+[ACTION:CINEMATIC_ATTACK;TARGETS:12345;ENEMY:огр;POWER:HIGH;HP:28;AC:14;ABILITY:STR;DC:16;MODE:NORMAL;OBJECT:валун-на-скале;METHOD:свалить огромный валун со скалы на огра;REASON:Алиса толкает валун в момент, когда огр проходит внизу]
 TARGETS — ровно один живой герой, совершающий действие. ENEMY — стабильное имя конкретной цели. POWER, HP и AC задавай
 так же, как для ACTION:PLAYER_ATTACK; существующее HP врага код не даст сбросить. ABILITY — STR/DEX/CON/INT/WIS/CHA,
 которая действительно отвечает за ключевую часть манёвра. DC — сложность 5..20; код всё равно не позволит смертельной
