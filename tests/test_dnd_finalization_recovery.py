@@ -9,6 +9,35 @@ from AI import dnd_finalization_recovery as finalization
 from AI import dnd_result_recovery as recovery
 
 
+def test_completion_id_is_unique_across_campaign_results_in_same_chat():
+    first = SimpleNamespace(
+        chat_id=-99,
+        pending_generated_result={
+            "id": "3:samehash",
+            "text": "одинаковый финал",
+            "created_at": 1000.125,
+        },
+        pending_generation_request={},
+        generated_result_seq=3,
+    )
+    second = SimpleNamespace(
+        chat_id=-99,
+        pending_generated_result={
+            "id": "3:samehash",
+            "text": "одинаковый финал",
+            "created_at": 2000.125,
+        },
+        pending_generation_request={},
+        generated_result_seq=3,
+    )
+
+    first_id = recovery.finalization_state(first, create=True)["completion_id"]
+    second_id = recovery.finalization_state(second, create=True)["completion_id"]
+
+    assert first_id != second_id
+    assert recovery.finalization_state(first, create=True)["completion_id"] == first_id
+
+
 def _history_accessor(campaign_obj):
     def chat_history(chat_id, create=False):
         chats = campaign_obj._archive.setdefault("chats", {})
