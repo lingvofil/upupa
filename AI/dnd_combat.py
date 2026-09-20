@@ -731,7 +731,7 @@ def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
             # This is the durable boundary for the enemy attack. HP/heal/death
             # changes, scene metadata and the exact continuation request become
             # one committed state before any Telegram/provider call below.
-            successor_prompt = _commit_enemy_attack_continuation(
+            _commit_enemy_attack_continuation(
                 dnd,
                 session,
                 chat_id=chat_id,
