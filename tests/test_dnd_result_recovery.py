@@ -6,6 +6,7 @@ import pytest
 
 from AI import dnd_campaign as campaign
 from AI import dnd_result_recovery as recovery
+from AI import dnd_target_mentions as target_mentions
 
 
 class FakeStatePolicy:
@@ -457,3 +458,16 @@ def test_in_flight_telegram_effect_is_retried_because_delivery_is_ambiguous():
     assert len(transport.messages) == 1
     assert session.pending_generated_result["telegram_effects"][0]["status"] == recovery.EFFECT_DONE
     assert response == "готовая сцена [ACTION:INPUT]"
+
+
+def test_target_mentions_unwrap_style_but_keep_durable_transport():
+    policy = FakeStatePolicy()
+    dnd, session, _calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    transport = FakeTelegramBot()
+    durable = recovery._DurableBotProxy(transport, dnd, session)
+    styled = SimpleNamespace(_bot=durable)
+
+    resolved = target_mentions._unwrap_bot(styled)
+
+    assert resolved is durable
