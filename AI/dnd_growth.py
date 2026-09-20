@@ -8,8 +8,6 @@ import uuid
 from aiogram import BaseMiddleware, F
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from AI import dnd_inventory_fun as inventory_fun
-
 
 GROWTH_MARKER = "РОСТ ГЕРОЯ ИЗ ПОСТУПКОВ DND УПУПЫ"
 GROWTH_THRESHOLD = 3
