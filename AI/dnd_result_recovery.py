@@ -404,7 +404,6 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
     def restore_dnd_sessions(bot):
         restored = original_restore_sessions(bot)
-        dirty = False
         for session in list(getattr(dnd, "dnd_sessions", {}).values()):
             _ensure(session)
             pending = session.pending_generated_result
@@ -414,8 +413,6 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
                 _resume_pending_result(dnd, bot, session, state_policy),
                 name=f"dnd-result-replay:{session.chat_id}:{pending.get('id')}",
             )
-        if dirty:
-            dnd.persist_dnd_sessions()
         return restored
 
     dnd.restore_dnd_sessions = restore_dnd_sessions
