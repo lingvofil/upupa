@@ -101,3 +101,41 @@ def test_dnd_waterfall_never_uses_cloudflare(monkeypatch):
 
     assert result == (None, None)
     assert cloudflare_calls == []
+
+
+def test_scene_image_prompt_forbids_duplicate_player_depictions():
+    from types import SimpleNamespace
+
+    from AI import dnd_campaign
+
+    session = SimpleNamespace(
+        participants={
+            "1": {"user_id": 1, "name": "Детектор"},
+            "2": {"user_id": 2, "name": "ИМакс"},
+        },
+        character_profiles={
+            "1": {
+                "style": "герой в панцире",
+                "strength": "упрямый",
+                "weakness": "лезет первым",
+                "special": "вертуха",
+            },
+            "2": {
+                "style": "герой в банке",
+                "strength": "скользкий",
+                "weakness": "застревает",
+                "special": "масляный побег",
+            },
+        },
+    )
+
+    prompt = dnd_campaign._scene_image_prompt(
+        session,
+        "Детектор вытаскивает ИМакса из банки.",
+        style="cinematic fantasy illustration",
+    ).casefold()
+
+    assert "one unique person" in prompt
+    assert "appear at most once" in prompt
+    assert "exactly one depiction of each involved player" in prompt
+    assert "never add a second copy" in prompt

@@ -973,6 +973,8 @@ def _scene_image_prompt(session, scene, *, style=None):
         f"CHARACTER PROFILES TO RESPECT: {_profile_context(session)[:1800]}\n"
         "Show one unmistakable central action or turning point with readable character poses and expressions. Preserve concrete objects, locations, "
         "actions and absurd details from the scene. If the moment is funny, make the visual joke legible through staging rather than text. "
+        "Each named player character is one unique person and must appear at most once in the image unless the scene explicitly says they were cloned or duplicated. "
+        "When one player helps, carries, pulls or attacks another, show exactly one depiction of each involved player; never add a second copy to make the action clearer. "
         "Use strong composition, atmospheric lighting, depth, expressive faces, rich color and scene-specific detail. "
         "Do not default to a pale grey-beige pencil sketch, concept-art mush, or a generic fantasy village unless the scene explicitly contains one."
     )
