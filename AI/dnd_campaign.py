@@ -1061,7 +1061,7 @@ async def _finish(dnd, bot, session, response):
     comic_prompt = _final_comic_prompt(session, ep)
     chat_id = session.chat_id
     dnd.cleanup_session(chat_id)
-    await bot.send_message(chat_id, "☠️ Егра окончена. Наследие этой катастрофы сохранено.")
+    await bot.send_message(chat_id, "☠️ Игра окончена. Наследие этой катастрофы сохранено.")
     try:
         dnd._start_background_task(
             _image(
