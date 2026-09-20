@@ -80,6 +80,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
     from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
     from AI.dnd_world_memory import install_dnd_world_memory
+    from AI.dnd_weakness_luck import install_dnd_weakness_luck
 
     router = dnd_router or dnd.dnd_router
     if getattr(router, "_upupa_dnd_runtime_configured", False):
@@ -136,6 +137,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_scene_clocks(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_scene_tactics(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
+    install_dnd_weakness_luck(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_roll_ability_display(dnd)
     install_dnd_healing_choice(router)
     install_dnd_two_heals(router)
