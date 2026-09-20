@@ -46,6 +46,6 @@ def test_active_status_uses_the_same_section_layout(monkeypatch):
 
     status = render_status(fake_dnd, -100950)
 
-    assert "Егра сейчас активна.\n\n🎬 Сюжет\nСанаторий теряет этажи" in status
+    assert "Игра сейчас активна.\n\n🎬 Сюжет\nСанаторий теряет этажи" in status
     assert "\n\n📍 Последняя сцена\nЛифт выплюнул героев" in status
     assert "\n\n⚠️ Угроза: Налоговая кавалерия — ■■■□□□ 3/6" in status
