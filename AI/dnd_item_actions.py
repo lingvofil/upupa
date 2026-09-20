@@ -728,6 +728,13 @@ def reset_adventure_charges(session, user_id: int) -> bool:
     return changed
 
 
+def _is_action_reply(dnd, event) -> bool:
+    if dnd._is_group_action_reply(event):
+        return True
+    from AI.dnd_any_bot_reply import is_any_bot_action_reply
+    return bool(is_any_bot_action_reply(event))
+
+
 class DndItemActionMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         from AI import dnd
@@ -742,7 +749,7 @@ class DndItemActionMiddleware(BaseMiddleware):
             not session
             or not dnd._is_participant_mode(session)
             or getattr(session, "state", None) != "WAITING_ACTION"
-            or not dnd._is_group_action_reply(event)
+            or not _is_action_reply(dnd, event)
         ):
             return await handler(event, data)
 
