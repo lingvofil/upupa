@@ -19,10 +19,12 @@ def test_reverse_callback_configurator_drives_stable_entrypoint():
 
     callback = _callback("configured")
     original = reverse.get_callback_handler()
+    stable_entrypoint = reverse.handle_callback
     configured = AsyncMock(return_value="configured-result")
 
     try:
         reverse.configure_callback_handler(configured)
+        assert reverse.handle_callback is stable_entrypoint
         result = asyncio.run(reverse.handle_callback(callback))
     finally:
         reverse.configure_callback_handler(original)
