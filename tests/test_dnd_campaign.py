@@ -506,7 +506,7 @@ def test_finish_archives_and_cleans_up_before_background_comic(monkeypatch):
     archive_index = next(i for i, event in enumerate(events) if event[0] == "archive")
     cleanup_index = next(i for i, event in enumerate(events) if event[0] == "cleanup")
     background_index = next(i for i, event in enumerate(events) if event[0] == "background")
-    end_message_index = next(i for i, event in enumerate(events) if event[0] == "message" and "Егра окончена" in event[2])
+    end_message_index = next(i for i, event in enumerate(events) if event[0] == "message" and "Игра окончена" in event[2])
     assert archive_index < cleanup_index < end_message_index < background_index
 
 
