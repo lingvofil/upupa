@@ -23,7 +23,7 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
         if item.get("user_id") is None:
             continue
         user_id = int(item["user_id"])
-        name = item.get("name") or f"егрок {user_id}"
+        name = item.get("name") or f"игрок {user_id}"
         roster_lines.append(f"- ID {user_id}: {name}")
     if not roster_lines:
         return prompt
@@ -31,7 +31,7 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
     return (
         f"{prompt}\n\n"
         f"{DND_PARTICIPANT_CONTEXT_MARKER}:\n{roster}\n"
-        "Это актуальный состав: участники могли влиться в егру уже после старта. "
+        "Это актуальный состав: участники могли влиться в игру уже после старта. "
         "Считай всех из этого списка полноценными персонажами и используй их ID в TARGETS, "
         "когда ход относится к конкретным людям."
     )
@@ -145,7 +145,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         user_id = int(user.id)
         participants = dnd._participant_ids(session)
         targets = list(getattr(session, "action_target_user_ids", []) or [])
-        user_name = getattr(user, "first_name", None) or f"егрок {user_id}"
+        user_name = getattr(user, "first_name", None) or f"игрок {user_id}"
         joined = False
 
         if user_id not in participants:
@@ -169,7 +169,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
                 names = ", ".join(dnd._target_names(session, sorted(expected)))
                 await bot.send_message(
                     chat_id,
-                    f"{user_name}, ты влез в егру. Но щас ход {names or 'других егроков'}: "
+                    f"{user_name}, ты влез в игру. Но сейчас ход {names or 'других игроков'}: "
                     "твой ответ не учтён — жди следующей движухи.",
                 )
                 await self._after_participant_joined(
@@ -188,7 +188,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             )
             await bot.send_message(
                 chat_id,
-                f"{user_name}, твой ход щас не учтён: эта движуха для {names}.",
+                f"{user_name}, твой ход сейчас не учтён: эта движуха для {names}.",
             )
             return
 
