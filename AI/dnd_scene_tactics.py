@@ -236,7 +236,7 @@ def consume_scene_object(session, object_id: str | None, method: str | None = No
     if not key or not isinstance(row, dict):
         return
     row["available"] = False
-    row["state"] = row.get("state") or "использован"
+    row["state"] = "использован в манёвре"
     method = _clean(method, 140)
     row["detail"] = f"использован в манёвре: {method}" if method else "уже использован"
     row["updated_scene"] = int(getattr(session, "scene_count", 0) or 0)
@@ -377,6 +377,7 @@ def install_dnd_scene_tactics(dnd, *, state_policy, metadata_policy) -> None:
         )
         if object_id and not before_dead and after_dead:
             consume_scene_object(session, object_id, action.get("method"))
+        if object_id:
             session.pending_scene_object_id = None
         return result
 
