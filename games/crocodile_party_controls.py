@@ -729,7 +729,7 @@ def configure_crocodile_party_controls() -> None:
     if _configured:
         return
 
-    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
+    _original_handle_telephone_callback = crocodile_modes.get_default_telephone_callback_handler()
     _original_send_telephone_step = crocodile_modes._send_telephone_step
     _original_finish_telephone = crocodile_modes._finish_telephone
     _original_record_drawing = crocodile_modes.record_drawing
