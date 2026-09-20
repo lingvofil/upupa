@@ -262,7 +262,9 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
         restored = dnd.restore_dnd_sessions(SimpleNamespace())
 
         assert restored == 1
-        assert scheduled == []
+        assert len(scheduled) == 1
+        assert scheduled[0]["name"].startswith("dnd-result-replay:-100805:")
+        assert not any(item["name"].startswith("dnd-poll:") for item in scheduled)
         assert "poll-existing" not in dnd.poll_map
         assert session.state == "WAITING_POLL"
         assert session.current_poll_id == "poll-existing"
