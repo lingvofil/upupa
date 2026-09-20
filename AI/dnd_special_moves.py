@@ -269,9 +269,11 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
     async def resolve_player_roll(dnd_module, message, session):
         pending_roll = getattr(session, "pending_roll", None)
         pending_user = getattr(session, "special_move_pending_user_id", None)
-        await original_resolve_player_roll(dnd_module, message, session)
-        if _commit_completed_special_roll(session, pending_roll, pending_user):
-            dnd_module.persist_dnd_sessions()
+        try:
+            return await original_resolve_player_roll(dnd_module, message, session)
+        finally:
+            if _commit_completed_special_roll(session, pending_roll, pending_user):
+                dnd_module.persist_dnd_sessions()
 
     combat._resolve_player_roll = resolve_player_roll
 
