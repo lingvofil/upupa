@@ -48,16 +48,17 @@ def _profile_special(session, user_id: int) -> str:
 
 
 def _ensure(session) -> None:
-    if not isinstance(getattr(session, "special_move_charges", None), dict):
-        session.special_move_charges = {}
+    raw_charges = getattr(session, "special_move_charges", None)
+    normalized = {}
+    for key, value in (raw_charges.items() if isinstance(raw_charges, dict) else []):
+        try:
+            normalized[str(int(key))] = 1 if int(value) > 0 else 0
+        except (TypeError, ValueError):
+            continue
+    session.special_move_charges = normalized
     for key in _participant_ids(session):
         if _profile_special(session, int(key)) and key not in session.special_move_charges:
             session.special_move_charges[key] = 1
-    for key, value in list(session.special_move_charges.items()):
-        try:
-            session.special_move_charges[str(int(key))] = 1 if int(value) > 0 else 0
-        except (TypeError, ValueError):
-            session.special_move_charges.pop(key, None)
     for field in ("special_move_pending_user_id", "special_move_offer_user_id"):
         raw = getattr(session, field, None)
         try:
