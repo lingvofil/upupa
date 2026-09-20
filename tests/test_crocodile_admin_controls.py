@@ -275,7 +275,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     menu_keyboard_wiring = "party_controls.configure_menu_keyboard_renderer("
     assert runtime_source.count(menu_keyboard_wiring) == 2
     assert "party_controls.menu_keyboard =" not in runtime_source
-    assert "reverse.handle_callback = _compose_callback_handler(" in runtime_source
+    reverse_wiring = "reverse.configure_callback_handler("
+    assert runtime_source.count(reverse_wiring) == 1
+    assert "reverse.handle_callback =" not in runtime_source
     assert "reverse_modes.handle_callback = _compose_callback_handler(" in runtime_source
     violations = []
     for path in sorted((ROOT / "games").glob("*.py")):
@@ -318,3 +320,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "def configure_stop_active_party_handler(" in party_controls_source
     assert "def get_menu_keyboard_renderer(" in party_controls_source
     assert "def configure_menu_keyboard_renderer(" in party_controls_source
+
+    reverse_source = (ROOT / "games" / "reverse_crocodile.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def get_callback_handler(" in reverse_source
+    assert "def configure_callback_handler(" in reverse_source

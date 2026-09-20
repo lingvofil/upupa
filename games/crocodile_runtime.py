@@ -515,9 +515,11 @@ def configure_crocodile_runtime() -> None:
             menu_keyboard_with_admin_emergency_stop,
         )
     )
-    reverse.handle_callback = _compose_callback_handler(
-        reverse.handle_callback,
-        reverse_callback_with_admin,
+    reverse.configure_callback_handler(
+        _compose_callback_handler(
+            reverse.get_callback_handler(),
+            reverse_callback_with_admin,
+        )
     )
     reverse_modes.handle_callback = _compose_callback_handler(
         reverse_modes.handle_callback,

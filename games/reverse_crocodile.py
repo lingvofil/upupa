@@ -457,7 +457,7 @@ async def _finish_game(chat_id: str, text: str):
     )
 
 
-async def handle_callback(cb: types.CallbackQuery):
+async def _default_handle_callback(cb: types.CallbackQuery):
     data = cb.data or ""
 
     if data == "rcroc_choose_level":
@@ -512,6 +512,24 @@ async def handle_callback(cb: types.CallbackQuery):
         word = session["word"]
         await cb.answer("Слабаки")
         await _finish_game(chat_id, f"🏳️ Сдались? Это был(а) <b>{word.upper()}</b>. Позорище.")
+
+
+_callback_handler = _default_handle_callback
+
+
+def get_callback_handler():
+    """Return the currently configured reverse-crocodile callback handler."""
+    return _callback_handler
+
+
+def configure_callback_handler(handler) -> None:
+    """Install the composed reverse-crocodile callback handler."""
+    global _callback_handler
+    _callback_handler = handler
+
+
+async def handle_callback(cb: types.CallbackQuery):
+    return await _callback_handler(cb)
 
 
 async def check_answer(msg: types.Message) -> bool:
