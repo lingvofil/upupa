@@ -58,3 +58,81 @@ def test_npc_repair_replays_only_npc_tags_from_history(monkeypatch):
     assert applied == ["[NPC:Капитан Ржа;EVENT:помог пройти;NOTE:провёл через ворота]"]
     assert session.npc_memory["капитан ржа"]["event"] == "помог пройти"
     assert persisted == [True]
+
+
+def test_npc_repair_uses_best_effort_auxiliary_generation(monkeypatch):
+    from AI import dnd_generation_resilience as resilience
+
+    chat_id = -100953
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        participants={"7": {"user_id": 7, "name": "Семён"}},
+        npc_memory={},
+        scene_log=["Капитан Ржа закрыл за партией ворота."],
+        conversation=[],
+    )
+    generated = []
+    applied = []
+    persisted = []
+
+    async def auxiliary(target, prompt):
+        generated.append((target, prompt))
+        return "[NPC:Капитан Ржа;EVENT:закрыл ворота;NOTE:остался снаружи]"
+
+    def apply_metadata(target, text):
+        applied.append(text)
+        target.npc_memory["капитан ржа"] = {
+            "name": "Капитан Ржа",
+            "event": "закрыл ворота",
+            "notes": ["остался снаружи"],
+        }
+        return text, []
+
+    fake_campaign = SimpleNamespace(
+        _ensure=lambda _session: None,
+        _apply_metadata=apply_metadata,
+    )
+    monkeypatch.setattr(dnd, "dnd_sessions", {chat_id: session})
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: persisted.append(True))
+    monkeypatch.setattr(commands, "_campaign_module", lambda _dnd: fake_campaign)
+    monkeypatch.setattr(resilience, "generate_auxiliary_text", auxiliary)
+
+    asyncio.run(commands._repair_active_npc_memory(dnd, chat_id))
+
+    assert len(generated) == 1
+    assert generated[0][0] is session
+    assert "Служебное восстановление связей" in generated[0][1]
+    assert applied == ["[NPC:Капитан Ржа;EVENT:закрыл ворота;NOTE:остался снаружи]"]
+    assert persisted == [True]
+
+
+def test_npc_repair_skips_cleanly_when_auxiliary_provider_is_unavailable(monkeypatch):
+    from AI import dnd_generation_resilience as resilience
+
+    chat_id = -100954
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        participants={"7": {"user_id": 7, "name": "Семён"}},
+        npc_memory={},
+        scene_log=["Капитан Ржа махнул рукой."],
+        conversation=[],
+    )
+    applied = []
+    persisted = []
+
+    async def unavailable(_session, _prompt):
+        return None
+
+    fake_campaign = SimpleNamespace(
+        _ensure=lambda _session: None,
+        _apply_metadata=lambda *_args: applied.append(True),
+    )
+    monkeypatch.setattr(dnd, "dnd_sessions", {chat_id: session})
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: persisted.append(True))
+    monkeypatch.setattr(commands, "_campaign_module", lambda _dnd: fake_campaign)
+    monkeypatch.setattr(resilience, "generate_auxiliary_text", unavailable)
+
+    asyncio.run(commands._repair_active_npc_memory(dnd, chat_id))
+
+    assert applied == []
+    assert persisted == []
