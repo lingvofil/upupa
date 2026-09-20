@@ -772,7 +772,10 @@ def apply_achievement_boost(session, response):
     boost = session.achievement_boosts.get(player)
     if not isinstance(boost, dict) or str(boost.get("domain") or "").upper() != _domain(action, suffix):
         return str(response or ""), None
-    guarded = _set_mode(response, _combine_advantage(_mode(suffix)))
+    current_mode = _mode(suffix)
+    if current_mode == "ADVANTAGE":
+        return str(response or ""), None
+    guarded = _set_mode(response, _combine_advantage(current_mode))
     source = boost.get("source")
     session.achievement_boosts.pop(player, None)
     return guarded, source
