@@ -24,6 +24,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_current_turn_priority import install_dnd_current_turn_priority
+    from AI.dnd_conditions import install_dnd_conditions
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_command import install_dnd_enemy_command
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
@@ -66,7 +67,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
     from AI.dnd_roll_feedback import install_dnd_roll_feedback
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
+    from AI.dnd_scene_tactics import install_dnd_scene_tactics
     from AI.dnd_spotlight import install_dnd_spotlight
+    from AI.dnd_special_moves import install_dnd_special_moves
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_target_mentions import configure_dnd_target_mentions
     from AI.dnd_turn_control import install_dnd_turn_control
@@ -125,6 +128,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_roll_feedback(dnd)
     install_dnd_enemy_command(dnd)
     install_dnd_cinematic_combat(dnd)
+    install_dnd_conditions(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_scene_tactics(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
     install_dnd_roll_ability_display(dnd)
     install_dnd_healing_choice(router)
     install_dnd_two_heals(router)
