@@ -29,6 +29,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_enemy_command import install_dnd_enemy_command
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
+    from AI.dnd_finalization_recovery import install_dnd_finalization_recovery
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
     from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
     from AI.dnd_growth import install_dnd_growth
@@ -168,6 +169,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    # Must be installed after every archive/finish wrapper so one completion ID
+    # guards the complete campaign archive and all post-finish effects.
+    install_dnd_finalization_recovery(dnd)
     configure_dnd_any_bot_replies(router)
 
     # Target notifications must be inside spotlight. Spotlight may safely add a
