@@ -355,6 +355,31 @@ class GameSession:
         return session
 
 
+def _rewind_session_conversation(session: GameSession, size: int) -> bool:
+    """Restore the exact pre-generation model history before retrying a request."""
+    try:
+        size = max(0, int(size))
+    except (TypeError, ValueError):
+        return False
+    conversation = getattr(session, "conversation", None)
+    if not isinstance(conversation, list) or len(conversation) <= size:
+        return False
+    del conversation[size:]
+    if getattr(session, "active_model", None) == "gemini":
+        history = [
+            {
+                "role": "model" if item["role"] == "assistant" else "user",
+                "parts": [item["content"]],
+            }
+            for item in conversation
+        ]
+        session.chat_session = model.start_chat(
+            chat_id=session.chat_id,
+            history=history,
+        )
+    return True
+
+
 def _state_path() -> Path:
     return Path(DND_STATE_PATH)
 
