@@ -525,20 +525,6 @@ def install_dnd_world_memory(dnd, *, state_policy, metadata_policy):
 
     state_commands.render_npcs = render_npcs
 
-    original_repair = state_commands._repair_active_npc_memory
-
-    async def repair_active_npc_memory(dnd_module, chat_id):
-        await original_repair(dnd_module, chat_id)
-        session = dnd_module.dnd_sessions.get(int(chat_id))
-        if session:
-            _ensure(session)
-            for key, raw in list((getattr(session, "npc_memory", {}) or {}).items()):
-                if isinstance(raw, dict):
-                    session.npc_memory[_npc_key(key)] = normalize_npc(raw.get("name") or key, raw)
-            dnd_module.persist_dnd_sessions()
-
-    state_commands._repair_active_npc_memory = repair_active_npc_memory
-
     dnd._upupa_dnd_world_memory_installed = True
 
 
