@@ -27,6 +27,7 @@ def test_main_generation_falls_back_to_groq_after_fast_gemini_failure(monkeypatc
     result = asyncio.run(resilience._generate_main_text(session, "продолжай"))
 
     assert result == "fallback ok"
+    assert session._dnd_last_generation_provider == "groq"
 
 
 def test_main_generation_retries_groq_with_compact_prompt_after_413(monkeypatch):
@@ -133,11 +134,33 @@ def test_configured_generator_appends_one_canonical_exchange(monkeypatch):
     assert persisted == [True]
 
 
+def test_gemini_circuit_is_isolated_per_chat(monkeypatch):
+    monkeypatch.setattr(resilience, "_gemini_circuit_until", {})
+    monkeypatch.setattr(resilience.time, "monotonic", lambda: 100.0)
+
+    resilience._open_circuit(-1001)
+
+    assert resilience._circuit_is_open(-1001) is True
+    assert resilience._circuit_is_open(-2002) is False
+    resilience._close_circuit(-1001)
+    assert resilience._circuit_is_open(-1001) is False
+
+
+def test_main_generation_marks_gemini_provider(monkeypatch):
+    session = _session()
+    monkeypatch.setattr(resilience, "_run_gemini_sync", lambda *_args, **_kwargs: "gemini ok")
+
+    result = asyncio.run(resilience._generate_main_text(session, "продолжай"))
+
+    assert result == "gemini ok"
+    assert session._dnd_last_generation_provider == "gemini"
+
+
 def test_auxiliary_generation_never_mutates_conversation(monkeypatch):
     session = _session()
     before = list(session.conversation)
 
-    monkeypatch.setattr(resilience, "_circuit_is_open", lambda: False)
+    monkeypatch.setattr(resilience, "_circuit_is_open", lambda _chat_id: False)
     monkeypatch.setattr(
         resilience,
         "_run_gemini_sync",
@@ -152,6 +175,6 @@ def test_auxiliary_generation_never_mutates_conversation(monkeypatch):
 
 def test_auxiliary_generation_is_skipped_while_circuit_is_open(monkeypatch):
     session = _session()
-    monkeypatch.setattr(resilience, "_circuit_is_open", lambda: True)
+    monkeypatch.setattr(resilience, "_circuit_is_open", lambda _chat_id: True)
 
     assert asyncio.run(resilience.generate_auxiliary_text(session, "audit")) is None
