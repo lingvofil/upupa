@@ -126,9 +126,10 @@ def _can_earn(session, user_id):
     )
 
 
-def _award_luck(session, user_id, complication):
-    if not _can_earn(session, user_id):
+def _award_luck(session, user_id, complication, *, prevalidated=False):
+    if not prevalidated and not _can_earn(session, user_id):
         return None
+    _ensure(session)
     key = str(int(user_id))
     session.luck_tokens[key] = min(MAX_LUCK_TOKENS, int(session.luck_tokens.get(key, 0) or 0) + 1)
     session.weakness_luck_earned[key] = min(
@@ -374,7 +375,12 @@ def apply_weakness_metadata(session, original_text, cleaned, notices):
         if not cost_notice:
             continue
         extra.append(cost_notice)
-        award = _award_luck(session, user_id, fields.get("COMPLICATION"))
+        award = _award_luck(
+            session,
+            user_id,
+            fields.get("COMPLICATION"),
+            prevalidated=True,
+        )
         if award:
             extra.append(award)
         session.pending_weakness_invocations.pop(player, None)
