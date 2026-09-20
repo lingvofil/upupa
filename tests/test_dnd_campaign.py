@@ -471,31 +471,39 @@ def test_image_provider_failure_does_not_escape_into_game(monkeypatch):
     asyncio.run(campaign._image(Bot(), 123, "scene prompt", "scene.png", "caption"))
 
 
-def test_finish_archives_and_cleans_up_before_background_comic(monkeypatch):
+def test_finish_archives_and_defers_cleanup_to_outer_finalizer(monkeypatch):
     session = _session()
     campaign._ensure(session)
     session.state = "RESOLVING"
     session.selected_plot = "Плавучий рынок"
     session.scene_log = ["Первая сцена", "Вторая сцена"]
+    session.pending_generated_result = {
+        "id": "9:end",
+        "text": "Финальная сцена. [ACTION:END]",
+        "phase": "APPLYING",
+        "telegram_effects": [],
+    }
+    session.pending_generation_request = {}
+    session.generated_result_seq = 9
     events = []
 
     async def generate(_session, _prompt):
         return "Все выжили, но теперь им запрещено приближаться к рынкам."
 
-    def cleanup(chat_id):
-        events.append(("cleanup", chat_id))
-
-    def start_background(coro, *, name):
-        events.append(("background", name))
-        coro.close()
-        return None
-
+    dnd_sessions = {session.chat_id: session}
     dnd = SimpleNamespace(
         generate_session_response=generate,
-        cleanup_session=cleanup,
-        _start_background_task=start_background,
+        dnd_sessions=dnd_sessions,
+        persist_dnd_sessions=lambda: events.append(("persist", session.chat_id)),
+        cleanup_session=lambda _chat_id: (_ for _ in ()).throw(
+            AssertionError("base finish must not clean session")
+        ),
     )
-    monkeypatch.setattr(campaign, "_archive_campaign", lambda *_args: events.append(("archive", session.chat_id)))
+    monkeypatch.setattr(
+        campaign,
+        "_archive_campaign",
+        lambda *_args: events.append(("archive", session.chat_id)),
+    )
 
     class Bot:
         async def send_message(self, chat_id, text):
@@ -503,49 +511,54 @@ def test_finish_archives_and_cleans_up_before_background_comic(monkeypatch):
 
     asyncio.run(campaign._finish(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
 
-    archive_index = next(i for i, event in enumerate(events) if event[0] == "archive")
-    cleanup_index = next(i for i, event in enumerate(events) if event[0] == "cleanup")
-    background_index = next(i for i, event in enumerate(events) if event[0] == "background")
-    end_message_index = next(i for i, event in enumerate(events) if event[0] == "message" and "Егра окончена" in event[2])
-    assert archive_index < cleanup_index < end_message_index < background_index
+    assert any(event[0] == "archive" for event in events)
+    assert not any(
+        event[0] == "message" and "Егра окончена" in event[2]
+        for event in events
+    )
+    state = session.pending_generated_result["finalization"]
+    assert state["epilogue"] == "Все выжили, но теперь им запрещено приближаться к рынкам."
+    assert state["final_image_prompt"]
+    assert state["base_finish_complete"] is True
+    assert dnd_sessions[session.chat_id] is session
 
 
-def test_final_image_guard_allows_cleanup_but_blocks_next_saga(monkeypatch):
+def test_base_finish_does_not_generate_or_schedule_final_image(monkeypatch):
     session = _session()
     campaign._ensure(session)
     session.state = "RESOLVING"
     session.selected_plot = "Плавучий рынок"
     session.scene_log = ["Финальная сцена"]
-    captured = {}
+    session.pending_generated_result = {
+        "id": "10:end",
+        "text": "Финальная сцена. [ACTION:END]",
+        "phase": "APPLYING",
+        "telegram_effects": [],
+    }
+    session.pending_generation_request = {}
+    session.generated_result_seq = 10
 
     async def generate(_session, _prompt):
         return "Эпилог старой саги."
 
-    def fake_image(_bot, _chat_id, _prompt, _filename, _caption, *, deliver_if=None):
-        captured["deliver_if"] = deliver_if
-
-        async def noop():
-            return None
-
-        return noop()
-
     dnd_sessions = {session.chat_id: session}
-
-    def cleanup(chat_id):
-        dnd_sessions.pop(chat_id, None)
-
-    def start_background(coro, *, name):
-        captured["name"] = name
-        coro.close()
-
     dnd = SimpleNamespace(
         dnd_sessions=dnd_sessions,
         generate_session_response=generate,
-        cleanup_session=cleanup,
-        _start_background_task=start_background,
+        persist_dnd_sessions=lambda: None,
+        cleanup_session=lambda _chat_id: (_ for _ in ()).throw(
+            AssertionError("cleanup belongs to finalization recovery")
+        ),
+        _start_background_task=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("final image is no longer a background task here")
+        ),
     )
     monkeypatch.setattr(campaign, "_archive_campaign", lambda *_args: None)
-    monkeypatch.setattr(campaign, "_image", fake_image)
+
+    async def forbidden_image(*_args, **_kwargs):
+        raise AssertionError("base finish must only prepare final image prompt")
+
+    monkeypatch.setattr(campaign, "_image", forbidden_image)
 
     class Bot:
         async def send_message(self, *_args, **_kwargs):
@@ -553,7 +566,7 @@ def test_final_image_guard_allows_cleanup_but_blocks_next_saga(monkeypatch):
 
     asyncio.run(campaign._finish(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
 
-    assert captured["deliver_if"]() is True
-    dnd_sessions[session.chat_id] = SimpleNamespace(chat_id=session.chat_id)
-    assert captured["deliver_if"]() is False
-    assert captured["name"].startswith(f"dnd-final-comic:{session.chat_id}:")
+    state = session.pending_generated_result["finalization"]
+    assert state["final_image_prompt"]
+    assert state["base_finish_complete"] is True
+    assert dnd_sessions[session.chat_id] is session
