@@ -183,6 +183,30 @@ def _new_result(session, text: str) -> dict:
     }
 
 
+def finalization_state(session, *, create: bool = False) -> dict:
+    """Return state tied to the current durable END result.
+
+    It lives inside pending_generated_result so replay keeps it even when the
+    normal campaign snapshot is restored to the pre-parse state.
+    """
+    _ensure(session)
+    pending = session.pending_generated_result
+    if not isinstance(pending, dict) or not pending.get("text"):
+        return {}
+    value = pending.get("finalization")
+    if isinstance(value, dict):
+        return value
+    if not create:
+        return {}
+    result_id = str(pending.get("id") or "unknown")
+    value = {
+        "completion_id": f"{int(getattr(session, 'chat_id', 0))}:{result_id}",
+        "created_at": time.time(),
+    }
+    pending["finalization"] = value
+    return value
+
+
 def _snapshot_parse_state(session) -> dict:
     row = session.to_record()
     campaign_state = copy.deepcopy(row.get("campaign_state") or {})
@@ -344,6 +368,23 @@ class _DurableBotProxy:
                 "message_id": getattr(result, "message_id", None),
                 "chat_id": chat_id,
                 "poll_id": getattr(getattr(result, "poll", None), "id", None),
+            },
+        )
+        return result
+
+
+    async def send_photo(self, chat_id, photo, **kwargs):
+        effect = self._effect("send_photo")
+        if effect.get("status") == EFFECT_DONE:
+            return _synthetic_message(effect)
+        self._mark_in_flight(effect)
+        result = await self._transport.send_photo(chat_id, photo, **kwargs)
+        resolved_chat_id = getattr(getattr(result, "chat", None), "id", None)
+        self._mark_done(
+            effect,
+            {
+                "message_id": getattr(result, "message_id", None),
+                "chat_id": resolved_chat_id if resolved_chat_id is not None else chat_id,
             },
         )
         return result
@@ -672,6 +713,7 @@ __all__ = [
     "_DurableBotProxy",
     "_snapshot_parse_state",
     "_restore_parse_state",
+    "finalization_state",
     "_resume_pending_generation",
     "_resume_pending_result",
     "retry_pending_recovery",
