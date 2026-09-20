@@ -238,22 +238,33 @@ def _world_context(session):
     )
 
 
-def _merge_world_npc(existing, incoming):
+def _merge_world_npc(existing, incoming, *, explicit_fields=None):
     current = normalize_npc((existing or {}).get("name") if isinstance(existing, dict) else "", existing)
     fresh = normalize_npc((incoming or {}).get("name") if isinstance(incoming, dict) else "", incoming)
+    explicit = {str(field) for field in (explicit_fields or set())}
     if fresh["name"]:
         current["name"] = fresh["name"]
-    for field in ("event", "attitude", "obligation", "wants", "unresolved", "last_seen_at"):
-        if fresh.get(field) is not None:
+    if fresh.get("event") is not None:
+        current["event"] = fresh["event"]
+    for field in ("attitude", "obligation", "wants", "unresolved"):
+        if field in explicit:
+            current[field] = fresh.get(field)
+        elif fresh.get(field) is not None:
             current[field] = fresh[field]
-    if fresh["obligation_kind"] != "NONE" or fresh.get("obligation") is None:
+    if "obligation_kind" in explicit:
         current["obligation_kind"] = fresh["obligation_kind"]
-    if fresh["affected_player_ids"]:
+    elif fresh["obligation_kind"] != "NONE":
+        current["obligation_kind"] = fresh["obligation_kind"]
+    if "affected_player_ids" in explicit or "affected" in explicit:
+        current["affected_player_ids"] = list(fresh["affected_player_ids"])
+    elif fresh["affected_player_ids"]:
         merged = current["affected_player_ids"] + fresh["affected_player_ids"]
         current["affected_player_ids"] = list(dict.fromkeys(merged))[-12:]
     if fresh["notes"]:
         current["notes"] = (current["notes"] + fresh["notes"])[-12:]
     current["updated_scene"] = max(current["updated_scene"], fresh["updated_scene"])
+    if fresh.get("last_seen_at"):
+        current["last_seen_at"] = fresh["last_seen_at"]
     current["last_seen_campaign"] = max(current["last_seen_campaign"], fresh["last_seen_campaign"])
     current["callback_count"] = max(current["callback_count"], fresh["callback_count"])
     current["last_callback_campaign"] = max(current["last_callback_campaign"], fresh["last_callback_campaign"])
@@ -270,7 +281,10 @@ def backfill_world_npcs(archive):
     for chat in chats.values():
         if not isinstance(chat, dict):
             continue
-        world = chat.setdefault("world_npcs", {})
+        if "world_npcs" not in chat:
+            chat["world_npcs"] = {}
+            changed = True
+        world = chat["world_npcs"]
         campaigns = chat.get("campaigns") or []
         for index, campaign_row in enumerate(campaigns, 1):
             if not isinstance(campaign_row, dict):
@@ -283,7 +297,11 @@ def backfill_world_npcs(archive):
                 incoming["last_seen_campaign"] = max(incoming["last_seen_campaign"], index)
                 incoming["last_seen_at"] = incoming.get("last_seen_at") or completed_at
                 npc_key = _npc_key(incoming["name"])
-                merged = _merge_world_npc(world.get(npc_key), incoming)
+                merged = _merge_world_npc(
+                    world.get(npc_key),
+                    incoming,
+                    explicit_fields=set(raw.keys()),
+                )
                 if world.get(npc_key) != merged:
                     world[npc_key] = merged
                     changed = True
@@ -384,7 +402,11 @@ def _archive_world_memory(campaign, dnd_module, session, original_archive, final
         item["last_seen_at"] = completed_at
         item["last_seen_campaign"] = campaign_index
         npc_key = _npc_key(item["name"])
-        world[npc_key] = _merge_world_npc(world.get(npc_key), item)
+        world[npc_key] = _merge_world_npc(
+            world.get(npc_key),
+            item,
+            explicit_fields=set(raw.keys()),
+        )
 
     candidate = getattr(session, "world_callback_candidate", {}) or {}
     if candidate:
