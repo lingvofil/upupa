@@ -1040,43 +1040,65 @@ def _archive_campaign(dnd, session, finale, epilogue):
 
 
 async def _finish(dnd, bot, session, response):
-    clean, notices = _apply_metadata(session, response); finale = ACTION_RE.sub("", clean).strip(); _record_scene(session, finale)
+    from AI.dnd_result_recovery import finalization_state
+
+    finalization = finalization_state(session, create=True)
+    if finalization:
+        dnd.persist_dnd_sessions()
+
+    clean, notices = _apply_metadata(session, response)
+    finale = ACTION_RE.sub("", clean).strip()
+    _record_scene(session, finale)
+    if finalization:
+        finalization["finale"] = finale
+        finalization["finale_notices"] = list(notices or [])
+        dnd.persist_dnd_sessions()
+
     if finale:
-        await bot.send_message(session.chat_id, finale + (("\n\n" + "\n".join(notices)) if notices else ""))
-    try:
-        ep = await _ephemeral_generate(
-            dnd,
-            session,
-            "История закончена. Дай эпилог 50–70 слов только по реальным решениям и последствиям. "
-            "У каждого важного участника оставь конкретный хвост: судьба, репутация или артефакт. "
-            "Без служебных тегов.",
+        await bot.send_message(
+            session.chat_id,
+            finale + (("\n\n" + "\n".join(notices)) if notices else ""),
         )
-        ep = ACTION_RE.sub("", META_RE.sub("", ep)).strip()
-    except Exception:
-        logging.exception("DnD epilogue failed")
-        ep = ""
+
+    if finalization and "epilogue" in finalization:
+        ep = str(finalization.get("epilogue") or "")
+    else:
+        if finalization:
+            rewind_to = finalization.get("epilogue_conversation_size")
+            if rewind_to is None:
+                conversation = getattr(session, "conversation", None)
+                finalization["epilogue_conversation_size"] = (
+                    len(conversation) if isinstance(conversation, list) else None
+                )
+                dnd.persist_dnd_sessions()
+            elif hasattr(dnd, "_rewind_session_conversation"):
+                if dnd._rewind_session_conversation(session, rewind_to):
+                    dnd.persist_dnd_sessions()
+        try:
+            ep = await _ephemeral_generate(
+                dnd,
+                session,
+                "История закончена. Дай эпилог 50–70 слов только по реальным решениям и последствиям. "
+                "У каждого важного участника оставь конкретный хвост: судьба, репутация или артефакт. "
+                "Без служебных тегов.",
+            )
+            ep = ACTION_RE.sub("", META_RE.sub("", ep)).strip()
+        except Exception:
+            logging.exception("DnD epilogue failed")
+            ep = ""
+        if finalization:
+            finalization["epilogue"] = ep
+            dnd.persist_dnd_sessions()
+
     if ep:
         await bot.send_message(session.chat_id, "🏁 Эпилог\n" + ep)
+
     _archive_campaign(dnd, session, finale, ep)
-    comic_prompt = _final_comic_prompt(session, ep)
-    chat_id = session.chat_id
-    dnd.cleanup_session(chat_id)
-    await bot.send_message(chat_id, "☠️ Егра окончена. Наследие этой катастрофы сохранено.")
-    try:
-        dnd._start_background_task(
-            _image(
-                bot,
-                chat_id,
-                comic_prompt,
-                "dnd_final_comic.png",
-                "📚 Финальный комикс. Вот до чего вы доигрались.",
-                deliver_if=lambda: dnd.dnd_sessions.get(chat_id) is None,
-            ),
-            name=f"dnd-final-comic:{chat_id}:{int(time.time())}",
-        )
-    except Exception:
-        # The story is already archived and cleaned up; image scheduling must never resurrect/fail the session.
-        logging.exception("DnD final comic scheduling failed chat_id=%s", chat_id)
+
+    if finalization:
+        finalization["final_image_prompt"] = _final_comic_prompt(session, ep)
+        finalization["base_finish_complete"] = True
+        dnd.persist_dnd_sessions()
 
 
 def _notices(text, notices):
