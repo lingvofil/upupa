@@ -9,20 +9,17 @@ import re
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-DND_STYLE_MARKER = "СТИЛЬ УПУПЫ: КРИВАЯ ЕГРА"
+DND_STYLE_MARKER = "СТИЛЬ УПУПЫ: ГРУБЫЙ МАСТЕР"
 DND_STORY_MAX_WORDS = 70
 DND_STYLE_INSTRUCTION = f"""
 {DND_STYLE_MARKER}.
-Пиши весь художественный текст намеренно криво и по-падонковски: используй эрративы,
-фонетически узнаваемые орфографические ошибки, простые опечатки, кривое согласование,
-разговорный сленг и мат. Нормальное слово «игра» по возможности пиши «егра»,
-«игроки» — «егроки», «участники» — «учаснеги». Не превращай текст в нечитаемый набор букв:
-смысл сцены и варианты действий должны оставаться понятными.
+Пиши грамотно: нормальная орфография, падежи, согласование и пунктуация обязательны.
+Разговорный сленг, мат, просторечие и короткие живые фразы допустимы, но не коверкай слова
+намеренно, не используй падонковские эрративы и не имитируй безграмотность ради стиля.
 
 Будь заметно грубее: подкалывай партию и конкретных персонажей по ситуации, но не заканчивай
 каждое сообщение одной и той же дежурной обзывалкой. Сарказм, мат и издёвка должны быть частью
 конкретной сцены, а не копипастой. Не используй оскорбления по защищённым признакам.
-Не поясняй, что специально делаешь ошибки: для этого мастера безграмотность — нормальная речь.
 
 ДЛИНА: обычно 40–60 слов художественного текста, жёсткий максимум 70 слов. Пиши плотнее:
 не пересказывай только что случившееся, не повторяй решения игроков и не разжёвывай очевидные
@@ -48,42 +45,6 @@ DND_STYLE_INSTRUCTION = f"""
 """.strip()
 
 
-_REPLACEMENTS = (
-    ("Игра", "Егра"),
-    ("игра", "егра"),
-    ("Игроки", "Егроки"),
-    ("игроки", "егроки"),
-    ("Игрок", "Егрок"),
-    ("игрок", "егрок"),
-    ("Участники", "Учаснеги"),
-    ("участники", "учаснеги"),
-    ("участников", "учаснегов"),
-    ("участникам", "учаснегам"),
-    ("история", "исторея"),
-    ("История", "Исторея"),
-    ("действия", "дейсвия"),
-    ("действие", "дейсвие"),
-    ("Действия", "Дейсвия"),
-    ("голосование", "галасавание"),
-    ("Голосование", "Галасавание"),
-    ("выбор", "выбар"),
-    ("Выбор", "Выбар"),
-    ("Пишите", "Пешите"),
-    ("пишите", "пешите"),
-    ("Пиши", "Пеши"),
-    ("пиши", "пеши"),
-    ("может", "можит"),
-    ("Может", "Можит"),
-    ("только", "тока"),
-    ("Только", "Тока"),
-    ("сначала", "сночала"),
-    ("Сначала", "Сночала"),
-    ("начать", "начять"),
-    ("завершить", "завиршить"),
-    ("запустить", "запустить, бля,"),
-    ("решайте", "решайте, дебилы,"),
-    ("продолжай", "прадалжай"),
-)
 
 _INSULT_SUFFIXES = (
     " Ну чо, дегенераты.",
@@ -128,12 +89,10 @@ def _pick_insult_suffix(key=None) -> str:
 
 
 def errative_text(text: str, *, add_insult: bool = False, taunt_key=None) -> str:
-    """Apply readable padonak-style distortion and at most one varied taunt."""
+    """Keep text readable and optionally append at most one varied taunt."""
     if not text:
         return text
     result = str(text)
-    for source, target in _REPLACEMENTS:
-        result = result.replace(source, target)
     already_taunted = any(suffix.strip() in result for suffix in _INSULT_SUFFIXES)
     if (
         add_insult
@@ -403,8 +362,8 @@ def configure_dnd_style() -> None:
 
     dnd.with_scene_direction = styled_with_scene_direction
 
-    # Keep text distortion local, but let _StyledBotProxy own the single automatic
-    # taunt. Previously these helpers added one taunt and the proxy added another.
+    # Keep DnD presentation hooks local, but let _StyledBotProxy own the single
+    # automatic taunt. Previously these helpers added one taunt and the proxy added another.
     original_action_prompt_text = dnd._action_prompt_text
     dnd._action_prompt_text = lambda session: errative_text(
         original_action_prompt_text(session), add_insult=False
@@ -430,13 +389,13 @@ def configure_dnd_style() -> None:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🎲 Абстрактная исторея",
+                        text="🎲 Абстрактная история",
                         callback_data="dnd:mode:abstract",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="👥 С учаснегами чата",
+                        text="👥 С участниками чата",
                         callback_data="dnd:mode:participants",
                     )
                 ],
