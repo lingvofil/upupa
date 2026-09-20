@@ -9,6 +9,7 @@ from aiogram import Router, types
 from aiogram.types import FSInputFile
 
 from core.settings import ADMIN_ID, BLOCKED_USERS
+from features.song.command_guard import is_song_command
 from features.song.hf_yue2 import (
     Yue2ConfigurationError,
     Yue2GenerationError,
@@ -62,14 +63,6 @@ def parse_song_request(message: types.Message) -> tuple[str | None, SongTarget |
             )
     return None, None
 
-
-def is_song_command(message: types.Message) -> bool:
-    """Catch valid songs plus malformed mention-shaped song commands for a useful error."""
-    text = _normalized_text(message)
-    lowered = text.casefold()
-    if lowered == "песня чат" or lowered.startswith("песня @"):
-        return True
-    return lowered.startswith("песня ") and bool(_text_mention_users(message))
 
 
 def _quota_message(exc: Yue2QuotaError) -> str:
