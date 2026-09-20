@@ -632,18 +632,23 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 session.pending_poll = None
 
             if session.state == "RESOLVING":
+                durable_result = getattr(session, "pending_generated_result", {}) or {}
+                if durable_result.get("text"):
+                    # A successful provider result already exists. The durable
+                    # outbox layer will replay this exact response after startup,
+                    # so do not downgrade the session to a fresh action window.
+                    pass
                 # A group turn is persisted as RESOLVING *before* provider
                 # generation. On process restart keep the collected actions and
                 # their resource reservations so the leader can retry with
                 # "дальше" instead of retyping the whole turn.
-                if session.pending_actions and session.action_prompt_message_id:
+                elif session.pending_actions and session.action_prompt_message_id:
                     session.state = "WAITING_ACTION"
                     session.action_deadline = None
                     session.pending_roll = None
                 else:
-                    # Other resolving states (for example a completed roll whose
-                    # narrative continuation was interrupted) cannot be replayed
-                    # safely. Fall back to a fresh action window.
+                    # No generated outbox entry exists, so there is nothing safe
+                    # to replay. Fall back to a fresh action window.
                     session.state = "WAITING_ACTION"
                     session.action_prompt_message_id = None
                     session.pending_actions = {}
