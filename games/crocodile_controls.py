@@ -52,6 +52,11 @@ def _default_stop_lock_remaining_seconds(
 _stop_lock_remaining_seconds_handler = _default_stop_lock_remaining_seconds
 
 
+def get_default_stop_lock_remaining_seconds_handler():
+    """Return the immutable base round stop-lock calculator."""
+    return _default_stop_lock_remaining_seconds
+
+
 def get_stop_lock_remaining_seconds_handler():
     """Return the currently configured round stop-lock calculator."""
     return _stop_lock_remaining_seconds_handler
