@@ -15,8 +15,8 @@ SPECIAL_RULES = f"""
 ACTION:ROLL, ACTION:PLAYER_ATTACK или ACTION:CINEMATIC_ATTACK. Код предложит владельцу подтвердить применение.
 После подтверждения приём даёт преимущество; если уже была помеха, преимущество и помеха взаимно отменяются.
 Не давай за базовый особый приём одновременно ещё и повышение исхода, автоуспех или дополнительный урон.
-Заряд расходуется только после подтверждения владельца и успешного продолжения генерации после броска.
-Если приём неприменим или генерация упала, заряд остаётся.
+Заряд расходуется только после подтверждения владельца и фактического броска, в котором бонус уже был использован.
+Если приём неприменим или бросок не состоялся, заряд остаётся. Сбой сюжетной генерации ПОСЛЕ броска не возвращает заряд.
 """.strip()
 
 _ACTION_RE = re.compile(r"\[ACTION:([A-Z_]+)([^\]]*)\]", re.I | re.S)
@@ -132,6 +132,32 @@ def activate_special(session, user_id: int) -> tuple[bool, str]:
     return True, f"🔥 Особый приём «{_profile_special(session, user_id)}» активирован. Теперь пиши «кидаю»."
 
 
+def _commit_completed_special_roll(session, pending_roll, user_id) -> bool:
+    if user_id is None or not isinstance(pending_roll, dict):
+        return False
+    _ensure(session)
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    targets = [int(value) for value in (pending_roll.get("target_user_ids") or [])]
+    if targets and user_id not in targets:
+        return False
+    # The same pending-roll object still being active means no roll was actually
+    # consumed (wrong actor, rejected command, etc.).
+    if getattr(session, "pending_roll", None) is pending_roll:
+        return False
+    key = str(user_id)
+    if int(session.special_move_charges.get(key, 0) or 0) <= 0:
+        session.special_move_pending_user_id = None
+        session.special_move_offer_user_id = None
+        return False
+    session.special_move_charges[key] = 0
+    session.special_move_pending_user_id = None
+    session.special_move_offer_user_id = None
+    return True
+
+
 def _offer_text(session, user_id: int) -> str:
     mode = str((getattr(session, "pending_roll", {}) or {}).get("mode") or "NORMAL").upper()
     effect = "снимет помеху и вернёт обычный бросок" if mode == "DISADVANTAGE" else "даст преимущество"
@@ -210,6 +236,7 @@ class SpecialMoveCallbackMiddleware(BaseMiddleware):
 
 def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
     from AI import dnd_campaign as campaign
+    from AI import dnd_combat as combat
 
     if getattr(dnd, "_upupa_dnd_special_moves_installed", False):
         return
@@ -226,23 +253,6 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
     original_context = campaign._campaign_context
     campaign._campaign_context = lambda dnd_module, session: original_context(dnd_module, session) + "\n" + _context(session)
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
-        pending_user = getattr(session, "special_move_pending_user_id", None)
-        result = await original_generate(session, prompt)
-        if pending_user is not None:
-            _ensure(session)
-            key = str(int(pending_user))
-            if int(session.special_move_charges.get(key, 0) or 0) > 0:
-                session.special_move_charges[key] = 0
-            session.special_move_pending_user_id = None
-            session.special_move_offer_user_id = None
-            dnd.persist_dnd_sessions()
-        return result
-
-    dnd.generate_session_response = generate_session_response
-
     original_open_action = dnd.open_action_window
 
     async def open_action_window(bot, chat_id, target_user_ids=None):
@@ -253,6 +263,17 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
         return await original_open_action(bot, chat_id, target_user_ids=target_user_ids)
 
     dnd.open_action_window = open_action_window
+
+    original_resolve_player_roll = combat._resolve_player_roll
+
+    async def resolve_player_roll(dnd_module, message, session):
+        pending_roll = getattr(session, "pending_roll", None)
+        pending_user = getattr(session, "special_move_pending_user_id", None)
+        await original_resolve_player_roll(dnd_module, message, session)
+        if _commit_completed_special_roll(session, pending_roll, pending_user):
+            dnd_module.persist_dnd_sessions()
+
+    combat._resolve_player_roll = resolve_player_roll
 
     original_parse = dnd.parse_and_execute_turn
 
@@ -278,5 +299,6 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
 
 __all__ = [
     "SPECIAL_MARKER", "SPECIAL_RULES",
-    "special_eligible_user", "activate_special", "install_dnd_special_moves",
+    "special_eligible_user", "activate_special", "_commit_completed_special_roll",
+    "install_dnd_special_moves",
 ]
