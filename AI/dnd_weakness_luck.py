@@ -308,36 +308,40 @@ def _apply_payoff_cost(session, user_id, fields):
                 session,
                 {"ID": row.get("id"), "DELTA": "1", "CAUSE": complication or "осложнение слабости"},
             )
-            if int(row.get("value", 0) or 0) > old:
-                return notice or "🚨 Опасность усилилась."
+            applied = int(row.get("value", 0) or 0) > old
+            return applied, notice if applied else None
         threat = getattr(session, "threat", None)
         if isinstance(threat, dict) and threat.get("name"):
             old = int(threat.get("level", 0) or 0)
             maximum = max(1, int(threat.get("max", 6) or 6))
             if old < maximum:
                 threat["level"] = old + 1
-                return f"⚠️ {threat.get('name')}: {old + 1}/{maximum} — {complication or 'осложнение слабости'}."
-        return None
+                return True, (
+                    f"⚠️ {threat.get('name')}: {old + 1}/{maximum} — "
+                    f"{complication or 'осложнение слабости'}."
+                )
+        return False, None
 
     if cost == "PROGRESS_MINUS_1":
         row = _active_clock(session, "PROGRESS")
         if row is None or int(row.get("value", 0) or 0) <= 0:
-            return None
+            return False, None
         old = int(row.get("value", 0) or 0)
         notice = clocks._delta_clock(
             session,
             {"ID": row.get("id"), "DELTA": "-1", "CAUSE": complication or "осложнение слабости"},
         )
-        return (notice or "🎯 Прогресс откатился.") if int(row.get("value", 0) or 0) < old else None
+        applied = int(row.get("value", 0) or 0) < old
+        return applied, notice if applied else None
 
     if cost == "CONDITION":
         effect = str(fields.get("EFFECT") or "").upper()
         if effect not in conditions.EFFECTS:
-            return None
+            return False, None
         conditions._ensure(session)
         existing = (session.conditions or {}).get(str(int(user_id)), []) or []
         if any(str(row.get("effect") or "").upper() == effect for row in existing):
-            return None
+            return False, None
         name = _clean(fields.get("NAME"), 80) or "осложнение слабости"
         clear = _clean(fields.get("CLEAR"), 180) or "осмысленно устранить причину или получить помощь"
         payload = {
@@ -354,8 +358,9 @@ def _apply_payoff_cost(session, user_id, fields):
             payload["USES"] = "1"
         elif effect != "ACTION_TO_CLEAR":
             payload["SCENES"] = "1"
-        return conditions._add(session, payload)
-    return None
+        notice = conditions._add(session, payload)
+        return bool(notice), notice
+    return False, None
 
 
 def apply_weakness_metadata(session, original_text, cleaned, notices):
@@ -371,10 +376,11 @@ def apply_weakness_metadata(session, original_text, cleaned, notices):
         user_id = int(player)
         if player not in session.pending_weakness_invocations or not _can_earn(session, user_id):
             continue
-        cost_notice = _apply_payoff_cost(session, user_id, fields)
-        if not cost_notice:
+        applied, cost_notice = _apply_payoff_cost(session, user_id, fields)
+        if not applied:
             continue
-        extra.append(cost_notice)
+        if cost_notice:
+            extra.append(cost_notice)
         award = _award_luck(
             session,
             user_id,
