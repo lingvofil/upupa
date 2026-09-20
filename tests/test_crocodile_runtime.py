@@ -247,7 +247,7 @@ def test_callback_pipeline_is_owned_by_runtime():
     assert "def configure_callback_handler(" in crocodile_source
 
     raw_capture = runtime_source.index(
-        "raw_callback_handler = crocodile.get_callback_handler()"
+        "raw_callback_handler = crocodile.get_default_callback_handler()"
     )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
