@@ -1424,16 +1424,70 @@ async def cmd_stop_dnd(message: Message):
         cleanup_session(message.chat.id)
         await message.answer("Игра отменена.")
         return
-    try:
-        response_text = await generate_session_response(
-            session,
-            "Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]",
+
+    ending_prompt = "Игроки хотят конец игры. Опиши короткий финал с тегом [ACTION:END]"
+    pending_request = getattr(session, "pending_generation_request", {}) or {}
+    pending_result = getattr(session, "pending_generated_result", {}) or {}
+    if pending_request.get("prompt") or pending_result.get("text"):
+        await message.answer(
+            "Сейчас мастер уже восстанавливает незавершённый ход. "
+            "Сначала напиши «дальше», потом завершим историю."
         )
-        await parse_and_execute_turn(message.bot, message.chat.id, response_text)
-    except Exception:
-        logging.exception("DnD ending failed chat_id=%s", message.chat.id)
-        cleanup_session(message.chat.id)
-        await message.answer("Игра окончена.")
+        return
+
+    from AI.dnd_result_recovery import (
+        continue_pending_generation,
+        reserve_generation_request,
+    )
+
+    poll_id = str(getattr(session, "current_poll_id", "") or "")
+    poll = getattr(session, "pending_poll", None) or {}
+    effects = []
+    if poll.get("message_id"):
+        effects.append(
+            {
+                "method": "stop_poll",
+                "chat_id": int(poll.get("poll_chat_id") or message.chat.id),
+                "message_id": int(poll["message_id"]),
+                "best_effort": True,
+            }
+        )
+
+    if poll_id:
+        poll_map.pop(poll_id, None)
+    session.current_poll_id = None
+    session.pending_poll = None
+    session.action_prompt_message_id = None
+    session.pending_actions = {}
+    session.action_deadline = None
+    session.action_target_user_ids = []
+    session.pending_roll = None
+    session.state = "RESOLVING"
+
+    if not reserve_generation_request(
+        session,
+        ending_prompt,
+        kind="ENDING",
+        effects=effects,
+    ):
+        await message.answer(
+            "Финал уже восстанавливается. Ведущий может написать «дальше»."
+        )
+        return
+    persist_dnd_sessions()
+
+    from AI import dnd as dnd_module
+
+    completed = await continue_pending_generation(
+        dnd_module,
+        message.bot,
+        session,
+    )
+    if not completed and dnd_sessions.get(message.chat.id) is session:
+        await message.answer(
+            "Мастер завис на финале, но игра сохранена. "
+            "Ведущий может написать «дальше» — финал продолжится без потери партии."
+        )
 
 
 def _is_backstory_reply(message: Message) -> bool:
