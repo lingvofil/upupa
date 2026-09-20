@@ -14,11 +14,12 @@ async def generate_image_bytes(
     """Generate image bytes through the project's standard image waterfall.
 
     GigaChat receives the original prompt directly. If it fails, AI Horde is
-    the first independent reserve, followed by Pollinations, Hugging Face and
-    Cloudflare. Providers after GigaChat receive the translated/enhanced prompt
-    when ``translate_fallback`` is true. DnD prompts are already deliberately
-    written for image generation, so they must never be compressed by
-    translate_to_en().
+    the first independent reserve, followed by Pollinations. Normal image flows
+    then use Hugging Face and Cloudflare. DnD instead uses Kandinsky before
+    Hugging Face and never falls through to Cloudflare. Providers after GigaChat
+    receive the translated/enhanced prompt when ``translate_fallback`` is true.
+    DnD prompts are already deliberately written for image generation, so they
+    must never be compressed by translate_to_en().
     """
     from AI import picgeneration as pg
     from AI.aihorde_image import generate_aihorde_image
@@ -45,15 +46,22 @@ async def generate_image_bytes(
             logging.info("[%s] image provider=pollinations", log_context)
             return image, "pollinations"
 
+        if log_context == "dnd":
+            image = await pg.kandinsky_generate(fallback_prompt)
+            if image:
+                logging.info("[%s] image provider=kandinsky", log_context)
+                return image, "kandinsky"
+
         image = await pg.hf_generate(fallback_prompt, "black-forest-labs/FLUX.1-schnell")
         if image:
             logging.info("[%s] image provider=huggingface", log_context)
             return image, "huggingface"
 
-        image = await pg.cf_generate_t2i(fallback_prompt)
-        if image:
-            logging.info("[%s] image provider=cloudflare", log_context)
-            return image, "cloudflare"
+        if log_context != "dnd":
+            image = await pg.cf_generate_t2i(fallback_prompt)
+            if image:
+                logging.info("[%s] image provider=cloudflare", log_context)
+                return image, "cloudflare"
     except Exception as exc:
         logging.warning("[%s] image generation waterfall failed: %s", log_context, exc, exc_info=True)
 
