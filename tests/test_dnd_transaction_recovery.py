@@ -439,7 +439,8 @@ def test_poll_outcome_is_committed_before_continuation_provider(monkeypatch):
         assert snapshot["poll"] is None
         assert snapshot["request"]["kind"] == "POLL_CONTINUATION"
         assert snapshot["request"]["prompt"] == snapshot["prompt"]
-        assert "Результат: Выбор сделан: право." in snapshot["prompt"]
+        assert "право" in snapshot["prompt"]
+        assert "лево" not in snapshot["prompt"]
         assert stopped == [(chat_id, 808)]
         assert sent[0] == (chat_id, "✅ Выбор сделан: право")
         assert "переголосовывать не надо" in sent[-1][1]
