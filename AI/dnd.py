@@ -1243,8 +1243,6 @@ def _user_is_host(session, user_id: int) -> bool:
     """Return host privileges without mutating persistent session identity."""
     if int(user_id) == int(ADMIN_ID):
         return True
-    if is_song_command(message):
-        return False
     starter_user_id = getattr(session, "starter_user_id", None)
     return starter_user_id is not None and int(user_id) == int(starter_user_id)
 
