@@ -361,6 +361,40 @@ def _consume_heal(session, target_id: int) -> str | None:
     )
 
 
+def _commit_enemy_attack_continuation(
+    dnd,
+    session,
+    *,
+    chat_id: int,
+    body: str,
+    summary: str,
+    continuation_prompt: str,
+) -> str:
+    from AI.dnd_result_recovery import transition_to_generation_request
+
+    successor_prompt = dnd.with_scene_direction(session, continuation_prompt)
+    effects = []
+    if body:
+        effects.append({
+            "method": "send_message",
+            "chat_id": int(chat_id),
+            "text": body,
+        })
+    effects.append({
+        "method": "send_message",
+        "chat_id": int(chat_id),
+        "text": summary,
+    })
+    transition_to_generation_request(
+        session,
+        successor_prompt,
+        kind="ENEMY_ATTACK_CONTINUATION",
+        effects=effects,
+    )
+    dnd.persist_dnd_sessions()
+    return successor_prompt
+
+
 def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
     living = sorted(_living_ids(session))
     if not living:
@@ -691,36 +725,20 @@ def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
                 body += "\n\n" + "\n".join(notices)
 
             summary, continuation_prompt, _all_dead = _resolve_enemy_attack(session, attack)
-            successor_prompt = dnd.with_scene_direction(session, continuation_prompt)
 
-            from AI.dnd_result_recovery import (
-                continue_pending_generation,
-                transition_to_generation_request,
-            )
-
-            effects = []
-            if body:
-                effects.append({
-                    "method": "send_message",
-                    "chat_id": chat_id,
-                    "text": body,
-                })
-            effects.append({
-                "method": "send_message",
-                "chat_id": chat_id,
-                "text": summary,
-            })
+            from AI.dnd_result_recovery import continue_pending_generation
 
             # This is the durable boundary for the enemy attack. HP/heal/death
             # changes, scene metadata and the exact continuation request become
             # one committed state before any Telegram/provider call below.
-            transition_to_generation_request(
+            successor_prompt = _commit_enemy_attack_continuation(
+                dnd,
                 session,
-                successor_prompt,
-                kind="ENEMY_ATTACK_CONTINUATION",
-                effects=effects,
+                chat_id=chat_id,
+                body=body,
+                summary=summary,
+                continuation_prompt=continuation_prompt,
             )
-            dnd.persist_dnd_sessions()
 
             if story:
                 campaign._maybe_image(
