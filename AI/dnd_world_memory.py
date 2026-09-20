@@ -473,6 +473,7 @@ def install_dnd_world_memory(dnd, *, state_policy, metadata_policy):
             else []
         )
         session.world_callback_used = False
+        session.world_callback_candidate = {}
         session.world_callback_candidate = await select_callback_candidate(
             campaign,
             dnd_module,
