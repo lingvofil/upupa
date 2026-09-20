@@ -199,8 +199,18 @@ def finalization_state(session, *, create: bool = False) -> dict:
     if not create:
         return {}
     result_id = str(pending.get("id") or "unknown")
+    result_created_at = pending.get("created_at")
+    try:
+        result_created_key = f"{float(result_created_at):.6f}"
+    except (TypeError, ValueError):
+        # Legacy/malformed pending result: still create a stable ID for this
+        # in-memory replay chain, while current results always have created_at.
+        result_created_key = result_id
     value = {
-        "completion_id": f"{int(getattr(session, 'chat_id', 0))}:{result_id}",
+        "completion_id": (
+            f"{int(getattr(session, 'chat_id', 0))}:"
+            f"{result_created_key}:{result_id}"
+        ),
         "created_at": time.time(),
     }
     pending["finalization"] = value
