@@ -36,7 +36,7 @@ WEAKNESS_LUCK_RULES = f"""
 
 Если заявка действительно воплощает указанную слабость и должна потребовать бросок/атаку, добавь:
 [WEAKNESS:ROLL;PLAYER:123;COMPLICATION:жадность заставляет полезть первым]
-непосредственно перед ACTION:ROLL или ACTION:PLAYER_ATTACK. Код сам ухудшит MODE на одну ступень:
+непосредственно перед ACTION:ROLL, ACTION:PLAYER_ATTACK или ACTION:CINEMATIC_ATTACK. Код сам ухудшит MODE на одну ступень:
 ADVANTAGE → NORMAL, NORMAL → DISADVANTAGE. Если бросок уже с DISADVANTAGE, дополнительной цены нет и жетона не будет.
 Не добавляй помеху вручную сверх этого тега.
 
@@ -245,7 +245,7 @@ def _apply_roll_tag(session, response):
     _ensure(session)
     text = str(response or "")
     action_match = _ACTION_RE.search(text)
-    if not action_match or action_match.group(1).upper() not in {"ROLL", "PLAYER_ATTACK"}:
+    if not action_match or action_match.group(1).upper() not in {"ROLL", "PLAYER_ATTACK", "CINEMATIC_ATTACK"}:
         return _WEAKNESS_RE.sub(lambda m: "" if _parse_fields(m.group(1))[0] == "ROLL" else m.group(0), text), None
 
     targets = _targets(action_match.group(2) or "")
@@ -279,9 +279,24 @@ def _apply_roll_tag(session, response):
     if worsened is None:
         return stripped, None
 
+    # A weakness earns luck only when it adds a real extra penalty after
+    # already-active conditions are taken into account. Otherwise a hero with
+    # an existing disadvantage could farm luck without making the roll worse.
+    from AI import dnd_conditions as conditions
+
+    baseline, _ = conditions.apply_condition_penalties(session, stripped)
+    candidate = _set_mode_in_action(stripped, worsened)
+    final_with_weakness, _ = conditions.apply_condition_penalties(session, candidate)
+
+    def response_mode(value):
+        match = _ACTION_RE.search(str(value or ""))
+        return _mode(match.group(2) or "") if match else "NORMAL"
+
+    if response_mode(final_with_weakness) == response_mode(baseline):
+        return stripped, None
+
     complication = _clean(fields.get("COMPLICATION"), 180) or f"слабость «{pending.get('weakness')}» мешает действию"
-    guarded = _set_mode_in_action(stripped, worsened)
-    return guarded, {"player": user_id, "complication": complication, "mode": worsened}
+    return candidate, {"player": user_id, "complication": complication, "mode": worsened}
 
 
 def _active_clock(session, kind):
