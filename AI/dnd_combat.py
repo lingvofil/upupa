@@ -687,25 +687,70 @@ def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
             clean, notices = campaign._apply_metadata(session, response)
             story = campaign._record_scene(session, clean)
             body = campaign.ACTION_RE.sub("", clean).strip()
-            if body:
-                if notices:
-                    body += "\n\n" + "\n".join(notices)
-                await bot.send_message(chat_id, body)
+            if body and notices:
+                body += "\n\n" + "\n".join(notices)
+
             summary, continuation_prompt, _all_dead = _resolve_enemy_attack(session, attack)
-            await bot.send_message(chat_id, summary)
+            successor_prompt = dnd.with_scene_direction(session, continuation_prompt)
+
+            from AI.dnd_result_recovery import (
+                continue_pending_generation,
+                transition_to_generation_request,
+            )
+
+            effects = []
+            if body:
+                effects.append({
+                    "method": "send_message",
+                    "chat_id": chat_id,
+                    "text": body,
+                })
+            effects.append({
+                "method": "send_message",
+                "chat_id": chat_id,
+                "text": summary,
+            })
+
+            # This is the durable boundary for the enemy attack. HP/heal/death
+            # changes, scene metadata and the exact continuation request become
+            # one committed state before any Telegram/provider call below.
+            transition_to_generation_request(
+                session,
+                successor_prompt,
+                kind="ENEMY_ATTACK_CONTINUATION",
+                effects=effects,
+            )
             dnd.persist_dnd_sessions()
+
             if story:
-                campaign._maybe_image(dnd, bot, session, story)
-            try:
-                next_response = await dnd.generate_session_response(
+                campaign._maybe_image(
+                    dnd,
+                    getattr(bot, "_transport", bot),
                     session,
-                    dnd.with_scene_direction(session, continuation_prompt),
+                    story,
                 )
-                return await dnd.parse_and_execute_turn(bot, chat_id, next_response)
+
+            completed = await continue_pending_generation(dnd, bot, session)
+            if completed:
+                return None
+
+            logging.error(
+                "DnD enemy attack continuation remains pending chat_id=%s",
+                chat_id,
+            )
+            transport = getattr(bot, "_transport", bot)
+            try:
+                await transport.send_message(
+                    chat_id,
+                    "Мастер завис после мордобоя, но урон и продолжение сохранены. "
+                    "Ведущий может написать «дальше» — враг второй раз не бросает.",
+                )
             except Exception:
-                logging.exception("DnD enemy attack continuation failed chat_id=%s", chat_id)
-                await bot.send_message(chat_id, "Мастер завис после мордобоя. Егра сохранена.")
-                return await dnd.open_action_window(bot, chat_id)
+                logging.exception(
+                    "DnD enemy attack recovery notice failed chat_id=%s",
+                    chat_id,
+                )
+            return None
 
         ability = _extract_roll_ability(response)
         result = await original_parse_turn(bot, chat_id, response)
