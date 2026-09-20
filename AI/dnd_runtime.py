@@ -64,6 +64,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_party_history import install_dnd_party_history
     from AI.dnd_player_agency import configure_dnd_player_agency
     from AI.dnd_player_combat import install_dnd_player_combat
+    from AI.dnd_player_positions import install_dnd_player_positions
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_profile_ownership import install_dnd_profile_ownership
     from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
@@ -130,6 +131,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_enemy_stats(dnd)
     install_dnd_unknown_action_recovery(dnd)
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
+    install_dnd_player_positions(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_roll_feedback(dnd)
     install_dnd_enemy_command(dnd)
     install_dnd_cinematic_combat(dnd)
