@@ -292,6 +292,8 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
     prompt = _pending_generation_prompt(session)
     if not prompt:
         return False
+    if bool(getattr(session, "_upupa_generation_call_active", False)):
+        return True
     session.state = "RESOLVING"
     dnd.persist_dnd_sessions()
     try:
@@ -423,12 +425,18 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             )
             dnd.persist_dnd_sessions()
 
+        session._upupa_generation_call_active = True
         try:
             result = await original_generate(session, effective_prompt)
         except Exception:
             if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
                 dnd.persist_dnd_sessions()
             raise
+        finally:
+            try:
+                del session._upupa_generation_call_active
+            except AttributeError:
+                pass
 
         if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
             session.pending_generated_result = _new_result(session, result)
