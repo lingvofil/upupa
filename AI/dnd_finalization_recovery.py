@@ -100,14 +100,14 @@ async def _finish_and_cleanup(
         # Defensive legacy path: no durable parent outbox exists.
         await bot.send_message(
             session.chat_id,
-            "☠️ Егра окончена. Наследие этой катастрофы сохранено.",
+            "☠️ Игра окончена. Наследие этой катастрофы сохранено.",
         )
         dnd_module.cleanup_session(session.chat_id)
         return
 
     await bot.send_message(
         session.chat_id,
-        "☠️ Егра окончена. Наследие этой катастрофы сохранено.",
+        "☠️ Игра окончена. Наследие этой катастрофы сохранено.",
     )
     finalization["final_notice_done"] = True
     dnd_module.persist_dnd_sessions()
