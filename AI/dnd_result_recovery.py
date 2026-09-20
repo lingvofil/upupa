@@ -201,7 +201,7 @@ def finalization_state(session, *, create: bool = False) -> dict:
     result_id = str(pending.get("id") or "unknown")
     result_created_at = pending.get("created_at")
     try:
-        result_created_key = f"{float(result_created_at):.6f}"
+        result_created_key = format(float(result_created_at), ".17g")
     except (TypeError, ValueError):
         # Legacy/malformed pending result: still create a stable ID for this
         # in-memory replay chain, while current results always have created_at.
