@@ -7,6 +7,8 @@ import time
 
 from aiogram import BaseMiddleware
 
+from features.song.command_guard import is_song_command
+
 
 DND_PARTICIPANT_CONTEXT_MARKER = "ТЕКУЩИЕ УЧАСТНИКИ ПАРТИИ"
 
@@ -136,7 +138,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         if not action:
             return
         normalized = str(action).strip().casefold()
-        if normalized == "дальше" or normalized.startswith("упупа"):
+        if normalized == "дальше" or normalized.startswith("упупа") or is_song_command(event):
             return
         from AI.dnd_state_commands import is_state_command
         if is_state_command(action):
