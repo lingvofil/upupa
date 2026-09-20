@@ -1,6 +1,5 @@
+import asyncio
 from types import SimpleNamespace
-
-import pytest
 
 from AI import dnd_campaign as campaign
 from AI import dnd_world_memory as memory
@@ -202,8 +201,7 @@ def test_callback_ranking_prefers_open_threads_and_penalizes_recent_repeat():
     assert rows[-1]["name"] != "Б"
 
 
-@pytest.mark.asyncio
-async def test_ai_selector_can_decline_irrelevant_callbacks():
+def test_ai_selector_can_decline_irrelevant_callbacks():
     class FakeCampaign:
         @staticmethod
         def _chat_history(chat_id, create=False):
@@ -230,18 +228,19 @@ async def test_ai_selector_can_decline_irrelevant_callbacks():
             assert "КАНДИДАТЫ" in prompt
             return "NONE"
 
-    result = await memory.select_callback_candidate(
-        FakeCampaign,
-        SimpleNamespace(),
-        _session(),
-        "приключение на лунной сыроварне",
-        continuation=False,
+    result = asyncio.run(
+        memory.select_callback_candidate(
+            FakeCampaign,
+            SimpleNamespace(),
+            _session(),
+            "приключение на лунной сыроварне",
+            continuation=False,
+        )
     )
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_ai_selector_returns_exactly_one_relevant_callback():
+def test_ai_selector_returns_exactly_one_relevant_callback():
     class FakeCampaign:
         @staticmethod
         def _chat_history(chat_id, create=False):
@@ -276,12 +275,14 @@ async def test_ai_selector_returns_exactly_one_relevant_callback():
         async def _ephemeral_generate(dnd, session, prompt):
             return "1"
 
-    result = await memory.select_callback_candidate(
-        FakeCampaign,
-        SimpleNamespace(),
-        _session(),
-        "контрабанда через тот же порт",
-        continuation=False,
+    result = asyncio.run(
+        memory.select_callback_candidate(
+            FakeCampaign,
+            SimpleNamespace(),
+            _session(),
+            "контрабанда через тот же порт",
+            continuation=False,
+        )
     )
     assert result["name"] == "Капитан"
 
