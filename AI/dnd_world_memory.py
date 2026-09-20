@@ -508,6 +508,22 @@ def install_dnd_world_memory(dnd, *, state_policy, metadata_policy):
 
     state_commands._format_npcs = render_npc_lines
 
+    original_render_npcs = state_commands.render_npcs
+
+    def render_npcs(dnd_module, chat_id):
+        if dnd_module.dnd_sessions.get(int(chat_id)) is not None:
+            return original_render_npcs(dnd_module, chat_id)
+        campaign._load_archive(dnd_module)
+        chat = campaign._chat_history(chat_id)
+        world = chat.get("world_npcs") or {}
+        if not world:
+            return original_render_npcs(dnd_module, chat_id)
+        lines = ["🤝 Связи", "Источник: долгая память мира по завершённым еграм."]
+        lines.extend(render_npc_lines(world) or ["Пока ни одного сюжетного NPC не запомнили."])
+        return "\n".join(lines)
+
+    state_commands.render_npcs = render_npcs
+
     original_repair = state_commands._repair_active_npc_memory
 
     async def repair_active_npc_memory(dnd_module, chat_id):
