@@ -181,8 +181,8 @@ def _ensure(session):
         session.growth_expected_actor_ids = []
     if not isinstance(getattr(session, "growth_seen_scene_keys", None), list):
         session.growth_seen_scene_keys = []
-    if not isinstance(getattr(session, "learned_achievements", None), list):
-        session.learned_achievements = []
+    if not isinstance(getattr(session, "learned_achievements", None), dict):
+        session.learned_achievements = {}
     if not isinstance(getattr(session, "pending_achievement_uses", None), dict):
         session.pending_achievement_uses = {}
     if not isinstance(getattr(session, "achievement_boosts", None), dict):
@@ -199,7 +199,7 @@ def _restore(session, data):
     session.growth_evidence = copy.deepcopy(row.get("growth_evidence") or {})
     session.growth_expected_actor_ids = list(row.get("growth_expected_actor_ids") or [])
     session.growth_seen_scene_keys = list(row.get("growth_seen_scene_keys") or [])
-    session.learned_achievements = copy.deepcopy(row.get("learned_achievements") or [])
+    session.learned_achievements = copy.deepcopy(row.get("learned_achievements") or {})
     session.pending_achievement_uses = copy.deepcopy(row.get("pending_achievement_uses") or {})
     session.achievement_boosts = copy.deepcopy(row.get("achievement_boosts") or {})
     session.achievement_world_facts = copy.deepcopy(row.get("achievement_world_facts") or [])
@@ -231,10 +231,11 @@ def _normalise_achievement(item):
     }
 
 
-def _load_achievements_from_history(session, history):
+def _load_achievements_from_history(session, user_id, history):
     _ensure(session)
+    key = str(int(user_id))
     if not isinstance(history, dict) or history.get("dead"):
-        session.learned_achievements = []
+        session.learned_achievements[key] = []
         return
     result = []
     for raw in history.get("achievements") or []:
@@ -243,20 +244,23 @@ def _load_achievements_from_history(session, history):
             continue
         item["charges_remaining"] = 1
         result.append(item)
-    session.learned_achievements = result[:MAX_ACHIEVEMENTS]
+    session.learned_achievements[key] = result[:MAX_ACHIEVEMENTS]
 
 
 def _growth_context(session):
     _ensure(session)
-    blocks = [GROWTH_RULES]
-    if session.learned_achievements:
-        lines = [
-            f"- {item['title']}: {item['description']} (заряд {item.get('charges_remaining', 0)}/1)"
-            for item in session.learned_achievements
-            if isinstance(item, dict)
-        ]
-        if lines:
-            blocks.append("ДОСТИЖЕНИЯ ГЕРОЯ:\n" + "\n".join(lines))
+    blocks = []
+    achievement_lines = []
+    for player, items in session.learned_achievements.items():
+        participant = (getattr(session, "participants", {}) or {}).get(str(player), {})
+        who = participant.get("name") or f"ID {player}"
+        for item in items or []:
+            if isinstance(item, dict):
+                achievement_lines.append(
+                    f"- {who}: {item['title']} — {item['description']} (заряд {item.get('charges_remaining', 0)}/1)"
+                )
+    if achievement_lines:
+        blocks.append("ДОСТИЖЕНИЯ ГЕРОЕВ:\n" + "\n".join(achievement_lines))
     if session.achievement_world_facts:
         lines = [f"- {fact.get('text')}" for fact in session.achievement_world_facts[-4:] if fact.get("text")]
         if lines:
@@ -382,7 +386,9 @@ def _archive_growth(campaign, dnd_module, session, original_archive, finale, epi
         row["growth_evidence"] = old_evidence
 
         achievements = []
-        for raw in old.get("achievements") or getattr(session, "learned_achievements", []) or []:
+        session_achievements = (getattr(session, "learned_achievements", {}) or {}).get(key) or []
+        source_achievements = session_achievements or old.get("achievements") or []
+        for raw in source_achievements:
             item = _normalise_achievement(raw)
             if item and item["id"] not in {x["id"] for x in achievements}:
                 achievements.append(item)
@@ -390,9 +396,11 @@ def _archive_growth(campaign, dnd_module, session, original_archive, finale, epi
         row["mastered_growth_patterns"] = list(old.get("mastered_growth_patterns") or [])
 
         pending = old.get("pending_achievement")
-        if isinstance(pending, dict):
+        if row.get("dead"):
+            row.pop("pending_achievement", None)
+        elif isinstance(pending, dict):
             row["pending_achievement"] = pending
-        elif not row.get("dead") and len(row["achievements"]) < MAX_ACHIEVEMENTS and rows:
+        elif len(row["achievements"]) < MAX_ACHIEVEMENTS and rows:
             _, pattern = rows[0]
             evidence = old_evidence.get(pattern) or []
             offer = _make_offer(pattern, evidence)
@@ -517,7 +525,8 @@ def _parse_achievement_use(session, user_id, text):
         return None
 
     candidates = []
-    for index, item in enumerate(session.learned_achievements):
+    items = session.learned_achievements.get(str(int(user_id)), []) or []
+    for index, item in enumerate(items):
         title = _normalise_title(item.get("title"))
         probe = _normalise_title(remainder)
         if probe == title or probe.startswith(title + " "):
@@ -558,8 +567,9 @@ def _prevalidate_achievement_use(session, user_id, plan):
     if not isinstance(plan, dict):
         return False, "Не смог распознать достижение.", None
     _ensure(session)
+    items = session.learned_achievements.get(str(int(user_id)), []) or []
     try:
-        item = session.learned_achievements[int(plan["index"])]
+        item = items[int(plan["index"])]
     except (KeyError, IndexError, TypeError, ValueError):
         return False, "Достижение уже изменилось.", None
     if str(item.get("id")) != str(plan.get("id")):
@@ -602,9 +612,10 @@ def _achievement_prompt(session):
     return "\n\n".join(["КОДОВЫЕ ДОСТИЖЕНИЯ В ЭТОМ ХОДЕ:", "\n".join(rows)]) if rows else ""
 
 
-def _spend_achievement(session, plan):
+def _spend_achievement(session, user_id, plan):
+    items = session.learned_achievements.get(str(int(user_id)), []) or []
     try:
-        item = session.learned_achievements[int(plan["index"])]
+        item = items[int(plan["index"])]
     except (KeyError, IndexError, TypeError, ValueError):
         return None
     if str(item.get("id")) != str(plan.get("id")) or int(item.get("charges_remaining", 0) or 0) <= 0:
@@ -634,7 +645,7 @@ def _reduce_danger(session, title):
 def _commit_achievement_use(session, user_id, plan):
     from AI import dnd_scene_clocks as clocks
 
-    item = _spend_achievement(session, plan)
+    item = _spend_achievement(session, user_id, plan)
     if item is None:
         return []
     mechanic = str(item.get("mechanic") or "").upper()
@@ -835,7 +846,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
     state_policy.add_state_field("growth_evidence", lambda s: copy.deepcopy(getattr(s, "growth_evidence", {}) or {}))
     state_policy.add_state_field("growth_expected_actor_ids", lambda s: list(getattr(s, "growth_expected_actor_ids", []) or []))
     state_policy.add_state_field("growth_seen_scene_keys", lambda s: list(getattr(s, "growth_seen_scene_keys", []) or []))
-    state_policy.add_state_field("learned_achievements", lambda s: copy.deepcopy(getattr(s, "learned_achievements", []) or []))
+    state_policy.add_state_field("learned_achievements", lambda s: copy.deepcopy(getattr(s, "learned_achievements", {}) or {}))
     state_policy.add_state_field("pending_achievement_uses", lambda s: copy.deepcopy(getattr(s, "pending_achievement_uses", {}) or {}))
     state_policy.add_state_field("achievement_boosts", lambda s: copy.deepcopy(getattr(s, "achievement_boosts", {}) or {}))
     state_policy.add_state_field("achievement_world_facts", lambda s: copy.deepcopy(getattr(s, "achievement_world_facts", []) or []))
@@ -843,11 +854,6 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     metadata_policy.add_postprocessor(apply_growth_metadata)
     metadata_policy.add_postprocessor(apply_achievement_fact_metadata)
-
-    if GROWTH_MARKER not in campaign.RULES:
-        campaign.RULES = campaign.RULES.rstrip() + "\n" + GROWTH_RULES
-    if GROWTH_MARKER not in dnd.DND_SYSTEM_PROMPT:
-        dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + GROWTH_RULES
 
     original_context = campaign._campaign_context
 
@@ -860,7 +866,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     def apply_heritage(session, user_id, continuation=False):
         history = original_heritage(session, user_id, continuation=continuation)
-        _load_achievements_from_history(session, history)
+        _load_achievements_from_history(session, user_id, history)
         return history
 
     campaign._apply_heritage = apply_heritage
@@ -901,9 +907,10 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
         actor_ids = list(session.growth_expected_actor_ids)
         if actor_ids:
             text += (
-                "\n\nРОСТ ГЕРОЯ: этот ответ разрешает действия только следующих ID: "
+                "\n\n" + GROWTH_RULES
+                + "\nРАЗРЕШАЕМЫЕ СЕЙЧАС ИГРОКИ: "
                 + ", ".join(str(x) for x in actor_ids)
-                + ". Если реальное действие подходит под один из паттернов, поставь GROWTH-тег."
+                + ". GROWTH-тег допустим только для этих ID."
             )
         if session.pending_achievement_uses and "Игроки заявили действия одновременно:" in text:
             text += "\n\n" + _achievement_prompt(session)
@@ -975,7 +982,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
         text = original_render_hero(dnd_module, chat_id, user_id, user_name)
         session = dnd_module.dnd_sessions.get(int(chat_id))
         if session is not None:
-            achievements = getattr(session, "learned_achievements", []) or []
+            achievements = (getattr(session, "learned_achievements", {}) or {}).get(str(int(user_id)), []) or []
         else:
             history = campaign._player_history(chat_id, user_id) or {}
             achievements = history.get("achievements") or []
