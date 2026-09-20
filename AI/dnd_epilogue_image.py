@@ -47,11 +47,18 @@ def install_dnd_epilogue_image(dnd) -> None:
 
     original_image = campaign._image
 
-    async def image(bot, chat_id, prompt, filename, caption):
+    async def image(bot, chat_id, prompt, filename, caption, *, deliver_if=None):
         if filename == "dnd_final_comic.png":
             filename = "dnd_finale.png"
             caption = "🏁 Финальный кадр. Вот до чего вы доигрались."
-        return await original_image(bot, chat_id, prompt, filename, caption)
+        return await original_image(
+            bot,
+            chat_id,
+            prompt,
+            filename,
+            caption,
+            deliver_if=deliver_if,
+        )
 
     campaign._image = image
     campaign._upupa_dnd_epilogue_image_installed = True
