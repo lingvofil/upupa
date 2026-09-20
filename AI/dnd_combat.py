@@ -455,6 +455,11 @@ async def _resolve_player_roll(dnd, message, session) -> None:
 
     session.state = "RESOLVING"
     session.pending_roll = None
+    transaction_notices = dnd._commit_roll_transaction(
+        session,
+        roll,
+        user_id,
+    )
     dnd.persist_dnd_sessions()
 
     roll_label = dnd._roll_type_label(roll_type, skill)
@@ -483,6 +488,8 @@ async def _resolve_player_roll(dnd, message, session) -> None:
         roll_text += f" ({natural_note})"
     result_lines.append(roll_text)
     await message.answer("\n".join(result_lines))
+    for notice in transaction_notices:
+        await message.answer(notice)
 
     if roll_type == "SAVE":
         prompt_roll_label = "спасбросок"
@@ -519,6 +526,15 @@ async def _resolve_player_roll(dnd, message, session) -> None:
         await dnd.parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD combat roll continuation failed chat_id=%s", message.chat.id)
+        if (
+            getattr(session, "pending_generation_request", {}) or {}
+            or getattr(session, "pending_generated_result", {}) or {}
+        ):
+            await message.answer(
+                "Мастер завис после броска, но кубик и продолжение сохранены. "
+                "Ведущий может написать «дальше» — нового броска не будет."
+            )
+            return
         await message.answer("Мастер завис, но егра сохранена.")
         await dnd.open_action_window(message.bot, message.chat.id)
 
