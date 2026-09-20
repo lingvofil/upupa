@@ -1025,39 +1025,57 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
         return
     _finalizing_polls.add(poll_id)
     try:
-        try:
-            poll_res = await bot.stop_poll(chat_id=chat_id, message_id=message_id)
-            if _is_participant_mode(session):
-                outcome = _outcome_from_counts(options, _eligible_poll_vote_counts(session, options))
-            else:
-                counts = [option.voter_count for option in poll_res.options]
-                outcome = _outcome_from_counts(options, counts)
-        except Exception:
-            logging.exception("DnD stop_poll failed chat_id=%s poll_id=%s", chat_id, poll_id)
-            if _is_participant_mode(session):
-                outcome = _outcome_from_counts(options, _eligible_poll_vote_counts(session, options))
-            else:
-                outcome = f"Опрос потерялся, судьба выбрала: {random.choice(options)}"
+        # Poll answers are persisted as they arrive, so resolve from local state
+        # before touching Telegram. This makes tie/no-vote randomness durable too.
+        outcome = _outcome_from_counts(
+            options,
+            _eligible_poll_vote_counts(session, options),
+        )
+        continuation_prompt = with_scene_direction(
+            session,
+            f"Результат: {outcome}. Продолжай (до 100 слов).",
+        )
+
+        from AI.dnd_result_recovery import (
+            continue_pending_generation,
+            transition_to_generation_request,
+        )
 
         poll_map.pop(poll_id, None)
         session.current_poll_id = None
         session.pending_poll = None
         session.state = "RESOLVING"
+        transition_to_generation_request(
+            session,
+            continuation_prompt,
+            kind="POLL_CONTINUATION",
+            effects=[
+                {
+                    "method": "stop_poll",
+                    "chat_id": chat_id,
+                    "message_id": int(message_id),
+                    "best_effort": True,
+                },
+                {
+                    "method": "send_message",
+                    "chat_id": chat_id,
+                    "text": f"✅ {outcome}",
+                },
+            ],
+        )
         persist_dnd_sessions()
-        await bot.send_message(chat_id, f"✅ {outcome}")
-        try:
-            response_text = await generate_session_response(
-                session,
-                with_scene_direction(
-                    session,
-                    f"Результат: {outcome}. Продолжай (до 100 слов).",
-                ),
+
+        completed = await continue_pending_generation(
+            __import__(__name__, fromlist=["*"]),
+            bot,
+            session,
+        )
+        if not completed:
+            await bot.send_message(
+                chat_id,
+                "Мастер завис после голосования, но его результат сохранён. "
+                "Ведущий может написать «дальше» — переголосовывать не надо.",
             )
-            await parse_and_execute_turn(bot, chat_id, response_text)
-        except Exception:
-            logging.exception("DnD continuation failed chat_id=%s", chat_id)
-            await bot.send_message(chat_id, "Мастер на секунду выпал из реальности. История сохранена.")
-            await open_action_window(bot, chat_id)
     finally:
         _finalizing_polls.discard(poll_id)
 
