@@ -67,6 +67,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
     from AI.dnd_roll_feedback import install_dnd_roll_feedback
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
+    from AI.dnd_scene_clocks import install_dnd_scene_clocks
     from AI.dnd_scene_tactics import install_dnd_scene_tactics
     from AI.dnd_spotlight import install_dnd_spotlight
     from AI.dnd_special_moves import install_dnd_special_moves
@@ -129,6 +130,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_enemy_command(dnd)
     install_dnd_cinematic_combat(dnd)
     install_dnd_conditions(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_scene_clocks(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_scene_tactics(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
     install_dnd_roll_ability_display(dnd)
