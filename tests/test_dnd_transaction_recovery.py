@@ -271,3 +271,98 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
     finally:
         dnd.dnd_sessions.pop(-100805, None)
         dnd.poll_map.pop("poll-existing", None)
+
+
+
+def test_conversation_rewind_removes_half_committed_generation_history():
+    session = SimpleNamespace(
+        active_model="groq",
+        chat_id=-100806,
+        conversation=[
+            {"role": "user", "content": "system"},
+            {"role": "assistant", "content": "ready"},
+            {"role": "user", "content": "roll outcome"},
+            {"role": "assistant", "content": "response that was never outboxed"},
+        ],
+        chat_session=None,
+    )
+
+    changed = dnd._rewind_session_conversation(session, 2)
+
+    assert changed is True
+    assert session.conversation == [
+        {"role": "user", "content": "system"},
+        {"role": "assistant", "content": "ready"},
+    ]
+
+
+def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch):
+    chat_id = -100807
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        mode="abstract",
+        state="WAITING_ROLL",
+        pending_roll={
+            "type": "CHECK",
+            "skill": "Атлетика",
+            "reason": "перепрыгнуть яму",
+            "dc": 12,
+            "mode": "NORMAL",
+            "target_user_ids": [],
+        },
+        pending_generation_request={},
+        pending_generated_result={},
+        conversation=[],
+    )
+    answers = []
+    provider_seen = []
+    opened = []
+
+    class Message:
+        chat = SimpleNamespace(id=chat_id)
+        from_user = SimpleNamespace(id=1, first_name="Алиса")
+        bot = SimpleNamespace()
+
+        async def answer(self, text, **kwargs):
+            del kwargs
+            answers.append(text)
+            return SimpleNamespace()
+
+    async def fail_generation(current, prompt):
+        provider_seen.append(
+            {
+                "prompt": prompt,
+                "request": dict(current.pending_generation_request),
+                "state": current.state,
+                "pending_roll": current.pending_roll,
+            }
+        )
+        raise RuntimeError("provider unavailable")
+
+    async def open_action(*args, **kwargs):
+        opened.append((args, kwargs))
+
+    monkeypatch.setattr(dnd, "_roll_d20", lambda mode: ([17], 17))
+    monkeypatch.setattr(dnd, "with_scene_direction", lambda session, prompt: prompt)
+    monkeypatch.setattr(dnd, "generate_session_response", fail_generation)
+    monkeypatch.setattr(dnd, "open_action_window", open_action)
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    dnd.dnd_sessions[chat_id] = session
+
+    try:
+        import asyncio
+
+        asyncio.run(dnd.handle_roll(Message()))
+
+        assert len(provider_seen) == 1
+        snapshot = provider_seen[0]
+        assert snapshot["state"] == "RESOLVING"
+        assert snapshot["pending_roll"] is None
+        assert snapshot["request"]["kind"] == "ROLL_CONTINUATION"
+        assert snapshot["request"]["prompt"] == snapshot["prompt"]
+        assert "Броски d20: [17]; итог: 17." in snapshot["prompt"]
+        assert "Сложность: 12; результат: успех." in snapshot["prompt"]
+        assert opened == []
+        assert any("нового кубика" in text for text in answers)
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
