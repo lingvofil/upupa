@@ -508,3 +508,52 @@ def test_finish_archives_and_cleans_up_before_background_comic(monkeypatch):
     background_index = next(i for i, event in enumerate(events) if event[0] == "background")
     end_message_index = next(i for i, event in enumerate(events) if event[0] == "message" and "Егра окончена" in event[2])
     assert archive_index < cleanup_index < end_message_index < background_index
+
+
+def test_final_image_guard_allows_cleanup_but_blocks_next_saga(monkeypatch):
+    session = _session()
+    campaign._ensure(session)
+    session.state = "RESOLVING"
+    session.selected_plot = "Плавучий рынок"
+    session.scene_log = ["Финальная сцена"]
+    captured = {}
+
+    async def generate(_session, _prompt):
+        return "Эпилог старой саги."
+
+    def fake_image(_bot, _chat_id, _prompt, _filename, _caption, *, deliver_if=None):
+        captured["deliver_if"] = deliver_if
+
+        async def noop():
+            return None
+
+        return noop()
+
+    dnd_sessions = {session.chat_id: session}
+
+    def cleanup(chat_id):
+        dnd_sessions.pop(chat_id, None)
+
+    def start_background(coro, *, name):
+        captured["name"] = name
+        coro.close()
+
+    dnd = SimpleNamespace(
+        dnd_sessions=dnd_sessions,
+        generate_session_response=generate,
+        cleanup_session=cleanup,
+        _start_background_task=start_background,
+    )
+    monkeypatch.setattr(campaign, "_archive_campaign", lambda *_args: None)
+    monkeypatch.setattr(campaign, "_image", fake_image)
+
+    class Bot:
+        async def send_message(self, *_args, **_kwargs):
+            return None
+
+    asyncio.run(campaign._finish(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
+
+    assert captured["deliver_if"]() is True
+    dnd_sessions[session.chat_id] = SimpleNamespace(chat_id=session.chat_id)
+    assert captured["deliver_if"]() is False
+    assert captured["name"].startswith(f"dnd-final-comic:{session.chat_id}:")
