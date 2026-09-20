@@ -45,6 +45,61 @@ def _callback(data: str):
     )
 
 
+def test_party_menu_callback_configurator_drives_stable_entrypoint():
+    from games import crocodile_party_controls as party_controls
+
+    callback = _callback("configured")
+    original = party_controls.get_menu_callback_handler()
+    configured = AsyncMock(return_value="configured-result")
+
+    try:
+        party_controls.configure_menu_callback_handler(configured)
+        result = asyncio.run(party_controls.handle_menu_callback(callback))
+    finally:
+        party_controls.configure_menu_callback_handler(original)
+
+    assert result == "configured-result"
+    configured.assert_awaited_once_with(callback)
+
+
+def test_party_menu_callback_keeps_skip_ratings_base_order():
+    from games import crocodile_runtime as runtime
+
+    seen = []
+
+    async def base(callback):
+        seen.append("base")
+        return "done"
+
+    async def ratings(callback, next_handler):
+        seen.append("ratings-before")
+        result = await next_handler(callback)
+        seen.append("ratings-after")
+        return result
+
+    async def skip_permissions(callback, next_handler):
+        seen.append("skip-before")
+        result = await next_handler(callback)
+        seen.append("skip-after")
+        return result
+
+    handler = runtime._compose_callback_handler(
+        base,
+        ratings,
+        skip_permissions,
+    )
+    result = asyncio.run(handler(_callback("cmenu_refresh")))
+
+    assert result == "done"
+    assert seen == [
+        "skip-before",
+        "ratings-before",
+        "base",
+        "ratings-after",
+        "skip-after",
+    ]
+
+
 def test_party_menu_callback_chain_delegates_unowned_action_once():
     from games import crocodile_runtime as runtime
     from games import crocodile_telephone_skip_permissions as permissions
@@ -103,12 +158,13 @@ def test_party_menu_callback_is_composed_only_in_runtime():
     assert "_original_menu_callback" not in skip_source
     assert "menu_callback_with_skip_permissions(callback, next_handler)" in skip_source
 
-    assignment = "party_controls.handle_menu_callback = _compose_callback_handler("
-    assert runtime_source.count(assignment) == 1
+    wiring_entrypoint = "party_controls.configure_menu_callback_handler("
+    assert runtime_source.count(wiring_entrypoint) == 1
+    assert "party_controls.handle_menu_callback =" not in runtime_source
     capture = runtime_source.index(
-        "base_party_menu_handler = party_controls.handle_menu_callback"
+        "base_party_menu_handler = party_controls.get_menu_callback_handler()"
     )
-    wiring = runtime_source.index(assignment)
+    wiring = runtime_source.index(wiring_entrypoint, capture)
     ui_router = runtime_source.index(
         "handle_party_menu_callback_with_ratings",
         wiring,
@@ -127,3 +183,7 @@ def test_party_menu_callback_is_composed_only_in_runtime():
     )
 
     assert capture < wiring < ui_router < skip_router < ui_install < skip_install
+
+    party_source = _source("games/crocodile_party_controls.py")
+    assert "def get_menu_callback_handler(" in party_source
+    assert "def configure_menu_callback_handler(" in party_source
