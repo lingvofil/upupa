@@ -57,7 +57,6 @@ def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
         "финал",
         "эпилог",
         original_archive=original_archive,
-        archive_save=archive_save,
         finalization_state=state,
     )
 
@@ -77,7 +76,6 @@ def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
         "финал",
         "эпилог",
         original_archive=original_archive,
-        archive_save=archive_save,
         finalization_state=state,
     )
 
@@ -92,7 +90,7 @@ def test_archive_transaction_rolls_back_memory_when_atomic_save_fails():
     original_archive_data = {"chats": {}}
     campaign_obj = SimpleNamespace(
         _archive=copy.deepcopy(original_archive_data),
-        _save_archive=lambda _dnd: True,
+        _save_archive=lambda _dnd: False,
     )
     campaign_obj._chat_history = _history_accessor(campaign_obj)
     final = {"completion_id": "-101:result-8"}
@@ -109,7 +107,6 @@ def test_archive_transaction_rolls_back_memory_when_atomic_save_fails():
             "финал",
             "эпилог",
             original_archive=original_archive,
-            archive_save=lambda _dnd: False,
             finalization_state=lambda _session, create=False: final,
         )
 
@@ -208,8 +205,8 @@ def test_base_finish_reuses_saved_epilogue_on_replay(monkeypatch):
     )
     monkeypatch.setattr(campaign, "_final_comic_prompt", lambda _session, ep: "IMAGE:" + ep)
 
-    asyncio.run(campaign._finish(dnd, Bot(), session, "финальная сцена [ACTION:END]"))
-    asyncio.run(campaign._finish(dnd, Bot(), session, "финальная сцена [ACTION:END]"))
+    asyncio.run(campaign._finish_core(dnd, Bot(), session, "финальная сцена [ACTION:END]"))
+    asyncio.run(campaign._finish_core(dnd, Bot(), session, "финальная сцена [ACTION:END]"))
 
     state = session.pending_generated_result["finalization"]
     assert generated == [True]
