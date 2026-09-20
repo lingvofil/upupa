@@ -143,6 +143,8 @@ def _delta_clock(session, fields: dict[str, str]) -> str | None:
     row = session.scene_clocks.get(clock_id)
     if not isinstance(row, dict):
         return None
+    if bool(row.get("full")):
+        return None
 
     try:
         delta = int(str(fields.get("DELTA") or "0").strip())
