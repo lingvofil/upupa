@@ -313,6 +313,7 @@ class FakeTelegramBot:
     def __init__(self):
         self.messages = []
         self.polls = []
+        self.stopped_polls = []
 
     async def send_message(self, chat_id, text, **kwargs):
         message_id = 100 + len(self.messages)
@@ -331,6 +332,11 @@ class FakeTelegramBot:
             chat=SimpleNamespace(id=chat_id),
             poll=SimpleNamespace(id=poll_id),
         )
+
+
+    async def stop_poll(self, *, chat_id, message_id):
+        self.stopped_polls.append((chat_id, message_id))
+        return SimpleNamespace(options=[])
 
 
 def test_completed_story_send_is_not_duplicated_when_parse_replays():
@@ -599,4 +605,85 @@ def test_manual_retry_does_not_start_second_provider_call_while_first_is_alive()
     retried = asyncio.run(recovery._resume_pending_generation(dnd, None, session))
 
     assert retried is True
+    assert calls["generate"] == 0
+
+
+def test_transition_to_generation_request_closes_parent_outbox_and_keeps_effects():
+    policy = FakeStatePolicy()
+    _dnd, session, _calls, _, _ = _fake_dnd(policy)
+    session.pending_generated_result = {
+        "id": "7:parent",
+        "text": "родительский ответ",
+        "phase": recovery.RESULT_PHASE_APPLYING,
+        "telegram_effects": [],
+    }
+
+    changed = recovery.transition_to_generation_request(
+        session,
+        "точное продолжение",
+        kind="ENEMY_ATTACK_CONTINUATION",
+        effects=[
+            {"method": "send_message", "chat_id": session.chat_id, "text": "урон уже посчитан"},
+        ],
+    )
+
+    assert changed is True
+    assert session.pending_generated_result == {}
+    request = session.pending_generation_request
+    assert request["prompt"] == "точное продолжение"
+    assert request["kind"] == "ENEMY_ATTACK_CONTINUATION"
+    assert request["parent_result_id"] == "7:parent"
+    assert request["telegram_effects"][0]["status"] == "PENDING"
+
+
+def test_generation_request_side_effects_are_idempotent_after_done():
+    policy = FakeStatePolicy()
+    dnd, session, _calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    transport = FakeTelegramBot()
+    recovery.reserve_generation_request(
+        session,
+        "продолжение",
+        kind="POLL_CONTINUATION",
+        effects=[
+            {
+                "method": "stop_poll",
+                "chat_id": session.chat_id,
+                "message_id": 321,
+                "best_effort": True,
+            },
+            {
+                "method": "send_message",
+                "chat_id": session.chat_id,
+                "text": "✅ Выбор сделан",
+            },
+        ],
+    )
+
+    assert asyncio.run(recovery._deliver_generation_effects(dnd, transport, session)) is True
+    assert asyncio.run(recovery._deliver_generation_effects(dnd, transport, session)) is True
+
+    assert transport.stopped_polls == [(session.chat_id, 321)]
+    assert len(transport.messages) == 1
+    assert all(
+        item["status"] == recovery.EFFECT_DONE
+        for item in session.pending_generation_request["telegram_effects"]
+    )
+
+
+def test_nested_generation_requires_explicit_successor_transition():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.pending_generated_result = {
+        "id": "1:parent",
+        "text": "родитель",
+        "phase": recovery.RESULT_PHASE_APPLYING,
+        "telegram_effects": [],
+    }
+    session._upupa_durable_parse_depth = 1
+
+    with pytest.raises(RuntimeError, match="transition_to_generation_request"):
+        asyncio.run(dnd.generate_session_response(session, "дочернее продолжение"))
+
     assert calls["generate"] == 0
