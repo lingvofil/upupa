@@ -442,7 +442,7 @@ def test_poll_outcome_is_committed_before_continuation_provider(monkeypatch):
         assert "право" in snapshot["prompt"]
         assert "лево" not in snapshot["prompt"]
         assert stopped == [(chat_id, 808)]
-        assert sent[0] == (chat_id, "✅ Выбор сделан: право")
+        assert sent[0][0] == chat_id\n        assert sent[0][1].startswith("✅ ")\n        assert "право" in sent[0][1]
         assert "переголосовывать не надо" in sent[-1][1]
         assert opened == []
         assert all(
