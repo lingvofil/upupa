@@ -416,7 +416,10 @@ def apply_item_boost(session, response: str) -> tuple[str, str | None]:
         return str(response or ""), None
     if str(boost.get("domain") or "").upper() != _domain(action, suffix):
         return str(response or ""), None
-    guarded = _set_action_mode(response, _combine_advantage(_mode(suffix)))
+    current_mode = _mode(suffix)
+    if current_mode == "ADVANTAGE":
+        return str(response or ""), None
+    guarded = _set_action_mode(response, _combine_advantage(current_mode))
     source = str(boost.get("source") or "предмет")
     session.item_boosts.pop(player, None)
     return guarded, source
