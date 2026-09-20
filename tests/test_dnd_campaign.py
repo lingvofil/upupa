@@ -196,7 +196,7 @@ def test_archive_campaign_saves_selected_profile(monkeypatch):
     campaign._archive = {"version": 1, "chats": {}}
     monkeypatch.setattr(campaign, "_save_archive", lambda _dnd: None)
 
-    campaign._archive_campaign(SimpleNamespace(), session, "финал", "эпилог")
+    campaign._archive_campaign_core(SimpleNamespace(), session, "финал", "эпилог")
 
     saved = campaign._archive["chats"][str(session.chat_id)]["players"]["1"]["profile"]
     assert saved == profile
@@ -509,7 +509,7 @@ def test_finish_archives_and_defers_cleanup_to_outer_finalizer(monkeypatch):
         async def send_message(self, chat_id, text):
             events.append(("message", chat_id, text))
 
-    asyncio.run(campaign._finish(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
+    asyncio.run(campaign._finish_core(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
 
     assert any(event[0] == "archive" for event in events)
     assert not any(
@@ -564,7 +564,7 @@ def test_base_finish_does_not_generate_or_schedule_final_image(monkeypatch):
         async def send_message(self, *_args, **_kwargs):
             return None
 
-    asyncio.run(campaign._finish(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
+    asyncio.run(campaign._finish_core(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))
 
     state = session.pending_generated_result["finalization"]
     assert state["final_image_prompt"]
