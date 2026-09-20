@@ -500,9 +500,18 @@ def _roll_grade_from_prompt(prompt):
 async def _ephemeral_generate(dnd, session, prompt):
     conversation = getattr(session, "conversation", None)
     before = len(conversation) if isinstance(conversation, list) else None
+    depth = int(getattr(session, "_upupa_ephemeral_generation_depth", 0) or 0)
+    session._upupa_ephemeral_generation_depth = depth + 1
     try:
         return await dnd.generate_session_response(session, prompt)
     finally:
+        if depth:
+            session._upupa_ephemeral_generation_depth = depth
+        else:
+            try:
+                del session._upupa_ephemeral_generation_depth
+            except AttributeError:
+                pass
         if before is not None and isinstance(conversation, list) and len(conversation) > before:
             del conversation[before:]
         if dnd.dnd_sessions.get(session.chat_id) is session:
@@ -1019,7 +1028,13 @@ async def _finish(dnd, bot, session, response):
     if finale:
         await bot.send_message(session.chat_id, finale + (("\n\n" + "\n".join(notices)) if notices else ""))
     try:
-        ep = await dnd.generate_session_response(session, "История закончена. Дай эпилог 50–70 слов только по реальным решениям и последствиям. У каждого важного участника оставь конкретный хвост: судьба, репутация или артефакт. Без служебных тегов.")
+        ep = await _ephemeral_generate(
+            dnd,
+            session,
+            "История закончена. Дай эпилог 50–70 слов только по реальным решениям и последствиям. "
+            "У каждого важного участника оставь конкретный хвост: судьба, репутация или артефакт. "
+            "Без служебных тегов.",
+        )
         ep = ACTION_RE.sub("", META_RE.sub("", ep)).strip()
     except Exception:
         logging.exception("DnD epilogue failed")
