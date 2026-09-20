@@ -320,7 +320,6 @@ def _context(session) -> str:
 
 def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
     from AI import dnd_campaign as campaign
-    from AI import dnd_combat as combat
     if getattr(dnd, "_upupa_dnd_conditions_installed", False):
         return
     state_policy.add_ensure_hook(_ensure)
@@ -356,22 +355,12 @@ def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
         return result
     dnd.parse_and_execute_turn = parse_turn
 
-    original_resolve_player_roll = combat._resolve_player_roll
+    def commit_roll_condition_uses(session, pending_roll, user_id):
+        del user_id
+        if isinstance(pending_roll, dict) and pending_roll.get(_PENDING_USES_KEY):
+            _consume_pending_uses(session, pending_roll)
 
-    async def resolve_player_roll(dnd_module, message, session):
-        pending = getattr(session, "pending_roll", None)
-        should_consume = bool(
-            isinstance(pending, dict)
-            and pending.get(_PENDING_USES_KEY)
-        )
-        try:
-            return await original_resolve_player_roll(dnd_module, message, session)
-        finally:
-            if should_consume and getattr(session, "pending_roll", None) is not pending:
-                if _consume_pending_uses(session, pending):
-                    dnd_module.persist_dnd_sessions()
-
-    combat._resolve_player_roll = resolve_player_roll
+    dnd.register_roll_commit_hook(commit_roll_condition_uses)
     dnd._upupa_dnd_conditions_installed = True
 
 
