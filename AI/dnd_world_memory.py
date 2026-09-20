@@ -519,7 +519,7 @@ def install_dnd_world_memory(dnd, *, state_policy, metadata_policy):
         world = chat.get("world_npcs") or {}
         if not world:
             return original_render_npcs(dnd_module, chat_id)
-        lines = ["🤝 Связи", "Источник: долгая память мира по завершённым еграм."]
+        lines = ["🤝 Связи", "Источник: долгая память мира по завершённым играм."]
         lines.extend(render_npc_lines(world) or ["Пока ни одного сюжетного NPC не запомнили."])
         return "\n".join(lines)
 
