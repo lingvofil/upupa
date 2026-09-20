@@ -399,9 +399,18 @@ def _spend_charge(item) -> None:
 
 def _add_world_fact(session, *, kind: str, player: int, text: str) -> None:
     _ensure(session)
+    normalized_kind = str(kind).upper()
+    normalized_player = int(player)
+    session.item_world_facts = [
+        fact for fact in session.item_world_facts
+        if not (
+            str(fact.get("kind") or "").upper() == normalized_kind
+            and int(fact.get("player") or 0) == normalized_player
+        )
+    ]
     session.item_world_facts.append({
-        "kind": str(kind).upper(),
-        "player": int(player),
+        "kind": normalized_kind,
+        "player": normalized_player,
         "text": _clean(text, 260),
         "scene": int(getattr(session, "scene_count", 0) or 0),
     })
@@ -643,7 +652,9 @@ def apply_item_action_metadata(campaign, session, text, cleaned, notices):
         if not isinstance(current, dict):
             current = {"name": inventory_fun._name(current), "kind": inventory_fun._kind(current)}
             inventory[index] = current
-        _apply_item_fields(current, fields)
+        if _apply_item_fields(current, fields):
+            from AI import dnd_inventory_effects as effects
+            effects._refresh_notice(notices, session, player, current)
     return cleaned, notices
 
 
@@ -809,6 +820,9 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
 
     def apply_heritage(session, user_id, continuation=False):
         result = original_heritage(session, user_id, continuation=continuation)
+        key = str(int(user_id))
+        if key in (getattr(session, "inventories", {}) or {}):
+            session.inventories[key] = [deepcopy(item) for item in session.inventories[key]]
         reset_adventure_charges(session, int(user_id))
         return result
 
