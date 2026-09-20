@@ -1025,7 +1025,7 @@ def _delay_threat(session):
     return f"⏳ Пока вы чесались, {session.threat['name'].lower()} ухудшилась: {_bar(new)} {new}/{THREAT_MAX}."
 
 
-def _archive_campaign(dnd, session, finale, epilogue):
+def _archive_campaign_core(dnd, session, finale, epilogue):
     chat = _chat_history(session.chat_id, True); now = datetime.now(timezone.utc).isoformat()
     row = {"completed_at": now, "selected_plot": session.selected_plot, "finale": finale, "epilogue": epilogue,
            "profiles": session.character_profiles, "inventories": session.inventories, "npc_memory": session.npc_memory,
@@ -1041,7 +1041,10 @@ def _archive_campaign(dnd, session, finale, epilogue):
     _save_archive(dnd)
 
 
-async def _finish(dnd, bot, session, response):
+_archive_campaign = _archive_campaign_core
+
+
+async def _finish_core(dnd, bot, session, response):
     from AI.dnd_result_recovery import finalization_state
 
     finalization = finalization_state(session, create=True)
@@ -1101,6 +1104,9 @@ async def _finish(dnd, bot, session, response):
         finalization["final_image_prompt"] = _final_comic_prompt(session, ep)
         finalization["base_finish_complete"] = True
         dnd.persist_dnd_sessions()
+
+
+_finish = _finish_core
 
 
 def _notices(text, notices):
