@@ -160,6 +160,7 @@ def _latest_campaign(chat_id):
 def _ensure(session):
     defaults = {
         "character_profiles": {}, "profile_options": {}, "heritage": {}, "social_relationships": [], "inventories": {},
+        "rebuild_inventory_users": [],
         "npc_memory": {}, "reputations": {}, "threat": {"name": None, "level": 0, "max": THREAT_MAX, "history": []},
         "plot_options": [], "selected_plot": None, "continuation_mode": False, "scene_log": [], "scene_count": 0,
         "next_illustration_at": random.randint(3, 5), "action_opened_at": None, "campaign_started_at": None,
@@ -178,8 +179,8 @@ def _ensure(session):
 def _state(session):
     _ensure(session)
     return {key: getattr(session, key) for key in (
-        "character_profiles", "profile_options", "heritage", "social_relationships", "inventories", "npc_memory", "reputations",
-        "threat", "plot_options", "selected_plot", "continuation_mode", "scene_log", "scene_count",
+        "character_profiles", "profile_options", "heritage", "social_relationships", "inventories", "rebuild_inventory_users",
+        "npc_memory", "reputations", "threat", "plot_options", "selected_plot", "continuation_mode", "scene_log", "scene_count",
         "next_illustration_at", "action_opened_at", "campaign_started_at",
     )}
 
@@ -344,10 +345,31 @@ def _apply_heritage(session, user_id, continuation=False):
         "artifacts": list(old.get("artifacts") or []),
     }
     session.reputations[key] = list(old.get("reputation") or [])[-12:]
-    items = old.get("inventory") if continuation else old.get("artifacts")
-    if items:
+    preserve_rebuild_inventory = key in session.rebuild_inventory_users
+    items = old.get("inventory") if continuation or preserve_rebuild_inventory else old.get("artifacts")
+    if preserve_rebuild_inventory:
+        session.inventories[key] = list(items or [])
+    elif items:
         session.inventories[key] = list(items)
     return old
+
+
+def _preserve_inventory_for_rebuild(session, user_id):
+    """Keep a living hero's full archived inventory while only rebuilding the profile."""
+    _ensure(session)
+    key = str(int(user_id))
+    old = _player_history(session.chat_id, user_id)
+    if not old or old.get("dead"):
+        session.rebuild_inventory_users = [value for value in session.rebuild_inventory_users if str(value) != key]
+        return False
+
+    items = old.get("inventory")
+    if items is None:
+        items = old.get("artifacts") or []
+    session.inventories[key] = list(items or [])
+    if key not in session.rebuild_inventory_users:
+        session.rebuild_inventory_users.append(key)
+    return True
 
 
 def _missing_profiles(session):
