@@ -304,11 +304,13 @@ def _apply_payoff_cost(session, user_id, fields):
         row = _active_clock(session, "DANGER")
         if row is not None:
             old = int(row.get("value", 0) or 0)
+            clock_id = str(row.get("id") or "")
             notice = clocks._delta_clock(
                 session,
-                {"ID": row.get("id"), "DELTA": "1", "CAUSE": complication or "осложнение слабости"},
+                {"ID": clock_id, "DELTA": "1", "CAUSE": complication or "осложнение слабости"},
             )
-            applied = int(row.get("value", 0) or 0) > old
+            current = (getattr(session, "scene_clocks", {}) or {}).get(clock_id) or {}
+            applied = int(current.get("value", 0) or 0) > old
             return applied, notice if applied else None
         threat = getattr(session, "threat", None)
         if isinstance(threat, dict) and threat.get("name"):
@@ -327,11 +329,13 @@ def _apply_payoff_cost(session, user_id, fields):
         if row is None or int(row.get("value", 0) or 0) <= 0:
             return False, None
         old = int(row.get("value", 0) or 0)
+        clock_id = str(row.get("id") or "")
         notice = clocks._delta_clock(
             session,
-            {"ID": row.get("id"), "DELTA": "-1", "CAUSE": complication or "осложнение слабости"},
+            {"ID": clock_id, "DELTA": "-1", "CAUSE": complication or "осложнение слабости"},
         )
-        applied = int(row.get("value", 0) or 0) < old
+        current = (getattr(session, "scene_clocks", {}) or {}).get(clock_id) or {}
+        applied = int(current.get("value", 0) or 0) < old
         return applied, notice if applied else None
 
     if cost == "CONDITION":
