@@ -1062,7 +1062,14 @@ async def _finish(dnd, bot, session, response):
     await bot.send_message(chat_id, "☠️ Егра окончена. Наследие этой катастрофы сохранено.")
     try:
         dnd._start_background_task(
-            _image(bot, chat_id, comic_prompt, "dnd_final_comic.png", "📚 Финальный комикс. Вот до чего вы доигрались."),
+            _image(
+                bot,
+                chat_id,
+                comic_prompt,
+                "dnd_final_comic.png",
+                "📚 Финальный комикс. Вот до чего вы доигрались.",
+                deliver_if=lambda: dnd.dnd_sessions.get(chat_id) is None,
+            ),
             name=f"dnd-final-comic:{chat_id}:{int(time.time())}",
         )
     except Exception:
