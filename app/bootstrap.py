@@ -118,11 +118,10 @@ class UpupaApplication:
             return
 
         from AI.birthday_calendar import birthday_scheduler
-        from AI.dnd import (
-            configure_task_supervisor as configure_dnd_tasks,
-            restore_dnd_sessions,
-        )
+        from AI import dnd as dnd_game
+        from AI.dnd import configure_task_supervisor as configure_dnd_tasks
         from AI.dnd_player_agency import configure_dnd_player_agency
+        from AI.dnd_result_recovery import configure_dnd_result_recovery
         from AI.dnd_runtime import configure_dnd_runtime
         from AI.dnd_style import configure_dnd_style
         from AI.dnd_target_mentions import configure_dnd_target_mentions
@@ -146,10 +145,13 @@ class UpupaApplication:
         configure_dnd_style()
         configure_dnd_player_agency()
         configure_dnd_target_mentions()
+        # Install the durable generated-result outbox last so it sees the exact
+        # final response after style/agency wrappers and the final parse surface.
+        configure_dnd_result_recovery()
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
         configure_crocodile_runtime()
-        restore_dnd_sessions(self.bot)
+        dnd_game.restore_dnd_sessions(self.bot)
         restore_crocodile_sessions()
         crocodile._scores_load()
 
