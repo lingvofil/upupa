@@ -934,7 +934,8 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
         if "Игроки заявили действия одновременно:" in text:
             session.growth_expected_actor_ids = _group_actor_ids(session)
         actor_ids = list(session.growth_expected_actor_ids)
-        if actor_ids:
+        is_epilogue = "История закончена. Дай эпилог" in text
+        if actor_ids and not is_epilogue:
             text += (
                 "\n\n" + GROWTH_RULES
                 + "\nРАЗРЕШАЕМЫЕ СЕЙЧАС ИГРОКИ: "
@@ -945,6 +946,8 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
             text += "\n\n" + _achievement_prompt(session)
 
         result = await original_generate(session, text)
+        if is_epilogue:
+            result = _ACH_FACT_RE.sub("", _GROWTH_RE.sub("", str(result or ""))).strip()
 
         if session.pending_achievement_uses and "Игроки заявили действия одновременно:" in text:
             notices = commit_pending_achievement_uses(session)
