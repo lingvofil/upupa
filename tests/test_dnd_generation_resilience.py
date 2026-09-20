@@ -187,3 +187,79 @@ def test_auxiliary_generation_is_skipped_while_circuit_is_open(monkeypatch):
     monkeypatch.setattr(resilience, "_circuit_is_open", lambda _chat_id: True)
 
     assert asyncio.run(resilience.generate_auxiliary_text(session, "audit")) is None
+
+
+def test_groq_short_rate_limit_retries_once_with_compact_prompt(monkeypatch):
+    session = _session()
+    calls = []
+    sleeps = []
+
+    def groq_rate_limited_then_ok(
+        _session,
+        _prompt,
+        *,
+        max_prompt_chars,
+        max_tokens,
+    ):
+        calls.append((max_prompt_chars, max_tokens))
+        if len(calls) == 1:
+            error = RuntimeError("Rate limit reached. Please try again in 389.999999ms.")
+            error.status_code = 429
+            raise error
+        return "retry ok"
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(resilience, "_run_groq_sync", groq_rate_limited_then_ok)
+    monkeypatch.setattr(resilience.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(resilience._run_groq_fallback(session, "продолжай"))
+
+    assert result == "retry ok"
+    assert calls == [
+        (
+            resilience.DND_FALLBACK_PROMPT_MAX_CHARS,
+            resilience.DND_GROQ_FALLBACK_MAX_TOKENS,
+        ),
+        (
+            resilience.DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
+            resilience.DND_GROQ_FALLBACK_RETRY_MAX_TOKENS,
+        ),
+    ]
+    assert len(sleeps) == 1
+    assert sleeps[0] == (
+        0.389999999 + resilience.DND_GROQ_RATE_LIMIT_RETRY_PADDING_SECONDS
+    )
+
+
+def test_groq_long_rate_limit_fails_without_retry(monkeypatch):
+    session = _session()
+    calls = []
+
+    def groq_rate_limited(*_args, **_kwargs):
+        calls.append(True)
+        error = RuntimeError("Rate limit reached. Please try again in 39.5s.")
+        error.status_code = 429
+        raise error
+
+    monkeypatch.setattr(resilience, "_run_groq_sync", groq_rate_limited)
+
+    try:
+        asyncio.run(resilience._run_groq_fallback(session, "продолжай"))
+    except RuntimeError as exc:
+        assert "39.5s" in str(exc)
+    else:
+        raise AssertionError("long Groq rate limit must fail fast")
+
+    assert calls == [True]
+
+
+def test_groq_retry_after_parser_handles_seconds_and_milliseconds():
+    short_ms = RuntimeError("Please try again in 390ms.")
+    short_ms.status_code = 429
+    short_seconds = RuntimeError("Please try again in 1.71s.")
+    short_seconds.status_code = 429
+
+    assert resilience._groq_retry_after_seconds(short_ms) == 0.39
+    assert resilience._groq_retry_after_seconds(short_seconds) == 1.71

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -28,6 +29,8 @@ DND_GEMINI_ATTEMPTS = 2
 DND_GEMINI_CIRCUIT_SECONDS = 45.0
 DND_GROQ_FALLBACK_TIMEOUT_SECONDS = 18.0
 DND_GROQ_HTTP_TIMEOUT_SECONDS = 15.0
+DND_GROQ_RATE_LIMIT_RETRY_CAP_SECONDS = 6.0
+DND_GROQ_RATE_LIMIT_RETRY_PADDING_SECONDS = 0.15
 DND_AUX_HTTP_TIMEOUT_MS = 12_000
 DND_AUX_GOVERNOR_TIMEOUT_SECONDS = 14.0
 DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
@@ -170,6 +173,36 @@ def _is_request_too_large(error: Exception) -> bool:
         or "prompt too large" in text
         or "context length" in text
     )
+
+
+def _groq_retry_after_seconds(error: Exception) -> float | None:
+    """Extract a short Groq Retry-After delay from a 429 response/message."""
+    if _status_code(error) != 429:
+        return None
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    raw_header = None
+    try:
+        raw_header = headers.get("retry-after")
+    except AttributeError:
+        raw_header = None
+    if raw_header is not None:
+        try:
+            return max(0.0, float(raw_header))
+        except (TypeError, ValueError):
+            pass
+
+    match = re.search(
+        r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec(?:ond)?s?)\b",
+        str(error),
+        re.I,
+    )
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).casefold()
+    return value / 1000.0 if unit == "ms" else value
 
 
 def _history_contents(session, prompt: str):
@@ -374,13 +407,28 @@ async def _run_groq_fallback(session, prompt: str) -> str:
             timeout=DND_GROQ_FALLBACK_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        if not _is_request_too_large(exc):
-            raise
-        logging.warning(
-            "DnD Groq fallback request too large chat_id=%s; retrying compact prompt chars=%s",
-            getattr(session, "chat_id", None),
-            DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
-        )
+        if _is_request_too_large(exc):
+            logging.warning(
+                "DnD Groq fallback request too large chat_id=%s; retrying compact prompt chars=%s",
+                getattr(session, "chat_id", None),
+                DND_FALLBACK_RETRY_PROMPT_MAX_CHARS,
+            )
+        else:
+            retry_after = _groq_retry_after_seconds(exc)
+            if (
+                retry_after is None
+                or retry_after > DND_GROQ_RATE_LIMIT_RETRY_CAP_SECONDS
+            ):
+                raise
+            delay = retry_after + DND_GROQ_RATE_LIMIT_RETRY_PADDING_SECONDS
+            logging.warning(
+                "DnD Groq fallback rate limited chat_id=%s retry_after=%.3fs; "
+                "retrying once with compact prompt",
+                getattr(session, "chat_id", None),
+                retry_after,
+            )
+            await asyncio.sleep(delay)
+
         return await asyncio.wait_for(
             asyncio.to_thread(
                 _run_groq_sync,
