@@ -20,7 +20,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "configure_crocodile_modes()",
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
-        "party_controls.menu_keyboard = _compose_party_menu_keyboard(",
+        "party_controls.configure_menu_keyboard_renderer(",
         "crocodile.configure_game_keyboard_renderer(",
         "crocodile.configure_start_new_game_handler(",
         "crocodile.configure_callback_handler(",
@@ -158,8 +158,9 @@ def test_duo_opt_in_does_not_replace_party_menu():
 
     runtime_source = _source("games/crocodile_runtime.py")
     assert runtime_source.count(
-        "party_controls.menu_keyboard = _compose_party_menu_keyboard("
-    ) == 1
+        "party_controls.configure_menu_keyboard_renderer("
+    ) == 2
+    assert "party_controls.menu_keyboard =" not in runtime_source
     assert "duo_optin.decorate_party_menu_without_default_duo" in runtime_source
 
 

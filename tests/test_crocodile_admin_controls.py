@@ -272,7 +272,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     party_stop_wiring = "party_controls.configure_stop_active_party_handler("
     assert runtime_source.count(party_stop_wiring) == 1
     assert "party_controls._stop_active_party =" not in runtime_source
-    assert "party_controls.menu_keyboard = _compose_menu_keyboard_handler(" in runtime_source
+    menu_keyboard_wiring = "party_controls.configure_menu_keyboard_renderer("
+    assert runtime_source.count(menu_keyboard_wiring) == 2
+    assert "party_controls.menu_keyboard =" not in runtime_source
     assert "reverse.handle_callback = _compose_callback_handler(" in runtime_source
     assert "reverse_modes.handle_callback = _compose_callback_handler(" in runtime_source
     violations = []
@@ -314,3 +316,5 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     )
     assert "def get_stop_active_party_handler(" in party_controls_source
     assert "def configure_stop_active_party_handler(" in party_controls_source
+    assert "def get_menu_keyboard_renderer(" in party_controls_source
+    assert "def configure_menu_keyboard_renderer(" in party_controls_source

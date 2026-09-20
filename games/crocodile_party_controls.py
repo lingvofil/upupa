@@ -356,7 +356,7 @@ def party_status_text(chat_id: int | str) -> str:
     )
 
 
-def menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
+def _default_menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
     chat_id = str(chat_id)
     if has_active_party(chat_id):
         rows: list[list[InlineKeyboardButton]] = []
@@ -386,6 +386,24 @@ def menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🖼 Галерея", callback_data="cmenu_gallery")],
         ]
     )
+
+
+_menu_keyboard_renderer = _default_menu_keyboard
+
+
+def get_menu_keyboard_renderer():
+    """Return the currently configured unified-menu keyboard renderer."""
+    return _menu_keyboard_renderer
+
+
+def configure_menu_keyboard_renderer(renderer) -> None:
+    """Install the composed unified-menu keyboard renderer."""
+    global _menu_keyboard_renderer
+    _menu_keyboard_renderer = renderer
+
+
+def menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
+    return _menu_keyboard_renderer(chat_id)
 
 
 async def show_menu(message) -> None:
