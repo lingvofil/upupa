@@ -485,7 +485,7 @@ async def stop_crocodile(message) -> None:
         await message.reply(text)
 
 
-async def handle_menu_callback(callback) -> None:
+async def _default_handle_menu_callback(callback) -> None:
     data = callback.data or ""
     chat_id = str(callback.message.chat.id)
     if data == "cmenu_refresh":
@@ -547,6 +547,24 @@ async def handle_menu_callback(callback) -> None:
 
         await reverse_crocodile_modes.ask_mode(proxy)
         return
+
+
+_menu_callback_handler = _default_handle_menu_callback
+
+
+def get_menu_callback_handler():
+    """Return the currently configured unified-menu callback handler."""
+    return _menu_callback_handler
+
+
+def configure_menu_callback_handler(handler) -> None:
+    """Install the composed unified-menu callback handler."""
+    global _menu_callback_handler
+    _menu_callback_handler = handler
+
+
+async def handle_menu_callback(callback) -> None:
+    return await _menu_callback_handler(callback)
 
 
 def _gallery_rows_for_page(chat_id: int | str, page: int) -> tuple[list[dict], int]:

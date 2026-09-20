@@ -21,6 +21,7 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
         "party_controls.configure_menu_keyboard_renderer(",
+        "party_controls.configure_menu_callback_handler(",
         "crocodile.configure_game_keyboard_renderer(",
         "crocodile.configure_start_new_game_handler(",
         "crocodile.configure_callback_handler(",
