@@ -79,6 +79,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_two_heals import install_dnd_two_heals
     from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
     from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
+    from AI.dnd_world_memory import install_dnd_world_memory
 
     router = dnd_router or dnd.dnd_router
     if getattr(router, "_upupa_dnd_runtime_configured", False):
@@ -162,6 +163,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
 
     # Target notifications must be inside spotlight. Spotlight may safely add a
