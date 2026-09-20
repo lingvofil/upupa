@@ -278,7 +278,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     reverse_wiring = "reverse.configure_callback_handler("
     assert runtime_source.count(reverse_wiring) == 1
     assert "reverse.handle_callback =" not in runtime_source
-    assert "reverse_modes.handle_callback = _compose_callback_handler(" in runtime_source
+    reverse_modes_wiring = "reverse_modes.configure_callback_handler("
+    assert runtime_source.count(reverse_modes_wiring) == 1
+    assert "reverse_modes.handle_callback =" not in runtime_source
     violations = []
     for path in sorted((ROOT / "games").glob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
@@ -326,3 +328,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     )
     assert "def get_callback_handler(" in reverse_source
     assert "def configure_callback_handler(" in reverse_source
+
+    reverse_modes_source = (
+        ROOT / "games" / "reverse_crocodile_modes.py"
+    ).read_text(encoding="utf-8")
+    assert "def get_callback_handler(" in reverse_modes_source
+    assert "def configure_callback_handler(" in reverse_modes_source
