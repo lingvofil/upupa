@@ -132,8 +132,12 @@ class FusionBrainAPI:
         logging.warning("Kandinsky check timeout")
         return None, "Timeout"
 
-kandinsky_api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
+fusionbrain_api = FusionBrainAPI('https://api-key.fusionbrain.ai/', KANDINSKY_API_KEY, KANDINSKY_SECRET_KEY)
+# Legacy compatibility surface. The GigaChat installer may replace this alias,
+# while fusionbrain_api always remains the real Kandinsky/FusionBrain client.
+kandinsky_api = fusionbrain_api
 PIPELINE_ID = None
+FUSIONBRAIN_PIPELINE_ID = None
 
 # =============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -533,6 +537,39 @@ async def cf_generate_t2i(prompt: str) -> Optional[bytes]:
         r = await asyncio.to_thread(lambda: requests.post(url, headers=headers, json={"prompt": prompt}, timeout=60))
         return r.content if r.status_code == 200 else None
     except: return None
+
+
+async def kandinsky_generate(prompt: str) -> Optional[bytes]:
+    """Generate through the real FusionBrain/Kandinsky client.
+
+    Keep this independent from the legacy kandinsky_api alias, which is replaced
+    by the GigaChat compatibility adapter during normal bot startup.
+    """
+    global FUSIONBRAIN_PIPELINE_ID
+    if not KANDINSKY_API_KEY or not KANDINSKY_SECRET_KEY:
+        return None
+    try:
+        if not FUSIONBRAIN_PIPELINE_ID:
+            FUSIONBRAIN_PIPELINE_ID = await asyncio.to_thread(fusionbrain_api.get_pipeline)
+        if not FUSIONBRAIN_PIPELINE_ID:
+            logging.warning("Kandinsky pipeline id is unavailable")
+            return None
+        request_id, error = await asyncio.to_thread(
+            fusionbrain_api.generate,
+            prompt,
+            FUSIONBRAIN_PIPELINE_ID,
+        )
+        if not request_id:
+            logging.warning("Kandinsky did not return generation uuid: %s", error)
+            return None
+        image, error = await asyncio.to_thread(fusionbrain_api.check, request_id)
+        if not image:
+            logging.warning("Kandinsky returned no image: %s", error)
+            return None
+        return image
+    except Exception as exc:
+        logging.warning("Kandinsky generation failed: %s", exc)
+        return None
 
 # =============================================================================
 # ГЛАВНЫЙ ОРКЕСТРАТОР (WATERFALL)
