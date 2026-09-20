@@ -1065,8 +1065,10 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
         )
         persist_dnd_sessions()
 
+        from AI import dnd as dnd_module
+
         completed = await continue_pending_generation(
-            __import__(__name__, fromlist=["*"]),
+            dnd_module,
             bot,
             session,
         )
