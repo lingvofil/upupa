@@ -21,7 +21,7 @@ def test_auxiliary_generation_uses_safe_deadlines(monkeypatch):
         captured.update(kwargs)
         return "ok"
 
-    monkeypatch.setattr(resilience, "_circuit_is_open", lambda: False)
+    monkeypatch.setattr(resilience, "_circuit_is_open", lambda _chat_id: False)
     monkeypatch.setattr(resilience, "_run_gemini_sync", fake_run)
 
     result = asyncio.run(resilience.generate_auxiliary_text(Session(), "audit"))
