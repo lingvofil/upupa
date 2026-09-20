@@ -208,3 +208,17 @@ def test_luck_line_is_visible_and_bounded():
     session.luck_tokens = {"1": 1}
     session.weakness_luck_earned = {"1": 2}
     assert luck._luck_line(session, 1) == "🍀 Жетон удачи: 1/1 · заработано 2/2 за приключение"
+
+
+def test_roll_cost_suppresses_same_player_immediate_payoff_tag():
+    session = _session()
+    _invoke(session)
+    response = (
+        "[WEAKNESS:ROLL;PLAYER:1;COMPLICATION:полез первым]"
+        "[WEAKNESS:PAYOFF;PLAYER:1;COST:DANGER_PLUS_1;COMPLICATION:ещё и шумит]"
+        "[ACTION:ROLL;TYPE:CHECK;DOMAIN:MOVE;REASON:лезет в люк;DC:11;MODE:NORMAL;TARGETS:1]"
+    )
+    guarded, reward = luck._apply_roll_tag(session, response)
+    assert "[WEAKNESS:" not in guarded
+    assert "MODE:DISADVANTAGE" in guarded
+    assert reward is not None
