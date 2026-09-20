@@ -66,6 +66,15 @@ def test_main_generation_retries_groq_with_compact_prompt_after_413(monkeypatch)
     ]
 
 
+def test_groq_tpm_rate_limit_is_not_misclassified_as_oversized_request():
+    error = RuntimeError(
+        "Rate limit reached on tokens per minute (TPM): Limit 8000, Used 7635, Requested 2401"
+    )
+    error.status_code = 429
+
+    assert resilience._is_request_too_large(error) is False
+
+
 def test_fallback_prompt_is_strictly_bounded_and_keeps_latest_request():
     session = _session()
     session.conversation = [
