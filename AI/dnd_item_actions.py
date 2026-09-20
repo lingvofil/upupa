@@ -187,6 +187,30 @@ def _find_item(session, user_id: int, item_name: str):
     return index, inventory[index]
 
 
+def _stem_token(value: str) -> str:
+    token = re.sub(r"[^a-zа-я0-9_-]+", "", str(value or "").casefold().replace("ё", "е"), flags=re.I)
+    if len(token) <= 4:
+        return token
+    for ending in (
+        "иями", "ями", "ами", "ого", "ему", "ому", "ыми", "ими",
+        "ую", "юю", "ая", "яя", "ой", "ей", "ам", "ям", "ах", "ях",
+        "ов", "ев", "ом", "ем", "ы", "и", "а", "я", "у", "ю", "е", "о",
+    ):
+        if token.endswith(ending) and len(token) - len(ending) >= 3:
+            return token[:-len(ending)]
+    return token
+
+
+def _name_prefix_match(remainder: str, alias: str) -> tuple[bool, int]:
+    rest_tokens = [token for token in str(remainder or "").split() if token]
+    alias_tokens = [token for token in str(alias or "").split() if token]
+    if not alias_tokens or len(rest_tokens) < len(alias_tokens):
+        return False, 0
+    rest_stems = [_stem_token(token) for token in rest_tokens[: len(alias_tokens)]]
+    alias_stems = [_stem_token(token) for token in alias_tokens]
+    return rest_stems == alias_stems, len(alias_tokens)
+
+
 def _parse_item_use(session, user_id: int, text: str):
     normalized = " ".join(str(text or "").strip().casefold().split())
     remainder = None
@@ -203,11 +227,14 @@ def _parse_item_use(session, user_id: int, text: str):
         if not _mechanic(item):
             continue
         for alias in inventory_fun._item_aliases(item):
-            if remainder == alias or remainder.startswith(alias + " ") or remainder.startswith(alias + " —") or remainder.startswith(alias + ":"):
-                candidates.append((len(alias), index, item, alias))
+            matched, token_count = _name_prefix_match(remainder, alias)
+            if matched:
+                candidates.append((token_count, len(alias), index, item))
     if not candidates:
         return None
-    _, index, item, alias = max(candidates, key=lambda row: row[0])
+    token_count, _, index, item = max(candidates, key=lambda row: (row[0], row[1]))
+    rest_tokens = remainder.split()
+    tail = " ".join(rest_tokens[token_count:]).strip(" —:-")
     return {
         "index": index,
         "name": inventory_fun._name(item),
@@ -215,13 +242,13 @@ def _parse_item_use(session, user_id: int, text: str):
         "requirement": _requirement(item),
         "cost": _cost(item),
         "text": str(text or "").strip(),
-        "tail": remainder[len(alias):].strip(" —:-"),
+        "tail": tail,
     }
 
 
 def _requirement_ok(plan: dict) -> tuple[bool, str | None]:
     requirement = str(plan.get("requirement") or "NONE").upper()
-    if requirement == "CONFESS_FEAR" and not _FEAR_RE.search(str(plan.get("text") or "")):
+    if requirement == "CONFESS_FEAR" and not _FEAR_RE.search(str(plan.get("tail") or "")):
         return False, "Эта штука работает только если в том же действии честно признаться, что тебе страшно."
     return True, None
 
@@ -258,8 +285,10 @@ def _condition_target(session, user_id: int, item):
     return rows[0] if rows else None
 
 
-def _prevalidate_plan(session, user_id: int, plan: dict) -> tuple[bool, str | None, dict | None]:
+def _prevalidate_plan(session, user_id: int, plan: dict | None) -> tuple[bool, str | None, dict | None]:
     _ensure(session)
+    if not isinstance(plan, dict):
+        return False, "Не смог распознать активный предмет в этой фразе.", None
     index = plan.get("index")
     items = (getattr(session, "inventories", {}) or {}).get(str(int(user_id)), [])
     if not isinstance(index, int) or not (0 <= index < len(items)):
