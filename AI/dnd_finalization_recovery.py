@@ -6,7 +6,7 @@ import logging
 
 
 def _completion_row(campaign, chat_id, completion_id):
-    chat = campaign._chat_history(chat_id, True)
+    chat = campaign._chat_history(chat_id, False)
     for row in reversed(chat.get("campaigns") or []):
         if isinstance(row, dict) and str(row.get("completion_id") or "") == str(completion_id):
             return row
@@ -33,7 +33,6 @@ def _archive_once(
     epilogue,
     *,
     original_archive,
-    archive_save,
     finalization_state,
 ):
     finalization = finalization_state(session, create=True)
@@ -74,7 +73,7 @@ def _archive_once(
     finally:
         campaign._save_archive = active_save
 
-    if archive_save(dnd_module) is False:
+    if active_save(dnd_module) is False:
         campaign._archive = snapshot
         raise RuntimeError("DnD campaign archive atomic save failed")
 
@@ -143,8 +142,6 @@ def install_dnd_finalization_recovery(dnd) -> None:
         return
 
     original_archive = campaign._archive_campaign
-    archive_save = campaign._save_archive
-
     def archive_campaign(dnd_module, session, finale, epilogue):
         return _archive_once(
             campaign,
@@ -153,7 +150,6 @@ def install_dnd_finalization_recovery(dnd) -> None:
             finale,
             epilogue,
             original_archive=original_archive,
-            archive_save=archive_save,
             finalization_state=finalization_state,
         )
 
