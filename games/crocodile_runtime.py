@@ -428,7 +428,7 @@ def configure_crocodile_runtime() -> None:
             telephone_callback_with_skip_permissions,
         )
     )
-    base_party_menu_handler = party_controls.handle_menu_callback
+    base_party_menu_handler = party_controls.get_menu_callback_handler()
     party_controls.configure_menu_keyboard_renderer(
         _compose_party_menu_keyboard(
             party_controls.get_menu_keyboard_renderer(),
@@ -436,10 +436,12 @@ def configure_crocodile_runtime() -> None:
             decorate_party_menu_with_ratings,
         )
     )
-    party_controls.handle_menu_callback = _compose_callback_handler(
-        base_party_menu_handler,
-        handle_party_menu_callback_with_ratings,
-        menu_callback_with_skip_permissions,
+    party_controls.configure_menu_callback_handler(
+        _compose_callback_handler(
+            base_party_menu_handler,
+            handle_party_menu_callback_with_ratings,
+            menu_callback_with_skip_permissions,
+        )
     )
     crocodile.configure_game_keyboard_renderer(
         _compose_game_keyboard(
