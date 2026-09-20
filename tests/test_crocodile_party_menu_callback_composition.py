@@ -162,7 +162,7 @@ def test_party_menu_callback_is_composed_only_in_runtime():
     assert runtime_source.count(wiring_entrypoint) == 1
     assert "party_controls.handle_menu_callback =" not in runtime_source
     capture = runtime_source.index(
-        "base_party_menu_handler = party_controls.get_menu_callback_handler()"
+        "party_controls.get_default_menu_callback_handler()"
     )
     wiring = runtime_source.index(wiring_entrypoint, capture)
     ui_router = runtime_source.index(
