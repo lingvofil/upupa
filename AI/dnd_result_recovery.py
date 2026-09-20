@@ -100,6 +100,20 @@ def _clear_generation_request(session) -> bool:
     return True
 
 
+def reserve_generation_request(session, prompt: str, *, kind: str = "GENERATION") -> bool:
+    """Reserve an exact continuation request before any provider/network work."""
+    _ensure(session)
+    if _pending_text(session):
+        return False
+    existing = _pending_generation_prompt(session)
+    if existing:
+        return existing == str(prompt or "")
+    request = _new_generation_request(session, str(prompt or ""))
+    request["kind"] = str(kind or "GENERATION")
+    session.pending_generation_request = request
+    return True
+
+
 def _result_matches(session, text: str) -> bool:
     pending = getattr(session, "pending_generated_result", None)
     return bool(
@@ -426,10 +440,7 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
                     dnd.persist_dnd_sessions()
         else:
             effective_prompt = str(prompt or "")
-            session.pending_generation_request = _new_generation_request(
-                session,
-                effective_prompt,
-            )
+            reserve_generation_request(session, effective_prompt)
             dnd.persist_dnd_sessions()
 
         session._upupa_generation_call_active = True
@@ -544,5 +555,6 @@ __all__ = [
     "_resume_pending_generation",
     "_resume_pending_result",
     "retry_pending_recovery",
+    "reserve_generation_request",
     "configure_dnd_result_recovery",
 ]
