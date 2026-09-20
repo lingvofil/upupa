@@ -515,6 +515,11 @@ async def _default_handle_duel_callback(callback) -> None:
 _duel_callback_handler = _default_handle_duel_callback
 
 
+def get_default_duel_callback_handler():
+    """Return the immutable base duel callback handler."""
+    return _default_handle_duel_callback
+
+
 def get_duel_callback_handler():
     """Return the currently configured duel callback handler."""
     return _duel_callback_handler
@@ -701,6 +706,11 @@ async def _default_handle_telephone_callback(callback) -> None:
 
 
 _telephone_callback_handler = _default_handle_telephone_callback
+
+
+def get_default_telephone_callback_handler():
+    """Return the immutable base broken-telephone callback handler."""
+    return _default_handle_telephone_callback
 
 
 def get_telephone_callback_handler():
