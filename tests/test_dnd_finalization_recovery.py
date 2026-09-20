@@ -38,6 +38,24 @@ def test_completion_id_is_unique_across_campaign_results_in_same_chat():
     assert recovery.finalization_state(first, create=True)["completion_id"] == first_id
 
 
+def test_legacy_completion_id_without_created_at_is_stable():
+    session = SimpleNamespace(
+        chat_id=-98,
+        pending_generated_result={
+            "id": "2:legacyhash",
+            "text": "старый durable финал",
+        },
+        pending_generation_request={},
+        generated_result_seq=2,
+    )
+
+    first = recovery.finalization_state(session, create=True)["completion_id"]
+    second = recovery.finalization_state(session, create=True)["completion_id"]
+
+    assert first == second
+    assert "2:legacyhash" in first
+
+
 def _history_accessor(campaign_obj):
     def chat_history(chat_id, create=False):
         chats = campaign_obj._archive.setdefault("chats", {})
