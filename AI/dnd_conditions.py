@@ -228,6 +228,37 @@ def apply_condition_penalties(session, response: str) -> tuple[str, list[tuple[s
     return _set_mode(response, _combine_mode(_mode(suffix), True)), consumed
 
 
+_PENDING_USES_KEY = "condition_uses_pending"
+
+
+def _queue_pending_uses(session, consumed: list[tuple[str, str]]) -> bool:
+    pending = getattr(session, "pending_roll", None)
+    if not isinstance(pending, dict) or not consumed:
+        return False
+    pending[_PENDING_USES_KEY] = [
+        {"player": str(player), "effect": str(effect)}
+        for player, effect in consumed
+    ]
+    return True
+
+
+def _consume_pending_uses(session, pending: dict) -> bool:
+    raw = pending.get(_PENDING_USES_KEY) if isinstance(pending, dict) else None
+    consumed = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        player = str(item.get("player") or "")
+        effect = str(item.get("effect") or "").upper()
+        if player and effect:
+            consumed.append((player, effect))
+    if not consumed:
+        return False
+    _consume_uses(session, consumed)
+    pending.pop(_PENDING_USES_KEY, None)
+    return True
+
+
 def _consume_uses(session, consumed: list[tuple[str, str]]) -> None:
     for player, effect in consumed:
         kept = []
@@ -289,6 +320,7 @@ def _context(session) -> str:
 
 def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
     from AI import dnd_campaign as campaign
+    from AI import dnd_combat as combat
     if getattr(dnd, "_upupa_dnd_conditions_installed", False):
         return
     state_policy.add_ensure_hook(_ensure)
@@ -319,10 +351,25 @@ def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
             guarded, consumed = apply_condition_penalties(session, guarded)
         result = await original_parse(bot, chat_id, guarded)
         if session and consumed and getattr(session, "state", None) == "WAITING_ROLL":
-            _consume_uses(session, consumed)
-            dnd.persist_dnd_sessions()
+            if _queue_pending_uses(session, consumed):
+                dnd.persist_dnd_sessions()
         return result
     dnd.parse_and_execute_turn = parse_turn
+
+    original_resolve_player_roll = combat._resolve_player_roll
+
+    async def resolve_player_roll(dnd_module, message, session):
+        pending = getattr(session, "pending_roll", None)
+        should_consume = bool(
+            isinstance(pending, dict)
+            and pending.get(_PENDING_USES_KEY)
+        )
+        await original_resolve_player_roll(dnd_module, message, session)
+        if should_consume and getattr(session, "pending_roll", None) is not pending:
+            if _consume_pending_uses(session, pending):
+                dnd_module.persist_dnd_sessions()
+
+    combat._resolve_player_roll = resolve_player_roll
     dnd._upupa_dnd_conditions_installed = True
 
 
