@@ -67,6 +67,7 @@ def _history_accessor(campaign_obj):
 
 
 def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
+    # completion_id must guard the whole archive-wrapper chain, not just the base row.
     campaign_obj = SimpleNamespace(_archive={"chats": {}}, _save_archive=None)
     campaign_obj._chat_history = _history_accessor(campaign_obj)
     archive_saves = []
