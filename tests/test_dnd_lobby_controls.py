@@ -20,6 +20,7 @@ def _session(state="LOBBY"):
         heritage={"1": {"adventures": ["x"]}},
         inventories={"1": [{"name": "ключ"}]},
         reputations={"1": ["сомнительная репутация"]},
+        rebuild_inventory_users=[],
     )
 
 
@@ -126,8 +127,15 @@ def test_rebuild_character_clears_profile_and_starts_with_gender_choice():
     def profile_keyboard(user_id, step, options):
         return (user_id, step, tuple(options))
 
+    preserved = []
+
+    def preserve_inventory_for_rebuild(target_session, user_id):
+        preserved.append((target_session, user_id))
+        return True
+
     campaign = SimpleNamespace(
         _ensure=ensure,
+        _preserve_inventory_for_rebuild=preserve_inventory_for_rebuild,
         _refresh_lobby=refresh_lobby,
         _generate_profile_options=generate_profile_options,
         _profile_choice_text=choice_text,
@@ -138,6 +146,7 @@ def test_rebuild_character_clears_profile_and_starts_with_gender_choice():
 
     assert session.character_profiles["1"] == {}
     assert session.profile_options["1"]["gender"] == generated
+    assert preserved == [(session, 1)]
     assert dnd.persist_calls == 1
     assert refreshed and refreshed[0][0] is session
     assert callback.answers[0][0] == "Пересобираю персонажа."
