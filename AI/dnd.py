@@ -23,6 +23,7 @@ from AI.summarize import _get_chat_messages
 from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
+from features.song.command_guard import is_song_command
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
@@ -1242,6 +1243,8 @@ def _user_is_host(session, user_id: int) -> bool:
     """Return host privileges without mutating persistent session identity."""
     if int(user_id) == int(ADMIN_ID):
         return True
+    if is_song_command(message):
+        return False
     starter_user_id = getattr(session, "starter_user_id", None)
     return starter_user_id is not None and int(user_id) == int(starter_user_id)
 
@@ -1506,7 +1509,7 @@ def _is_group_action_reply(message: Message) -> bool:
     if not prompt_message_id or not message.reply_to_message:
         return False
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
         return False
     if not _can_user_act(
         session,
@@ -1522,7 +1525,7 @@ async def handle_free_action(message: Message):
     session = dnd_sessions[message.chat.id]
     prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
         return
     user_id = int(message.from_user.id)
     if not _can_user_act(
