@@ -81,9 +81,10 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
     assert "decorate_party_menu_with_ratings" in ui_source
 
     runtime_source = _source("games/crocodile_runtime.py")
-    assignment = "party_controls.menu_keyboard = _compose_party_menu_keyboard("
-    assert runtime_source.count(assignment) == 1
-    wiring = runtime_source.index(assignment)
+    wiring_entrypoint = "party_controls.configure_menu_keyboard_renderer("
+    assert runtime_source.count(wiring_entrypoint) == 2
+    assert "party_controls.menu_keyboard =" not in runtime_source
+    wiring = runtime_source.index(wiring_entrypoint)
     duo = runtime_source.index(
         "duo_optin.decorate_party_menu_without_default_duo",
         wiring,
@@ -94,7 +95,7 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         ratings,
     )
     admin_wiring = runtime_source.index(
-        "party_controls.menu_keyboard = _compose_menu_keyboard_handler(",
+        wiring_entrypoint,
         ui_install,
     )
     admin_wrapper = runtime_source.index(
