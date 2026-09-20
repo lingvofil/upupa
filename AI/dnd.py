@@ -609,10 +609,13 @@ def restore_dnd_sessions(bot: Bot) -> int:
             dnd_sessions[session.chat_id] = session
             restored += 1
             durable_result = getattr(session, "pending_generated_result", {}) or {}
+            generation_request = getattr(session, "pending_generation_request", {}) or {}
             has_durable_result = bool(durable_result.get("text"))
+            has_pending_generation = bool(generation_request.get("prompt"))
+            has_recovery_work = has_durable_result or has_pending_generation
             poll = session.pending_poll
             if (
-                not has_durable_result
+                not has_recovery_work
                 and session.state == "WAITING_POLL"
                 and session.current_poll_id
                 and poll
@@ -633,12 +636,12 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     ),
                     name=f"dnd-poll:{session.chat_id}:{poll_id}:restored",
                 )
-            elif not has_durable_result and session.state == "WAITING_POLL":
+            elif not has_recovery_work and session.state == "WAITING_POLL":
                 session.state = "WAITING_ACTION"
                 session.current_poll_id = None
                 session.pending_poll = None
 
-            if session.state == "RESOLVING" and not has_durable_result:
+            if session.state == "RESOLVING" and not has_recovery_work:
                 # A group turn is persisted as RESOLVING *before* provider
                 # generation. On process restart keep the collected actions and
                 # their resource reservations so the leader can retry with
@@ -657,7 +660,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     session.pending_roll = None
 
             if (
-                not has_durable_result
+                not has_recovery_work
                 and session.state == "WAITING_MODE"
                 and not session.mode_prompt_message_id
             ):
@@ -666,7 +669,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     name=f"dnd-mode:{session.chat_id}:restore-prompt",
                 )
             elif (
-                not has_durable_result
+                not has_recovery_work
                 and session.state == "LOBBY"
                 and not session.lobby_message_id
             ):
@@ -675,7 +678,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     name=f"dnd-lobby:{session.chat_id}:restore-prompt",
                 )
             elif (
-                not has_durable_result
+                not has_recovery_work
                 and session.state == "WAITING_BACKSTORY"
                 and not getattr(session, "backstory_prompt_message_id", None)
             ):
@@ -684,7 +687,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     name=f"dnd-backstory:{session.chat_id}:restore-prompt",
                 )
 
-            if not has_durable_result and session.state == "WAITING_ACTION":
+            if not has_recovery_work and session.state == "WAITING_ACTION":
                 prompt_id = getattr(session, "action_prompt_message_id", None)
                 action_deadline = getattr(session, "action_deadline", None)
                 pending_actions = getattr(session, "pending_actions", {}) or {}
@@ -834,6 +837,27 @@ def configure_natural_roll_note(formatter: Callable[[int], str | None]) -> None:
 
 def _natural_roll_note(result: int) -> str | None:
     return _natural_roll_note_formatter(result)
+
+
+_roll_commit_hooks: list[Callable] = []
+
+
+def register_roll_commit_hook(hook: Callable) -> None:
+    """Register deterministic state changes that must commit with a consumed d20."""
+    if hook not in _roll_commit_hooks:
+        _roll_commit_hooks.append(hook)
+
+
+def _commit_roll_transaction(session, pending_roll: dict, user_id: int) -> list[str]:
+    """Apply all post-roll resource effects before the continuation LLM call."""
+    notices: list[str] = []
+    for hook in list(_roll_commit_hooks):
+        result = hook(session, pending_roll, int(user_id))
+        if isinstance(result, str) and result.strip():
+            notices.append(result.strip())
+        elif isinstance(result, (list, tuple)):
+            notices.extend(str(item).strip() for item in result if str(item).strip())
+    return notices
 
 
 def _poll_question(session, targets: list[int]) -> str:
@@ -1450,6 +1474,11 @@ async def handle_roll(message: Message):
 
     session.state = "RESOLVING"
     session.pending_roll = None
+    transaction_notices = _commit_roll_transaction(
+        session,
+        roll,
+        int(message.from_user.id),
+    )
     persist_dnd_sessions()
 
     roll_label = _roll_type_label(roll_type, skill)
@@ -1474,6 +1503,8 @@ async def handle_roll(message: Message):
         roll_line += f" ({natural_note})"
     result_lines.append(roll_line)
     await message.answer("\n".join(result_lines))
+    for notice in transaction_notices:
+        await message.answer(notice)
 
     if roll_type == "SAVE":
         prompt_roll_label = "спасбросок"
@@ -1504,6 +1535,15 @@ async def handle_roll(message: Message):
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD roll continuation failed chat_id=%s", message.chat.id)
+        if (
+            getattr(session, "pending_generation_request", {}) or {}
+            or getattr(session, "pending_generated_result", {}) or {}
+        ):
+            await message.answer(
+                "Мастер завис после броска, но сам бросок и продолжение сохранены. "
+                "Ведущий может написать «дальше», чтобы повторить продолжение без нового кубика."
+            )
+            return
         await message.answer("Мастер завис, но история сохранена.")
         await open_action_window(message.bot, message.chat.id)
 
@@ -1566,7 +1606,16 @@ def _is_dnd_next_command(message: Message) -> bool:
     if not message.text or message.text.strip().casefold() != "дальше":
         return False
     session = dnd_sessions.get(message.chat.id)
-    return bool(session and session.state in {"WAITING_ACTION", "WAITING_POLL"})
+    if not session:
+        return False
+    if session.state in {"WAITING_ACTION", "WAITING_POLL"}:
+        return True
+    if session.state == "RESOLVING":
+        return bool(
+            (getattr(session, "pending_generation_request", {}) or {}).get("prompt")
+            or (getattr(session, "pending_generated_result", {}) or {}).get("text")
+        )
+    return False
 
 
 @dnd_router.message(_is_dnd_next_command)
@@ -1576,6 +1625,17 @@ async def handle_dnd_next(message: Message):
         return
     if not _user_is_host(session, int(message.from_user.id)):
         await message.answer("«Дальше» может сказать только ведущий.")
+        return
+    if session.state == "RESOLVING":
+        from AI.dnd_result_recovery import retry_pending_recovery
+
+        retried = await retry_pending_recovery(
+            globals(),
+            message.bot,
+            session,
+        )
+        if not retried:
+            await message.answer("Нечего восстанавливать.")
         return
     if session.state == "WAITING_ACTION":
         if not session.pending_actions:
