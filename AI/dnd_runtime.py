@@ -31,6 +31,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
     from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
+    from AI.dnd_growth import install_dnd_growth
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_image_quality import install_dnd_image_quality
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
@@ -160,6 +161,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
 
     # Target notifications must be inside spotlight. Spotlight may safely add a
