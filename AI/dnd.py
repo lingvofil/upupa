@@ -310,18 +310,22 @@ class GameSession:
         raw_roll = record.get("pending_roll") or None
         if raw_roll:
             raw_type = raw_roll.get("type", "CHECK")
-            session.pending_roll = {
-                "type": raw_type,
-                "skill": (
-                    _normalize_roll_skill(raw_roll.get("skill"))
-                    if raw_type == "CHECK"
-                    else None
-                ),
-                "reason": raw_roll.get("reason") or "проверка по ситуации",
-                "dc": raw_roll.get("dc"),
-                "mode": raw_roll.get("mode", "NORMAL"),
-                "target_user_ids": [int(value) for value in raw_roll.get("target_user_ids", [])],
-            }
+            session.pending_roll = dict(raw_roll)
+            # Normalize the stable core while preserving extension payloads
+            # owned by combat/conditions/luck and future mechanics.
+            session.pending_roll.pop("stat", None)
+            session.pending_roll["type"] = raw_type
+            session.pending_roll["skill"] = (
+                _normalize_roll_skill(raw_roll.get("skill"))
+                if raw_type == "CHECK"
+                else None
+            )
+            session.pending_roll["reason"] = raw_roll.get("reason") or "проверка по ситуации"
+            session.pending_roll["dc"] = raw_roll.get("dc")
+            session.pending_roll["mode"] = raw_roll.get("mode", "NORMAL")
+            session.pending_roll["target_user_ids"] = [
+                int(value) for value in raw_roll.get("target_user_ids", [])
+            ]
         elif session.state == "WAITING_ROLL":
             session.pending_roll = {
                 "type": "CHECK",
@@ -628,11 +632,23 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 session.pending_poll = None
 
             if session.state == "RESOLVING":
-                session.state = "WAITING_ACTION"
-                session.action_prompt_message_id = None
-                session.pending_actions = {}
-                session.action_deadline = None
-                session.pending_roll = None
+                # A group turn is persisted as RESOLVING *before* provider
+                # generation. On process restart keep the collected actions and
+                # their resource reservations so the leader can retry with
+                # "дальше" instead of retyping the whole turn.
+                if session.pending_actions and session.action_prompt_message_id:
+                    session.state = "WAITING_ACTION"
+                    session.action_deadline = None
+                    session.pending_roll = None
+                else:
+                    # Other resolving states (for example a completed roll whose
+                    # narrative continuation was interrupted) cannot be replayed
+                    # safely. Fall back to a fresh action window.
+                    session.state = "WAITING_ACTION"
+                    session.action_prompt_message_id = None
+                    session.pending_actions = {}
+                    session.action_deadline = None
+                    session.pending_roll = None
 
             if session.state == "WAITING_MODE" and not session.mode_prompt_message_id:
                 _start_background_task(
