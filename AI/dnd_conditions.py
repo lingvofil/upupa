@@ -364,10 +364,12 @@ def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
             isinstance(pending, dict)
             and pending.get(_PENDING_USES_KEY)
         )
-        await original_resolve_player_roll(dnd_module, message, session)
-        if should_consume and getattr(session, "pending_roll", None) is not pending:
-            if _consume_pending_uses(session, pending):
-                dnd_module.persist_dnd_sessions()
+        try:
+            return await original_resolve_player_roll(dnd_module, message, session)
+        finally:
+            if should_consume and getattr(session, "pending_roll", None) is not pending:
+                if _consume_pending_uses(session, pending):
+                    dnd_module.persist_dnd_sessions()
 
     combat._resolve_player_roll = resolve_player_roll
     dnd._upupa_dnd_conditions_installed = True

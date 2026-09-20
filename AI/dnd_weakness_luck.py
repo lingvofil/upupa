@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 
 from aiogram import BaseMiddleware
@@ -607,12 +608,21 @@ def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy)
                     pending.get("target_user_ids") or [],
                 )
             )
-        await original_resolve_roll(dnd_module, message, session)
-        if eligible and getattr(session, "pending_roll", None) is not pending:
-            award = _award_luck(session, int(message.from_user.id), reward.get("complication"))
-            if award:
-                dnd_module.persist_dnd_sessions()
-                await message.answer(award)
+        award = None
+        try:
+            return await original_resolve_roll(dnd_module, message, session)
+        finally:
+            if eligible and getattr(session, "pending_roll", None) is not pending:
+                award = _award_luck(session, int(message.from_user.id), reward.get("complication"))
+                if award:
+                    dnd_module.persist_dnd_sessions()
+                    try:
+                        await message.answer(award)
+                    except Exception:
+                        logging.exception(
+                            "DnD weakness luck notice failed chat_id=%s",
+                            getattr(getattr(message, "chat", None), "id", None),
+                        )
 
     combat._resolve_player_roll = resolve_player_roll
 
