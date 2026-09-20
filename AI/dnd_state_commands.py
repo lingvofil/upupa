@@ -325,7 +325,12 @@ async def _repair_active_npc_memory(dnd, chat_id: int) -> None:
         "СЦЕНЫ:\n" + "\n---\n".join(scenes)
     )
     try:
-        raw = await campaign._ephemeral_generate(dnd, session, prompt)
+        from AI.dnd_generation_resilience import generate_auxiliary_text
+
+        raw = await generate_auxiliary_text(session, prompt)
+        if not raw:
+            logging.info("DnD NPC memory repair skipped chat_id=%s", chat_id)
+            return
         campaign._apply_metadata(session, raw)
         dnd.persist_dnd_sessions()
     except Exception:
