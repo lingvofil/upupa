@@ -1504,6 +1504,36 @@ async def handle_roll(message: Message):
         roll,
         int(message.from_user.id),
     )
+
+    if roll_type == "SAVE":
+        prompt_roll_label = "спасбросок"
+    elif skill:
+        prompt_roll_label = f"проверку навыка «{skill}»"
+    else:
+        prompt_roll_label = "проверку"
+    prompt_parts = [
+        f"Игрок {message.from_user.first_name} сделал {prompt_roll_label}: {reason}.",
+        f"Режим: {_roll_mode_label(mode)}.",
+        f"Броски d20: {rolls}; итог: {result}.",
+    ]
+    if dc is not None:
+        prompt_parts.append(f"Сложность: {dc}; результат: {outcome}.")
+    else:
+        prompt_parts.append("Сложность не была задана; трактуй число по ситуации.")
+    if natural_note:
+        prompt_parts.append(
+            f"Выпала {natural_note}; отметь это в описании, но не меняй автоматически исход против сложности."
+        )
+    prompt_parts.append("Продолжай сюжет до 100 слов.")
+    continuation_prompt = with_scene_direction(session, " ".join(prompt_parts))
+
+    from AI.dnd_result_recovery import reserve_generation_request
+
+    reserve_generation_request(
+        session,
+        continuation_prompt,
+        kind="ROLL_CONTINUATION",
+    )
     persist_dnd_sessions()
 
     roll_label = _roll_type_label(roll_type, skill)
@@ -1531,31 +1561,10 @@ async def handle_roll(message: Message):
     for notice in transaction_notices:
         await message.answer(notice)
 
-    if roll_type == "SAVE":
-        prompt_roll_label = "спасбросок"
-    elif skill:
-        prompt_roll_label = f"проверку навыка «{skill}»"
-    else:
-        prompt_roll_label = "проверку"
-    prompt_parts = [
-        f"Игрок {message.from_user.first_name} сделал {prompt_roll_label}: {reason}.",
-        f"Режим: {_roll_mode_label(mode)}.",
-        f"Броски d20: {rolls}; итог: {result}.",
-    ]
-    if dc is not None:
-        prompt_parts.append(f"Сложность: {dc}; результат: {outcome}.")
-    else:
-        prompt_parts.append("Сложность не была задана; трактуй число по ситуации.")
-    if natural_note:
-        prompt_parts.append(
-            f"Выпала {natural_note}; отметь это в описании, но не меняй автоматически исход против сложности."
-        )
-    prompt_parts.append("Продолжай сюжет до 100 слов.")
-
     try:
         response_text = await generate_session_response(
             session,
-            with_scene_direction(session, " ".join(prompt_parts)),
+            continuation_prompt,
         )
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
