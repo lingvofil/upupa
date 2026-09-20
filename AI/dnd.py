@@ -608,8 +608,15 @@ def restore_dnd_sessions(bot: Bot) -> int:
             session = GameSession.from_record(record)
             dnd_sessions[session.chat_id] = session
             restored += 1
+            durable_result = getattr(session, "pending_generated_result", {}) or {}
+            has_durable_result = bool(durable_result.get("text"))
             poll = session.pending_poll
-            if session.state == "WAITING_POLL" and session.current_poll_id and poll:
+            if (
+                not has_durable_result
+                and session.state == "WAITING_POLL"
+                and session.current_poll_id
+                and poll
+            ):
                 poll_id = str(session.current_poll_id)
                 poll_map[poll_id] = session.chat_id
                 deadline = float(poll.get("deadline", time.time()))
@@ -626,23 +633,17 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     ),
                     name=f"dnd-poll:{session.chat_id}:{poll_id}:restored",
                 )
-            elif session.state == "WAITING_POLL":
+            elif not has_durable_result and session.state == "WAITING_POLL":
                 session.state = "WAITING_ACTION"
                 session.current_poll_id = None
                 session.pending_poll = None
 
-            if session.state == "RESOLVING":
-                durable_result = getattr(session, "pending_generated_result", {}) or {}
-                if durable_result.get("text"):
-                    # A successful provider result already exists. The durable
-                    # outbox layer will replay this exact response after startup,
-                    # so do not downgrade the session to a fresh action window.
-                    pass
+            if session.state == "RESOLVING" and not has_durable_result:
                 # A group turn is persisted as RESOLVING *before* provider
                 # generation. On process restart keep the collected actions and
                 # their resource reservations so the leader can retry with
                 # "дальше" instead of retyping the whole turn.
-                elif session.pending_actions and session.action_prompt_message_id:
+                if session.pending_actions and session.action_prompt_message_id:
                     session.state = "WAITING_ACTION"
                     session.action_deadline = None
                     session.pending_roll = None
@@ -655,18 +656,27 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     session.action_deadline = None
                     session.pending_roll = None
 
-            if session.state == "WAITING_MODE" and not session.mode_prompt_message_id:
+            if (
+                not has_durable_result
+                and session.state == "WAITING_MODE"
+                and not session.mode_prompt_message_id
+            ):
                 _start_background_task(
                     _restore_mode_prompt(bot, session.chat_id),
                     name=f"dnd-mode:{session.chat_id}:restore-prompt",
                 )
-            elif session.state == "LOBBY" and not session.lobby_message_id:
+            elif (
+                not has_durable_result
+                and session.state == "LOBBY"
+                and not session.lobby_message_id
+            ):
                 _start_background_task(
                     _restore_lobby_prompt(bot, session.chat_id),
                     name=f"dnd-lobby:{session.chat_id}:restore-prompt",
                 )
             elif (
-                session.state == "WAITING_BACKSTORY"
+                not has_durable_result
+                and session.state == "WAITING_BACKSTORY"
                 and not getattr(session, "backstory_prompt_message_id", None)
             ):
                 _start_background_task(
@@ -674,7 +684,7 @@ def restore_dnd_sessions(bot: Bot) -> int:
                     name=f"dnd-backstory:{session.chat_id}:restore-prompt",
                 )
 
-            if session.state == "WAITING_ACTION":
+            if not has_durable_result and session.state == "WAITING_ACTION":
                 prompt_id = getattr(session, "action_prompt_message_id", None)
                 action_deadline = getattr(session, "action_deadline", None)
                 pending_actions = getattr(session, "pending_actions", {}) or {}
