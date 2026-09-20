@@ -70,7 +70,7 @@ def test_complete_bypasses_remaining_segments():
     assert "обход: нашли настоящий ключ" in notices[0]
 
 
-def test_clock_can_fall_without_untriggering_an_already_full_world_event_only_if_model_explicitly_changes_it():
+def test_completed_clock_is_frozen_until_explicitly_cleared():
     session = _session()
     _apply(
         session,
@@ -78,8 +78,8 @@ def test_clock_can_fall_without_untriggering_an_already_full_world_event_only_if
     )
     _apply(session, "[CLOCK:DELTA;ID:alarm;DELTA:-2;CAUSE:замели следы]")
     row = session.scene_clocks["alarm"]
-    assert row["value"] == 4
-    assert row["full"] is False
+    assert row["value"] == 6
+    assert row["full"] is True
 
 
 def test_clear_frees_slot_for_new_scene_clock():
