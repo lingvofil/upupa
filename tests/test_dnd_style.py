@@ -109,6 +109,29 @@ def test_runtime_guard_falls_back_to_poll_if_model_ignores_corrections():
     assert "Действовать осторожно" in result
 
 
+def test_runtime_guard_uses_only_one_correction_after_groq_fallback():
+    session = SimpleNamespace(
+        chat_id=-100908,
+        conversation=[
+            {"role": "assistant", "content": "Сцена. [ACTION:INPUT]"},
+        ],
+        _dnd_last_generation_provider="groq",
+    )
+    calls = []
+
+    async def fake_generate(_session, prompt):
+        calls.append(prompt)
+        return "Упрямый fallback. [ACTION:INPUT;TARGETS:11]"
+
+    result = asyncio.run(
+        _generate_without_consecutive_input(fake_generate, session, "продолжай")
+    )
+
+    assert len(calls) == 2
+    assert "ACTION:INPUT" not in result
+    assert "ACTION:POLL;TARGETS:11" in result
+
+
 def test_runtime_guard_allows_input_after_non_input_turn():
     session = SimpleNamespace(
         chat_id=-100903,

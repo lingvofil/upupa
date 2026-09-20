@@ -19,11 +19,21 @@ def install_dnd_image_quality(dnd) -> None:
     if getattr(campaign, "_upupa_dnd_image_quality_installed", False):
         return
 
-    async def image(bot, chat_id, prompt, filename, caption):
+    async def image(bot, chat_id, prompt, filename, caption, *, deliver_if=None):
         try:
+            if deliver_if is not None and not deliver_if():
+                logging.info("[dnd] stale image skipped before generation chat_id=%s", chat_id)
+                return None
             data, provider = await generate_dnd_image_bytes(prompt)
             if not data:
                 logging.warning("[dnd] all image providers failed chat_id=%s", chat_id)
+                return None
+            if deliver_if is not None and not deliver_if():
+                logging.info(
+                    "[dnd] stale image dropped after generation chat_id=%s provider=%s",
+                    chat_id,
+                    provider,
+                )
                 return None
             logging.info("[dnd] image delivered provider=%s chat_id=%s", provider, chat_id)
             return await bot.send_photo(

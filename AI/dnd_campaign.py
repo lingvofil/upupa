@@ -946,15 +946,22 @@ def _record_scene(session, text):
     return story
 
 
-async def _image(bot, chat_id, prompt, filename, caption):
+async def _image(bot, chat_id, prompt, filename, caption, *, deliver_if=None):
     try:
+        if deliver_if is not None and not deliver_if():
+            logging.info("[dnd] stale image skipped before generation chat_id=%s", chat_id)
+            return None
         from features.image_generation import generate_image_bytes
         data, provider = await generate_image_bytes(prompt, log_context="dnd")
         if data:
+            if deliver_if is not None and not deliver_if():
+                logging.info("[dnd] stale image dropped after generation chat_id=%s provider=%s", chat_id, provider)
+                return None
             logging.info("[dnd] image provider=%s chat_id=%s", provider, chat_id)
-            await bot.send_photo(chat_id, BufferedInputFile(data, filename=filename), caption=caption)
+            return await bot.send_photo(chat_id, BufferedInputFile(data, filename=filename), caption=caption)
     except Exception:
         logging.exception("DnD image generation failed chat_id=%s", chat_id)
+    return None
 
 
 def _scene_image_prompt(session, scene, *, style=None):
@@ -991,7 +998,14 @@ def _maybe_image(dnd, bot, session, story):
     session.next_illustration_at = session.scene_count + random.randint(3, 5)
     prompt = _scene_image_prompt(session, story)
     dnd._start_background_task(
-        _image(bot, session.chat_id, prompt, "dnd_scene.png", "🖼 Ключевой кадр этой ебучей саги."),
+        _image(
+            bot,
+            session.chat_id,
+            prompt,
+            "dnd_scene.png",
+            "🖼 Ключевой кадр этой ебучей саги.",
+            deliver_if=lambda: dnd.dnd_sessions.get(session.chat_id) is session,
+        ),
         name=f"dnd-illustration:{session.chat_id}:{session.scene_count}",
     )
 
@@ -1048,7 +1062,14 @@ async def _finish(dnd, bot, session, response):
     await bot.send_message(chat_id, "☠️ Егра окончена. Наследие этой катастрофы сохранено.")
     try:
         dnd._start_background_task(
-            _image(bot, chat_id, comic_prompt, "dnd_final_comic.png", "📚 Финальный комикс. Вот до чего вы доигрались."),
+            _image(
+                bot,
+                chat_id,
+                comic_prompt,
+                "dnd_final_comic.png",
+                "📚 Финальный комикс. Вот до чего вы доигрались.",
+                deliver_if=lambda: dnd.dnd_sessions.get(chat_id) is None,
+            ),
             name=f"dnd-final-comic:{chat_id}:{int(time.time())}",
         )
     except Exception:

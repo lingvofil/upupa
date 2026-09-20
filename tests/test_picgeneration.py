@@ -85,3 +85,37 @@ async def test_pollinations_stops_on_payment_required(monkeypatch):
 
     assert await pg.pollinations_generate("bike") is None
     assert len(calls) == 1
+
+
+def test_kandinsky_generate_uses_stable_fusionbrain_client(monkeypatch):
+    calls = []
+
+    class FakeFusionBrain:
+        def get_pipeline(self):
+            calls.append(("pipeline",))
+            return "pipe-1"
+
+        def generate(self, prompt, pipeline_id):
+            calls.append(("generate", prompt, pipeline_id))
+            return "request-1", None
+
+        def check(self, request_id):
+            calls.append(("check", request_id))
+            return b"kandinsky-image", None
+
+    monkeypatch.setattr(pg, "KANDINSKY_API_KEY", "key")
+    monkeypatch.setattr(pg, "KANDINSKY_SECRET_KEY", "secret")
+    monkeypatch.setattr(pg, "fusionbrain_api", FakeFusionBrain())
+    monkeypatch.setattr(pg, "kandinsky_api", object())
+    monkeypatch.setattr(pg, "FUSIONBRAIN_PIPELINE_ID", None)
+
+    import asyncio
+
+    result = asyncio.run(pg.kandinsky_generate("scene prompt"))
+
+    assert result == b"kandinsky-image"
+    assert calls == [
+        ("pipeline",),
+        ("generate", "scene prompt", "pipe-1"),
+        ("check", "request-1"),
+    ]

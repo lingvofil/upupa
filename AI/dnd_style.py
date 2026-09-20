@@ -328,11 +328,18 @@ async def _generate_without_consecutive_input(original_generate, session, prompt
         "Заверши его только ACTION:ROLL или ACTION:POLL; если это настоящий финал — ACTION:END. "
         "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
     )
-    for _attempt in range(2):
+    correction_attempts = 1 if getattr(session, "_dnd_last_generation_provider", None) == "groq" else 2
+    for _attempt in range(correction_attempts):
         corrected = await generate_once(correction_prompt, force_style=True)
         if _action_kind(corrected) != "INPUT":
             return corrected
         result = corrected
+        if getattr(session, "_dnd_last_generation_provider", None) == "groq":
+            logging.warning(
+                "DnD consecutive INPUT correction stayed on Groq; using deterministic fallback chat_id=%s",
+                getattr(session, "chat_id", None),
+            )
+            break
 
     logging.warning(
         "DnD model ignored consecutive INPUT guard; using fallback poll chat_id=%s",
