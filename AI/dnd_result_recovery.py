@@ -38,6 +38,8 @@ _CORE_SNAPSHOT_FIELDS = (
 def _ensure(session) -> None:
     pending = getattr(session, "pending_generated_result", None)
     session.pending_generated_result = dict(pending) if isinstance(pending, dict) else {}
+    request = getattr(session, "pending_generation_request", None)
+    session.pending_generation_request = dict(request) if isinstance(request, dict) else {}
     try:
         session.generated_result_seq = max(0, int(getattr(session, "generated_result_seq", 0) or 0))
     except (TypeError, ValueError):
@@ -48,6 +50,8 @@ def _restore(session, data) -> None:
     row = data if isinstance(data, dict) else {}
     pending = row.get("pending_generated_result")
     session.pending_generated_result = copy.deepcopy(pending) if isinstance(pending, dict) else {}
+    request = row.get("pending_generation_request")
+    session.pending_generation_request = copy.deepcopy(request) if isinstance(request, dict) else {}
     try:
         session.generated_result_seq = max(0, int(row.get("generated_result_seq", 0) or 0))
     except (TypeError, ValueError):
@@ -66,6 +70,48 @@ def _pending_text(session) -> str | None:
     _ensure(session)
     text = session.pending_generated_result.get("text")
     return str(text) if text else None
+
+
+def _pending_generation_prompt(session) -> str | None:
+    _ensure(session)
+    prompt = session.pending_generation_request.get("prompt")
+    return str(prompt) if prompt else None
+
+
+def _new_generation_request(session, prompt: str) -> dict:
+    payload = str(prompt or "")
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    conversation = getattr(session, "conversation", None)
+    conversation_size = len(conversation) if isinstance(conversation, list) else None
+    return {
+        "id": f"gen:{int(time.time() * 1000)}:{digest}",
+        "prompt": payload,
+        "created_at": time.time(),
+        "source_state": str(getattr(session, "state", "") or ""),
+        "conversation_size": conversation_size,
+    }
+
+
+def _clear_generation_request(session) -> bool:
+    _ensure(session)
+    if not session.pending_generation_request:
+        return False
+    session.pending_generation_request = {}
+    return True
+
+
+def reserve_generation_request(session, prompt: str, *, kind: str = "GENERATION") -> bool:
+    """Reserve an exact continuation request before any provider/network work."""
+    _ensure(session)
+    if _pending_text(session):
+        return False
+    existing = _pending_generation_prompt(session)
+    if existing:
+        return existing == str(prompt or "")
+    request = _new_generation_request(session, str(prompt or ""))
+    request["kind"] = str(kind or "GENERATION")
+    session.pending_generation_request = request
+    return True
 
 
 def _result_matches(session, text: str) -> bool:
@@ -258,6 +304,42 @@ class _DurableBotProxy:
         return result
 
 
+async def _resume_pending_generation(dnd, bot, session) -> bool:
+    _ensure(session)
+    prompt = _pending_generation_prompt(session)
+    if not prompt:
+        return False
+    if bool(getattr(session, "_upupa_generation_call_active", False)):
+        return True
+    session.state = "RESOLVING"
+    dnd.persist_dnd_sessions()
+    try:
+        response = await dnd.generate_session_response(session, prompt)
+        await dnd.parse_and_execute_turn(bot, session.chat_id, response)
+        return True
+    except Exception:
+        logging.exception(
+            "DnD pending generation retry failed chat_id=%s request_id=%s",
+            getattr(session, "chat_id", None),
+            session.pending_generation_request.get("id"),
+        )
+        return False
+
+
+async def retry_pending_recovery(dnd, bot, session) -> bool:
+    _ensure(session)
+    router = getattr(dnd, "dnd_router", None)
+    state_policy = getattr(router, "_upupa_dnd_campaign_state_policy", None)
+    if _pending_text(session):
+        if state_policy is None:
+            return False
+        await _resume_pending_result(dnd, bot, session, state_policy)
+        return True
+    if _pending_generation_prompt(session):
+        return await _resume_pending_generation(dnd, bot, session)
+    return False
+
+
 async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
     _ensure(session)
     pending = copy.deepcopy(session.pending_generated_result)
@@ -318,6 +400,10 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         lambda session: copy.deepcopy(getattr(session, "pending_generated_result", {}) or {}),
     )
     state_policy.add_state_field(
+        "pending_generation_request",
+        lambda session: copy.deepcopy(getattr(session, "pending_generation_request", {}) or {}),
+    )
+    state_policy.add_state_field(
         "generated_result_seq",
         lambda session: int(getattr(session, "generated_result_seq", 0) or 0),
     )
@@ -327,22 +413,52 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
     async def generate_session_response(session, prompt):
         _ensure(session)
-        if not _generation_is_ephemeral(session):
-            existing = _pending_text(session)
-            if existing:
-                logging.warning(
-                    "DnD reusing durable generated result chat_id=%s result_id=%s",
-                    getattr(session, "chat_id", None),
-                    session.pending_generated_result.get("id"),
-                )
-                return existing
+        if _generation_is_ephemeral(session):
+            return await original_generate(session, prompt)
 
-        result = await original_generate(session, prompt)
-        if (
-            not _generation_is_ephemeral(session)
-            and getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session
-        ):
+        existing = _pending_text(session)
+        if existing:
+            logging.warning(
+                "DnD reusing durable generated result chat_id=%s result_id=%s",
+                getattr(session, "chat_id", None),
+                session.pending_generated_result.get("id"),
+            )
+            return existing
+
+        stored_prompt = _pending_generation_prompt(session)
+        if stored_prompt:
+            effective_prompt = stored_prompt
+            if str(prompt or "") != stored_prompt:
+                logging.warning(
+                    "DnD preserving earlier generation request chat_id=%s request_id=%s",
+                    getattr(session, "chat_id", None),
+                    session.pending_generation_request.get("id"),
+                )
+            rewind_to = session.pending_generation_request.get("conversation_size")
+            if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
+                if dnd._rewind_session_conversation(session, rewind_to):
+                    dnd.persist_dnd_sessions()
+        else:
+            effective_prompt = str(prompt or "")
+            reserve_generation_request(session, effective_prompt)
+            dnd.persist_dnd_sessions()
+
+        session._upupa_generation_call_active = True
+        try:
+            result = await original_generate(session, effective_prompt)
+        except Exception:
+            if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
+                dnd.persist_dnd_sessions()
+            raise
+        finally:
+            try:
+                del session._upupa_generation_call_active
+            except AttributeError:
+                pass
+
+        if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
             session.pending_generated_result = _new_result(session, result)
+            session.pending_generation_request = {}
             dnd.persist_dnd_sessions()
         return result
 
@@ -394,8 +510,11 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         result = await original_open_action(bot, chat_id, target_user_ids=target_user_ids)
         session = dnd.dnd_sessions.get(chat_id)
         parse_depth = int(getattr(session, "_upupa_durable_parse_depth", 0) or 0) if session else 0
-        if session is not None and not parse_depth and _clear_pending(session):
-            dnd.persist_dnd_sessions()
+        if session is not None and not parse_depth:
+            changed = _clear_pending(session)
+            changed = _clear_generation_request(session) or changed
+            if changed:
+                dnd.persist_dnd_sessions()
         return result
 
     dnd.open_action_window = open_action_window
@@ -407,12 +526,18 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         for session in list(getattr(dnd, "dnd_sessions", {}).values()):
             _ensure(session)
             pending = session.pending_generated_result
-            if not pending or not pending.get("text"):
+            if pending and pending.get("text"):
+                dnd._start_background_task(
+                    _resume_pending_result(dnd, bot, session, state_policy),
+                    name=f"dnd-result-replay:{session.chat_id}:{pending.get('id')}",
+                )
                 continue
-            dnd._start_background_task(
-                _resume_pending_result(dnd, bot, session, state_policy),
-                name=f"dnd-result-replay:{session.chat_id}:{pending.get('id')}",
-            )
+            request = session.pending_generation_request
+            if request and request.get("prompt"):
+                dnd._start_background_task(
+                    _resume_pending_generation(dnd, bot, session),
+                    name=f"dnd-generation-retry:{session.chat_id}:{request.get('id')}",
+                )
         return restored
 
     dnd.restore_dnd_sessions = restore_dnd_sessions
@@ -427,6 +552,9 @@ __all__ = [
     "_DurableBotProxy",
     "_snapshot_parse_state",
     "_restore_parse_state",
+    "_resume_pending_generation",
     "_resume_pending_result",
+    "retry_pending_recovery",
+    "reserve_generation_request",
     "configure_dnd_result_recovery",
 ]

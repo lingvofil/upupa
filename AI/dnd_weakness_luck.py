@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import logging
 import re
 
 from aiogram import BaseMiddleware
@@ -510,7 +509,6 @@ class WeaknessLuckMiddleware(BaseMiddleware):
 
 def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy):
     from AI import dnd_campaign as campaign
-    from AI import dnd_combat as combat
     from AI import dnd_state_commands as state_commands
 
     if getattr(dnd, "_upupa_dnd_weakness_luck_installed", False):
@@ -593,38 +591,25 @@ def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy)
 
     dnd.parse_and_execute_turn = parse_turn
 
-    original_resolve_roll = combat._resolve_player_roll
+    def commit_weakness_luck(session, pending_roll, user_id):
+        reward = (
+            copy.deepcopy(pending_roll.get("weakness_luck_reward"))
+            if isinstance(pending_roll, dict)
+            else None
+        )
+        if not isinstance(reward, dict):
+            return None
+        if int(reward.get("player", -1)) != int(user_id):
+            return None
+        if not dnd._can_user_act(
+            session,
+            int(user_id),
+            pending_roll.get("target_user_ids") or [],
+        ):
+            return None
+        return _award_luck(session, int(user_id), reward.get("complication"))
 
-    async def resolve_player_roll(dnd_module, message, session):
-        pending = getattr(session, "pending_roll", None) or {}
-        reward = copy.deepcopy(pending.get("weakness_luck_reward")) if isinstance(pending, dict) else None
-        eligible = False
-        if isinstance(reward, dict):
-            eligible = (
-                int(reward.get("player", -1)) == int(message.from_user.id)
-                and dnd_module._can_user_act(
-                    session,
-                    int(message.from_user.id),
-                    pending.get("target_user_ids") or [],
-                )
-            )
-        award = None
-        try:
-            return await original_resolve_roll(dnd_module, message, session)
-        finally:
-            if eligible and getattr(session, "pending_roll", None) is not pending:
-                award = _award_luck(session, int(message.from_user.id), reward.get("complication"))
-                if award:
-                    dnd_module.persist_dnd_sessions()
-                    try:
-                        await message.answer(award)
-                    except Exception:
-                        logging.exception(
-                            "DnD weakness luck notice failed chat_id=%s",
-                            getattr(getattr(message, "chat", None), "id", None),
-                        )
-
-    combat._resolve_player_roll = resolve_player_roll
+    dnd.register_roll_commit_hook(commit_weakness_luck)
 
     original_render_hero = state_commands.render_hero
 

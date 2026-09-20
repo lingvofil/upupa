@@ -455,6 +455,47 @@ async def _resolve_player_roll(dnd, message, session) -> None:
 
     session.state = "RESOLVING"
     session.pending_roll = None
+    transaction_notices = dnd._commit_roll_transaction(
+        session,
+        roll,
+        user_id,
+    )
+
+    if roll_type == "SAVE":
+        prompt_roll_label = "спасбросок"
+    elif skill:
+        prompt_roll_label = f"проверку навыка «{skill}»"
+    else:
+        prompt_roll_label = "проверку"
+    prompt_parts = [
+        f"Игрок {message.from_user.first_name} сделал {prompt_roll_label}: {reason}.",
+        f"Режим: {dnd._roll_mode_label(mode)}.",
+        f"Броски d20: {rolls}; выбранное значение: {natural_result}.",
+    ]
+    if ability:
+        prompt_parts.append(
+            f"Характеристика: {ABILITY_LABELS[ability]} ({ability}) {score}, модификатор {modifier:+d}; итог: {result}."
+        )
+    else:
+        prompt_parts.append(f"Модификатор не применялся; итог: {result}.")
+    if dc is not None:
+        prompt_parts.append(f"Сложность: {dc}; результат: {outcome}.")
+    else:
+        prompt_parts.append("Сложность не была задана; трактуй итог по ситуации.")
+    if natural_note:
+        prompt_parts.append(
+            f"На d20 выпала {natural_note}; отметь это в описании, но не меняй автоматически исход против сложности."
+        )
+    prompt_parts.append("Продолжай сюжет.")
+    continuation_prompt = dnd.with_scene_direction(session, " ".join(prompt_parts))
+
+    from AI.dnd_result_recovery import reserve_generation_request
+
+    reserve_generation_request(
+        session,
+        continuation_prompt,
+        kind="ROLL_CONTINUATION",
+    )
     dnd.persist_dnd_sessions()
 
     roll_label = dnd._roll_type_label(roll_type, skill)
@@ -483,42 +524,26 @@ async def _resolve_player_roll(dnd, message, session) -> None:
         roll_text += f" ({natural_note})"
     result_lines.append(roll_text)
     await message.answer("\n".join(result_lines))
-
-    if roll_type == "SAVE":
-        prompt_roll_label = "спасбросок"
-    elif skill:
-        prompt_roll_label = f"проверку навыка «{skill}»"
-    else:
-        prompt_roll_label = "проверку"
-    prompt_parts = [
-        f"Игрок {message.from_user.first_name} сделал {prompt_roll_label}: {reason}.",
-        f"Режим: {dnd._roll_mode_label(mode)}.",
-        f"Броски d20: {rolls}; выбранное значение: {natural_result}.",
-    ]
-    if ability:
-        prompt_parts.append(
-            f"Характеристика: {ABILITY_LABELS[ability]} ({ability}) {score}, модификатор {modifier:+d}; итог: {result}."
-        )
-    else:
-        prompt_parts.append(f"Модификатор не применялся; итог: {result}.")
-    if dc is not None:
-        prompt_parts.append(f"Сложность: {dc}; результат: {outcome}.")
-    else:
-        prompt_parts.append("Сложность не была задана; трактуй итог по ситуации.")
-    if natural_note:
-        prompt_parts.append(
-            f"На d20 выпала {natural_note}; отметь это в описании, но не меняй автоматически исход против сложности."
-        )
-    prompt_parts.append("Продолжай сюжет.")
+    for notice in transaction_notices:
+        await message.answer(notice)
 
     try:
         response_text = await dnd.generate_session_response(
             session,
-            dnd.with_scene_direction(session, " ".join(prompt_parts)),
+            continuation_prompt,
         )
         await dnd.parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD combat roll continuation failed chat_id=%s", message.chat.id)
+        if (
+            getattr(session, "pending_generation_request", {}) or {}
+            or getattr(session, "pending_generated_result", {}) or {}
+        ):
+            await message.answer(
+                "Мастер завис после броска, но кубик и продолжение сохранены. "
+                "Ведущий может написать «дальше» — нового броска не будет."
+            )
+            return
         await message.answer("Мастер завис, но егра сохранена.")
         await dnd.open_action_window(message.bot, message.chat.id)
 

@@ -236,7 +236,6 @@ class SpecialMoveCallbackMiddleware(BaseMiddleware):
 
 def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
     from AI import dnd_campaign as campaign
-    from AI import dnd_combat as combat
 
     if getattr(dnd, "_upupa_dnd_special_moves_installed", False):
         return
@@ -264,18 +263,13 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
 
     dnd.open_action_window = open_action_window
 
-    original_resolve_player_roll = combat._resolve_player_roll
-
-    async def resolve_player_roll(dnd_module, message, session):
-        pending_roll = getattr(session, "pending_roll", None)
+    def commit_special_move(session, pending_roll, user_id):
         pending_user = getattr(session, "special_move_pending_user_id", None)
-        try:
-            return await original_resolve_player_roll(dnd_module, message, session)
-        finally:
-            if _commit_completed_special_roll(session, pending_roll, pending_user):
-                dnd_module.persist_dnd_sessions()
+        if pending_user is None or int(pending_user) != int(user_id):
+            return
+        _commit_completed_special_roll(session, pending_roll, pending_user)
 
-    combat._resolve_player_roll = resolve_player_roll
+    dnd.register_roll_commit_hook(commit_special_move)
 
     original_parse = dnd.parse_and_execute_turn
 
