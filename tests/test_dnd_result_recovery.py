@@ -471,3 +471,132 @@ def test_target_mentions_unwrap_style_but_keep_durable_transport():
     resolved = target_mentions._unwrap_bot(styled)
 
     assert resolved is durable
+
+
+
+def test_failed_generation_keeps_exact_request_and_retry_reuses_it():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1020)
+    attempts = []
+    calls = {"persist": 0, "parse": 0}
+
+    async def generate(_session, prompt):
+        attempts.append(prompt)
+        if len(attempts) == 1:
+            raise RuntimeError("provider outage")
+        return "продолжение [ACTION:INPUT]"
+
+    async def parse(_bot, _chat_id, _text):
+        calls["parse"] += 1
+        session.state = "WAITING_ACTION"
+
+    async def open_action(_bot, _chat_id, target_user_ids=None):
+        session.state = "WAITING_ACTION"
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: calls.__setitem__("persist", calls["persist"] + 1),
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+        open_action_window=open_action,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *args, **kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(dnd.generate_session_response(session, "ТОЧНЫЙ РЕЗУЛЬТАТ БРОСКА"))
+
+    assert attempts == ["ТОЧНЫЙ РЕЗУЛЬТАТ БРОСКА"]
+    assert session.pending_generation_request["prompt"] == "ТОЧНЫЙ РЕЗУЛЬТАТ БРОСКА"
+    assert session.pending_generated_result == {}
+
+    assert asyncio.run(recovery._resume_pending_generation(dnd, None, session)) is True
+
+    assert attempts == [
+        "ТОЧНЫЙ РЕЗУЛЬТАТ БРОСКА",
+        "ТОЧНЫЙ РЕЗУЛЬТАТ БРОСКА",
+    ]
+    assert calls["parse"] == 1
+    assert session.pending_generation_request == {}
+    assert session.pending_generated_result == {}
+    assert session.state == "WAITING_ACTION"
+
+
+def test_new_prompt_cannot_replace_unfinished_generation_request():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1021)
+    attempts = []
+
+    async def generate(_session, prompt):
+        attempts.append(prompt)
+        if len(attempts) == 1:
+            raise RuntimeError("provider outage")
+        return "готово [ACTION:INPUT]"
+
+    async def parse(_bot, _chat_id, _text):
+        session.state = "WAITING_ACTION"
+
+    async def open_action(_bot, _chat_id, target_user_ids=None):
+        session.state = "WAITING_ACTION"
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: None,
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+        open_action_window=open_action,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *args, **kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(dnd.generate_session_response(session, "СТАРЫЙ PROMPT"))
+
+    result = asyncio.run(dnd.generate_session_response(session, "НОВЫЙ PROMPT"))
+
+    assert result == "готово [ACTION:INPUT]"
+    assert attempts == ["СТАРЫЙ PROMPT", "СТАРЫЙ PROMPT"]
+    assert session.pending_generation_request == {}
+    assert session.pending_generated_result["text"] == "готово [ACTION:INPUT]"
+
+
+def test_restore_schedules_generation_retry_when_provider_died_before_response():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, scheduled = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state = "RESOLVING"
+    session.pending_generation_request = {
+        "id": "gen:1:test",
+        "prompt": "зафиксированный roll outcome",
+        "source_state": "RESOLVING",
+    }
+    session.pending_generated_result = {}
+
+    restored = dnd.restore_dnd_sessions(object())
+
+    assert restored == 1
+    assert calls["restore"] == 1
+    assert len(scheduled) == 1
+    coro, name = scheduled.pop()
+    assert name == "dnd-generation-retry:-1001:gen:1:test"
+    coro.close()
+
+
+def test_manual_retry_does_not_start_second_provider_call_while_first_is_alive():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.pending_generation_request = {
+        "id": "gen:busy",
+        "prompt": "результат уже обрабатывается",
+    }
+    session._upupa_generation_call_active = True
+
+    retried = asyncio.run(recovery._resume_pending_generation(dnd, None, session))
+
+    assert retried is True
+    assert calls["generate"] == 0
