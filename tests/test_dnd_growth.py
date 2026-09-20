@@ -293,3 +293,16 @@ def test_growth_context_does_not_emit_growth_tag_rules_outside_resolution():
     text = growth._growth_context(session)
     assert "ДОСТИЖЕНИЯ ГЕРОЕВ" in text
     assert growth.GROWTH_MARKER not in text
+
+
+def test_growth_tag_for_pending_roll_target_is_not_counted_early():
+    session = _session()
+    session.growth_expected_actor_ids = [1]
+    response = (
+        "[GROWTH:ADD;PLAYER:1;PATTERN:ESCAPE;EVIDENCE:пытается выскочить в окно]"
+        "[ACTION:ROLL;TYPE:CHECK;DOMAIN:MOVE;REASON:прыгнуть в окно;DC:12;MODE:NORMAL;TARGETS:1]"
+    )
+    cleaned, notices = growth.apply_growth_metadata(session, response, response, [])
+    assert "[GROWTH:" not in cleaned
+    assert session.growth_counts == {}
+    assert notices == []
