@@ -138,8 +138,10 @@ def _save_archive(dnd):
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(_archive, ensure_ascii=False, indent=2), "utf-8")
         tmp.replace(p)
+        return True
     except Exception:
         logging.exception("DnD campaign archive save failed")
+        return False
 
 
 def _chat_history(chat_id, create=False):
