@@ -161,28 +161,40 @@ def test_party_menu_callback_is_composed_only_in_runtime():
     wiring_entrypoint = "party_controls.configure_menu_callback_handler("
     assert runtime_source.count(wiring_entrypoint) == 1
     assert "party_controls.handle_menu_callback =" not in runtime_source
-    capture = runtime_source.index(
-        "party_controls.get_default_menu_callback_handler()"
+    composition = runtime_source.index(
+        "party_menu_callback_handler = _compose_callback_handler("
     )
-    wiring = runtime_source.index(wiring_entrypoint, capture)
+    capture = runtime_source.index(
+        "party_controls.get_default_menu_callback_handler()",
+        composition,
+    )
     ui_router = runtime_source.index(
         "handle_party_menu_callback_with_ratings",
-        wiring,
+        capture,
     )
     skip_router = runtime_source.index(
         "menu_callback_with_skip_permissions",
         ui_router,
     )
+    wiring = runtime_source.index(wiring_entrypoint, skip_router)
     ui_install = runtime_source.index(
         "configure_crocodile_ui_enhancements()",
-        skip_router,
+        wiring,
     )
     skip_install = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
         ui_install,
     )
 
-    assert capture < wiring < ui_router < skip_router < ui_install < skip_install
+    assert (
+        composition
+        < capture
+        < ui_router
+        < skip_router
+        < wiring
+        < ui_install
+        < skip_install
+    )
 
     party_source = _source("games/crocodile_party_controls.py")
     assert "def get_menu_callback_handler(" in party_source
