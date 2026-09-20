@@ -167,8 +167,8 @@ def _is_request_too_large(error: Exception) -> bool:
     return (
         code == 413
         or "request too large" in text
-        or "tokens per minute" in text
-        or "requested" in text and "tpm" in text
+        or "prompt too large" in text
+        or "context length" in text
     )
 
 
