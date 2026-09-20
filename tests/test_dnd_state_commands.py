@@ -289,7 +289,7 @@ def test_dnd_links_repairs_empty_memory_from_saved_scenes(monkeypatch):
     session.scene_log = ["Партия договорилась с Капитаном Ржой: он спрятал их от стражи."]
     persisted = []
 
-    async def ephemeral(_dnd, _session, prompt):
+    async def auxiliary(_session, prompt):
         assert "Капитаном Ржой" in prompt
         return "[NPC:Капитан Ржа;EVENT:помог скрыться;NOTE:спрятал партию от стражи]"
 
@@ -304,12 +304,13 @@ def test_dnd_links_repairs_empty_memory_from_saved_scenes(monkeypatch):
 
     fake_campaign = SimpleNamespace(
         _ensure=lambda _session: None,
-        _ephemeral_generate=ephemeral,
         _apply_metadata=apply_metadata,
     )
     monkeypatch.setattr(dnd, "dnd_sessions", {session.chat_id: session})
     monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: persisted.append(True))
     monkeypatch.setattr(state_commands, "_campaign_module", lambda _dnd: fake_campaign)
+    from AI import dnd_generation_resilience as resilience
+    monkeypatch.setattr(resilience, "generate_auxiliary_text", auxiliary)
 
     async def handler(_event, _data):
         raise AssertionError("DnD links command must not fall through")
