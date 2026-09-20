@@ -177,3 +177,47 @@ def test_natural_one_always_misses_and_natural_twenty_crits(monkeypatch):
     assert "КРИТ" in summary
     assert "Урон: 7" in summary
     assert session.character_sheets["1"]["hp"] == 7
+
+
+
+def test_enemy_attack_transition_commits_exact_successor_and_effects():
+    session = _session(hp=9, max_hp=14, ac=13)
+    session.pending_generated_result = {
+        "id": "4:enemy",
+        "text": "враг атакует",
+        "phase": "APPLYING",
+        "telegram_effects": [],
+    }
+    session.pending_generation_request = {}
+    session.generated_result_seq = 4
+    session.conversation = [
+        {"role": "user", "content": "ход"},
+        {"role": "assistant", "content": "враг атакует"},
+    ]
+    persisted = []
+    fake_dnd = SimpleNamespace(
+        with_scene_direction=lambda current, prompt: "DIR:" + prompt,
+        persist_dnd_sessions=lambda: persisted.append(True),
+    )
+
+    successor = combat._commit_enemy_attack_continuation(
+        fake_dnd,
+        session,
+        chat_id=-100900,
+        body="Сцена перед ударом.",
+        summary="💥 Урон уже посчитан.",
+        continuation_prompt="Продолжай с точным уроном.",
+    )
+
+    assert successor == "DIR:Продолжай с точным уроном."
+    assert session.pending_generated_result == {}
+    request = session.pending_generation_request
+    assert request["kind"] == "ENEMY_ATTACK_CONTINUATION"
+    assert request["prompt"] == successor
+    assert request["parent_result_id"] == "4:enemy"
+    assert request["conversation_size"] == 2
+    assert [item["text"] for item in request["telegram_effects"]] == [
+        "Сцена перед ударом.",
+        "💥 Урон уже посчитан.",
+    ]
+    assert persisted == [True]
