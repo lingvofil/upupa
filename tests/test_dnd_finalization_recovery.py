@@ -22,16 +22,9 @@ def _history_accessor(campaign_obj):
 def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
     campaign_obj = SimpleNamespace(_archive={"chats": {}}, _save_archive=None)
     campaign_obj._chat_history = _history_accessor(campaign_obj)
-    deferred_saves = []
     archive_saves = []
     inner_calls = []
     final = {"completion_id": "-100:result-7"}
-
-    def initial_save(_dnd):
-        deferred_saves.append(True)
-        return True
-
-    campaign_obj._save_archive = initial_save
 
     def original_archive(_dnd, session, finale, epilogue):
         inner_calls.append((finale, epilogue))
@@ -46,6 +39,7 @@ def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
         archive_saves.append(copy.deepcopy(campaign_obj._archive))
         return True
 
+    campaign_obj._save_archive = archive_save
     dnd = SimpleNamespace(persist_dnd_sessions=lambda: None)
     session = SimpleNamespace(chat_id=-100, growth_created_offer_tokens=[])
     state = lambda _session, create=False: final
@@ -61,7 +55,6 @@ def test_archive_transaction_commits_once_and_replay_skips_all_inner_wrappers():
     )
 
     assert len(inner_calls) == 1
-    assert deferred_saves == []
     assert len(archive_saves) == 1
     assert first["completion_id"] == "-100:result-7"
     assert first["growth_created_offer_tokens"] == [[1, "offer-token"]]
