@@ -521,9 +521,11 @@ def configure_crocodile_runtime() -> None:
             reverse_callback_with_admin,
         )
     )
-    reverse_modes.handle_callback = _compose_callback_handler(
-        reverse_modes.handle_callback,
-        reverse_modes_callback_with_admin,
+    reverse_modes.configure_callback_handler(
+        _compose_callback_handler(
+            reverse_modes.get_callback_handler(),
+            reverse_modes_callback_with_admin,
+        )
     )
     configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
