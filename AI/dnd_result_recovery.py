@@ -100,7 +100,29 @@ def _clear_generation_request(session) -> bool:
     return True
 
 
-def reserve_generation_request(session, prompt: str, *, kind: str = "GENERATION") -> bool:
+def _generation_effects(effects) -> list[dict]:
+    rows = []
+    for index, raw in enumerate(effects or []):
+        if not isinstance(raw, dict):
+            continue
+        item = copy.deepcopy(raw)
+        method = str(item.get("method") or "").strip()
+        if method not in {"send_message", "stop_poll"}:
+            continue
+        item["index"] = len(rows)
+        item["method"] = method
+        item.setdefault("status", "PENDING")
+        rows.append(item)
+    return rows
+
+
+def reserve_generation_request(
+    session,
+    prompt: str,
+    *,
+    kind: str = "GENERATION",
+    effects=None,
+) -> bool:
     """Reserve an exact continuation request before any provider/network work."""
     _ensure(session)
     if _pending_text(session):
@@ -110,7 +132,30 @@ def reserve_generation_request(session, prompt: str, *, kind: str = "GENERATION"
         return existing == str(prompt or "")
     request = _new_generation_request(session, str(prompt or ""))
     request["kind"] = str(kind or "GENERATION")
+    request["telegram_effects"] = _generation_effects(effects)
     session.pending_generation_request = request
+    return True
+
+
+def transition_to_generation_request(
+    session,
+    prompt: str,
+    *,
+    kind: str,
+    effects=None,
+) -> bool:
+    """Commit the current parsed result and atomically reserve its successor."""
+    _ensure(session)
+    existing = _pending_generation_prompt(session)
+    if existing:
+        return existing == str(prompt or "")
+    parent_id = (getattr(session, "pending_generated_result", {}) or {}).get("id")
+    request = _new_generation_request(session, str(prompt or ""))
+    request["kind"] = str(kind or "GENERATION")
+    request["parent_result_id"] = parent_id
+    request["telegram_effects"] = _generation_effects(effects)
+    session.pending_generation_request = request
+    session.pending_generated_result = {}
     return True
 
 
@@ -304,6 +349,74 @@ class _DurableBotProxy:
         return result
 
 
+async def _deliver_generation_effects(dnd, bot, session) -> bool:
+    _ensure(session)
+    request = session.pending_generation_request
+    effects = request.get("telegram_effects") or []
+    if not effects:
+        return True
+    transport = _unwrap_transport(bot)
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        if effect.get("status") == EFFECT_DONE:
+            continue
+        method = effect.get("method")
+        effect["status"] = EFFECT_IN_FLIGHT
+        dnd.persist_dnd_sessions()
+        try:
+            if method == "send_message":
+                result = await transport.send_message(
+                    effect.get("chat_id", session.chat_id),
+                    str(effect.get("text") or ""),
+                    **dict(effect.get("kwargs") or {}),
+                )
+                effect["result"] = {
+                    "message_id": getattr(result, "message_id", None),
+                    "chat_id": getattr(getattr(result, "chat", None), "id", None)
+                    or effect.get("chat_id", session.chat_id),
+                }
+            elif method == "stop_poll":
+                await transport.stop_poll(
+                    chat_id=effect.get("chat_id", session.chat_id),
+                    message_id=int(effect["message_id"]),
+                )
+                effect["result"] = {"stopped": True}
+            else:
+                effect["result"] = {"skipped": True}
+        except Exception as exc:
+            if effect.get("best_effort"):
+                logging.warning(
+                    "DnD generation side effect failed but is best-effort chat_id=%s method=%s error=%s",
+                    getattr(session, "chat_id", None),
+                    method,
+                    exc,
+                )
+                effect["result"] = {"failed": True, "error": str(exc)[:200]}
+            else:
+                logging.exception(
+                    "DnD generation side effect failed chat_id=%s method=%s",
+                    getattr(session, "chat_id", None),
+                    method,
+                )
+                dnd.persist_dnd_sessions()
+                return False
+        effect["status"] = EFFECT_DONE
+        effect["completed_at"] = time.time()
+        dnd.persist_dnd_sessions()
+    return True
+
+
+async def continue_pending_generation(dnd, bot, session) -> bool:
+    """Finish durable pre-generation side effects, generate, then parse."""
+    _ensure(session)
+    if not _pending_generation_prompt(session):
+        return False
+    if not await _deliver_generation_effects(dnd, bot, session):
+        return False
+    return await _resume_pending_generation(dnd, bot, session)
+
+
 async def _resume_pending_generation(dnd, bot, session) -> bool:
     _ensure(session)
     prompt = _pending_generation_prompt(session)
@@ -311,6 +424,8 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
         return False
     if bool(getattr(session, "_upupa_generation_call_active", False)):
         return True
+    if not await _deliver_generation_effects(dnd, bot, session):
+        return False
     session.state = "RESOLVING"
     dnd.persist_dnd_sessions()
     try:
@@ -418,6 +533,11 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
         existing = _pending_text(session)
         if existing:
+            parse_depth = int(getattr(session, "_upupa_durable_parse_depth", 0) or 0)
+            if parse_depth:
+                raise RuntimeError(
+                    "Nested DnD generation requires transition_to_generation_request()"
+                )
             logging.warning(
                 "DnD reusing durable generated result chat_id=%s result_id=%s",
                 getattr(session, "chat_id", None),
@@ -535,7 +655,7 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             request = session.pending_generation_request
             if request and request.get("prompt"):
                 dnd._start_background_task(
-                    _resume_pending_generation(dnd, bot, session),
+                    continue_pending_generation(dnd, bot, session),
                     name=f"dnd-generation-retry:{session.chat_id}:{request.get('id')}",
                 )
         return restored
@@ -556,5 +676,7 @@ __all__ = [
     "_resume_pending_result",
     "retry_pending_recovery",
     "reserve_generation_request",
+    "transition_to_generation_request",
+    "continue_pending_generation",
     "configure_dnd_result_recovery",
 ]
