@@ -23,8 +23,8 @@ from AI.summarize import _get_chat_messages
 from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
-from features.song.command_guard import is_song_command
 from core.state import chat_settings
+from features.song.command_guard import is_song_command
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 
@@ -1367,6 +1367,8 @@ def _is_backstory_reply(message: Message) -> bool:
         or session.state != "WAITING_BACKSTORY"
         or message.chat.id in _processing_backstories
     ):
+        return False
+    if is_song_command(message):
         return False
     starter_user_id = getattr(session, "starter_user_id", None)
     if starter_user_id is not None and not _user_is_host(session, int(message.from_user.id)):
