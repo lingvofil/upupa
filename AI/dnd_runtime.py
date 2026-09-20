@@ -55,6 +55,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         install_fun_inventory,
     )
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
+    from AI.dnd_item_actions import install_dnd_item_actions
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
     from AI.dnd_manual_healing import install_dnd_manual_healing
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
@@ -158,6 +159,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     inventory_context_policy.renderer = render_inventory_description_context
     state_view_policy.inventory_items_renderer = render_inventory_description_lines
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
+    install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     configure_dnd_any_bot_replies(router)
 
     # Target notifications must be inside spotlight. Spotlight may safely add a
