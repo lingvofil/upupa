@@ -159,7 +159,7 @@ def test_active_hero_and_inventory_use_live_state_not_archive(monkeypatch):
     assert "курьер запретных реликвий" in hero
     assert "поссорился с часовней" in hero
     assert "бухгалтер некромантии" not in hero
-    assert "Источник: текущая егра" in inventory
+    assert "Источник: текущая игра" in inventory
     assert "мокрый ключ" in inventory
     assert "✨ Зуб Канцлера" in inventory
     assert "ржавая ложка" not in inventory
@@ -182,7 +182,7 @@ def test_commands_fall_back_to_saved_state_without_active_game(monkeypatch):
     assert "🤝 Связи" in npcs
     assert "Капитан Ржа" in npcs
     assert "теперь не доверяет Семёну" in npcs
-    assert "Активной егры сейчас нет" in status
+    assert "Активной игры сейчас нет" in status
     assert "Почтамт объявил войну адресатам" in status
     assert "Почтамт сгорел, письма победили" in status
     assert "Почтовый бунт" in status
@@ -198,7 +198,7 @@ def test_active_status_exposes_real_pending_roll_scene_and_threat(monkeypatch):
 
     status = render_status(fake_dnd, session.chat_id)
 
-    assert "Егра сейчас активна" in status
+    assert "Игра сейчас активна" in status
     assert "Санаторий теряет этажи" in status
     assert "ждём бросок" in status
     assert "перепрыгнуть кассовый аппарат" in status
@@ -217,7 +217,7 @@ def test_active_npcs_do_not_mix_in_previous_campaign(monkeypatch):
     text = render_npcs(fake_dnd, session.chat_id)
 
     assert "🤝 Связи" in text
-    assert "Источник: текущая егра" in text
+    assert "Источник: текущая игра" in text
     assert "Марфа Без Паспорта" in text
     assert "Капитан Ржа" not in text
 
