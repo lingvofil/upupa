@@ -50,7 +50,7 @@ DND_FALLBACK_CONTINUITY_GUARD = (
 
 _state_lock = threading.Lock()
 _key_cursor = 0
-_gemini_circuit_until = 0.0
+_gemini_circuit_until: dict[int | None, float] = {}
 _client_cache: dict[tuple[str, int], genai.Client] = {}
 
 
@@ -97,24 +97,26 @@ def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:
     ]
 
 
-def _circuit_is_open() -> bool:
+def _circuit_is_open(chat_id: int | None) -> bool:
     with _state_lock:
-        return time.monotonic() < _gemini_circuit_until
+        until = float(_gemini_circuit_until.get(chat_id, 0.0))
+        if time.monotonic() < until:
+            return True
+        _gemini_circuit_until.pop(chat_id, None)
+        return False
 
 
-def _open_circuit() -> None:
-    global _gemini_circuit_until
+def _open_circuit(chat_id: int | None) -> None:
     with _state_lock:
-        _gemini_circuit_until = max(
-            _gemini_circuit_until,
+        _gemini_circuit_until[chat_id] = max(
+            float(_gemini_circuit_until.get(chat_id, 0.0)),
             time.monotonic() + DND_GEMINI_CIRCUIT_SECONDS,
         )
 
 
-def _close_circuit() -> None:
-    global _gemini_circuit_until
+def _close_circuit(chat_id: int | None) -> None:
     with _state_lock:
-        _gemini_circuit_until = 0.0
+        _gemini_circuit_until.pop(chat_id, None)
 
 
 def _extract_text(response: Any) -> str:
@@ -194,10 +196,11 @@ def _run_gemini_sync(
     lane: str,
     update_circuit: bool,
 ) -> str:
-    if update_circuit and _circuit_is_open():
+    chat_id = getattr(session, "chat_id", None)
+    if update_circuit and _circuit_is_open(chat_id):
         raise DndGeminiCircuitOpen("DnD Gemini circuit is temporarily open")
 
-    pairs = _attempt_pairs(getattr(session, "chat_id", None), attempts)
+    pairs = _attempt_pairs(chat_id, attempts)
     if not pairs:
         raise RuntimeError("DnD Gemini keys/models are not configured")
 
@@ -226,10 +229,10 @@ def _run_gemini_sync(
             if not text:
                 raise RuntimeError("DnD Gemini returned empty text")
             if update_circuit:
-                _close_circuit()
+                _close_circuit(chat_id)
             logging.info(
                 "DnD Gemini success chat_id=%s model=%s",
-                getattr(session, "chat_id", None),
+                chat_id,
                 model_name,
             )
             return text
@@ -246,10 +249,10 @@ def _run_gemini_sync(
             )
 
     if update_circuit and saw_transient:
-        _open_circuit()
+        _open_circuit(chat_id)
         logging.warning(
             "DnD Gemini circuit opened chat_id=%s seconds=%s",
-            getattr(session, "chat_id", None),
+            chat_id,
             int(DND_GEMINI_CIRCUIT_SECONDS),
         )
     raise RuntimeError(f"DnD Gemini fast path failed: {errors[-1] if errors else 'unknown error'}")
@@ -393,7 +396,7 @@ async def _run_groq_fallback(session, prompt: str) -> str:
 async def _generate_main_text(session, prompt: str) -> str:
     gemini_error: Exception | None = None
     try:
-        return await asyncio.to_thread(
+        text = await asyncio.to_thread(
             _run_gemini_sync,
             session,
             prompt,
@@ -405,6 +408,8 @@ async def _generate_main_text(session, prompt: str) -> str:
             lane="interactive",
             update_circuit=True,
         )
+        session._dnd_last_generation_provider = "gemini"
+        return text
     except Exception as exc:
         gemini_error = exc
         logging.warning(
@@ -415,6 +420,7 @@ async def _generate_main_text(session, prompt: str) -> str:
 
     try:
         text = await _run_groq_fallback(session, prompt)
+        session._dnd_last_generation_provider = "groq"
         logging.info(
             "DnD provider fallback success chat_id=%s provider=groq",
             getattr(session, "chat_id", None),
@@ -432,7 +438,7 @@ async def generate_auxiliary_text(session, prompt: str) -> str | None:
     It never mutates the canonical DnD conversation and never falls through the
     long provider chain. During an open Gemini circuit it is skipped entirely.
     """
-    if _circuit_is_open():
+    if _circuit_is_open(getattr(session, "chat_id", None)):
         return None
     try:
         return await asyncio.to_thread(
