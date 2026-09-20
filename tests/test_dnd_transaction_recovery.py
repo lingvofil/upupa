@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -366,3 +367,91 @@ def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch)
         assert any("нового кубика" in text for text in answers)
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
+
+
+
+def test_poll_outcome_is_committed_before_continuation_provider(monkeypatch):
+    chat_id = -100808
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        mode="abstract",
+        state="WAITING_POLL",
+        current_poll_id="poll-808",
+        pending_poll={
+            "poll_id": "poll-808",
+            "message_id": 808,
+            "poll_chat_id": chat_id,
+            "options": ["лево", "право"],
+            "target_user_ids": [],
+            "votes": {"1": 1, "2": 1},
+        },
+        pending_generated_result={},
+        pending_generation_request={},
+        generated_result_seq=0,
+        conversation=[],
+    )
+    provider_seen = []
+    opened = []
+    sent = []
+    stopped = []
+
+    class Bot:
+        async def stop_poll(self, *, chat_id, message_id):
+            stopped.append((chat_id, message_id))
+            return SimpleNamespace(options=[])
+
+        async def send_message(self, chat_id, text, **kwargs):
+            del kwargs
+            sent.append((chat_id, text))
+            return SimpleNamespace(message_id=900 + len(sent), chat=SimpleNamespace(id=chat_id))
+
+    async def fail_generation(current, prompt):
+        provider_seen.append(
+            {
+                "prompt": prompt,
+                "request": dict(current.pending_generation_request),
+                "state": current.state,
+                "poll": current.pending_poll,
+            }
+        )
+        raise RuntimeError("provider unavailable")
+
+    async def open_action(*args, **kwargs):
+        opened.append((args, kwargs))
+
+    monkeypatch.setattr(dnd, "generate_session_response", fail_generation)
+    monkeypatch.setattr(dnd, "open_action_window", open_action)
+    monkeypatch.setattr(dnd, "with_scene_direction", lambda session, prompt: prompt)
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    dnd.dnd_sessions[chat_id] = session
+    dnd.poll_map["poll-808"] = chat_id
+
+    try:
+        asyncio.run(dnd.finalize_poll(Bot(), chat_id, 808, ["лево", "право"]))
+
+        assert session.state == "RESOLVING"
+        assert session.current_poll_id is None
+        assert session.pending_poll is None
+        assert "poll-808" not in dnd.poll_map
+        assert len(provider_seen) == 1
+        snapshot = provider_seen[0]
+        assert snapshot["state"] == "RESOLVING"
+        assert snapshot["poll"] is None
+        assert snapshot["request"]["kind"] == "POLL_CONTINUATION"
+        assert snapshot["request"]["prompt"] == snapshot["prompt"]
+        assert "право" in snapshot["prompt"]
+        assert "лево" not in snapshot["prompt"]
+        assert stopped == [(chat_id, 808)]
+        assert sent[0][0] == chat_id
+        assert sent[0][1].startswith("✅ ")
+        assert "право" in sent[0][1]
+        assert "переголосовывать не надо" in sent[-1][1]
+        assert opened == []
+        assert all(
+            effect["status"] == "DONE"
+            for effect in session.pending_generation_request["telegram_effects"]
+        )
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+        dnd.poll_map.pop("poll-808", None)
+        dnd._finalizing_polls.discard("poll-808")
