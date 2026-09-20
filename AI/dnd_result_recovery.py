@@ -10,10 +10,13 @@ import copy
 import hashlib
 import logging
 import time
+from types import SimpleNamespace
 
 
 RESULT_PHASE_READY = "READY"
 RESULT_PHASE_APPLYING = "APPLYING"
+EFFECT_IN_FLIGHT = "IN_FLIGHT"
+EFFECT_DONE = "DONE"
 
 _CORE_SNAPSHOT_FIELDS = (
     "state",
@@ -85,6 +88,7 @@ def _new_result(session, text: str) -> dict:
         "phase": RESULT_PHASE_READY,
         "created_at": time.time(),
         "source_state": str(getattr(session, "state", "") or ""),
+        "telegram_effects": [],
     }
 
 
@@ -141,6 +145,119 @@ def _normalize_ready_group_replay(session) -> None:
     session.action_target_user_ids = []
 
 
+def _unwrap_transport(bot):
+    current = bot
+    seen = set()
+    while hasattr(current, "_bot") and id(current) not in seen:
+        seen.add(id(current))
+        nested = getattr(current, "_bot", None)
+        if nested is None or nested is current:
+            break
+        current = nested
+    return current
+
+
+def _synthetic_message(effect):
+    result = effect.get("result") if isinstance(effect, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    chat_id = result.get("chat_id")
+    return SimpleNamespace(
+        message_id=result.get("message_id"),
+        chat=SimpleNamespace(id=chat_id),
+    )
+
+
+def _synthetic_poll_message(effect):
+    result = effect.get("result") if isinstance(effect, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    return SimpleNamespace(
+        message_id=result.get("message_id"),
+        chat=SimpleNamespace(id=result.get("chat_id")),
+        poll=SimpleNamespace(id=result.get("poll_id")),
+    )
+
+
+class _DurableBotProxy:
+    """Persist Telegram sends belonging to one durable generated result."""
+
+    _upupa_dnd_side_effect_proxy = True
+
+    def __init__(self, bot, dnd, session):
+        self._transport = _unwrap_transport(bot)
+        self._dnd = dnd
+        self._session = session
+        self._cursor = 0
+
+    def __getattr__(self, name):
+        return getattr(self._transport, name)
+
+    def _effect(self, method):
+        pending = getattr(self._session, "pending_generated_result", {}) or {}
+        effects = pending.setdefault("telegram_effects", [])
+        index = self._cursor
+        self._cursor += 1
+        if index < len(effects):
+            effect = effects[index]
+            if not isinstance(effect, dict) or effect.get("method") != method:
+                del effects[index:]
+                effect = {"index": index, "method": method, "status": EFFECT_IN_FLIGHT}
+                effects.append(effect)
+                self._dnd.persist_dnd_sessions()
+            return effect
+        effect = {"index": index, "method": method, "status": EFFECT_IN_FLIGHT}
+        effects.append(effect)
+        self._dnd.persist_dnd_sessions()
+        return effect
+
+    def _mark_in_flight(self, effect):
+        if effect.get("status") != EFFECT_IN_FLIGHT:
+            effect["status"] = EFFECT_IN_FLIGHT
+            self._dnd.persist_dnd_sessions()
+
+    def _mark_done(self, effect, result):
+        effect["status"] = EFFECT_DONE
+        effect["result"] = result
+        effect["completed_at"] = time.time()
+        self._dnd.persist_dnd_sessions()
+
+    async def send_message(self, chat_id, text, **kwargs):
+        effect = self._effect("send_message")
+        if effect.get("status") == EFFECT_DONE:
+            return _synthetic_message(effect)
+        self._mark_in_flight(effect)
+        result = await self._transport.send_message(chat_id, text, **kwargs)
+        resolved_chat_id = getattr(getattr(result, "chat", None), "id", None)
+        self._mark_done(
+            effect,
+            {
+                "message_id": getattr(result, "message_id", None),
+                "chat_id": resolved_chat_id if resolved_chat_id is not None else chat_id,
+            },
+        )
+        return result
+
+    async def send_poll(self, *args, **kwargs):
+        effect = self._effect("send_poll")
+        if effect.get("status") == EFFECT_DONE:
+            return _synthetic_poll_message(effect)
+        self._mark_in_flight(effect)
+        result = await self._transport.send_poll(*args, **kwargs)
+        chat_id = getattr(getattr(result, "chat", None), "id", None)
+        if chat_id is None:
+            chat_id = kwargs.get("chat_id")
+            if chat_id is None and args:
+                chat_id = args[0]
+        self._mark_done(
+            effect,
+            {
+                "message_id": getattr(result, "message_id", None),
+                "chat_id": chat_id,
+                "poll_id": getattr(getattr(result, "poll", None), "id", None),
+            },
+        )
+        return result
+
+
 async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
     _ensure(session)
     pending = copy.deepcopy(session.pending_generated_result)
@@ -148,20 +265,25 @@ async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
         return
 
     phase = str(pending.get("phase") or RESULT_PHASE_READY).upper()
-    if phase == RESULT_PHASE_APPLYING and getattr(session, "state", None) != "RESOLVING":
-        # The downstream parser already committed a durable next state (ROLL,
-        # POLL, INPUT, etc.) and the process died only before the outbox cleanup.
-        if _clear_pending(session):
-            dnd.persist_dnd_sessions()
-        return
-
     if phase == RESULT_PHASE_APPLYING:
+        # Even if a downstream state such as WAITING_ROLL was already persisted,
+        # the process may have died before one of its Telegram sends completed.
+        # Restore the local pre-apply snapshot and replay the exact response.
+        # Telegram effects already marked DONE are suppressed by _DurableBotProxy.
         snapshot = pending.get("pre_apply_snapshot")
         if _restore_parse_state(session, snapshot, state_policy):
+            pending = session.pending_generated_result
             pending["phase"] = RESULT_PHASE_READY
             pending.pop("pre_apply_snapshot", None)
             session.pending_generated_result = pending
             dnd.persist_dnd_sessions()
+        else:
+            logging.error(
+                "DnD durable result missing pre-apply snapshot chat_id=%s result_id=%s",
+                getattr(session, "chat_id", None),
+                pending.get("id"),
+            )
+            return
     else:
         _normalize_ready_group_replay(session)
         dnd.persist_dnd_sessions()
@@ -237,14 +359,26 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         if str(pending.get("phase") or RESULT_PHASE_READY).upper() != RESULT_PHASE_APPLYING:
             pending["phase"] = RESULT_PHASE_APPLYING
             pending["pre_apply_snapshot"] = _snapshot_parse_state(session)
+            pending.setdefault("telegram_effects", [])
             dnd.persist_dnd_sessions()
 
+        depth = int(getattr(session, "_upupa_durable_parse_depth", 0) or 0)
+        session._upupa_durable_parse_depth = depth + 1
+        durable_bot = _DurableBotProxy(bot, dnd, session)
         try:
-            result = await original_parse(bot, chat_id, text_response)
+            result = await original_parse(durable_bot, chat_id, text_response)
         except Exception:
             if dnd.dnd_sessions.get(chat_id) is session:
                 dnd.persist_dnd_sessions()
             raise
+        finally:
+            if depth:
+                session._upupa_durable_parse_depth = depth
+            else:
+                try:
+                    del session._upupa_durable_parse_depth
+                except AttributeError:
+                    pass
 
         current = dnd.dnd_sessions.get(chat_id)
         if current is session and _result_matches(current, text_response):
@@ -259,7 +393,8 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
     async def open_action_window(bot, chat_id, target_user_ids=None):
         result = await original_open_action(bot, chat_id, target_user_ids=target_user_ids)
         session = dnd.dnd_sessions.get(chat_id)
-        if session is not None and _clear_pending(session):
+        parse_depth = int(getattr(session, "_upupa_durable_parse_depth", 0) or 0) if session else 0
+        if session is not None and not parse_depth and _clear_pending(session):
             dnd.persist_dnd_sessions()
         return result
 
@@ -269,23 +404,15 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
     def restore_dnd_sessions(bot):
         restored = original_restore_sessions(bot)
-        dirty = False
         for session in list(getattr(dnd, "dnd_sessions", {}).values()):
             _ensure(session)
             pending = session.pending_generated_result
             if not pending or not pending.get("text"):
                 continue
-            phase = str(pending.get("phase") or RESULT_PHASE_READY).upper()
-            if phase == RESULT_PHASE_APPLYING and getattr(session, "state", None) != "RESOLVING":
-                session.pending_generated_result = {}
-                dirty = True
-                continue
             dnd._start_background_task(
                 _resume_pending_result(dnd, bot, session, state_policy),
                 name=f"dnd-result-replay:{session.chat_id}:{pending.get('id')}",
             )
-        if dirty:
-            dnd.persist_dnd_sessions()
         return restored
 
     dnd.restore_dnd_sessions = restore_dnd_sessions
@@ -295,6 +422,9 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 __all__ = [
     "RESULT_PHASE_READY",
     "RESULT_PHASE_APPLYING",
+    "EFFECT_IN_FLIGHT",
+    "EFFECT_DONE",
+    "_DurableBotProxy",
     "_snapshot_parse_state",
     "_restore_parse_state",
     "_resume_pending_result",

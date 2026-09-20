@@ -216,3 +216,58 @@ def test_special_charge_is_not_spent_by_wrong_actor():
 
     assert changed is False
     assert session.special_move_charges["1"] == 1
+
+
+def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_path, monkeypatch):
+    path = tmp_path / "dnd_state.json"
+    path.write_text('{"version": 1, "sessions": [{}]}', encoding="utf-8")
+    session = SimpleNamespace(
+        chat_id=-100805,
+        state="WAITING_POLL",
+        current_poll_id="poll-existing",
+        pending_poll={
+            "poll_id": "poll-existing",
+            "poll_chat_id": -100805,
+            "message_id": 501,
+            "options": ["А", "Б"],
+            "deadline": 9999999999.0,
+            "target_user_ids": [],
+            "votes": {},
+        },
+        pending_generated_result={"text": "готовый ответ", "phase": "APPLYING"},
+        pending_actions={},
+        action_prompt_message_id=None,
+        action_deadline=None,
+        pending_roll=None,
+        mode_prompt_message_id=None,
+        lobby_message_id=None,
+        backstory_prompt_message_id=None,
+    )
+    scheduled = []
+
+    monkeypatch.setattr(dnd, "_state_path", lambda: path)
+    monkeypatch.setattr(
+        dnd.GameSession,
+        "from_record",
+        classmethod(lambda cls, record: session),
+    )
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(
+        dnd,
+        "_start_background_task",
+        lambda coroutine, **kwargs: (scheduled.append(kwargs), coroutine.close()),
+    )
+
+    try:
+        restored = dnd.restore_dnd_sessions(SimpleNamespace())
+
+        assert restored == 1
+        assert len(scheduled) == 1
+        assert scheduled[0]["name"].startswith("dnd-result-replay:-100805:")
+        assert not any(item["name"].startswith("dnd-poll:") for item in scheduled)
+        assert "poll-existing" not in dnd.poll_map
+        assert session.state == "WAITING_POLL"
+        assert session.current_poll_id == "poll-existing"
+    finally:
+        dnd.dnd_sessions.pop(-100805, None)
+        dnd.poll_map.pop("poll-existing", None)

@@ -6,6 +6,7 @@ import pytest
 
 from AI import dnd_campaign as campaign
 from AI import dnd_result_recovery as recovery
+from AI import dnd_target_mentions as target_mentions
 
 
 class FakeStatePolicy:
@@ -254,7 +255,7 @@ def test_restore_schedules_exact_ready_result_for_replay():
     assert response == "готовая сцена [ACTION:INPUT]"
 
 
-def test_restore_drops_applying_outbox_if_next_state_was_already_committed():
+def test_restore_replays_applying_outbox_even_if_next_state_was_already_committed():
     policy = FakeStatePolicy()
     dnd, session, calls, _, scheduled = _fake_dnd(policy)
     recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
@@ -273,9 +274,12 @@ def test_restore_drops_applying_outbox_if_next_state_was_already_committed():
 
     dnd.restore_dnd_sessions(object())
 
-    assert scheduled == []
+    assert len(scheduled) == 1
+    coro, _name = scheduled.pop()
+    asyncio.run(coro)
+    assert calls["parse"] == 1
+    assert session.state == "WAITING_ACTION"
     assert session.pending_generated_result == {}
-    assert session.pending_roll["reason"] == "прыгнуть"
     assert response == "готовая сцена [ACTION:INPUT]"
 
 
@@ -303,3 +307,167 @@ def test_campaign_ephemeral_generation_sets_suppression_flag():
     assert observed == [1]
     assert not hasattr(session, "_upupa_ephemeral_generation_depth")
     assert session.conversation == []
+
+
+class FakeTelegramBot:
+    def __init__(self):
+        self.messages = []
+        self.polls = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        message_id = 100 + len(self.messages)
+        self.messages.append((chat_id, text, kwargs))
+        return SimpleNamespace(message_id=message_id, chat=SimpleNamespace(id=chat_id))
+
+    async def send_poll(self, *args, **kwargs):
+        chat_id = kwargs.get("chat_id")
+        if chat_id is None and args:
+            chat_id = args[0]
+        message_id = 200 + len(self.polls)
+        poll_id = f"poll-{message_id}"
+        self.polls.append((args, kwargs))
+        return SimpleNamespace(
+            message_id=message_id,
+            chat=SimpleNamespace(id=chat_id),
+            poll=SimpleNamespace(id=poll_id),
+        )
+
+
+def test_completed_story_send_is_not_duplicated_when_parse_replays():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1010)
+    calls = {"generate": 0, "parse": 0, "persist": 0}
+    transport = FakeTelegramBot()
+
+    async def generate(_session, _prompt):
+        calls["generate"] += 1
+        return "сцена [ACTION:INPUT]"
+
+    async def parse(bot, _chat_id, _text):
+        calls["parse"] += 1
+        await bot.send_message(session.chat_id, "сцена")
+        if calls["parse"] == 1:
+            raise RuntimeError("crash after Telegram accepted story")
+        session.state = "WAITING_ACTION"
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: calls.__setitem__("persist", calls["persist"] + 1),
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+        open_action_window=lambda *args, **kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *args, **kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(dnd.parse_and_execute_turn(transport, session.chat_id, response))
+
+    effects = session.pending_generated_result["telegram_effects"]
+    assert len(effects) == 1
+    assert effects[0]["status"] == recovery.EFFECT_DONE
+    assert len(transport.messages) == 1
+
+    asyncio.run(recovery._resume_pending_result(dnd, transport, session, policy))
+
+    assert calls["parse"] == 2
+    assert len(transport.messages) == 1
+    assert session.pending_generated_result == {}
+
+
+def test_completed_poll_send_replays_with_synthetic_original_ids():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1011)
+    calls = {"generate": 0, "parse": 0, "persist": 0}
+    seen_poll_ids = []
+    transport = FakeTelegramBot()
+
+    async def generate(_session, _prompt):
+        calls["generate"] += 1
+        return "выбор [ACTION:POLL;OPTIONS:А;Б]"
+
+    async def parse(bot, _chat_id, _text):
+        calls["parse"] += 1
+        poll_msg = await bot.send_poll(
+            chat_id=session.chat_id,
+            question="Куда?",
+            options=["А", "Б"],
+            is_anonymous=False,
+        )
+        seen_poll_ids.append((poll_msg.poll.id, poll_msg.message_id, poll_msg.chat.id))
+        if calls["parse"] == 1:
+            raise RuntimeError("crash after poll creation")
+        session.state = "WAITING_POLL"
+        session.current_poll_id = str(poll_msg.poll.id)
+        session.pending_poll = {
+            "poll_id": str(poll_msg.poll.id),
+            "message_id": poll_msg.message_id,
+            "poll_chat_id": poll_msg.chat.id,
+            "options": ["А", "Б"],
+            "target_user_ids": [],
+            "votes": {},
+        }
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: calls.__setitem__("persist", calls["persist"] + 1),
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+        open_action_window=lambda *args, **kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *args, **kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(dnd.parse_and_execute_turn(transport, session.chat_id, response))
+    assert len(transport.polls) == 1
+
+    asyncio.run(recovery._resume_pending_result(dnd, transport, session, policy))
+
+    assert calls["parse"] == 2
+    assert len(transport.polls) == 1
+    assert seen_poll_ids == [
+        ("poll-200", 200, session.chat_id),
+        ("poll-200", 200, session.chat_id),
+    ]
+    assert session.current_poll_id == "poll-200"
+    assert session.pending_generated_result == {}
+
+
+def test_in_flight_telegram_effect_is_retried_because_delivery_is_ambiguous():
+    policy = FakeStatePolicy()
+    dnd, session, _calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+    session.pending_generated_result["phase"] = recovery.RESULT_PHASE_APPLYING
+    session.pending_generated_result["telegram_effects"] = [
+        {"index": 0, "method": "send_message", "status": recovery.EFFECT_IN_FLIGHT}
+    ]
+    transport = FakeTelegramBot()
+    proxy = recovery._DurableBotProxy(transport, dnd, session)
+
+    result = asyncio.run(proxy.send_message(session.chat_id, "повтор"))
+
+    assert result.message_id == 100
+    assert len(transport.messages) == 1
+    assert session.pending_generated_result["telegram_effects"][0]["status"] == recovery.EFFECT_DONE
+    assert response == "готовая сцена [ACTION:INPUT]"
+
+
+def test_target_mentions_unwrap_style_but_keep_durable_transport():
+    policy = FakeStatePolicy()
+    dnd, session, _calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    transport = FakeTelegramBot()
+    durable = recovery._DurableBotProxy(transport, dnd, session)
+    styled = SimpleNamespace(_bot=durable)
+
+    resolved = target_mentions._unwrap_bot(styled)
+
+    assert resolved is durable
