@@ -453,36 +453,16 @@ def _find_pending_offer(campaign, chat_id, user_id, token):
     return history, pending
 
 
-async def _achievement_callback(callback, dnd, campaign):
-    parts = str(callback.data or "").split(":")
-    if len(parts) != 4:
-        await callback.answer("Кнопка протухла.", show_alert=True)
-        return
-    token = parts[2]
-    try:
-        option_index = int(parts[3])
-    except (TypeError, ValueError):
-        await callback.answer("Кнопка протухла.", show_alert=True)
-        return
-    if option_index not in {0, 1} or callback.message is None:
-        await callback.answer("Кнопка протухла.", show_alert=True)
-        return
-
-    chat_id = int(callback.message.chat.id)
-    user_id = int(callback.from_user.id)
+def select_achievement(campaign, dnd, chat_id, user_id, token, option_index):
     history, offer = _find_pending_offer(campaign, chat_id, user_id, token)
     if not offer:
-        await callback.answer("Этот выбор уже закрыт.", show_alert=True)
-        return
-
+        return None, "Этот выбор уже закрыт."
     options = offer.get("options") or []
-    if option_index >= len(options):
-        await callback.answer("Вариант потерялся.", show_alert=True)
-        return
+    if option_index not in {0, 1} or option_index >= len(options):
+        return None, "Вариант потерялся."
     selected = _normalise_achievement(options[option_index])
     if selected is None:
-        await callback.answer("Механика варианта повреждена.", show_alert=True)
-        return
+        return None, "Механика варианта повреждена."
 
     achievements = []
     for raw in history.get("achievements") or []:
@@ -497,6 +477,50 @@ async def _achievement_callback(callback, dnd, campaign):
     history.pop("pending_achievement", None)
     campaign._save_archive(dnd)
 
+    session = (getattr(dnd, "dnd_sessions", {}) or {}).get(int(chat_id))
+    if session is not None and str(int(user_id)) in (getattr(session, "participants", {}) or {}):
+        _ensure(session)
+        key = str(int(user_id))
+        current = []
+        for raw in session.learned_achievements.get(key, []) or []:
+            item = _normalise_achievement(raw)
+            if item and item["id"] != selected["id"]:
+                current.append(item)
+        selected_live = dict(selected)
+        selected_live["charges_remaining"] = 1
+        current.append(selected_live)
+        session.learned_achievements[key] = current[-MAX_ACHIEVEMENTS:]
+        dnd.persist_dnd_sessions()
+    return selected, None
+
+
+async def _achievement_callback(callback, dnd, campaign):
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 4 or callback.message is None:
+        await callback.answer("Кнопка протухла.", show_alert=True)
+        return
+    token = parts[2]
+    try:
+        option_index = int(parts[3])
+    except (TypeError, ValueError):
+        await callback.answer("Кнопка протухла.", show_alert=True)
+        return
+
+    chat_id = int(callback.message.chat.id)
+    user_id = int(callback.from_user.id)
+    selected, error = select_achievement(
+        campaign,
+        dnd,
+        chat_id,
+        user_id,
+        token,
+        option_index,
+    )
+    if selected is None:
+        await callback.answer(error or "Этот выбор уже закрыт.", show_alert=True)
+        return
+
+    history = campaign._player_history(chat_id, user_id) or {}
     await callback.answer("Выбрано.")
     try:
         await callback.message.edit_text(
@@ -1010,5 +1034,6 @@ __all__ = [
     "apply_growth_metadata",
     "commit_pending_achievement_uses",
     "apply_achievement_boost",
+    "select_achievement",
     "install_dnd_growth",
 ]
