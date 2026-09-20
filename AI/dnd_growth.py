@@ -295,9 +295,14 @@ def _record_growth(session, fields):
 
 def apply_growth_metadata(session, original_text, cleaned, notices):
     extra = []
+    action, unresolved_targets = _targets_from_action(original_text)
+    unresolved = set(unresolved_targets) if action in {"ROLL", "PLAYER_ATTACK", "CINEMATIC_ATTACK"} else set()
     for match in _GROWTH_RE.finditer(str(original_text or "")):
         head, fields = _parse_fields(match.group(1))
         if head != "ADD":
+            continue
+        player = str(fields.get("PLAYER") or "")
+        if player.isdigit() and int(player) in unresolved:
             continue
         notice = _record_growth(session, fields)
         if notice:
@@ -968,6 +973,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
     async def parse_turn(bot, chat_id, response):
         session = dnd.dnd_sessions.get(chat_id)
         guarded = str(response or "")
+        consume_parley_after = False
         if session and dnd._is_participant_mode(session):
             _ensure(session)
             action, targets = _targets_from_action(guarded)
@@ -980,18 +986,18 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
             if _has_parley(session):
                 guarded, blocked = _block_attack_for_parley(guarded)
+                consume_parley_after = True
                 if blocked:
-                    _consume_parley(session)
                     guarded = (
                         "🗣 Достижение не даёт врагу ударить первым: партия получает короткое окно переговоров.\n\n"
                         + guarded
                     )
-                elif action not in {"ROLL", "PLAYER_ATTACK", "CINEMATIC_ATTACK"}:
-                    _consume_parley(session)
 
         result = await original_parse(bot, chat_id, guarded)
 
         if session and dnd._is_participant_mode(session):
+            if consume_parley_after:
+                _consume_parley(session)
             action, targets = _targets_from_action(guarded)
             if action not in {"ROLL", "PLAYER_ATTACK", "CINEMATIC_ATTACK"}:
                 session.growth_expected_actor_ids = []
