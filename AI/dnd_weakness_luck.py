@@ -267,7 +267,14 @@ def _apply_roll_tag(session, response):
 
     match, fields = selected
     worsened = _worsen_mode(_mode(action_match.group(2) or ""))
-    stripped = text[:match.start()] + text[match.end():]
+
+    def strip_same_player_tags(tag_match):
+        tag_head, tag_fields = _parse_fields(tag_match.group(1))
+        if str(tag_fields.get("PLAYER") or "") == key and tag_head in {"ROLL", "PAYOFF"}:
+            return ""
+        return tag_match.group(0)
+
+    stripped = _WEAKNESS_RE.sub(strip_same_player_tags, text)
     if worsened is None:
         return stripped, None
 
@@ -344,7 +351,7 @@ def _apply_payoff_cost(session, user_id, fields):
             payload["SCENES"] = str(fields["SCENES"])
         elif effect == "NEXT_ROLL_DISADVANTAGE":
             payload["USES"] = "1"
-        else:
+        elif effect != "ACTION_TO_CLEAR":
             payload["SCENES"] = "1"
         return conditions._add(session, payload)
     return None
