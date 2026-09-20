@@ -481,7 +481,7 @@ async def check_answer(message) -> bool:
     return True
 
 
-async def handle_callback(callback) -> None:
+async def _default_handle_callback(callback) -> None:
     data = callback.data or ""
     if data == "rcrocm_menu":
         await callback.answer()
@@ -523,3 +523,21 @@ async def handle_callback(callback) -> None:
             session,
             f"🏳️ Сдались? Ответ: <b>{str(session['word']).upper()}</b>.",
         )
+
+_callback_handler = _default_handle_callback
+
+
+def get_callback_handler():
+    """Return the currently configured reverse-mode callback handler."""
+    return _callback_handler
+
+
+def configure_callback_handler(handler) -> None:
+    """Install the composed reverse-mode callback handler."""
+    global _callback_handler
+    _callback_handler = handler
+
+
+async def handle_callback(callback) -> None:
+    return await _callback_handler(callback)
+
