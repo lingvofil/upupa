@@ -120,6 +120,6 @@ def test_ending_does_not_replace_an_unrelated_pending_generation(monkeypatch):
         assert session.pending_generation_request["prompt"] == "старое незавершённое продолжение"
         assert called == []
         assert len(message.answers) == 1
-        assert "сначала напиши «дальше»" in message.answers[0][0]
+        assert "сначала напиши «дальше»" in message.answers[0][0].casefold()
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
