@@ -1629,8 +1629,10 @@ async def handle_dnd_next(message: Message):
     if session.state == "RESOLVING":
         from AI.dnd_result_recovery import retry_pending_recovery
 
+        from AI import dnd as dnd_module
+
         retried = await retry_pending_recovery(
-            globals(),
+            dnd_module,
             message.bot,
             session,
         )
