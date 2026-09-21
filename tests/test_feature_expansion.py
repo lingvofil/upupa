@@ -34,19 +34,30 @@ def test_radio_rubrics_and_two_speaker_parser():
             return list(values)[:k]
 
     rubrics = _choose_rubrics(
-        world_context="есть мир",
         social_context="Вася и Петя часто взаимодействовали",
         rng=Rng(),
     )
-    assert len(rubrics) == 4
+    assert len(rubrics) == 3
     assert any(name == "кто с кем" for name, _instruction in rubrics)
-    assert rubrics[-1][0] == "международная панорама"
+    assert all(name != "международная панорама" for name, _instruction in rubrics)
 
     script = "ВЕДУЩИЙ: Начинаем эфир. ЭКСПЕРТ: Я изучил ровно эти факты. ВЕДУЩИЙ: Спасибо, ужасно полезно."
     turns = parse_speaker_turns(script)
     assert [turn.speaker for turn in turns] == ["host", "expert", "host"]
     assert "ВЕДУЩИЙ:" not in strip_speaker_labels(script)
     assert "ЭКСПЕРТ:" not in strip_speaker_labels(script)
+
+
+def test_radio_has_no_world_news_dependency():
+    import features.radio.script as radio_script
+    import features.radio.service as radio_service
+
+    script_source = inspect.getsource(radio_script)
+    service_source = inspect.getsource(radio_service)
+    assert "build_world_radio_context" not in service_source
+    assert "_world_radio_context" not in service_source
+    assert "world_context" not in script_source
+    assert "международная панорама" not in script_source
 
 
 def test_summary_status_hides_message_counters():
