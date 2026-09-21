@@ -173,6 +173,49 @@ def test_reply_to_analysis_result_is_added_as_immediate_context():
     assert "главным локальным контекстом" in captured["prompt"]
 
 
+def test_participant_semantic_query_includes_reply_context(monkeypatch):
+    from AI.dialog import generation
+
+    generation.conversation_history.clear()
+    generation.chat_settings["12345"] = {
+        "dialog_enabled": True,
+        "prompt": "participant prompt",
+        "prompt_name": "Вася",
+        "prompt_type": "user_style",
+        "active_model": "gemini",
+        "imitated_user": {"user_id": 42, "display_name": "Вася"},
+    }
+
+    captured = {}
+
+    async def fake_prepare(chat_id, settings, query_text, *, current_message_text=None):
+        captured["chat_id"] = chat_id
+        captured["query_text"] = query_text
+        captured["current_message_text"] = current_message_text
+        return "", False
+
+    async def fake_generate_response(prompt, chat_id, bot_name, user_input=""):
+        return "reply"
+
+    monkeypatch.setattr(generation, "prepare_participant_turn", fake_prepare)
+
+    replied = _bot_reply(text="А муж че не пердит?")
+    response = asyncio.run(
+        generation.handle_bot_conversation(
+            _message("еще как", reply_to_message=replied),
+            "Human",
+            generate_response_func=fake_generate_response,
+            needs_web_search_func=lambda _: False,
+        )
+    )
+
+    assert response == "reply"
+    assert captured["current_message_text"] == "еще как"
+    assert "еще как" in captured["query_text"]
+    assert "А муж че не пердит?" in captured["query_text"]
+    assert "Контекст сообщения, на которое отвечают" in captured["query_text"]
+
+
 def test_reply_to_holiday_digest_keeps_digest_context():
     from AI.dialog.generation import format_reply_context
 
