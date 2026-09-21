@@ -75,7 +75,7 @@ def test_poem_active_users_fall_back_to_lifetime_counts():
     assert _rank_active_poem_users(users) == ["2", "1"]
 
 
-def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
+def test_poem_dynamic_characters_use_six_slots_and_mix_optional_bot(monkeypatch):
     import asyncio
     from types import SimpleNamespace
     from AI.dialog import prompt_commands
@@ -83,11 +83,13 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
     async def valid_users(chat_id):
         assert chat_id == "-1001"
         return {
-            "11": {"weekly": 8, "daily": 2, "total": 100},
-            "22": {"weekly": 7, "daily": 6, "total": 90},
-            "33": {"weekly": 6, "daily": 1, "total": 80},
-            "44": {"weekly": 5, "daily": 4, "total": 70},
-            "55": {"weekly": 4, "daily": 3, "total": 60},
+            "11": {"weekly": 10, "daily": 4, "total": 110},
+            "22": {"weekly": 9, "daily": 3, "total": 100},
+            "33": {"weekly": 8, "daily": 2, "total": 90},
+            "44": {"weekly": 7, "daily": 2, "total": 80},
+            "55": {"weekly": 6, "daily": 1, "total": 70},
+            "88": {"weekly": 5, "daily": 1, "total": 60},
+            "99": {"weekly": 4, "daily": 1, "total": 50},
         }
 
     names = {
@@ -96,6 +98,8 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
         33: "Детектор",
         44: "Ольга",
         55: "Никита",
+        88: "Жека",
+        99: "Софико",
     }
 
     async def display_name(chat_id, user_id):
@@ -104,11 +108,8 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
 
     async def participant_activity(chat_id, *, period_hours, limit):
         assert chat_id == -1001
-        assert period_hours == 24 * 7
-        assert limit == prompt_commands._POEM_PARTICIPANT_SCAN_LIMIT
         return [
             {"user_id": 66, "message_count": 15, "user_name": "Карл"},
-            {"user_id": 11, "message_count": 12, "user_name": "Света"},
             {"user_id": 77, "message_count": 9, "user_name": "Сглыпа"},
         ]
 
@@ -116,15 +117,18 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
         return SimpleNamespace(first_name="Upupa Epops", full_name="Upupa Epops")
 
     async def get_chat_member(chat_id, user_id):
-        assert chat_id == -1001
         bot_names = {66: "Карл", 77: "Сглыпа"}
         return SimpleNamespace(
             user=SimpleNamespace(
-                is_bot=user_id in bot_names,
-                first_name=bot_names.get(user_id, "Не бот"),
-                full_name=bot_names.get(user_id, "Не бот"),
+                is_bot=True,
+                first_name=bot_names[user_id],
+                full_name=bot_names[user_id],
             )
         )
+
+    def put_bot_in_middle(values):
+        bot_name = values.pop()
+        values.insert(2, bot_name)
 
     monkeypatch.setattr(prompt_commands, "get_valid_users", valid_users)
     monkeypatch.setattr(prompt_commands, "get_user_display_name", display_name)
@@ -135,15 +139,17 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
         SimpleNamespace(get_me=get_me, get_chat_member=get_chat_member),
     )
     monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
+    monkeypatch.setattr(prompt_commands.random, "random", lambda: 0.0)
     monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Карл")
+    monkeypatch.setattr(prompt_commands.random, "shuffle", put_bot_in_middle)
 
     characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
+    hero_list = [part.strip() for part in characters.split(",")]
 
-    assert "обязательный активный бот" in characters
-    assert "Карл" in characters
-    assert "Упупа" not in characters
-    assert "Сглыпа" not in characters
-    assert "Света, Алина, Детектор, Ольга" in characters
+    assert hero_list == ["Света", "Алина", "Карл", "Детектор", "Ольга", "Никита"]
+    assert len(hero_list) == 6
+    assert "Упупа" not in hero_list
+    assert "Сглыпа" not in hero_list
 
 
 def test_poem_prompts_do_not_hardcode_legacy_chat_members():
@@ -183,21 +189,30 @@ def test_poem_bot_detection_ignores_unknown_humans(monkeypatch):
     assert names == ["Упупа"]
 
 
-def test_poem_explicit_characters_add_at_most_one_active_bot(monkeypatch):
+def test_poem_bot_is_optional_and_has_no_special_prompt_position(monkeypatch):
     from AI.dialog import prompt_commands
 
+    monkeypatch.setattr(prompt_commands.random, "random", lambda: 0.0)
     monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Сглыпа")
+    monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: values.reverse())
 
     text = prompt_commands._format_poem_character_instruction(
         ["Упупа", "Карл", "Сглыпа"],
-        "Света, Алина",
+        "Света, Алина, Жека",
     )
 
-    assert "Сглыпа" in text
-    assert "Упупа" not in text
-    assert "Карл" not in text
-    assert "Света, Алина" in text
-    assert "обязательный активный бот" in text
+    assert text == "Сглыпа, Жека, Алина, Света"
+    assert "обязательный" not in text
+
+    monkeypatch.setattr(prompt_commands.random, "random", lambda: 0.9)
+    monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: None)
+
+    text_without_bot = prompt_commands._format_poem_character_instruction(
+        ["Упупа", "Карл", "Сглыпа"],
+        "Света, Алина, Жека",
+    )
+
+    assert text_without_bot == "Света, Алина, Жека"
 
 
 def test_poem_active_bot_pool_is_chat_specific_and_not_hardcoded(monkeypatch):
@@ -330,7 +345,8 @@ def test_poem_dynamic_human_names_are_normalized_before_prompt(monkeypatch):
         SimpleNamespace(get_me=get_me),
     )
     monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
-    monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Упупа")
+    monkeypatch.setattr(prompt_commands.random, "random", lambda: 0.9)
+    monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: None)
 
     characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
 
@@ -338,3 +354,14 @@ def test_poem_dynamic_human_names_are_normalized_before_prompt(monkeypatch):
     assert "🙃" not in characters
     assert "bagr" not in characters
     assert "sofiko" not in characters
+
+
+
+def test_poem_prompts_prioritize_named_participants_over_filler():
+    from prompts import PROMPT_PIROZHOK, PROMPT_POROSHOK
+
+    for prompt in (PROMPT_PIROZHOK[0], PROMPT_POROSHOK[0]):
+        lowered = prompt.lower()
+        assert "используй как можно больше" in lowered
+        assert "порядок списка не задаёт главного героя" in lowered
+        assert "не вводи новых случайных или безымянных персонажей" in lowered
