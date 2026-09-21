@@ -29,6 +29,7 @@ def _clear_participant_metadata(settings: dict) -> None:
     settings.pop("imitated_user", None)
     settings.pop("style_profile_message_count", None)
     settings.pop("style_profile_updated_at", None)
+    settings.pop("style_profile_version", None)
 
 
 async def handle_poem_command(message: types.Message, poem_type: str):
