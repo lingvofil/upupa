@@ -1531,11 +1531,24 @@ async def handle_backstory(message: Message):
         await parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD backstory generation failed chat_id=%s", message.chat.id)
+        pending_prompt = str(
+            (getattr(session, "pending_generation_request", {}) or {}).get("prompt") or ""
+        )
         if dnd_sessions.get(message.chat.id) is session:
-            session.state = "WAITING_BACKSTORY"
-            session.backstory_prompt_message_id = backstory_prompt_message_id
+            if pending_prompt:
+                session.state = "RESOLVING"
+                session.backstory_prompt_message_id = None
+            else:
+                session.state = "WAITING_BACKSTORY"
+                session.backstory_prompt_message_id = backstory_prompt_message_id
             persist_dnd_sessions()
-        await message.answer("Мастер завис, но история сохранена. Попробуй ещё раз реплаем.")
+        if pending_prompt:
+            await message.answer(
+                "Мастер завис на старте, но точная предыстория уже сохранена. "
+                "Ведущий может написать «дальше» — повторно присылать её не надо."
+            )
+        else:
+            await message.answer("Мастер завис до сохранения хода. Попробуй ещё раз реплаем.")
     finally:
         _processing_backstories.discard(message.chat.id)
 
