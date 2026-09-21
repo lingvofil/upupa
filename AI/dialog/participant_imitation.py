@@ -28,6 +28,7 @@ PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
+STYLE_PROFILE_VERSION = 2
 
 
 @dataclass
@@ -476,6 +477,8 @@ def record_participant_message(message) -> None:
 def _profile_needs_refresh(settings: dict, message_count: int) -> bool:
     if not settings.get("prompt"):
         return True
+    if settings.get("style_profile_version") != STYLE_PROFILE_VERSION:
+        return True
 
     previous_count = settings.get("style_profile_message_count")
     if not isinstance(previous_count, int) or message_count >= previous_count + PROFILE_REFRESH_MESSAGE_DELTA:
@@ -516,6 +519,7 @@ def refresh_style_profile(
     )
     settings["style_profile_message_count"] = message_count
     settings["style_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
+    settings["style_profile_version"] = STYLE_PROFILE_VERSION
     return True
 
 
@@ -554,6 +558,7 @@ async def initialize_participant_profile(
     settings["imitated_user"] = identity
     settings["style_profile_message_count"] = message_count
     settings["style_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
+    settings["style_profile_version"] = STYLE_PROFILE_VERSION
     return identity
 
 
