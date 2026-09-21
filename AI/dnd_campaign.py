@@ -835,7 +835,6 @@ async def _start_story(dnd, bot, session, plot, continuation=False, message=None
     session.selected_plot = plot
     session.continuation_mode = continuation
     session.campaign_started_at = datetime.now(timezone.utc).isoformat()
-    session.state = "RESOLVING"
     for p in session.participants.values():
         uid = int(p["user_id"]); old = _apply_heritage(session, uid, continuation) or {}
         if not _profile_complete(session.character_profiles.get(str(uid))):
@@ -845,12 +844,7 @@ async def _start_story(dnd, bot, session, plot, continuation=False, message=None
     if continuation:
         old_campaign = _latest_campaign(session.chat_id) or {}; session.npc_memory = dict(old_campaign.get("npc_memory") or {})
         old_threat = old_campaign.get("threat") or {}; session.threat = {"name": old_threat.get("name"), "level": min(2, int(old_threat.get("level", 0))), "max": THREAT_MAX, "history": []}
-    await _social_context(session); dnd.persist_dnd_sessions()
-    if message:
-        try:
-            await message.edit_text("🎬 Сюжет выбран. Понеслась.")
-        except Exception:
-            pass
+    await _social_context(session)
     recent = await dnd._collect_recent_chat_context(session.chat_id) or "Свежей переписки почти нет."
     previous = _latest_campaign(session.chat_id) if continuation else None
     prompt = (f"РЕЖИМ С УЧАСТНИКАМИ ЧАТА.\nУЧАСТНИКИ:\n{dnd._participants_prompt(session)}\nПРОФИЛИ:\n{_profile_context(session)}\n"
@@ -858,8 +852,40 @@ async def _start_story(dnd, bot, session, plot, continuation=False, message=None
               f"\nНАСЛЕДИЕ:\n{_heritage_context(session)}\nПЕРЕПИСКА:\n{recent}\n" +
               (f"ПРОШЛЫЙ ФИНАЛ: {previous.get('finale')}\nПРОШЛЫЙ ЭПИЛОГ: {previous.get('epilogue')}\n" if previous else "") +
               "Начни с конкретной проблемы; не пересказывай справку. Соцграф — только мягкий материал для отношений.")
-    response = await dnd.generate_session_response(session, dnd.with_scene_direction(session, prompt))
-    await dnd.parse_and_execute_turn(bot, session.chat_id, response)
+    continuation_prompt = dnd.with_scene_direction(session, prompt)
+
+    from AI.dnd_result_recovery import (
+        continue_pending_generation,
+        reserve_generation_request,
+    )
+
+    if not reserve_generation_request(
+        session,
+        continuation_prompt,
+        kind="STORY_START",
+    ):
+        await bot.send_message(
+            session.chat_id,
+            "Старт уже восстанавливается. Ведущий может написать «дальше».",
+        )
+        return False
+
+    session.state = "RESOLVING"
+    dnd.persist_dnd_sessions()
+    if message:
+        try:
+            await message.edit_text("🎬 Сюжет выбран. Понеслась.")
+        except Exception:
+            pass
+
+    completed = await continue_pending_generation(dnd, bot, session)
+    if not completed and dnd.dnd_sessions.get(session.chat_id) is session:
+        await bot.send_message(
+            session.chat_id,
+            "Мастер завис на первой сцене, но старт сохранён. "
+            "Ведущий может написать «дальше» — сюжет и персонажей пересобирать не надо.",
+        )
+    return completed
 
 
 async def _choose_plots(dnd, callback, session):
@@ -895,9 +921,36 @@ async def _plot_callback(callback, dnd):
     if session.mode == "participants":
         await _start_story(dnd, callback.bot, session, plot, message=callback.message)
         return
-    session.selected_plot = plot; session.state = "RESOLVING"; dnd.persist_dnd_sessions(); await callback.message.edit_text("🎬 Сюжет выбран. Понеслась.")
-    response = await dnd.generate_session_response(session, dnd.with_scene_direction(session, f"Выбранный сюжет: {plot}. Начинай с конкретной проблемы."))
-    await dnd.parse_and_execute_turn(callback.bot, session.chat_id, response)
+    session.selected_plot = plot
+    continuation_prompt = dnd.with_scene_direction(
+        session,
+        f"Выбранный сюжет: {plot}. Начинай с конкретной проблемы.",
+    )
+
+    from AI.dnd_result_recovery import (
+        continue_pending_generation,
+        reserve_generation_request,
+    )
+
+    if not reserve_generation_request(
+        session,
+        continuation_prompt,
+        kind="STORY_START",
+    ):
+        await callback.message.answer(
+            "Старт уже восстанавливается. Ведущий может написать «дальше»."
+        )
+        return
+    session.state = "RESOLVING"
+    dnd.persist_dnd_sessions()
+    await callback.message.edit_text("🎬 Сюжет выбран. Понеслась.")
+
+    completed = await continue_pending_generation(dnd, callback.bot, session)
+    if not completed and dnd.dnd_sessions.get(session.chat_id) is session:
+        await callback.message.answer(
+            "Мастер завис на первой сцене, но старт сохранён. "
+            "Ведущий может написать «дальше»."
+        )
 
 
 async def _continue_callback(callback, dnd):
