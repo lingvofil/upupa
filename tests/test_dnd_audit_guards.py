@@ -17,18 +17,41 @@ def test_world_variety_rules_prefer_open_spaces_and_deprioritize_cramped_default
 
 
 
-def test_scene_momentum_rules_change_decor_and_threat_archetypes():
+def test_scene_momentum_rules_include_breathers_and_exploration():
     rules = dnd_pacing.SCENE_MOMENTUM_RULES.casefold()
 
     assert "2–3 предыдущими" in rules
-    assert "измени хотя бы два элемента" in rules
-    assert "не подменяй динамику очередной волной врагов" in rules
+    assert "не обязана добавлять новую угрозу" in rules
+    assert "спокойная прогулка" in rules
+    assert "разговор с npc" in rules
+    assert "после напряжённого эпизода" in rules
+    assert "низким давлением" in rules
+    assert "не превращай исследовательское действие" in rules
+    assert "ем яблоко" in rules
     assert "роботы" in rules
     assert "дроны" in rules
-    assert "киберживотные" in rules
-    assert "социальные" in rules
-    assert "природные" in rules
-    assert "средовые" in rules
+
+
+def test_opening_rules_give_every_hero_one_free_decision():
+    rules = dnd_pacing.OPENING_EXPLORATION_RULES.casefold()
+
+    assert "общим action:input без targets" in rules
+    assert "каждый герой один раз решил" in rules
+    assert "учти действие каждого героя" in rules
+    assert "не запускай голосование" in rules
+
+
+def test_story_start_action_is_forced_to_group_input():
+    source = (
+        "На ярмарке уже начинается драка. "
+        "[ACTION:POLL;TARGETS:1,2;OPTIONS:Бежать;Драться]"
+    )
+
+    guarded = dnd_pacing._force_story_start_group_input(source)
+
+    assert guarded.endswith("[ACTION:INPUT]")
+    assert "ACTION:POLL" not in guarded
+    assert "TARGETS:" not in guarded
 
 
 def test_recent_scene_context_exposes_three_scenes_for_variety_control():
