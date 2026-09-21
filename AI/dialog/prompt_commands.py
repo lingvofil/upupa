@@ -81,13 +81,8 @@ _LATIN_TO_CYRILLIC_CHARS = {
 }
 
 
-def _normalize_poem_bot_name(raw_name: str | None) -> str:
-    """Return one short Cyrillic bot name suitable for a poem prompt."""
-    match = re.search(r"[A-Za-zА-Яа-яЁё]+", raw_name or "")
-    if not match:
-        return ""
-
-    token = match.group(0)
+def _normalize_poem_name_token(token: str) -> str:
+    """Normalize one alphabetic name token to Cyrillic."""
     if not re.search(r"[A-Za-z]", token):
         return token[:1].upper() + token[1:].lower()
 
@@ -106,6 +101,18 @@ def _normalize_poem_bot_name(raw_name: str | None) -> str:
 
     normalized = "".join(result)
     return normalized[:1].upper() + normalized[1:]
+
+
+def _normalize_poem_bot_name(raw_name: str | None) -> str:
+    """Return one short Cyrillic bot name suitable for a poem prompt."""
+    match = re.search(r"[A-Za-zА-Яа-яЁё]+", raw_name or "")
+    return _normalize_poem_name_token(match.group(0)) if match else ""
+
+
+def _normalize_poem_user_name(raw_name: str | None) -> str:
+    """Keep all human name words, remove emoji/punctuation and use Cyrillic."""
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё]+", raw_name or "")
+    return " ".join(_normalize_poem_name_token(token) for token in tokens)
 
 
 
@@ -234,8 +241,10 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     unique_names = []
     seen = {name.casefold() for name in active_bot_names}
     for raw_name in names:
-        name = (raw_name or "").strip()
-        if not name or name.startswith("Пользователь "):
+        if (raw_name or "").startswith("Пользователь "):
+            continue
+        name = _normalize_poem_user_name(raw_name)
+        if not name:
             continue
         key = name.casefold()
         if key in seen:
