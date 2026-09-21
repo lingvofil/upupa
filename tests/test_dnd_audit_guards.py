@@ -143,3 +143,47 @@ def test_pending_generation_does_not_parse_into_replacement_session():
     assert completed is False
     assert calls["parse"] == 0
     assert fake_dnd.dnd_sessions[chat_id] is replacement
+
+
+def test_pending_generation_does_not_parse_when_request_changes_in_same_session():
+    chat_id = -100503
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        state="RESOLVING",
+        pending_generation_request={
+            "id": "gen:old",
+            "prompt": "старый ход",
+            "kind": "GENERATION",
+            "telegram_effects": [],
+        },
+        pending_generated_result={},
+        generated_result_seq=0,
+    )
+    calls = {"parse": 0}
+
+    async def generate(current, _prompt):
+        current.pending_generation_request = {
+            "id": "gen:new",
+            "prompt": "новый ход",
+            "kind": "GENERATION",
+            "telegram_effects": [],
+        }
+        return "ответ старого запроса [ACTION:INPUT]"
+
+    async def parse(_bot, _chat_id, _response):
+        calls["parse"] += 1
+
+    fake_dnd = SimpleNamespace(
+        dnd_sessions={chat_id: session},
+        persist_dnd_sessions=lambda: None,
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+    )
+
+    completed = asyncio.run(
+        recovery._resume_pending_generation(fake_dnd, object(), session)
+    )
+
+    assert completed is False
+    assert calls["parse"] == 0
+    assert session.pending_generation_request["id"] == "gen:new"
