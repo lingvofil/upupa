@@ -53,6 +53,8 @@ def test_style_profile_includes_real_interaction_examples_and_behavior_rule():
     assert "[RECURRING PATTERNS]" in prompt
     assert "- подари куклу" in prompt
     assert "повторяющиеся просьбы" in prompt
+    assert "не обязательный набор фраз" in prompt
+    assert "Не повторяй одну и ту же фирменную фразу" in prompt
 
 
 def test_participant_interactions_capture_preceding_other_user(monkeypatch):
@@ -106,6 +108,8 @@ def test_semantic_memory_searches_interaction_examples_and_excludes_current_mess
         recent_size=10,
     )
     entry.add_logged_message("старое сообщение")
+    entry.add_logged_message("обезян обезян")
+    entry.add_logged_message("обезян обезян")
     entry.add_logged_message("ещё как")
     entry.interactions = [
         "Реплика собеседника: А муж че не пердит?\nОтвет участника: еще как"
@@ -139,6 +143,10 @@ def test_semantic_memory_searches_interaction_examples_and_excludes_current_mess
     assert "старое сообщение" in captured["candidates"]
     assert "ещё как" not in captured["candidates"]
     assert entry.interactions[0] in captured["candidates"]
+    assert not any(
+        candidate.startswith("Повторяющаяся реплика участника:")
+        for candidate in captured["candidates"]
+    )
     assert captured["top_k"] == 5
     assert "А муж че не пердит?" in captured["query"]
     assert "Ответ участника: еще как" in memory
