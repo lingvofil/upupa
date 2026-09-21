@@ -10,11 +10,10 @@ async def generate_dnd_image_bytes(prompt: str, *, should_continue=None):
     """Use the DnD waterfall without translating/compressing scene prompts."""
     from features.image_generation import generate_image_bytes
 
-    return await generate_image_bytes(
-        prompt,
-        log_context="dnd",
-        should_continue=should_continue,
-    )
+    kwargs = {"log_context": "dnd"}
+    if should_continue is not None:
+        kwargs["should_continue"] = should_continue
+    return await generate_image_bytes(prompt, **kwargs)
 
 
 def install_dnd_image_quality(dnd) -> None:
