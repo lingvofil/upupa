@@ -17,7 +17,7 @@ def _callback(data: str, user_id: int, name: str = "Игрок & Co", chat_id: i
     )
 
 
-def test_new_player_role_is_announced_with_real_mention(monkeypatch):
+def test_new_player_role_is_announced_with_real_mention():
     from games import crocodile_telephone_role_announcements as announcements
 
     cid = "-42"
@@ -34,11 +34,12 @@ def test_new_player_role_is_announced_with_real_mention(monkeypatch):
         game["telephone_roles"]["202"] = "draw"
         return "ok"
 
-    monkeypatch.setattr(announcements, "_original_handle_telephone_callback", original)
     callback = _callback(f"ctel_role_draw_{cid}", 202)
 
     try:
-        result = asyncio.run(announcements.telephone_callback_with_role_announcement(callback))
+        result = asyncio.run(
+            announcements.telephone_callback_with_role_announcement(callback, original)
+        )
         assert result == "ok"
         callback.message.answer.assert_awaited_once()
         text = callback.message.answer.await_args.args[0]
@@ -51,7 +52,7 @@ def test_new_player_role_is_announced_with_real_mention(monkeypatch):
         announcements.crocodile_modes.telephone_games.pop(cid, None)
 
 
-def test_switch_between_roles_is_announced_as_team_change(monkeypatch):
+def test_switch_between_roles_is_announced_as_team_change():
     from games import crocodile_telephone_role_announcements as announcements
 
     cid = "-42"
@@ -67,11 +68,12 @@ def test_switch_between_roles_is_announced_as_team_change(monkeypatch):
         game["telephone_roles"]["202"] = "text"
         return "switched"
 
-    monkeypatch.setattr(announcements, "_original_handle_telephone_callback", original)
     callback = _callback(f"ctel_role_text_{cid}", 202, name="Игрок")
 
     try:
-        result = asyncio.run(announcements.telephone_callback_with_role_announcement(callback))
+        result = asyncio.run(
+            announcements.telephone_callback_with_role_announcement(callback, original)
+        )
         assert result == "switched"
         callback.message.answer.assert_awaited_once()
         text = callback.message.answer.await_args.args[0]
@@ -82,7 +84,7 @@ def test_switch_between_roles_is_announced_as_team_change(monkeypatch):
         announcements.crocodile_modes.telephone_games.pop(cid, None)
 
 
-def test_repeated_click_on_same_role_does_not_spam_chat(monkeypatch):
+def test_repeated_click_on_same_role_does_not_spam_chat():
     from games import crocodile_telephone_role_announcements as announcements
 
     cid = "-42"
@@ -94,11 +96,12 @@ def test_repeated_click_on_same_role_does_not_spam_chat(monkeypatch):
     }
     announcements.crocodile_modes.telephone_games[cid] = game
     original = AsyncMock(return_value="same")
-    monkeypatch.setattr(announcements, "_original_handle_telephone_callback", original)
     callback = _callback(f"ctel_role_draw_{cid}", 202, name="Игрок")
 
     try:
-        result = asyncio.run(announcements.telephone_callback_with_role_announcement(callback))
+        result = asyncio.run(
+            announcements.telephone_callback_with_role_announcement(callback, original)
+        )
         assert result == "same"
         callback.message.answer.assert_not_awaited()
     finally:

@@ -277,19 +277,13 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "telephone_callback_with_skip_permissions,",
         base,
     )
-    wiring = "crocodile_modes.configure_telephone_callback_handler("
-    permissions_wiring = runtime_source.index(wiring, permissions)
     admin_composition = runtime_source.index(
         composition,
-        permissions_wiring,
+        permissions,
     )
     admin_wrapper = runtime_source.index(
         "handle_telephone_callback_with_admin,",
         admin_composition,
-    )
-    admin_wiring = runtime_source.index(
-        wiring,
-        admin_wrapper,
     )
     permissions_installer = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
@@ -299,10 +293,28 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "configure_crocodile_telephone_roles()",
         permissions_installer,
     )
-    announcements_installer = runtime_source.index(
-        "configure_crocodile_telephone_role_announcements()",
+    roles_composition = runtime_source.index(
+        composition,
         roles_installer,
     )
+    roles_wrapper = runtime_source.index(
+        "handle_telephone_callback_with_roles,",
+        roles_composition,
+    )
+    announcements_installer = runtime_source.index(
+        "configure_crocodile_telephone_role_announcements()",
+        roles_wrapper,
+    )
+    announcements_composition = runtime_source.index(
+        composition,
+        announcements_installer,
+    )
+    announcements_wrapper = runtime_source.index(
+        "telephone_callback_with_role_announcement,",
+        announcements_composition,
+    )
+    wiring = "crocodile_modes.configure_telephone_callback_handler("
+    final_wiring = runtime_source.index(wiring, announcements_wrapper)
 
     roles_source = (ROOT / "games" / "crocodile_telephone_roles.py").read_text(
         encoding="utf-8"
@@ -310,25 +322,31 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     announcements_source = (
         ROOT / "games" / "crocodile_telephone_role_announcements.py"
     ).read_text(encoding="utf-8")
-    for source in (roles_source, announcements_source):
-        assert (
-            "_original_handle_telephone_callback = "
-            "crocodile_modes.get_telephone_callback_handler()"
-            in source
-        )
-        assert "crocodile_modes.configure_telephone_callback_handler(" in source
+    assert "_original_handle_telephone_callback" not in roles_source
+    assert "_original_handle_telephone_callback" not in announcements_source
+    assert "crocodile_modes.configure_telephone_callback_handler(" not in roles_source
+    assert "crocodile_modes.configure_telephone_callback_handler(" not in announcements_source
+    assert "handle_telephone_callback_with_roles(callback, next_handler)" in roles_source
+    assert (
+        "telephone_callback_with_role_announcement(callback, next_handler)"
+        in announcements_source
+    )
 
-    assert runtime_source.count(wiring) == 2
+    assert runtime_source.count(wiring) == 1
     assert (
         party_install
         < permissions_composition
         < base
         < permissions
-        < permissions_wiring
         < admin_composition
         < admin_wrapper
-        < admin_wiring
         < permissions_installer
         < roles_installer
+        < roles_composition
+        < roles_wrapper
         < announcements_installer
+        < announcements_composition
+        < announcements_wrapper
+        < final_wiring
     )
+

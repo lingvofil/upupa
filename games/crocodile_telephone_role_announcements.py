@@ -10,7 +10,6 @@ from games import crocodile_modes, crocodile_telephone_roles
 
 _configured = False
 _original_start_telephone = None
-_original_handle_telephone_callback = None
 
 
 def _user_id(value: Any) -> int | None:
@@ -103,18 +102,18 @@ async def start_telephone_with_role_announcement(message) -> Any:
     return result
 
 
-async def telephone_callback_with_role_announcement(callback) -> Any:
+async def telephone_callback_with_role_announcement(callback, next_handler) -> Any:
     """Announce a new role join or a real switch, but not a repeated click."""
     data = str(callback.data or "")
     requested_role, chat_id = _requested_role(data)
     if requested_role is None or chat_id is None:
-        return await _original_handle_telephone_callback(callback)
+        return await next_handler(callback)
 
     game = crocodile_modes.telephone_games.get(chat_id)
     user = getattr(callback, "from_user", None)
     user_id = _user_id(getattr(user, "id", None))
     if not game or game.get("phase") != "lobby" or user_id is None:
-        return await _original_handle_telephone_callback(callback)
+        return await next_handler(callback)
 
     player_ids = {
         _user_id(row[0])
@@ -125,7 +124,7 @@ async def telephone_callback_with_role_announcement(callback) -> Any:
     roles_before = crocodile_telephone_roles._ensure_roles(game)
     previous_role = None if is_new else roles_before.get(str(user_id))
 
-    result = await _original_handle_telephone_callback(callback)
+    result = await next_handler(callback)
 
     game_after = crocodile_modes.telephone_games.get(chat_id)
     if not game_after or game_after.get("phase") != "lobby":
@@ -150,13 +149,11 @@ async def telephone_callback_with_role_announcement(callback) -> Any:
 
 
 def configure_crocodile_telephone_role_announcements() -> None:
-    """Wrap the final role-aware telephone handlers."""
-    global _configured, _original_start_telephone, _original_handle_telephone_callback
+    """Install start-role announcements; callback composition lives in runtime."""
+    global _configured, _original_start_telephone
     if _configured:
         return
 
     _original_start_telephone = crocodile_modes.start_telephone
-    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
     crocodile_modes.start_telephone = start_telephone_with_role_announcement
-    crocodile_modes.configure_telephone_callback_handler(telephone_callback_with_role_announcement)
     _configured = True
