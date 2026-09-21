@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 
 POLL_AGENCY_MARKER = "ГОЛОСОВАНИЯ DND: ЗАКРЫТЫЙ ВЫБОР НЕ ДОЛЖЕН ЗАПИРАТЬ ИГРОКОВ"
@@ -109,6 +110,7 @@ async def _resolve_custom_poll(dnd, bot, session, chat_id: int, message_id: int,
             "scene_text": str(poll_snapshot.get("scene_text") or "").strip(),
             "options": list(options),
             "outcome": outcome,
+            "resolved_at": time.time(),
         }
         dnd.poll_map.pop(poll_id, None)
         session.current_poll_id = None
