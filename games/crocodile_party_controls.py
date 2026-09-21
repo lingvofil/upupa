@@ -204,7 +204,7 @@ async def _cancel_duel(chat_id: str, duel: dict, *, announce: bool = True) -> No
         )
 
 
-async def _skip_telephone(chat_id: str, game: dict) -> str:
+async def _default_skip_telephone(chat_id: str, game: dict) -> str:
     """Remove the current missing player but keep text/draw step parity."""
     if game.get("phase") != "playing":
         return "Цепочка ещё не идёт."
@@ -232,6 +232,29 @@ async def _skip_telephone(chat_id: str, game: dict) -> str:
     # (text or drawing) so the chain keeps alternating correctly.
     await crocodile_modes._send_telephone_step(chat_id, game)
     return f"Пропущен: {skipped_name}"
+
+
+_skip_telephone_handler = _default_skip_telephone
+
+
+def get_default_skip_telephone_handler():
+    """Return the immutable base broken-telephone skip handler."""
+    return _default_skip_telephone
+
+
+def get_skip_telephone_handler():
+    """Return the currently configured broken-telephone skip handler."""
+    return _skip_telephone_handler
+
+
+def configure_skip_telephone_handler(handler) -> None:
+    """Install the composed broken-telephone skip handler."""
+    global _skip_telephone_handler
+    _skip_telephone_handler = handler
+
+
+async def _skip_telephone(chat_id: str, game: dict) -> str:
+    return await _skip_telephone_handler(chat_id, game)
 
 
 def _telephone_participants(game: dict) -> set[int]:
@@ -304,7 +327,7 @@ def has_active_non_reverse_party(chat_id: int | str) -> bool:
     )
 
 
-def party_status_text(chat_id: int | str) -> str:
+def _default_party_status_text(chat_id: int | str) -> str:
     chat_id = str(chat_id)
     telephone = crocodile_modes.telephone_games.get(chat_id)
     if telephone:
@@ -351,6 +374,29 @@ def party_status_text(chat_id: int | str) -> str:
         "🦎 Сейчас ничего не идёт. Выбирай, каким способом унижать "
         "изобразительное искусство."
     )
+
+
+_party_status_text_renderer = _default_party_status_text
+
+
+def get_default_party_status_text_renderer():
+    """Return the immutable base unified-party status renderer."""
+    return _default_party_status_text
+
+
+def get_party_status_text_renderer():
+    """Return the currently configured unified-party status renderer."""
+    return _party_status_text_renderer
+
+
+def configure_party_status_text_renderer(renderer) -> None:
+    """Install the composed unified-party status renderer."""
+    global _party_status_text_renderer
+    _party_status_text_renderer = renderer
+
+
+def party_status_text(chat_id: int | str) -> str:
+    return _party_status_text_renderer(chat_id)
 
 
 def _default_menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:

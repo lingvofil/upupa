@@ -56,6 +56,11 @@ def test_default_handler_getters_are_stable_when_current_handlers_change():
             crocodile_modes.configure_start_telephone_handler,
         ),
         (
+            crocodile_modes.get_default_telephone_lobby_keyboard_renderer,
+            crocodile_modes.get_telephone_lobby_keyboard_renderer,
+            crocodile_modes.configure_telephone_lobby_keyboard_renderer,
+        ),
+        (
             crocodile_modes.get_default_send_telephone_step_handler,
             crocodile_modes.get_send_telephone_step_handler,
             crocodile_modes.configure_send_telephone_step_handler,
@@ -74,6 +79,16 @@ def test_default_handler_getters_are_stable_when_current_handlers_change():
             crocodile_modes.get_default_duel_callback_handler,
             crocodile_modes.get_duel_callback_handler,
             crocodile_modes.configure_duel_callback_handler,
+        ),
+        (
+            party_controls.get_default_party_status_text_renderer,
+            party_controls.get_party_status_text_renderer,
+            party_controls.configure_party_status_text_renderer,
+        ),
+        (
+            party_controls.get_default_skip_telephone_handler,
+            party_controls.get_skip_telephone_handler,
+            party_controls.configure_skip_telephone_handler,
         ),
         (
             party_controls.get_default_stop_active_party_handler,
@@ -129,6 +144,8 @@ def test_runtime_composes_from_stable_bases_not_current_handlers():
         "crocodile.get_default_check_answer_handler()",
         "crocodile_controls.get_default_stop_lock_remaining_seconds_handler()",
         "crocodile_modes.get_default_start_telephone_handler()",
+        "party_controls.get_default_party_status_text_renderer()",
+        "party_controls.get_default_skip_telephone_handler()",
         "crocodile_modes.get_default_start_duel_handler()",
         "crocodile_modes.get_default_duel_callback_handler()",
         "party_controls.get_default_stop_active_party_handler()",
@@ -152,6 +169,9 @@ def test_runtime_composes_from_stable_bases_not_current_handlers():
         "crocodile.get_check_answer_handler()",
         "crocodile_controls.get_stop_lock_remaining_seconds_handler()",
         "crocodile_modes.get_start_telephone_handler()",
+        "crocodile_modes.get_telephone_lobby_keyboard_renderer()",
+        "party_controls.get_party_status_text_renderer()",
+        "party_controls.get_skip_telephone_handler()",
         "crocodile_modes.get_send_telephone_step_handler()",
         "crocodile_modes.get_start_duel_handler()",
         "crocodile_modes.get_telephone_callback_handler()",

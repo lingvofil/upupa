@@ -123,6 +123,34 @@ def _compose_telephone_step_sender(base_handler, *wrappers):
     return handler
 
 
+def _compose_party_status_text(base_renderer, *wrappers):
+    renderer = base_renderer
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_renderer = renderer
+
+        def render(chat_id, _wrapper=wrapper, _next=next_renderer):
+            return _wrapper(chat_id, _next)
+
+        renderer = render
+    return renderer
+
+
+def _compose_skip_telephone(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def skip(chat_id, game, _wrapper=wrapper, _next=next_handler):
+            return await _wrapper(chat_id, game, _next)
+
+        handler = skip
+    return handler
+
+
 def _compose_start_duel(base_handler, *wrappers):
     handler = base_handler
     for wrapper in wrappers:
@@ -379,9 +407,11 @@ def configure_crocodile_runtime() -> None:
         telephone_callback_with_role_announcement,
     )
     from games.crocodile_telephone_roles import (
-        configure_crocodile_telephone_roles,
         handle_telephone_callback_with_roles,
+        party_status_text_with_roles,
+        skip_telephone_with_roles,
         start_telephone_with_roles,
+        telephone_lobby_keyboard,
     )
     from games.crocodile_telephone_skip_permissions import (
         menu_callback_with_skip_permissions,
@@ -465,6 +495,21 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
+    party_controls.configure_party_status_text_renderer(
+        _compose_party_status_text(
+            party_controls.get_default_party_status_text_renderer(),
+            party_status_text_with_roles,
+        )
+    )
+    party_controls.configure_skip_telephone_handler(
+        _compose_skip_telephone(
+            party_controls.get_default_skip_telephone_handler(),
+            skip_telephone_with_roles,
+        )
+    )
+    crocodile_modes.configure_telephone_lobby_keyboard_renderer(
+        telephone_lobby_keyboard
+    )
     telephone_step_handler = _compose_telephone_step_sender(
         send_telephone_step_with_mention,
         party_controls.send_telephone_step_with_controls,
@@ -571,7 +616,6 @@ def configure_crocodile_runtime() -> None:
             reverse_modes_callback_with_admin,
         )
     )
-    configure_crocodile_telephone_roles()
     telephone_callback_handler = _compose_callback_handler(
         telephone_callback_handler,
         handle_telephone_callback_with_roles,
