@@ -92,7 +92,7 @@ def test_group_turn_is_durable_before_provider_call(monkeypatch):
     assert "Боря: ищу ловушку (id=2)" in seen[0]["prompt"]
     assert "Сначала явно учти КАЖДУЮ заявку" in seen[0]["prompt"]
     assert "ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ" in seen[0]["prompt"]
-    assert "не сжимай четыре разных действия" in seen[0]["prompt"]
+    assert "не сжимай четыре разных действия" in seen[0]["prompt"].casefold()
     assert "допустим ещё один общий ACTION:INPUT" in seen[0]["prompt"]
     assert seen[0]["effects"][0]["method"] == "send_message"
     assert seen[0]["effects"][0]["text"].startswith("🎭 Ход партии:")
