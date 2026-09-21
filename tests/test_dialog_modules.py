@@ -75,8 +75,9 @@ def test_poem_active_users_fall_back_to_lifetime_counts():
     assert _rank_active_poem_users(users) == ["2", "1"]
 
 
-def test_poem_dynamic_characters_use_active_chat_members(monkeypatch):
+def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
     import asyncio
+    from types import SimpleNamespace
     from AI.dialog import prompt_commands
 
     async def valid_users(chat_id):
@@ -101,13 +102,42 @@ def test_poem_dynamic_characters_use_active_chat_members(monkeypatch):
         assert chat_id == -1001
         return names[user_id]
 
+    async def participant_activity(chat_id, *, period_hours, limit):
+        assert chat_id == -1001
+        assert period_hours == 24 * 7
+        assert limit == prompt_commands._POEM_PARTICIPANT_SCAN_LIMIT
+        return [
+            {"user_id": 66, "message_count": 15, "user_name": "Карл"},
+            {"user_id": 11, "message_count": 12, "user_name": "Света"},
+            {"user_id": 77, "message_count": 9, "user_name": "Сглыпа"},
+        ]
+
+    async def get_me():
+        return SimpleNamespace(first_name="Упупа", full_name="Упупа")
+
+    async def get_chat_member(chat_id, user_id):
+        assert chat_id == -1001
+        bot_names = {66: "Карл", 77: "Сглыпа"}
+        return SimpleNamespace(
+            user=SimpleNamespace(
+                is_bot=user_id in bot_names,
+                first_name=bot_names.get(user_id, "Не бот"),
+                full_name=bot_names.get(user_id, "Не бот"),
+            )
+        )
+
     monkeypatch.setattr(prompt_commands, "get_valid_users", valid_users)
     monkeypatch.setattr(prompt_commands, "get_user_display_name", display_name)
+    monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", participant_activity)
+    monkeypatch.setattr(prompt_commands.bot, "get_me", get_me)
+    monkeypatch.setattr(prompt_commands.bot, "get_chat_member", get_chat_member)
     monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
 
     characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
 
-    assert characters == "Света, Алина, Детектор, Ольга"
+    assert "обязательные активные боты" in characters
+    assert "Упупа, Карл, Сглыпа" in characters
+    assert "Света, Алина, Детектор, Ольга" in characters
 
 
 def test_poem_prompts_do_not_hardcode_legacy_chat_members():
@@ -117,3 +147,28 @@ def test_poem_prompts_do_not_hardcode_legacy_chat_members():
     assert PROMPT_POROSHOK1 is PROMPT_POROSHOK
     assert "анна" not in PROMPT_PIROZHOK1[0].lower()
     assert "анна" not in PROMPT_POROSHOK1[0].lower()
+
+
+def test_poem_bot_detection_ignores_unknown_humans(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from AI.dialog import prompt_commands
+
+    async def activity(*args, **kwargs):
+        return [{"user_id": 999, "message_count": 4, "user_name": "Случайный"}]
+
+    async def get_me():
+        return SimpleNamespace(first_name="Упупа", full_name="Упупа")
+
+    async def get_chat_member(chat_id, user_id):
+        return SimpleNamespace(
+            user=SimpleNamespace(is_bot=False, first_name="Случайный", full_name="Случайный")
+        )
+
+    monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", activity)
+    monkeypatch.setattr(prompt_commands.bot, "get_me", get_me)
+    monkeypatch.setattr(prompt_commands.bot, "get_chat_member", get_chat_member)
+
+    names = asyncio.run(prompt_commands._get_active_poem_bot_names("-1001", set()))
+
+    assert names == ["Упупа"]
