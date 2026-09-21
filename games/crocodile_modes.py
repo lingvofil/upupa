@@ -325,7 +325,7 @@ def _duel_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def start_duel(message) -> None:
+async def _default_start_duel(message) -> None:
     cid = str(message.chat.id)
     if cid in duel_games or cid in telephone_games or cid in crocodile.game_sessions:
         await message.answer("Сначала закончите текущего кракадила.")
@@ -343,6 +343,29 @@ async def start_duel(message) -> None:
         parse_mode="HTML",
         reply_markup=_duel_lobby_keyboard(message.chat.id),
     )
+
+
+_start_duel_handler = _default_start_duel
+
+
+def get_default_start_duel_handler():
+    """Return the immutable base duel starter."""
+    return _default_start_duel
+
+
+def get_start_duel_handler():
+    """Return the currently configured duel starter."""
+    return _start_duel_handler
+
+
+def configure_start_duel_handler(handler) -> None:
+    """Install the composed duel starter."""
+    global _start_duel_handler
+    _start_duel_handler = handler
+
+
+async def start_duel(message) -> None:
+    return await _start_duel_handler(message)
 
 
 async def _start_duel_round(chat_id: str, duel: dict) -> None:
