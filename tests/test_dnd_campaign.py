@@ -570,3 +570,144 @@ def test_base_finish_does_not_generate_or_schedule_final_image(monkeypatch):
     assert state["final_image_prompt"]
     assert state["base_finish_complete"] is True
     assert dnd_sessions[session.chat_id] is session
+
+
+def test_participant_story_start_persists_resolving_only_with_exact_request(monkeypatch):
+    from AI import dnd_result_recovery as recovery
+
+    session = _session(-1009011)
+    session.state = "WAITING_PLOT"
+    campaign._ensure(session)
+    session.character_profiles = {
+        "1": campaign._random_profile(),
+        "2": campaign._random_profile(),
+    }
+    persisted = []
+    continued = []
+
+    async def no_social(_session):
+        return None
+
+    async def chat_context(_chat_id):
+        return "свежая переписка"
+
+    async def continue_generation(_dnd, _bot, current):
+        continued.append(
+            (
+                current.state,
+                dict(current.pending_generation_request),
+                current.selected_plot,
+            )
+        )
+        return False
+
+    class Bot:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, chat_id, text, **kwargs):
+            self.messages.append((chat_id, text, kwargs))
+            return SimpleNamespace(message_id=1, chat=SimpleNamespace(id=chat_id))
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        persist_dnd_sessions=lambda: persisted.append(
+            (
+                session.state,
+                dict(getattr(session, "pending_generation_request", {}) or {}),
+            )
+        ),
+        _collect_recent_chat_context=chat_context,
+        _participants_prompt=lambda _session: "- ID 1: Алиса\n- ID 2: Боря",
+        with_scene_direction=lambda _session, prompt: prompt + "\nSCENE_DIRECTION",
+    )
+
+    monkeypatch.setattr(campaign, "_social_context", no_social)
+    monkeypatch.setattr(recovery, "continue_pending_generation", continue_generation)
+
+    bot = Bot()
+    asyncio.run(
+        campaign._start_story(
+            dnd,
+            bot,
+            session,
+            "Плавучий рынок",
+        )
+    )
+
+    assert persisted
+    resolving_rows = [row for row in persisted if row[0] == "RESOLVING"]
+    assert resolving_rows
+    assert all(row[1].get("kind") == "STORY_START" for row in resolving_rows)
+    assert "Плавучий рынок" in resolving_rows[0][1]["prompt"]
+    assert "SCENE_DIRECTION" in resolving_rows[0][1]["prompt"]
+    assert continued[0][0] == "RESOLVING"
+    assert continued[0][1]["kind"] == "STORY_START"
+    assert continued[0][2] == "Плавучий рынок"
+    assert "дальше" in bot.messages[-1][1]
+
+
+def test_abstract_plot_reserves_story_start_before_resolving(monkeypatch):
+    from AI import dnd_result_recovery as recovery
+
+    session = _session(-1009012)
+    session.mode = "abstract"
+    session.state = "WAITING_PLOT"
+    campaign._ensure(session)
+    session.plot_options = ["Архив объявил забастовку"]
+    persisted = []
+    continued = []
+
+    async def continue_generation(_dnd, _bot, current):
+        continued.append(dict(current.pending_generation_request))
+        return False
+
+    class Message:
+        def __init__(self):
+            self.chat = SimpleNamespace(id=session.chat_id)
+            self.edits = []
+            self.answers = []
+
+        async def edit_text(self, text, **kwargs):
+            self.edits.append((text, kwargs))
+
+        async def answer(self, text, **kwargs):
+            self.answers.append((text, kwargs))
+            return SimpleNamespace(message_id=1)
+
+    class Callback:
+        def __init__(self):
+            self.data = "dnd:plot:0"
+            self.message = Message()
+            self.bot = SimpleNamespace()
+            self.from_user = SimpleNamespace(id=1)
+            self.answers = []
+
+        async def answer(self, text=None, **kwargs):
+            self.answers.append((text, kwargs))
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        _callback_is_host=lambda _callback, _session: True,
+        with_scene_direction=lambda _session, prompt: prompt + "\nSCENE_DIRECTION",
+        persist_dnd_sessions=lambda: persisted.append(
+            (
+                session.state,
+                dict(getattr(session, "pending_generation_request", {}) or {}),
+            )
+        ),
+    )
+
+    monkeypatch.setattr(recovery, "continue_pending_generation", continue_generation)
+
+    callback = Callback()
+    asyncio.run(campaign._plot_callback(callback, dnd))
+
+    assert persisted
+    assert persisted[0][0] == "RESOLVING"
+    assert persisted[0][1]["kind"] == "STORY_START"
+    assert "Архив объявил забастовку" in persisted[0][1]["prompt"]
+    assert "SCENE_DIRECTION" in persisted[0][1]["prompt"]
+    assert continued[0]["kind"] == "STORY_START"
+    assert session.selected_plot == "Архив объявил забастовку"
+    assert "дальше" in callback.message.answers[-1][0]
