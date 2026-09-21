@@ -35,9 +35,11 @@ def _clear_participant_metadata(settings: dict) -> None:
 
 
 _POEM_ACTIVE_POOL_SIZE = 8
-_POEM_CHARACTER_COUNT = 4
+_POEM_CHARACTER_COUNT = 6
 _POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
+_POEM_BOT_INCLUSION_PROBABILITY = 0.20
+_POEM_MAX_GENERATION_ATTEMPTS = 3
 _TELEGRAM_FAKE_SENDER_USER_IDS = {777000, 1087968824}
 _LATIN_TO_CYRILLIC_SEQUENCES = (
     ("shch", "щ"),
@@ -213,18 +215,34 @@ async def _get_active_poem_bot_names(
 def _format_poem_character_instruction(
     active_bot_names: list[str],
     other_characters: str,
+    *,
+    max_characters: int | None = None,
 ) -> str:
-    other_characters = (other_characters or "").strip()
-    if not active_bot_names:
-        return other_characters or "случайные русские имена"
+    """Build one neutral, shuffled hero list with an occasional active bot."""
+    character_parts = [
+        part.strip()
+        for part in (other_characters or "").split(",")
+        if part.strip()
+    ]
+    if max_characters is not None:
+        character_parts = character_parts[:max_characters]
 
-    selected_bot = random.choice(active_bot_names)
-    if other_characters:
-        return (
-            f"обязательный активный бот (должен появиться в тексте): {selected_bot}; "
-            f"остальные герои: {other_characters}"
-        )
-    return f"обязательный активный бот (должен появиться в тексте): {selected_bot}"
+    include_bot = (
+        active_bot_names
+        and random.random() < _POEM_BOT_INCLUSION_PROBABILITY
+    )
+    if include_bot:
+        selected_bot = random.choice(active_bot_names)
+        if selected_bot.casefold() not in {name.casefold() for name in character_parts}:
+            if max_characters is not None and len(character_parts) >= max_characters:
+                character_parts = character_parts[: max_characters - 1]
+            character_parts.append(selected_bot)
+
+    if not character_parts:
+        return "случайные русские имена"
+
+    random.shuffle(character_parts)
+    return ", ".join(character_parts)
 
 
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
@@ -257,7 +275,46 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     return _format_poem_character_instruction(
         active_bot_names,
         ", ".join(selected) if selected else "",
+        max_characters=_POEM_CHARACTER_COUNT,
     )
+
+
+def _is_valid_poem_response(response_text: str | None) -> bool:
+    """Accept only a real four-line poem, ignoring blank lines."""
+    lines = [
+        line.strip()
+        for line in (response_text or "").splitlines()
+        if line.strip()
+    ]
+    return len(lines) == 4
+
+
+async def _generate_valid_poem(
+    full_prompt: str,
+    chat_id: str,
+    poem_type: str,
+) -> str | None:
+    retry_instruction = (
+        "\n\nКРИТИЧЕСКОЕ ТРЕБОВАНИЕ К ФОРМАТУ: ответ должен состоять ровно из четырёх "
+        "непустых строк, разделённых переносами строки. Не склеивай строки в одну, "
+        "не добавляй заголовок, комментарии, кавычки или пояснения."
+    )
+
+    for attempt in range(1, _POEM_MAX_GENERATION_ATTEMPTS + 1):
+        prompt = full_prompt if attempt == 1 else full_prompt + retry_instruction
+        response_text = await generate_simple_response(prompt, chat_id)
+        if _is_valid_poem_response(response_text):
+            return response_text.strip()
+
+        logging.warning(
+            "Некорректный формат %s: попытка %s/%s, ответ=%r",
+            poem_type,
+            attempt,
+            _POEM_MAX_GENERATION_ATTEMPTS,
+            (response_text or "")[:300],
+        )
+
+    return None
 
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -287,7 +344,9 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     full_prompt = base_prompt + characters
     try:
-        response_text = await generate_simple_response(full_prompt, chat_id)
+        response_text = await _generate_valid_poem(full_prompt, chat_id, poem_type)
+        if response_text is None:
+            response_text = error_response
     except Exception as exc:
         logging.error("API Error for %s: %s", poem_type, exc)
         response_text = error_response
