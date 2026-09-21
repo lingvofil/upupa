@@ -235,6 +235,9 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     )
 
     assert "_original_" not in admin_source
+    assert "_configured = False" not in admin_source
+    assert "def configure_crocodile_admin_controls(" not in admin_source
+    assert "configure_crocodile_admin_controls(" not in runtime_source
     for assignment in (
         "crocodile_controls.stop_lock_remaining_seconds =",
         "crocodile_modes.handle_telephone_callback =",
@@ -266,8 +269,15 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_admin,",
         admin_composition,
     )
-    admin_install = runtime_source.index("configure_crocodile_admin_controls()", admin_wrapper)
-    roles_composition = runtime_source.index(composition, admin_install)
+    mentions_install = runtime_source.index(
+        "configure_crocodile_telephone_mentions()",
+        admin_wrapper,
+    )
+    roles_install = runtime_source.index(
+        "configure_crocodile_telephone_roles()",
+        mentions_install,
+    )
+    roles_composition = runtime_source.index(composition, roles_install)
     roles_wrapper = runtime_source.index(
         "handle_telephone_callback_with_roles,",
         roles_composition,
@@ -287,7 +297,8 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
         permissions_composition
         < admin_composition
         < admin_wrapper
-        < admin_install
+        < mentions_install
+        < roles_install
         < roles_composition
         < roles_wrapper
         < announcements_composition
