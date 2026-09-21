@@ -625,11 +625,12 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
     async def generate_session_response(session, prompt):
         _ensure(session)
+        sessions = getattr(dnd, "dnd_sessions", {})
+        chat_id = getattr(session, "chat_id", None)
+        was_registered = sessions.get(chat_id) is session
         if _generation_is_ephemeral(session):
             result = await original_generate(session, prompt)
-            if getattr(dnd, "dnd_sessions", {}).get(
-                getattr(session, "chat_id", None)
-            ) is not session:
+            if was_registered and sessions.get(chat_id) is not session:
                 raise StaleDndSessionError(
                     f"DnD session changed while auxiliary generation was running: {session.chat_id}"
                 )
@@ -680,15 +681,15 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             except AttributeError:
                 pass
 
-        if getattr(dnd, "dnd_sessions", {}).get(
-            getattr(session, "chat_id", None)
-        ) is not session:
+        current = sessions.get(chat_id)
+        if was_registered and current is not session:
             raise StaleDndSessionError(
                 f"DnD session changed while generation was running: {session.chat_id}"
             )
-        session.pending_generated_result = _new_result(session, result)
-        session.pending_generation_request = {}
-        dnd.persist_dnd_sessions()
+        if current is session:
+            session.pending_generated_result = _new_result(session, result)
+            session.pending_generation_request = {}
+            dnd.persist_dnd_sessions()
         return result
 
     dnd.generate_session_response = generate_session_response
