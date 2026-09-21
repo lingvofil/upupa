@@ -687,3 +687,121 @@ def test_nested_generation_requires_explicit_successor_transition():
         asyncio.run(dnd.generate_session_response(session, "дочернее продолжение"))
 
     assert calls["generate"] == 0
+
+
+def test_group_generation_retry_restores_group_parse_context():
+    session = SimpleNamespace(
+        chat_id=-1031,
+        state="RESOLVING",
+        pending_generation_request={
+            "id": "gen:group",
+            "prompt": "групповой ход",
+            "kind": "GROUP_ACTION_CONTINUATION",
+            "telegram_effects": [],
+        },
+        pending_generated_result={},
+        generated_result_seq=0,
+    )
+    seen = []
+
+    async def generate(_session, _prompt):
+        return "Алиса действует. [ACTION:ROLL;TYPE:CHECK;TARGETS:1;DC:11]"
+
+    async def parse(_bot, _chat_id, _text):
+        seen.append(bool(getattr(session, "_upupa_resolving_group_actions", False)))
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        persist_dnd_sessions=lambda: None,
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+    )
+
+    assert asyncio.run(recovery._resume_pending_generation(dnd, None, session)) is True
+    assert seen == [True]
+    assert not hasattr(session, "_upupa_resolving_group_actions")
+
+
+def test_group_generated_result_replay_restores_group_parse_context():
+    session = SimpleNamespace(
+        chat_id=-1032,
+        state="RESOLVING",
+        pending_generation_request={},
+        pending_generated_result={
+            "id": "8:group",
+            "text": "Алиса действует. [ACTION:ROLL;TYPE:CHECK;TARGETS:1;DC:11]",
+            "phase": recovery.RESULT_PHASE_READY,
+            "source_request_kind": "GROUP_ACTION_CONTINUATION",
+            "telegram_effects": [],
+        },
+        generated_result_seq=8,
+        pending_actions={},
+        action_prompt_message_id=None,
+        action_deadline=None,
+        action_target_user_ids=[],
+    )
+    seen = []
+
+    async def parse(_bot, _chat_id, _text):
+        seen.append(bool(getattr(session, "_upupa_resolving_group_actions", False)))
+
+    dnd = SimpleNamespace(
+        persist_dnd_sessions=lambda: None,
+        parse_and_execute_turn=parse,
+    )
+    state_policy = SimpleNamespace()
+
+    asyncio.run(recovery._resume_pending_result(dnd, None, session, state_policy))
+
+    assert seen == [True]
+    assert not hasattr(session, "_upupa_resolving_group_actions")
+
+
+def test_generated_result_keeps_source_request_kind():
+    session = SimpleNamespace(
+        generated_result_seq=0,
+        state="RESOLVING",
+        pending_generation_request={
+            "kind": "GROUP_ACTION_CONTINUATION",
+        },
+        pending_generated_result={},
+    )
+
+    result = recovery._new_result(session, "готовый групповой ответ")
+
+    assert result["source_request_kind"] == "GROUP_ACTION_CONTINUATION"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "STORY_START",
+        "ROLL_CONTINUATION",
+        "POLL_CONTINUATION",
+        "GROUP_ACTION_CONTINUATION",
+        "ENDING",
+        "GENERATION",
+    ],
+)
+def test_restore_schedules_every_durable_generation_kind(kind):
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, scheduled = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state = "RESOLVING"
+    session.pending_generation_request = {
+        "id": f"gen:matrix:{kind}",
+        "prompt": f"точный запрос {kind}",
+        "kind": kind,
+        "source_state": "RESOLVING",
+        "telegram_effects": [],
+    }
+    session.pending_generated_result = {}
+
+    restored = dnd.restore_dnd_sessions(object())
+
+    assert restored == 1
+    assert calls["restore"] == 1
+    assert len(scheduled) == 1
+    coro, name = scheduled.pop()
+    assert name == f"dnd-generation-retry:{session.chat_id}:gen:matrix:{kind}"
+    coro.close()
