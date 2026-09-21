@@ -20,7 +20,7 @@ async def generate_image_bytes(
 
     Normal image flows preserve their existing provider order. DnD uses a
     latency-aware order: GigaChat first, then quick reserves
-    Pollinations/Kandinsky/Hugging Face, with slow public AI Horde last.
+    Pollinations/Hugging Face, with slow public AI Horde last.
     DnD provider work runs in the background AI lane and can stop between
     providers when the scene that requested the image is no longer current.
     """
@@ -69,13 +69,6 @@ async def generate_image_bytes(
                 if image:
                     logging.info("[%s] image provider=pollinations", log_context)
                     return image, "pollinations"
-
-                if stale("kandinsky"):
-                    return None, None
-                image = await pg.kandinsky_generate(fallback_prompt)
-                if image:
-                    logging.info("[%s] image provider=kandinsky", log_context)
-                    return image, "kandinsky"
 
                 if stale("huggingface"):
                     return None, None
