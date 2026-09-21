@@ -263,3 +263,62 @@ def test_groq_retry_after_parser_handles_seconds_and_milliseconds():
 
     assert resilience._groq_retry_after_seconds(short_ms) == 0.39
     assert resilience._groq_retry_after_seconds(short_seconds) == 1.71
+
+
+def test_gemini_history_is_bounded_without_mutating_durable_conversation():
+    session = _session()
+    session.conversation = [
+        {"role": "user", "content": "SYSTEM_HEAD " + "с" * 12_000 + " SYSTEM_TAIL"},
+        {"role": "assistant", "content": "Погнали."},
+    ]
+    for index in range(8):
+        session.conversation.extend(
+            [
+                {
+                    "role": "user",
+                    "content": f"OLD_USER_{index} " + ("у" * 2_000),
+                },
+                {
+                    "role": "assistant",
+                    "content": f"OLD_ASSISTANT_{index} " + ("а" * 2_000),
+                },
+            ]
+        )
+    before = [dict(item) for item in session.conversation]
+    current = (
+        "CURRENT_STATE_SENTINEL "
+        + ("к" * 10_000)
+        + " CURRENT_ACTION_SENTINEL"
+    )
+
+    contents = resilience._history_contents(session, current)
+
+    sent_texts = [
+        part["text"]
+        for item in contents
+        for part in item.get("parts") or []
+    ]
+    sent_chars = sum(len(text) for text in sent_texts)
+
+    assert sent_chars <= resilience.DND_GEMINI_INPUT_MAX_CHARS
+    assert len(contents) <= 2 + resilience.DND_GEMINI_RECENT_MESSAGES + 1
+    assert "SYSTEM_HEAD" in sent_texts[0]
+    assert "SYSTEM_TAIL" in sent_texts[0]
+    assert any("OLD_ASSISTANT_7" in text for text in sent_texts)
+    assert not any("OLD_ASSISTANT_0" in text for text in sent_texts)
+    assert "CURRENT_STATE_SENTINEL" in sent_texts[-1]
+    assert "CURRENT_ACTION_SENTINEL" in sent_texts[-1]
+    assert session.conversation == before
+
+
+def test_short_gemini_history_is_preserved_exactly():
+    session = _session()
+    prompt = "свежий ход"
+
+    contents = resilience._history_contents(session, prompt)
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "system prompt"}]},
+        {"role": "model", "parts": [{"text": "Погнали."}]},
+        {"role": "user", "parts": [{"text": prompt}]},
+    ]
