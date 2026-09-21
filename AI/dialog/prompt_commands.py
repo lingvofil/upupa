@@ -10,6 +10,7 @@ from core.loader import bot
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
 from features.stat_rank_settings import get_user_display_name, get_valid_users
+from features.statistics import get_chat_participant_activity
 from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
@@ -33,6 +34,8 @@ def _clear_participant_metadata(settings: dict) -> None:
 
 _POEM_ACTIVE_POOL_SIZE = 8
 _POEM_CHARACTER_COUNT = 4
+_POEM_ACTIVE_BOT_LIMIT = 4
+_POEM_PARTICIPANT_SCAN_LIMIT = 50
 
 
 def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
@@ -59,22 +62,86 @@ def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL
     return [str(user_id) for user_id, _stats in ranked[:limit]]
 
 
+async def _get_active_poem_bot_names(
+    chat_id: str,
+    human_user_ids: set[str],
+) -> list[str]:
+    bot_names: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        me = await bot.get_me()
+        own_name = (getattr(me, "first_name", None) or getattr(me, "full_name", None) or "Упупа").strip()
+        if own_name:
+            bot_names.append(own_name)
+            seen.add(own_name.casefold())
+    except Exception as exc:
+        logging.warning("Не удалось получить имя Упупы для стихов: %s", exc)
+        bot_names.append("Упупа")
+        seen.add("упупа")
+
+    try:
+        activity = await get_chat_participant_activity(
+            int(chat_id),
+            period_hours=24 * 7,
+            limit=_POEM_PARTICIPANT_SCAN_LIMIT,
+        )
+    except Exception as exc:
+        logging.warning("Не удалось получить активность ботов для стихов: %s", exc)
+        return bot_names[:_POEM_ACTIVE_BOT_LIMIT]
+
+    bot_candidates = [
+        row
+        for row in activity
+        if str(row.get("user_id")) not in human_user_ids
+    ]
+
+    for row in bot_candidates:
+        if len(bot_names) >= _POEM_ACTIVE_BOT_LIMIT:
+            break
+        user_id = row.get("user_id")
+        if not isinstance(user_id, int):
+            continue
+        try:
+            member = await bot.get_chat_member(int(chat_id), user_id)
+        except Exception:
+            continue
+
+        user = getattr(member, "user", None)
+        if not user or not getattr(user, "is_bot", False):
+            continue
+        name = (
+            getattr(user, "first_name", None)
+            or getattr(user, "full_name", None)
+            or row.get("user_name")
+            or row.get("user_username")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        bot_names.append(name)
+
+    return bot_names
+
+
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
     try:
         valid_users = await get_valid_users(chat_id)
         user_ids = _rank_active_poem_users(valid_users)
-        if not user_ids:
-            return "случайные русские имена"
-
         names = await asyncio.gather(
             *(get_user_display_name(int(chat_id), int(user_id)) for user_id in user_ids)
         )
+        active_bot_names = await _get_active_poem_bot_names(chat_id, set(valid_users))
     except Exception as exc:
         logging.warning("Не удалось подобрать активных героев для стихов: %s", exc)
         return "случайные русские имена"
 
     unique_names = []
-    seen = set()
+    seen = {name.casefold() for name in active_bot_names}
     for raw_name in names:
         name = (raw_name or "").strip()
         if not name or name.startswith("Пользователь "):
@@ -85,10 +152,18 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
         seen.add(key)
         unique_names.append(name)
 
-    if not unique_names:
-        return "случайные русские имена"
-
     selected = random.sample(unique_names, k=min(_POEM_CHARACTER_COUNT, len(unique_names)))
+    if active_bot_names:
+        bot_block = ", ".join(active_bot_names)
+        if selected:
+            return (
+                f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
+                f"остальные герои на выбор: {', '.join(selected)}"
+            )
+        return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
+
+    if not selected:
+        return "случайные русские имена"
     return ", ".join(selected)
 
 
