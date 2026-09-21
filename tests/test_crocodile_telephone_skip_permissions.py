@@ -285,13 +285,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_admin,",
         admin_composition,
     )
-    permissions_installer = runtime_source.index(
-        "configure_crocodile_telephone_skip_permissions()",
-        admin_wrapper,
-    )
     roles_installer = runtime_source.index(
         "configure_crocodile_telephone_roles()",
-        permissions_installer,
+        admin_wrapper,
     )
     roles_composition = runtime_source.index(
         composition,
@@ -301,13 +297,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_roles,",
         roles_composition,
     )
-    announcements_installer = runtime_source.index(
-        "configure_crocodile_telephone_role_announcements()",
-        roles_wrapper,
-    )
     announcements_composition = runtime_source.index(
         composition,
-        announcements_installer,
+        roles_wrapper,
     )
     announcements_wrapper = runtime_source.index(
         "telephone_callback_with_role_announcement,",
@@ -316,6 +308,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     wiring = "crocodile_modes.configure_telephone_callback_handler("
     final_wiring = runtime_source.index(wiring, announcements_wrapper)
 
+    skip_source = (
+        ROOT / "games" / "crocodile_telephone_skip_permissions.py"
+    ).read_text(encoding="utf-8")
     roles_source = (ROOT / "games" / "crocodile_telephone_roles.py").read_text(
         encoding="utf-8"
     )
@@ -324,6 +319,13 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     ).read_text(encoding="utf-8")
     assert "_original_handle_telephone_callback" not in roles_source
     assert "_original_handle_telephone_callback" not in announcements_source
+    assert "_configured = False" not in skip_source
+    assert "_configured = False" not in announcements_source
+    assert "def configure_crocodile_telephone_skip_permissions(" not in skip_source
+    assert (
+        "def configure_crocodile_telephone_role_announcements("
+        not in announcements_source
+    )
     assert "crocodile_modes.configure_telephone_callback_handler(" not in roles_source
     assert "crocodile_modes.configure_telephone_callback_handler(" not in announcements_source
     assert "handle_telephone_callback_with_roles(callback, next_handler)" in roles_source
@@ -340,11 +342,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         < permissions
         < admin_composition
         < admin_wrapper
-        < permissions_installer
         < roles_installer
         < roles_composition
         < roles_wrapper
-        < announcements_installer
         < announcements_composition
         < announcements_wrapper
         < final_wiring
