@@ -34,6 +34,116 @@ def test_style_profile_preserves_short_reactions_and_real_length():
     assert "Не навязывай универсальный лимит длины" in prompt
 
 
+def test_style_profile_includes_real_interaction_examples_and_behavior_rule():
+    from AI.dialog.style import create_user_style_prompt
+
+    prompt = create_user_style_prompt(
+        ["куклу хочу", "хочу монстер хай", "не буду"],
+        "Вася",
+        interaction_examples=[
+            "Реплика собеседника: что тебе подарить?\nОтвет участника: куклу",
+        ],
+        recurring_examples=["подари куклу"],
+    )
+
+    assert "[INTERACTION EXAMPLES]" in prompt
+    assert "что тебе подарить?" in prompt
+    assert "Ответ участника: куклу" in prompt
+    assert "INTERACTION EXAMPLES важнее усреднённой вежливости" in prompt
+    assert "[RECURRING PATTERNS]" in prompt
+    assert "- подари куклу" in prompt
+    assert "повторяющиеся просьбы" in prompt
+
+
+def test_participant_interactions_capture_preceding_other_user(monkeypatch):
+    from AI.dialog import participant_imitation
+
+    class FakeRepository:
+        def scan(self, _chat_id, visitor, **_filters):
+            visitor({"id": 2, "user_id": "42", "text": "подари куклу"})
+            visitor({"id": 4, "user_id": "42", "text": "не буду"})
+
+        def context(self, _chat_id, row_id, radius=1):
+            assert radius == 1
+            rows = {
+                2: [
+                    {"id": 1, "user_id": "99", "text": "что тебе подарить?"},
+                    {"id": 2, "user_id": "42", "text": "подари куклу"},
+                    {"id": 3, "user_id": "42", "text": "ещё одну"},
+                ],
+                4: [
+                    {"id": 3, "user_id": "42", "text": "ещё одну"},
+                    {"id": 4, "user_id": "42", "text": "не буду"},
+                ],
+            }
+            return rows[row_id]
+
+    monkeypatch.setattr(
+        participant_imitation,
+        "get_history_repository",
+        lambda _path: FakeRepository(),
+    )
+
+    interactions = participant_imitation._sample_participant_interactions_sync(
+        42,
+        -1001,
+        sample_size=10,
+        recent_size=10,
+    )
+
+    assert interactions == [
+        "Реплика собеседника: что тебе подарить?\nОтвет участника: подари куклу"
+    ]
+
+
+def test_semantic_memory_searches_interaction_examples_and_excludes_current_message(monkeypatch):
+    from AI.dialog import participant_imitation
+
+    entry = participant_imitation.ParticipantHistory(
+        chat_id="-1001",
+        user_id=42,
+        sample_size=10,
+        recent_size=10,
+    )
+    entry.add_logged_message("старое сообщение")
+    entry.add_logged_message("ещё как")
+    entry.interactions = [
+        "Реплика собеседника: А муж че не пердит?\nОтвет участника: еще как"
+    ]
+
+    async def fake_get_or_build_history(*_args, **_kwargs):
+        return entry, "hit"
+
+    captured = {}
+
+    async def fake_find_relevant_context(query_text, candidates, top_k=3):
+        captured["query"] = query_text
+        captured["candidates"] = list(candidates)
+        captured["top_k"] = top_k
+        return [entry.interactions[0]]
+
+    monkeypatch.setattr(participant_imitation, "_get_or_build_history", fake_get_or_build_history)
+    monkeypatch.setattr(participant_imitation, "find_relevant_context", fake_find_relevant_context)
+    monkeypatch.setattr(participant_imitation, "refresh_style_profile", lambda *_args, **_kwargs: False)
+
+    memory, changed = asyncio.run(
+        participant_imitation.prepare_participant_turn(
+            -1001,
+            {"imitated_user": {"user_id": 42, "display_name": "Вася"}},
+            "еще как\n\nКонтекст сообщения, на которое отвечают:\nА муж че не пердит?",
+            current_message_text="ещё как",
+        )
+    )
+
+    assert changed is False
+    assert "старое сообщение" in captured["candidates"]
+    assert "ещё как" not in captured["candidates"]
+    assert entry.interactions[0] in captured["candidates"]
+    assert captured["top_k"] == 5
+    assert "А муж че не пердит?" in captured["query"]
+    assert "Ответ участника: еще как" in memory
+
+
 def test_style_ngrams_never_cross_message_boundaries():
     from AI.dialog.style import _frequent_phrases
 
@@ -47,6 +157,26 @@ def test_style_ngrams_never_cross_message_boundaries():
     assert "красный кот" in phrase_names
     assert "спит дома" in phrase_names
     assert "кот спит" not in phrase_names
+
+
+def test_recurring_short_messages_survive_outside_bounded_style_sample():
+    from AI.dialog.participant_imitation import ParticipantHistory
+
+    entry = ParticipantHistory(
+        chat_id="-1001",
+        user_id=42,
+        sample_size=2,
+        recent_size=2,
+    )
+    for index in range(40):
+        entry.add_logged_message(f"одноразовая реплика номер {index}")
+        if index in {2, 9, 17, 31}:
+            entry.add_logged_message("подари куклу")
+
+    sampled, _count = entry.snapshot()
+
+    assert "подари куклу" not in sampled
+    assert "подари куклу" in entry.recurring_messages()
 
 
 def test_participant_sampling_is_bounded_and_keeps_recent_tail(tmp_path, monkeypatch):
@@ -173,7 +303,7 @@ def test_identity_resolution_pins_telegram_user_id(tmp_path, monkeypatch):
 
 
 def test_style_profile_refreshes_after_fifty_new_messages():
-    from AI.dialog.participant_imitation import refresh_style_profile
+    from AI.dialog.participant_imitation import STYLE_PROFILE_VERSION, refresh_style_profile
 
     settings = {
         "prompt": "old prompt",
@@ -181,6 +311,7 @@ def test_style_profile_refreshes_after_fifty_new_messages():
         "imitated_user": {"user_id": 42, "display_name": "Вася"},
         "style_profile_message_count": 100,
         "style_profile_updated_at": datetime.now(timezone.utc).isoformat(),
+        "style_profile_version": STYLE_PROFILE_VERSION,
     }
     messages = ["ага", "ну нормально", "короче потом"]
 
@@ -190,6 +321,31 @@ def test_style_profile_refreshes_after_fifty_new_messages():
     assert refresh_style_profile(settings, messages, 150) is True
     assert settings["prompt"] != "old prompt"
     assert settings["style_profile_message_count"] == 150
+
+
+def test_legacy_participant_profile_refreshes_for_new_behavior_schema():
+    from AI.dialog.participant_imitation import STYLE_PROFILE_VERSION, refresh_style_profile
+
+    settings = {
+        "prompt": "legacy prompt",
+        "prompt_name": "Вася",
+        "imitated_user": {"user_id": 42, "display_name": "Вася"},
+        "style_profile_message_count": 100,
+        "style_profile_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    changed = refresh_style_profile(
+        settings,
+        ["подари куклу", "хочу монстер хай"],
+        100,
+        ["Реплика собеседника: что хочешь?\nОтвет участника: подари куклу"],
+        ["подари куклу"],
+    )
+
+    assert changed is True
+    assert settings["style_profile_version"] == STYLE_PROFILE_VERSION
+    assert "[INTERACTION EXAMPLES]" in settings["prompt"]
+    assert "[RECURRING PATTERNS]" in settings["prompt"]
 
 
 def test_semantic_search_uses_supported_text_embedding_model():

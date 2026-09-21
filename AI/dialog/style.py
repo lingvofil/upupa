@@ -12,6 +12,7 @@ WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_]+", re.UNICODE)
 EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", re.UNICODE)
 MAX_STYLE_EXAMPLES = 12
 RECENT_STYLE_EXAMPLES = 6
+MAX_INTERACTION_EXAMPLES = 8
 
 
 def is_participant_style_message(text: str) -> bool:
@@ -174,12 +175,28 @@ def build_style_fingerprint(messages: list[str]) -> str:
     return "\n".join(lines)
 
 
-def create_user_style_prompt(messages: list[str], display_name: str) -> str:
-    """Create a compact participant persona from measurable style + real examples."""
+def create_user_style_prompt(
+    messages: list[str],
+    display_name: str,
+    interaction_examples: list[str] | None = None,
+    recurring_examples: list[str] | None = None,
+) -> str:
+    """Create a compact participant persona from style plus real conversational behavior."""
     filtered = [message.strip() for message in messages if is_participant_style_message(message)]
     fingerprint = build_style_fingerprint(filtered)
     examples = _select_style_examples(filtered)
     examples_text = "\n".join(f"{index}. {message}" for index, message in enumerate(examples, 1))
+    interaction_pool = [item.strip() for item in (interaction_examples or []) if item.strip()]
+    if len(interaction_pool) <= MAX_INTERACTION_EXAMPLES:
+        interactions = interaction_pool
+    else:
+        older_slots = MAX_INTERACTION_EXAMPLES // 2
+        interactions = interaction_pool[:older_slots] + interaction_pool[-(MAX_INTERACTION_EXAMPLES - older_slots):]
+    interactions_text = "\n\n".join(
+        f"{index}. {item}" for index, item in enumerate(interactions, 1)
+    )
+    recurring = [item.strip() for item in (recurring_examples or []) if item.strip()]
+    recurring_text = "\n".join(f"- {item}" for item in recurring)
 
     return (
         "Ты — имитатор манеры общения участника Telegram-чата. Твоя задача — создавать НОВЫЕ сообщения "
@@ -190,14 +207,28 @@ def create_user_style_prompt(messages: list[str], display_name: str) -> str:
         "[STYLE EXAMPLES]\n"
         f"{examples_text or 'Нет подходящих примеров.'}\n"
         "[/STYLE EXAMPLES]\n\n"
+        "[INTERACTION EXAMPLES]\n"
+        f"{interactions_text or 'Нет надёжных контекстных примеров.'}\n"
+        "[/INTERACTION EXAMPLES]\n\n"
+        "[RECURRING PATTERNS]\n"
+        f"{recurring_text or 'Нет достаточно повторяющихся коротких реплик.'}\n"
+        "[/RECURRING PATTERNS]\n\n"
         "Правила имитации:\n"
         "- Копируй статистически заметные привычки: типичную длину, регистр, пунктуацию, мат, сленг, "
         "эмодзи, междометия, ошибки, ритм и степень подробности.\n"
         "- Не навязывай универсальный лимит длины: короткий или длинный ответ выбирай по профилю и контексту.\n"
         "- Короткие реакции — полноценная часть стиля. Если человек часто отвечает одним-двумя словами, делай так же.\n"
-        "- Не повторяй STYLE EXAMPLES и найденные старые сообщения дословно, не цитируй логи и не склеивай ответ из кусков.\n"
+        "- RECURRING PATTERNS — сильный сигнал фирменных присказок, просьб и повторяющихся мотивов; используй их заметно, "
+        "когда текущий контекст к ним подходит, вместо усреднённого ответа чат-бота.\n"
+        "- INTERACTION EXAMPLES важнее усреднённой вежливости: они показывают, на что человек цепляется, что игнорирует, "
+        "как отказывает, подкалывает, просит, спорит или меняет тему. Не превращай ответ в нейтральное поддержание беседы, "
+        "если реальные примеры показывают более характерную реакцию.\n"
+        "- Не копируй целиком уникальные старые реплики и не склеивай ответ из кусков. Но короткие устойчивые присказки, "
+        "повторяющиеся просьбы, междометия и фирменные формулировки можно естественно повторять, если они действительно "
+        "встречаются неоднократно.\n"
         "- STYLE EXAMPLES показывают только манеру речи. Не считай случайные факты из них вечными убеждениями человека.\n"
-        "- Конкретные взгляды, предпочтения, биографические факты и прошлый опыт можно приписывать человеку только когда "
-        "они подтверждены отдельно переданным SEMANTIC MEMORY. Если такой памяти нет, имитируй только стиль и не выдумывай позицию.\n"
+        "- Повторяющиеся темы, просьбы и поведенческие привычки из примеров можно использовать как часть образа, но не "
+        "превращай их в новые биографические факты. Конкретные взгляды, биографию и прошлый опыт можно приписывать человеку "
+        "только когда они подтверждены отдельно переданным SEMANTIC MEMORY.\n"
         f"- Отвечай от лица {display_name} естественно для обычного группового Telegram-чата."
     )
