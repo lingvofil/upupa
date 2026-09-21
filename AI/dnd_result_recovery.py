@@ -20,12 +20,18 @@ EFFECT_IN_FLIGHT = "IN_FLIGHT"
 EFFECT_DONE = "DONE"
 GROUP_ACTION_REQUEST_KIND = "GROUP_ACTION_CONTINUATION"
 
+
+class StaleDndSessionError(RuntimeError):
+    """A provider response belongs to a session that is no longer current."""
+
+
 _CORE_SNAPSHOT_FIELDS = (
     "state",
     "last_roll_stat",
     "pending_roll",
     "current_poll_id",
     "pending_poll",
+    "last_resolved_poll",
     "action_prompt_message_id",
     "pending_actions",
     "action_deadline",
@@ -185,8 +191,11 @@ def _new_result(session, text: str) -> dict:
         "telegram_effects": [],
     }
     request_kind = str(request.get("kind") or "")
+    request_id = str(request.get("id") or "")
     if request_kind:
         result["source_request_kind"] = request_kind
+    if request_id:
+        result["source_request_id"] = request_id
     return result
 
 
@@ -507,11 +516,33 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
     if not await _deliver_generation_effects(dnd, bot, session):
         return False
     request_kind = str(session.pending_generation_request.get("kind") or "")
-    request_id = session.pending_generation_request.get("id")
+    request_id = str(session.pending_generation_request.get("id") or "")
     session.state = "RESOLVING"
     dnd.persist_dnd_sessions()
     try:
         response = await dnd.generate_session_response(session, prompt)
+        if dnd.dnd_sessions.get(session.chat_id) is not session:
+            logging.warning(
+                "DnD discarded stale generated continuation chat_id=%s request_id=%s reason=session-replaced",
+                getattr(session, "chat_id", None),
+                request_id,
+            )
+            return False
+        current_request_id = str(
+            (getattr(session, "pending_generation_request", {}) or {}).get("id") or ""
+        )
+        result_request_id = str(
+            (getattr(session, "pending_generated_result", {}) or {}).get("source_request_id") or ""
+        )
+        if request_id and request_id not in {current_request_id, result_request_id}:
+            logging.warning(
+                "DnD discarded stale generated continuation chat_id=%s request_id=%s current_request_id=%s result_request_id=%s reason=request-replaced",
+                getattr(session, "chat_id", None),
+                request_id,
+                current_request_id or None,
+                result_request_id or None,
+            )
+            return False
         with _parse_request_context(session, request_kind):
             await dnd.parse_and_execute_turn(bot, session.chat_id, response)
         return True
@@ -612,8 +643,16 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
     async def generate_session_response(session, prompt):
         _ensure(session)
+        sessions = getattr(dnd, "dnd_sessions", {})
+        chat_id = getattr(session, "chat_id", None)
+        was_registered = sessions.get(chat_id) is session
         if _generation_is_ephemeral(session):
-            return await original_generate(session, prompt)
+            result = await original_generate(session, prompt)
+            if was_registered and sessions.get(chat_id) is not session:
+                raise StaleDndSessionError(
+                    f"DnD session changed while auxiliary generation was running: {session.chat_id}"
+                )
+            return result
 
         existing = _pending_text(session)
         if existing:
@@ -647,6 +686,9 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             reserve_generation_request(session, effective_prompt)
             dnd.persist_dnd_sessions()
 
+        active_request_id = str(
+            (getattr(session, "pending_generation_request", {}) or {}).get("id") or ""
+        )
         session._upupa_generation_call_active = True
         try:
             result = await original_generate(session, effective_prompt)
@@ -660,7 +702,24 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             except AttributeError:
                 pass
 
-        if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
+        current = sessions.get(chat_id)
+        if was_registered and current is not session:
+            raise StaleDndSessionError(
+                f"DnD session changed while generation was running: {session.chat_id}"
+            )
+        current_request_id = str(
+            (getattr(session, "pending_generation_request", {}) or {}).get("id") or ""
+        )
+        if (
+            was_registered
+            and active_request_id
+            and current_request_id != active_request_id
+        ):
+            raise StaleDndSessionError(
+                "DnD generation request changed while provider call was running: "
+                f"{session.chat_id} {active_request_id} -> {current_request_id or 'none'}"
+            )
+        if current is session:
             session.pending_generated_result = _new_result(session, result)
             session.pending_generation_request = {}
             dnd.persist_dnd_sessions()
@@ -753,6 +812,7 @@ __all__ = [
     "RESULT_PHASE_APPLYING",
     "EFFECT_IN_FLIGHT",
     "EFFECT_DONE",
+    "StaleDndSessionError",
     "_DurableBotProxy",
     "_snapshot_parse_state",
     "_restore_parse_state",

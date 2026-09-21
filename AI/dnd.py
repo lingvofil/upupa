@@ -205,6 +205,7 @@ class GameSession:
         self.pending_roll = None
         self.current_poll_id = None
         self.pending_poll = None
+        self.last_resolved_poll = None
         self.action_prompt_message_id = None
         self.pending_actions = {}
         self.action_deadline = None
@@ -278,6 +279,7 @@ class GameSession:
             "pending_roll": self.pending_roll,
             "current_poll_id": self.current_poll_id,
             "pending_poll": self.pending_poll,
+            "last_resolved_poll": self.last_resolved_poll,
             "action_prompt_message_id": self.action_prompt_message_id,
             "pending_actions": self.pending_actions,
             "action_deadline": self.action_deadline,
@@ -337,6 +339,10 @@ class GameSession:
             }
         session.current_poll_id = record.get("current_poll_id")
         session.pending_poll = record.get("pending_poll")
+        raw_resolved_poll = record.get("last_resolved_poll")
+        session.last_resolved_poll = (
+            dict(raw_resolved_poll) if isinstance(raw_resolved_poll, dict) else None
+        )
         if session.pending_poll is not None:
             session.pending_poll = dict(session.pending_poll)
             session.pending_poll["votes"] = dict(session.pending_poll.get("votes") or {})
@@ -936,6 +942,7 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
                 "deadline": deadline,
                 "target_user_ids": targets,
                 "votes": {},
+                "scene_text": clean_text,
             }
             poll_map[poll_id] = chat_id
             persist_dnd_sessions()
@@ -1041,6 +1048,14 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
             transition_to_generation_request,
         )
 
+        poll_snapshot = dict(getattr(session, "pending_poll", None) or {})
+        session.last_resolved_poll = {
+            "poll_id": poll_id,
+            "scene_text": str(poll_snapshot.get("scene_text") or "").strip(),
+            "options": list(options),
+            "outcome": outcome,
+            "resolved_at": time.time(),
+        }
         poll_map.pop(poll_id, None)
         session.current_poll_id = None
         session.pending_poll = None
@@ -1774,6 +1789,23 @@ async def handle_dnd_next(message: Message):
             await message.answer("Нечего восстанавливать.")
         return
     if session.state == "WAITING_ACTION":
+        if not session.action_prompt_message_id:
+            targets = list(getattr(session, "action_target_user_ids", []) or [])
+            try:
+                await open_action_window(
+                    message.bot,
+                    message.chat.id,
+                    target_user_ids=targets,
+                )
+            except Exception:
+                logging.exception(
+                    "DnD action prompt recovery failed chat_id=%s",
+                    message.chat.id,
+                )
+                await message.answer(
+                    "Не смог восстановить окно хода. Напиши «дальше» ещё раз."
+                )
+            return
         if not session.pending_actions:
             await message.answer("Пока нечего завершать: никто ещё не заявил действие.")
             return
