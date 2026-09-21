@@ -16,7 +16,6 @@ from core.settings import ADMIN_ID
 from games import crocodile, crocodile_modes, crocodile_party_controls
 
 
-_configured = False
 
 
 def is_crocodile_admin(user_id: int | str | None) -> bool:
@@ -212,11 +211,3 @@ async def reverse_modes_callback_with_admin(callback, next_handler) -> Any:
             return await callback.answer("Остановлено администратором")
         return await callback.answer("Игра уже закончилась")
     return await next_handler(callback)
-
-
-def configure_crocodile_admin_controls() -> None:
-    """Mark owner fallbacks configured after explicit runtime composition."""
-    global _configured
-    if _configured:
-        return
-    _configured = True

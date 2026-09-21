@@ -8,7 +8,6 @@ from core.settings import ADMIN_ID
 from games import crocodile_modes, crocodile_party_controls
 
 
-_configured = False
 
 
 def _callback_user_id(callback) -> int | None:
@@ -91,11 +90,3 @@ async def menu_callback_with_skip_permissions(callback, next_handler) -> Any:
         return
 
     return await next_handler(callback)
-
-
-def configure_crocodile_telephone_skip_permissions() -> None:
-    """Mark skip permissions configured after explicit runtime composition."""
-    global _configured
-    if _configured:
-        return
-    _configured = True

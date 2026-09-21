@@ -181,11 +181,10 @@ def test_party_menu_callback_is_composed_only_in_runtime():
         "configure_crocodile_ui_enhancements()",
         wiring,
     )
-    skip_install = runtime_source.index(
-        "configure_crocodile_telephone_skip_permissions()",
-        ui_install,
-    )
 
+    assert "_configured = False" not in skip_source
+    assert "def configure_crocodile_telephone_skip_permissions(" not in skip_source
+    assert "configure_crocodile_telephone_skip_permissions(" not in runtime_source
     assert (
         composition
         < capture
@@ -193,7 +192,6 @@ def test_party_menu_callback_is_composed_only_in_runtime():
         < skip_router
         < wiring
         < ui_install
-        < skip_install
     )
 
     party_source = _source("games/crocodile_party_controls.py")

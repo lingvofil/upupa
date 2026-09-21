@@ -332,7 +332,6 @@ def configure_crocodile_runtime() -> None:
     from games import reverse_crocodile_modes as reverse_modes
     from games import reverse_crocodile_persistence as reverse_persistence
     from games.crocodile_admin_controls import (
-        configure_crocodile_admin_controls,
         handle_duel_callback_with_admin,
         handle_telephone_callback_with_admin,
         menu_keyboard_with_admin_emergency_stop,
@@ -342,7 +341,6 @@ def configure_crocodile_runtime() -> None:
         stop_lock_remaining_seconds_with_admin,
     )
     from games.crocodile_canvas_restore import (
-        configure_crocodile_canvas_restore,
         join_room_with_canvas_restore,
     )
     from games.crocodile_controls import (
@@ -363,7 +361,6 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_single_words import configure_crocodile_single_words
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
-        configure_crocodile_telephone_role_announcements,
         start_telephone_with_role_announcement,
         telephone_callback_with_role_announcement,
     )
@@ -373,7 +370,6 @@ def configure_crocodile_runtime() -> None:
         start_telephone_with_roles,
     )
     from games.crocodile_telephone_skip_permissions import (
-        configure_crocodile_telephone_skip_permissions,
         menu_callback_with_skip_permissions,
         telephone_callback_with_skip_permissions,
     )
@@ -554,15 +550,12 @@ def configure_crocodile_runtime() -> None:
             reverse_modes_callback_with_admin,
         )
     )
-    configure_crocodile_admin_controls()
     configure_crocodile_telephone_mentions()
-    configure_crocodile_telephone_skip_permissions()
     configure_crocodile_telephone_roles()
     telephone_callback_handler = _compose_callback_handler(
         telephone_callback_handler,
         handle_telephone_callback_with_roles,
     )
-    configure_crocodile_telephone_role_announcements()
     telephone_callback_handler = _compose_callback_handler(
         telephone_callback_handler,
         telephone_callback_with_role_announcement,
@@ -586,5 +579,4 @@ def configure_crocodile_runtime() -> None:
     crocodile_modes.configure_start_duel_handler(
         duel_start_handler
     )
-    configure_crocodile_canvas_restore()
     _configured = True

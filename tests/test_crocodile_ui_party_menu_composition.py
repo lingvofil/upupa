@@ -113,10 +113,14 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         wiring_entrypoint,
         admin_wrapper,
     )
-    admin_install = runtime_source.index(
-        "configure_crocodile_admin_controls()",
+    mentions_install = runtime_source.index(
+        "configure_crocodile_telephone_mentions()",
         admin_wiring,
     )
+    admin_source = _source("games/crocodile_admin_controls.py")
+    assert "_configured = False" not in admin_source
+    assert "def configure_crocodile_admin_controls(" not in admin_source
+    assert "configure_crocodile_admin_controls(" not in runtime_source
     assert (
         composition
         < base
@@ -127,5 +131,5 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         < admin_composition
         < admin_wrapper
         < admin_wiring
-        < admin_install
+        < mentions_install
     )
