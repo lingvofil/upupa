@@ -517,6 +517,11 @@ async def _default_handle_callback(cb: types.CallbackQuery):
 _callback_handler = _default_handle_callback
 
 
+def get_default_callback_handler():
+    """Return the immutable base reverse-crocodile callback handler."""
+    return _default_handle_callback
+
+
 def get_callback_handler():
     """Return the currently configured reverse-crocodile callback handler."""
     return _callback_handler

@@ -234,7 +234,7 @@ def test_runtime_owns_socket_authorizer_entrypoint_and_wrapper_order():
     assert runtime_source.count(wiring) == 1
 
     raw_capture = runtime_source.index(
-        "raw_authorize_socket_room = crocodile.get_socket_room_authorizer()"
+        "raw_authorize_socket_room = crocodile.get_default_socket_room_authorizer()"
     )
     persistence_install = runtime_source.index("persistence.configure_crocodile_runtime()")
     modes_install = runtime_source.index("configure_crocodile_modes()")

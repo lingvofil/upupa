@@ -355,15 +355,15 @@ def configure_crocodile_runtime() -> None:
         start_new_game_with_instant_word,
     )
 
-    raw_authorize_socket_room = crocodile.get_socket_room_authorizer()
+    raw_authorize_socket_room = crocodile.get_default_socket_room_authorizer()
     raw_join_room = crocodile.join_room
     raw_snapshot = crocodile.snapshot
     raw_final_frame = crocodile.final_frame
     persistence.configure_crocodile_runtime()
-    base_start_new_game = crocodile.get_start_new_game_handler()
-    raw_game_keyboard = crocodile.get_game_keyboard_renderer()
-    raw_callback_handler = crocodile.get_callback_handler()
-    raw_check_answer = crocodile.get_check_answer_handler()
+    base_start_new_game = crocodile.get_default_start_new_game_handler()
+    raw_game_keyboard = crocodile.get_default_game_keyboard_renderer()
+    raw_callback_handler = crocodile.get_default_callback_handler()
+    raw_check_answer = crocodile.get_default_check_answer_handler()
     configure_crocodile_controls(base_start_new_game=base_start_new_game)
     configure_crocodile_single_words()
     configure_crocodile_modes()
@@ -398,7 +398,7 @@ def configure_crocodile_runtime() -> None:
         decorate_game_keyboard_with_previous,
         decorate_game_keyboard_with_legacy_duo,
     )
-    base_end_game_keyboard = crocodile.get_end_game_keyboard_renderer()
+    base_end_game_keyboard = crocodile.get_default_end_game_keyboard_renderer()
     party_dependencies = party_state.crocodile_persistence_dependencies()
     persistence.configure_crocodile_persistence_dependencies(
         persistence.CrocodilePersistenceDependencies(
@@ -421,27 +421,26 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
-    base_telephone_callback = crocodile_modes.get_telephone_callback_handler()
-    crocodile_modes.configure_telephone_callback_handler(
-        _compose_callback_handler(
-            base_telephone_callback,
-            telephone_callback_with_skip_permissions,
-        )
+    telephone_callback_handler = _compose_callback_handler(
+        party_controls.handle_telephone_callback_resilient,
+        telephone_callback_with_skip_permissions,
     )
-    base_party_menu_handler = party_controls.get_menu_callback_handler()
-    party_controls.configure_menu_keyboard_renderer(
-        _compose_party_menu_keyboard(
-            party_controls.get_menu_keyboard_renderer(),
-            duo_optin.decorate_party_menu_without_default_duo,
-            decorate_party_menu_with_ratings,
-        )
+    crocodile_modes.configure_telephone_callback_handler(
+        telephone_callback_handler
+    )
+    party_menu_renderer = _compose_party_menu_keyboard(
+        party_controls.get_default_menu_keyboard_renderer(),
+        duo_optin.decorate_party_menu_without_default_duo,
+        decorate_party_menu_with_ratings,
+    )
+    party_controls.configure_menu_keyboard_renderer(party_menu_renderer)
+    party_menu_callback_handler = _compose_callback_handler(
+        party_controls.get_default_menu_callback_handler(),
+        handle_party_menu_callback_with_ratings,
+        menu_callback_with_skip_permissions,
     )
     party_controls.configure_menu_callback_handler(
-        _compose_callback_handler(
-            base_party_menu_handler,
-            handle_party_menu_callback_with_ratings,
-            menu_callback_with_skip_permissions,
-        )
+        party_menu_callback_handler
     )
     crocodile.configure_game_keyboard_renderer(
         _compose_game_keyboard(
@@ -487,43 +486,43 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_ui_enhancements()
     crocodile_controls.configure_stop_lock_remaining_seconds_handler(
         _compose_stop_lock_remaining_seconds(
-            crocodile_controls.get_stop_lock_remaining_seconds_handler(),
+            crocodile_controls.get_default_stop_lock_remaining_seconds_handler(),
             stop_lock_remaining_seconds_with_admin,
         )
     )
+    telephone_callback_handler = _compose_callback_handler(
+        telephone_callback_handler,
+        handle_telephone_callback_with_admin,
+    )
     crocodile_modes.configure_telephone_callback_handler(
-        _compose_callback_handler(
-            crocodile_modes.get_telephone_callback_handler(),
-            handle_telephone_callback_with_admin,
-        )
+        telephone_callback_handler
     )
     crocodile_modes.configure_duel_callback_handler(
         _compose_callback_handler(
-            crocodile_modes.get_duel_callback_handler(),
+            crocodile_modes.get_default_duel_callback_handler(),
             handle_duel_callback_with_admin,
         )
     )
     party_controls.configure_stop_active_party_handler(
         _compose_party_stop_handler(
-            party_controls.get_stop_active_party_handler(),
+            party_controls.get_default_stop_active_party_handler(),
             stop_active_party_with_admin,
         )
     )
-    party_controls.configure_menu_keyboard_renderer(
-        _compose_menu_keyboard_handler(
-            party_controls.get_menu_keyboard_renderer(),
-            menu_keyboard_with_admin_emergency_stop,
-        )
+    party_menu_renderer = _compose_menu_keyboard_handler(
+        party_menu_renderer,
+        menu_keyboard_with_admin_emergency_stop,
     )
+    party_controls.configure_menu_keyboard_renderer(party_menu_renderer)
     reverse.configure_callback_handler(
         _compose_callback_handler(
-            reverse.get_callback_handler(),
+            reverse.get_default_callback_handler(),
             reverse_callback_with_admin,
         )
     )
     reverse_modes.configure_callback_handler(
         _compose_callback_handler(
-            reverse_modes.get_callback_handler(),
+            reverse_modes.get_default_callback_handler(),
             reverse_modes_callback_with_admin,
         )
     )

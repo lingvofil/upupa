@@ -454,6 +454,11 @@ def _default_game_keyboard(chat_id: int) -> InlineKeyboardMarkup:
 _game_keyboard_renderer = _default_game_keyboard
 
 
+def get_default_game_keyboard_renderer():
+    """Return the immutable base in-game keyboard renderer."""
+    return _default_game_keyboard
+
+
 def get_game_keyboard_renderer():
     """Return the currently configured in-game keyboard renderer."""
     return _game_keyboard_renderer
@@ -482,6 +487,11 @@ def _default_end_game_keyboard(likes: int = 0) -> InlineKeyboardMarkup:
 
 
 _end_game_keyboard_renderer = _default_end_game_keyboard
+
+
+def get_default_end_game_keyboard_renderer():
+    """Return the immutable base end-game keyboard renderer."""
+    return _default_end_game_keyboard
 
 
 def get_end_game_keyboard_renderer():
@@ -542,6 +552,11 @@ async def _default_authorize_socket_room(sid, data, *, bind_room: bool = False):
 
 
 _socket_room_authorizer = _default_authorize_socket_room
+
+
+def get_default_socket_room_authorizer():
+    """Return the immutable base socket-room authorizer."""
+    return _default_authorize_socket_room
 
 
 def get_socket_room_authorizer():
@@ -745,6 +760,11 @@ async def _default_start_new_game(chat_id: int, user_id: int, user_full_name: st
 _start_new_game_handler = _default_start_new_game
 
 
+def get_default_start_new_game_handler():
+    """Return the immutable base new-game handler."""
+    return _default_start_new_game
+
+
 def get_start_new_game_handler():
     """Return the currently configured new-game handler."""
     return _start_new_game_handler
@@ -856,6 +876,11 @@ async def _default_handle_callback(cb: types.CallbackQuery):
 _callback_handler = _default_handle_callback
 
 
+def get_default_callback_handler():
+    """Return the immutable base callback handler."""
+    return _default_handle_callback
+
+
 def get_callback_handler():
     """Return the currently configured Crocodile callback handler."""
     return _callback_handler
@@ -921,6 +946,11 @@ async def _default_check_answer(msg: types.Message) -> bool:
 
 
 _check_answer_handler = _default_check_answer
+
+
+def get_default_check_answer_handler():
+    """Return the immutable base answer checker."""
+    return _default_check_answer
 
 
 def get_check_answer_handler():

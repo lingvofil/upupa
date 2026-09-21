@@ -263,8 +263,11 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     admin_install = runtime_source.index("configure_crocodile_admin_controls()")
 
     assert runtime_source.count(telephone_wiring) == 2
-    assert first_telephone < second_telephone < admin_install
-    assert "handle_telephone_callback_with_admin," in runtime_source[second_telephone:admin_install]
+    admin_wrapper = runtime_source.index(
+        "handle_telephone_callback_with_admin,",
+        first_telephone,
+    )
+    assert first_telephone < admin_wrapper < second_telephone < admin_install
     assert "crocodile_modes.handle_telephone_callback =" not in runtime_source
     duel_wiring = "crocodile_modes.configure_duel_callback_handler("
     assert runtime_source.count(duel_wiring) == 1
@@ -312,25 +315,30 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     controls_source = (ROOT / "games" / "crocodile_controls.py").read_text(
         encoding="utf-8"
     )
+    assert "def get_default_stop_lock_remaining_seconds_handler(" in controls_source
     assert "def get_stop_lock_remaining_seconds_handler(" in controls_source
     assert "def configure_stop_lock_remaining_seconds_handler(" in controls_source
 
     party_controls_source = (ROOT / "games" / "crocodile_party_controls.py").read_text(
         encoding="utf-8"
     )
+    assert "def get_default_stop_active_party_handler(" in party_controls_source
     assert "def get_stop_active_party_handler(" in party_controls_source
     assert "def configure_stop_active_party_handler(" in party_controls_source
+    assert "def get_default_menu_keyboard_renderer(" in party_controls_source
     assert "def get_menu_keyboard_renderer(" in party_controls_source
     assert "def configure_menu_keyboard_renderer(" in party_controls_source
 
     reverse_source = (ROOT / "games" / "reverse_crocodile.py").read_text(
         encoding="utf-8"
     )
+    assert "def get_default_callback_handler(" in reverse_source
     assert "def get_callback_handler(" in reverse_source
     assert "def configure_callback_handler(" in reverse_source
 
     reverse_modes_source = (
         ROOT / "games" / "reverse_crocodile_modes.py"
     ).read_text(encoding="utf-8")
+    assert "def get_default_callback_handler(" in reverse_modes_source
     assert "def get_callback_handler(" in reverse_modes_source
     assert "def configure_callback_handler(" in reverse_modes_source

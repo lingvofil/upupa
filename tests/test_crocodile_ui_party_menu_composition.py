@@ -84,34 +84,48 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
     wiring_entrypoint = "party_controls.configure_menu_keyboard_renderer("
     assert runtime_source.count(wiring_entrypoint) == 2
     assert "party_controls.menu_keyboard =" not in runtime_source
-    wiring = runtime_source.index(wiring_entrypoint)
+    composition = runtime_source.index(
+        "party_menu_renderer = _compose_party_menu_keyboard("
+    )
+    base = runtime_source.index(
+        "party_controls.get_default_menu_keyboard_renderer()",
+        composition,
+    )
     duo = runtime_source.index(
         "duo_optin.decorate_party_menu_without_default_duo",
-        wiring,
+        base,
     )
     ratings = runtime_source.index("decorate_party_menu_with_ratings", duo)
+    wiring = runtime_source.index(wiring_entrypoint, ratings)
     ui_install = runtime_source.index(
         "configure_crocodile_ui_enhancements()",
-        ratings,
+        wiring,
     )
-    admin_wiring = runtime_source.index(
-        wiring_entrypoint,
+    admin_composition = runtime_source.index(
+        "party_menu_renderer = _compose_menu_keyboard_handler(",
         ui_install,
     )
     admin_wrapper = runtime_source.index(
         "menu_keyboard_with_admin_emergency_stop,",
-        admin_wiring,
+        admin_composition,
+    )
+    admin_wiring = runtime_source.index(
+        wiring_entrypoint,
+        admin_wrapper,
     )
     admin_install = runtime_source.index(
         "configure_crocodile_admin_controls()",
-        admin_wrapper,
+        admin_wiring,
     )
     assert (
-        wiring
+        composition
+        < base
         < duo
         < ratings
+        < wiring
         < ui_install
-        < admin_wiring
+        < admin_composition
         < admin_wrapper
+        < admin_wiring
         < admin_install
     )
