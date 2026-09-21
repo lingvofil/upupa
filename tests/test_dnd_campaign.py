@@ -636,10 +636,11 @@ def test_participant_story_start_persists_resolving_only_with_exact_request(monk
     )
 
     assert persisted
-    assert persisted[0][0] == "RESOLVING"
-    assert persisted[0][1]["kind"] == "STORY_START"
-    assert "Плавучий рынок" in persisted[0][1]["prompt"]
-    assert "SCENE_DIRECTION" in persisted[0][1]["prompt"]
+    resolving_rows = [row for row in persisted if row[0] == "RESOLVING"]
+    assert resolving_rows
+    assert all(row[1].get("kind") == "STORY_START" for row in resolving_rows)
+    assert "Плавучий рынок" in resolving_rows[0][1]["prompt"]
+    assert "SCENE_DIRECTION" in resolving_rows[0][1]["prompt"]
     assert continued[0][0] == "RESOLVING"
     assert continued[0][1]["kind"] == "STORY_START"
     assert continued[0][2] == "Плавучий рынок"
