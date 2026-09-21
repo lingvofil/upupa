@@ -336,8 +336,12 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
         configure_crocodile_telephone_role_announcements,
+        telephone_callback_with_role_announcement,
     )
-    from games.crocodile_telephone_roles import configure_crocodile_telephone_roles
+    from games.crocodile_telephone_roles import (
+        configure_crocodile_telephone_roles,
+        handle_telephone_callback_with_roles,
+    )
     from games.crocodile_telephone_skip_permissions import (
         configure_crocodile_telephone_skip_permissions,
         menu_callback_with_skip_permissions,
@@ -425,9 +429,6 @@ def configure_crocodile_runtime() -> None:
         party_controls.handle_telephone_callback_resilient,
         telephone_callback_with_skip_permissions,
     )
-    crocodile_modes.configure_telephone_callback_handler(
-        telephone_callback_handler
-    )
     party_menu_renderer = _compose_party_menu_keyboard(
         party_controls.get_default_menu_keyboard_renderer(),
         duo_optin.decorate_party_menu_without_default_duo,
@@ -494,9 +495,6 @@ def configure_crocodile_runtime() -> None:
         telephone_callback_handler,
         handle_telephone_callback_with_admin,
     )
-    crocodile_modes.configure_telephone_callback_handler(
-        telephone_callback_handler
-    )
     crocodile_modes.configure_duel_callback_handler(
         _compose_callback_handler(
             crocodile_modes.get_default_duel_callback_handler(),
@@ -530,6 +528,17 @@ def configure_crocodile_runtime() -> None:
     configure_crocodile_telephone_mentions()
     configure_crocodile_telephone_skip_permissions()
     configure_crocodile_telephone_roles()
+    telephone_callback_handler = _compose_callback_handler(
+        telephone_callback_handler,
+        handle_telephone_callback_with_roles,
+    )
     configure_crocodile_telephone_role_announcements()
+    telephone_callback_handler = _compose_callback_handler(
+        telephone_callback_handler,
+        telephone_callback_with_role_announcement,
+    )
+    crocodile_modes.configure_telephone_callback_handler(
+        telephone_callback_handler
+    )
     configure_crocodile_canvas_restore()
     _configured = True
