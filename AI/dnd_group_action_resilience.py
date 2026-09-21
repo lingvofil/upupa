@@ -1,7 +1,5 @@
-"""Keep collected DnD group actions until the master response is generated."""
+"""Make collected DnD group actions durable before provider generation."""
 from __future__ import annotations
-
-import logging
 
 
 def _format_group_actions_for_model(actions: list[dict]) -> str:
@@ -20,13 +18,7 @@ def _format_group_actions_for_model(actions: list[dict]) -> str:
 
 
 def install_dnd_group_action_resilience(dnd) -> None:
-    """Make group-action resolution transactional around model generation.
-
-    The canonical implementation clears ``pending_actions`` before calling the
-    model. If every provider is temporarily unavailable, the players therefore
-    have to type the same actions again. This wrapper keeps the collected turn
-    until generation succeeds and restores it on a provider failure.
-    """
+    """Reserve an exact group turn before Telegram/provider side effects."""
     if getattr(dnd, "_upupa_dnd_group_action_resilience_installed", False):
         return
 
@@ -37,76 +29,75 @@ def install_dnd_group_action_resilience(dnd) -> None:
         if int(session.action_prompt_message_id or 0) != int(prompt_message_id):
             return
 
-        pending_actions = dict(getattr(session, "pending_actions", {}) or {})
-        actions = list(pending_actions.values())
-        target_user_ids = list(getattr(session, "action_target_user_ids", []) or [])
+        actions = list((getattr(session, "pending_actions", {}) or {}).values())
         session.action_deadline = None
         if not actions:
             dnd.persist_dnd_sessions()
             return
 
-        # Block duplicate submissions while the model resolves the already
-        # collected turn, but do not consume the turn until generation succeeds.
-        session.state = "RESOLVING"
-        dnd.persist_dnd_sessions()
         actions_text = dnd._format_group_actions(actions)
         actions_prompt_text = _format_group_actions_for_model(actions)
-        await bot.send_message(chat_id, f"🎭 Ход партии:\n{actions_text}")
+        continuation_prompt = dnd.with_scene_direction(
+            session,
+            (
+                "Игроки заявили действия одновременно:\n"
+                f"{actions_prompt_text}\n"
+                "Свяжи их в одну общую сцену: учти взаимодействие действий и противоречия. "
+                "Если для заявленного действия нужен бросок, не предрешай его исход: опиши только попытку "
+                "и поставь [ACTION:ROLL]. TARGETS этого броска обязан содержать id именно того игрока, "
+                "чьё действие проверяется. До результата броска не объявляй успех или провал этого действия, "
+                "не выдавай и не отнимай из-за него предметы и не фиксируй другие зависящие от броска последствия. "
+                "Действия с очевидным исходом можно разрешить сразу. Продолжай до 100 слов."
+            ),
+        )
 
-        try:
-            response_text = await dnd.generate_session_response(
-                session,
-                dnd.with_scene_direction(
-                    session,
-                    (
-                        "Игроки заявили действия одновременно:\n"
-                        f"{actions_prompt_text}\n"
-                        "Свяжи их в одну общую сцену: учти взаимодействие действий и противоречия. "
-                        "Если для заявленного действия нужен бросок, не предрешай его исход: опиши только попытку "
-                        "и поставь [ACTION:ROLL]. TARGETS этого броска обязан содержать id именно того игрока, "
-                        "чьё действие проверяется. До результата броска не объявляй успех или провал этого действия, "
-                        "не выдавай и не отнимай из-за него предметы и не фиксируй другие зависящие от броска последствия. "
-                        "Действия с очевидным исходом можно разрешить сразу. Продолжай до 100 слов."
-                    ),
-                ),
-            )
-        except Exception:
-            logging.exception(
-                "DnD group action generation failed; preserving turn chat_id=%s",
-                chat_id,
-            )
-            if dnd.dnd_sessions.get(chat_id) is session:
-                session.state = "WAITING_ACTION"
-                session.action_prompt_message_id = prompt_message_id
-                session.pending_actions = pending_actions
-                session.action_target_user_ids = target_user_ids
-                session.action_deadline = None
-                dnd.persist_dnd_sessions()
+        from AI.dnd_result_recovery import (
+            continue_pending_generation,
+            reserve_generation_request,
+        )
+
+        if not reserve_generation_request(
+            session,
+            continuation_prompt,
+            kind="GROUP_ACTION_CONTINUATION",
+            effects=[
+                {
+                    "method": "send_message",
+                    "chat_id": chat_id,
+                    "text": f"🎭 Ход партии:\n{actions_text}",
+                }
+            ],
+        ):
             await bot.send_message(
                 chat_id,
-                "Мастер временно недоступен. Ход сохранён — повторно вводить действия не надо; "
-                "ведущий может написать «дальше», чтобы повторить попытку.",
+                "Этот ход уже восстанавливается. Ведущий может написать «дальше».",
             )
             return
 
-        # Generation succeeded: only now consume the collected turn. Parsing may
-        # open the next action/poll window and should see a clean previous turn.
+        # Once the exact request is durable, the mutable collection window is no
+        # longer the source of truth and can be consumed atomically.
+        session.state = "RESOLVING"
         session.action_prompt_message_id = None
         session.pending_actions = {}
+        session.action_deadline = None
         session.action_target_user_ids = []
         dnd.persist_dnd_sessions()
+
         session._upupa_resolving_group_actions = True
         try:
-            await dnd.parse_and_execute_turn(bot, chat_id, response_text)
-        except Exception:
-            logging.exception("DnD group action continuation failed chat_id=%s", chat_id)
-            await bot.send_message(chat_id, "Мастер завис на коллективном безумии. Продолжаем с нового хода.")
-            await dnd.open_action_window(bot, chat_id)
+            completed = await continue_pending_generation(dnd, bot, session)
         finally:
             try:
                 del session._upupa_resolving_group_actions
             except AttributeError:
                 pass
+
+        if not completed and dnd.dnd_sessions.get(chat_id) is session:
+            await bot.send_message(
+                chat_id,
+                "Мастер временно недоступен, но коллективный ход сохранён. "
+                "Ведущий может написать «дальше» — повторно вводить действия не надо.",
+            )
 
     dnd.finalize_group_actions = finalize_group_actions
     dnd._upupa_dnd_group_action_resilience_installed = True
