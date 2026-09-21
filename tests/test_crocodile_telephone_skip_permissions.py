@@ -285,13 +285,9 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_admin,",
         admin_composition,
     )
-    roles_installer = runtime_source.index(
-        "configure_crocodile_telephone_roles()",
-        admin_wrapper,
-    )
     roles_composition = runtime_source.index(
         composition,
-        roles_installer,
+        admin_wrapper,
     )
     roles_wrapper = runtime_source.index(
         "handle_telephone_callback_with_roles,",
@@ -318,6 +314,10 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         ROOT / "games" / "crocodile_telephone_role_announcements.py"
     ).read_text(encoding="utf-8")
     assert "_original_handle_telephone_callback" not in roles_source
+    assert "_original_party_status_text" not in roles_source
+    assert "_original_skip_telephone" not in roles_source
+    assert "_configured = False" not in roles_source
+    assert "def configure_crocodile_telephone_roles(" not in roles_source
     assert "_original_handle_telephone_callback" not in announcements_source
     assert "_configured = False" not in skip_source
     assert "_configured = False" not in announcements_source
@@ -342,7 +342,6 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         < permissions
         < admin_composition
         < admin_wrapper
-        < roles_installer
         < roles_composition
         < roles_wrapper
         < announcements_composition

@@ -17,9 +17,6 @@ ROLE_TEXT = "text"
 ROLE_DRAW = "draw"
 _ROLE_FIELD = "telephone_roles"
 
-_configured = False
-_original_party_status_text = None
-_original_skip_telephone = None
 
 
 def _user_id(value: Any) -> int | None:
@@ -280,7 +277,7 @@ async def handle_telephone_callback_with_roles(callback, next_handler) -> Any:
     return await next_handler(callback)
 
 
-def party_status_text_with_roles(chat_id: int | str) -> str:
+def party_status_text_with_roles(chat_id: int | str, next_renderer) -> str:
     cid = str(chat_id)
     game = crocodile_modes.telephone_games.get(cid)
     if game and game.get("phase") == "lobby":
@@ -291,7 +288,7 @@ def party_status_text_with_roles(chat_id: int | str) -> str:
             "☎️ Сейчас собирается испорченный телефон: "
             f"слова {text_count}, рисование {draw_count}; {suffix}."
         )
-    return _original_party_status_text(chat_id)
+    return next_renderer(chat_id)
 
 
 def _role_of(game: dict, user_id: Any) -> str | None:
@@ -319,11 +316,11 @@ def _alternating_remaining(
     return ordered, dropped
 
 
-async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
+async def skip_telephone_with_roles(chat_id: str, game: dict, next_handler) -> str:
     """Skip without ever assigning a text-only participant to a drawing turn or vice versa."""
     roles = game.get(_ROLE_FIELD)
     if not isinstance(roles, dict) or not roles:
-        return await _original_skip_telephone(chat_id, game)
+        return await next_handler(chat_id, game)
     if game.get("phase") != "playing":
         return "Цепочка ещё не идёт."
 
@@ -363,19 +360,3 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
     else:
         await crocodile_modes._send_telephone_step(chat_id, game)
     return f"Пропущен: {skipped_name}"
-
-
-def configure_crocodile_telephone_roles() -> None:
-    """Install stateful role lobby adapters; start/callback composition lives in runtime."""
-    global _configured
-    global _original_party_status_text, _original_skip_telephone
-    if _configured:
-        return
-
-    _original_party_status_text = crocodile_party_controls.party_status_text
-    _original_skip_telephone = crocodile_party_controls._skip_telephone
-
-    crocodile_modes._telephone_lobby_keyboard = telephone_lobby_keyboard
-    crocodile_party_controls.party_status_text = party_status_text_with_roles
-    crocodile_party_controls._skip_telephone = skip_telephone_with_roles
-    _configured = True
