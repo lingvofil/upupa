@@ -226,8 +226,16 @@ class GameSession:
         else:
             self.conversation = [dict(item) for item in conversation]
 
+        # The production DnD runtime uses the bounded provider path and does not
+        # need the legacy SDK chat object. Keep it lazy for direct/compatibility
+        # callers so restoring a long campaign does not duplicate the full
+        # conversation in memory.
         self.chat_session = None
-        if self.active_model == "gemini":
+
+    def _ensure_chat_session(self):
+        if self.active_model != "gemini":
+            return None
+        if self.chat_session is None:
             history = [
                 {
                     "role": "model" if item["role"] == "assistant" else "user",
@@ -235,11 +243,16 @@ class GameSession:
                 }
                 for item in self.conversation
             ]
-            self.chat_session = model.start_chat(chat_id=chat_id, history=history)
+            self.chat_session = model.start_chat(
+                chat_id=self.chat_id,
+                history=history,
+            )
+        return self.chat_session
 
     def send_message(self, message_text):
         if self.active_model == "gemini":
-            response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
+            chat_session = self._ensure_chat_session()
+            response = chat_session.send_message(message_text, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "gigachat":
             history = self.conversation + [{"role": "user", "content": message_text}]
@@ -365,7 +378,10 @@ def _rewind_session_conversation(session: GameSession, size: int) -> bool:
     if not isinstance(conversation, list) or len(conversation) <= size:
         return False
     del conversation[size:]
-    if getattr(session, "active_model", None) == "gemini":
+    if (
+        getattr(session, "active_model", None) == "gemini"
+        and getattr(session, "chat_session", None) is not None
+    ):
         history = [
             {
                 "role": "model" if item["role"] == "assistant" else "user",
