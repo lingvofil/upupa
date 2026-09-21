@@ -71,7 +71,9 @@ def test_switch_between_roles_is_announced_as_team_change():
     callback = _callback(f"ctel_role_text_{cid}", 202, name="Игрок")
 
     try:
-        result = asyncio.run(announcements.telephone_callback_with_role_announcement(callback))
+        result = asyncio.run(
+            announcements.telephone_callback_with_role_announcement(callback, original)
+        )
         assert result == "switched"
         callback.message.answer.assert_awaited_once()
         text = callback.message.answer.await_args.args[0]
@@ -97,7 +99,9 @@ def test_repeated_click_on_same_role_does_not_spam_chat():
     callback = _callback(f"ctel_role_draw_{cid}", 202, name="Игрок")
 
     try:
-        result = asyncio.run(announcements.telephone_callback_with_role_announcement(callback))
+        result = asyncio.run(
+            announcements.telephone_callback_with_role_announcement(callback, original)
+        )
         assert result == "same"
         callback.message.answer.assert_not_awaited()
     finally:
