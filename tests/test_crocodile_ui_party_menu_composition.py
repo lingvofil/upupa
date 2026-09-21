@@ -113,8 +113,8 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         wiring_entrypoint,
         admin_wrapper,
     )
-    mentions_install = runtime_source.index(
-        "configure_crocodile_telephone_mentions()",
+    roles_install = runtime_source.index(
+        "configure_crocodile_telephone_roles()",
         admin_wiring,
     )
     admin_source = _source("games/crocodile_admin_controls.py")
@@ -131,5 +131,5 @@ def test_ui_enhancements_do_not_replace_party_menu_keyboard():
         < admin_composition
         < admin_wrapper
         < admin_wiring
-        < mentions_install
+        < roles_install
     )

@@ -20,6 +20,8 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "configure_crocodile_modes()",
         "persistence.configure_crocodile_persistence_dependencies(",
         "party_controls.configure_crocodile_party_controls()",
+        "telephone_step_handler = _compose_telephone_step_sender(",
+        "crocodile_modes.configure_send_telephone_step_handler(",
         "party_controls.configure_menu_keyboard_renderer(",
         "party_controls.configure_menu_callback_handler(",
         "crocodile.configure_game_keyboard_renderer(",
@@ -27,7 +29,6 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "crocodile.configure_callback_handler(",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
-        "configure_crocodile_telephone_mentions()",
         "configure_crocodile_telephone_roles()",
     ]
     positions = [source.index(call) for call in calls]
@@ -51,7 +52,6 @@ def test_crocodile_installers_do_not_compose_other_installers():
     ):
         assert call not in canvas
     assert "configure_crocodile_ui_enhancements()" not in duo
-    assert "configure_crocodile_telephone_mentions()" not in admin
     assert "configure_crocodile_telephone_roles()" not in skip
 
     explicit_extensions = (
@@ -70,6 +70,10 @@ def test_crocodile_installers_do_not_compose_other_installers():
         (
             canvas,
             "configure_crocodile_canvas_restore",
+        ),
+        (
+            mentions,
+            "configure_crocodile_telephone_mentions",
         ),
     )
     runtime_source = _source("games/crocodile_runtime.py")

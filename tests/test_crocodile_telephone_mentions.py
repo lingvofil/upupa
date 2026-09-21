@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,3 +77,80 @@ def test_telephone_first_turn_mentions_player_too(monkeypatch):
         assert ": загадывай. Остальные не подглядывают." in text
     finally:
         mentions.crocodile_modes.canvas_sessions.pop("-43:t0", None)
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_telephone_step_configurator_drives_stable_entrypoint():
+    from games import crocodile_modes as modes
+
+    original = modes.get_send_telephone_step_handler()
+    stable_entrypoint = modes._send_telephone_step
+    configured = AsyncMock(return_value="configured-result")
+    game = {"step": 0, "players": []}
+
+    try:
+        modes.configure_send_telephone_step_handler(configured)
+        assert modes.get_send_telephone_step_handler() is configured
+        assert modes.get_default_send_telephone_step_handler() is not configured
+        assert modes._send_telephone_step is stable_entrypoint
+        result = asyncio.run(modes._send_telephone_step("-44", game))
+    finally:
+        modes.configure_send_telephone_step_handler(original)
+
+    assert result == "configured-result"
+    configured.assert_awaited_once_with("-44", game)
+
+
+def test_telephone_step_sender_is_composed_only_in_runtime():
+    mentions_source = (
+        ROOT / "games" / "crocodile_telephone_mentions.py"
+    ).read_text(encoding="utf-8")
+    party_source = (
+        ROOT / "games" / "crocodile_party_controls.py"
+    ).read_text(encoding="utf-8")
+    modes_source = (
+        ROOT / "games" / "crocodile_modes.py"
+    ).read_text(encoding="utf-8")
+    runtime_source = (
+        ROOT / "games" / "crocodile_runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_configured = False" not in mentions_source
+    assert "_original_send_telephone_step" not in mentions_source
+    assert "def configure_crocodile_telephone_mentions(" not in mentions_source
+    assert "crocodile_party_controls" not in mentions_source
+
+    assert "_original_send_telephone_step" not in party_source
+    assert "crocodile_modes._send_telephone_step =" not in party_source
+    assert (
+        "send_telephone_step_with_controls(chat_id: str, game: dict, next_handler)"
+        in party_source
+    )
+
+    assert "def get_default_send_telephone_step_handler(" in modes_source
+    assert "def get_send_telephone_step_handler(" in modes_source
+    assert "def configure_send_telephone_step_handler(" in modes_source
+
+    composition = runtime_source.index(
+        "telephone_step_handler = _compose_telephone_step_sender("
+    )
+    mention = runtime_source.index(
+        "send_telephone_step_with_mention,",
+        composition,
+    )
+    controls = runtime_source.index(
+        "party_controls.send_telephone_step_with_controls,",
+        mention,
+    )
+    wiring = runtime_source.index(
+        "crocodile_modes.configure_send_telephone_step_handler(",
+        controls,
+    )
+
+    assert "configure_crocodile_telephone_mentions(" not in runtime_source
+    assert runtime_source.count(
+        "crocodile_modes.configure_send_telephone_step_handler("
+    ) == 1
+    assert composition < mention < controls < wiring
+
