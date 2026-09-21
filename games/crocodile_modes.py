@@ -609,7 +609,7 @@ async def start_telephone(message) -> None:
     return await _start_telephone_handler(message)
 
 
-async def _send_telephone_step(chat_id: str, game: dict) -> None:
+async def _default_send_telephone_step(chat_id: str, game: dict) -> None:
     step = int(game["step"])
     players = game["players"]
     if step >= len(players):
@@ -649,6 +649,29 @@ async def _send_telephone_step(chat_id: str, game: dict) -> None:
         parse_mode="HTML",
         reply_markup=_canvas_button(chat_id, suffix, "✍️ Открыть свой ход"),
     )
+
+
+_send_telephone_step_handler = _default_send_telephone_step
+
+
+def get_default_send_telephone_step_handler():
+    """Return the immutable base broken-telephone turn sender."""
+    return _default_send_telephone_step
+
+
+def get_send_telephone_step_handler():
+    """Return the currently configured broken-telephone turn sender."""
+    return _send_telephone_step_handler
+
+
+def configure_send_telephone_step_handler(handler) -> None:
+    """Install the composed broken-telephone turn sender."""
+    global _send_telephone_step_handler
+    _send_telephone_step_handler = handler
+
+
+async def _send_telephone_step(chat_id: str, game: dict) -> None:
+    return await _send_telephone_step_handler(chat_id, game)
 
 
 async def _advance_telephone(chat_id: str, game: dict) -> None:
