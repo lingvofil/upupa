@@ -109,6 +109,20 @@ def _compose_start_new_game(base_handler, *wrappers):
     return handler
 
 
+def _compose_telephone_step_sender(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def send(chat_id, game, _wrapper=wrapper, _next=next_handler):
+            return await _wrapper(chat_id, game, _next)
+
+        handler = send
+    return handler
+
+
 def _compose_start_duel(base_handler, *wrappers):
     handler = base_handler
     for wrapper in wrappers:
@@ -359,7 +373,7 @@ def configure_crocodile_runtime() -> None:
         snapshot_with_modes,
     )
     from games.crocodile_single_words import configure_crocodile_single_words
-    from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
+    from games.crocodile_telephone_mentions import send_telephone_step_with_mention
     from games.crocodile_telephone_role_announcements import (
         start_telephone_with_role_announcement,
         telephone_callback_with_role_announcement,
@@ -451,6 +465,13 @@ def configure_crocodile_runtime() -> None:
         )
     )
     party_controls.configure_crocodile_party_controls()
+    telephone_step_handler = _compose_telephone_step_sender(
+        send_telephone_step_with_mention,
+        party_controls.send_telephone_step_with_controls,
+    )
+    crocodile_modes.configure_send_telephone_step_handler(
+        telephone_step_handler
+    )
     telephone_callback_handler = _compose_callback_handler(
         party_controls.handle_telephone_callback_resilient,
         telephone_callback_with_skip_permissions,
@@ -550,7 +571,6 @@ def configure_crocodile_runtime() -> None:
             reverse_modes_callback_with_admin,
         )
     )
-    configure_crocodile_telephone_mentions()
     configure_crocodile_telephone_roles()
     telephone_callback_handler = _compose_callback_handler(
         telephone_callback_handler,
