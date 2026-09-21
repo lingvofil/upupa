@@ -1,5 +1,6 @@
 """Telegram-facing commands for dialogue personas and generated poems."""
 
+import asyncio
 import logging
 import random
 
@@ -8,12 +9,12 @@ from aiogram import types
 from core.loader import bot
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
+from features.stat_rank_settings import get_user_display_name, get_valid_users
+from features.statistics import get_chat_participant_activity
 from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
-    PROMPT_PIROZHOK1,
     PROMPT_POROSHOK,
-    PROMPT_POROSHOK1,
     actions,
     get_available_prompts,
     get_prompt_by_name,
@@ -31,27 +32,173 @@ def _clear_participant_metadata(settings: dict) -> None:
     settings.pop("style_profile_updated_at", None)
 
 
+_POEM_ACTIVE_POOL_SIZE = 8
+_POEM_CHARACTER_COUNT = 4
+_POEM_ACTIVE_BOT_LIMIT = 4
+_POEM_PARTICIPANT_SCAN_LIMIT = 50
+
+
+def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
+    def count(stats: dict | None, key: str) -> int:
+        return int((stats or {}).get(key, 0) or 0)
+
+    def score(item):
+        stats = item[1]
+        return (
+            count(stats, "weekly"),
+            count(stats, "daily"),
+            count(stats, "total"),
+        )
+
+    recent = [
+        item
+        for item in valid_users.items()
+        if count(item[1], "weekly") > 0 or count(item[1], "daily") > 0
+    ]
+    candidates = recent or [
+        item for item in valid_users.items() if count(item[1], "total") > 0
+    ]
+    ranked = sorted(candidates, key=score, reverse=True)
+    return [str(user_id) for user_id, _stats in ranked[:limit]]
+
+
+async def _get_active_poem_bot_names(
+    chat_id: str,
+    human_user_ids: set[str],
+) -> list[str]:
+    bot_names: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        me = await bot.get_me()
+        own_name = (getattr(me, "first_name", None) or getattr(me, "full_name", None) or "Упупа").strip()
+        if own_name:
+            bot_names.append(own_name)
+            seen.add(own_name.casefold())
+    except Exception as exc:
+        logging.warning("Не удалось получить имя Упупы для стихов: %s", exc)
+        bot_names.append("Упупа")
+        seen.add("упупа")
+
+    try:
+        activity = await get_chat_participant_activity(
+            int(chat_id),
+            period_hours=24 * 7,
+            limit=_POEM_PARTICIPANT_SCAN_LIMIT,
+        )
+    except Exception as exc:
+        logging.warning("Не удалось получить активность ботов для стихов: %s", exc)
+        return bot_names[:_POEM_ACTIVE_BOT_LIMIT]
+
+    bot_candidates = [
+        row
+        for row in activity
+        if str(row.get("user_id")) not in human_user_ids
+    ]
+
+    for row in bot_candidates:
+        if len(bot_names) >= _POEM_ACTIVE_BOT_LIMIT:
+            break
+        user_id = row.get("user_id")
+        if not isinstance(user_id, int):
+            continue
+        try:
+            member = await bot.get_chat_member(int(chat_id), user_id)
+        except Exception:
+            continue
+
+        user = getattr(member, "user", None)
+        if not user or not getattr(user, "is_bot", False):
+            continue
+        name = (
+            getattr(user, "first_name", None)
+            or getattr(user, "full_name", None)
+            or row.get("user_name")
+            or row.get("user_username")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        bot_names.append(name)
+
+    return bot_names
+
+
+def _format_poem_character_instruction(
+    active_bot_names: list[str],
+    other_characters: str,
+) -> str:
+    other_characters = (other_characters or "").strip()
+    if not active_bot_names:
+        return other_characters or "случайные русские имена"
+
+    bot_block = ", ".join(active_bot_names)
+    if other_characters:
+        return (
+            f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
+            f"остальные герои: {other_characters}"
+        )
+    return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
+
+
+async def _get_dynamic_poem_characters(chat_id: str) -> str:
+    try:
+        valid_users = await get_valid_users(chat_id)
+        user_ids = _rank_active_poem_users(valid_users)
+        names = await asyncio.gather(
+            *(get_user_display_name(int(chat_id), int(user_id)) for user_id in user_ids)
+        )
+        active_bot_names = await _get_active_poem_bot_names(chat_id, set(valid_users))
+    except Exception as exc:
+        logging.warning("Не удалось подобрать активных героев для стихов: %s", exc)
+        return "случайные русские имена"
+
+    unique_names = []
+    seen = {name.casefold() for name in active_bot_names}
+    for raw_name in names:
+        name = (raw_name or "").strip()
+        if not name or name.startswith("Пользователь "):
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_names.append(name)
+
+    selected = random.sample(unique_names, k=min(_POEM_CHARACTER_COUNT, len(unique_names)))
+    return _format_poem_character_instruction(
+        active_bot_names,
+        ", ".join(selected) if selected else "",
+    )
+
+
 async def handle_poem_command(message: types.Message, poem_type: str):
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
     logging.info("Обработчик для %r вызван", poem_type)
 
-    parts = message.text.lower().split(maxsplit=1)
-    characters = parts[1] if len(parts) > 1 else "случайные русские имена"
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1:
+        explicit_characters = parts[1].strip()
+        try:
+            valid_users = await get_valid_users(chat_id)
+        except Exception as exc:
+            logging.warning("Не удалось получить людей для исключения при поиске ботов: %s", exc)
+            valid_users = {}
+        active_bot_names = await _get_active_poem_bot_names(chat_id, set(valid_users))
+        characters = _format_poem_character_instruction(active_bot_names, explicit_characters)
+    else:
+        characters = await _get_dynamic_poem_characters(chat_id)
 
     if poem_type == "пирожок":
-        base_prompt = (
-            PROMPT_PIROZHOK1[0]
-            if message.chat.id == -1001707530786 and len(parts) == 1
-            else PROMPT_PIROZHOK[0]
-        )
+        base_prompt = PROMPT_PIROZHOK[0]
         error_response = "🔥 Пирожок сгорел в духовке!"
     else:
-        base_prompt = (
-            PROMPT_POROSHOK1[0]
-            if message.chat.id == -1001707530786 and len(parts) == 1
-            else PROMPT_POROSHOK[0]
-        )
+        base_prompt = PROMPT_POROSHOK[0]
         error_response = "💨 Порошок развеялся..."
 
     full_prompt = base_prompt + characters

@@ -46,6 +46,13 @@ class StatisticsRepository(Protocol):
         active_since: datetime,
     ) -> dict[int, datetime]: ...
 
+    def get_chat_participant_activity(
+        self,
+        chat_id: int,
+        active_since: datetime,
+        limit: int = 50,
+    ) -> list[dict]: ...
+
 
 _statistics_repository: StatisticsRepository | None = None
 
@@ -139,4 +146,18 @@ async def get_group_chat_activity(
     return await asyncio.to_thread(
         _repository().get_group_chat_activity,
         active_since,
+    )
+
+
+async def get_chat_participant_activity(
+    chat_id: int,
+    *,
+    period_hours: int = 24 * 7,
+    limit: int = 50,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        _repository().get_chat_participant_activity,
+        chat_id,
+        datetime.now() - timedelta(hours=period_hours),
+        limit,
     )
