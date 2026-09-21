@@ -34,7 +34,7 @@ def _clear_participant_metadata(settings: dict) -> None:
 
 _POEM_ACTIVE_POOL_SIZE = 8
 _POEM_CHARACTER_COUNT = 4
-_POEM_ACTIVE_BOT_LIMIT = 4
+_POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
 
 
@@ -88,7 +88,7 @@ async def _get_active_poem_bot_names(
         )
     except Exception as exc:
         logging.warning("Не удалось получить активность ботов для стихов: %s", exc)
-        return bot_names[:_POEM_ACTIVE_BOT_LIMIT]
+        return bot_names[:_POEM_ACTIVE_BOT_POOL_SIZE]
 
     bot_candidates = [
         row
@@ -97,7 +97,7 @@ async def _get_active_poem_bot_names(
     ]
 
     for row in bot_candidates:
-        if len(bot_names) >= _POEM_ACTIVE_BOT_LIMIT:
+        if len(bot_names) >= _POEM_ACTIVE_BOT_POOL_SIZE:
             break
         user_id = row.get("user_id")
         if not isinstance(user_id, int):
@@ -136,13 +136,13 @@ def _format_poem_character_instruction(
     if not active_bot_names:
         return other_characters or "случайные русские имена"
 
-    bot_block = ", ".join(active_bot_names)
+    selected_bot = random.choice(active_bot_names)
     if other_characters:
         return (
-            f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
+            f"обязательный активный бот (должен появиться в тексте): {selected_bot}; "
             f"остальные герои: {other_characters}"
         )
-    return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
+    return f"обязательный активный бот (должен появиться в тексте): {selected_bot}"
 
 
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
