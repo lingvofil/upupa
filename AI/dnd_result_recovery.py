@@ -20,12 +20,18 @@ EFFECT_IN_FLIGHT = "IN_FLIGHT"
 EFFECT_DONE = "DONE"
 GROUP_ACTION_REQUEST_KIND = "GROUP_ACTION_CONTINUATION"
 
+
+class StaleDndSessionError(RuntimeError):
+    """A provider response belongs to a session that is no longer current."""
+
+
 _CORE_SNAPSHOT_FIELDS = (
     "state",
     "last_roll_stat",
     "pending_roll",
     "current_poll_id",
     "pending_poll",
+    "last_resolved_poll",
     "action_prompt_message_id",
     "pending_actions",
     "action_deadline",
@@ -512,6 +518,13 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
     dnd.persist_dnd_sessions()
     try:
         response = await dnd.generate_session_response(session, prompt)
+        if dnd.dnd_sessions.get(session.chat_id) is not session:
+            logging.warning(
+                "DnD discarded stale generated continuation chat_id=%s request_id=%s",
+                getattr(session, "chat_id", None),
+                request_id,
+            )
+            return False
         with _parse_request_context(session, request_kind):
             await dnd.parse_and_execute_turn(bot, session.chat_id, response)
         return True
@@ -613,7 +626,14 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
     async def generate_session_response(session, prompt):
         _ensure(session)
         if _generation_is_ephemeral(session):
-            return await original_generate(session, prompt)
+            result = await original_generate(session, prompt)
+            if getattr(dnd, "dnd_sessions", {}).get(
+                getattr(session, "chat_id", None)
+            ) is not session:
+                raise StaleDndSessionError(
+                    f"DnD session changed while auxiliary generation was running: {session.chat_id}"
+                )
+            return result
 
         existing = _pending_text(session)
         if existing:
@@ -660,10 +680,15 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             except AttributeError:
                 pass
 
-        if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
-            session.pending_generated_result = _new_result(session, result)
-            session.pending_generation_request = {}
-            dnd.persist_dnd_sessions()
+        if getattr(dnd, "dnd_sessions", {}).get(
+            getattr(session, "chat_id", None)
+        ) is not session:
+            raise StaleDndSessionError(
+                f"DnD session changed while generation was running: {session.chat_id}"
+            )
+        session.pending_generated_result = _new_result(session, result)
+        session.pending_generation_request = {}
+        dnd.persist_dnd_sessions()
         return result
 
     dnd.generate_session_response = generate_session_response
@@ -753,6 +778,7 @@ __all__ = [
     "RESULT_PHASE_APPLYING",
     "EFFECT_IN_FLIGHT",
     "EFFECT_DONE",
+    "StaleDndSessionError",
     "_DurableBotProxy",
     "_snapshot_parse_state",
     "_restore_parse_state",
