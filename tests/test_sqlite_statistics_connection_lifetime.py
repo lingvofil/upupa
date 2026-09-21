@@ -46,8 +46,58 @@ def test_statistics_repository_closes_every_connection(monkeypatch, tmp_path):
         request_type="dialog",
     )
     repository.get_group_chat_activity(datetime.now() - timedelta(hours=1))
+    repository.get_chat_participant_activity(
+        -1001,
+        datetime.now() - timedelta(hours=1),
+        limit=10,
+    )
     repository.get_stats(period_hours=1)
     repository.get_activity_by_hour(period_hours=1)
 
     assert opened
     assert all(conn.was_closed for conn in opened)
+
+
+def test_recent_chat_participant_activity_is_ranked_and_scoped(tmp_path):
+    repository = sqlite_statistics.SQLiteStatisticsRepository(tmp_path / "statistics.db")
+    repository.init_schema()
+
+    for _ in range(3):
+        repository.log_message(
+            chat_id=-1001,
+            user_id=66,
+            message_type="text",
+            is_private=False,
+            chat_title="Test chat",
+            user_name="Карл",
+            user_username="karl_bot",
+        )
+    repository.log_message(
+        chat_id=-1001,
+        user_id=77,
+        message_type="text",
+        is_private=False,
+        chat_title="Test chat",
+        user_name="Сглыпа",
+        user_username="sglypa_bot",
+    )
+    repository.log_message(
+        chat_id=-2002,
+        user_id=88,
+        message_type="text",
+        is_private=False,
+        chat_title="Other chat",
+        user_name="Чужой",
+        user_username=None,
+    )
+
+    rows = repository.get_chat_participant_activity(
+        -1001,
+        datetime.now() - timedelta(hours=1),
+        limit=10,
+    )
+
+    assert [row["user_id"] for row in rows] == [66, 77]
+    assert rows[0]["message_count"] == 3
+    assert rows[0]["user_name"] == "Карл"
+    assert rows[0]["user_username"] == "karl_bot"

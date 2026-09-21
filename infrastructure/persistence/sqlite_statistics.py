@@ -179,6 +179,52 @@ class SQLiteStatisticsRepository:
             activity[int(chat_id)] = parsed
         return activity
 
+    def get_chat_participant_activity(
+        self,
+        chat_id: int,
+        active_since: datetime,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recently active participant IDs and their latest known names."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, COUNT(*) AS message_count, MAX(message_timestamp) AS last_message
+                FROM message_stats
+                WHERE chat_id = ? AND is_private = 0 AND message_timestamp >= ?
+                GROUP BY user_id
+                ORDER BY message_count DESC, last_message DESC
+                LIMIT ?
+                """,
+                (chat_id, active_since, max(1, int(limit))),
+            ).fetchall()
+
+            participants: list[dict[str, Any]] = []
+            for user_id, message_count, last_message in rows:
+                identity = conn.execute(
+                    """
+                    SELECT user_name, user_username
+                    FROM message_stats
+                    WHERE chat_id = ? AND user_id = ?
+                    ORDER BY message_timestamp DESC
+                    LIMIT 1
+                    """,
+                    (chat_id, user_id),
+                ).fetchone()
+                user_name = identity[0] if identity else None
+                user_username = identity[1] if identity else None
+                participants.append(
+                    {
+                        "user_id": int(user_id),
+                        "message_count": int(message_count),
+                        "last_message": str(last_message) if last_message is not None else None,
+                        "user_name": user_name,
+                        "user_username": user_username,
+                    }
+                )
+
+        return participants
+
     @staticmethod
     def _last_known_user_display(conn: sqlite3.Connection, user_id: int) -> str:
         row = conn.execute(
