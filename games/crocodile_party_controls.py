@@ -391,6 +391,11 @@ def _default_menu_keyboard(chat_id: int | str) -> InlineKeyboardMarkup:
 _menu_keyboard_renderer = _default_menu_keyboard
 
 
+def get_default_menu_keyboard_renderer():
+    """Return the immutable base unified-menu keyboard renderer."""
+    return _default_menu_keyboard
+
+
 def get_menu_keyboard_renderer():
     """Return the currently configured unified-menu keyboard renderer."""
     return _menu_keyboard_renderer
@@ -460,6 +465,11 @@ async def _default_stop_active_party(chat_id: str, user_id: int) -> tuple[bool, 
 
 
 _stop_active_party_handler = _default_stop_active_party
+
+
+def get_default_stop_active_party_handler():
+    """Return the immutable base unified party-stop handler."""
+    return _default_stop_active_party
 
 
 def get_stop_active_party_handler():
@@ -550,6 +560,11 @@ async def _default_handle_menu_callback(callback) -> None:
 
 
 _menu_callback_handler = _default_handle_menu_callback
+
+
+def get_default_menu_callback_handler():
+    """Return the immutable base unified-menu callback handler."""
+    return _default_handle_menu_callback
 
 
 def get_menu_callback_handler():
@@ -714,7 +729,7 @@ def configure_crocodile_party_controls() -> None:
     if _configured:
         return
 
-    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
+    _original_handle_telephone_callback = crocodile_modes.get_default_telephone_callback_handler()
     _original_send_telephone_step = crocodile_modes._send_telephone_step
     _original_finish_telephone = crocodile_modes._finish_telephone
     _original_record_drawing = crocodile_modes.record_drawing
