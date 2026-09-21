@@ -32,6 +32,7 @@ def _session(chat_id=-1001):
         pending_generated_result={},
         pending_generation_request={},
         generated_result_seq=0,
+        scene_count=1,
     )
 
 
@@ -89,6 +90,10 @@ def test_group_turn_is_durable_before_provider_call(monkeypatch):
     assert seen[0]["kind"] == "GROUP_ACTION_CONTINUATION"
     assert "Алиса: ломаю дверь (id=1)" in seen[0]["prompt"]
     assert "Боря: ищу ловушку (id=2)" in seen[0]["prompt"]
+    assert "Сначала явно учти КАЖДУЮ заявку" in seen[0]["prompt"]
+    assert "ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ" in seen[0]["prompt"]
+    assert "не сжимай четыре разных действия" in seen[0]["prompt"].casefold()
+    assert "допустим ещё один общий ACTION:INPUT" in seen[0]["prompt"]
     assert seen[0]["effects"][0]["method"] == "send_message"
     assert seen[0]["effects"][0]["text"].startswith("🎭 Ход партии:")
     assert session.action_target_user_ids == []
@@ -153,3 +158,27 @@ def test_retry_does_not_duplicate_group_turn_announcement():
     ]
     assert len(action_announcements) == 1
     assert len(attempts) == 2
+
+
+def test_later_group_turn_still_preserves_each_action_without_opening_lock(monkeypatch):
+    session = _session()
+    session.scene_count = 5
+    seen = []
+
+    async def generate(_session, _prompt):
+        raise AssertionError("group wrapper delegates generation to durable recovery")
+
+    async def fake_continue(_dnd, _bot, current):
+        seen.append(current.pending_generation_request["prompt"])
+        return True
+
+    monkeypatch.setattr(recovery, "continue_pending_generation", fake_continue)
+
+    dnd, _persisted = _fake_dnd(session, generate)
+    install_dnd_group_action_resilience(dnd)
+
+    asyncio.run(dnd.finalize_group_actions(FakeBot(), session.chat_id, 77))
+
+    assert "Сначала явно учти КАЖДУЮ заявку" in seen[0]
+    assert "ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ" not in seen[0]
+    assert "не обязано запускать новый экшен" in seen[0]

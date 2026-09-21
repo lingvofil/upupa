@@ -25,14 +25,14 @@ DND_STYLE_INSTRUCTION = f"""
 не пересказывай только что случившееся, не повторяй решения игроков и не разжёвывай очевидные
 последствия. Обычно достаточно одного-двух коротких абзацев плюс технический тег.
 
-СВОБОДНЫЕ ХОДЫ ПАРТИИ — ВАЖНЫ, НО НЕ ДВА ПОДРЯД. ACTION:INPUT может появляться часто,
-но не чаще чем через один игровой эпизод. НИКОГДА не ставь ACTION:INPUT, если предыдущий
-технический тег мастера тоже был ACTION:INPUT — это относится и к общему ходу партии, и к
-адресному INPUT с TARGETS. После INPUT следующий эпизод должен завершаться ROLL или POLL,
-если игра не заканчивается через END. Если ситуацию можно интересно разрулить фантазией игроков,
-предпочитай ACTION:INPUT только при соблюдении этого ограничения. Не делай длинную цепочку ROLL/POLL:
-после одного-двух таких эпизодов снова можно дать свободный ACTION:INPUT. POLL используй только когда
-реально нужны несколько заранее сформулированных альтернатив, ROLL — только когда важен неопределённый исход.
+СВОБОДНЫЕ ХОДЫ ПАРТИИ — ОСНОВА ИГРЫ. ACTION:INPUT можно ставить несколько эпизодов подряд,
+если игроки исследуют место, разговаривают с NPC, осматриваются, планируют, покупают, отдыхают или просто
+пробуют свои идеи. Не заставляй сцену переходить в ROLL или POLL только потому, что предыдущий тег тоже
+был ACTION:INPUT. Каждый новый INPUT должен отвечать на уже заявленные действия и давать новую информацию,
+реакцию мира или возможность взаимодействия, а не повторять ту же ситуацию без изменений. POLL используй
+только для настоящей общей развилки с заранее сформулированными альтернативами; если у игроков естественно
+может быть свой вариант, предпочитай INPUT. ROLL нужен только когда исход конкретного заявленного действия
+действительно неопределён и цена успеха/провала важна.
 
 БАЛАНС БРОСКОВ: MODE:NORMAL — штатный режим и должен использоваться заметно чаще всего,
 ориентир примерно 70–80% бросков. ADVANTAGE и DISADVANTAGE — редкие ситуационные исключения,
@@ -257,58 +257,18 @@ def _fallback_non_input_poll(text: str) -> str:
 
 
 async def _generate_without_consecutive_input(original_generate, session, prompt: str) -> str:
-    """Generate a compact turn while guarding INPUT cadence and roll-mode balance."""
+    """Generate a compact turn without forcing artificial action-type alternation."""
     conversation = getattr(session, "conversation", None)
-    previous_action = _last_assistant_action(conversation or [])
-
-    async def generate_once(request: str, *, force_style: bool = False) -> str:
-        history_before = list(conversation) if isinstance(conversation, list) else []
-        if force_style or isinstance(conversation, list):
-            prepared_request = _ensure_style_instruction(request)
-        else:
-            prepared_request = _compact_request_text(request)
-        raw_result = await original_generate(session, prepared_request)
-        compact_result = _compact_story_response(raw_result)
-        balanced_result = _balance_roll_mode(session, compact_result, history=history_before)
-        _replace_last_assistant_content(session, raw_result, balanced_result)
-        return balanced_result
-
-    result = await generate_once(prompt)
-    if previous_action != "INPUT" or _action_kind(result) != "INPUT":
-        return result
-
-    logging.info(
-        "DnD rejected consecutive ACTION:INPUT chat_id=%s",
-        getattr(session, "chat_id", None),
-    )
-    if getattr(session, "_dnd_last_generation_provider", None) == "groq":
-        fallback = _fallback_non_input_poll(result)
-        _replace_last_assistant_content(session, result, fallback)
-        logging.warning(
-            "DnD consecutive INPUT on Groq; using deterministic fallback without correction request chat_id=%s",
-            getattr(session, "chat_id", None),
-        )
-        return fallback
-
-    correction_prompt = (
-        "Предыдущий технический ход уже был ACTION:INPUT, а ты снова выдал ACTION:INPUT. "
-        "Так нельзя. Перепиши ближайший сюжетный эпизод без нового свободного хода партии. "
-        "Заверши его только ACTION:ROLL или ACTION:POLL; если это настоящий финал — ACTION:END. "
-        "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
-    )
-    for _attempt in range(2):
-        corrected = await generate_once(correction_prompt, force_style=True)
-        if _action_kind(corrected) != "INPUT":
-            return corrected
-        result = corrected
-
-    fallback = _fallback_non_input_poll(result)
-    _replace_last_assistant_content(session, result, fallback)
-    logging.warning(
-        "DnD model ignored consecutive INPUT guard; using fallback poll chat_id=%s",
-        getattr(session, "chat_id", None),
-    )
-    return fallback
+    history_before = list(conversation) if isinstance(conversation, list) else []
+    if isinstance(conversation, list):
+        prepared_request = _ensure_style_instruction(prompt)
+    else:
+        prepared_request = _compact_request_text(prompt)
+    raw_result = await original_generate(session, prepared_request)
+    compact_result = _compact_story_response(raw_result)
+    balanced_result = _balance_roll_mode(session, compact_result, history=history_before)
+    _replace_last_assistant_content(session, raw_result, balanced_result)
+    return balanced_result
 
 
 class _StyledBotProxy:

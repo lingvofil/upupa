@@ -14,13 +14,12 @@ from AI.dnd_style import (
 )
 
 
-def test_dnd_style_limits_free_party_turns_to_every_other_episode():
-    assert "НЕ ДВА ПОДРЯД" in DND_STYLE_INSTRUCTION
-    assert "не чаще чем через один игровой эпизод" in DND_STYLE_INSTRUCTION
-    assert "НИКОГДА не ставь ACTION:INPUT" in DND_STYLE_INSTRUCTION
-    assert "предыдущий\nтехнический тег мастера тоже был ACTION:INPUT" in DND_STYLE_INSTRUCTION
-    assert "После INPUT следующий эпизод должен завершаться ROLL или POLL" in DND_STYLE_INSTRUCTION
-    assert "Не делай длинную цепочку ROLL/POLL" in DND_STYLE_INSTRUCTION
+def test_dnd_style_allows_consecutive_exploratory_party_turns():
+    assert "ACTION:INPUT можно ставить несколько эпизодов подряд" in DND_STYLE_INSTRUCTION
+    assert "исследуют место" in DND_STYLE_INSTRUCTION
+    assert "разговаривают с NPC" in DND_STYLE_INSTRUCTION
+    assert "Не заставляй сцену переходить в ROLL или POLL" in DND_STYLE_INSTRUCTION
+    assert "предпочитай INPUT" in DND_STYLE_INSTRUCTION
 
 
 def test_dnd_style_requests_compact_story_text():
@@ -62,76 +61,31 @@ def test_short_story_response_is_unchanged():
     assert _compact_story_response(source) == source
 
 
-def test_runtime_guard_regenerates_second_input():
+def test_runtime_allows_second_input_without_regeneration():
     session = SimpleNamespace(
         chat_id=-100901,
         conversation=[
             {"role": "assistant", "content": "Сцена. [ACTION:INPUT]"},
         ],
     )
-    outputs = [
-        "Ещё сцена. [ACTION:INPUT]",
-        "Теперь проверка. [ACTION:ROLL;TYPE:CHECK;REASON:проверить дверь;DC:10;MODE:NORMAL]",
-    ]
-    prompts = []
+    calls = []
 
-    async def fake_generate(_session, prompt):
-        prompts.append(prompt)
-        return outputs.pop(0)
-
-    result = asyncio.run(
-        _generate_without_consecutive_input(fake_generate, session, "продолжай")
-    )
-
-    assert "ACTION:ROLL" in result
-    assert len(prompts) == 2
-    assert "не используй ACTION:INPUT" in prompts[1]
-    assert all("обычно 40–60 слов" in prompt for prompt in prompts)
-
-
-def test_runtime_guard_falls_back_to_poll_if_model_ignores_corrections():
-    session = SimpleNamespace(
-        chat_id=-100902,
-        conversation=[
-            {"role": "assistant", "content": "Сцена. [ACTION:INPUT]"},
-        ],
-    )
-
-    async def fake_generate(_session, _prompt):
-        return "Упрямый мастер. [ACTION:INPUT;TARGETS:11,22]"
-
-    result = asyncio.run(
-        _generate_without_consecutive_input(fake_generate, session, "продолжай")
-    )
-
-    assert "ACTION:INPUT" not in result
-    assert "ACTION:POLL;TARGETS:11,22" in result
-    assert "Действовать осторожно" in result
-
-
-def test_deterministic_fallback_replaces_assistant_action_in_conversation():
-    session = SimpleNamespace(
-        chat_id=-100909,
-        conversation=[
-            {"role": "assistant", "content": "Сцена. [ACTION:INPUT]"},
-        ],
-    )
-
-    async def fake_generate(target_session, _prompt):
-        raw = "Упрямый мастер. [ACTION:INPUT;TARGETS:11,22]"
+    async def fake_generate(target_session, prompt):
+        calls.append(prompt)
+        raw = "Осмотр продолжается. [ACTION:INPUT]"
         target_session.conversation.append({"role": "assistant", "content": raw})
         return raw
 
     result = asyncio.run(
-        _generate_without_consecutive_input(fake_generate, session, "продолжай")
+        _generate_without_consecutive_input(fake_generate, session, "осматриваем рынок")
     )
 
-    assert "ACTION:POLL;TARGETS:11,22" in result
-    assert "ACTION:POLL;TARGETS:11,22" in session.conversation[-1]["content"]
-    assert "ACTION:INPUT" not in session.conversation[-1]["content"]
+    assert result.endswith("[ACTION:INPUT]")
+    assert len(calls) == 1
+    assert session.conversation[-1]["content"].endswith("[ACTION:INPUT]")
 
 
-def test_runtime_guard_skips_second_groq_request_for_consecutive_input():
+def test_runtime_keeps_consecutive_input_on_groq_too():
     session = SimpleNamespace(
         chat_id=-100908,
         conversation=[
@@ -143,15 +97,16 @@ def test_runtime_guard_skips_second_groq_request_for_consecutive_input():
 
     async def fake_generate(_session, prompt):
         calls.append(prompt)
-        return "Упрямый fallback. [ACTION:INPUT;TARGETS:11]"
+        return "Можно ещё поговорить со старостой. [ACTION:INPUT]"
 
     result = asyncio.run(
         _generate_without_consecutive_input(fake_generate, session, "продолжай")
     )
 
     assert len(calls) == 1
-    assert "ACTION:INPUT" not in result
-    assert "ACTION:POLL;TARGETS:11" in result
+    assert result.endswith("[ACTION:INPUT]")
+    assert "ACTION:POLL" not in result
+
 
 
 def test_runtime_guard_allows_input_after_non_input_turn():
