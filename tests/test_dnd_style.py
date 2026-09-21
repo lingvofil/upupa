@@ -109,7 +109,29 @@ def test_runtime_guard_falls_back_to_poll_if_model_ignores_corrections():
     assert "Действовать осторожно" in result
 
 
-def test_runtime_guard_uses_only_one_correction_after_groq_fallback():
+def test_deterministic_fallback_replaces_assistant_action_in_conversation():
+    session = SimpleNamespace(
+        chat_id=-100909,
+        conversation=[
+            {"role": "assistant", "content": "Сцена. [ACTION:INPUT]"},
+        ],
+    )
+
+    async def fake_generate(target_session, _prompt):
+        raw = "Упрямый мастер. [ACTION:INPUT;TARGETS:11,22]"
+        target_session.conversation.append({"role": "assistant", "content": raw})
+        return raw
+
+    result = asyncio.run(
+        _generate_without_consecutive_input(fake_generate, session, "продолжай")
+    )
+
+    assert "ACTION:POLL;TARGETS:11,22" in result
+    assert "ACTION:POLL;TARGETS:11,22" in session.conversation[-1]["content"]
+    assert "ACTION:INPUT" not in session.conversation[-1]["content"]
+
+
+def test_runtime_guard_skips_second_groq_request_for_consecutive_input():
     session = SimpleNamespace(
         chat_id=-100908,
         conversation=[
@@ -127,7 +149,7 @@ def test_runtime_guard_uses_only_one_correction_after_groq_fallback():
         _generate_without_consecutive_input(fake_generate, session, "продолжай")
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert "ACTION:INPUT" not in result
     assert "ACTION:POLL;TARGETS:11" in result
 
