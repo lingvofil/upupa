@@ -193,7 +193,11 @@ def install_dnd_pacing(dnd) -> None:
                         kind="POLL_REPEAT_CORRECTION",
                     ):
                         dnd.persist_dnd_sessions()
-                        await continue_pending_generation(dnd, bot, session)
+                        completed = await continue_pending_generation(dnd, bot, session)
+                        if not completed:
+                            raise RuntimeError(
+                                "DnD repeated poll correction generation failed"
+                            )
                         return None
                 response = _force_repeat_poll_to_input(response)
 
