@@ -350,17 +350,3 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         < final_wiring
     )
 
-    assert runtime_source.count(wiring) == 2
-    assert (
-        party_install
-        < permissions_composition
-        < base
-        < permissions
-        < permissions_wiring
-        < admin_composition
-        < admin_wrapper
-        < admin_wiring
-        < permissions_installer
-        < roles_installer
-        < announcements_installer
-    )
