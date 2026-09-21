@@ -165,7 +165,7 @@ def test_recurring_short_messages_survive_outside_bounded_style_sample():
     entry = ParticipantHistory(
         chat_id="-1001",
         user_id=42,
-        sample_size=4,
+        sample_size=2,
         recent_size=2,
     )
     for index in range(40):
