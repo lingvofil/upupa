@@ -95,18 +95,20 @@ def test_player_can_join_and_redistribute_between_groups(monkeypatch):
     }
     roles.crocodile_modes.telephone_games[cid] = game
     monkeypatch.setattr(roles, "_persist", lambda: None)
+    downstream = AsyncMock()
 
     try:
         draw_callback = _callback(f"ctel_role_draw_{cid}", 202)
-        asyncio.run(roles.handle_telephone_callback_with_roles(draw_callback))
+        asyncio.run(roles.handle_telephone_callback_with_roles(draw_callback, downstream))
         assert (202, "User 202") in game["players"]
         assert game["telephone_roles"]["202"] == "draw"
 
         text_callback = _callback(f"ctel_role_text_{cid}", 202)
-        asyncio.run(roles.handle_telephone_callback_with_roles(text_callback))
+        asyncio.run(roles.handle_telephone_callback_with_roles(text_callback, downstream))
         assert game["telephone_roles"]["202"] == "text"
         assert len([row for row in game["players"] if row[0] == 202]) == 1
         text_callback.message.edit_text.assert_awaited_once()
+        downstream.assert_not_awaited()
     finally:
         roles.crocodile_modes.telephone_games.pop(cid, None)
 
@@ -119,12 +121,11 @@ def test_start_is_blocked_until_role_groups_are_balanced(monkeypatch):
     game["telephone_roles"]["303"] = "text"
     roles.crocodile_modes.telephone_games[cid] = game
     original = AsyncMock()
-    monkeypatch.setattr(roles, "_original_handle_telephone_callback", original)
     monkeypatch.setattr(roles, "_persist", lambda: None)
     callback = _callback(f"ctel_start_{cid}", 101)
 
     try:
-        asyncio.run(roles.handle_telephone_callback_with_roles(callback))
+        asyncio.run(roles.handle_telephone_callback_with_roles(callback, original))
         callback.answer.assert_awaited_once()
         assert callback.answer.await_args.kwargs["show_alert"] is True
         original.assert_not_awaited()
@@ -140,12 +141,11 @@ def test_balanced_start_interleaves_text_and_draw_roles(monkeypatch):
     game = _balanced_game()
     roles.crocodile_modes.telephone_games[cid] = game
     original = AsyncMock(return_value="started")
-    monkeypatch.setattr(roles, "_original_handle_telephone_callback", original)
     monkeypatch.setattr(roles, "_persist", lambda: None)
     callback = _callback(f"ctel_start_{cid}", 101)
 
     try:
-        result = asyncio.run(roles.handle_telephone_callback_with_roles(callback))
+        result = asyncio.run(roles.handle_telephone_callback_with_roles(callback, original))
         assert result == "started"
         assert [row[0] for row in game["players"]] == [101, 303, 202, 404]
         assert [game["telephone_roles"][str(row[0])] for row in game["players"]] == [
@@ -167,11 +167,10 @@ def test_admin_start_is_also_blocked_by_balance(monkeypatch):
     game["telephone_roles"]["303"] = "text"
     roles.crocodile_modes.telephone_games[cid] = game
     original = AsyncMock()
-    monkeypatch.setattr(roles, "_original_handle_telephone_callback", original)
     callback = _callback(f"ctel_start_{cid}", roles.ADMIN_ID)
 
     try:
-        asyncio.run(roles.handle_telephone_callback_with_roles(callback))
+        asyncio.run(roles.handle_telephone_callback_with_roles(callback, original))
         callback.answer.assert_awaited_once()
         original.assert_not_awaited()
     finally:
