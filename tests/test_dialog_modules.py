@@ -423,3 +423,58 @@ def test_poem_generation_returns_none_after_three_malformed_attempts(monkeypatch
 
     assert result is None
     assert len(calls) == prompt_commands._POEM_MAX_GENERATION_ATTEMPTS
+
+
+
+def test_poem_active_users_ignore_telegram_fake_senders():
+    from AI.dialog.prompt_commands import _rank_active_poem_users
+
+    users = {
+        "777000": {"weekly": 100, "daily": 100, "total": 1000},
+        "1087968824": {"weekly": 90, "daily": 90, "total": 900},
+        "42": {"weekly": 5, "daily": 2, "total": 50},
+    }
+
+    assert _rank_active_poem_users(users) == ["42"]
+
+
+def test_valid_users_exclude_persisted_telegram_non_human_senders(monkeypatch):
+    import asyncio
+    from features import stat_rank_settings
+
+    class FakeCounters:
+        def get_chat(self, chat_id, today):
+            assert chat_id == "-1001"
+            return {
+                "777000": {"weekly": 100, "daily": 100, "total": 1000},
+                "1087968824": {"weekly": 90, "daily": 90, "total": 900},
+                "42": {"weekly": 5, "daily": 2, "total": 50},
+            }
+
+    monkeypatch.setattr(stat_rank_settings, "_counter_repository", FakeCounters())
+
+    users = asyncio.run(stat_rank_settings.get_valid_users("-1001"))
+
+    assert users == {
+        "42": {"weekly": 5, "daily": 2, "total": 50},
+    }
+
+
+def test_track_message_statistics_ignores_sender_chat(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from features import stat_rank_settings
+
+    class FailingCounters:
+        def increment(self, *args, **kwargs):
+            raise AssertionError("sender_chat must not be counted as a human")
+
+    monkeypatch.setattr(stat_rank_settings, "_counter_repository", FailingCounters())
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=777000, is_bot=False),
+        sender_chat=SimpleNamespace(id=-100123),
+        chat=SimpleNamespace(id=-1001),
+    )
+
+    asyncio.run(stat_rank_settings.track_message_statistics(message))
