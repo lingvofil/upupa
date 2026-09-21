@@ -255,20 +255,45 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "reverse_modes_callback_with_admin(callback, next_handler)" in admin_source
 
     telephone_wiring = "crocodile_modes.configure_telephone_callback_handler("
-    admin_wrapper = runtime_source.index("handle_telephone_callback_with_admin,")
+    composition = "telephone_callback_handler = _compose_callback_handler("
+    party_install = runtime_source.index("party_controls.configure_crocodile_party_controls()")
+    permissions_composition = runtime_source.index(composition, party_install)
+    admin_composition = runtime_source.index(
+        composition,
+        permissions_composition + len(composition),
+    )
+    admin_wrapper = runtime_source.index(
+        "handle_telephone_callback_with_admin,",
+        admin_composition,
+    )
+    admin_install = runtime_source.index("configure_crocodile_admin_controls()", admin_wrapper)
+    roles_composition = runtime_source.index(composition, admin_install)
     roles_wrapper = runtime_source.index(
         "handle_telephone_callback_with_roles,",
-        admin_wrapper,
+        roles_composition,
+    )
+    announcements_composition = runtime_source.index(
+        composition,
+        roles_wrapper,
     )
     announcements_wrapper = runtime_source.index(
         "telephone_callback_with_role_announcement,",
-        roles_wrapper,
+        announcements_composition,
     )
     telephone_install = runtime_source.index(telephone_wiring, announcements_wrapper)
-    admin_install = runtime_source.index("configure_crocodile_admin_controls()")
 
     assert runtime_source.count(telephone_wiring) == 1
-    assert admin_wrapper < admin_install < roles_wrapper < announcements_wrapper < telephone_install
+    assert (
+        permissions_composition
+        < admin_composition
+        < admin_wrapper
+        < admin_install
+        < roles_composition
+        < roles_wrapper
+        < announcements_composition
+        < announcements_wrapper
+        < telephone_install
+    )
     assert "crocodile_modes.handle_telephone_callback =" not in runtime_source
     duel_wiring = "crocodile_modes.configure_duel_callback_handler("
     assert runtime_source.count(duel_wiring) == 1
