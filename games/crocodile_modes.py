@@ -559,7 +559,7 @@ async def handle_duel_callback(callback) -> None:
 
 
 # ---------------- telephone ----------------
-def _telephone_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+def _default_telephone_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Участвовать", callback_data=f"ctel_join_{chat_id}")],
@@ -567,6 +567,29 @@ def _telephone_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"ctel_cancel_{chat_id}")],
         ]
     )
+
+
+_telephone_lobby_keyboard_renderer = _default_telephone_lobby_keyboard
+
+
+def get_default_telephone_lobby_keyboard_renderer():
+    """Return the immutable base broken-telephone lobby keyboard renderer."""
+    return _default_telephone_lobby_keyboard
+
+
+def get_telephone_lobby_keyboard_renderer():
+    """Return the currently configured broken-telephone lobby keyboard renderer."""
+    return _telephone_lobby_keyboard_renderer
+
+
+def configure_telephone_lobby_keyboard_renderer(renderer) -> None:
+    """Install the broken-telephone lobby keyboard renderer."""
+    global _telephone_lobby_keyboard_renderer
+    _telephone_lobby_keyboard_renderer = renderer
+
+
+def _telephone_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    return _telephone_lobby_keyboard_renderer(chat_id)
 
 
 async def _default_start_telephone(message) -> None:
