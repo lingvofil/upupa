@@ -39,6 +39,7 @@ _POEM_CHARACTER_COUNT = 6
 _POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
 _POEM_BOT_INCLUSION_PROBABILITY = 0.20
+_POEM_MAX_GENERATION_ATTEMPTS = 3
 _TELEGRAM_FAKE_SENDER_USER_IDS = {777000, 1087968824}
 _LATIN_TO_CYRILLIC_SEQUENCES = (
     ("shch", "щ"),
@@ -278,6 +279,44 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     )
 
 
+def _is_valid_poem_response(response_text: str | None) -> bool:
+    """Accept only a real four-line poem, ignoring blank lines."""
+    lines = [
+        line.strip()
+        for line in (response_text or "").splitlines()
+        if line.strip()
+    ]
+    return len(lines) == 4
+
+
+async def _generate_valid_poem(
+    full_prompt: str,
+    chat_id: str,
+    poem_type: str,
+) -> str | None:
+    retry_instruction = (
+        "\n\nКРИТИЧЕСКОЕ ТРЕБОВАНИЕ К ФОРМАТУ: ответ должен состоять ровно из четырёх "
+        "непустых строк, разделённых переносами строки. Не склеивай строки в одну, "
+        "не добавляй заголовок, комментарии, кавычки или пояснения."
+    )
+
+    for attempt in range(1, _POEM_MAX_GENERATION_ATTEMPTS + 1):
+        prompt = full_prompt if attempt == 1 else full_prompt + retry_instruction
+        response_text = await generate_simple_response(prompt, chat_id)
+        if _is_valid_poem_response(response_text):
+            return response_text.strip()
+
+        logging.warning(
+            "Некорректный формат %s: попытка %s/%s, ответ=%r",
+            poem_type,
+            attempt,
+            _POEM_MAX_GENERATION_ATTEMPTS,
+            (response_text or "")[:300],
+        )
+
+    return None
+
+
 async def handle_poem_command(message: types.Message, poem_type: str):
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
@@ -305,7 +344,9 @@ async def handle_poem_command(message: types.Message, poem_type: str):
 
     full_prompt = base_prompt + characters
     try:
-        response_text = await generate_simple_response(full_prompt, chat_id)
+        response_text = await _generate_valid_poem(full_prompt, chat_id, poem_type)
+        if response_text is None:
+            response_text = error_response
     except Exception as exc:
         logging.error("API Error for %s: %s", poem_type, exc)
         response_text = error_response
