@@ -281,30 +281,34 @@ async def _generate_without_consecutive_input(original_generate, session, prompt
         "DnD rejected consecutive ACTION:INPUT chat_id=%s",
         getattr(session, "chat_id", None),
     )
+    if getattr(session, "_dnd_last_generation_provider", None) == "groq":
+        fallback = _fallback_non_input_poll(result)
+        _replace_last_assistant_content(session, result, fallback)
+        logging.warning(
+            "DnD consecutive INPUT on Groq; using deterministic fallback without correction request chat_id=%s",
+            getattr(session, "chat_id", None),
+        )
+        return fallback
+
     correction_prompt = (
         "Предыдущий технический ход уже был ACTION:INPUT, а ты снова выдал ACTION:INPUT. "
         "Так нельзя. Перепиши ближайший сюжетный эпизод без нового свободного хода партии. "
         "Заверши его только ACTION:ROLL или ACTION:POLL; если это настоящий финал — ACTION:END. "
         "Не упоминай это исправление и не используй ACTION:INPUT ни с TARGETS, ни без TARGETS."
     )
-    correction_attempts = 1 if getattr(session, "_dnd_last_generation_provider", None) == "groq" else 2
-    for _attempt in range(correction_attempts):
+    for _attempt in range(2):
         corrected = await generate_once(correction_prompt, force_style=True)
         if _action_kind(corrected) != "INPUT":
             return corrected
         result = corrected
-        if getattr(session, "_dnd_last_generation_provider", None) == "groq":
-            logging.warning(
-                "DnD consecutive INPUT correction stayed on Groq; using deterministic fallback chat_id=%s",
-                getattr(session, "chat_id", None),
-            )
-            break
 
+    fallback = _fallback_non_input_poll(result)
+    _replace_last_assistant_content(session, result, fallback)
     logging.warning(
         "DnD model ignored consecutive INPUT guard; using fallback poll chat_id=%s",
         getattr(session, "chat_id", None),
     )
-    return _fallback_non_input_poll(result)
+    return fallback
 
 
 class _StyledBotProxy:
