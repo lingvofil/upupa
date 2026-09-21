@@ -296,7 +296,10 @@ def test_role_adapters_are_composed_only_in_runtime():
     assert "crocodile_party_controls.party_status_text =" not in roles_source
     assert "crocodile_party_controls._skip_telephone =" not in roles_source
     assert "crocodile_modes._telephone_lobby_keyboard =" not in roles_source
-    assert "party_status_text_with_roles(chat_id: int | str, next_renderer)" in roles_source
+    assert (
+        "party_status_text_with_roles(chat_id: int | str, next_renderer)"
+        in roles_source
+    )
     assert (
         "skip_telephone_with_roles(chat_id: str, game: dict, next_handler)"
         in roles_source
@@ -337,7 +340,7 @@ def test_role_adapters_are_composed_only_in_runtime():
         skip_role,
     )
     lobby_role = runtime_source.index(
-        "telephone_lobby_keyboard",
+        "\n        telephone_lobby_keyboard\n",
         lobby_wiring,
     )
 
