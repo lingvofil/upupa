@@ -19,7 +19,6 @@ _ROLE_FIELD = "telephone_roles"
 
 _configured = False
 _original_start_telephone = None
-_original_handle_telephone_callback = None
 _original_party_status_text = None
 _original_skip_telephone = None
 
@@ -211,7 +210,7 @@ async def start_telephone_with_roles(message) -> Any:
     return await _original_start_telephone(proxy)
 
 
-async def handle_telephone_callback_with_roles(callback) -> Any:
+async def handle_telephone_callback_with_roles(callback, next_handler) -> Any:
     data = callback.data or ""
     role = None
     cid = None
@@ -279,7 +278,7 @@ async def handle_telephone_callback_with_roles(callback) -> Any:
             game["players"] = _ordered_players(game)
             _persist()
 
-    return await _original_handle_telephone_callback(callback)
+    return await next_handler(callback)
 
 
 def party_status_text_with_roles(chat_id: int | str) -> str:
@@ -368,20 +367,18 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
 
 
 def configure_crocodile_telephone_roles() -> None:
-    """Install role lobby last so it sees admin, resilience and permission wrappers."""
+    """Install stateful role lobby adapters; callback composition lives in runtime."""
     global _configured
-    global _original_start_telephone, _original_handle_telephone_callback
+    global _original_start_telephone
     global _original_party_status_text, _original_skip_telephone
     if _configured:
         return
 
     _original_start_telephone = crocodile_modes.start_telephone
-    _original_handle_telephone_callback = crocodile_modes.get_telephone_callback_handler()
     _original_party_status_text = crocodile_party_controls.party_status_text
     _original_skip_telephone = crocodile_party_controls._skip_telephone
 
     crocodile_modes.start_telephone = start_telephone_with_roles
-    crocodile_modes.configure_telephone_callback_handler(handle_telephone_callback_with_roles)
     crocodile_modes._telephone_lobby_keyboard = telephone_lobby_keyboard
     crocodile_party_controls.party_status_text = party_status_text_with_roles
     crocodile_party_controls._skip_telephone = skip_telephone_with_roles
