@@ -128,10 +128,10 @@ def test_host_initial_role_is_announced_when_lobby_is_created(monkeypatch):
         }
         return "created"
 
-    monkeypatch.setattr(announcements, "_original_start_telephone", original)
-
     try:
-        result = asyncio.run(announcements.start_telephone_with_role_announcement(message))
+        result = asyncio.run(
+            announcements.start_telephone_with_role_announcement(message, original)
+        )
         assert result == "created"
         message.answer.assert_awaited_once()
         text = message.answer.await_args.args[0]

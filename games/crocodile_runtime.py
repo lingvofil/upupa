@@ -109,6 +109,20 @@ def _compose_start_new_game(base_handler, *wrappers):
     return handler
 
 
+def _compose_start_telephone(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def start(message, _wrapper=wrapper, _next=next_handler):
+            return await _wrapper(message, _next)
+
+        handler = start
+    return handler
+
+
 def _compose_callback_handler(base_handler, *routers):
     handler = base_handler
     for router in routers:
@@ -336,11 +350,13 @@ def configure_crocodile_runtime() -> None:
     from games.crocodile_telephone_mentions import configure_crocodile_telephone_mentions
     from games.crocodile_telephone_role_announcements import (
         configure_crocodile_telephone_role_announcements,
+        start_telephone_with_role_announcement,
         telephone_callback_with_role_announcement,
     )
     from games.crocodile_telephone_roles import (
         configure_crocodile_telephone_roles,
         handle_telephone_callback_with_roles,
+        start_telephone_with_roles,
     )
     from games.crocodile_telephone_skip_permissions import (
         configure_crocodile_telephone_skip_permissions,
@@ -539,6 +555,15 @@ def configure_crocodile_runtime() -> None:
     )
     crocodile_modes.configure_telephone_callback_handler(
         telephone_callback_handler
+    )
+    telephone_start_handler = _compose_start_telephone(
+        crocodile_modes.get_default_start_telephone_handler(),
+        party_controls.start_telephone_with_party_controls,
+        start_telephone_with_roles,
+        start_telephone_with_role_announcement,
+    )
+    crocodile_modes.configure_start_telephone_handler(
+        telephone_start_handler
     )
     configure_crocodile_canvas_restore()
     _configured = True
