@@ -10,6 +10,7 @@ import copy
 import hashlib
 import logging
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 
@@ -17,6 +18,7 @@ RESULT_PHASE_READY = "READY"
 RESULT_PHASE_APPLYING = "APPLYING"
 EFFECT_IN_FLIGHT = "IN_FLIGHT"
 EFFECT_DONE = "DONE"
+GROUP_ACTION_REQUEST_KIND = "GROUP_ACTION_CONTINUATION"
 
 _CORE_SNAPSHOT_FIELDS = (
     "state",
@@ -173,7 +175,8 @@ def _new_result(session, text: str) -> dict:
     session.generated_result_seq += 1
     payload = str(text or "")
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-    return {
+    request = getattr(session, "pending_generation_request", {}) or {}
+    result = {
         "id": f"{session.generated_result_seq}:{digest}",
         "text": payload,
         "phase": RESULT_PHASE_READY,
@@ -181,6 +184,32 @@ def _new_result(session, text: str) -> dict:
         "source_state": str(getattr(session, "state", "") or ""),
         "telegram_effects": [],
     }
+    request_kind = str(request.get("kind") or "")
+    if request_kind:
+        result["source_request_kind"] = request_kind
+    return result
+
+
+@contextmanager
+def _parse_request_context(session, request_kind):
+    """Restore transient parse semantics from durable request metadata."""
+    if str(request_kind or "").upper() != GROUP_ACTION_REQUEST_KIND:
+        yield
+        return
+
+    existed = hasattr(session, "_upupa_resolving_group_actions")
+    previous = getattr(session, "_upupa_resolving_group_actions", None)
+    session._upupa_resolving_group_actions = True
+    try:
+        yield
+    finally:
+        if existed:
+            session._upupa_resolving_group_actions = previous
+        else:
+            try:
+                del session._upupa_resolving_group_actions
+            except AttributeError:
+                pass
 
 
 def finalization_state(session, *, create: bool = False) -> dict:
@@ -477,17 +506,20 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
         return True
     if not await _deliver_generation_effects(dnd, bot, session):
         return False
+    request_kind = str(session.pending_generation_request.get("kind") or "")
+    request_id = session.pending_generation_request.get("id")
     session.state = "RESOLVING"
     dnd.persist_dnd_sessions()
     try:
         response = await dnd.generate_session_response(session, prompt)
-        await dnd.parse_and_execute_turn(bot, session.chat_id, response)
+        with _parse_request_context(session, request_kind):
+            await dnd.parse_and_execute_turn(bot, session.chat_id, response)
         return True
     except Exception:
         logging.exception(
             "DnD pending generation retry failed chat_id=%s request_id=%s",
             getattr(session, "chat_id", None),
-            session.pending_generation_request.get("id"),
+            request_id,
         )
         return False
 
@@ -537,7 +569,8 @@ async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
         dnd.persist_dnd_sessions()
 
     try:
-        await dnd.parse_and_execute_turn(bot, session.chat_id, pending["text"])
+        with _parse_request_context(session, pending.get("source_request_kind")):
+            await dnd.parse_and_execute_turn(bot, session.chat_id, pending["text"])
     except Exception:
         logging.exception(
             "DnD durable result replay failed chat_id=%s result_id=%s",
