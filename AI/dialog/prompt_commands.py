@@ -1,5 +1,6 @@
 """Telegram-facing commands for dialogue personas and generated poems."""
 
+import asyncio
 import logging
 import random
 
@@ -8,12 +9,11 @@ from aiogram import types
 from core.loader import bot
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
+from features.stat_rank_settings import get_user_display_name, get_valid_users
 from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
-    PROMPT_PIROZHOK1,
     PROMPT_POROSHOK,
-    PROMPT_POROSHOK1,
     actions,
     get_available_prompts,
     get_prompt_by_name,
@@ -31,27 +31,73 @@ def _clear_participant_metadata(settings: dict) -> None:
     settings.pop("style_profile_updated_at", None)
 
 
+_POEM_ACTIVE_POOL_SIZE = 8
+_POEM_CHARACTER_COUNT = 4
+
+
+def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
+    def score(item):
+        stats = item[1] or {}
+        return (
+            int(stats.get("weekly", 0) or 0),
+            int(stats.get("daily", 0) or 0),
+            int(stats.get("total", 0) or 0),
+        )
+
+    ranked = sorted(valid_users.items(), key=score, reverse=True)
+    return [
+        str(user_id)
+        for user_id, stats in ranked
+        if any(int((stats or {}).get(key, 0) or 0) > 0 for key in ("weekly", "daily", "total"))
+    ][:limit]
+
+
+async def _get_dynamic_poem_characters(chat_id: str) -> str:
+    try:
+        valid_users = await get_valid_users(chat_id)
+        user_ids = _rank_active_poem_users(valid_users)
+        if not user_ids:
+            return "случайные русские имена"
+
+        names = await asyncio.gather(
+            *(get_user_display_name(int(chat_id), int(user_id)) for user_id in user_ids)
+        )
+    except Exception as exc:
+        logging.warning("Не удалось подобрать активных героев для стихов: %s", exc)
+        return "случайные русские имена"
+
+    unique_names = []
+    seen = set()
+    for raw_name in names:
+        name = (raw_name or "").strip()
+        if not name or name.startswith("Пользователь "):
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_names.append(name)
+
+    if not unique_names:
+        return "случайные русские имена"
+
+    selected = random.sample(unique_names, k=min(_POEM_CHARACTER_COUNT, len(unique_names)))
+    return ", ".join(selected)
+
+
 async def handle_poem_command(message: types.Message, poem_type: str):
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
     logging.info("Обработчик для %r вызван", poem_type)
 
-    parts = message.text.lower().split(maxsplit=1)
-    characters = parts[1] if len(parts) > 1 else "случайные русские имена"
+    parts = message.text.split(maxsplit=1)
+    characters = parts[1].strip() if len(parts) > 1 else await _get_dynamic_poem_characters(chat_id)
 
     if poem_type == "пирожок":
-        base_prompt = (
-            PROMPT_PIROZHOK1[0]
-            if message.chat.id == -1001707530786 and len(parts) == 1
-            else PROMPT_PIROZHOK[0]
-        )
+        base_prompt = PROMPT_PIROZHOK[0]
         error_response = "🔥 Пирожок сгорел в духовке!"
     else:
-        base_prompt = (
-            PROMPT_POROSHOK1[0]
-            if message.chat.id == -1001707530786 and len(parts) == 1
-            else PROMPT_POROSHOK[0]
-        )
+        base_prompt = PROMPT_POROSHOK[0]
         error_response = "💨 Порошок развеялся..."
 
     full_prompt = base_prompt + characters
