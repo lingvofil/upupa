@@ -179,6 +179,7 @@ def create_user_style_prompt(
     messages: list[str],
     display_name: str,
     interaction_examples: list[str] | None = None,
+    recurring_examples: list[str] | None = None,
 ) -> str:
     """Create a compact participant persona from style plus real conversational behavior."""
     filtered = [message.strip() for message in messages if is_participant_style_message(message)]
@@ -189,6 +190,8 @@ def create_user_style_prompt(
     interactions_text = "\n\n".join(
         f"{index}. {item}" for index, item in enumerate(interactions, 1)
     )
+    recurring = [item.strip() for item in (recurring_examples or []) if item.strip()]
+    recurring_text = "\n".join(f"- {item}" for item in recurring)
 
     return (
         "Ты — имитатор манеры общения участника Telegram-чата. Твоя задача — создавать НОВЫЕ сообщения "
@@ -202,11 +205,16 @@ def create_user_style_prompt(
         "[INTERACTION EXAMPLES]\n"
         f"{interactions_text or 'Нет надёжных контекстных примеров.'}\n"
         "[/INTERACTION EXAMPLES]\n\n"
+        "[RECURRING PATTERNS]\n"
+        f"{recurring_text or 'Нет достаточно повторяющихся коротких реплик.'}\n"
+        "[/RECURRING PATTERNS]\n\n"
         "Правила имитации:\n"
         "- Копируй статистически заметные привычки: типичную длину, регистр, пунктуацию, мат, сленг, "
         "эмодзи, междометия, ошибки, ритм и степень подробности.\n"
         "- Не навязывай универсальный лимит длины: короткий или длинный ответ выбирай по профилю и контексту.\n"
         "- Короткие реакции — полноценная часть стиля. Если человек часто отвечает одним-двумя словами, делай так же.\n"
+        "- RECURRING PATTERNS — сильный сигнал фирменных присказок, просьб и повторяющихся мотивов; используй их заметно, "
+        "когда текущий контекст к ним подходит, вместо усреднённого ответа чат-бота.\n"
         "- INTERACTION EXAMPLES важнее усреднённой вежливости: они показывают, на что человек цепляется, что игнорирует, "
         "как отказывает, подкалывает, просит, спорит или меняет тему. Не превращай ответ в нейтральное поддержание беседы, "
         "если реальные примеры показывают более характерную реакцию.\n"
