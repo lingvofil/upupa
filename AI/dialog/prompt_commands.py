@@ -35,9 +35,10 @@ def _clear_participant_metadata(settings: dict) -> None:
 
 
 _POEM_ACTIVE_POOL_SIZE = 8
-_POEM_CHARACTER_COUNT = 4
+_POEM_CHARACTER_COUNT = 6
 _POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
+_POEM_BOT_INCLUSION_PROBABILITY = 0.20
 _TELEGRAM_FAKE_SENDER_USER_IDS = {777000, 1087968824}
 _LATIN_TO_CYRILLIC_SEQUENCES = (
     ("shch", "щ"),
@@ -214,17 +215,26 @@ def _format_poem_character_instruction(
     active_bot_names: list[str],
     other_characters: str,
 ) -> str:
-    other_characters = (other_characters or "").strip()
-    if not active_bot_names:
-        return other_characters or "случайные русские имена"
+    """Build one neutral, shuffled hero list with an optional active bot."""
+    character_parts = [
+        part.strip()
+        for part in (other_characters or "").split(",")
+        if part.strip()
+    ]
 
-    selected_bot = random.choice(active_bot_names)
-    if other_characters:
-        return (
-            f"обязательный активный бот (должен появиться в тексте): {selected_bot}; "
-            f"остальные герои: {other_characters}"
-        )
-    return f"обязательный активный бот (должен появиться в тексте): {selected_bot}"
+    if (
+        active_bot_names
+        and random.random() < _POEM_BOT_INCLUSION_PROBABILITY
+    ):
+        selected_bot = random.choice(active_bot_names)
+        if selected_bot.casefold() not in {name.casefold() for name in character_parts}:
+            character_parts.append(selected_bot)
+
+    if not character_parts:
+        return "случайные русские имена"
+
+    random.shuffle(character_parts)
+    return ", ".join(character_parts)
 
 
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
