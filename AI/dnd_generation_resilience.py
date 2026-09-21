@@ -27,6 +27,11 @@ DND_GEMINI_GOVERNOR_TIMEOUT_SECONDS = 15.0
 DND_GEMINI_QUEUE_TIMEOUT_SECONDS = 5.0
 DND_GEMINI_ATTEMPTS = 2
 DND_GEMINI_CIRCUIT_SECONDS = 45.0
+DND_GEMINI_INPUT_MAX_CHARS = 20_000
+DND_GEMINI_SYSTEM_MAX_CHARS = 8_000
+DND_GEMINI_RECENT_HISTORY_MAX_CHARS = 4_000
+DND_GEMINI_CURRENT_PROMPT_MAX_CHARS = 8_000
+DND_GEMINI_RECENT_MESSAGES = 4
 DND_GROQ_FALLBACK_TIMEOUT_SECONDS = 18.0
 DND_GROQ_HTTP_TIMEOUT_SECONDS = 15.0
 DND_GROQ_RATE_LIMIT_RETRY_CAP_SECONDS = 6.0
@@ -206,14 +211,94 @@ def _groq_retry_after_seconds(error: Exception) -> float | None:
 
 
 def _history_contents(session, prompt: str):
-    contents = []
+    """Build Gemini contents with a bounded provider-side history window.
+
+    The durable session conversation is intentionally left untouched. Long-term
+    DnD state is supplied separately by campaign context, so the provider only
+    needs the system contract, the most recent exchanges and the current request.
+    """
+    rows = []
     for item in getattr(session, "conversation", None) or []:
         if not isinstance(item, dict) or item.get("content") is None:
             continue
         source_role = item.get("role")
         role = "model" if source_role in {"assistant", "model"} else "user"
-        contents.append({"role": role, "parts": [{"text": str(item["content"])}]})
-    contents.append({"role": "user", "parts": [{"text": str(prompt)}]})
+        rows.append((role, str(item["content"])))
+
+    current = str(prompt)
+    total_chars = sum(len(text) for _role, text in rows) + len(current)
+    if total_chars <= DND_GEMINI_INPUT_MAX_CHARS:
+        contents = [
+            {"role": role, "parts": [{"text": text}]}
+            for role, text in rows
+        ]
+        contents.append({"role": "user", "parts": [{"text": current}]})
+        return contents
+
+    def clip_middle(text: str, budget: int) -> str:
+        value = str(text or "")
+        budget = max(0, int(budget))
+        if len(value) <= budget:
+            return value
+        if budget <= 1:
+            return value[:budget]
+        marker = "\n[...сокращено для Gemini...]\n"
+        if budget <= len(marker) + 2:
+            return value[:budget]
+        payload = budget - len(marker)
+        head = max(1, payload // 2)
+        tail = payload - head
+        return value[:head] + marker + value[-tail:]
+
+    compact_rows = []
+    prefix = rows[:2]
+    if prefix:
+        opening = prefix[1][1] if len(prefix) > 1 else ""
+        system_budget = max(
+            0,
+            DND_GEMINI_SYSTEM_MAX_CHARS - min(len(opening), 256),
+        )
+        compact_rows.append((prefix[0][0], clip_middle(prefix[0][1], system_budget)))
+        if len(prefix) > 1:
+            compact_rows.append((prefix[1][0], opening[:256]))
+
+    recent = rows[2:]
+    recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent))
+    if recent_count % 2:
+        recent_count -= 1
+    recent = recent[-recent_count:] if recent_count else []
+    if recent:
+        per_message_budget = max(
+            1,
+            DND_GEMINI_RECENT_HISTORY_MAX_CHARS // len(recent),
+        )
+        compact_rows.extend(
+            (role, clip_middle(text, per_message_budget))
+            for role, text in recent
+        )
+
+    current = clip_middle(current, DND_GEMINI_CURRENT_PROMPT_MAX_CHARS)
+    contents = [
+        {"role": role, "parts": [{"text": text}]}
+        for role, text in compact_rows
+        if text
+    ]
+    contents.append({"role": "user", "parts": [{"text": current}]})
+
+    sent_chars = sum(
+        len(part.get("text") or "")
+        for item in contents
+        for part in item.get("parts") or []
+    )
+    logging.info(
+        "DnD Gemini history compacted chat_id=%s original_chars=%s sent_chars=%s "
+        "original_messages=%s sent_messages=%s",
+        getattr(session, "chat_id", None),
+        total_chars,
+        sent_chars,
+        len(rows) + 1,
+        len(contents),
+    )
     return contents
 
 
