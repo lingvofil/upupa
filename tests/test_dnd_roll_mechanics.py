@@ -267,7 +267,7 @@ def test_handle_roll_reports_success_and_sends_story_context_to_master(monkeypat
 
     assert session.state == "RESOLVING"
     assert session.pending_roll is None
-    assert message.answers[0][0] == (
+    assert message.bot.messages[0][1] == (
         "🎲 Алиса: Спасбросок — выдержать действие яда\n"
         "⚙️ Сложность — 12 (с преимуществом).\n"
         "🎯 Броски кубика — 5 и 18, результат — 18"
@@ -314,7 +314,7 @@ def test_handle_roll_uses_skill_name_and_story_context(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
-    assert message.answers[0][0].startswith(
+    assert message.bot.messages[0][1].startswith(
         "🎲 Alina: Расследование — понять механизм тайника\n"
     )
     assert "проверку навыка «Расследование»" in prompts[0]
@@ -354,14 +354,14 @@ def test_handle_roll_simplifies_normal_failure_summary(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
-    assert message.answers[0][0] == (
+    assert message.bot.messages[0][1] == (
         "🎲 Alina: Спасбросок — успеть выбежать из рушащегося здания\n"
         "⚙️ Сложность — 12.\n"
         "🎯 Бросок кубика — 2"
     )
-    assert "d20" not in message.answers[0][0]
-    assert "DC" not in message.answers[0][0]
-    assert "|" not in message.answers[0][0]
+    assert "d20" not in message.bot.messages[0][1]
+    assert "DC" not in message.bot.messages[0][1]
+    assert "|" not in message.bot.messages[0][1]
 
 
 def test_handle_roll_labels_disadvantage_in_difficulty_line(monkeypatch):
@@ -399,7 +399,7 @@ def test_handle_roll_labels_disadvantage_in_difficulty_line(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
-    assert message.answers[0][0] == (
+    assert message.bot.messages[0][1] == (
         "🎲 Alina: Спасбросок — устоять на ногах\n"
         "⚙️ Сложность — 14 (с помехой).\n"
         "🎯 Броски кубика — 17 и 6, результат — 6"

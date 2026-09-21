@@ -1614,15 +1614,6 @@ async def handle_roll(message: Message):
     prompt_parts.append("Продолжай сюжет до 100 слов.")
     continuation_prompt = with_scene_direction(session, " ".join(prompt_parts))
 
-    from AI.dnd_result_recovery import reserve_generation_request
-
-    reserve_generation_request(
-        session,
-        continuation_prompt,
-        kind="ROLL_CONTINUATION",
-    )
-    persist_dnd_sessions()
-
     roll_label = _roll_type_label(roll_type, skill)
     result_lines = [f"🎲 {message.from_user.first_name}: {roll_label} — {reason}"]
     if dc is not None:
@@ -1644,29 +1635,51 @@ async def handle_roll(message: Message):
     if natural_note:
         roll_line += f" ({natural_note})"
     result_lines.append(roll_line)
-    await message.answer("\n".join(result_lines))
-    for notice in transaction_notices:
-        await message.answer(notice)
 
-    try:
-        response_text = await generate_session_response(
-            session,
-            continuation_prompt,
+    from AI.dnd_result_recovery import (
+        continue_pending_generation,
+        reserve_generation_request,
+    )
+
+    effects = [
+        {
+            "method": "send_message",
+            "chat_id": message.chat.id,
+            "text": "\n".join(result_lines),
+        }
+    ]
+    effects.extend(
+        {
+            "method": "send_message",
+            "chat_id": message.chat.id,
+            "text": notice,
+        }
+        for notice in transaction_notices
+    )
+    if not reserve_generation_request(
+        session,
+        continuation_prompt,
+        kind="ROLL_CONTINUATION",
+        effects=effects,
+    ):
+        await message.answer(
+            "Этот бросок уже восстанавливается. Ведущий может написать «дальше»."
         )
-        await parse_and_execute_turn(message.bot, message.chat.id, response_text)
-    except Exception:
-        logging.exception("DnD roll continuation failed chat_id=%s", message.chat.id)
-        if (
-            getattr(session, "pending_generation_request", {}) or {}
-            or getattr(session, "pending_generated_result", {}) or {}
-        ):
-            await message.answer(
-                "Мастер завис после броска, но сам бросок и продолжение сохранены. "
-                "Ведущий может написать «дальше», чтобы повторить продолжение без нового кубика."
-            )
-            return
-        await message.answer("Мастер завис, но история сохранена.")
-        await open_action_window(message.bot, message.chat.id)
+        return
+    persist_dnd_sessions()
+
+    from AI import dnd as dnd_module
+
+    completed = await continue_pending_generation(
+        dnd_module,
+        message.bot,
+        session,
+    )
+    if not completed and dnd_sessions.get(message.chat.id) is session:
+        await message.answer(
+            "Мастер завис после броска, но сам бросок, его эффекты и продолжение сохранены. "
+            "Ведущий может написать «дальше» — нового кубика не будет."
+        )
 
 
 def _is_group_action_reply(message: Message) -> bool:

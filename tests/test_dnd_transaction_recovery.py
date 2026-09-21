@@ -319,10 +319,24 @@ def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch)
     provider_seen = []
     opened = []
 
+    class Bot:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, resolved_chat_id, text, **kwargs):
+            del kwargs
+            self.messages.append((resolved_chat_id, text))
+            return SimpleNamespace(
+                message_id=900 + len(self.messages),
+                chat=SimpleNamespace(id=resolved_chat_id),
+            )
+
     class Message:
         chat = SimpleNamespace(id=chat_id)
         from_user = SimpleNamespace(id=1, first_name="Алиса")
-        bot = SimpleNamespace()
+
+        def __init__(self):
+            self.bot = Bot()
 
         async def answer(self, text, **kwargs):
             del kwargs
@@ -353,7 +367,8 @@ def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch)
     try:
         import asyncio
 
-        asyncio.run(dnd.handle_roll(Message()))
+        message = Message()
+        asyncio.run(dnd.handle_roll(message))
 
         assert len(provider_seen) == 1
         snapshot = provider_seen[0]
@@ -363,6 +378,11 @@ def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch)
         assert snapshot["request"]["prompt"] == snapshot["prompt"]
         assert "Броски d20: [17]; итог: 17." in snapshot["prompt"]
         assert "Сложность: 12; результат: успех." in snapshot["prompt"]
+        effects = session.pending_generation_request["telegram_effects"]
+        assert effects[0]["method"] == "send_message"
+        assert effects[0]["status"] == "DONE"
+        assert "🎲 Алиса: Атлетика — перепрыгнуть яму" in effects[0]["text"]
+        assert len(message.bot.messages) == 1
         assert opened == []
         assert any("нового кубика" in text for text in answers)
     finally:
