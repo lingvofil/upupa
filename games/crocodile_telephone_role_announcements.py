@@ -8,7 +8,6 @@ from typing import Any
 from games import crocodile_modes, crocodile_telephone_roles
 
 
-_configured = False
 
 
 def _user_id(value: Any) -> int | None:
@@ -145,12 +144,3 @@ async def telephone_callback_with_role_announcement(callback, next_handler) -> A
         ),
     )
     return result
-
-
-def configure_crocodile_telephone_role_announcements() -> None:
-    """Mark role announcements configured; start/callback composition lives in runtime."""
-    global _configured
-    if _configured:
-        return
-
-    _configured = True
