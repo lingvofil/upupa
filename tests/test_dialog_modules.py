@@ -247,6 +247,16 @@ def test_poem_bot_name_uses_first_word_and_cyrillic():
     assert _normalize_poem_bot_name("🤖 Karl Bot") == "Карл"
 
 
+def test_poem_user_name_keeps_all_words_removes_emoji_and_uses_cyrillic():
+    from AI.dialog.prompt_commands import _normalize_poem_user_name
+
+    assert _normalize_poem_user_name("bagr") == "Багр"
+    assert _normalize_poem_user_name("sofiko 🙃") == "Софико"
+    assert _normalize_poem_user_name("v v") == "В В"
+    assert _normalize_poem_user_name("Anna Maria ✨ Petrova") == "Анна Мариа Петрова"
+    assert _normalize_poem_user_name("Арина 🙃") == "Арина"
+
+
 def test_poem_bot_pool_ignores_telegram_fake_channel_senders(monkeypatch):
     import asyncio
     from types import SimpleNamespace
@@ -281,3 +291,50 @@ def test_poem_bot_pool_ignores_telegram_fake_channel_senders(monkeypatch):
 
     assert names == ["Упупа", "Мира"]
     assert seen_member_ids == [501]
+
+
+
+def test_poem_dynamic_human_names_are_normalized_before_prompt(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from AI.dialog import prompt_commands
+
+    async def valid_users(chat_id):
+        return {
+            "11": {"weekly": 10, "daily": 3, "total": 100},
+            "22": {"weekly": 9, "daily": 2, "total": 90},
+            "33": {"weekly": 8, "daily": 1, "total": 80},
+        }
+
+    names = {
+        11: "bagr",
+        22: "sofiko 🙃",
+        33: "v v",
+    }
+
+    async def display_name(chat_id, user_id):
+        return names[user_id]
+
+    async def participant_activity(*args, **kwargs):
+        return []
+
+    async def get_me():
+        return SimpleNamespace(first_name="Upupa Epops", full_name="Upupa Epops")
+
+    monkeypatch.setattr(prompt_commands, "get_valid_users", valid_users)
+    monkeypatch.setattr(prompt_commands, "get_user_display_name", display_name)
+    monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", participant_activity)
+    monkeypatch.setattr(
+        prompt_commands,
+        "bot",
+        SimpleNamespace(get_me=get_me),
+    )
+    monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
+    monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Упупа")
+
+    characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
+
+    assert "Багр, Софико, В В" in characters
+    assert "🙃" not in characters
+    assert "bagr" not in characters
+    assert "sofiko" not in characters
