@@ -8,7 +8,6 @@ import logging
 from games import crocodile
 
 
-_configured = False
 
 
 def _image_data_url(image: bytes) -> str:
@@ -47,11 +46,3 @@ async def join_room_with_canvas_restore(sid, data, next_handler):
         restored.setdefault("ui_mode", "draw")
         restored.setdefault("word", session.get("word", ""))
     return restored
-
-
-def configure_crocodile_canvas_restore() -> None:
-    """Mark canvas restore configured after explicit runtime composition."""
-    global _configured
-    if _configured:
-        return
-    _configured = True
