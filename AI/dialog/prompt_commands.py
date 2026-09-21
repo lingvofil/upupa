@@ -36,20 +36,27 @@ _POEM_CHARACTER_COUNT = 4
 
 
 def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
+    def count(stats: dict | None, key: str) -> int:
+        return int((stats or {}).get(key, 0) or 0)
+
     def score(item):
-        stats = item[1] or {}
+        stats = item[1]
         return (
-            int(stats.get("weekly", 0) or 0),
-            int(stats.get("daily", 0) or 0),
-            int(stats.get("total", 0) or 0),
+            count(stats, "weekly"),
+            count(stats, "daily"),
+            count(stats, "total"),
         )
 
-    ranked = sorted(valid_users.items(), key=score, reverse=True)
-    return [
-        str(user_id)
-        for user_id, stats in ranked
-        if any(int((stats or {}).get(key, 0) or 0) > 0 for key in ("weekly", "daily", "total"))
-    ][:limit]
+    recent = [
+        item
+        for item in valid_users.items()
+        if count(item[1], "weekly") > 0 or count(item[1], "daily") > 0
+    ]
+    candidates = recent or [
+        item for item in valid_users.items() if count(item[1], "total") > 0
+    ]
+    ranked = sorted(candidates, key=score, reverse=True)
+    return [str(user_id) for user_id, _stats in ranked[:limit]]
 
 
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
