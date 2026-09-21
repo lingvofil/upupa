@@ -343,13 +343,21 @@ async def handle_bot_conversation(
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
 
     current_settings = chat_settings.get(chat_id, {})
+    reply_context = format_reply_context(message)
     additional_context = ""
     if current_settings.get("prompt_type") == "user_style":
         try:
+            semantic_query = user_input
+            if reply_context:
+                semantic_query = (
+                    f"{user_input}\n\n"
+                    f"Контекст сообщения, на которое отвечают:\n{reply_context}"
+                )
             additional_context, profile_changed = await prepare_participant_turn(
                 chat_id,
                 current_settings,
-                user_input,
+                semantic_query,
+                current_message_text=user_input,
             )
             if profile_changed:
                 save_chat_settings()
@@ -375,7 +383,6 @@ async def handle_bot_conversation(
         except Exception as exc:
             logging.warning("Web Search failed: %s", exc)
 
-    reply_context = format_reply_context(message)
     reply_context_block = ""
     if reply_context:
         reply_context_block = (
