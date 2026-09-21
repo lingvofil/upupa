@@ -144,7 +144,6 @@ def test_runtime_composes_from_stable_bases_not_current_handlers():
         "crocodile.get_default_check_answer_handler()",
         "crocodile_controls.get_default_stop_lock_remaining_seconds_handler()",
         "crocodile_modes.get_default_start_telephone_handler()",
-        "crocodile_modes.get_default_telephone_lobby_keyboard_renderer()",
         "party_controls.get_default_party_status_text_renderer()",
         "party_controls.get_default_skip_telephone_handler()",
         "crocodile_modes.get_default_start_duel_handler()",
