@@ -546,7 +546,7 @@ def _telephone_lobby_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def start_telephone(message) -> None:
+async def _default_start_telephone(message) -> None:
     cid = str(message.chat.id)
     if cid in telephone_games or cid in duel_games or cid in crocodile.game_sessions:
         await message.answer("Сначала закончите текущего кракадила.")
@@ -561,6 +561,29 @@ async def start_telephone(message) -> None:
         f"☎️ <b>ИСПОРЧЕННЫЙ КРАКАДИЛ</b>\n{html.escape(message.from_user.full_name)} уже в цепочке. Нужно минимум {TELEPHONE_MIN_PLAYERS}, максимум {TELEPHONE_MAX_PLAYERS}.\n\nКаждый увидит только предыдущий шаг: слово → рисунок → догадка → рисунок…",
         parse_mode="HTML", reply_markup=_telephone_lobby_keyboard(message.chat.id),
     )
+
+
+_start_telephone_handler = _default_start_telephone
+
+
+def get_default_start_telephone_handler():
+    """Return the immutable base broken-telephone starter."""
+    return _default_start_telephone
+
+
+def get_start_telephone_handler():
+    """Return the currently configured broken-telephone starter."""
+    return _start_telephone_handler
+
+
+def configure_start_telephone_handler(handler) -> None:
+    """Install the composed broken-telephone starter."""
+    global _start_telephone_handler
+    _start_telephone_handler = handler
+
+
+async def start_telephone(message) -> None:
+    return await _start_telephone_handler(message)
 
 
 async def _send_telephone_step(chat_id: str, game: dict) -> None:

@@ -9,7 +9,6 @@ from games import crocodile_modes, crocodile_telephone_roles
 
 
 _configured = False
-_original_start_telephone = None
 
 
 def _user_id(value: Any) -> int | None:
@@ -62,11 +61,11 @@ async def _send_announcement(message, text: str) -> None:
         await sender(text, parse_mode="HTML")
 
 
-async def start_telephone_with_role_announcement(message) -> Any:
+async def start_telephone_with_role_announcement(message, next_handler) -> Any:
     """Announce the host's automatically selected initial role."""
     chat_id = str(message.chat.id)
     existed_before = chat_id in crocodile_modes.telephone_games
-    result = await _original_start_telephone(message)
+    result = await next_handler(message)
     if existed_before:
         return result
 
@@ -149,11 +148,9 @@ async def telephone_callback_with_role_announcement(callback, next_handler) -> A
 
 
 def configure_crocodile_telephone_role_announcements() -> None:
-    """Install start-role announcements; callback composition lives in runtime."""
-    global _configured, _original_start_telephone
+    """Mark role announcements configured; start/callback composition lives in runtime."""
+    global _configured
     if _configured:
         return
 
-    _original_start_telephone = crocodile_modes.start_telephone
-    crocodile_modes.start_telephone = start_telephone_with_role_announcement
     _configured = True
