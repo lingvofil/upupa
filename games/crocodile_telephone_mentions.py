@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import html
 
-from games import crocodile_modes, crocodile_party_controls
+from games import crocodile_modes
 
 
-_configured = False
-_original_send_telephone_step = None
 
 
 async def send_telephone_step_with_mention(chat_id: str, game: dict) -> None:
@@ -74,21 +72,3 @@ async def send_telephone_step_with_mention(chat_id: str, game: dict) -> None:
             "✍️ Открыть свой ход",
         ),
     )
-
-
-def configure_crocodile_telephone_mentions() -> None:
-    """Replace the base telephone sender while keeping resilience wrappers."""
-    global _configured, _original_send_telephone_step
-    if _configured:
-        return
-
-    _original_send_telephone_step = crocodile_party_controls._original_send_telephone_step
-    if _original_send_telephone_step is None:
-        raise RuntimeError("Crocodile party controls must be configured first")
-
-    # Party controls intentionally call this captured base sender before adding
-    # persistence and skip/cancel controls. Replacing only the captured sender
-    # preserves all of that behaviour while changing the turn announcement.
-    crocodile_party_controls._original_send_telephone_step = send_telephone_step_with_mention
-
-    _configured = True
