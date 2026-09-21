@@ -269,11 +269,7 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
         "handle_telephone_callback_with_admin,",
         admin_composition,
     )
-    roles_install = runtime_source.index(
-        "configure_crocodile_telephone_roles()",
-        admin_wrapper,
-    )
-    roles_composition = runtime_source.index(composition, roles_install)
+    roles_composition = runtime_source.index(composition, admin_wrapper)
     roles_wrapper = runtime_source.index(
         "handle_telephone_callback_with_roles,",
         roles_composition,
@@ -293,7 +289,6 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
         permissions_composition
         < admin_composition
         < admin_wrapper
-        < roles_install
         < roles_composition
         < roles_wrapper
         < announcements_composition
