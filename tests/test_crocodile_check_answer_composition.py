@@ -195,7 +195,7 @@ def test_runtime_owns_check_answer_entrypoint_and_wrapper_order():
     assert "def configure_check_answer_handler(" in crocodile_source
 
     raw_capture = runtime_source.index(
-        "raw_check_answer = crocodile.get_check_answer_handler()"
+        "raw_check_answer = crocodile.get_default_check_answer_handler()"
     )
     modes_install = runtime_source.index("configure_crocodile_modes()")
     wiring = runtime_source.index(wiring_entrypoint)

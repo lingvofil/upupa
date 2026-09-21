@@ -159,7 +159,7 @@ def test_game_keyboard_entrypoint_is_composed_only_in_runtime():
     assert "def configure_game_keyboard_renderer(" in crocodile_source
 
     raw_capture = runtime_source.index(
-        "raw_game_keyboard = crocodile.get_game_keyboard_renderer()"
+        "raw_game_keyboard = crocodile.get_default_game_keyboard_renderer()"
     )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"

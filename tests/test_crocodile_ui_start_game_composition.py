@@ -118,7 +118,7 @@ def test_start_game_is_composed_only_in_runtime():
     assert "crocodile.start_new_game =" not in runtime_source
 
     capture = runtime_source.index(
-        "base_start_new_game = crocodile.get_start_new_game_handler()"
+        "base_start_new_game = crocodile.get_default_start_new_game_handler()"
     )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"

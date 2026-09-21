@@ -233,7 +233,7 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     assert "def configure_telephone_callback_handler(" in modes_source
     assert (
         "_original_handle_telephone_callback = "
-        "crocodile_modes.get_telephone_callback_handler()"
+        "crocodile_modes.get_default_telephone_callback_handler()"
         in party_source
     )
     assert (
@@ -267,28 +267,29 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     )
 
     party_install = runtime_source.index("party_controls.configure_crocodile_party_controls()")
-    capture = runtime_source.index(
-        "base_telephone_callback = crocodile_modes.get_telephone_callback_handler()",
-        party_install,
+    composition = "telephone_callback_handler = _compose_callback_handler("
+    permissions_composition = runtime_source.index(composition, party_install)
+    base = runtime_source.index(
+        "party_controls.handle_telephone_callback_resilient,",
+        permissions_composition,
     )
-    wiring = "crocodile_modes.configure_telephone_callback_handler("
-    permissions_wiring = runtime_source.index(wiring, capture)
-    base = runtime_source.index("base_telephone_callback,", permissions_wiring)
     permissions = runtime_source.index(
         "telephone_callback_with_skip_permissions,",
         base,
     )
-    admin_wiring = runtime_source.index(
-        wiring,
-        permissions_wiring + len(wiring),
-    )
-    admin_current = runtime_source.index(
-        "crocodile_modes.get_telephone_callback_handler(),",
-        admin_wiring,
+    wiring = "crocodile_modes.configure_telephone_callback_handler("
+    permissions_wiring = runtime_source.index(wiring, permissions)
+    admin_composition = runtime_source.index(
+        composition,
+        permissions_wiring,
     )
     admin_wrapper = runtime_source.index(
         "handle_telephone_callback_with_admin,",
-        admin_current,
+        admin_composition,
+    )
+    admin_wiring = runtime_source.index(
+        wiring,
+        admin_wrapper,
     )
     permissions_installer = runtime_source.index(
         "configure_crocodile_telephone_skip_permissions()",
@@ -320,13 +321,13 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     assert runtime_source.count(wiring) == 2
     assert (
         party_install
-        < capture
-        < permissions_wiring
+        < permissions_composition
         < base
         < permissions
-        < admin_wiring
-        < admin_current
+        < permissions_wiring
+        < admin_composition
         < admin_wrapper
+        < admin_wiring
         < permissions_installer
         < roles_installer
         < announcements_installer

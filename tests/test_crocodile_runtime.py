@@ -13,8 +13,8 @@ def test_crocodile_runtime_owns_extension_composition_order():
     source = _source("games/crocodile_runtime.py")
     calls = [
         "persistence.configure_crocodile_runtime()",
-        "base_start_new_game = crocodile.get_start_new_game_handler()",
-        "raw_callback_handler = crocodile.get_callback_handler()",
+        "base_start_new_game = crocodile.get_default_start_new_game_handler()",
+        "raw_callback_handler = crocodile.get_default_callback_handler()",
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)",
         "configure_crocodile_single_words()",
         "configure_crocodile_modes()",
@@ -195,7 +195,7 @@ def test_duo_opt_in_does_not_replace_game_keyboard():
         "crocodile.configure_game_keyboard_renderer("
     ) == 1
     assert "crocodile.get_game_keyboard =" not in runtime_source
-    assert "raw_game_keyboard = crocodile.get_game_keyboard_renderer()" in runtime_source
+    assert "raw_game_keyboard = crocodile.get_default_game_keyboard_renderer()" in runtime_source
     assert "pre_duo_game_keyboard = _compose_game_keyboard(" in runtime_source
     assert "decorate_game_keyboard_with_legacy_duo" in runtime_source
     assert "duo_optin.decorate_game_keyboard_with_duo_opt_in" in runtime_source
@@ -247,7 +247,7 @@ def test_callback_pipeline_is_owned_by_runtime():
     assert "def configure_callback_handler(" in crocodile_source
 
     raw_capture = runtime_source.index(
-        "raw_callback_handler = crocodile.get_callback_handler()"
+        "raw_callback_handler = crocodile.get_default_callback_handler()"
     )
     controls_install = runtime_source.index(
         "configure_crocodile_controls(base_start_new_game=base_start_new_game)"
