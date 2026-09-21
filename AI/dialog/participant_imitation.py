@@ -7,7 +7,7 @@ import hashlib
 import logging
 import re
 import time
-from collections import OrderedDict, deque
+from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +21,8 @@ PARTICIPANT_TURN_SAMPLE_SIZE = 200
 PARTICIPANT_TURN_RECENT_SIZE = 100
 PARTICIPANT_INTERACTION_SAMPLE_SIZE = 48
 PARTICIPANT_INTERACTION_RECENT_SIZE = 24
+PARTICIPANT_RECURRING_TRACK_LIMIT = 512
+PARTICIPANT_RECURRING_MAX_ITEMS = 10
 PARTICIPANT_HISTORY_CACHE_MAX_ENTRIES = 16
 PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
@@ -41,6 +43,7 @@ class ParticipantHistory:
     historical: list[tuple[int, int, str]] = field(default_factory=list)
     recent: deque[tuple[int, str]] = field(default_factory=deque)
     interactions: list[str] = field(default_factory=list)
+    recurring_counts: Counter[str] = field(default_factory=Counter, repr=False)
 
     def __post_init__(self) -> None:
         self.recent_size = min(max(self.recent_size, 0), self.sample_size)
@@ -78,6 +81,20 @@ class ParticipantHistory:
             return
 
         self.sequence += 1
+
+        normalized_short = re.sub(r"\s+", " ", stripped.casefold())
+        word_count = len(re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", normalized_short))
+        if (
+            2 <= word_count <= 8
+            and len(normalized_short) <= 120
+            and not normalized_short.startswith("/")
+        ):
+            self.recurring_counts[normalized_short] += 1
+            if len(self.recurring_counts) > PARTICIPANT_RECURRING_TRACK_LIMIT * 2:
+                self.recurring_counts = Counter(
+                    dict(self.recurring_counts.most_common(PARTICIPANT_RECURRING_TRACK_LIMIT))
+                )
+
         item = (self.sequence, stripped)
         if self.recent_size:
             if len(self.recent) == self.recent_size:
@@ -91,6 +108,14 @@ class ParticipantHistory:
         messages = [text for _score, _sequence, text in historical]
         messages.extend(text for _sequence, text in self.recent)
         return messages, self.message_count
+
+    def recurring_messages(self) -> list[str]:
+        """Return bounded repeated short utterances mined across the full scan."""
+        return [
+            message
+            for message, count in self.recurring_counts.most_common(PARTICIPANT_RECURRING_MAX_ITEMS)
+            if count >= 2
+        ]
 
 
 CacheKey = tuple[str, int, int, int]
@@ -474,6 +499,7 @@ def refresh_style_profile(
     messages: list[str],
     message_count: int,
     interaction_examples: list[str] | None = None,
+    recurring_examples: list[str] | None = None,
 ) -> bool:
     """Refresh the cached prompt when the participant has materially evolved."""
     identity = settings.get("imitated_user", {})
@@ -486,6 +512,7 @@ def refresh_style_profile(
         usable,
         display_name,
         interaction_examples=interaction_examples,
+        recurring_examples=recurring_examples,
     )
     settings["style_profile_message_count"] = message_count
     settings["style_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -519,6 +546,7 @@ async def initialize_participant_profile(
         usable,
         identity["display_name"],
         interaction_examples=entry.interactions,
+        recurring_examples=entry.recurring_messages(),
     )
     settings["prompt_name"] = identity["display_name"]
     settings["prompt_source"] = "user_imitation"
@@ -591,7 +619,13 @@ async def prepare_participant_turn(
         return _style_only_memory("История участника ещё прогревается; этот ответ использует только готовый style profile."), changed
 
     messages, message_count = entry.snapshot()
-    if refresh_style_profile(settings, messages, message_count, entry.interactions):
+    if refresh_style_profile(
+        settings,
+        messages,
+        message_count,
+        entry.interactions,
+        entry.recurring_messages(),
+    ):
         changed = True
 
     # If the imitated participant is also asking the current question, do not
@@ -603,6 +637,10 @@ async def prepare_participant_turn(
 
     semantic_candidates = list(semantic_messages)
     semantic_candidates.extend(entry.interactions)
+    semantic_candidates.extend(
+        f"Повторяющаяся реплика участника: {message}"
+        for message in entry.recurring_messages()
+    )
 
     semantic_started = time.perf_counter()
     try:
