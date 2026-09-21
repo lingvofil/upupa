@@ -139,7 +139,6 @@ def _source_size(messages: list[dict]) -> int:
 
 def _choose_rubrics(
     *,
-    world_context: str | None,
     social_context: str | None = None,
     rng=random,
 ) -> tuple[tuple[str, str], ...]:
@@ -151,11 +150,6 @@ def _choose_rubrics(
         picked.append((
             "кто с кем",
             "естественно отметь хотя бы один реальный паттерн общения из социальных наблюдений, без технических метрик",
-        ))
-    if world_context:
-        picked.append((
-            "международная панорама",
-            "коротко упомяни 1–2 факта Мира Упупы только из блока международной обстановки",
         ))
     return tuple(picked)
 
@@ -218,7 +212,6 @@ async def generate_radio_script(
     messages: list[dict],
     period_hours: int,
     *,
-    world_context: str | None = None,
     social_context: str | None = None,
     duration_minutes: int = RADIO_DEFAULT_DURATION_MINUTES,
 ) -> RadioScript:
@@ -249,17 +242,7 @@ async def generate_radio_script(
         social_rule = ""
         social_block = ""
 
-    if world_context:
-        international_rule = (
-            "- Международные факты бери только из блока «Международная обстановка». "
-            "Не выдумывай причин, реакций или последствий.\n"
-        )
-        world_block = f"\nМеждународная обстановка:\n{world_context}\n"
-    else:
-        international_rule = "- Не упоминай Мир Упупы или международные новости: для этого выпуска данных нет.\n"
-        world_block = ""
-
-    rubrics = _choose_rubrics(world_context=world_context, social_context=social_context)
+    rubrics = _choose_rubrics(social_context=social_context)
     task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
@@ -273,7 +256,7 @@ async def generate_radio_script(
 - В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
 - После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
 - Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
-{social_rule}{international_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Цель — {target_min_words}–{target_max_words} русских слов.
+{social_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Цель — {target_min_words}–{target_max_words} русских слов.
 - Не опускайся ниже {target_min_words} слов. Если фактов немного, не выдумывай новые: подробнее и живее раскрывай существующие темы, используй естественные переходы, подводки, реакции ведущего и эксперта.
 - Никогда не превышай {hard_max_words} слов вместе с метками.
 
@@ -284,12 +267,12 @@ async def generate_radio_script(
 
 Материал чата:
 {source_block}
-{social_block}{world_block}
+{social_block}
 Верни только сценарий с метками {SPEAKER_HOST}: / {SPEAKER_EXPERT}:.
 """
 
     logging.info(
-        "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s world_context=%s rubrics=%s current_prompt=true",
+        "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s rubrics=%s current_prompt=true",
         len(messages),
         duration_minutes,
         target_min_words,
@@ -299,7 +282,6 @@ async def generate_radio_script(
         len(source_block),
         use_summary,
         bool(social_context),
-        bool(world_context),
         ",".join(name for name, _instruction in rubrics),
     )
 
