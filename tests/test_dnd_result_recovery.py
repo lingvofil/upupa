@@ -770,3 +770,38 @@ def test_generated_result_keeps_source_request_kind():
     result = recovery._new_result(session, "готовый групповой ответ")
 
     assert result["source_request_kind"] == "GROUP_ACTION_CONTINUATION"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "STORY_START",
+        "ROLL_CONTINUATION",
+        "POLL_CONTINUATION",
+        "GROUP_ACTION_CONTINUATION",
+        "ENDING",
+        "GENERATION",
+    ],
+)
+def test_restore_schedules_every_durable_generation_kind(kind):
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, scheduled = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state = "RESOLVING"
+    session.pending_generation_request = {
+        "id": f"gen:matrix:{kind}",
+        "prompt": f"точный запрос {kind}",
+        "kind": kind,
+        "source_state": "RESOLVING",
+        "telegram_effects": [],
+    }
+    session.pending_generated_result = {}
+
+    restored = dnd.restore_dnd_sessions(object())
+
+    assert restored == 1
+    assert calls["restore"] == 1
+    assert len(scheduled) == 1
+    coro, name = scheduled.pop()
+    assert name == f"dnd-generation-retry:{session.chat_id}:gen:matrix:{kind}"
+    coro.close()
