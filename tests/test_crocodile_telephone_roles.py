@@ -207,6 +207,7 @@ def test_role_aware_skip_never_gives_draw_turn_to_text_player(monkeypatch):
     send_message = AsyncMock()
     send_step = AsyncMock()
     finish = AsyncMock()
+    downstream = AsyncMock()
     monkeypatch.setattr(roles.crocodile_party_controls, "_close_synthetic_room", close_room)
     monkeypatch.setattr(
         roles.crocodile_party_controls,
@@ -217,7 +218,9 @@ def test_role_aware_skip_never_gives_draw_turn_to_text_player(monkeypatch):
     monkeypatch.setattr(roles.crocodile_modes, "_finish_telephone", finish)
 
     try:
-        result = asyncio.run(roles.skip_telephone_with_roles(cid, game))
+        result = asyncio.run(
+            roles.skip_telephone_with_roles(cid, game, downstream)
+        )
         assert result == "Пропущен: Draw 1"
         assert [row[0] for row in game["players"]] == [101, 202, 102]
         assert game["telephone_roles"]["202"] == "draw"
@@ -225,6 +228,7 @@ def test_role_aware_skip_never_gives_draw_turn_to_text_player(monkeypatch):
         assert "103" not in game["telephone_roles"]
         send_step.assert_awaited_once_with(cid, game)
         finish.assert_not_awaited()
+        downstream.assert_not_awaited()
     finally:
         roles.crocodile_modes.telephone_games.pop(cid, None)
 
@@ -242,3 +246,28 @@ def test_legacy_lobby_roles_are_migrated_by_existing_parity():
         "202": "draw",
         "303": "text",
     }
+
+def test_role_status_renderer_delegates_outside_telephone_lobby():
+    from games import crocodile_telephone_roles as roles
+
+    downstream = lambda chat_id: f"base:{chat_id}"
+    assert roles.party_status_text_with_roles("-99", downstream) == "base:-99"
+
+
+def test_role_skip_delegates_when_legacy_game_has_no_roles():
+    from games import crocodile_telephone_roles as roles
+
+    game = {
+        "phase": "playing",
+        "step": 0,
+        "players": [(101, "A"), (202, "B")],
+    }
+    downstream = AsyncMock(return_value="base-skip")
+
+    result = asyncio.run(
+        roles.skip_telephone_with_roles("-99", game, downstream)
+    )
+
+    assert result == "base-skip"
+    downstream.assert_awaited_once_with("-99", game)
+
