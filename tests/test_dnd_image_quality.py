@@ -44,17 +44,16 @@ def test_dnd_waterfall_tries_quick_reserves_before_horde(monkeypatch):
         calls.append(("pollinations", prompt))
         return None
 
-    async def kandinsky(prompt):
-        calls.append(("kandinsky", prompt))
-        return b"kandinsky-image"
+    async def huggingface(prompt, model):
+        calls.append(("huggingface", prompt, model))
+        return b"huggingface-image"
 
     async def must_not_run(*_args, **_kwargs):
-        raise AssertionError("slow provider after Kandinsky must not run")
+        raise AssertionError("slow provider after Hugging Face must not run")
 
     monkeypatch.setattr(gigachat_image, "generate_gigachat_image", no_gigachat)
     monkeypatch.setattr(pg, "pollinations_generate", no_pollinations)
-    monkeypatch.setattr(pg, "kandinsky_generate", kandinsky)
-    monkeypatch.setattr(pg, "hf_generate", must_not_run)
+    monkeypatch.setattr(pg, "hf_generate", huggingface)
     monkeypatch.setattr(aihorde_image, "generate_aihorde_image", must_not_run)
     monkeypatch.setattr(pg, "cf_generate_t2i", must_not_run)
 
@@ -65,11 +64,11 @@ def test_dnd_waterfall_tries_quick_reserves_before_horde(monkeypatch):
         )
     )
 
-    assert result == (b"kandinsky-image", "kandinsky")
+    assert result == (b"huggingface-image", "huggingface")
     assert calls == [
         ("gigachat", "exact DnD prompt"),
         ("pollinations", "exact DnD prompt"),
-        ("kandinsky", "exact DnD prompt"),
+        ("huggingface", "exact DnD prompt", "black-forest-labs/FLUX.1-schnell"),
     ]
 
 
@@ -87,10 +86,6 @@ def test_dnd_waterfall_keeps_aihorde_as_last_long_reserve(monkeypatch):
         calls.append("pollinations")
         return None
 
-    async def no_kandinsky(prompt):
-        calls.append("kandinsky")
-        return None
-
     async def no_hf(prompt, model):
         calls.append(("huggingface", model))
         return None
@@ -101,7 +96,6 @@ def test_dnd_waterfall_keeps_aihorde_as_last_long_reserve(monkeypatch):
 
     monkeypatch.setattr(gigachat_image, "generate_gigachat_image", no_gigachat)
     monkeypatch.setattr(pg, "pollinations_generate", no_pollinations)
-    monkeypatch.setattr(pg, "kandinsky_generate", no_kandinsky)
     monkeypatch.setattr(pg, "hf_generate", no_hf)
     monkeypatch.setattr(aihorde_image, "generate_aihorde_image", horde)
 
@@ -118,7 +112,6 @@ def test_dnd_waterfall_keeps_aihorde_as_last_long_reserve(monkeypatch):
     assert calls[:4] == [
         "gigachat",
         "pollinations",
-        "kandinsky",
         ("huggingface", "black-forest-labs/FLUX.1-schnell"),
     ]
     assert calls[4] == ("aihorde", guard)
@@ -164,7 +157,6 @@ def test_dnd_waterfall_never_uses_cloudflare(monkeypatch):
     monkeypatch.setattr(gigachat_image, "generate_gigachat_image", none)
     monkeypatch.setattr(aihorde_image, "generate_aihorde_image", none)
     monkeypatch.setattr(pg, "pollinations_generate", none)
-    monkeypatch.setattr(pg, "kandinsky_generate", none)
     monkeypatch.setattr(pg, "hf_generate", none)
     monkeypatch.setattr(pg, "cf_generate_t2i", cloudflare)
 
