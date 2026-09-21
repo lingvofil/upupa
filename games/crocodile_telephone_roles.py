@@ -18,7 +18,6 @@ ROLE_DRAW = "draw"
 _ROLE_FIELD = "telephone_roles"
 
 _configured = False
-_original_start_telephone = None
 _original_party_status_text = None
 _original_skip_telephone = None
 
@@ -180,11 +179,11 @@ def _is_host_or_admin(game: dict, user_id: Any) -> bool:
         return uid == int(game.get("host_id") or 0)
 
 
-async def start_telephone_with_roles(message) -> Any:
+async def start_telephone_with_roles(message, next_handler) -> Any:
     """Keep existing start guards but render a role-aware lobby from the first card."""
     cid = str(message.chat.id)
     if cid in crocodile_modes.telephone_games:
-        return await _original_start_telephone(message)
+        return await next_handler(message)
 
     original_answer = message.answer
 
@@ -207,7 +206,7 @@ async def start_telephone_with_roles(message) -> Any:
         answer=answer,
         reply=getattr(message, "reply", answer),
     )
-    return await _original_start_telephone(proxy)
+    return await next_handler(proxy)
 
 
 async def handle_telephone_callback_with_roles(callback, next_handler) -> Any:
@@ -367,18 +366,15 @@ async def skip_telephone_with_roles(chat_id: str, game: dict) -> str:
 
 
 def configure_crocodile_telephone_roles() -> None:
-    """Install stateful role lobby adapters; callback composition lives in runtime."""
+    """Install stateful role lobby adapters; start/callback composition lives in runtime."""
     global _configured
-    global _original_start_telephone
     global _original_party_status_text, _original_skip_telephone
     if _configured:
         return
 
-    _original_start_telephone = crocodile_modes.start_telephone
     _original_party_status_text = crocodile_party_controls.party_status_text
     _original_skip_telephone = crocodile_party_controls._skip_telephone
 
-    crocodile_modes.start_telephone = start_telephone_with_roles
     crocodile_modes._telephone_lobby_keyboard = telephone_lobby_keyboard
     crocodile_party_controls.party_status_text = party_status_text_with_roles
     crocodile_party_controls._skip_telephone = skip_telephone_with_roles
