@@ -83,7 +83,15 @@ def install_dnd_group_action_resilience(dnd) -> None:
         session.action_target_user_ids = []
         dnd.persist_dnd_sessions()
 
-        completed = await continue_pending_generation(dnd, bot, session)
+        session._upupa_resolving_group_actions = True
+        try:
+            completed = await continue_pending_generation(dnd, bot, session)
+        finally:
+            try:
+                del session._upupa_resolving_group_actions
+            except AttributeError:
+                pass
+
         if not completed and dnd.dnd_sessions.get(chat_id) is session:
             await bot.send_message(
                 chat_id,
