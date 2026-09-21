@@ -303,7 +303,7 @@ def test_identity_resolution_pins_telegram_user_id(tmp_path, monkeypatch):
 
 
 def test_style_profile_refreshes_after_fifty_new_messages():
-    from AI.dialog.participant_imitation import refresh_style_profile
+    from AI.dialog.participant_imitation import STYLE_PROFILE_VERSION, refresh_style_profile
 
     settings = {
         "prompt": "old prompt",
@@ -311,6 +311,7 @@ def test_style_profile_refreshes_after_fifty_new_messages():
         "imitated_user": {"user_id": 42, "display_name": "Вася"},
         "style_profile_message_count": 100,
         "style_profile_updated_at": datetime.now(timezone.utc).isoformat(),
+        "style_profile_version": STYLE_PROFILE_VERSION,
     }
     messages = ["ага", "ну нормально", "короче потом"]
 
@@ -320,6 +321,31 @@ def test_style_profile_refreshes_after_fifty_new_messages():
     assert refresh_style_profile(settings, messages, 150) is True
     assert settings["prompt"] != "old prompt"
     assert settings["style_profile_message_count"] == 150
+
+
+def test_legacy_participant_profile_refreshes_for_new_behavior_schema():
+    from AI.dialog.participant_imitation import STYLE_PROFILE_VERSION, refresh_style_profile
+
+    settings = {
+        "prompt": "legacy prompt",
+        "prompt_name": "Вася",
+        "imitated_user": {"user_id": 42, "display_name": "Вася"},
+        "style_profile_message_count": 100,
+        "style_profile_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    changed = refresh_style_profile(
+        settings,
+        ["подари куклу", "хочу монстер хай"],
+        100,
+        ["Реплика собеседника: что хочешь?\nОтвет участника: подари куклу"],
+        ["подари куклу"],
+    )
+
+    assert changed is True
+    assert settings["style_profile_version"] == STYLE_PROFILE_VERSION
+    assert "[INTERACTION EXAMPLES]" in settings["prompt"]
+    assert "[RECURRING PATTERNS]" in settings["prompt"]
 
 
 def test_semantic_search_uses_supported_text_embedding_model():
