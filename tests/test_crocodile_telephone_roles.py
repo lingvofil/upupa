@@ -1,8 +1,12 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (fake env + heavy-library mocks)
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _callback(data: str, user_id: int, chat_id: int = -42):
@@ -270,4 +274,91 @@ def test_role_skip_delegates_when_legacy_game_has_no_roles():
 
     assert result == "base-skip"
     downstream.assert_awaited_once_with("-99", game)
+
+def test_role_adapters_are_composed_only_in_runtime():
+    roles_source = (
+        ROOT / "games" / "crocodile_telephone_roles.py"
+    ).read_text(encoding="utf-8")
+    party_source = (
+        ROOT / "games" / "crocodile_party_controls.py"
+    ).read_text(encoding="utf-8")
+    modes_source = (
+        ROOT / "games" / "crocodile_modes.py"
+    ).read_text(encoding="utf-8")
+    runtime_source = (
+        ROOT / "games" / "crocodile_runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_configured = False" not in roles_source
+    assert "_original_party_status_text" not in roles_source
+    assert "_original_skip_telephone" not in roles_source
+    assert "def configure_crocodile_telephone_roles(" not in roles_source
+    assert "crocodile_party_controls.party_status_text =" not in roles_source
+    assert "crocodile_party_controls._skip_telephone =" not in roles_source
+    assert "crocodile_modes._telephone_lobby_keyboard =" not in roles_source
+    assert "party_status_text_with_roles(chat_id: int | str, next_renderer)" in roles_source
+    assert (
+        "skip_telephone_with_roles(chat_id: str, game: dict, next_handler)"
+        in roles_source
+    )
+
+    assert "def get_default_party_status_text_renderer(" in party_source
+    assert "def configure_party_status_text_renderer(" in party_source
+    assert "def get_default_skip_telephone_handler(" in party_source
+    assert "def configure_skip_telephone_handler(" in party_source
+    assert "def get_default_telephone_lobby_keyboard_renderer(" in modes_source
+    assert "def configure_telephone_lobby_keyboard_renderer(" in modes_source
+
+    status_wiring = runtime_source.index(
+        "party_controls.configure_party_status_text_renderer("
+    )
+    status_base = runtime_source.index(
+        "party_controls.get_default_party_status_text_renderer()",
+        status_wiring,
+    )
+    status_role = runtime_source.index(
+        "party_status_text_with_roles,",
+        status_base,
+    )
+    skip_wiring = runtime_source.index(
+        "party_controls.configure_skip_telephone_handler(",
+        status_role,
+    )
+    skip_base = runtime_source.index(
+        "party_controls.get_default_skip_telephone_handler()",
+        skip_wiring,
+    )
+    skip_role = runtime_source.index(
+        "skip_telephone_with_roles,",
+        skip_base,
+    )
+    lobby_wiring = runtime_source.index(
+        "crocodile_modes.configure_telephone_lobby_keyboard_renderer(",
+        skip_role,
+    )
+    lobby_role = runtime_source.index(
+        "telephone_lobby_keyboard",
+        lobby_wiring,
+    )
+
+    assert "configure_crocodile_telephone_roles(" not in runtime_source
+    assert runtime_source.count(
+        "party_controls.configure_party_status_text_renderer("
+    ) == 1
+    assert runtime_source.count(
+        "party_controls.configure_skip_telephone_handler("
+    ) == 1
+    assert runtime_source.count(
+        "crocodile_modes.configure_telephone_lobby_keyboard_renderer("
+    ) == 1
+    assert (
+        status_wiring
+        < status_base
+        < status_role
+        < skip_wiring
+        < skip_base
+        < skip_role
+        < lobby_wiring
+        < lobby_role
+    )
 
