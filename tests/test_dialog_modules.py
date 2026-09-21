@@ -129,8 +129,11 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
     monkeypatch.setattr(prompt_commands, "get_valid_users", valid_users)
     monkeypatch.setattr(prompt_commands, "get_user_display_name", display_name)
     monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", participant_activity)
-    monkeypatch.setattr(prompt_commands.bot, "get_me", get_me)
-    monkeypatch.setattr(prompt_commands.bot, "get_chat_member", get_chat_member)
+    monkeypatch.setattr(
+        prompt_commands,
+        "bot",
+        SimpleNamespace(get_me=get_me, get_chat_member=get_chat_member),
+    )
     monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
 
     characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
@@ -166,9 +169,25 @@ def test_poem_bot_detection_ignores_unknown_humans(monkeypatch):
         )
 
     monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", activity)
-    monkeypatch.setattr(prompt_commands.bot, "get_me", get_me)
-    monkeypatch.setattr(prompt_commands.bot, "get_chat_member", get_chat_member)
+    monkeypatch.setattr(
+        prompt_commands,
+        "bot",
+        SimpleNamespace(get_me=get_me, get_chat_member=get_chat_member),
+    )
 
     names = asyncio.run(prompt_commands._get_active_poem_bot_names("-1001", set()))
 
     assert names == ["Упупа"]
+
+
+def test_poem_explicit_characters_still_require_active_bots():
+    from AI.dialog.prompt_commands import _format_poem_character_instruction
+
+    text = _format_poem_character_instruction(
+        ["Упупа", "Карл", "Сглыпа"],
+        "Света, Алина",
+    )
+
+    assert "Упупа, Карл, Сглыпа" in text
+    assert "Света, Алина" in text
+    assert "каждый должен появиться в тексте" in text
