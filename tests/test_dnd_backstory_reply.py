@@ -139,3 +139,47 @@ def test_backstory_failure_reopens_same_prompt(monkeypatch):
     finally:
         dnd._processing_backstories.discard(chat_id)
         dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_backstory_failure_with_durable_request_switches_to_next_recovery(monkeypatch):
+    chat_id = -100604
+    session = SimpleNamespace(
+        state="WAITING_BACKSTORY",
+        backstory_prompt_message_id=111,
+        pending_generation_request={},
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(dnd, "with_scene_direction", lambda _session, prompt: prompt)
+
+    async def fail_after_reservation(current_session, prompt):
+        current_session.pending_generation_request = {
+            "id": "gen:backstory",
+            "prompt": prompt,
+        }
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(dnd, "generate_session_response", fail_after_reservation)
+
+    try:
+        message = FakeMessage(
+            chat_id=chat_id,
+            text="Я проснулся в подвале",
+            reply_to_message_id=111,
+        )
+        asyncio.run(dnd.handle_backstory(message))
+
+        assert session.state == "RESOLVING"
+        assert session.backstory_prompt_message_id is None
+        assert session.pending_generation_request["prompt"] == (
+            "Предыстория: Я проснулся в подвале. Начинай."
+        )
+        assert dnd._is_dnd_next_command(
+            FakeMessage(chat_id=chat_id, text="дальше")
+        ) is True
+        assert "дальше" in message.answers[-1][0]
+        assert "повторно" in message.answers[-1][0]
+        assert chat_id not in dnd._processing_backstories
+    finally:
+        dnd._processing_backstories.discard(chat_id)
+        dnd.dnd_sessions.pop(chat_id, None)
