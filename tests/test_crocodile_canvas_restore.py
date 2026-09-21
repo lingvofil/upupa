@@ -82,10 +82,12 @@ def test_join_room_restore_is_explicitly_composed_in_runtime():
         capture,
     )
     wrapper = runtime_source.index("join_room_with_canvas_restore,", assignment)
-    installer = runtime_source.index("configure_crocodile_canvas_restore()", wrapper)
 
+    assert "_configured = False" not in restore_source
+    assert "def configure_crocodile_canvas_restore(" not in restore_source
+    assert "configure_crocodile_canvas_restore(" not in runtime_source
     assert runtime_source.count('"join_room",') == 1
-    assert capture < assignment < wrapper < installer
+    assert capture < assignment < wrapper
 
 
 def test_mini_app_first_join_restores_server_frame_before_snapshots():
