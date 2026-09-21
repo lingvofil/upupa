@@ -66,6 +66,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_player_agency import configure_dnd_player_agency
     from AI.dnd_player_combat import install_dnd_player_combat
     from AI.dnd_player_positions import install_dnd_player_positions
+    from AI.dnd_poll_agency import install_dnd_poll_agency
     from AI.dnd_plot_resilience import configure_dnd_plot_resilience
     from AI.dnd_profile_ownership import install_dnd_profile_ownership
     from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
@@ -180,6 +181,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_dnd_target_mentions(dnd)
     install_dnd_spotlight(dnd, state_policy=campaign_state_policy)
     install_dnd_turn_control(dnd, router)
+    install_dnd_poll_agency(dnd)
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
