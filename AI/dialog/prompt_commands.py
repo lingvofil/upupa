@@ -214,20 +214,27 @@ async def _get_active_poem_bot_names(
 def _format_poem_character_instruction(
     active_bot_names: list[str],
     other_characters: str,
+    *,
+    max_characters: int | None = None,
 ) -> str:
-    """Build one neutral, shuffled hero list with an optional active bot."""
+    """Build one neutral, shuffled hero list with an occasional active bot."""
     character_parts = [
         part.strip()
         for part in (other_characters or "").split(",")
         if part.strip()
     ]
+    if max_characters is not None:
+        character_parts = character_parts[:max_characters]
 
-    if (
+    include_bot = (
         active_bot_names
         and random.random() < _POEM_BOT_INCLUSION_PROBABILITY
-    ):
+    )
+    if include_bot:
         selected_bot = random.choice(active_bot_names)
         if selected_bot.casefold() not in {name.casefold() for name in character_parts}:
+            if max_characters is not None and len(character_parts) >= max_characters:
+                character_parts = character_parts[: max_characters - 1]
             character_parts.append(selected_bot)
 
     if not character_parts:
@@ -267,6 +274,7 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     return _format_poem_character_instruction(
         active_bot_names,
         ", ".join(selected) if selected else "",
+        max_characters=_POEM_CHARACTER_COUNT,
     )
 
 
