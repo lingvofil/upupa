@@ -6,11 +6,14 @@ import logging
 from aiogram.types import BufferedInputFile
 
 
-async def generate_dnd_image_bytes(prompt: str):
-    """Use the shared image waterfall without translating/compressing DnD prompts."""
+async def generate_dnd_image_bytes(prompt: str, *, should_continue=None):
+    """Use the DnD waterfall without translating/compressing scene prompts."""
     from features.image_generation import generate_image_bytes
 
-    return await generate_image_bytes(prompt, log_context="dnd")
+    kwargs = {"log_context": "dnd"}
+    if should_continue is not None:
+        kwargs["should_continue"] = should_continue
+    return await generate_image_bytes(prompt, **kwargs)
 
 
 def install_dnd_image_quality(dnd) -> None:
@@ -24,7 +27,10 @@ def install_dnd_image_quality(dnd) -> None:
             if deliver_if is not None and not deliver_if():
                 logging.info("[dnd] stale image skipped before generation chat_id=%s", chat_id)
                 return None
-            data, provider = await generate_dnd_image_bytes(prompt)
+            data, provider = await generate_dnd_image_bytes(
+                prompt,
+                should_continue=deliver_if,
+            )
             if not data:
                 logging.warning("[dnd] all image providers failed chat_id=%s", chat_id)
                 return None

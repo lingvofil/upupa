@@ -1001,6 +1001,15 @@ def _maybe_image(dnd, bot, session, story):
         return
     session.next_illustration_at = session.scene_count + random.randint(3, 5)
     prompt = _scene_image_prompt(session, story)
+    illustration_scene = int(session.scene_count)
+
+    def scene_is_current():
+        active = dnd.dnd_sessions.get(session.chat_id)
+        return (
+            active is session
+            and int(getattr(session, "scene_count", -1)) == illustration_scene
+        )
+
     dnd._start_background_task(
         _image(
             bot,
@@ -1008,9 +1017,9 @@ def _maybe_image(dnd, bot, session, story):
             prompt,
             "dnd_scene.png",
             "🖼 Ключевой кадр этой ебучей саги.",
-            deliver_if=lambda: dnd.dnd_sessions.get(session.chat_id) is session,
+            deliver_if=scene_is_current,
         ),
-        name=f"dnd-illustration:{session.chat_id}:{session.scene_count}",
+        name=f"dnd-illustration:{session.chat_id}:{illustration_scene}",
     )
 
 

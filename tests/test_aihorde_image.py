@@ -79,3 +79,27 @@ def test_horde_failure_returns_none(monkeypatch):
     )
 
     assert horde._generate_aihorde_image_sync("test") is None
+
+
+def test_horde_stops_waiting_when_request_becomes_stale(monkeypatch):
+    get_calls = []
+    checks = iter([True, False])
+
+    def fake_post(url, *, headers, json, timeout):
+        del url, headers, json, timeout
+        return FakeResponse(status_code=202, payload={"id": "job-stale"})
+
+    def fake_get(*args, **kwargs):
+        get_calls.append((args, kwargs))
+        raise AssertionError("stale Horde request must stop before polling")
+
+    monkeypatch.setattr(horde.requests, "post", fake_post)
+    monkeypatch.setattr(horde.requests, "get", fake_get)
+
+    result = horde._generate_aihorde_image_sync(
+        "stale scene",
+        should_continue=lambda: next(checks),
+    )
+
+    assert result is None
+    assert get_calls == []

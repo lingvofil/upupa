@@ -11,7 +11,7 @@ import asyncio
 import base64
 import logging
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -56,10 +56,16 @@ def _decode_generation_image(value: str) -> Optional[bytes]:
     return image if len(image) > 1000 else None
 
 
-def _generate_aihorde_image_sync(prompt: str) -> Optional[bytes]:
+def _generate_aihorde_image_sync(
+    prompt: str,
+    should_continue: Callable[[], bool] | None = None,
+) -> Optional[bytes]:
     """Submit one Horde job, wait for it, and return decoded image bytes."""
     prompt = (prompt or "").strip()
     if not prompt:
+        return None
+    if should_continue is not None and not should_continue():
+        logging.info("AI Horde image skipped before submit: request is stale")
         return None
 
     headers = _request_headers()
@@ -104,6 +110,9 @@ def _generate_aihorde_image_sync(prompt: str) -> Optional[bytes]:
         logging.info("AI Horde job submitted: id=%s model=%s", job_id, AIHORDE_MODEL)
         started = time.monotonic()
         while time.monotonic() - started < AIHORDE_MAX_WAIT_SECONDS:
+            if should_continue is not None and not should_continue():
+                logging.info("AI Horde wait stopped because image request became stale: id=%s", job_id)
+                return None
             status_response = requests.get(
                 f"{AIHORDE_API_URL}/generate/check/{job_id}",
                 headers=headers,
@@ -147,19 +156,31 @@ def _generate_aihorde_image_sync(prompt: str) -> Optional[bytes]:
         return None
 
 
-def _generate_aihorde_image_governed(prompt: str) -> Optional[bytes]:
+def _generate_aihorde_image_governed(
+    prompt: str,
+    should_continue: Callable[[], bool] | None = None,
+) -> Optional[bytes]:
     return run_ai_provider_call(
         "aihorde.image.generate",
         _generate_aihorde_image_sync,
         prompt,
+        should_continue,
         timeout_seconds=AIHORDE_REQUEST_TIMEOUT_SECONDS,
     )
 
 
-async def generate_aihorde_image(prompt: str) -> Optional[bytes]:
+async def generate_aihorde_image(
+    prompt: str,
+    *,
+    should_continue: Callable[[], bool] | None = None,
+) -> Optional[bytes]:
     """Run the blocking Horde workflow under the process-wide AI governor."""
     try:
-        return await asyncio.to_thread(_generate_aihorde_image_governed, prompt)
+        return await asyncio.to_thread(
+            _generate_aihorde_image_governed,
+            prompt,
+            should_continue,
+        )
     except Exception as exc:
         logging.warning("AI Horde governed request failed: %s", exc)
         return None
