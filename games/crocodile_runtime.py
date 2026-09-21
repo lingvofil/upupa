@@ -518,6 +518,7 @@ def configure_crocodile_runtime() -> None:
         telephone_step_handler
     )
     telephone_callback_handler = _compose_callback_handler(
+        crocodile_modes.get_default_telephone_callback_handler(),
         party_controls.handle_telephone_callback_resilient,
         telephone_callback_with_skip_permissions,
     )
