@@ -255,19 +255,20 @@ def test_admin_controls_are_explicitly_composed_in_runtime():
     assert "reverse_modes_callback_with_admin(callback, next_handler)" in admin_source
 
     telephone_wiring = "crocodile_modes.configure_telephone_callback_handler("
-    first_telephone = runtime_source.index(telephone_wiring)
-    second_telephone = runtime_source.index(
-        telephone_wiring,
-        first_telephone + len(telephone_wiring),
+    admin_wrapper = runtime_source.index("handle_telephone_callback_with_admin,")
+    roles_wrapper = runtime_source.index(
+        "handle_telephone_callback_with_roles,",
+        admin_wrapper,
     )
+    announcements_wrapper = runtime_source.index(
+        "telephone_callback_with_role_announcement,",
+        roles_wrapper,
+    )
+    telephone_install = runtime_source.index(telephone_wiring, announcements_wrapper)
     admin_install = runtime_source.index("configure_crocodile_admin_controls()")
 
-    assert runtime_source.count(telephone_wiring) == 2
-    admin_wrapper = runtime_source.index(
-        "handle_telephone_callback_with_admin,",
-        first_telephone,
-    )
-    assert first_telephone < admin_wrapper < second_telephone < admin_install
+    assert runtime_source.count(telephone_wiring) == 1
+    assert admin_wrapper < admin_install < roles_wrapper < announcements_wrapper < telephone_install
     assert "crocodile_modes.handle_telephone_callback =" not in runtime_source
     duel_wiring = "crocodile_modes.configure_duel_callback_handler("
     assert runtime_source.count(duel_wiring) == 1
