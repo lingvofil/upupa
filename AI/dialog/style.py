@@ -186,7 +186,12 @@ def create_user_style_prompt(
     fingerprint = build_style_fingerprint(filtered)
     examples = _select_style_examples(filtered)
     examples_text = "\n".join(f"{index}. {message}" for index, message in enumerate(examples, 1))
-    interactions = [item.strip() for item in (interaction_examples or []) if item.strip()][:MAX_INTERACTION_EXAMPLES]
+    interaction_pool = [item.strip() for item in (interaction_examples or []) if item.strip()]
+    if len(interaction_pool) <= MAX_INTERACTION_EXAMPLES:
+        interactions = interaction_pool
+    else:
+        older_slots = MAX_INTERACTION_EXAMPLES // 2
+        interactions = interaction_pool[:older_slots] + interaction_pool[-(MAX_INTERACTION_EXAMPLES - older_slots):]
     interactions_text = "\n\n".join(
         f"{index}. {item}" for index, item in enumerate(interactions, 1)
     )
