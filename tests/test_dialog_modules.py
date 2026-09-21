@@ -365,3 +365,61 @@ def test_poem_prompts_prioritize_named_participants_over_filler():
         assert "используй как можно больше" in lowered
         assert "порядок списка не задаёт главного героя" in lowered
         assert "не вводи новых случайных или безымянных персонажей" in lowered
+
+
+
+def test_poem_format_validator_requires_exactly_four_nonempty_lines():
+    from AI.dialog.prompt_commands import _is_valid_poem_response
+
+    assert _is_valid_poem_response("раз\nдва\nтри\nчетыре")
+    assert _is_valid_poem_response("раз\n\nдва\nтри\nчетыре\n")
+    assert not _is_valid_poem_response("раз два три четыре")
+    assert not _is_valid_poem_response("раз\nдва\nтри")
+    assert not _is_valid_poem_response("раз\nдва\nтри\nчетыре\nпять")
+
+
+def test_poem_generation_retries_malformed_output(monkeypatch):
+    import asyncio
+    from AI.dialog import prompt_commands
+
+    calls = []
+    responses = iter([
+        "мира ведет владимира в лес где все едят чтобы наесться человечиной",
+        "света идет домой\nалина варит суп\nжека режет хлеб\nникита ест носок",
+    ])
+
+    async def fake_generate(prompt, chat_id):
+        calls.append((prompt, chat_id))
+        return next(responses)
+
+    monkeypatch.setattr(prompt_commands, "generate_simple_response", fake_generate)
+
+    result = asyncio.run(
+        prompt_commands._generate_valid_poem("базовый промпт", "-1001", "пирожок")
+    )
+
+    assert result == "света идет домой\nалина варит суп\nжека режет хлеб\nникита ест носок"
+    assert len(calls) == 2
+    assert calls[0][0] == "базовый промпт"
+    assert "ровно из четырёх" in calls[1][0]
+    assert "не склеивай строки в одну" in calls[1][0]
+
+
+def test_poem_generation_returns_none_after_three_malformed_attempts(monkeypatch):
+    import asyncio
+    from AI.dialog import prompt_commands
+
+    calls = []
+
+    async def fake_generate(prompt, chat_id):
+        calls.append(prompt)
+        return "одна длинная строка без четверостишия"
+
+    monkeypatch.setattr(prompt_commands, "generate_simple_response", fake_generate)
+
+    result = asyncio.run(
+        prompt_commands._generate_valid_poem("базовый промпт", "-1001", "порошок")
+    )
+
+    assert result is None
+    assert len(calls) == prompt_commands._POEM_MAX_GENERATION_ATTEMPTS
