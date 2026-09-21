@@ -128,6 +128,23 @@ async def _get_active_poem_bot_names(
     return bot_names
 
 
+def _format_poem_character_instruction(
+    active_bot_names: list[str],
+    other_characters: str,
+) -> str:
+    other_characters = (other_characters or "").strip()
+    if not active_bot_names:
+        return other_characters or "случайные русские имена"
+
+    bot_block = ", ".join(active_bot_names)
+    if other_characters:
+        return (
+            f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
+            f"остальные герои: {other_characters}"
+        )
+    return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
+
+
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
     try:
         valid_users = await get_valid_users(chat_id)
@@ -153,18 +170,10 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
         unique_names.append(name)
 
     selected = random.sample(unique_names, k=min(_POEM_CHARACTER_COUNT, len(unique_names)))
-    if active_bot_names:
-        bot_block = ", ".join(active_bot_names)
-        if selected:
-            return (
-                f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
-                f"остальные герои на выбор: {', '.join(selected)}"
-            )
-        return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
-
-    if not selected:
-        return "случайные русские имена"
-    return ", ".join(selected)
+    return _format_poem_character_instruction(
+        active_bot_names,
+        ", ".join(selected) if selected else "",
+    )
 
 
 async def handle_poem_command(message: types.Message, poem_type: str):
@@ -173,7 +182,17 @@ async def handle_poem_command(message: types.Message, poem_type: str):
     logging.info("Обработчик для %r вызван", poem_type)
 
     parts = message.text.split(maxsplit=1)
-    characters = parts[1].strip() if len(parts) > 1 else await _get_dynamic_poem_characters(chat_id)
+    if len(parts) > 1:
+        explicit_characters = parts[1].strip()
+        try:
+            valid_users = await get_valid_users(chat_id)
+        except Exception as exc:
+            logging.warning("Не удалось получить людей для исключения при поиске ботов: %s", exc)
+            valid_users = {}
+        active_bot_names = await _get_active_poem_bot_names(chat_id, set(valid_users))
+        characters = _format_poem_character_instruction(active_bot_names, explicit_characters)
+    else:
+        characters = await _get_dynamic_poem_characters(chat_id)
 
     if poem_type == "пирожок":
         base_prompt = PROMPT_PIROZHOK[0]
