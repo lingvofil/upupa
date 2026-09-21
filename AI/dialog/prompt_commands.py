@@ -10,7 +10,11 @@ from aiogram import types
 from core.loader import bot
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
-from features.stat_rank_settings import get_user_display_name, get_valid_users
+from features.stat_rank_settings import (
+    TELEGRAM_NON_HUMAN_SENDER_IDS,
+    get_user_display_name,
+    get_valid_users,
+)
 from features.statistics import get_chat_participant_activity
 from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
@@ -40,7 +44,6 @@ _POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
 _POEM_BOT_INCLUSION_PROBABILITY = 0.20
 _POEM_MAX_GENERATION_ATTEMPTS = 3
-_TELEGRAM_FAKE_SENDER_USER_IDS = {777000, 1087968824}
 _LATIN_TO_CYRILLIC_SEQUENCES = (
     ("shch", "щ"),
     ("sch", "щ"),
@@ -132,13 +135,18 @@ def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL
             count(stats, "total"),
         )
 
-    recent = [
+    human_items = [
         item
         for item in valid_users.items()
+        if int(item[0]) not in TELEGRAM_NON_HUMAN_SENDER_IDS
+    ]
+    recent = [
+        item
+        for item in human_items
         if count(item[1], "weekly") > 0 or count(item[1], "daily") > 0
     ]
     candidates = recent or [
-        item for item in valid_users.items() if count(item[1], "total") > 0
+        item for item in human_items if count(item[1], "total") > 0
     ]
     ranked = sorted(candidates, key=score, reverse=True)
     return [str(user_id) for user_id, _stats in ranked[:limit]]
@@ -184,7 +192,7 @@ async def _get_active_poem_bot_names(
         if len(bot_names) >= _POEM_ACTIVE_BOT_POOL_SIZE:
             break
         user_id = row.get("user_id")
-        if not isinstance(user_id, int) or user_id in _TELEGRAM_FAKE_SENDER_USER_IDS:
+        if not isinstance(user_id, int) or user_id in TELEGRAM_NON_HUMAN_SENDER_IDS:
             continue
         try:
             member = await bot.get_chat_member(int(chat_id), user_id)

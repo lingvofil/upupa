@@ -14,6 +14,8 @@ from prompts import RANKS
 # Identity сохраняем: другие модули могут держать ссылку на этот set.
 rank_notifications_disabled_chats = set()
 
+TELEGRAM_NON_HUMAN_SENDER_IDS = {777000, 1087968824}
+
 _counter_repository: SQLiteRankCountersRepository | None = None
 
 
@@ -75,7 +77,12 @@ def load_stat_rank_state() -> None:
 
 
 async def track_message_statistics(message: types.Message):
-    if not message.from_user or message.from_user.is_bot:
+    if (
+        not message.from_user
+        or message.from_user.is_bot
+        or getattr(message, "sender_chat", None) is not None
+        or message.from_user.id in TELEGRAM_NON_HUMAN_SENDER_IDS
+    ):
         return
     chat_id = str(message.chat.id)
     stats = await asyncio.to_thread(
@@ -118,7 +125,8 @@ async def get_valid_users(chat_id: str) -> dict:
     valid_users = {}
     for user_id, stats in users.items():
         try:
-            if int(user_id) > 0:
+            numeric_user_id = int(user_id)
+            if numeric_user_id > 0 and numeric_user_id not in TELEGRAM_NON_HUMAN_SENDER_IDS:
                 valid_users[user_id] = stats
         except (ValueError, TypeError):
             logging.error("Некорректный user_id в статистике: %s", user_id)
