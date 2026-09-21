@@ -43,12 +43,15 @@ def test_style_profile_includes_real_interaction_examples_and_behavior_rule():
         interaction_examples=[
             "Реплика собеседника: что тебе подарить?\nОтвет участника: куклу",
         ],
+        recurring_examples=["подари куклу"],
     )
 
     assert "[INTERACTION EXAMPLES]" in prompt
     assert "что тебе подарить?" in prompt
     assert "Ответ участника: куклу" in prompt
     assert "INTERACTION EXAMPLES важнее усреднённой вежливости" in prompt
+    assert "[RECURRING PATTERNS]" in prompt
+    assert "- подари куклу" in prompt
     assert "повторяющиеся просьбы" in prompt
 
 
@@ -154,6 +157,26 @@ def test_style_ngrams_never_cross_message_boundaries():
     assert "красный кот" in phrase_names
     assert "спит дома" in phrase_names
     assert "кот спит" not in phrase_names
+
+
+def test_recurring_short_messages_survive_outside_bounded_style_sample():
+    from AI.dialog.participant_imitation import ParticipantHistory
+
+    entry = ParticipantHistory(
+        chat_id="-1001",
+        user_id=42,
+        sample_size=4,
+        recent_size=2,
+    )
+    for index in range(40):
+        entry.add_logged_message(f"одноразовая реплика номер {index}")
+        if index in {2, 9, 17, 31}:
+            entry.add_logged_message("подари куклу")
+
+    sampled, _count = entry.snapshot()
+
+    assert "подари куклу" not in sampled
+    assert "подари куклу" in entry.recurring_messages()
 
 
 def test_participant_sampling_is_bounded_and_keeps_recent_tail(tmp_path, monkeypatch):
