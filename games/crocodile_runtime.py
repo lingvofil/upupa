@@ -109,6 +109,20 @@ def _compose_start_new_game(base_handler, *wrappers):
     return handler
 
 
+def _compose_start_duel(base_handler, *wrappers):
+    handler = base_handler
+    for wrapper in wrappers:
+        if wrapper is None:
+            continue
+        next_handler = handler
+
+        async def start(message, _wrapper=wrapper, _next=next_handler):
+            return await _wrapper(message, _next)
+
+        handler = start
+    return handler
+
+
 def _compose_start_telephone(base_handler, *wrappers):
     handler = base_handler
     for wrapper in wrappers:
@@ -564,6 +578,13 @@ def configure_crocodile_runtime() -> None:
     )
     crocodile_modes.configure_start_telephone_handler(
         telephone_start_handler
+    )
+    duel_start_handler = _compose_start_duel(
+        crocodile_modes.get_default_start_duel_handler(),
+        party_controls.start_duel_with_party_controls,
+    )
+    crocodile_modes.configure_start_duel_handler(
+        duel_start_handler
     )
     configure_crocodile_canvas_restore()
     _configured = True
