@@ -19,7 +19,7 @@ def test_completed_status_is_split_into_readable_sections(monkeypatch):
 
     assert status == (
         "🧭 Что происходит?\n\n"
-        "Активной егры сейчас нет.\n"
+        "Активной игры сейчас нет.\n"
         "Показываю последнюю завершённую.\n\n"
         "🎬 Сюжет\n"
         "Почтамт объявил войну адресатам\n\n"
@@ -46,6 +46,6 @@ def test_active_status_uses_the_same_section_layout(monkeypatch):
 
     status = render_status(fake_dnd, -100950)
 
-    assert "Егра сейчас активна.\n\n🎬 Сюжет\nСанаторий теряет этажи" in status
+    assert "Игра сейчас активна.\n\n🎬 Сюжет\nСанаторий теряет этажи" in status
     assert "\n\n📍 Последняя сцена\nЛифт выплюнул героев" in status
     assert "\n\n⚠️ Угроза: Налоговая кавалерия — ■■■□□□ 3/6" in status

@@ -217,20 +217,29 @@ def test_runtime_guard_persists_balanced_roll_mode_in_conversation():
     assert _roll_mode(session.conversation[-1]["content"]) == "NORMAL"
 
 
-def test_dnd_style_uses_erratives_and_insults():
+def test_dnd_style_keeps_spelling_readable_and_insults():
+    source = "Игра с участниками. Игроки, пишите действия и завершить можно позже."
     text = errative_text(
-        "Игра с участниками. Игроки, пишите действия и завершить можно позже.",
+        source,
         add_insult=True,
         taunt_key="style-test",
     )
 
-    assert "Егра" in text
-    assert "учаснег" in text
-    assert "Егроки" in text
-    assert "пешите" in text
-    assert "дейсвия" in text
-    assert "завиршить" in text
+    assert text.startswith(source)
+    assert "Егра" not in text
+    assert "учаснег" not in text
+    assert "Егроки" not in text
+    assert "пешите" not in text
+    assert "дейсвия" not in text
+    assert "завиршить" not in text
     assert any(suffix.strip() in text for suffix in _INSULT_SUFFIXES)
+
+
+def test_dnd_style_explicitly_requires_correct_grammar():
+    assert "Пиши грамотно" in DND_STYLE_INSTRUCTION
+    assert "нормальная орфография, падежи, согласование" in DND_STYLE_INSTRUCTION
+    assert "не коверкай слова" in DND_STYLE_INSTRUCTION
+    assert "не используй падонковские эрративы" in DND_STYLE_INSTRUCTION
 
 
 def test_dnd_style_never_stacks_two_automatic_taunts():

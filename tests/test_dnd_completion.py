@@ -271,8 +271,8 @@ def test_unregistered_reply_joins_but_waits_on_targeted_turn(monkeypatch):
     assert "9" not in session.pending_actions
     assert persisted == [True]
     assert bot.messages
-    assert "ты влез в егру" in bot.messages[-1][1]
-    assert "щас ход А, Б" in bot.messages[-1][1]
+    assert "ты влез в игру" in bot.messages[-1][1]
+    assert "сейчас ход А, Б" in bot.messages[-1][1]
     assert "твой ответ не учтён" in bot.messages[-1][1]
 
 
