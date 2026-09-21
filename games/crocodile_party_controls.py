@@ -23,7 +23,6 @@ _original_handle_telephone_callback = None
 _original_send_telephone_step = None
 _original_finish_telephone = None
 _original_record_drawing = None
-_original_start_duel = None
 
 
 async def check_duel_answer_locked(message) -> bool:
@@ -672,12 +671,12 @@ async def handle_gallery_callback(callback) -> None:
     await send_gallery_page(callback.message, page=page)
 
 
-async def _start_duel_guarded(message) -> None:
+async def start_duel_with_party_controls(message, next_handler) -> None:
     chat_id = str(message.chat.id)
     if _reverse_active(chat_id):
         await message.answer("Сначала закончите текущего кракадила наоборот.")
         return
-    await _original_start_duel(message)
+    await next_handler(message)
 
 
 async def start_telephone_with_party_controls(message, next_handler) -> None:
@@ -724,7 +723,6 @@ def configure_crocodile_party_controls() -> None:
     global _configured
     global _original_handle_telephone_callback, _original_send_telephone_step
     global _original_finish_telephone, _original_record_drawing
-    global _original_start_duel
     if _configured:
         return
 
@@ -732,13 +730,11 @@ def configure_crocodile_party_controls() -> None:
     _original_send_telephone_step = crocodile_modes._send_telephone_step
     _original_finish_telephone = crocodile_modes._finish_telephone
     _original_record_drawing = crocodile_modes.record_drawing
-    _original_start_duel = crocodile_modes.start_duel
 
     crocodile_modes.check_duel_answer = check_duel_answer_locked
     crocodile_modes.configure_telephone_callback_handler(handle_telephone_callback_resilient)
     crocodile_modes._send_telephone_step = _send_telephone_step_with_controls
     crocodile_modes.record_drawing = _record_drawing_without_phone_leak
     crocodile_modes._finish_telephone = _finish_telephone_after_reveal
-    crocodile_modes.start_duel = _start_duel_guarded
     install_crocodile_help()
     _configured = True
