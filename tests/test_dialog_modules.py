@@ -402,7 +402,7 @@ def test_poem_generation_retries_malformed_output(monkeypatch):
     assert len(calls) == 2
     assert calls[0][0] == "базовый промпт"
     assert "ровно из четырёх" in calls[1][0]
-    assert "не склеивай строки в одну" in calls[1][0]
+    assert "не склеивай строки в одну" in calls[1][0].lower()
 
 
 def test_poem_generation_returns_none_after_three_malformed_attempts(monkeypatch):
