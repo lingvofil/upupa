@@ -27,12 +27,8 @@ def test_crocodile_runtime_owns_extension_composition_order():
         "crocodile.configure_callback_handler(",
         "duo_optin.configure_crocodile_duo_opt_in(",
         "configure_crocodile_ui_enhancements()",
-        "configure_crocodile_admin_controls()",
         "configure_crocodile_telephone_mentions()",
-        "configure_crocodile_telephone_skip_permissions()",
         "configure_crocodile_telephone_roles()",
-        "configure_crocodile_telephone_role_announcements()",
-        "configure_crocodile_canvas_restore()",
     ]
     positions = [source.index(call) for call in calls]
     assert positions == sorted(positions)
@@ -52,14 +48,35 @@ def test_crocodile_installers_do_not_compose_other_installers():
         "configure_crocodile_party_state()",
         "configure_crocodile_party_controls()",
         "configure_crocodile_duo_opt_in()",
-        "configure_crocodile_admin_controls()",
     ):
         assert call not in canvas
     assert "configure_crocodile_ui_enhancements()" not in duo
     assert "configure_crocodile_telephone_mentions()" not in admin
-    assert "configure_crocodile_telephone_skip_permissions()" not in mentions
     assert "configure_crocodile_telephone_roles()" not in skip
-    assert "configure_crocodile_telephone_role_announcements()" not in skip
+
+    explicit_extensions = (
+        (
+            admin,
+            "configure_crocodile_admin_controls",
+        ),
+        (
+            skip,
+            "configure_crocodile_telephone_skip_permissions",
+        ),
+        (
+            _source("games/crocodile_telephone_role_announcements.py"),
+            "configure_crocodile_telephone_role_announcements",
+        ),
+        (
+            canvas,
+            "configure_crocodile_canvas_restore",
+        ),
+    )
+    runtime_source = _source("games/crocodile_runtime.py")
+    for extension_source, configure_name in explicit_extensions:
+        assert "_configured = False" not in extension_source
+        assert f"def {configure_name}(" not in extension_source
+        assert f"{configure_name}(" not in runtime_source
 
 
 def test_party_state_does_not_assign_into_runtime_modules():
