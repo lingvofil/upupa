@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import re
 
 from aiogram import types
 
@@ -35,8 +36,86 @@ def _clear_participant_metadata(settings: dict) -> None:
 
 _POEM_ACTIVE_POOL_SIZE = 8
 _POEM_CHARACTER_COUNT = 4
-_POEM_ACTIVE_BOT_LIMIT = 4
+_POEM_ACTIVE_BOT_POOL_SIZE = 8
 _POEM_PARTICIPANT_SCAN_LIMIT = 50
+_TELEGRAM_FAKE_SENDER_USER_IDS = {777000, 1087968824}
+_LATIN_TO_CYRILLIC_SEQUENCES = (
+    ("shch", "щ"),
+    ("sch", "щ"),
+    ("yo", "ё"),
+    ("zh", "ж"),
+    ("kh", "х"),
+    ("ts", "ц"),
+    ("ch", "ч"),
+    ("sh", "ш"),
+    ("yu", "ю"),
+    ("ya", "я"),
+    ("ye", "е"),
+)
+_LATIN_TO_CYRILLIC_CHARS = {
+    "a": "а",
+    "b": "б",
+    "c": "к",
+    "d": "д",
+    "e": "е",
+    "f": "ф",
+    "g": "г",
+    "h": "х",
+    "i": "и",
+    "j": "й",
+    "k": "к",
+    "l": "л",
+    "m": "м",
+    "n": "н",
+    "o": "о",
+    "p": "п",
+    "q": "к",
+    "r": "р",
+    "s": "с",
+    "t": "т",
+    "u": "у",
+    "v": "в",
+    "w": "в",
+    "x": "кс",
+    "y": "й",
+    "z": "з",
+}
+
+
+def _normalize_poem_name_token(token: str) -> str:
+    """Normalize one alphabetic name token to Cyrillic."""
+    if not re.search(r"[A-Za-z]", token):
+        return token[:1].upper() + token[1:].lower()
+
+    source = token.casefold()
+    result: list[str] = []
+    index = 0
+    while index < len(source):
+        for latin, cyrillic in _LATIN_TO_CYRILLIC_SEQUENCES:
+            if source.startswith(latin, index):
+                result.append(cyrillic)
+                index += len(latin)
+                break
+        else:
+            result.append(_LATIN_TO_CYRILLIC_CHARS.get(source[index], source[index]))
+            index += 1
+
+    normalized = "".join(result)
+    return normalized[:1].upper() + normalized[1:]
+
+
+def _normalize_poem_bot_name(raw_name: str | None) -> str:
+    """Return one short Cyrillic bot name suitable for a poem prompt."""
+    match = re.search(r"[A-Za-zА-Яа-яЁё]+", raw_name or "")
+    return _normalize_poem_name_token(match.group(0)) if match else ""
+
+
+def _normalize_poem_user_name(raw_name: str | None) -> str:
+    """Keep all human name words, remove emoji/punctuation and use Cyrillic."""
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё]+", raw_name or "")
+    return " ".join(_normalize_poem_name_token(token) for token in tokens)
+
+
 
 
 def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
@@ -72,7 +151,9 @@ async def _get_active_poem_bot_names(
 
     try:
         me = await bot.get_me()
-        own_name = (getattr(me, "first_name", None) or getattr(me, "full_name", None) or "Упупа").strip()
+        own_name = _normalize_poem_bot_name(
+            getattr(me, "first_name", None) or getattr(me, "full_name", None) or "Упупа"
+        )
         if own_name:
             bot_names.append(own_name)
             seen.add(own_name.casefold())
@@ -89,7 +170,7 @@ async def _get_active_poem_bot_names(
         )
     except Exception as exc:
         logging.warning("Не удалось получить активность ботов для стихов: %s", exc)
-        return bot_names[:_POEM_ACTIVE_BOT_LIMIT]
+        return bot_names[:_POEM_ACTIVE_BOT_POOL_SIZE]
 
     bot_candidates = [
         row
@@ -98,10 +179,10 @@ async def _get_active_poem_bot_names(
     ]
 
     for row in bot_candidates:
-        if len(bot_names) >= _POEM_ACTIVE_BOT_LIMIT:
+        if len(bot_names) >= _POEM_ACTIVE_BOT_POOL_SIZE:
             break
         user_id = row.get("user_id")
-        if not isinstance(user_id, int):
+        if not isinstance(user_id, int) or user_id in _TELEGRAM_FAKE_SENDER_USER_IDS:
             continue
         try:
             member = await bot.get_chat_member(int(chat_id), user_id)
@@ -111,13 +192,13 @@ async def _get_active_poem_bot_names(
         user = getattr(member, "user", None)
         if not user or not getattr(user, "is_bot", False):
             continue
-        name = (
+        name = _normalize_poem_bot_name(
             getattr(user, "first_name", None)
             or getattr(user, "full_name", None)
             or row.get("user_name")
             or row.get("user_username")
             or ""
-        ).strip()
+        )
         if not name:
             continue
         key = name.casefold()
@@ -137,13 +218,13 @@ def _format_poem_character_instruction(
     if not active_bot_names:
         return other_characters or "случайные русские имена"
 
-    bot_block = ", ".join(active_bot_names)
+    selected_bot = random.choice(active_bot_names)
     if other_characters:
         return (
-            f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}; "
+            f"обязательный активный бот (должен появиться в тексте): {selected_bot}; "
             f"остальные герои: {other_characters}"
         )
-    return f"обязательные активные боты (каждый должен появиться в тексте): {bot_block}"
+    return f"обязательный активный бот (должен появиться в тексте): {selected_bot}"
 
 
 async def _get_dynamic_poem_characters(chat_id: str) -> str:
@@ -161,8 +242,10 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     unique_names = []
     seen = {name.casefold() for name in active_bot_names}
     for raw_name in names:
-        name = (raw_name or "").strip()
-        if not name or name.startswith("Пользователь "):
+        if (raw_name or "").startswith("Пользователь "):
+            continue
+        name = _normalize_poem_user_name(raw_name)
+        if not name:
             continue
         key = name.casefold()
         if key in seen:
