@@ -231,15 +231,15 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
 
     assert "def get_telephone_callback_handler(" in modes_source
     assert "def configure_telephone_callback_handler(" in modes_source
+    assert "_original_handle_telephone_callback" not in party_source
     assert (
-        "_original_handle_telephone_callback = "
-        "crocodile_modes.get_default_telephone_callback_handler()"
+        "handle_telephone_callback_resilient(callback, next_handler)"
         in party_source
     )
+    assert "return await next_handler(callback)" not in party_source
     assert (
         "crocodile_modes.configure_telephone_callback_handler("
-        "handle_telephone_callback_resilient)"
-        in party_source
+        not in party_source
     )
 
     violations = []
@@ -270,12 +270,16 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
     composition = "telephone_callback_handler = _compose_callback_handler("
     permissions_composition = runtime_source.index(composition, party_install)
     base = runtime_source.index(
-        "party_controls.handle_telephone_callback_resilient,",
+        "crocodile_modes.get_default_telephone_callback_handler()",
         permissions_composition,
+    )
+    resilience = runtime_source.index(
+        "party_controls.handle_telephone_callback_resilient,",
+        base,
     )
     permissions = runtime_source.index(
         "telephone_callback_with_skip_permissions,",
-        base,
+        resilience,
     )
     admin_composition = runtime_source.index(
         composition,
@@ -339,6 +343,7 @@ def test_direct_skip_pipeline_is_explicitly_composed_in_runtime():
         party_install
         < permissions_composition
         < base
+        < resilience
         < permissions
         < admin_composition
         < admin_wrapper

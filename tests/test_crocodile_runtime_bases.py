@@ -147,6 +147,7 @@ def test_runtime_composes_from_stable_bases_not_current_handlers():
         "party_controls.get_default_party_status_text_renderer()",
         "party_controls.get_default_skip_telephone_handler()",
         "crocodile_modes.get_default_start_duel_handler()",
+        "crocodile_modes.get_default_telephone_callback_handler()",
         "crocodile_modes.get_default_duel_callback_handler()",
         "party_controls.get_default_stop_active_party_handler()",
         "party_controls.get_default_menu_keyboard_renderer()",

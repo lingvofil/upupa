@@ -257,7 +257,7 @@ def test_active_telephone_can_be_cancelled_by_host(monkeypatch):
     monkeypatch.setattr(controls, "_close_synthetic_room", AsyncMock())
     monkeypatch.setattr(controls, "bot", SimpleNamespace(send_message=AsyncMock()))
 
-    asyncio.run(controls.handle_telephone_callback_resilient(callback))
+    asyncio.run(controls.handle_telephone_callback_resilient(callback, AsyncMock()))
 
     assert chat_id not in crocodile_modes.telephone_games
     assert f"{chat_id}:t0" not in crocodile_modes.canvas_sessions

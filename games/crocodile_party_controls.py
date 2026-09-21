@@ -19,7 +19,6 @@ from games import crocodile_party_state as party_state
 GALLERY_PAGE_SIZE = 10
 
 _configured = False
-_original_handle_telephone_callback = None
 _original_finish_telephone = None
 _original_record_drawing = None
 
@@ -265,7 +264,7 @@ def _telephone_participants(game: dict) -> set[int]:
     return participants
 
 
-async def handle_telephone_callback_resilient(callback) -> None:
+async def handle_telephone_callback_resilient(callback, next_handler) -> None:
     data = callback.data or ""
     if data.startswith("ctel_skip_"):
         chat_id = data[len("ctel_skip_"):]
@@ -296,7 +295,7 @@ async def handle_telephone_callback_resilient(callback) -> None:
         await _cancel_telephone(chat_id, game)
         return
 
-    await _original_handle_telephone_callback(callback)
+    await next_handler(callback)
 
 
 def _reverse_active(chat_id: str) -> bool:
@@ -766,17 +765,14 @@ def install_crocodile_help() -> None:
 def configure_crocodile_party_controls() -> None:
     """Install party-mode controls after ``configure_crocodile_modes``."""
     global _configured
-    global _original_handle_telephone_callback
     global _original_finish_telephone, _original_record_drawing
     if _configured:
         return
 
-    _original_handle_telephone_callback = crocodile_modes.get_default_telephone_callback_handler()
     _original_finish_telephone = crocodile_modes._finish_telephone
     _original_record_drawing = crocodile_modes.record_drawing
 
     crocodile_modes.check_duel_answer = check_duel_answer_locked
-    crocodile_modes.configure_telephone_callback_handler(handle_telephone_callback_resilient)
     crocodile_modes.record_drawing = _record_drawing_without_phone_leak
     crocodile_modes._finish_telephone = _finish_telephone_after_reveal
     install_crocodile_help()
