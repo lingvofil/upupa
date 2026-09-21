@@ -135,11 +135,14 @@ def test_poem_dynamic_characters_include_active_bots_and_humans(monkeypatch):
         SimpleNamespace(get_me=get_me, get_chat_member=get_chat_member),
     )
     monkeypatch.setattr(prompt_commands.random, "sample", lambda values, k: list(values)[:k])
+    monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Карл")
 
     characters = asyncio.run(prompt_commands._get_dynamic_poem_characters("-1001"))
 
-    assert "обязательные активные боты" in characters
-    assert "Упупа, Карл, Сглыпа" in characters
+    assert "обязательный активный бот" in characters
+    assert "Карл" in characters
+    assert "Упупа" not in characters
+    assert "Сглыпа" not in characters
     assert "Света, Алина, Детектор, Ольга" in characters
 
 
@@ -180,14 +183,55 @@ def test_poem_bot_detection_ignores_unknown_humans(monkeypatch):
     assert names == ["Упупа"]
 
 
-def test_poem_explicit_characters_still_require_active_bots():
-    from AI.dialog.prompt_commands import _format_poem_character_instruction
+def test_poem_explicit_characters_add_at_most_one_active_bot(monkeypatch):
+    from AI.dialog import prompt_commands
 
-    text = _format_poem_character_instruction(
+    monkeypatch.setattr(prompt_commands.random, "choice", lambda values: "Сглыпа")
+
+    text = prompt_commands._format_poem_character_instruction(
         ["Упупа", "Карл", "Сглыпа"],
         "Света, Алина",
     )
 
-    assert "Упупа, Карл, Сглыпа" in text
+    assert "Сглыпа" in text
+    assert "Упупа" not in text
+    assert "Карл" not in text
     assert "Света, Алина" in text
-    assert "каждый должен появиться в тексте" in text
+    assert "обязательный активный бот" in text
+
+
+def test_poem_active_bot_pool_is_chat_specific_and_not_hardcoded(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from AI.dialog import prompt_commands
+
+    async def activity(chat_id, *, period_hours, limit):
+        assert chat_id == -2002
+        return [
+            {"user_id": 501, "message_count": 20, "user_name": "Чатобот"},
+            {"user_id": 502, "message_count": 10, "user_name": "Мемобот"},
+        ]
+
+    async def get_me():
+        return SimpleNamespace(first_name="Упупа", full_name="Упупа")
+
+    async def get_chat_member(chat_id, user_id):
+        names = {501: "Чатобот", 502: "Мемобот"}
+        return SimpleNamespace(
+            user=SimpleNamespace(
+                is_bot=True,
+                first_name=names[user_id],
+                full_name=names[user_id],
+            )
+        )
+
+    monkeypatch.setattr(prompt_commands, "get_chat_participant_activity", activity)
+    monkeypatch.setattr(
+        prompt_commands,
+        "bot",
+        SimpleNamespace(get_me=get_me, get_chat_member=get_chat_member),
+    )
+
+    names = asyncio.run(prompt_commands._get_active_poem_bot_names("-2002", set()))
+
+    assert names == ["Упупа", "Чатобот", "Мемобот"]
