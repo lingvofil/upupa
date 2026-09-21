@@ -61,7 +61,18 @@ def test_poem_active_users_are_ranked_by_recent_activity():
         "4": {"weekly": 0, "daily": 0, "total": 200},
     }
 
-    assert _rank_active_poem_users(users, limit=4) == ["3", "2", "1", "4"]
+    assert _rank_active_poem_users(users, limit=4) == ["3", "2", "1"]
+
+
+def test_poem_active_users_fall_back_to_lifetime_counts():
+    from AI.dialog.prompt_commands import _rank_active_poem_users
+
+    users = {
+        "1": {"weekly": 0, "daily": 0, "total": 5},
+        "2": {"weekly": 0, "daily": 0, "total": 20},
+    }
+
+    assert _rank_active_poem_users(users) == ["2", "1"]
 
 
 def test_poem_dynamic_characters_use_active_chat_members(monkeypatch):
