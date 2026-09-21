@@ -16,6 +16,38 @@ def test_world_variety_rules_prefer_open_spaces_and_deprioritize_cramped_default
     assert "не делай" in rules
 
 
+
+def test_scene_momentum_rules_change_decor_and_threat_archetypes():
+    rules = dnd_pacing.SCENE_MOMENTUM_RULES.casefold()
+
+    assert "2–3 предыдущими" in rules
+    assert "измени хотя бы два элемента" in rules
+    assert "не подменяй динамику очередной волной врагов" in rules
+    assert "роботы" in rules
+    assert "дроны" in rules
+    assert "киберживотные" in rules
+    assert "социальные" in rules
+    assert "природные" in rules
+    assert "средовые" in rules
+
+
+def test_recent_scene_context_exposes_three_scenes_for_variety_control():
+    session = SimpleNamespace(
+        scene_log=[
+            "Старая сцена, которую уже не надо учитывать.",
+            "Погоня на рынке.",
+            "Драка на крыше.",
+            "Переправа через порт.",
+        ]
+    )
+
+    context = dnd_pacing._recent_scene_context(session)
+
+    assert "Старая сцена" not in context
+    assert "Погоня на рынке." in context
+    assert "Драка на крыше." in context
+    assert "Переправа через порт." in context
+
 def test_repeated_poll_guard_requires_same_scene_and_same_options():
     resolved = {
         "scene_text": "На мосту стражник перекрывает путь. Можно спорить или лезть через перила.",
