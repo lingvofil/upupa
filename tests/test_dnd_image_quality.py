@@ -109,12 +109,12 @@ def test_dnd_waterfall_keeps_aihorde_as_last_long_reserve(monkeypatch):
     )
 
     assert result == (b"horde-image", "aihorde")
-    assert calls[:4] == [
+    assert calls[:3] == [
         "gigachat",
         "pollinations",
         ("huggingface", "black-forest-labs/FLUX.1-schnell"),
     ]
-    assert calls[4] == ("aihorde", guard)
+    assert calls[3] == ("aihorde", guard)
 
 
 def test_dnd_image_providers_use_background_ai_lane(monkeypatch):
