@@ -250,3 +250,100 @@ def test_reply_to_quiz_poll_includes_question_options_and_correct_answer():
     assert "Кто сказал: «я червяк»?" in context
     assert "1. Вася; 2. Петя; 3. Упупа" in context
     assert "Правильный вариант: 3. Упупа" in context
+
+
+
+def test_participant_repetition_detector_catches_same_short_conversational_move():
+    from AI.dialog.generation import _participant_reply_is_too_repetitive
+
+    assert _participant_reply_is_too_repetitive(
+        "обезян обезян обезян",
+        ["что ты пристал еблан", "обезян обезян"],
+    )
+    assert not _participant_reply_is_too_repetitive(
+        "у тебя батон",
+        ["что ты пристал еблан", "обезян обезян"],
+    )
+
+
+def test_participant_prompt_marks_recent_persona_replies_as_do_not_repeat(monkeypatch):
+    from AI.dialog import generation
+
+    generation.conversation_history.clear()
+    generation.conversation_history["12345"] = [
+        {"role": "assistant", "name": "Six7ape", "content": "обезян обезян"},
+    ]
+    generation.chat_settings["12345"] = {
+        "dialog_enabled": True,
+        "prompt": "participant prompt",
+        "prompt_name": "Six7ape",
+        "prompt_type": "user_style",
+        "active_model": "gemini",
+        "imitated_user": {"user_id": 42, "display_name": "Six7ape"},
+    }
+
+    async def fake_prepare(*_args, **_kwargs):
+        return "", False
+
+    captured = {}
+
+    async def fake_generate_response(prompt, chat_id, bot_name, user_input=""):
+        captured["prompt"] = prompt
+        return "новый ответ"
+
+    monkeypatch.setattr(generation, "prepare_participant_turn", fake_prepare)
+
+    response = asyncio.run(
+        generation.handle_bot_conversation(
+            _message("ну и че", reply_to_message=None),
+            "Human",
+            generate_response_func=fake_generate_response,
+            needs_web_search_func=lambda _: False,
+        )
+    )
+
+    assert response == "новый ответ"
+    assert "[ANTI-REPETITION]" in captured["prompt"]
+    assert "обезян обезян" in captured["prompt"]
+    assert "не повторяй ту же фирменную фразу" in captured["prompt"]
+
+
+def test_participant_generation_retries_once_on_repetitive_reply(monkeypatch):
+    from AI.dialog import generation
+
+    generation.conversation_history.clear()
+    generation.conversation_history["12345"] = [
+        {"role": "assistant", "name": "Six7ape", "content": "обезян обезян"},
+    ]
+    generation.chat_settings["12345"] = {
+        "prompt_type": "user_style",
+        "active_model": "gemini",
+    }
+    monkeypatch.setattr(generation, "update_chat_settings", lambda _chat_id: None)
+
+    prompts = []
+    replies = iter(["обезян обезян обезян", "да хуй знает"])
+
+    def fake_generate_content(prompt, **_kwargs):
+        prompts.append(prompt)
+        return SimpleNamespace(text=next(replies))
+
+    monkeypatch.setattr(
+        generation,
+        "model",
+        SimpleNamespace(generate_content=fake_generate_content),
+    )
+
+    response = asyncio.run(
+        generation.generate_response(
+            "BASE PROMPT",
+            "12345",
+            "Six7ape",
+            user_input="что будет",
+        )
+    )
+
+    assert response == "да хуй знает"
+    assert len(prompts) == 2
+    assert "[ANTI-REPETITION RETRY]" in prompts[1]
+    assert generation.conversation_history["12345"][-1]["content"] == "да хуй знает"

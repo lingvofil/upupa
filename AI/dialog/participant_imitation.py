@@ -28,7 +28,7 @@ PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
-STYLE_PROFILE_VERSION = 2
+STYLE_PROFILE_VERSION = 3
 
 
 @dataclass
@@ -642,10 +642,9 @@ async def prepare_participant_turn(
 
     semantic_candidates = list(semantic_messages)
     semantic_candidates.extend(entry.interactions)
-    semantic_candidates.extend(
-        f"Повторяющаяся реплика участника: {message}"
-        for message in entry.recurring_messages()
-    )
+    # Recurring patterns already live in the persistent style profile. Adding
+    # them again as standalone semantic candidates double-weights catchphrases
+    # and can make the model loop on one signature line.
 
     semantic_started = time.perf_counter()
     try:

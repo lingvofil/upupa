@@ -3,6 +3,8 @@
 import asyncio
 import logging
 import random
+import re
+from difflib import SequenceMatcher
 from collections.abc import Awaitable, Callable
 
 from aiogram import types
@@ -35,6 +37,8 @@ GenerateResponseCallable = Callable[[str, str, str, str], Awaitable[str]]
 NeedsWebSearchCallable = Callable[[str], bool]
 GetWebContextCallable = Callable[[str], Awaitable[str]]
 MAX_REPLY_CONTEXT_LENGTH = 6000
+PARTICIPANT_REPEAT_WINDOW = 6
+PARTICIPANT_REPEAT_SIMILARITY = 0.78
 
 
 def get_error_reply_text() -> str:
@@ -108,6 +112,74 @@ def format_chat_history(chat_id: str) -> str:
     if chat_id not in conversation_history or not conversation_history[chat_id]:
         return "Диалог только начинается."
     return "\n".join(f"{msg['name']}: {msg['content']}" for msg in conversation_history[chat_id])
+
+
+def _normalize_participant_reply(text: str) -> str:
+    normalized = re.sub(r"[^\w\s]+", " ", (text or "").casefold(), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _recent_participant_replies(
+    chat_id: str,
+    bot_name: str,
+    *,
+    limit: int = PARTICIPANT_REPEAT_WINDOW,
+) -> list[str]:
+    replies: list[str] = []
+    for item in reversed(conversation_history.get(chat_id, [])):
+        if item.get("role") != "assistant" or item.get("name") != bot_name:
+            continue
+        content = str(item.get("content") or "").strip()
+        if content:
+            replies.append(content)
+        if len(replies) >= limit:
+            break
+    replies.reverse()
+    return replies
+
+
+def _participant_reply_is_too_repetitive(response: str, recent_replies: list[str]) -> bool:
+    candidate = _normalize_participant_reply(response)
+    candidate_tokens = candidate.split()
+    if len(candidate_tokens) < 2:
+        return False
+
+    for previous in recent_replies:
+        old = _normalize_participant_reply(previous)
+        old_tokens = old.split()
+        if len(old_tokens) < 2:
+            continue
+        if candidate == old:
+            return True
+
+        # Short Telegram replies need a lower threshold: "обезян обезян" and
+        # "обезян обезян обезян" are the same conversational move even though
+        # one has an extra repeated token.
+        threshold = (
+            PARTICIPANT_REPEAT_SIMILARITY
+            if max(len(candidate), len(old)) <= 120
+            else 0.9
+        )
+        if SequenceMatcher(None, candidate, old).ratio() >= threshold:
+            return True
+
+    return False
+
+
+def _format_participant_repetition_guard(chat_id: str, bot_name: str) -> str:
+    recent = _recent_participant_replies(chat_id, bot_name)
+    if not recent:
+        return ""
+
+    lines = "\n".join(f"- {reply[:240]}" for reply in recent)
+    return (
+        "\n[ANTI-REPETITION]\n"
+        "Ниже твои недавние ответы в этом образе. Сохраняй стиль, но не повторяй ту же фирменную фразу, "
+        "шутку или почти тот же ответ в соседних ходах только ради узнаваемости. Выбирай другой характерный "
+        "ход, если текущий контекст не требует повтора.\n"
+        f"{lines}\n"
+        "[/ANTI-REPETITION]\n"
+    )
 
 
 def _format_reply_author(message: types.Message) -> str:
@@ -253,22 +325,22 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                 "presence_penalty": 0.6,
             }
 
-        def sync_model_call():
+        def sync_model_call(prompt_text: str):
             if active_model == "gigachat":
                 response = gigachat_model.generate_content(
-                    prompt,
+                    prompt_text,
                     chat_id=int(chat_id),
                     temperature=generation_kwargs.get("temperature", 0.7),
                 )
                 return response.text
             if active_model == "groq":
-                return groq_ai.generate_text(prompt, **generation_kwargs)
+                return groq_ai.generate_text(prompt_text, **generation_kwargs)
             if active_model == "openrouter":
-                result = openrouter_ai.generate_text(prompt, **generation_kwargs)
+                result = openrouter_ai.generate_text(prompt_text, **generation_kwargs)
                 logging.info("OpenRouter вернул: %r", result[:100] if result else "")
                 return result
             if active_model == "siliconflow":
-                result = siliconflow_ai.generate_text(prompt, **generation_kwargs)
+                result = siliconflow_ai.generate_text(prompt_text, **generation_kwargs)
                 logging.info("SiliconFlow вернул: %r", result[:100] if result else "")
                 return result
 
@@ -278,13 +350,43 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
                     "temperature": generation_kwargs["temperature"],
                 }
             response = model.generate_content(
-                prompt,
+                prompt_text,
                 chat_id=int(chat_id),
                 **gemini_kwargs,
             )
             return response.text
 
-        response_text = await asyncio.to_thread(sync_model_call)
+        recent_participant_replies = (
+            _recent_participant_replies(chat_id, bot_name)
+            if prompt_type == "user_style"
+            else []
+        )
+        response_text = await asyncio.to_thread(sync_model_call, prompt)
+
+        if (
+            prompt_type == "user_style"
+            and response_text
+            and _participant_reply_is_too_repetitive(response_text, recent_participant_replies)
+        ):
+            logging.info(
+                "Participant imitation repetition detected chat=%s persona=%s; retrying once",
+                chat_id,
+                bot_name,
+            )
+            recent_lines = "\n".join(
+                f"- {reply[:240]}" for reply in recent_participant_replies
+            )
+            retry_prompt = (
+                f"{prompt}\n\n[ANTI-REPETITION RETRY]\n"
+                "Черновик получился слишком похожим на один из недавних ответов. Сохрани манеру этого "
+                "участника, но полностью смени конкретную формулировку и разговорный ход. Не используй "
+                "ту же фирменную фразу как заполнитель.\n"
+                f"Недавние ответы:\n{recent_lines}\n"
+                f"Отбракованный черновик: {str(response_text)[:240]}\n"
+                "[/ANTI-REPETITION RETRY]\n"
+                f"{bot_name}:"
+            )
+            response_text = await asyncio.to_thread(sync_model_call, retry_prompt)
         if response_text is None:
             logging.warning("generate_response: модель вернула None")
             response_text = ""
@@ -395,10 +497,16 @@ async def handle_bot_conversation(
         )
 
     chat_history_formatted = format_chat_history(chat_id)
+    repetition_guard = (
+        _format_participant_repetition_guard(chat_id, prompt_name)
+        if current_settings.get("prompt_type") == "user_style"
+        else ""
+    )
     full_prompt = (
         f"{selected_prompt}\n"
         f"{NO_CONFIDENCE_PERCENTAGES_INSTRUCTION}\n"
         f"{additional_context}"
+        f"{repetition_guard}"
         f"{web_context}\n"
         f"{reply_context_block}"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
