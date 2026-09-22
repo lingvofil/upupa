@@ -162,12 +162,17 @@ SPECIAL_CHAT_ID = -1001707530786
 # gemini-3.7-flash давал 503, gemini-3.5-* — 504, gemini-3.6-flash —
 # пустой текст, gemma-3-*-it — 404 для generateContent.
 MODEL_QUEUE_DEFAULT = [
-    "gemini-3.8-flash",       # primary: успешный ответ в production probe
-    "gemini-2.5-flash",       # быстрый стабильный fallback
+    "gemini-2.5-flash",       # быстрый стабильный primary
     "gemini-2.5-flash-lite",  # самый быстрый из проверенных fallback
     "gemini-3-flash-preview", # рабочий preview-резерв
     "gemini-3.1-flash-lite",  # оставляем последним: периодические 503
 ]
+
+# "упупа умоляю ..." — отдельный high-quality route. Если 3.8 недоступен,
+# автоматически откатываемся на обычную проверенную очередь.
+MODEL_QUEUE_PLEADING = [
+    "gemini-3.8-flash",
+] + MODEL_QUEUE_DEFAULT
 
 MODEL_QUEUE_SPECIAL = [
     #"gemini-2.5-pro",
