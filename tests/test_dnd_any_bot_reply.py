@@ -140,6 +140,34 @@ def test_old_bot_reply_keeps_target_and_command_guards():
         dnd.dnd_sessions.pop(chat_id, None)
 
 
+def test_song_command_reply_bypasses_dnd_action_routes():
+    chat_id = -100710
+    dnd.dnd_sessions[chat_id] = _session()
+    try:
+        old_reply = FakeMessage(chat_id=chat_id, text="песня чат", reply_message_id=12)
+        current_reply = FakeMessage(chat_id=chat_id, text="песня чат", reply_message_id=77)
+        assert any_reply.is_any_bot_action_reply(old_reply) is False
+        assert dnd._is_group_action_reply(current_reply) is False
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_song_command_reply_bypasses_dnd_backstory_and_poll_routes():
+    chat_id = -100711
+    try:
+        dnd.dnd_sessions[chat_id] = _backstory_session()
+        old_backstory_reply = FakeMessage(chat_id=chat_id, text="песня чат", reply_message_id=12)
+        current_backstory_reply = FakeMessage(chat_id=chat_id, text="песня чат", reply_message_id=88)
+        assert any_reply.is_any_bot_backstory_reply(old_backstory_reply) is False
+        assert dnd._is_backstory_reply(current_backstory_reply) is False
+
+        dnd.dnd_sessions[chat_id] = _poll_session()
+        poll_reply = FakeMessage(chat_id=chat_id, text="песня чат", reply_message_id=12)
+        assert any_reply.is_any_bot_poll_reply(poll_reply) is False
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
 def test_old_upupa_message_is_accepted_for_custom_backstory():
     chat_id = -100704
     dnd.dnd_sessions[chat_id] = _backstory_session()
