@@ -129,7 +129,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_fun_inventory_rules(dnd)
     install_dnd_lobby_controls(router)
     install_dnd_profile_ownership(router)
-    install_dnd_combat(router, completion_policy=completion_policy)
+    install_dnd_combat(
+        router,
+        completion_policy=completion_policy,
+        state_policy=campaign_state_policy,
+    )
     install_dnd_enemy_stats(dnd)
     install_dnd_unknown_action_recovery(dnd)
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
@@ -160,7 +164,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_inventory_effect_rules(dnd)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
-    install_dnd_artifact_stats(dnd, metadata_policy=metadata_policy)
+    install_dnd_artifact_stats(
+        dnd,
+        metadata_policy=metadata_policy,
+        state_policy=campaign_state_policy,
+    )
     install_dnd_inventory_effect_refinement(dnd)
     configure_inventory_description_rules(dnd)
     install_dnd_inventory_descriptions(metadata_policy=metadata_policy)
