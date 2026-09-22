@@ -131,4 +131,4 @@ Priority order:
 5. only the latest three narrative scenes for literary continuity;
 6. a small tail of legacy dynamic mechanics context for compatibility.
 
-The resulting Memory v2 block is capped at 6500 characters. Durable `conversation` remains stored as an audit/recovery transcript, but provider calls are always windowed: system contract + a few latest exchanges + the current request. Old narrative history is therefore no longer a second implicit source of world truth.
+The resulting Memory v2 block is capped at 6000 characters. Durable `conversation` remains stored as an audit/recovery transcript, but provider calls are always windowed: system contract + a few latest exchanges + the current request. Old narrative history is therefore no longer a second implicit source of world truth.
