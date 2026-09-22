@@ -791,6 +791,18 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
                 raise RuntimeError(
                     "Nested DnD generation requires transition_to_generation_request()"
                 )
+            pending_result = getattr(session, "pending_generated_result", {}) or {}
+            phase = str(pending_result.get("phase") or RESULT_PHASE_READY).upper()
+            stale_reason = _identity_mismatch_reason(
+                session,
+                pending_result,
+                allow_committed_revision=phase == RESULT_PHASE_APPLYING,
+            )
+            if stale_reason:
+                _discard_stale_result(dnd, session, reason=stale_reason)
+                raise StaleDndSessionError(
+                    f"DnD durable result is stale: {session.chat_id} {stale_reason}"
+                )
             logging.warning(
                 "DnD reusing durable generated result chat_id=%s result_id=%s",
                 getattr(session, "chat_id", None),
@@ -816,9 +828,16 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             reserve_generation_request(session, effective_prompt)
             dnd.persist_dnd_sessions()
 
-        active_request_id = str(
-            (getattr(session, "pending_generation_request", {}) or {}).get("id") or ""
-        )
+        active_request = getattr(session, "pending_generation_request", {}) or {}
+        stale_reason = _identity_mismatch_reason(session, active_request)
+        if stale_reason:
+            _discard_stale_request(dnd, session, reason=stale_reason)
+            raise StaleDndSessionError(
+                f"DnD generation request is stale before provider call: "
+                f"{session.chat_id} {stale_reason}"
+            )
+
+        active_request_id = str(active_request.get("id") or "")
         session._upupa_generation_call_active = True
         try:
             result = await original_generate(session, effective_prompt)
@@ -837,9 +856,8 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             raise StaleDndSessionError(
                 f"DnD session changed while generation was running: {session.chat_id}"
             )
-        current_request_id = str(
-            (getattr(session, "pending_generation_request", {}) or {}).get("id") or ""
-        )
+        current_request = getattr(session, "pending_generation_request", {}) or {}
+        current_request_id = str(current_request.get("id") or "")
         if (
             was_registered
             and active_request_id
@@ -848,6 +866,14 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             raise StaleDndSessionError(
                 "DnD generation request changed while provider call was running: "
                 f"{session.chat_id} {active_request_id} -> {current_request_id or 'none'}"
+            )
+        stale_reason = _identity_mismatch_reason(session, current_request)
+        if stale_reason:
+            if current_request_id == active_request_id:
+                _discard_stale_request(dnd, session, reason=stale_reason)
+            raise StaleDndSessionError(
+                f"DnD state revision changed while provider call was running: "
+                f"{session.chat_id} {stale_reason}"
             )
         if current is session:
             session.pending_generated_result = _new_result(session, result)
@@ -865,11 +891,27 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             return await original_parse(bot, chat_id, text_response)
 
         pending = session.pending_generated_result
-        if str(pending.get("phase") or RESULT_PHASE_READY).upper() != RESULT_PHASE_APPLYING:
+        phase = str(pending.get("phase") or RESULT_PHASE_READY).upper()
+        stale_reason = _identity_mismatch_reason(
+            session,
+            pending,
+            allow_committed_revision=phase == RESULT_PHASE_APPLYING,
+        )
+        if stale_reason:
+            _discard_stale_result(dnd, session, reason=stale_reason)
+            raise StaleDndSessionError(
+                f"DnD generated result is stale before apply: {chat_id} {stale_reason}"
+            )
+
+        if phase != RESULT_PHASE_APPLYING:
             pending["phase"] = RESULT_PHASE_APPLYING
             pending["pre_apply_snapshot"] = _snapshot_parse_state(session)
+            pending["transaction_open"] = True
+            pending["transaction_started_at"] = time.time()
             pending.setdefault("telegram_effects", [])
             dnd.persist_dnd_sessions()
+        else:
+            pending["transaction_open"] = True
 
         depth = int(getattr(session, "_upupa_durable_parse_depth", 0) or 0)
         session._upupa_durable_parse_depth = depth + 1
@@ -891,6 +933,14 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
 
         current = dnd.dnd_sessions.get(chat_id)
         if current is session and _result_matches(current, text_response):
+            pending = current.pending_generated_result
+            # Open the single canonical commit boundary only after the exact
+            # result has been fully parsed and all durable Telegram effects are
+            # accounted for. The event journal then emits at most one revision
+            # for the complete logical turn.
+            pending["transaction_open"] = False
+            pending["transaction_finished_at"] = time.time()
+            dnd.persist_dnd_sessions()
             _clear_pending(current)
             dnd.persist_dnd_sessions()
         return result
