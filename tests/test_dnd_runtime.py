@@ -26,6 +26,7 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     two_heals_source = (ROOT / "AI" / "dnd_two_heals.py").read_text(encoding="utf-8")
     refinement_source = (ROOT / "AI" / "dnd_inventory_effect_refinement.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
+    dnd_source = (ROOT / "AI" / "dnd.py").read_text(encoding="utf-8")
 
     assert "completion_policy.after_participant_joined" in campaign_source
     assert "DndParticipantCompletionMiddleware._precollect_action_reply" not in campaign_source
@@ -46,5 +47,11 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
 
     assert "DndCompletionPolicy()" in runtime_source
     assert "state_policy=campaign_state_policy" in runtime_source
+    assert "install_dnd_event_journal(dnd, state_policy=campaign_state_policy)" in runtime_source
+    assert "install_dnd_context_builder(dnd, campaign)" in runtime_source
+    assert "build_memory_context" in campaign_source
+    assert "register_persist_hook" in dnd_source
+    assert "build_bounded_text_prompt(self, message_text)" in dnd_source
+    assert "history = self.conversation +" not in dnd_source
     assert "isolated_completion_middleware_class" not in runtime_source
     assert "middleware_class=" not in runtime_source
