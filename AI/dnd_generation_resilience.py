@@ -44,6 +44,7 @@ DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
 # normal fallback comfortably below that ceiling and retry once even smaller.
 DND_FALLBACK_PROMPT_MAX_CHARS = 12_000
 DND_FALLBACK_RETRY_PROMPT_MAX_CHARS = 7_000
+DND_FALLBACK_RECENT_MESSAGES = 4
 DND_GROQ_FALLBACK_MAX_TOKENS = 900
 DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 700
 DND_GROQ_FALLBACK_TEMPERATURE = 0.55
@@ -211,11 +212,11 @@ def _groq_retry_after_seconds(error: Exception) -> float | None:
 
 
 def _history_contents(session, prompt: str):
-    """Build Gemini contents with a bounded provider-side history window.
+    """Build Gemini contents from system + a tiny recent window + current state.
 
-    The durable session conversation is intentionally left untouched. Long-term
-    DnD state is supplied separately by campaign context, so the provider only
-    needs the system contract, the most recent exchanges and the current request.
+    Durable conversation remains a full audit trail, but provider continuity is
+    intentionally bounded on every request. Long-term truth is rebuilt into the
+    current request by the Memory v2 context builder.
     """
     rows = []
     for item in getattr(session, "conversation", None) or []:
@@ -227,13 +228,6 @@ def _history_contents(session, prompt: str):
 
     current = str(prompt)
     total_chars = sum(len(text) for _role, text in rows) + len(current)
-    if total_chars <= DND_GEMINI_INPUT_MAX_CHARS:
-        contents = [
-            {"role": role, "parts": [{"text": text}]}
-            for role, text in rows
-        ]
-        contents.append({"role": "user", "parts": [{"text": current}]})
-        return contents
 
     def clip_middle(text: str, budget: int) -> str:
         value = str(text or "")
@@ -262,11 +256,11 @@ def _history_contents(session, prompt: str):
         if len(prefix) > 1:
             compact_rows.append((prefix[1][0], opening[:256]))
 
-    recent = rows[2:]
-    recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent))
+    recent_source = rows[2:]
+    recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent_source))
     if recent_count % 2:
         recent_count -= 1
-    recent = recent[-recent_count:] if recent_count else []
+    recent = recent_source[-recent_count:] if recent_count else []
     if recent:
         per_message_budget = max(
             1,
@@ -290,15 +284,16 @@ def _history_contents(session, prompt: str):
         for item in contents
         for part in item.get("parts") or []
     )
-    logging.info(
-        "DnD Gemini history compacted chat_id=%s original_chars=%s sent_chars=%s "
-        "original_messages=%s sent_messages=%s",
-        getattr(session, "chat_id", None),
-        total_chars,
-        sent_chars,
-        len(rows) + 1,
-        len(contents),
-    )
+    if len(recent_source) > len(recent) or total_chars > sent_chars:
+        logging.info(
+            "DnD Gemini history bounded chat_id=%s original_chars=%s sent_chars=%s "
+            "original_messages=%s sent_messages=%s",
+            getattr(session, "chat_id", None),
+            total_chars,
+            sent_chars,
+            len(rows) + 1,
+            len(contents),
+        )
     return contents
 
 
@@ -408,18 +403,34 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
         rows.append(f"{role}: {item['content']}")
 
     current = str(prompt or "")
-    full_rows = [DND_FALLBACK_CONTINUITY_GUARD, *rows, f"user: {current}"]
-    full = "\n\n".join(full_rows)
-    if len(full) <= max_chars:
-        return full
-
     system = rows[0] if rows else ""
-    recent_history = "\n\n".join(rows[1:]) if len(rows) > 1 else ""
+    opening = rows[1:2]
+    recent_source = rows[2:]
+    recent = recent_source[-DND_FALLBACK_RECENT_MESSAGES:]
+    history_rows = [*opening]
+    if len(recent_source) > len(recent):
+        history_rows.append(
+            "[...ранняя история опущена; долгосрочные факты бери из MEMORY V2 в CURRENT REQUEST...]"
+        )
+    history_rows.extend(recent)
+    recent_history = "\n\n".join(history_rows)
+
     labels = (
         "SYSTEM EXCERPT:\n",
         "RECENT HISTORY:\n",
         "CURRENT REQUEST:\n",
     )
+    full = "\n\n".join(
+        (
+            DND_FALLBACK_CONTINUITY_GUARD,
+            labels[0] + system,
+            labels[1] + recent_history,
+            labels[2] + current,
+        )
+    )
+    if len(full) <= max_chars:
+        return full
+
     separator = "\n\n"
     fixed = (
         len(DND_FALLBACK_CONTINUITY_GUARD)
