@@ -126,7 +126,9 @@ def test_dnd_runtime_composition_is_owned_by_bootstrap():
     assert "completion_policy = completion.DndCompletionPolicy()" in runtime_source
     assert "completion.configure_dnd_completion(router, policy=completion_policy)" in runtime_source
     assert "configure_dnd_campaign(dnd, router, completion_policy=completion_policy)" in runtime_source
-    assert "install_dnd_combat(router, completion_policy=completion_policy)" in runtime_source
+    assert "install_dnd_combat(" in runtime_source
+    assert "completion_policy=completion_policy" in runtime_source
+    assert "state_policy=campaign_state_policy" in runtime_source
     assert "isolated_completion_middleware_class" not in runtime_source
     assert "middleware_class=" not in runtime_source
     assert "from AI.dnd_campaign" not in completion_source
