@@ -338,6 +338,18 @@ def test_short_but_long_lived_gemini_history_is_always_windowed():
     assert len(contents) <= 2 + resilience.DND_GEMINI_RECENT_MESSAGES + 1
 
 
+def test_direct_text_prompt_uses_memory_guard_without_emergency_label():
+    session = _session()
+    prompt = resilience.build_bounded_text_prompt(
+        session,
+        "CURRENT REQUEST WITH MEMORY V2",
+    )
+
+    assert "DND MEMORY V2" in prompt
+    assert "АВАРИЙНЫЙ РЕЖИМ DND" not in prompt
+    assert "CURRENT REQUEST WITH MEMORY V2" in prompt
+
+
 def test_groq_fallback_always_drops_old_turns_even_when_under_char_limit():
     session = _session()
     for index in range(8):
