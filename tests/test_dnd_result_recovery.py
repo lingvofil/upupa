@@ -772,6 +772,7 @@ def test_generated_result_keeps_source_request_kind():
         state="RESOLVING",
         pending_generation_request={
             "kind": "GROUP_ACTION_CONTINUATION",
+            "prompt": "точные исходные заявки игроков",
         },
         pending_generated_result={},
     )
@@ -779,6 +780,7 @@ def test_generated_result_keeps_source_request_kind():
     result = recovery._new_result(session, "готовый групповой ответ")
 
     assert result["source_request_kind"] == "GROUP_ACTION_CONTINUATION"
+    assert result["source_prompt"] == "точные исходные заявки игроков"
 
 
 @pytest.mark.parametrize(

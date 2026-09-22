@@ -163,4 +163,22 @@ The suite covers the historical failure classes recorded in the Memory v2 plan: 
 - On completion, the final structured snapshot is stored as `session_canon` inside the campaign archive.
 - Older archived campaigns remain readable through a conservative legacy adapter that only renders fields actually present in the old archive.
 - Quest/thread canon is intentionally deferred until quests/threads become first-class structured entities.
-\n## Stage 8: DM adjudication discipline\n\n`AI/dnd_adjudication.py` adds a table-style resolution policy on top of the structured Memory v2 state.\n\n- A roll is allowed only when the attempted action is possible, the outcome is genuinely uncertain, and failure has a meaningful consequence.\n- Obvious success, obvious impossibility, and endlessly repeatable no-cost actions are resolved without a fake d20 gate.\n- CHECK, SAVE and ATTACK are explicitly separated. Direct attacks stay on deterministic combat tags instead of leaking into generic checks.\n- For CHECK, the model chooses the governing ability from the declared approach first and only then the skill. Explicit non-standard pairs such as STR + Intimidation remain valid.\n- Participant-mode roll prompts must carry ABILITY; the code owns modifiers and combat results.\n- Player agency stays separate from world adjudication: the DM describes what characters perceive and how the world reacts, but voluntary decisions remain with the player.\n
+
+## Stage 8: DM adjudication discipline
+
+`AI/dnd_adjudication.py` adds a table-style resolution policy on top of the structured Memory v2 state.
+
+- A roll is allowed only when the attempted action is possible, the outcome is genuinely uncertain, and failure has a meaningful consequence.
+- Obvious success, obvious impossibility, and endlessly repeatable no-cost actions are resolved without a fake d20 gate.
+- CHECK, SAVE and ATTACK are explicitly separated. Direct attacks stay on deterministic combat tags instead of leaking into generic checks.
+- For CHECK, the model chooses the governing ability from the declared approach first and only then the skill. Explicit non-standard pairs such as STR + Intimidation remain valid.
+- Participant-mode roll prompts must carry ABILITY; the code owns modifiers and combat results.
+- Player agency stays separate from world adjudication: the DM describes what characters perceive and how the world reacts, but voluntary decisions remain with the player.
+
+## Stage 9: group progress, late joiners and visible item bonuses
+
+- `AI/dnd_group_progress.py` guards group-turn model output before campaign/metadata parse side effects. An inspection/search group action that receives only acknowledgment and another generic INPUT is regenerated once with an explicit concrete-resolution contract.
+- `group_input_streak` is persisted as runtime pacing state. A third consecutive untargeted group INPUT triggers the same correction path instead of silently stalling in place.
+- Durable generated results keep a bounded `source_prompt` so the correction layer can recover the exact submitted group actions even after provider/restart boundaries.
+- Combat living-roster filtering treats a participant with a temporarily missing character sheet as not-yet-initialized rather than dead. This keeps late joiners in completion expectations until their own action arrives.
+- Inventory display no longer relies on artifact-stat wrapper installation order: explicit `STAT/STAT_BONUS` and existing `BONUS/TRAIT` values are visible directly in the item line used by `герой` and `инвентарь`, including already saved items.

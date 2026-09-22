@@ -303,16 +303,36 @@ def _ability_for_roll(roll: dict) -> str | None:
 
 
 def _living_ids(session) -> set[int]:
+    participants = set()
+    for value in (getattr(session, "participants", {}) or {}).values():
+        try:
+            participants.add(int(value["user_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
     sheets = getattr(session, "character_sheets", {}) or {}
     if not sheets:
-        return {int(value["user_id"]) for value in (getattr(session, "participants", {}) or {}).values()}
+        return participants
+
     result = set()
+    # A participant who joined after combat initialization may temporarily have
+    # no sheet yet (or may be restored in the small window before auto-profile
+    # finishes). Do not silently drop that person from group-turn completion:
+    # missing sheet means "not initialized yet", not "dead".
+    for user_id in participants:
+        sheet = sheets.get(str(user_id))
+        if sheet is None or _alive(sheet):
+            result.add(user_id)
+
+    # Compatibility for old states that have a living sheet but no participant
+    # row. They remain mechanically alive until the archive/session is repaired.
     for key, sheet in sheets.items():
-        if _alive(sheet):
-            try:
-                result.add(int(key))
-            except (TypeError, ValueError):
-                continue
+        try:
+            user_id = int(key)
+        except (TypeError, ValueError):
+            continue
+        if user_id not in participants and _alive(sheet):
+            result.add(user_id)
     return result
 
 

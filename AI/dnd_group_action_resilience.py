@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 
+_GROUP_ACTION_KIND = "GROUP_ACTION_CONTINUATION"
+
+
 def _format_group_actions_for_model(actions: list[dict]) -> str:
     """Render group actions with stable actor IDs for the model only."""
     lines = []
@@ -15,6 +18,14 @@ def _format_group_actions_for_model(actions: list[dict]) -> str:
         else:
             lines.append(f"- {name}: {action} (id={user_id})")
     return "\n".join(lines)
+
+
+def _resolution_budget(action_count: int) -> tuple[int, int]:
+    """Give simultaneous actions enough narrative room without flooding chat."""
+    count = max(1, int(action_count or 1))
+    preferred = min(170, max(90, 55 + 28 * count))
+    maximum = min(200, preferred + 30)
+    return preferred, maximum
 
 
 def install_dnd_group_action_resilience(dnd) -> None:
@@ -37,6 +48,7 @@ def install_dnd_group_action_resilience(dnd) -> None:
 
         actions_text = dnd._format_group_actions(actions)
         actions_prompt_text = _format_group_actions_for_model(actions)
+        preferred_words, max_words = _resolution_budget(len(actions))
         opening_round = int(getattr(session, "scene_count", 0) or 0) <= 1
         opening_rules = (
             " ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ: сначала дай каждому герою короткое конкретное последствие его заявки "
@@ -52,16 +64,25 @@ def install_dnd_group_action_resilience(dnd) -> None:
             (
                 "Игроки заявили действия одновременно:\n"
                 f"{actions_prompt_text}\n"
-                "Сначала явно учти КАЖДУЮ заявку: не пропускай бытовые, исследовательские и социальные действия "
-                "только потому, что рядом есть более эффектная угроза. Простое действие вроде еды, осмотра, разговора "
-                "или попытки кого-то заткнуть должно получить понятную реакцию мира и не обязано запускать новый экшен. "
-                "После этого свяжи совместимые последствия в одну сцену; противоречия между заявками тоже покажи явно."
+                "Сначала РАЗРЕШИ КАЖДУЮ заявку, а не просто перескажи её: для каждого участника должна быть видна "
+                "прямая причинно-следственная связь «что сделал -> что из этого вышло». Не пропускай бытовые, "
+                "исследовательские и социальные действия только потому, что рядом есть более эффектная угроза. "
+                "Простое действие вроде еды, осмотра, разговора или попытки кого-то заткнуть должно получить "
+                "конкретную реакцию мира и не обязано запускать новый экшен. Даже если действие не двигает основной "
+                "сюжет, покажи его локальный эффект. После этого свяжи совместимые последствия в одну сцену; "
+                "противоречия между заявками тоже покажи явно. "
+                "ОСОБЕННО для осмотра, поиска, прислушивания и изучения: нельзя ответить «да-да, осматривайтесь/думайте» "
+                "и снова открыть тот же ход. Если бросок не нужен, дай конкретный результат — что именно заметили, "
+                "услышали, не нашли или поняли. Если бросок нужен, назначь его конкретному заявившему игроку."
                 + opening_rules
                 + " Если для конкретной заявки нужен бросок, не предрешай его исход: опиши только попытку "
                 "и поставь [ACTION:ROLL]. TARGETS этого броска обязан содержать id именно того игрока, "
                 "чьё действие проверяется. До результата броска не объявляй успех или провал этого действия, "
                 "не выдавай и не отнимай из-за него предметы и не фиксируй другие зависящие от броска последствия. "
-                "Действия с очевидным исходом можно разрешить сразу. Обычно 40–60 слов, максимум 70."
+                "Действия с очевидным исходом можно разрешить сразу. Не заканчивай ответ одним перечислением заявок "
+                "и новым «ходом партии»: перед следующим INPUT в сцене должно появиться хотя бы одно наблюдаемое "
+                "изменение, новая информация, реакция мира или честно зафиксированное отсутствие результата. "
+                f"Ориентир для этого коллективного хода — около {preferred_words} слов, максимум {max_words}."
             ),
         )
 
@@ -73,7 +94,7 @@ def install_dnd_group_action_resilience(dnd) -> None:
         if not reserve_generation_request(
             session,
             continuation_prompt,
-            kind="GROUP_ACTION_CONTINUATION",
+            kind=_GROUP_ACTION_KIND,
             effects=[
                 {
                     "method": "send_message",
@@ -117,4 +138,8 @@ def install_dnd_group_action_resilience(dnd) -> None:
     dnd._upupa_dnd_group_action_resilience_installed = True
 
 
-__all__ = ["install_dnd_group_action_resilience"]
+__all__ = [
+    "_GROUP_ACTION_KIND",
+    "_resolution_budget",
+    "install_dnd_group_action_resilience",
+]

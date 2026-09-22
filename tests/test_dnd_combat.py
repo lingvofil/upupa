@@ -221,3 +221,12 @@ def test_enemy_attack_transition_commits_exact_successor_and_effects():
         "💥 Урон уже посчитан.",
     ]
     assert persisted == [True]
+
+
+def test_living_ids_keeps_late_joiner_without_sheet():
+    session = _session()
+    session.participants["9"] = {"user_id": 9, "name": "Новый"}
+    # Combat was initialized before this participant joined.
+    assert "9" not in session.character_sheets
+
+    assert combat._living_ids(session) == {1, 2, 9}

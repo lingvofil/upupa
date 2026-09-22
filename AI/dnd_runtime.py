@@ -35,6 +35,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_finalization_recovery import install_dnd_finalization_recovery
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
     from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
+    from AI.dnd_group_progress import install_dnd_group_progress
     from AI.dnd_growth import install_dnd_growth
     from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_image_quality import install_dnd_image_quality
@@ -202,6 +203,12 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
+    # Group-progress correction must sit outside campaign/metadata parse wrappers
+    # so acknowledgment-only responses are replaced before they can mutate state.
+    install_dnd_group_progress(
+        dnd,
+        state_policy=campaign_state_policy,
+    )
     # Install the journal after all canonical state extensions so its restore
     # baseline sees the fully composed campaign representation.
     install_dnd_event_journal(dnd, state_policy=campaign_state_policy)

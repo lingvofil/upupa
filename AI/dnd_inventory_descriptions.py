@@ -12,7 +12,9 @@ INVENTORY_DESCRIPTION_RULES = f"""
 Если у стака естественно накапливается шуточное свойство, используй BONUS + TRAIT. Во всех остальных случаях обязательно
 укажи EFFECT: 2–10 слов о том, чем вещь примечательна, полезна, подозрительна или смешна в контексте её получения.
 EFFECT не обязан быть механическим бонусом и не должен выдумывать прямой модификатор d20. Для обычной безделушки это может
-быть просто короткая характерная деталь. Сохраняй характеристику лаконичной и без точки с запятой.
+быть просто короткая характерная деталь. Если у предмета уже есть ЯВНЫЙ числовой бонус (BONUS+TRAIT или STAT+STAT_BONUS),
+он обязан быть виден прямо в строке предмета в командах «герой» и «инвентарь», включая старые уже сохранённые вещи.
+Сохраняй характеристику лаконичной и без точки с запятой.
 """.strip()
 
 
@@ -35,9 +37,28 @@ def _described_copy(item):
     return described
 
 
+def _explicit_stat_bonus_text(item) -> str:
+    """Render persisted STR/DEX/... artifact metadata independent of install order."""
+    try:
+        from AI import dnd_artifact_stats as artifact_stats
+
+        parsed = artifact_stats._artifact_stat(item)
+    except Exception:
+        return ""
+    if parsed is None:
+        return ""
+    ability, bonus = parsed
+    return f"{bonus:+d} к {artifact_stats.ABILITY_LABELS[ability]}"
+
+
 def format_inventory_entry(item) -> str:
-    """Render a characteristic without mutating the persisted inventory object."""
-    return effects.format_inventory_entry(_described_copy(item))
+    """Render all visible characteristics without mutating persisted inventory."""
+    described = _described_copy(item)
+    rendered = effects.format_inventory_entry(described)
+    stat = _explicit_stat_bonus_text(described)
+    if not stat or stat.casefold() in rendered.casefold():
+        return rendered
+    return f"{rendered}; {stat}" if rendered else stat
 
 
 def render_inventory_lines(items) -> list[str]:

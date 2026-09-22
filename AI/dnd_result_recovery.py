@@ -317,6 +317,9 @@ def _new_result(session, text: str) -> dict:
         result["source_request_kind"] = request_kind
     if request_id:
         result["source_request_id"] = request_id
+    source_prompt = str(request.get("prompt") or "")
+    if source_prompt:
+        result["source_prompt"] = source_prompt[-6000:]
     if request.get("conversation_size") is not None:
         result["conversation_size"] = request.get("conversation_size")
     if request.get("source_campaign_id"):
