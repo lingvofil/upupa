@@ -147,8 +147,8 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
     install_dnd_weakness_luck(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_roll_ability_display(dnd)
-    install_dnd_healing_choice(router)
-    install_dnd_two_heals(router)
+    install_dnd_healing_choice(router, state_policy=campaign_state_policy)
+    install_dnd_two_heals(router, state_policy=campaign_state_policy)
     install_dnd_two_heals_compat()
     install_dnd_scaled_heals(router)
     install_dnd_manual_healing(router)
@@ -169,7 +169,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         metadata_policy=metadata_policy,
         state_policy=campaign_state_policy,
     )
-    install_dnd_inventory_effect_refinement(dnd)
+    install_dnd_inventory_effect_refinement(
+        dnd,
+        state_policy=campaign_state_policy,
+    )
     configure_inventory_description_rules(dnd)
     install_dnd_inventory_descriptions(metadata_policy=metadata_policy)
     inventory_context_policy.renderer = render_inventory_description_context
