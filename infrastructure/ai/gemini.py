@@ -264,6 +264,7 @@ class FallbackChatSession:
                 **kwargs,
             ),
             require_text=True,
+            model_queue=self.model_queue,
         )
 
     def _send_with_model(self, model_obj, content, **kwargs):
@@ -307,6 +308,7 @@ class ModelFallbackWrapper:
         *,
         chat_id=None,
         require_text: bool = True,
+        model_queue: Optional[List[str]] = None,
         **kwargs,
     ):
         return self._run_with_fallback(
@@ -314,6 +316,7 @@ class ModelFallbackWrapper:
             chat_id=chat_id,
             request_fn=lambda model_obj: model_obj.generate_content(prompt, **kwargs),
             require_text=require_text,
+            model_queue=model_queue,
         )
 
     def generate_custom(self, model_name: str, *args, **kwargs):
@@ -405,10 +408,12 @@ class ModelFallbackWrapper:
         chat_id: Optional[int],
         request_fn: Callable,
         require_text: bool = False,
+        model_queue: Optional[List[str]] = None,
     ):
+        selected_queue = model_queue if model_queue is not None else self._get_queue(chat_id)
         model_queue = [
             self._normalize_model_name(name)
-            for name in self._get_queue(chat_id)
+            for name in selected_queue
         ]
         key_indices = self._iter_key_indices()
         if not key_indices:
