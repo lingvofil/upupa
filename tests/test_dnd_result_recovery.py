@@ -28,7 +28,11 @@ class FakeStatePolicy:
         return self
 
     def state(self, session):
-        row = {"campaign_marker": getattr(session, "campaign_marker", "before")}
+        row = {
+            "campaign_marker": getattr(session, "campaign_marker", "before"),
+            "campaign_id": getattr(session, "campaign_id", None),
+            "state_revision": getattr(session, "state_revision", 0),
+        }
         for name, provider in self.fields.items():
             row[name] = copy.deepcopy(provider(session))
         return row
@@ -36,6 +40,8 @@ class FakeStatePolicy:
     def restore(self, session, data):
         row = data if isinstance(data, dict) else {}
         session.campaign_marker = row.get("campaign_marker", "before")
+        session.campaign_id = row.get("campaign_id")
+        session.state_revision = int(row.get("state_revision", 0) or 0)
         for hook in self.restore_hooks:
             hook(session, row)
 
@@ -60,6 +66,8 @@ class FakeSession:
         self.pending_generated_result = {}
         self.generated_result_seq = 0
         self.campaign_marker = "before"
+        self.campaign_id = f"campaign-{abs(int(chat_id))}"
+        self.state_revision = 0
 
     def to_record(self):
         return {
