@@ -8,6 +8,13 @@ del test_smoke_imports
 from AI import dnd
 
 
+def test_action_prompt_omits_repeated_leader_hint():
+    session = SimpleNamespace(mode="participants", participants={}, action_target_user_ids=[])
+    text = dnd._action_prompt_text(session)
+    assert "Пишите действия реплаями" in text
+    assert "Ведущий может завершить ход раньше" not in text
+
+
 class RecordingSupervisor:
     def __init__(self):
         self.names = []

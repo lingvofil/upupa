@@ -439,6 +439,11 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         "ПОСЛЕДНИЕ ПОДТВЕРЖДЁННЫЕ ИЗМЕНЕНИЯ:\n" + _recent_event_text(session),
         "ПОСЛЕДНИЕ ХУДОЖЕСТВЕННЫЕ СЦЕНЫ — только для связности:\n" + _recent_scene_text(recent_scenes),
     ]
+    # The legacy tail is only 300 characters; the live initiative queue must
+    # survive independently of the many campaign context wrappers.
+    from AI.dnd_spotlight import _spotlight_context
+
+    sections.insert(2, _spotlight_context(session))
     legacy_tail = _legacy_tail(legacy)
     if legacy_tail:
         sections.append(

@@ -1090,3 +1090,65 @@ def test_apply_snapshot_survives_to_record_rebinding_pending_result():
     assert calls["parse"] == 1
     assert calls["persist"] >= 2
     assert session.pending_generated_result == {}
+
+
+@pytest.mark.parametrize("fail_first_send", [False, True])
+def test_third_group_turn_becomes_individual_and_replays_same_target(monkeypatch, fail_first_send):
+    from AI.dnd_group_progress import install_dnd_group_progress
+    from AI.dnd_spotlight import install_dnd_spotlight, next_spotlight
+
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy, generated="Открывается проход. [ACTION:INPUT]")
+    session.participants = {str(i): {"user_id": i, "name": f"Герой{i}"} for i in (1, 2, 3)}
+    session.spotlight_order = [1, 2, 3]
+    session.spotlight_cursor = 0
+    session.group_input_streak = 2
+    session.conversation = []
+    dnd.DND_SYSTEM_PROMPT = "BASE"
+    dnd._is_participant_mode = lambda _: True
+    dnd.finalize_group_actions = None
+    seen_targets = []
+
+    async def parse(bot, chat_id, response):
+        assert "Открывается проход." in response
+        assert response.endswith("[ACTION:INPUT;TARGETS:1]")
+        seen_targets.append(1)
+        session.state = "WAITING_ACTION"
+        session.action_target_user_ids = [1]
+        await bot.send_message(chat_id, response)
+
+    class Bot:
+        failed = False
+
+        async def send_message(self, chat_id, text, **kwargs):
+            if fail_first_send and not self.failed:
+                self.failed = True
+                raise RuntimeError("temporary Telegram failure")
+            return SimpleNamespace(message_id=99)
+
+    dnd.parse_and_execute_turn = parse
+    monkeypatch.setattr(campaign, "_campaign_context", campaign._campaign_context)
+    install_dnd_spotlight(dnd, state_policy=policy)
+    install_dnd_group_progress(dnd, state_policy=policy)
+    # Match bootstrap: durable result recovery wraps the entire parse surface.
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    assert recovery.reserve_generation_request(
+        session,
+        "Игроки заявили действия одновременно:\n- Герой1: открываю проход (id=1)\nСначала РАЗРЕШИ",
+        kind="GROUP_ACTION_CONTINUATION",
+    )
+    bot = Bot()
+    completed = asyncio.run(recovery.continue_pending_generation(dnd, bot, session))
+    if fail_first_send:
+        assert not completed
+        assert session.pending_generated_result["pre_apply_snapshot"]
+        asyncio.run(recovery.retry_pending_recovery(dnd, bot, session))
+    else:
+        assert completed
+
+    assert calls["generate"] == 2  # One correction, never an unbounded retry loop.
+    assert seen_targets == ([1, 1] if fail_first_send else [1])
+    assert session.pending_generated_result == {}
+    assert session.action_target_user_ids == [1]
+    assert session.group_input_streak == 0
+    assert next_spotlight(session) == 2

@@ -39,7 +39,8 @@ GROUP_PROGRESS_RULES = f"""{GROUP_PROGRESS_MARKER}.
 «осматривайтесь», «думайте», «ищите» и снова открыть тот же общий INPUT.
 Если бросок не нужен — назови конкретную обнаруженную деталь, отсутствие находок, изменение позиции, реакцию NPC или
 другой фактический результат. Если исход неопределён и провал имеет цену — назначь адресный ROLL тому, кто это делает.
-Не допускай третьего подряд общего INPUT без материального изменения информации, цели, позиции или ситуации партии.
+После двух общих INPUT передай инициативу личным INPUT следующему герою очереди фокуса,
+сначала разрешив все текущие заявки. Адресный бросок по заявке сохраняет её реального исполнителя.
 Продвижение не обязано быть экшеном или катастрофой: новая улика, понятная пустота, разговор, путь, смена цели или
 конкретная реакция мира тоже считаются полноценным прогрессом.
 """.strip()
@@ -89,6 +90,7 @@ def _group_action_block(source_prompt: str) -> str:
         return ""
     tail = text.split(marker, 1)[1]
     for stop in (
+        "\nСначала РАЗРЕШИ",
         "\nСначала явно учти",
         "\nСначала учти",
         "\nРЕЖИССЁР СЦЕНЫ:",
@@ -169,8 +171,13 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
     return None
 
 
-def _correction_prompt(pending: dict, response: str, reason: str) -> str:
+def _correction_prompt(pending: dict, response: str, reason: str, session=None) -> str:
     actions = _group_action_block(str(pending.get("source_prompt") or ""))
+    from AI.dnd_group_action_resilience import _resolution_budget
+    from AI.dnd_spotlight import _spotlight_context
+
+    max_words = _resolution_budget(_group_action_count(str(pending.get("source_prompt") or "")))[1]
+    focus = _spotlight_context(session) if session is not None else ""
     return (
         "СЛУЖЕБНАЯ КОРРЕКЦИЯ ГРУППОВОГО ХОДА. Предыдущий ответ не продвинул игру. "
         "Не повторяй и не комментируй ошибочный ответ. Сначала РАЗРЕШИ каждую исходную заявку: "
@@ -178,11 +185,13 @@ def _correction_prompt(pending: dict, response: str, reason: str) -> str:
         "Для осмотра/поиска: если бросок не нужен — сообщи конкретную новую деталь, улику, отсутствие находок "
         "или другую фактическую обратную связь; если исход реально неопределён и провал имеет цену — дай адресный "
         "ACTION:ROLL соответствующему игроку. Нельзя отвечать только «осматривайтесь», «думайте», «ищите» и снова "
-        "возвращать тот же общий ход. Если это уже третий общий INPUT подряд, материально измени ситуацию, цель, "
-        "доступную информацию или позицию партии; ещё один общий INPUT допустим только после такого явного продвижения. "
-        "Не добавляй случайную катастрофу ради темпа. До 100 слов.\n"
+        "возвращать тот же общий ход. Если это уже третий общий INPUT подряд, после последствий заявок "
+        "передай следующий свободный выбор одному герою очереди фокуса через адресный INPUT. "
+        f"Не добавляй случайную катастрофу ради темпа. Максимум {max_words} слов.\n"
+        f"{focus}\n"
         f"ПРИЧИНА КОРРЕКЦИИ: {reason}\n"
-        f"ИСХОДНЫЕ ЗАЯВКИ:\n{actions or 'см. текущий structured state'}\n"
+        f"ИСХОДНЫЕ ЗАЯВКИ:\nИгроки заявили действия одновременно:\n{actions or 'см. текущий structured state'}\n"
+        "Сначала РАЗРЕШИ каждую из этих заявок.\n"
         f"НЕУДАЧНЫЙ ОТВЕТ:\n{_response_body(response)[:1200]}"
     )
 
@@ -190,12 +199,12 @@ def _correction_prompt(pending: dict, response: str, reason: str) -> str:
 def _update_streak(session, pending: dict, response: str) -> None:
     _ensure(session)
     source_kind = str(pending.get("source_request_kind") or "").upper()
+    if not _is_untargeted_group_input(response):
+        session.group_input_streak = 0
+        return
     if source_kind not in {GROUP_ACTION_KIND, GROUP_PROGRESS_CORRECTION_KIND}:
         return
-    if _is_untargeted_group_input(response):
-        session.group_input_streak += 1
-    else:
-        session.group_input_streak = 0
+    session.group_input_streak += 1
 
 
 def install_dnd_group_progress(dnd, *, state_policy=None) -> None:
@@ -243,7 +252,7 @@ def install_dnd_group_progress(dnd, *, state_policy=None) -> None:
                 )
                 if transition_to_generation_request(
                     session,
-                    _correction_prompt(pending, response, reason),
+                    _correction_prompt(pending, response, reason, session),
                     kind=GROUP_PROGRESS_CORRECTION_KIND,
                 ):
                     dnd.persist_dnd_sessions()
@@ -253,6 +262,29 @@ def install_dnd_group_progress(dnd, *, state_policy=None) -> None:
                             "DnD group progress correction generation failed"
                         )
                     return None
+
+            # A correction is attempted once. If it still opens a third public
+            # input, preserve all consequences and narrow only the next free
+            # decision. Never retarget an existing roll or explicit actor.
+            if (
+                pending.get("source_request_kind") in {GROUP_ACTION_KIND, GROUP_PROGRESS_CORRECTION_KIND}
+                and int(getattr(session, "group_input_streak", 0) or 0) >= 2
+                and _is_untargeted_group_input(response)
+            ):
+                from AI.dnd_spotlight import next_spotlight, _replace_or_add_single_target
+
+                target = next_spotlight(session)
+                if target is not None:
+                    original_response = response
+                    response = _replace_or_add_single_target(response, target)
+                    # Keep the cached provider result unchanged: the outer
+                    # durable transaction completes against that exact text.
+                    # Replay restores the pre-apply streak and repeats this
+                    # deterministic targeting before any Telegram side effects.
+                    from AI.dnd_style import _replace_last_assistant_content
+
+                    _replace_last_assistant_content(session, original_response, response)
+                    logging.info("DnD group input handed to individual chat_id=%s target=%s", chat_id, target)
 
             _update_streak(session, pending, response)
             dnd.persist_dnd_sessions()

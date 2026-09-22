@@ -213,3 +213,24 @@ def test_context_does_not_mutate_durable_history_or_state():
 
     assert session.event_journal == before_events
     assert session.scene_log == before_scenes
+
+
+def test_spotlight_survives_legacy_tail_and_provider_window():
+    from AI.dnd_generation_resilience import _history_contents, build_bounded_text_prompt
+
+    session = _session()
+    session.spotlight_order = [1, 2]
+    session.spotlight_cursor = 0
+    session.group_input_streak = 2
+    session.conversation = [{"role": "system", "content": "правило " * 5000}]
+    campaign = SimpleNamespace(_campaign_context=lambda *_: "лишний контекст " * 4000)
+    context = context_builder.build_memory_context(SimpleNamespace(), campaign, session)
+
+    assert len(context) <= context_builder.CONTEXT_MAX_CHARS
+    assert "СЛЕДУЮЩИЙ ФОКУС — ID 1" in context
+    assert "[ACTION:INPUT;TARGETS:1]" in context
+    prompt = context + "\nПродолжай текущие действия."
+    gemini = _history_contents(session, prompt)
+    text = "\n".join(part["text"] for row in gemini for part in row["parts"])
+    assert "[ACTION:INPUT;TARGETS:1]" in text
+    assert "[ACTION:INPUT;TARGETS:1]" in build_bounded_text_prompt(session, prompt, max_chars=7000)
