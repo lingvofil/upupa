@@ -111,7 +111,7 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _empty_response_details(response: Any) -> str:
-    details = []
+    details = ["no candidate text"]
     candidates = getattr(response, "candidates", None) or []
     if not candidates:
         details.append("candidates=0")
