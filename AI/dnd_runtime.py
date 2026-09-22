@@ -28,6 +28,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_command import install_dnd_enemy_command
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
+    from AI.dnd_event_journal import install_dnd_event_journal
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_finalization_recovery import install_dnd_finalization_recovery
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
@@ -196,6 +197,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
+    # Install the journal after all canonical state extensions so its restore
+    # baseline sees the fully composed campaign representation.
+    install_dnd_event_journal(dnd, state_policy=campaign_state_policy)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
