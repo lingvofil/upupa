@@ -8,6 +8,7 @@ from infrastructure.ai.gemini import (
     GeminiModel,
     ModelFallbackWrapper,
     _build_config,
+    _is_retryable,
     _normalize_contents,
     _normalize_history,
 )
@@ -190,3 +191,104 @@ def test_require_text_falls_back_to_next_model_on_empty_response(monkeypatch):
     assert result.text == "готовый ответ"
     assert calls == ["gemini-empty", "gemini-good"]
     assert wrapper.last_used_model_name == "gemini-good"
+
+
+
+class _FakeGeminiServerError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(f"{code} provider failure")
+        self.code = code
+
+
+def test_retryable_includes_gateway_and_service_failures():
+    for code in (500, 502, 503, 504):
+        assert _is_retryable(_FakeGeminiServerError(code))
+
+
+def test_service_failures_open_model_circuit_and_fall_back(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    class FakeGeminiModel:
+        def __init__(self, api_key, model_name):
+            self.api_key = api_key
+            self.model_name = model_name
+
+        def generate_content(self, prompt):
+            calls.append((self.model_name, self.api_key))
+            if self.model_name == "gemini-bad":
+                raise _FakeGeminiServerError(503)
+            return FakeResponse("готово")
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel(api_key, model_name)
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(
+        ["gemini-bad", "gemini-good"],
+        ["gemini-bad", "gemini-good"],
+        keys_pool=["key-1", "key-2", "key-3"],
+    )
+
+    result = wrapper.generate_content("дай текст")
+    assert result.text == "готово"
+    assert calls == [
+        ("gemini-bad", "key-1"),
+        ("gemini-bad", "key-2"),
+        ("gemini-good", "key-1"),
+    ]
+
+    calls.clear()
+    second = wrapper.generate_content("ещё текст")
+    assert second.text == "готово"
+    assert calls == [("gemini-good", "key-2")]
+
+
+def test_404_skips_missing_model_without_rotating_all_keys(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        text = "готово"
+        candidates = []
+
+    class FakeGeminiModel:
+        def __init__(self, api_key, model_name):
+            self.api_key = api_key
+            self.model_name = model_name
+
+        def generate_content(self, prompt):
+            calls.append((self.model_name, self.api_key))
+            if self.model_name == "gemini-missing":
+                raise _FakeGeminiServerError(404)
+            return FakeResponse()
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel(api_key, model_name)
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(
+        ["gemini-missing", "gemini-good"],
+        ["gemini-missing", "gemini-good"],
+        keys_pool=["key-1", "key-2", "key-3"],
+    )
+    result = wrapper.generate_content("дай текст")
+
+    assert result.text == "готово"
+    assert calls == [
+        ("gemini-missing", "key-1"),
+        ("gemini-good", "key-1"),
+    ]
