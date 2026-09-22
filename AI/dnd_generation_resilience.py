@@ -447,8 +447,10 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
         )
         return _bounded_head_tail(emergency, max_chars, head_ratio=0.35)
 
-    current_budget = int(available * 0.55)
-    history_budget = int(available * 0.25)
+    # CURRENT REQUEST carries the Memory v2 authoritative state, so preserve it
+    # ahead of old narrative history when the fallback prompt must be compressed.
+    current_budget = int(available * 0.65)
+    history_budget = int(available * 0.15)
     system_budget = available - current_budget - history_budget
 
     system_excerpt = _bounded_head_tail(system, system_budget, head_ratio=0.55)
