@@ -21,6 +21,13 @@ PER_KEY_MIN_DELAY = 2.5
 # broken transport eventually releases its provider worker.
 GEMINI_HTTP_TIMEOUT_MS = 60_000
 
+# Provider-wide 5xx failures usually follow the model rather than one API key.
+# After a couple of such failures, temporarily bypass that model so one outage
+# cannot consume the entire interactive AI deadline across the key pool.
+MODEL_TRANSIENT_STATUS_CODES = frozenset({500, 502, 503, 504})
+MODEL_CIRCUIT_FAILURE_THRESHOLD = 2
+MODEL_CIRCUIT_COOLDOWN_SECONDS = 60.0
+
 _last_call_ts: dict[str, float] = {}
 _throttle_lock = threading.Lock()
 _genai_lock = threading.RLock()
@@ -64,13 +71,21 @@ def _is_retryable(error: Exception) -> bool:
     text = str(error).lower()
     if error_type == "EmptyModelResponseError":
         return False
-    if status_code in (429, 503):
+    if status_code == 429 or status_code in MODEL_TRANSIENT_STATUS_CODES:
         return True
     if error_type in ("ResourceExhausted", "QuotaExceeded"):
         return True
     return any(
         marker in text
-        for marker in ("429", "503", "resourceexhausted", "quotaexceeded")
+        for marker in (
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "resourceexhausted",
+            "quotaexceeded",
+        )
     )
 
 
@@ -256,7 +271,9 @@ class ModelFallbackWrapper:
         self.special_queue = special_queue
         self.keys_pool = [key for key in (keys_pool or []) if key]
         self._key_rr_cursor = 0
-        self._max_retries_per_pair = 3
+        self._model_health_lock = threading.Lock()
+        self._model_transient_failures: dict[str, int] = {}
+        self._model_circuit_until: dict[str, float] = {}
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
@@ -324,6 +341,38 @@ class ModelFallbackWrapper:
     def _build_model(self, api_key: str, model_name: str):
         return GeminiModel(_get_client(api_key), model_name)
 
+    def _model_circuit_remaining(self, model_name: str) -> float:
+        now = time.monotonic()
+        with self._model_health_lock:
+            until = self._model_circuit_until.get(model_name, 0.0)
+            if until <= now:
+                self._model_circuit_until.pop(model_name, None)
+                self._model_transient_failures.pop(model_name, None)
+                return 0.0
+            return until - now
+
+    def _record_model_success(self, model_name: str) -> None:
+        with self._model_health_lock:
+            self._model_transient_failures.pop(model_name, None)
+            self._model_circuit_until.pop(model_name, None)
+
+    def _record_model_transient_failure(self, model_name: str) -> bool:
+        with self._model_health_lock:
+            failures = self._model_transient_failures.get(model_name, 0) + 1
+            self._model_transient_failures[model_name] = failures
+            if failures < MODEL_CIRCUIT_FAILURE_THRESHOLD:
+                return False
+            self._model_circuit_until[model_name] = (
+                time.monotonic() + MODEL_CIRCUIT_COOLDOWN_SECONDS
+            )
+        logging.warning(
+            "Gemini model circuit opened model=%s failures=%s cooldown_s=%.0f",
+            model_name,
+            failures,
+            MODEL_CIRCUIT_COOLDOWN_SECONDS,
+        )
+        return True
+
     def _run_with_fallback(
         self,
         action_name: str,
@@ -343,60 +392,89 @@ class ModelFallbackWrapper:
         temporary_failure_only = True
 
         for model_name in model_queue:
+            circuit_remaining = self._model_circuit_remaining(model_name)
+            if circuit_remaining > 0:
+                logging.warning(
+                    "Gemini skip model action=%s model=%s circuit_remaining_s=%.1f",
+                    action_name,
+                    model_name,
+                    circuit_remaining,
+                )
+                continue
+
             skip_model = False
             for key_idx in key_indices:
                 api_key = self.keys_pool[key_idx]
-                for attempt in range(1, self._max_retries_per_pair + 1):
-                    try:
-                        _throttle_key(api_key)
-                        model_obj = self._build_model(api_key, model_name)
-                        result = request_fn(model_obj)
-                        if require_text and not _extract_response_text(result).strip():
-                            raise EmptyModelResponseError(
-                                _empty_response_details(result)
-                            )
-                        self.last_used_model_name = model_name
-                        logging.info(
-                            "Gemini success action=%s key_idx=%s model=%s attempts=%s",
-                            action_name,
-                            key_idx,
-                            model_name,
-                            attempt,
+                try:
+                    _throttle_key(api_key)
+                    model_obj = self._build_model(api_key, model_name)
+                    result = request_fn(model_obj)
+                    if require_text and not _extract_response_text(result).strip():
+                        raise EmptyModelResponseError(
+                            _empty_response_details(result)
                         )
-                        return result
-                    except Exception as error:
-                        status_code, error_type = _extract_error_details(error)
-                        retryable = _is_retryable(error)
+                    self._record_model_success(model_name)
+                    self.last_used_model_name = model_name
+                    logging.info(
+                        "Gemini success action=%s key_idx=%s model=%s attempts=1",
+                        action_name,
+                        key_idx,
+                        model_name,
+                    )
+                    return result
+                except Exception as error:
+                    status_code, error_type = _extract_error_details(error)
+                    retryable = _is_retryable(error)
+                    logging.warning(
+                        "Gemini fail action=%s key_idx=%s model=%s attempt=1 "
+                        "code=%s type=%s retryable=%s",
+                        action_name,
+                        key_idx,
+                        model_name,
+                        status_code,
+                        error_type,
+                        retryable,
+                    )
+
+                    if error_type == "EmptyModelResponseError":
+                        temporary_failure_only = False
+                        hard_failures.append(error)
                         logging.warning(
-                            "Gemini fail action=%s key_idx=%s model=%s attempt=%s "
-                            "code=%s type=%s retryable=%s",
+                            "Gemini empty text action=%s model=%s; trying next model",
                             action_name,
-                            key_idx,
                             model_name,
-                            attempt,
-                            status_code,
-                            error_type,
-                            retryable,
                         )
-                        if error_type == "EmptyModelResponseError":
-                            temporary_failure_only = False
-                            hard_failures.append(error)
-                            logging.warning(
-                                "Gemini empty text action=%s model=%s; trying next model",
-                                action_name,
-                                model_name,
-                            )
-                            skip_model = True
-                            break
-                        if retryable and attempt < self._max_retries_per_pair:
-                            time.sleep(2 ** (attempt - 1))
-                            continue
-                        if not retryable:
-                            temporary_failure_only = False
-                            hard_failures.append(error)
+                        skip_model = True
                         break
-                if skip_model:
-                    break
+
+                    if retryable:
+                        # 429 is commonly key/project-specific, so rotate the key.
+                        # 5xx service failures are commonly model-wide; two such
+                        # failures open a short circuit and immediately move to
+                        # the next fallback model.
+                        if status_code in MODEL_TRANSIENT_STATUS_CODES:
+                            if self._record_model_transient_failure(model_name):
+                                skip_model = True
+                                break
+                        continue
+
+                    temporary_failure_only = False
+                    hard_failures.append(error)
+
+                    # A missing model will not become available by rotating keys.
+                    if status_code == 404:
+                        logging.warning(
+                            "Gemini model unavailable action=%s model=%s; "
+                            "trying next model",
+                            action_name,
+                            model_name,
+                        )
+                        skip_model = True
+                        break
+
+                    # Other hard failures can still be credential-specific.
+                    # Try the next key before abandoning this model.
+
             if skip_model:
                 continue
 

@@ -41,3 +41,27 @@ def test_throttle_is_per_key(monkeypatch):
     t1 = time.monotonic()
     gemini._throttle_key("key_a")  # повтор того же ключа — обязан подождать
     assert time.monotonic() - t1 >= 0.25, "повторный вызов по ключу должен троттлиться"
+
+
+
+def test_gemini_queue_matches_verified_production_probe():
+    from core import settings
+
+    assert settings.MODEL_QUEUE_DEFAULT == [
+        "gemini-3.8-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+    ]
+    assert settings.TEXT_GENERATION_MODEL_LIGHT == "gemini-2.5-flash-lite"
+
+    rejected_from_probe = {
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemma-3-12b-it",
+        "gemma-3-4b-it",
+    }
+    assert rejected_from_probe.isdisjoint(settings.MODEL_QUEUE_DEFAULT)

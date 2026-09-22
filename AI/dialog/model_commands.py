@@ -98,7 +98,7 @@ async def handle_which_model(message: types.Message):
         "gigachat": lambda: f"🤖 Сейчас использую GigaChat: {gigachat_model.last_used_model_name or 'GigaChat-2'}",
         "history": lambda: "📜 Сейчас я в режиме 'По памяти' (использую историю логов)",
         "groq": lambda: f"⚡ Сейчас использую Groq: {groq_ai.text_model}",
-        "gemini": lambda: f"✨ Сейчас использую Gemini: {model.last_used_model_name or 'gemini-2.0-flash'}",
+        "gemini": lambda: f"✨ Сейчас использую Gemini: {model.last_used_model_name or model.model_names[0]}",
         "openrouter": lambda: f"🚀 Сейчас использую OpenRouter: {openrouter_ai.model_name}",
         "siliconflow": lambda: f"🇨🇳 Сейчас использую SiliconFlow: {siliconflow_ai.model_name}",
     }
