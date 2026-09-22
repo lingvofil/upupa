@@ -2,10 +2,11 @@ import asyncio
 from types import SimpleNamespace
 
 from AI import dnd_result_recovery as recovery
-from AI.dnd_group_action_resilience import (
-    _inspection_was_deferred,
-    _progress_correction_reason,
-    install_dnd_group_action_resilience,
+from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
+from AI.dnd_group_progress import (
+    inspection_was_deferred,
+    install_dnd_group_progress,
+    progress_correction_reason,
 )
 
 
@@ -224,7 +225,7 @@ def test_deferred_inspection_response_is_detected():
         "Сначала явно учти КАЖДУЮ заявку"
     )
 
-    assert _inspection_was_deferred(
+    assert inspection_was_deferred(
         source_prompt,
         "Да-да, осматривайтесь и думайте, что делать дальше. [ACTION:INPUT]",
     ) is True
@@ -252,7 +253,7 @@ def test_third_consecutive_group_input_requires_progress_correction():
         ),
     }
 
-    assert _progress_correction_reason(
+    assert progress_correction_reason(
         session,
         pending,
         "Вы подходите к воротам. [ACTION:INPUT]",
@@ -285,7 +286,7 @@ def test_parse_replaces_noop_inspection_with_one_correction(monkeypatch):
         calls["parse"] += 1
 
     dnd.parse_and_execute_turn = original_parse
-    install_dnd_group_action_resilience(dnd)
+    install_dnd_group_progress(dnd)
 
     def fake_transition(current, prompt, *, kind, effects=None):
         del effects
