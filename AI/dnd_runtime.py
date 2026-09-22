@@ -76,6 +76,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_scene_clocks import install_dnd_scene_clocks
     from AI.dnd_scene_tactics import install_dnd_scene_tactics
+    from AI.dnd_session_canon import install_dnd_session_canon_archive
     from AI.dnd_spotlight import install_dnd_spotlight
     from AI.dnd_special_moves import install_dnd_special_moves
     from AI.dnd_state_commands import configure_dnd_state_commands
@@ -183,6 +184,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_session_canon_archive(dnd)
     # Must be installed after every archive/finish wrapper so one completion ID
     # guards the complete campaign archive and all post-finish effects.
     install_dnd_finalization_recovery(dnd)
