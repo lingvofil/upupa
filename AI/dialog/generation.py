@@ -458,19 +458,15 @@ async def handle_bot_conversation(
     else:
         temp_input_lower = user_input.lower()
 
-    pleading_trigger = "упупа умоляю"
-    is_pleading = (
-        temp_input_lower == pleading_trigger
-        or temp_input_lower.startswith(pleading_trigger + " ")
+    pleading_match = re.match(
+        r"^\s*упупа(?:[\s,;:!?.—–-]+)умоляю(?:[\s,;:!?.—–-]+)?(.*)$",
+        user_input,
+        flags=re.IGNORECASE | re.DOTALL,
     )
+    is_pleading = pleading_match is not None
 
     if is_pleading:
-        match = re.match(
-            r"^\s*упупа(?:[\s,;:!?.—–-]+)умоляю(?:[\s,;:!?.—–-]+)?(.*)$",
-            user_input,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        user_input = (match.group(1) if match else "").strip()
+        user_input = pleading_match.group(1).strip()
     else:
         for keyword in DIALOG_TRIGGER_KEYWORDS:
             if temp_input_lower.startswith(keyword):
