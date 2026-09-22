@@ -390,11 +390,20 @@ def _state_path() -> Path:
     return Path(DND_STATE_PATH)
 
 
+def _validate_dnd_session_state(session, *, boundary: str):
+    from AI.dnd_state_invariants import validate_and_log_session_state
+
+    return validate_and_log_session_state(session, boundary=boundary)
+
+
 def persist_dnd_sessions() -> None:
     path = _state_path()
+    sessions = list(dnd_sessions.values())
+    for session in sessions:
+        _validate_dnd_session_state(session, boundary="persist")
     payload = {
         "version": 1,
-        "sessions": [session.to_record() for session in dnd_sessions.values()],
+        "sessions": [session.to_record() for session in sessions],
     }
     JsonFileRepository(path, indent=2).save(payload)
 
@@ -738,6 +747,8 @@ def restore_dnd_sessions(bot: Bot) -> int:
                         _restore_action_prompt(bot, session.chat_id),
                         name=f"dnd-actions:{session.chat_id}:restore-prompt",
                     )
+
+            _validate_dnd_session_state(session, boundary="restore")
         except Exception:
             logging.exception("DnD session restore failed record=%r", record)
 
