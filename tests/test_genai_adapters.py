@@ -360,4 +360,4 @@ def test_empty_response_details_report_zero_candidates():
         prompt_feedback = None
         candidates = []
 
-    assert _empty_response_details(Response()) == "candidates=0"
+    assert _empty_response_details(Response()) == "no candidate text; candidates=0"
