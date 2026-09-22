@@ -24,6 +24,7 @@ from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
 from core.state import chat_settings
+from features.song.command_guard import is_song_command
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 
@@ -1537,6 +1538,8 @@ def _is_backstory_reply(message: Message) -> bool:
         or message.chat.id in _processing_backstories
     ):
         return False
+    if is_song_command(message):
+        return False
     starter_user_id = getattr(session, "starter_user_id", None)
     if starter_user_id is not None and not _user_is_host(session, int(message.from_user.id)):
         return False
@@ -1729,7 +1732,7 @@ def _is_group_action_reply(message: Message) -> bool:
     if not prompt_message_id or not message.reply_to_message:
         return False
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
         return False
     if not _can_user_act(
         session,
@@ -1745,7 +1748,7 @@ async def handle_free_action(message: Message):
     session = dnd_sessions[message.chat.id]
     prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
         return
     user_id = int(message.from_user.id)
     if not _can_user_act(
