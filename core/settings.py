@@ -158,7 +158,7 @@ SPECIAL_CHAT_ID = -1001707530786
 
 # --- GEMINI MODEL QUEUES ---
 # ВАЖНО: gemini-2.0-* отключены Google 1 июня 2026 — в очередь не добавлять.
-# Очередь проверена живыми запросами с production key pool 22.09.2026.
+# Очередь проверена живыми запросами с тремя production-ключами 22.09.2026.
 # gemini-3.7-flash давал 503, gemini-3.5-* — 504, gemini-3.6-flash —
 # пустой текст, gemma-3-*-it — 404 для generateContent.
 MODEL_QUEUE_DEFAULT = [
