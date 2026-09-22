@@ -347,3 +347,91 @@ def test_participant_generation_retries_once_on_repetitive_reply(monkeypatch):
     assert len(prompts) == 2
     assert "[ANTI-REPETITION RETRY]" in prompts[1]
     assert generation.conversation_history["12345"][-1]["content"] == "да хуй знает"
+
+
+
+def test_pleading_trigger_uses_dedicated_generator_and_strips_command(monkeypatch):
+    from AI.dialog import generation
+
+    generation.conversation_history.clear()
+    generation.chat_settings["12345"] = {
+        "dialog_enabled": True,
+        "prompt": "base prompt",
+        "prompt_name": "упупа",
+        "active_model": "groq",
+    }
+
+    captured = {}
+
+    async def fake_pleading(prompt, chat_id, bot_name, user_input=""):
+        captured["prompt"] = prompt
+        captured["chat_id"] = chat_id
+        captured["bot_name"] = bot_name
+        captured["user_input"] = user_input
+        return "premium reply"
+
+    monkeypatch.setattr(generation, "generate_pleading_response", fake_pleading)
+
+    response = asyncio.run(
+        generation.handle_bot_conversation(
+            _message("Упупа, умоляю, объясни квантовую механику"),
+            "Human",
+            needs_web_search_func=lambda _: False,
+        )
+    )
+
+    assert response == "premium reply"
+    assert captured["user_input"] == "объясни квантовую механику"
+    assert captured["chat_id"] == "12345"
+    assert generation.conversation_history["12345"][-1] == {
+        "role": "user",
+        "name": "Human",
+        "content": "объясни квантовую механику",
+    }
+
+
+def test_pleading_response_forces_gemini_and_uses_pleading_queue(monkeypatch):
+    from AI.dialog import generation
+    from core.settings import MODEL_QUEUE_PLEADING
+
+    generation.conversation_history.clear()
+    generation.chat_settings["12345"] = {
+        "prompt_type": "standard",
+        "active_model": "groq",
+    }
+    monkeypatch.setattr(generation, "update_chat_settings", lambda _chat_id: None)
+
+    captured = {}
+
+    def fake_generate_content(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(text="ответ 3.8")
+
+    def fail_groq(*_args, **_kwargs):
+        raise AssertionError("pleading route must not use active groq model")
+
+    monkeypatch.setattr(
+        generation,
+        "model",
+        SimpleNamespace(generate_content=fake_generate_content),
+    )
+    monkeypatch.setattr(
+        generation.groq_ai,
+        "generate_text",
+        fail_groq,
+    )
+
+    response = asyncio.run(
+        generation.generate_pleading_response(
+            "PREMIUM PROMPT",
+            "12345",
+            "Упупа",
+            user_input="сложный вопрос",
+        )
+    )
+
+    assert response == "ответ 3.8"
+    assert captured["prompt"] == "PREMIUM PROMPT"
+    assert captured["kwargs"]["chat_id"] == 12345
+    assert captured["kwargs"]["model_queue"] == MODEL_QUEUE_PLEADING
