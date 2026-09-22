@@ -21,7 +21,15 @@ _DEFER_RE = re.compile(
 )
 _CONCRETE_FEEDBACK_RE = re.compile(
     r"\b(замеч|обнаруж|наход|увид|видн|слыш|услыш|чувству|запах|след|улика|"
-    r"двер|проход|надпис|щель|шорох|пусто|стен|предмет|оказыва|выясн|понима)\w*",
+    r"двер|проход|надпис|щель|шорох|пусто|стен|предмет|оказыва|выясн|понима|"
+    r"получ|добира|вход|выход|откры|закры|лома|чин|отвеч|отказыва|соглаша|"
+    r"бер[её]т|теря|меня|сдвига|переход|срабаты|уда[её]т|провал|останав|"
+    r"появ|исчез|достига|узна|реагир)\w*",
+    re.I,
+)
+_ACK_ONLY_RE = re.compile(
+    r"\b(принято|понял|да-да|делаете|пытаетесь|начинаете|продолжаете|можете|"
+    r"думайте|решайте|что\s+дальше|ход\s+за\s+вами|ваш\s+ход|действуйте)\b",
     re.I,
 )
 
@@ -101,6 +109,28 @@ def inspection_was_deferred(source_prompt: str, response: str) -> bool:
     return bool(_DEFER_RE.search(normalized)) or len(normalized) < 90
 
 
+def group_resolution_was_noop(source_prompt: str, response: str) -> bool:
+    """Detect acknowledgement/rephrasing that returns control without consequence."""
+    actions = _group_action_block(source_prompt)
+    if not actions or not _is_untargeted_group_input(response):
+        return False
+
+    body = _response_body(response)
+    if _CONCRETE_FEEDBACK_RE.search(body):
+        return False
+
+    normalized = " ".join(body.split())
+    if not normalized:
+        return True
+
+    # Short acknowledgement-only prose is exactly the failure seen in live
+    # parties: the model repeats that heroes are looking/thinking/trying and
+    # immediately asks for another group turn without resolving anything.
+    return len(normalized) < 180 and bool(
+        _ACK_ONLY_RE.search(normalized) or _DEFER_RE.search(normalized)
+    )
+
+
 def progress_correction_reason(session, pending: dict, response: str) -> str | None:
     source_kind = str(pending.get("source_request_kind") or "").upper()
     if source_kind != GROUP_ACTION_KIND:
@@ -109,6 +139,8 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
     source_prompt = str(pending.get("source_prompt") or "")
     if inspection_was_deferred(source_prompt, response):
         return "inspection-without-feedback"
+    if group_resolution_was_noop(source_prompt, response):
+        return "group-action-without-consequence"
 
     _ensure(session)
     if (
@@ -123,7 +155,8 @@ def _correction_prompt(pending: dict, response: str, reason: str) -> str:
     actions = _group_action_block(str(pending.get("source_prompt") or ""))
     return (
         "СЛУЖЕБНАЯ КОРРЕКЦИЯ ГРУППОВОГО ХОДА. Предыдущий ответ не продвинул игру. "
-        "Не повторяй и не комментируй ошибочный ответ. Сначала РАЗРЕШИ каждую исходную заявку. "
+        "Не повторяй и не комментируй ошибочный ответ. Сначала РАЗРЕШИ каждую исходную заявку: "
+        "для каждого участника явно покажи «действие -> последствие», а не просто перефразируй намерение. "
         "Для осмотра/поиска: если бросок не нужен — сообщи конкретную новую деталь, улику, отсутствие находок "
         "или другую фактическую обратную связь; если исход реально неопределён и провал имеет цену — дай адресный "
         "ACTION:ROLL соответствующему игроку. Нельзя отвечать только «осматривайтесь», «думайте», «ищите» и снова "
@@ -214,6 +247,7 @@ def install_dnd_group_progress(dnd, *, state_policy=None) -> None:
 
 __all__ = [
     "GROUP_PROGRESS_RULES",
+    "group_resolution_was_noop",
     "inspection_was_deferred",
     "progress_correction_reason",
     "install_dnd_group_progress",
