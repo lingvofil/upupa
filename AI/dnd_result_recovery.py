@@ -611,6 +611,11 @@ async def continue_pending_generation(dnd, bot, session) -> bool:
     _ensure(session)
     if not _pending_generation_prompt(session):
         return False
+    request = getattr(session, "pending_generation_request", {}) or {}
+    stale_reason = _identity_mismatch_reason(session, request)
+    if stale_reason:
+        _discard_stale_request(dnd, session, reason=stale_reason)
+        return False
     if not await _deliver_generation_effects(dnd, bot, session):
         return False
     return await _resume_pending_generation(dnd, bot, session)
@@ -620,6 +625,11 @@ async def _resume_pending_generation(dnd, bot, session) -> bool:
     _ensure(session)
     prompt = _pending_generation_prompt(session)
     if not prompt:
+        return False
+    request = getattr(session, "pending_generation_request", {}) or {}
+    stale_reason = _identity_mismatch_reason(session, request)
+    if stale_reason:
+        _discard_stale_request(dnd, session, reason=stale_reason)
         return False
     if bool(getattr(session, "_upupa_generation_call_active", False)):
         return True
@@ -686,6 +696,15 @@ async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
         return
 
     phase = str(pending.get("phase") or RESULT_PHASE_READY).upper()
+    stale_reason = _identity_mismatch_reason(
+        session,
+        pending,
+        allow_committed_revision=phase == RESULT_PHASE_APPLYING,
+    )
+    if stale_reason:
+        _discard_stale_result(dnd, session, reason=stale_reason)
+        return
+
     if phase == RESULT_PHASE_APPLYING:
         # Even if a downstream state such as WAITING_ROLL was already persisted,
         # the process may have died before one of its Telegram sends completed.
@@ -695,6 +714,7 @@ async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
         if _restore_parse_state(session, snapshot, state_policy):
             pending = session.pending_generated_result
             pending["phase"] = RESULT_PHASE_READY
+            pending["transaction_open"] = False
             pending.pop("pre_apply_snapshot", None)
             session.pending_generated_result = pending
             dnd.persist_dnd_sessions()
