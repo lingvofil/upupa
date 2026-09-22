@@ -146,3 +146,9 @@ The resulting Memory v2 block is capped at 6000 characters. Durable `conversatio
 - A stale request/result is discarded without parsing; any stale provider exchange is rewound out of durable narrative history when possible.
 
 During durable result apply, `transaction_open=true` pins the event-journal baseline. Intermediate persists used for Telegram idempotency and crash recovery therefore do not create multiple canonical revisions. Once parse completes, the transaction is closed and the next persist creates the single canonical revision for the logical turn. Explicit successor requests created inside a turn target the prospective parent revision before that parent commit is persisted.
+
+## Stage 6: historical regression barrier
+
+`tests/test_dnd_memory_v2_regressions.py` is the cross-layer acceptance barrier for Memory v2. It deliberately combines state, journal, bounded context, durable recovery and lobby/group mechanics instead of testing each module only in isolation.
+
+The suite covers the historical failure classes recorded in the Memory v2 plan: long-lived positions, complete group turns, inventory transfer persistence, safe character rebuild, HP/death authority, NPC obligations across restore, all runtime restart phases, dual-provider outage recovery without replaying already committed player effects, and rejection of results from an older campaign identity.
