@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from AI import dnd_result_recovery as recovery
 from AI.dnd_group_action_resilience import _resolution_budget, install_dnd_group_action_resilience
 from AI.dnd_group_progress import (
+    _minimum_resolution_words,
     group_resolution_was_noop,
     inspection_was_deferred,
     install_dnd_group_progress,
@@ -348,8 +349,8 @@ def test_generic_acknowledgement_only_group_turn_is_noop():
     ) is False
 
 
-def test_generic_noop_reason_precedes_third_input_rule():
-    session = SimpleNamespace(group_input_streak=2)
+def test_generic_noop_reason_is_used_before_streak_limit():
+    session = SimpleNamespace(group_input_streak=0)
     pending = {
         "source_request_kind": "GROUP_ACTION_CONTINUATION",
         "source_prompt": (
@@ -364,3 +365,35 @@ def test_generic_noop_reason_precedes_third_input_rule():
         pending,
         "Алиса продолжает разговор. Решайте, что дальше. [ACTION:INPUT]",
     ) == "group-action-without-consequence"
+
+
+def test_live_short_group_resolution_from_party_is_rejected():
+    source_prompt = (
+        "Игроки заявили действия одновременно:\n"
+        "- Детектор: бегу в соседнюю комнату, смотрю что там (id=1)\n"
+        "- Чудо: бегу следом, шарю по углам в поисках блестящих находок (id=2)\n"
+        "- М&M: завожу пиратский корабль и валю нахуй (id=3)\n"
+        "Сначала РАЗРЕШИ КАЖДУЮ заявку"
+    )
+    response = (
+        "Ладно, давайте, блядь, по одному! Детектор рвёт когти в соседнюю комнату, "
+        "Чудо за ним, блестяшки. Не тормозите, долбоёбы. [ACTION:INPUT]"
+    )
+
+    assert _minimum_resolution_words(source_prompt) == 78
+    assert group_resolution_was_noop(source_prompt, response) is True
+
+
+def test_short_but_concrete_roll_is_not_rejected_as_group_noop():
+    source_prompt = (
+        "Игроки заявили действия одновременно:\n"
+        "- Детектор: осматриваю люк (id=1)\n"
+        "- Чудо: ищу следы (id=2)\n"
+        "Сначала РАЗРЕШИ КАЖДУЮ заявку"
+    )
+    response = (
+        "На люке следы свежей копоти; чтобы понять, открывали ли его недавно, нужна проверка. "
+        "[ACTION:ROLL;TYPE:CHECK;SKILL:Расследование;TARGETS:1;DC:10;MODE:NORMAL]"
+    )
+
+    assert group_resolution_was_noop(source_prompt, response) is False

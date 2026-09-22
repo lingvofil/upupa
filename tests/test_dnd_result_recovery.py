@@ -1067,3 +1067,26 @@ def test_stale_provider_exchange_is_rewound_from_durable_conversation():
     assert session.conversation == original
     assert session.pending_generation_request == {}
     assert session.pending_generated_result == {}
+
+
+def test_apply_snapshot_survives_to_record_rebinding_pending_result():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    original_to_record = session.to_record
+
+    def rebinding_to_record():
+        # Reproduce real campaign-state normalization: to_record() may replace
+        # the pending-result dict while the recovery wrapper is snapshotting.
+        session.pending_generated_result = dict(session.pending_generated_result)
+        return original_to_record()
+
+    session.to_record = rebinding_to_record
+
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+    asyncio.run(dnd.parse_and_execute_turn(None, session.chat_id, response))
+
+    assert calls["parse"] == 1
+    assert calls["persist"] >= 2
+    assert session.pending_generated_result == {}

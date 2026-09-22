@@ -929,8 +929,17 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
             )
 
         if phase != RESULT_PHASE_APPLYING:
+            # Build the snapshot before mutating the durable result. Real
+            # GameSession.to_record() runs campaign-state ensure hooks, and some
+            # of them normalize pending_generated_result by replacing the dict.
+            # If we keep a local reference across to_record(), the APPLYING flag
+            # can land on the new dict while pre_apply_snapshot is written to a
+            # detached old dict. That produced live
+            # applying_result_without_snapshot invariant errors.
+            pre_apply_snapshot = _snapshot_parse_state(session)
+            pending = session.pending_generated_result
             pending["phase"] = RESULT_PHASE_APPLYING
-            pending["pre_apply_snapshot"] = _snapshot_parse_state(session)
+            pending["pre_apply_snapshot"] = pre_apply_snapshot
             pending["transaction_open"] = True
             pending["transaction_started_at"] = time.time()
             pending.setdefault("telegram_effects", [])

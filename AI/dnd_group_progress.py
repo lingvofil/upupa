@@ -72,6 +72,16 @@ def _response_body(response: str) -> str:
     return _ACTION_RE.sub("", str(response or ""), count=1).strip()
 
 
+def _group_action_count(source_prompt: str) -> int:
+    block = _group_action_block(source_prompt)
+    return sum(1 for line in block.splitlines() if line.lstrip().startswith("- "))
+
+
+def _minimum_resolution_words(source_prompt: str) -> int:
+    count = max(1, _group_action_count(source_prompt))
+    return min(100, 24 + 18 * count)
+
+
 def _group_action_block(source_prompt: str) -> str:
     text = str(source_prompt or "")
     marker = "Игроки заявили действия одновременно:\n"
@@ -123,10 +133,17 @@ def group_resolution_was_noop(source_prompt: str, response: str) -> bool:
     if not normalized:
         return True
 
-    # Short acknowledgement-only prose is exactly the failure seen in live
-    # parties: the model repeats that heroes are looking/thinking/trying and
-    # immediately asks for another group turn without resolving anything.
-    return len(normalized) < 180 and bool(
+    words = re.findall(r"\b[\wЁёА-Яа-я-]+\b", normalized)
+    minimum_words = _minimum_resolution_words(source_prompt)
+
+    # A multi-actor group resolution that immediately returns INPUT with only a
+    # handful of words cannot have shown concrete consequences for everyone.
+    # This catches the live failure mode:
+    # "Детектор рвёт когти..., Чудо за ним... Не тормозите" -> next group turn.
+    if len(words) < minimum_words:
+        return True
+
+    return len(normalized) < 220 and bool(
         _ACK_ONLY_RE.search(normalized) or _DEFER_RE.search(normalized)
     )
 
@@ -139,8 +156,6 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
     source_prompt = str(pending.get("source_prompt") or "")
     if inspection_was_deferred(source_prompt, response):
         return "inspection-without-feedback"
-    if group_resolution_was_noop(source_prompt, response):
-        return "group-action-without-consequence"
 
     _ensure(session)
     if (
@@ -148,6 +163,9 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
         and _is_untargeted_group_input(response)
     ):
         return "third-consecutive-group-input"
+
+    if group_resolution_was_noop(source_prompt, response):
+        return "group-action-without-consequence"
     return None
 
 
@@ -247,6 +265,7 @@ def install_dnd_group_progress(dnd, *, state_policy=None) -> None:
 
 __all__ = [
     "GROUP_PROGRESS_RULES",
+    "_minimum_resolution_words",
     "group_resolution_was_noop",
     "inspection_was_deferred",
     "progress_correction_reason",
