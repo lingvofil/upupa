@@ -69,6 +69,8 @@
 | `dnd_world_memory` | `world_callback_candidate`, `world_inherited_npc_keys`, `world_callback_used` | canonical/runtime cross-campaign memory |
 | `dnd_spotlight` | `spotlight_order`, `spotlight_cursor`, `spotlight_individual_streak`, `spotlight_decisions_since_poll`, `spotlight_last_player` | runtime pacing |
 | `dnd_result_recovery` | `pending_generation_request`, `pending_generated_result`, `generated_result_seq` | runtime durable outbox |
+| `dnd_event_journal` | `campaign_id`, `state_revision` | canonical identity/version metadata |
+| `dnd_event_journal` | `event_journal` | bounded diagnostic/replay journal derived from canonical state changes |
 
 ## Derived state that must not become a second truth
 
@@ -98,6 +100,19 @@
 - HP/max HP/status are mutually consistent;
 - a unique artifact is not owned by multiple heroes or stacked;
 - durable generation request and durable generated result are not active simultaneously;
-- an APPLYING generated result has a pre-apply snapshot.
+- an APPLYING generated result has a pre-apply snapshot;
+- campaign/event identity is consistent: event IDs are unique, revisions are ordered and no event belongs to another campaign or a future revision.
 
 На этом этапе нарушение логируется, но не чинится автоматически. Это намеренно: сначала собираем реальные нарушения на существующих партиях, затем для каждого класса выбираем безопасную recovery-policy вместо скрытого удаления данных.
+
+
+## Stage 3: revision/event journal boundaries
+
+`AI/dnd_event_journal.py` observes canonical state only at the durable persist boundary.
+
+- The first persist after installation establishes a baseline and does **not** invent history for older changes.
+- Any later canonical delta increments `state_revision` exactly once for that persisted snapshot.
+- Multiple changes in one snapshot share the same revision and receive ordered `sequence` values.
+- The journal currently records positions, inventory add/remove/transfer, player/enemy HP and status, NPC memory, conditions, reputations, threat and scene clocks.
+- `event_journal` stores only the latest 200 events. Dropping old journal entries never changes canonical game state.
+- Narrative text, prompt context and Telegram runtime fields are deliberately excluded from revision changes.
