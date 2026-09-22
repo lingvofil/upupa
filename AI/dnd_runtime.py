@@ -124,7 +124,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # capture generate_session_response, so every later DnD layer inherits it.
     install_dnd_adjudication(dnd, campaign)
     configure_dnd_generation_resilience(dnd)
-    install_dnd_group_action_resilience(dnd)
+    install_dnd_group_action_resilience(
+        dnd,
+        state_policy=campaign_state_policy,
+    )
     install_dnd_current_turn_priority(dnd, campaign_marker=campaign.MARKER)
     completion_policy = completion.DndCompletionPolicy()
     completion.configure_dnd_completion(router, policy=completion_policy)
