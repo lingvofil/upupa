@@ -295,6 +295,19 @@ def build_legacy_archive_canon(row: dict, chat: dict) -> dict:
             "max": _safe_int(threat.get("max"), 0),
         }
 
+    raw_clocks = row.get("scene_clocks") or {}
+    clocks = []
+    if isinstance(raw_clocks, dict):
+        for key, raw in raw_clocks.items():
+            clock = _clock_snapshot(raw, key)
+            if clock:
+                clocks.append(clock)
+    elif isinstance(raw_clocks, list):
+        for raw in raw_clocks:
+            clock = _clock_snapshot(raw)
+            if clock:
+                clocks.append(clock)
+
     return {
         "version": 0,
         "legacy": True,
@@ -303,7 +316,7 @@ def build_legacy_archive_canon(row: dict, chat: dict) -> dict:
         "plot": _clean(row.get("selected_plot"), 220) or None,
         "heroes": heroes,
         "npcs": npcs[-MAX_NPCS:],
-        "clocks": copy.deepcopy(row.get("scene_clocks") or []),
+        "clocks": clocks,
         "threat": threat_row,
     }
 
