@@ -152,4 +152,14 @@ During durable result apply, `transaction_open=true` pins the event-journal base
 `tests/test_dnd_memory_v2_regressions.py` is the cross-layer acceptance barrier for Memory v2. It deliberately combines state, journal, bounded context, durable recovery and lobby/group mechanics instead of testing each module only in isolation.
 
 The suite covers the historical failure classes recorded in the Memory v2 plan: long-lived positions, complete group turns, inventory transfer persistence, safe character rebuild, HP/death authority, NPC obligations across restore, all runtime restart phases, dual-provider outage recovery without replaying already committed player effects, and rejection of results from an older campaign identity.
-\n## Stage 7: SESSION CANON\n\n`AI/dnd_session_canon.py` adds a deterministic session-level canon view after Memory v2.\n\n- `днд канон` shows the active campaign when one exists, otherwise the latest completed campaign.\n- The view is built from structured state only: hero HP/status/position/inventory/reputation, structured NPC memory and unresolved obligations, scene clocks and threat.\n- `conversation`, old narrative prose, backstory and planned material are never promoted into SESSION CANON.\n- On completion, the final structured snapshot is stored as `session_canon` inside the campaign archive.\n- Older archived campaigns remain readable through a conservative legacy adapter that only renders fields actually present in the old archive.\n- Quest/thread canon is intentionally deferred until quests/threads become first-class structured entities.\n
+
+## Stage 7: SESSION CANON
+
+`AI/dnd_session_canon.py` adds a deterministic session-level canon view after Memory v2.
+
+- `днд канон` shows the active campaign when one exists, otherwise the latest completed campaign.
+- The view is built from structured state only: hero HP/status/position/inventory/reputation, structured NPC memory and unresolved obligations, scene clocks and threat.
+- `conversation`, old narrative prose, backstory and planned material are never promoted into SESSION CANON.
+- On completion, the final structured snapshot is stored as `session_canon` inside the campaign archive.
+- Older archived campaigns remain readable through a conservative legacy adapter that only renders fields actually present in the old archive.
+- Quest/thread canon is intentionally deferred until quests/threads become first-class structured entities.
