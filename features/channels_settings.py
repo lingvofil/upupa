@@ -60,7 +60,7 @@ def _telegram_preview_url(url):
         return None
 
     parts = [part for part in parsed.path.split("/") if part]
-    if len(parts) < 2 || parts[0] != "channel":
+    if len(parts) < 2 or parts[0] != "channel":
         return None
 
     username = parts[1].lstrip("@")
