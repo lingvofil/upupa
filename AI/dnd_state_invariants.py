@@ -358,6 +358,72 @@ def _validate_generation_recovery(session, issues) -> None:
             )
 
 
+def _validate_turn_transaction_identity(session, issues) -> None:
+    campaign_id = str(getattr(session, "campaign_id", "") or "").strip()
+    revision = _int_value(getattr(session, "state_revision", 0))
+    revision = revision if revision is not None else 0
+
+    request = getattr(session, "pending_generation_request", None)
+    if isinstance(request, dict) and request:
+        source_campaign = str(request.get("source_campaign_id") or "").strip()
+        source_revision = _int_value(request.get("source_revision"))
+        if source_campaign and campaign_id and source_campaign != campaign_id:
+            issues.append(
+                DndStateIssue(
+                    "generation_request_campaign_mismatch",
+                    f"request campaign={source_campaign!r}, current={campaign_id!r}",
+                )
+            )
+        if source_revision is not None and source_revision != revision:
+            issues.append(
+                DndStateIssue(
+                    "generation_request_revision_mismatch",
+                    f"request revision={source_revision}, current={revision}",
+                )
+            )
+
+    result = getattr(session, "pending_generated_result", None)
+    if not isinstance(result, dict) or not result:
+        return
+
+    source_campaign = str(result.get("source_campaign_id") or "").strip()
+    source_revision = _int_value(result.get("source_revision"))
+    phase = str(result.get("phase") or "READY").upper()
+    if source_campaign and campaign_id and source_campaign != campaign_id:
+        issues.append(
+            DndStateIssue(
+                "generated_result_campaign_mismatch",
+                f"result campaign={source_campaign!r}, current={campaign_id!r}",
+            )
+        )
+    if source_revision is not None:
+        allowed = {source_revision}
+        if phase == "APPLYING":
+            allowed.add(source_revision + 1)
+        if revision not in allowed:
+            issues.append(
+                DndStateIssue(
+                    "generated_result_revision_mismatch",
+                    f"result revision={source_revision}, current={revision}, phase={phase}",
+                )
+            )
+
+    if result.get("transaction_open") and phase != "APPLYING":
+        issues.append(
+            DndStateIssue(
+                "turn_transaction_phase_mismatch",
+                f"transaction_open with phase={phase}",
+            )
+        )
+    if result.get("transaction_open") and not isinstance(result.get("pre_apply_snapshot"), dict):
+        issues.append(
+            DndStateIssue(
+                "turn_transaction_without_snapshot",
+                "open turn transaction has no pre_apply_snapshot",
+            )
+        )
+
+
 def _validate_event_journal(session, issues) -> None:
     campaign_id = str(getattr(session, "campaign_id", "") or "").strip()
     revision = _int_value(getattr(session, "state_revision", 0))
@@ -464,6 +530,7 @@ def validate_session_state(session) -> list[DndStateIssue]:
     _validate_player_scoped_state(session, issues)
     _validate_inventory(session, issues)
     _validate_generation_recovery(session, issues)
+    _validate_turn_transaction_identity(session, issues)
     _validate_event_journal(session, issues)
     return issues
 
