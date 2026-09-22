@@ -70,3 +70,35 @@ def test_description_prompt_requires_characteristic_for_every_new_item():
     assert "не оставляй новый предмет только с name/kind" in rules
     assert "обязательно" in rules
     assert "effect не обязан быть механическим бонусом" in rules
+
+
+def test_existing_numeric_item_bonuses_are_visible_in_description():
+    stack = {
+        "name": "ложка",
+        "kind": "item",
+        "quantity": 5,
+        "bonus_per_unit": 1,
+        "trait": "прожорливости",
+    }
+    artifact = {
+        "name": "Сапоги крысиных тоннелей",
+        "kind": "artifact",
+        "quantity": 1,
+        "effect": "сами находят устойчивую опору",
+        "stat": "DEX",
+        "stat_bonus": 2,
+    }
+
+    assert "+5 к прожорливости" in format_inventory_entry(stack)
+    rendered = format_inventory_entry(artifact)
+    assert "сами находят устойчивую опору" in rendered
+    assert "+2 к Ловкость" in rendered
+
+
+def test_description_rules_require_numeric_bonus_visibility_for_old_and_new_items():
+    rules = INVENTORY_DESCRIPTION_RULES.casefold()
+
+    assert "явный числовой бонус" in rules
+    assert "герой" in rules
+    assert "инвентарь" in rules
+    assert "старые уже сохранённые вещи" in rules
