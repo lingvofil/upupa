@@ -69,6 +69,8 @@
 | `dnd_world_memory` | `world_callback_candidate`, `world_inherited_npc_keys`, `world_callback_used` | canonical/runtime cross-campaign memory |
 | `dnd_spotlight` | `spotlight_order`, `spotlight_cursor`, `spotlight_individual_streak`, `spotlight_decisions_since_poll`, `spotlight_last_player` | runtime pacing |
 | `dnd_result_recovery` | `pending_generation_request`, `pending_generated_result`, `generated_result_seq` | runtime durable outbox |
+| `dnd_event_journal` | `campaign_id`, `state_revision` | canonical identity/version metadata |
+| `dnd_event_journal` | `event_journal` | bounded diagnostic/replay journal derived from canonical state changes |
 
 ## Derived state that must not become a second truth
 
@@ -98,6 +100,55 @@
 - HP/max HP/status are mutually consistent;
 - a unique artifact is not owned by multiple heroes or stacked;
 - durable generation request and durable generated result are not active simultaneously;
-- an APPLYING generated result has a pre-apply snapshot.
+- an APPLYING generated result has a pre-apply snapshot;
+- campaign/event identity is consistent: event IDs are unique, revisions are ordered and no event belongs to another campaign or a future revision.
 
 На этом этапе нарушение логируется, но не чинится автоматически. Это намеренно: сначала собираем реальные нарушения на существующих партиях, затем для каждого класса выбираем безопасную recovery-policy вместо скрытого удаления данных.
+
+
+## Stage 3: revision/event journal boundaries
+
+`AI/dnd_event_journal.py` observes canonical state only at the durable persist boundary.
+
+- The first persist after installation establishes a baseline and does **not** invent history for older changes.
+- Any later canonical delta increments `state_revision` exactly once for that persisted snapshot.
+- Multiple changes in one snapshot share the same revision and receive ordered `sequence` values.
+- The journal records positions, inventory add/remove/transfer, player/enemy HP and status, NPC memory, conditions, reputations, threat and scene clocks. It also emits `CANONICAL_FIELDS_CHANGED` for remaining canonical resources/identity such as profiles, heritage, scene counter, healing charges, special-move/luck/growth resources and world-memory flags, so `state_revision` tracks canonical changes even when there is no dedicated event type yet.
+- `event_journal` stores only the latest 200 events. Dropping old journal entries never changes canonical game state.
+- Narrative text, prompt context and Telegram runtime fields are deliberately excluded from revision changes.
+
+
+## Stage 4: bounded provider context
+
+`AI/dnd_context_builder.py` rebuilds the current model memory from structured state on every main generation.
+
+Priority order:
+
+1. authoritative current hero state: positions, HP/status, conditions, inventory and compact progression/resources;
+2. active enemies and scene clocks/threat;
+3. relevant NPC memory and open obligations;
+4. latest structured `event_journal` entries;
+5. only the latest three narrative scenes for literary continuity;
+6. a small tail of legacy dynamic mechanics context for compatibility.
+
+The resulting Memory v2 block is capped at 6000 characters. Durable `conversation` remains stored as an audit/recovery transcript, but provider calls are always windowed: system contract + a few latest exchanges + the current request. This applies to the resilient Gemini→Groq path and to direct GigaChat/Groq sessions. Old narrative history is therefore no longer a second implicit source of world truth.
+
+## Stage 5: revision-bound durable turn transaction
+
+`AI/dnd_result_recovery.py` now binds every new durable generation request/result to the canonical state it was created from.
+
+- `pending_generation_request` stores `source_campaign_id` and `source_revision`.
+- If canonical state is already dirty before request reservation, `source_revision` uses the prospective revision that the immediately following persist will commit.
+- `pending_generated_result` inherits the same identity and carries the original `conversation_size` for stale-history rewind.
+- Identity is checked before a retry/provider call, after provider completion, before parse, and again during restart recovery.
+- A READY result must match its source revision exactly.
+- An APPLYING result may also observe `source_revision + 1` only for the narrow crash window where the final canonical commit succeeded but the durable outbox had not yet been cleared.
+- A stale request/result is discarded without parsing; any stale provider exchange is rewound out of durable narrative history when possible.
+
+During durable result apply, `transaction_open=true` pins the event-journal baseline. Intermediate persists used for Telegram idempotency and crash recovery therefore do not create multiple canonical revisions. Once parse completes, the transaction is closed and the next persist creates the single canonical revision for the logical turn. Explicit successor requests created inside a turn target the prospective parent revision before that parent commit is persisted.
+
+## Stage 6: historical regression barrier
+
+`tests/test_dnd_memory_v2_regressions.py` is the cross-layer acceptance barrier for Memory v2. It deliberately combines state, journal, bounded context, durable recovery and lobby/group mechanics instead of testing each module only in isolation.
+
+The suite covers the historical failure classes recorded in the Memory v2 plan: long-lived positions, complete group turns, inventory transfer persistence, safe character rebuild, HP/death authority, NPC obligations across restore, all runtime restart phases, dual-provider outage recovery without replaying already committed player effects, and rejection of results from an older campaign identity.

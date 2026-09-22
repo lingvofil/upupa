@@ -243,17 +243,15 @@ class GameSession:
             response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "gigachat":
-            history = self.conversation + [{"role": "user", "content": message_text}]
-            full_prompt = "\n".join(
-                f"{item['role']}: {item['content']}" for item in history
-            )
+            from AI.dnd_generation_resilience import build_bounded_text_prompt
+
+            full_prompt = build_bounded_text_prompt(self, message_text)
             response = gigachat_model.generate_content(full_prompt, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "groq":
-            history = self.conversation + [{"role": "user", "content": message_text}]
-            full_prompt = "\n".join(
-                f"{item['role']}: {item['content']}" for item in history
-            )
+            from AI.dnd_generation_resilience import build_bounded_text_prompt
+
+            full_prompt = build_bounded_text_prompt(self, message_text)
             result = groq_ai.generate_text(full_prompt, max_tokens=512)
         else:
             raise RuntimeError(f"Unsupported DnD model: {self.active_model}")
@@ -390,6 +388,20 @@ def _state_path() -> Path:
     return Path(DND_STATE_PATH)
 
 
+_persist_hooks: list[Callable] = []
+
+
+def register_persist_hook(hook: Callable) -> None:
+    """Register deterministic bookkeeping that must run before a DnD snapshot is written."""
+    if hook not in _persist_hooks:
+        _persist_hooks.append(hook)
+
+
+def _run_persist_hooks(session) -> None:
+    for hook in list(_persist_hooks):
+        hook(session)
+
+
 def _validate_dnd_session_state(session, *, boundary: str):
     from AI.dnd_state_invariants import validate_and_log_session_state
 
@@ -400,6 +412,7 @@ def persist_dnd_sessions() -> None:
     path = _state_path()
     sessions = list(dnd_sessions.values())
     for session in sessions:
+        _run_persist_hooks(session)
         _validate_dnd_session_state(session, boundary="persist")
     payload = {
         "version": 1,

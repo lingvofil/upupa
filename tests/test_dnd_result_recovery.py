@@ -7,6 +7,7 @@ import pytest
 from AI import dnd_campaign as campaign
 from AI import dnd_result_recovery as recovery
 from AI import dnd_target_mentions as target_mentions
+from AI.dnd_event_journal import prepare_session_events
 
 
 class FakeStatePolicy:
@@ -28,7 +29,11 @@ class FakeStatePolicy:
         return self
 
     def state(self, session):
-        row = {"campaign_marker": getattr(session, "campaign_marker", "before")}
+        row = {
+            "campaign_marker": getattr(session, "campaign_marker", "before"),
+            "campaign_id": getattr(session, "campaign_id", None),
+            "state_revision": getattr(session, "state_revision", 0),
+        }
         for name, provider in self.fields.items():
             row[name] = copy.deepcopy(provider(session))
         return row
@@ -36,6 +41,8 @@ class FakeStatePolicy:
     def restore(self, session, data):
         row = data if isinstance(data, dict) else {}
         session.campaign_marker = row.get("campaign_marker", "before")
+        session.campaign_id = row.get("campaign_id")
+        session.state_revision = int(row.get("state_revision", 0) or 0)
         for hook in self.restore_hooks:
             hook(session, row)
 
@@ -60,6 +67,8 @@ class FakeSession:
         self.pending_generated_result = {}
         self.generated_result_seq = 0
         self.campaign_marker = "before"
+        self.campaign_id = f"campaign-{abs(int(chat_id))}"
+        self.state_revision = 0
 
     def to_record(self):
         return {
@@ -805,3 +814,254 @@ def test_restore_schedules_every_durable_generation_kind(kind):
     coro, name = scheduled.pop()
     assert name == f"dnd-generation-retry:{session.chat_id}:gen:matrix:{kind}"
     coro.close()
+
+
+def test_late_provider_response_is_discarded_when_revision_advanced():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1040)
+    session.state_revision = 3
+    calls = {"generate": 0, "persist": 0}
+
+    async def generate(_session, _prompt):
+        calls["generate"] += 1
+        # Simulate a concurrent canonical commit while the provider is running.
+        session.state_revision = 4
+        return "устаревшая сцена [ACTION:INPUT]"
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: calls.__setitem__("persist", calls["persist"] + 1),
+        generate_session_response=generate,
+        parse_and_execute_turn=lambda *_args, **_kwargs: None,
+        open_action_window=lambda *_args, **_kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *_args, **_kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    with pytest.raises(recovery.StaleDndSessionError, match="revision changed"):
+        asyncio.run(dnd.generate_session_response(session, "ход из revision 3"))
+
+    assert calls["generate"] == 1
+    assert session.pending_generation_request == {}
+    assert session.pending_generated_result == {}
+
+
+def test_stale_generation_retry_is_cancelled_before_provider_call():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state_revision = 6
+    session.pending_generation_request = {
+        "id": "gen:stale",
+        "prompt": "старое продолжение",
+        "source_campaign_id": session.campaign_id,
+        "source_revision": 5,
+        "telegram_effects": [],
+    }
+
+    retried = asyncio.run(recovery._resume_pending_generation(dnd, None, session))
+
+    assert retried is False
+    assert calls["generate"] == 0
+    assert session.pending_generation_request == {}
+
+
+def test_ready_result_is_rejected_after_revision_drift():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state_revision = 2
+    session.pending_generated_result = {
+        "id": "9:stale",
+        "text": "устаревший ответ",
+        "phase": recovery.RESULT_PHASE_READY,
+        "source_campaign_id": session.campaign_id,
+        "source_revision": 1,
+        "telegram_effects": [],
+    }
+
+    with pytest.raises(recovery.StaleDndSessionError, match="stale before apply"):
+        asyncio.run(
+            dnd.parse_and_execute_turn(
+                None,
+                session.chat_id,
+                "устаревший ответ",
+            )
+        )
+
+    assert calls["parse"] == 0
+    assert session.pending_generated_result == {}
+
+
+def test_applying_result_accepts_commit_crash_window_and_replays_from_snapshot():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    session.state_revision = 4
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+    assert session.pending_generated_result["source_revision"] == 4
+
+    session.pending_generated_result["phase"] = recovery.RESULT_PHASE_APPLYING
+    session.pending_generated_result["pre_apply_snapshot"] = recovery._snapshot_parse_state(session)
+    session.pending_generated_result["transaction_open"] = False
+    # Simulate: final canonical commit reached disk, but outbox clear did not.
+    session.state_revision = 5
+
+    asyncio.run(recovery._resume_pending_result(dnd, None, session, policy))
+
+    assert calls["parse"] == 1
+    assert session.state_revision == 4
+    assert session.pending_generated_result == {}
+    assert response == "готовая сцена [ACTION:INPUT]"
+
+
+def test_successful_durable_parse_commits_intermediate_canonical_changes_once():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1041)
+    session.campaign_started_at = "2026-09-22T20:00:00+00:00"
+    session.event_journal = []
+    session.player_positions = {
+        "1": {"location": "двор", "detail": ""},
+    }
+    session.inventories = {"1": []}
+    session.character_sheets = {
+        "1": {"hp": 10, "max_hp": 10, "status": "alive"},
+    }
+    session.enemy_combatants = {}
+    session.npc_memory = {}
+    session.conditions = {}
+    session.reputations = {}
+    session.threat = {"name": "Шум", "level": 0, "max": 6}
+    session.scene_clocks = {}
+    prepare_session_events(session)
+
+    calls = {"persist": 0, "parse": 0}
+    dnd = None
+
+    async def generate(_session, _prompt):
+        return "единый ход [ACTION:INPUT]"
+
+    async def parse(_bot, _chat_id, _text):
+        calls["parse"] += 1
+        session.player_positions["1"] = {
+            "location": "банка",
+            "detail": "сидит внутри",
+        }
+        dnd.persist_dnd_sessions()
+        session.character_sheets["1"]["hp"] = 3
+        dnd.persist_dnd_sessions()
+        session.state = "WAITING_ACTION"
+
+    def persist():
+        calls["persist"] += 1
+        prepare_session_events(session)
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=persist,
+        generate_session_response=generate,
+        parse_and_execute_turn=parse,
+        open_action_window=lambda *_args, **_kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *_args, **_kwargs: None,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    response = asyncio.run(dnd.generate_session_response(session, "ход"))
+    asyncio.run(dnd.parse_and_execute_turn(None, session.chat_id, response))
+
+    assert calls["parse"] == 1
+    assert session.state_revision == 1
+    assert [event["type"] for event in session.event_journal] == [
+        "PLAYER_POSITION_CHANGED",
+        "PLAYER_HP_CHANGED",
+    ]
+    assert {event["revision"] for event in session.event_journal} == {1}
+    assert session.pending_generated_result == {}
+
+
+def test_successor_request_targets_revision_created_by_parent_transaction():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1042)
+    session.campaign_started_at = "2026-09-22T20:00:00+00:00"
+    session.event_journal = []
+    session.player_positions = {}
+    session.inventories = {"1": []}
+    session.character_sheets = {
+        "1": {"hp": 10, "max_hp": 10, "status": "alive"},
+    }
+    session.enemy_combatants = {}
+    session.npc_memory = {}
+    session.conditions = {}
+    session.reputations = {}
+    session.threat = {"name": "Шум", "level": 0, "max": 6}
+    session.scene_clocks = {}
+    prepare_session_events(session)
+
+    session.pending_generated_result = {
+        "id": "11:parent",
+        "text": "родитель",
+        "phase": recovery.RESULT_PHASE_APPLYING,
+        "transaction_open": True,
+        "source_campaign_id": session.campaign_id,
+        "source_revision": 0,
+        "telegram_effects": [],
+    }
+    session.character_sheets["1"]["hp"] = 5
+
+    changed = recovery.transition_to_generation_request(
+        session,
+        "дочернее продолжение",
+        kind="ENEMY_ATTACK_CONTINUATION",
+    )
+
+    assert changed is True
+    assert session.pending_generation_request["source_revision"] == 1
+    prepare_session_events(session)
+    assert session.state_revision == 1
+
+
+def test_stale_provider_exchange_is_rewound_from_durable_conversation():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1043)
+    session.state_revision = 1
+    session.conversation = [
+        {"role": "user", "content": "system"},
+        {"role": "assistant", "content": "Погнали."},
+    ]
+    original = copy.deepcopy(session.conversation)
+
+    async def generate(_session, prompt):
+        session.conversation.append({"role": "user", "content": prompt})
+        session.conversation.append({"role": "assistant", "content": "устаревший ответ"})
+        session.state_revision = 2
+        return "устаревший ответ"
+
+    def rewind(current, size):
+        if len(current.conversation) <= int(size):
+            return False
+        del current.conversation[int(size):]
+        return True
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: None,
+        generate_session_response=generate,
+        parse_and_execute_turn=lambda *_args, **_kwargs: None,
+        open_action_window=lambda *_args, **_kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *_args, **_kwargs: None,
+        _rewind_session_conversation=rewind,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    with pytest.raises(recovery.StaleDndSessionError):
+        asyncio.run(dnd.generate_session_response(session, "ход"))
+
+    assert session.conversation == original
+    assert session.pending_generation_request == {}
+    assert session.pending_generated_result == {}

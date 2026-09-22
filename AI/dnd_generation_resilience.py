@@ -44,6 +44,7 @@ DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
 # normal fallback comfortably below that ceiling and retry once even smaller.
 DND_FALLBACK_PROMPT_MAX_CHARS = 12_000
 DND_FALLBACK_RETRY_PROMPT_MAX_CHARS = 7_000
+DND_FALLBACK_RECENT_MESSAGES = 4
 DND_GROQ_FALLBACK_MAX_TOKENS = 900
 DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 700
 DND_GROQ_FALLBACK_TEMPERATURE = 0.55
@@ -53,6 +54,11 @@ DND_FALLBACK_CONTINUITY_GUARD = (
     "Не вводи нового врага, локацию, катастрофу или сюжетную ветку только ради разнообразия "
     "или указания РЕЖИССЁР СЦЕНЫ. РЕЖИССЁР СЦЕНЫ задаёт подачу, а не заменяет причинность. "
     "Не игнорируй действия игроков даже если часть старой истории сокращена."
+)
+DND_DIRECT_CONTINUITY_GUARD = (
+    "DND MEMORY V2. CURRENT REQUEST содержит актуальный structured state и важнее старой истории. "
+    "Используй несколько последних реплик только для литературной связности; не отменяй ими "
+    "подтверждённые позиции, HP, предметы, состояния и последствия."
 )
 
 
@@ -211,11 +217,11 @@ def _groq_retry_after_seconds(error: Exception) -> float | None:
 
 
 def _history_contents(session, prompt: str):
-    """Build Gemini contents with a bounded provider-side history window.
+    """Build Gemini contents from system + a tiny recent window + current state.
 
-    The durable session conversation is intentionally left untouched. Long-term
-    DnD state is supplied separately by campaign context, so the provider only
-    needs the system contract, the most recent exchanges and the current request.
+    Durable conversation remains a full audit trail, but provider continuity is
+    intentionally bounded on every request. Long-term truth is rebuilt into the
+    current request by the Memory v2 context builder.
     """
     rows = []
     for item in getattr(session, "conversation", None) or []:
@@ -227,13 +233,6 @@ def _history_contents(session, prompt: str):
 
     current = str(prompt)
     total_chars = sum(len(text) for _role, text in rows) + len(current)
-    if total_chars <= DND_GEMINI_INPUT_MAX_CHARS:
-        contents = [
-            {"role": role, "parts": [{"text": text}]}
-            for role, text in rows
-        ]
-        contents.append({"role": "user", "parts": [{"text": current}]})
-        return contents
 
     def clip_middle(text: str, budget: int) -> str:
         value = str(text or "")
@@ -262,11 +261,11 @@ def _history_contents(session, prompt: str):
         if len(prefix) > 1:
             compact_rows.append((prefix[1][0], opening[:256]))
 
-    recent = rows[2:]
-    recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent))
+    recent_source = rows[2:]
+    recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent_source))
     if recent_count % 2:
         recent_count -= 1
-    recent = recent[-recent_count:] if recent_count else []
+    recent = recent_source[-recent_count:] if recent_count else []
     if recent:
         per_message_budget = max(
             1,
@@ -290,15 +289,16 @@ def _history_contents(session, prompt: str):
         for item in contents
         for part in item.get("parts") or []
     )
-    logging.info(
-        "DnD Gemini history compacted chat_id=%s original_chars=%s sent_chars=%s "
-        "original_messages=%s sent_messages=%s",
-        getattr(session, "chat_id", None),
-        total_chars,
-        sent_chars,
-        len(rows) + 1,
-        len(contents),
-    )
+    if len(recent_source) > len(recent) or total_chars > sent_chars:
+        logging.info(
+            "DnD Gemini history bounded chat_id=%s original_chars=%s sent_chars=%s "
+            "original_messages=%s sent_messages=%s",
+            getattr(session, "chat_id", None),
+            total_chars,
+            sent_chars,
+            len(rows) + 1,
+            len(contents),
+        )
     return contents
 
 
@@ -399,7 +399,13 @@ def _bounded_head_tail(
     return value[:head_size] + marker + value[-tail_size:]
 
 
-def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS) -> str:
+def _fallback_prompt(
+    session,
+    prompt: str,
+    *,
+    max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
+    continuity_guard: str = DND_FALLBACK_CONTINUITY_GUARD,
+) -> str:
     rows = []
     for item in getattr(session, "conversation", None) or []:
         if not isinstance(item, dict) or item.get("content") is None:
@@ -408,36 +414,54 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
         rows.append(f"{role}: {item['content']}")
 
     current = str(prompt or "")
-    full_rows = [DND_FALLBACK_CONTINUITY_GUARD, *rows, f"user: {current}"]
-    full = "\n\n".join(full_rows)
-    if len(full) <= max_chars:
-        return full
-
     system = rows[0] if rows else ""
-    recent_history = "\n\n".join(rows[1:]) if len(rows) > 1 else ""
+    opening = rows[1:2]
+    recent_source = rows[2:]
+    recent = recent_source[-DND_FALLBACK_RECENT_MESSAGES:]
+    history_rows = [*opening]
+    if len(recent_source) > len(recent):
+        history_rows.append(
+            "[...ранняя история опущена; долгосрочные факты бери из MEMORY V2 в CURRENT REQUEST...]"
+        )
+    history_rows.extend(recent)
+    recent_history = "\n\n".join(history_rows)
+
     labels = (
         "SYSTEM EXCERPT:\n",
         "RECENT HISTORY:\n",
         "CURRENT REQUEST:\n",
     )
+    full = "\n\n".join(
+        (
+            continuity_guard,
+            labels[0] + system,
+            labels[1] + recent_history,
+            labels[2] + current,
+        )
+    )
+    if len(full) <= max_chars:
+        return full
+
     separator = "\n\n"
     fixed = (
-        len(DND_FALLBACK_CONTINUITY_GUARD)
+        len(continuity_guard)
         + sum(len(label) for label in labels)
         + 3 * len(separator)
     )
     available = max(0, int(max_chars) - fixed)
     if available < 64:
         emergency = (
-            DND_FALLBACK_CONTINUITY_GUARD
+            continuity_guard
             + separator
             + labels[2]
             + current
         )
         return _bounded_head_tail(emergency, max_chars, head_ratio=0.35)
 
-    current_budget = int(available * 0.55)
-    history_budget = int(available * 0.25)
+    # CURRENT REQUEST carries the Memory v2 authoritative state, so preserve it
+    # ahead of old narrative history when the fallback prompt must be compressed.
+    current_budget = int(available * 0.65)
+    history_budget = int(available * 0.15)
     system_budget = available - current_budget - history_budget
 
     system_excerpt = _bounded_head_tail(system, system_budget, head_ratio=0.55)
@@ -446,13 +470,28 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
 
     compact = separator.join(
         (
-            DND_FALLBACK_CONTINUITY_GUARD,
+            continuity_guard,
             labels[0] + system_excerpt,
             labels[1] + history_excerpt,
             labels[2] + current_excerpt,
         )
     )
     return compact[:max_chars]
+
+
+def build_bounded_text_prompt(
+    session,
+    prompt: str,
+    *,
+    max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
+) -> str:
+    """Public bounded text prompt for non-Gemini DnD provider paths."""
+    return _fallback_prompt(
+        session,
+        prompt,
+        max_chars=max_chars,
+        continuity_guard=DND_DIRECT_CONTINUITY_GUARD,
+    )
 
 
 def _run_groq_sync(
@@ -620,6 +659,7 @@ def configure_dnd_generation_resilience(dnd) -> None:
 
 __all__ = [
     "DndGeminiCircuitOpen",
+    "build_bounded_text_prompt",
     "configure_dnd_generation_resilience",
     "generate_auxiliary_text",
 ]

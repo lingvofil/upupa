@@ -311,6 +311,68 @@ def test_gemini_history_is_bounded_without_mutating_durable_conversation():
     assert session.conversation == before
 
 
+
+
+def test_short_but_long_lived_gemini_history_is_always_windowed():
+    session = _session()
+    for index in range(8):
+        session.conversation.extend(
+            [
+                {"role": "user", "content": f"USER_{index}"},
+                {"role": "assistant", "content": f"ASSISTANT_{index}"},
+            ]
+        )
+
+    contents = resilience._history_contents(session, "CURRENT_MEMORY_V2")
+
+    sent = [
+        part["text"]
+        for item in contents
+        for part in item.get("parts") or []
+    ]
+    assert "USER_0" not in sent
+    assert "ASSISTANT_0" not in sent
+    assert "USER_7" in sent
+    assert "ASSISTANT_7" in sent
+    assert sent[-1] == "CURRENT_MEMORY_V2"
+    assert len(contents) <= 2 + resilience.DND_GEMINI_RECENT_MESSAGES + 1
+
+
+def test_direct_text_prompt_uses_memory_guard_without_emergency_label():
+    session = _session()
+    prompt = resilience.build_bounded_text_prompt(
+        session,
+        "CURRENT REQUEST WITH MEMORY V2",
+    )
+
+    assert "DND MEMORY V2" in prompt
+    assert "АВАРИЙНЫЙ РЕЖИМ DND" not in prompt
+    assert "CURRENT REQUEST WITH MEMORY V2" in prompt
+
+
+def test_groq_fallback_always_drops_old_turns_even_when_under_char_limit():
+    session = _session()
+    for index in range(8):
+        session.conversation.extend(
+            [
+                {"role": "user", "content": f"USER_{index}"},
+                {"role": "assistant", "content": f"ASSISTANT_{index}"},
+            ]
+        )
+
+    prompt = resilience._fallback_prompt(
+        session,
+        "CURRENT REQUEST WITH MEMORY V2",
+        max_chars=12_000,
+    )
+
+    assert "USER_0" not in prompt
+    assert "ASSISTANT_0" not in prompt
+    assert "USER_7" in prompt
+    assert "ASSISTANT_7" in prompt
+    assert "ранняя история опущена" in prompt
+    assert "CURRENT REQUEST WITH MEMORY V2" in prompt
+
 def test_short_gemini_history_is_preserved_exactly():
     session = _session()
     prompt = "свежий ход"

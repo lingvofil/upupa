@@ -358,6 +358,169 @@ def _validate_generation_recovery(session, issues) -> None:
             )
 
 
+def _validate_turn_transaction_identity(session, issues) -> None:
+    campaign_id = str(getattr(session, "campaign_id", "") or "").strip()
+    revision = _int_value(getattr(session, "state_revision", 0))
+    revision = revision if revision is not None else 0
+
+    request = getattr(session, "pending_generation_request", None)
+    if isinstance(request, dict) and request:
+        source_campaign = str(request.get("source_campaign_id") or "").strip()
+        source_revision = _int_value(request.get("source_revision"))
+        if source_campaign and campaign_id and source_campaign != campaign_id:
+            issues.append(
+                DndStateIssue(
+                    "generation_request_campaign_mismatch",
+                    f"request campaign={source_campaign!r}, current={campaign_id!r}",
+                )
+            )
+        if source_revision is not None and source_revision != revision:
+            issues.append(
+                DndStateIssue(
+                    "generation_request_revision_mismatch",
+                    f"request revision={source_revision}, current={revision}",
+                )
+            )
+
+    result = getattr(session, "pending_generated_result", None)
+    if not isinstance(result, dict) or not result:
+        return
+
+    source_campaign = str(result.get("source_campaign_id") or "").strip()
+    source_revision = _int_value(result.get("source_revision"))
+    phase = str(result.get("phase") or "READY").upper()
+    if source_campaign and campaign_id and source_campaign != campaign_id:
+        issues.append(
+            DndStateIssue(
+                "generated_result_campaign_mismatch",
+                f"result campaign={source_campaign!r}, current={campaign_id!r}",
+            )
+        )
+    if source_revision is not None:
+        allowed = {source_revision}
+        if phase == "APPLYING":
+            allowed.add(source_revision + 1)
+        if revision not in allowed:
+            issues.append(
+                DndStateIssue(
+                    "generated_result_revision_mismatch",
+                    f"result revision={source_revision}, current={revision}, phase={phase}",
+                )
+            )
+
+    if result.get("transaction_open") and phase != "APPLYING":
+        issues.append(
+            DndStateIssue(
+                "turn_transaction_phase_mismatch",
+                f"transaction_open with phase={phase}",
+            )
+        )
+    if result.get("transaction_open") and not isinstance(result.get("pre_apply_snapshot"), dict):
+        issues.append(
+            DndStateIssue(
+                "turn_transaction_without_snapshot",
+                "open turn transaction has no pre_apply_snapshot",
+            )
+        )
+
+
+def _validate_event_journal(session, issues) -> None:
+    campaign_id = str(getattr(session, "campaign_id", "") or "").strip()
+    revision = _int_value(getattr(session, "state_revision", 0))
+    journal = getattr(session, "event_journal", None)
+
+    if not campaign_id:
+        issues.append(DndStateIssue("missing_campaign_id", "campaign_id is empty"))
+    if revision is None or revision < 0:
+        issues.append(
+            DndStateIssue(
+                "invalid_state_revision",
+                f"state_revision={getattr(session, 'state_revision', None)!r}",
+            )
+        )
+        revision = 0
+    if not isinstance(journal, list):
+        issues.append(DndStateIssue("invalid_event_journal", "event_journal is not a list"))
+        return
+    if len(journal) > 200:
+        issues.append(
+            DndStateIssue(
+                "event_journal_unbounded",
+                f"event_journal contains {len(journal)} entries",
+            )
+        )
+
+    seen_ids = set()
+    previous_order = None
+    latest_revision = 0
+    for index, event in enumerate(journal):
+        if not isinstance(event, dict):
+            issues.append(
+                DndStateIssue(
+                    "invalid_event_record",
+                    f"event_journal[{index}] is not a dict",
+                )
+            )
+            continue
+        event_id = str(event.get("event_id") or "")
+        event_campaign = str(event.get("campaign_id") or "")
+        event_revision = _int_value(event.get("revision"))
+        sequence = _int_value(event.get("sequence"))
+
+        if not event_id or event_id in seen_ids:
+            issues.append(
+                DndStateIssue(
+                    "duplicate_or_missing_event_id",
+                    f"event_journal[{index}] event_id={event_id!r}",
+                )
+            )
+        seen_ids.add(event_id)
+
+        if campaign_id and event_campaign != campaign_id:
+            issues.append(
+                DndStateIssue(
+                    "foreign_event_campaign",
+                    f"event {event_id or index} belongs to campaign {event_campaign!r}",
+                )
+            )
+
+        if event_revision is None or event_revision < 1:
+            issues.append(
+                DndStateIssue(
+                    "invalid_event_revision",
+                    f"event {event_id or index} revision={event.get('revision')!r}",
+                )
+            )
+            continue
+        if revision is not None and event_revision > revision:
+            issues.append(
+                DndStateIssue(
+                    "event_ahead_of_state",
+                    f"event {event_id or index} revision={event_revision} > state_revision={revision}",
+                )
+            )
+
+        sequence = sequence if sequence is not None else 0
+        order = (event_revision, sequence)
+        if previous_order is not None and order < previous_order:
+            issues.append(
+                DndStateIssue(
+                    "event_journal_out_of_order",
+                    f"event {event_id or index} order={order} after {previous_order}",
+                )
+            )
+        previous_order = order
+        latest_revision = max(latest_revision, event_revision)
+
+    if journal and revision is not None and latest_revision != revision:
+        issues.append(
+            DndStateIssue(
+                "journal_revision_mismatch",
+                f"latest event revision={latest_revision}, state_revision={revision}",
+            )
+        )
+
+
 def validate_session_state(session) -> list[DndStateIssue]:
     """Return current state contradictions without mutating the session."""
     issues: list[DndStateIssue] = []
@@ -367,6 +530,8 @@ def validate_session_state(session) -> list[DndStateIssue]:
     _validate_player_scoped_state(session, issues)
     _validate_inventory(session, issues)
     _validate_generation_recovery(session, issues)
+    _validate_turn_transaction_identity(session, issues)
+    _validate_event_journal(session, issues)
     return issues
 
 
