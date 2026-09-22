@@ -165,3 +165,55 @@ def test_validator_detects_foreign_or_future_event_journal_entries():
     assert "foreign_event_campaign" in codes
     assert "event_ahead_of_state" in codes
     assert "journal_revision_mismatch" in codes
+
+
+def test_validator_detects_stale_generation_request_revision():
+    session = _session(
+        state="RESOLVING",
+        state_revision=3,
+        pending_generation_request={
+            "id": "gen:stale",
+            "prompt": "старый ход",
+            "source_campaign_id": "campaign-test",
+            "source_revision": 2,
+        },
+    )
+
+    assert "generation_request_revision_mismatch" in _codes(session)
+
+
+def test_validator_accepts_applying_result_in_commit_crash_window():
+    session = _session(
+        state="RESOLVING",
+        state_revision=4,
+        pending_generated_result={
+            "id": "4:apply",
+            "text": "готово",
+            "phase": "APPLYING",
+            "source_campaign_id": "campaign-test",
+            "source_revision": 3,
+            "transaction_open": False,
+            "pre_apply_snapshot": {},
+        },
+    )
+
+    codes = _codes(session)
+
+    assert "generated_result_revision_mismatch" not in codes
+    assert "turn_transaction_phase_mismatch" not in codes
+
+
+def test_validator_requires_snapshot_for_open_turn_transaction():
+    session = _session(
+        state="RESOLVING",
+        pending_generated_result={
+            "id": "1:apply",
+            "text": "готово",
+            "phase": "APPLYING",
+            "source_campaign_id": "campaign-test",
+            "source_revision": 0,
+            "transaction_open": True,
+        },
+    )
+
+    assert "turn_transaction_without_snapshot" in _codes(session)

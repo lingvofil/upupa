@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from AI.dnd_event_journal import (
     EVENT_JOURNAL_LIMIT,
     prepare_session_events,
+    prospective_revision,
 )
 
 
@@ -173,3 +174,80 @@ def test_pre_campaign_bootstrap_changes_do_not_create_world_events():
     assert prepare_session_events(session) == []
     assert session.state_revision == 0
     assert session.event_journal == []
+
+
+def test_open_turn_transaction_batches_intermediate_persists_into_one_revision():
+    session = _session()
+    prepare_session_events(session)
+    session.pending_generated_result = {
+        "id": "1:turn",
+        "text": "сцена",
+        "phase": "APPLYING",
+        "transaction_open": True,
+    }
+
+    session.player_positions["1"] = {
+        "location": "банка",
+        "detail": "сидит внутри",
+    }
+    assert prospective_revision(session) == 1
+    assert prepare_session_events(session) == []
+    assert session.state_revision == 0
+
+    session.character_sheets["1"]["hp"] = 3
+    assert prepare_session_events(session) == []
+    assert session.state_revision == 0
+    assert session.event_journal == []
+
+    session.pending_generated_result["transaction_open"] = False
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == [
+        "PLAYER_POSITION_CHANGED",
+        "PLAYER_HP_CHANGED",
+    ]
+    assert {event["revision"] for event in events} == {1}
+
+
+def test_successor_can_target_prospective_revision_before_parent_commit():
+    session = _session()
+    prepare_session_events(session)
+    session.character_sheets["1"]["hp"] = 6
+
+    assert session.state_revision == 0
+    assert prospective_revision(session) == 1
+
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == ["PLAYER_HP_CHANGED"]
+
+
+def test_revision_advances_for_canonical_resource_change_not_covered_by_named_events():
+    session = _session()
+    session.special_move_charges = {"1": 1}
+    session.scene_count = 3
+    prepare_session_events(session)
+
+    session.special_move_charges["1"] = 0
+
+    assert prospective_revision(session) == 1
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == ["CANONICAL_FIELDS_CHANGED"]
+    assert events[0]["data"]["fields"] == ["special_move_charges"]
+
+
+def test_scene_counter_alone_still_advances_revision():
+    session = _session()
+    session.scene_count = 10
+    prepare_session_events(session)
+
+    session.scene_count = 11
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == ["CANONICAL_FIELDS_CHANGED"]
+    assert events[0]["data"]["fields"] == ["scene_count"]
