@@ -31,8 +31,10 @@ class FakeMessage:
 def test_system_prompt_uses_skill_checks_and_calibrated_dc():
     assert "SKILL:Внимательность" in dnd.DND_SYSTEM_PROMPT
     assert "Расследование" in dnd.DND_SYSTEM_PROMPT
-    assert "TYPE:CHECK — основной тип броска" in dnd.DND_SYSTEM_PROMPT
+    assert "TYPE:CHECK — активная попытка героя" in dnd.DND_SYSTEM_PROMPT
     assert "TYPE:SAVE используй ТОЛЬКО" in dnd.DND_SYSTEM_PROMPT
+    assert "очевидного успеха" in dnd.DND_SYSTEM_PROMPT
+    assert "очевидной невозможности" in dnd.DND_SYSTEM_PROMPT
     assert "DC 18–20 не назначай" in dnd.DND_SYSTEM_PROMPT
     assert "STAT:Название" not in dnd.DND_SYSTEM_PROMPT
     assert "STAT:Телосложение" not in dnd.DND_SYSTEM_PROMPT
