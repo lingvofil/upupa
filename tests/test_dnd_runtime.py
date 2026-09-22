@@ -51,5 +51,7 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     assert "install_dnd_context_builder(dnd, campaign)" in runtime_source
     assert "build_memory_context" in campaign_source
     assert "register_persist_hook" in dnd_source
+    assert "build_bounded_text_prompt(self, message_text)" in dnd_source
+    assert "history = self.conversation +" not in dnd_source
     assert "isolated_completion_middleware_class" not in runtime_source
     assert "middleware_class=" not in runtime_source
