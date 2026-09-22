@@ -13,6 +13,7 @@ _STATE_ALIASES = {
     "inventory": {"инвентарь", "днд инвентарь"},
     "npcs": {"днд связи"},
     "status": {"днд сюжет"},
+    "canon": {"днд канон"},
 }
 _START_ALIASES = {"упупа днд"}
 _END_ALIASES = {"днд конец"}
@@ -476,6 +477,10 @@ def render_state_command(
             return render_npcs(dnd, chat_id)
         if kind == "status":
             return render_status(dnd, chat_id)
+        if kind == "canon":
+            from AI.dnd_session_canon import render_session_canon
+
+            return render_session_canon(dnd, chat_id)
         raise ValueError(f"Unknown DnD state command: {kind}")
     finally:
         _ACTIVE_STATE_VIEW_POLICY.reset(token)
