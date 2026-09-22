@@ -1022,3 +1022,46 @@ def test_successor_request_targets_revision_created_by_parent_transaction():
     assert session.pending_generation_request["source_revision"] == 1
     prepare_session_events(session)
     assert session.state_revision == 1
+
+
+def test_stale_provider_exchange_is_rewound_from_durable_conversation():
+    policy = FakeStatePolicy()
+    session = FakeSession(policy, chat_id=-1043)
+    session.state_revision = 1
+    session.conversation = [
+        {"role": "user", "content": "system"},
+        {"role": "assistant", "content": "Погнали."},
+    ]
+    original = copy.deepcopy(session.conversation)
+
+    async def generate(_session, prompt):
+        session.conversation.append({"role": "user", "content": prompt})
+        session.conversation.append({"role": "assistant", "content": "устаревший ответ"})
+        session.state_revision = 2
+        return "устаревший ответ"
+
+    def rewind(current, size):
+        if len(current.conversation) <= int(size):
+            return False
+        del current.conversation[int(size):]
+        return True
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        dnd_router=SimpleNamespace(_upupa_dnd_campaign_state_policy=policy),
+        persist_dnd_sessions=lambda: None,
+        generate_session_response=generate,
+        parse_and_execute_turn=lambda *_args, **_kwargs: None,
+        open_action_window=lambda *_args, **_kwargs: None,
+        restore_dnd_sessions=lambda _bot: 1,
+        _start_background_task=lambda *_args, **_kwargs: None,
+        _rewind_session_conversation=rewind,
+    )
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+
+    with pytest.raises(recovery.StaleDndSessionError):
+        asyncio.run(dnd.generate_session_response(session, "ход"))
+
+    assert session.conversation == original
+    assert session.pending_generation_request == {}
+    assert session.pending_generated_result == {}
