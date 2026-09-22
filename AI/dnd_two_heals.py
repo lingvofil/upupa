@@ -310,7 +310,7 @@ def _charges_text(combat, session) -> str:
     return "; ".join(chunks) or "нет"
 
 
-def install_dnd_two_heals(dnd_router) -> None:
+def install_dnd_two_heals(dnd_router, *, state_policy=None) -> None:
     from AI import dnd
     from AI import dnd_campaign as campaign
     from AI import dnd_combat as combat
@@ -318,6 +318,20 @@ def install_dnd_two_heals(dnd_router) -> None:
 
     if getattr(dnd_router, "_upupa_dnd_two_heals_configured", False):
         return
+
+    if state_policy is None:
+        state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
 
     # Remove the now-wrong one-charge rule from both prompt sources.
     if healing_choice._CHOICE_HEAL_RULE in combat.COMBAT_RULES:
@@ -335,34 +349,18 @@ def install_dnd_two_heals(dnd_router) -> None:
 
     # Persist the two-charge structure while retaining the legacy single-charge
     # field for backwards compatibility with old session records.
-    original_ensure = campaign._ensure
-
     def ensure(session):
-        original_ensure(session)
         _ensure_charges(session)
 
-    campaign._ensure = ensure
-
-    original_state = campaign._state
-
-    def state(session):
-        row = original_state(session)
-        ensure(session)
-        row["healing_charges"] = [dict(charge) for charge in session.healing_charges]
-        return row
-
-    campaign._state = state
-
-    original_restore = campaign._restore_state
-
-    def restore_state(session, data):
-        original_restore(session, data)
-        raw = (data or {}).get("healing_charges") if isinstance(data, dict) else None
-        if isinstance(raw, list):
-            session.healing_charges = [dict(item) for item in raw if isinstance(item, dict)]
+    def restore_state(session, _data):
         _ensure_charges(session)
 
-    campaign._restore_state = restore_state
+    state_policy.add_ensure_hook(ensure)
+    state_policy.add_state_field(
+        "healing_charges",
+        lambda session: [dict(charge) for charge in _ensure_charges(session)],
+    )
+    state_policy.add_restore_hook(restore_state)
 
     # The existing initializer chooses charge #1. Add charge #2 after it finishes,
     # choosing a different owner whenever there is more than one participant.

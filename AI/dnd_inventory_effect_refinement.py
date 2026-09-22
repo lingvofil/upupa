@@ -178,12 +178,26 @@ def refine_session_inventory(session) -> bool:
     return changed
 
 
-def install_dnd_inventory_effect_refinement(dnd) -> None:
+def install_dnd_inventory_effect_refinement(dnd, *, state_policy=None) -> None:
     """Replace v1 generic placeholders in persisted and restored inventories."""
     from AI import dnd_campaign as campaign
 
     if getattr(campaign, "_upupa_dnd_inventory_effect_refinement_installed", False):
         return
+
+    if state_policy is None:
+        state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
 
     campaign._load_archive(dnd)
     if refine_archive_data(getattr(campaign, "_archive", None)):
@@ -195,11 +209,7 @@ def install_dnd_inventory_effect_refinement(dnd) -> None:
     if active_changed:
         dnd.persist_dnd_sessions()
 
-    original_restore_state = campaign._restore_state
-
-    def restore_state(session, data):
-        original_restore_state(session, data)
-        refine_session_inventory(session)
-
-    campaign._restore_state = restore_state
+    state_policy.add_restore_hook(
+        lambda session, _data: refine_session_inventory(session)
+    )
     campaign._upupa_dnd_inventory_effect_refinement_installed = True

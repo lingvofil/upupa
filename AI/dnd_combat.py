@@ -625,7 +625,7 @@ def _hero_combat_lines(session, user_id: int) -> list[str]:
     return lines
 
 
-def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
+def install_dnd_combat(dnd_router, *, completion_policy=None, state_policy=None) -> None:
     if getattr(dnd_router, "_upupa_dnd_combat_configured", False):
         return
 
@@ -633,27 +633,35 @@ def install_dnd_combat(dnd_router, *, completion_policy=None) -> None:
     from AI import dnd_campaign as campaign
     from AI import dnd_state_commands as state_commands
 
-    original_ensure = campaign._ensure
+    if state_policy is None:
+        state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
 
     def ensure(session):
-        original_ensure(session)
         if not isinstance(getattr(session, "character_sheets", None), dict):
             session.character_sheets = {}
         if not isinstance(getattr(session, "healing_charge", None), dict):
             session.healing_charge = {"owner_id": None, "used": True}
 
-    campaign._ensure = ensure
-
-    original_state = campaign._state
-
-    def state(session):
-        row = original_state(session)
-        ensure(session)
-        row["character_sheets"] = session.character_sheets
-        row["healing_charge"] = session.healing_charge
-        return row
-
-    campaign._state = state
+    state_policy.add_ensure_hook(ensure)
+    state_policy.add_state_field(
+        "character_sheets",
+        lambda session: getattr(session, "character_sheets", {}) or {},
+    )
+    state_policy.add_state_field(
+        "healing_charge",
+        lambda session: getattr(session, "healing_charge", {}) or {},
+    )
 
     original_context = campaign._campaign_context
 

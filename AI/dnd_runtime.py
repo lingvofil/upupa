@@ -24,10 +24,12 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_current_turn_priority import install_dnd_current_turn_priority
+    from AI.dnd_context_builder import install_dnd_context_builder
     from AI.dnd_conditions import install_dnd_conditions
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_command import install_dnd_enemy_command
     from AI.dnd_enemy_stats import install_dnd_enemy_stats
+    from AI.dnd_event_journal import install_dnd_event_journal
     from AI.dnd_epilogue_image import install_dnd_epilogue_image
     from AI.dnd_finalization_recovery import install_dnd_finalization_recovery
     from AI.dnd_generation_resilience import configure_dnd_generation_resilience
@@ -129,7 +131,11 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_fun_inventory_rules(dnd)
     install_dnd_lobby_controls(router)
     install_dnd_profile_ownership(router)
-    install_dnd_combat(router, completion_policy=completion_policy)
+    install_dnd_combat(
+        router,
+        completion_policy=completion_policy,
+        state_policy=campaign_state_policy,
+    )
     install_dnd_enemy_stats(dnd)
     install_dnd_unknown_action_recovery(dnd)
     install_dnd_player_combat(dnd, state_policy=campaign_state_policy)
@@ -143,8 +149,8 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
     install_dnd_weakness_luck(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_roll_ability_display(dnd)
-    install_dnd_healing_choice(router)
-    install_dnd_two_heals(router)
+    install_dnd_healing_choice(router, state_policy=campaign_state_policy)
+    install_dnd_two_heals(router, state_policy=campaign_state_policy)
     install_dnd_two_heals_compat()
     install_dnd_scaled_heals(router)
     install_dnd_manual_healing(router)
@@ -160,8 +166,15 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     configure_inventory_effect_rules(dnd)
     inventory_context_policy.renderer = render_inventory_effect_context
     state_view_policy.inventory_items_renderer = render_inventory_effect_lines
-    install_dnd_artifact_stats(dnd, metadata_policy=metadata_policy)
-    install_dnd_inventory_effect_refinement(dnd)
+    install_dnd_artifact_stats(
+        dnd,
+        metadata_policy=metadata_policy,
+        state_policy=campaign_state_policy,
+    )
+    install_dnd_inventory_effect_refinement(
+        dnd,
+        state_policy=campaign_state_policy,
+    )
     configure_inventory_description_rules(dnd)
     install_dnd_inventory_descriptions(metadata_policy=metadata_policy)
     inventory_context_policy.renderer = render_inventory_description_context
@@ -185,6 +198,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Pacing stays outermost so a blocked consecutive NPC attack becomes a
     # group INPUT before the spotlight layer classifies the next initiative.
     install_dnd_pacing(dnd)
+    # Install the journal after all canonical state extensions so its restore
+    # baseline sees the fully composed campaign representation.
+    install_dnd_event_journal(dnd, state_policy=campaign_state_policy)
+    install_dnd_context_builder(dnd, campaign)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy
