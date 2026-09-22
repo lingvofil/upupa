@@ -22,6 +22,9 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     campaign_source = (ROOT / "AI" / "dnd_campaign.py").read_text(encoding="utf-8")
     combat_source = (ROOT / "AI" / "dnd_combat.py").read_text(encoding="utf-8")
     artifact_stats_source = (ROOT / "AI" / "dnd_artifact_stats.py").read_text(encoding="utf-8")
+    healing_choice_source = (ROOT / "AI" / "dnd_healing_choice.py").read_text(encoding="utf-8")
+    two_heals_source = (ROOT / "AI" / "dnd_two_heals.py").read_text(encoding="utf-8")
+    refinement_source = (ROOT / "AI" / "dnd_inventory_effect_refinement.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
 
     assert "completion_policy.after_participant_joined" in campaign_source
@@ -34,6 +37,12 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     assert "campaign._ensure = ensure" not in combat_source
     assert "campaign._state = state" not in combat_source
     assert "campaign._restore_state = restore_state" not in artifact_stats_source
+    assert "campaign._ensure = ensure" not in healing_choice_source
+    assert "campaign._state = state" not in healing_choice_source
+    assert "campaign._ensure = ensure" not in two_heals_source
+    assert "campaign._state = state" not in two_heals_source
+    assert "campaign._restore_state = restore_state" not in two_heals_source
+    assert "campaign._restore_state = restore_state" not in refinement_source
 
     assert "DndCompletionPolicy()" in runtime_source
     assert "state_policy=campaign_state_policy" in runtime_source
