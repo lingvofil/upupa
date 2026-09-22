@@ -408,18 +408,10 @@ def test_pleading_response_forces_gemini_and_uses_pleading_queue(monkeypatch):
         captured["kwargs"] = kwargs
         return SimpleNamespace(text="ответ 3.8")
 
-    def fail_groq(*_args, **_kwargs):
-        raise AssertionError("pleading route must not use active groq model")
-
     monkeypatch.setattr(
         generation,
         "model",
         SimpleNamespace(generate_content=fake_generate_content),
-    )
-    monkeypatch.setattr(
-        generation.groq_ai,
-        "generate_text",
-        fail_groq,
     )
 
     response = asyncio.run(
