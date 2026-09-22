@@ -35,6 +35,9 @@ def _session(**overrides):
         },
         "pending_generation_request": {},
         "pending_generated_result": {},
+        "campaign_id": "campaign-test",
+        "state_revision": 0,
+        "event_journal": [],
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -140,3 +143,25 @@ def test_dnd_validates_state_before_persist_and_after_restore():
 
     assert '_validate_dnd_session_state(session, boundary="persist")' in persist_block
     assert '_validate_dnd_session_state(session, boundary="restore")' in restore_block
+
+
+def test_validator_detects_foreign_or_future_event_journal_entries():
+    session = _session(
+        state_revision=1,
+        event_journal=[
+            {
+                "event_id": "other:2:1",
+                "campaign_id": "other",
+                "revision": 2,
+                "sequence": 1,
+                "type": "PLAYER_HP_CHANGED",
+                "data": {},
+            }
+        ],
+    )
+
+    codes = _codes(session)
+
+    assert "foreign_event_campaign" in codes
+    assert "event_ahead_of_state" in codes
+    assert "journal_revision_mismatch" in codes
