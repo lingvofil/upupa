@@ -182,6 +182,45 @@ def test_legacy_profile_button_after_restart_migrates_to_generated_batch(monkeyp
     assert "Старая кнопка" in callback.answers[0][0]
 
 
+def test_live_hero_rebuild_preserves_full_inventory_across_heritage_reapply(monkeypatch):
+    session = _session()
+    campaign._ensure(session)
+    regular = {"name": "ложка", "kind": "item"}
+    artifact = {"name": "Дверная ручка", "kind": "artifact"}
+    old = {
+        "dead": False,
+        "inventory": [regular, artifact],
+        "artifacts": [artifact],
+        "reputation": [],
+        "adventures": [],
+    }
+    monkeypatch.setattr(campaign, "_player_history", lambda *_args: old)
+
+    assert campaign._preserve_inventory_for_rebuild(session, 1) is True
+    assert session.inventories["1"] == [regular, artifact]
+
+    campaign._apply_heritage(session, 1, continuation=False)
+
+    assert session.inventories["1"] == [regular, artifact]
+    assert session.rebuild_inventory_users == ["1"]
+
+
+def test_dead_hero_rebuild_never_inherits_corpse_inventory(monkeypatch):
+    session = _session()
+    campaign._ensure(session)
+    session.rebuild_inventory_users = ["1"]
+    old = {
+        "dead": True,
+        "inventory": [{"name": "старый меч", "kind": "item"}],
+        "artifacts": [{"name": "проклятая медаль", "kind": "artifact"}],
+    }
+    monkeypatch.setattr(campaign, "_player_history", lambda *_args: old)
+
+    assert campaign._preserve_inventory_for_rebuild(session, 1) is False
+    assert session.rebuild_inventory_users == []
+    assert "1" not in session.inventories
+
+
 def test_archive_campaign_saves_selected_profile(monkeypatch):
     session = _session()
     campaign._ensure(session)
@@ -321,6 +360,7 @@ def test_campaign_state_roundtrip_keeps_persistent_state_and_profile_choices():
     source.character_profiles["1"] = campaign._random_profile()
     source.profile_options["2"] = {"style": campaign._parse_profile_options(VALID_PROFILE_OPTIONS)}
     source.inventories["1"] = [{"name": "ключ", "kind": "item"}]
+    source.rebuild_inventory_users = ["1"]
     source.npc_memory["сторож"] = {"name": "Сторож", "event": "помогли", "notes": ["вытащили из ямы"]}
     source.reputations["1"] = ["спаситель двора"]
     source.threat = {"name": "Буря", "level": 3, "max": 6, "history": []}
@@ -331,6 +371,7 @@ def test_campaign_state_roundtrip_keeps_persistent_state_and_profile_choices():
     assert restored.character_profiles == source.character_profiles
     assert restored.profile_options == source.profile_options
     assert restored.inventories == source.inventories
+    assert restored.rebuild_inventory_users == ["1"]
     assert restored.npc_memory == source.npc_memory
     assert restored.reputations == source.reputations
     assert restored.threat["level"] == 3
