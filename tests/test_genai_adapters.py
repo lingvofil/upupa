@@ -361,3 +361,46 @@ def test_empty_response_details_report_zero_candidates():
         candidates = []
 
     assert _empty_response_details(Response()) == "no candidate text; candidates=0"
+
+
+
+def test_generate_content_uses_per_request_model_queue(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    class FakeGeminiModel:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def generate_content(self, prompt):
+            calls.append(self.model_name)
+            if self.model_name == "premium-bad":
+                raise _FakeGeminiServerError(503)
+            return FakeResponse("fallback ok")
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel(model_name)
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(
+        ["default-model"],
+        ["default-model"],
+        keys_pool=["key-1", "key-2"],
+    )
+    result = wrapper.generate_content(
+        "дай текст",
+        model_queue=["premium-bad", "premium-good"],
+    )
+
+    assert result.text == "fallback ok"
+    assert calls == ["premium-bad", "premium-bad", "premium-good"]
+    assert "default-model" not in calls
