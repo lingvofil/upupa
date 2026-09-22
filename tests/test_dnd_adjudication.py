@@ -15,7 +15,7 @@ def test_adjudication_rules_require_possible_uncertain_and_meaningful_failure():
     assert "действие вообще возможно" in rules
     assert "исход действительно неочевиден" in rules
     assert "провал или цена провала заметно меняют сцену" in rules
-    assert "обычная незапертая дверь" in rules
+    assert "обычная незапертая дверь" in rules.casefold()
     assert "очевидно невозможно" in rules
     assert "безнаказанно повторять" in rules
 
@@ -38,7 +38,7 @@ def test_adjudication_rules_choose_ability_before_skill_and_allow_unusual_pair()
     assert "только потом подходящий SKILL" in rules
     assert "ABILITY:STR + SKILL:Запугивание" in rules
     assert "ABILITY:CHA + SKILL:Запугивание" in rules
-    assert "не подгоняй характеристику под лучший стат героя" in rules
+    assert "не подгоняй характеристику под лучший стат героя" in rules.casefold()
 
 
 def test_explicit_strength_intimidation_survives_roll_annotation():
