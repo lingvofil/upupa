@@ -21,6 +21,7 @@ def test_completion_policy_is_instance_dependency():
 def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation():
     campaign_source = (ROOT / "AI" / "dnd_campaign.py").read_text(encoding="utf-8")
     combat_source = (ROOT / "AI" / "dnd_combat.py").read_text(encoding="utf-8")
+    artifact_stats_source = (ROOT / "AI" / "dnd_artifact_stats.py").read_text(encoding="utf-8")
     runtime_source = (ROOT / "AI" / "dnd_runtime.py").read_text(encoding="utf-8")
 
     assert "completion_policy.after_participant_joined" in campaign_source
@@ -30,7 +31,11 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     assert "completion_policy.filter_expected_ids" in combat_source
     assert "DndParticipantCompletionMiddleware._expected_ids" not in combat_source
     assert "original_expected =" not in combat_source
+    assert "campaign._ensure = ensure" not in combat_source
+    assert "campaign._state = state" not in combat_source
+    assert "campaign._restore_state = restore_state" not in artifact_stats_source
 
     assert "DndCompletionPolicy()" in runtime_source
+    assert "state_policy=campaign_state_policy" in runtime_source
     assert "isolated_completion_middleware_class" not in runtime_source
     assert "middleware_class=" not in runtime_source
