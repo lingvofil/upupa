@@ -183,6 +183,17 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy, state_policy=None) -> No
 
     if state_policy is None:
         state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
 
     if ARTIFACT_STATS_MARKER not in campaign.RULES:
         campaign.RULES = campaign.RULES.rstrip() + "\n" + ARTIFACT_STAT_RULES
@@ -250,8 +261,7 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy, state_policy=None) -> No
 
     inventory_fun.transfer_inventory = transfer_inventory
 
-    if state_policy is not None:
-        state_policy.add_restore_hook(lambda session, _data: sync_party(session))
+    state_policy.add_restore_hook(lambda session, _data: sync_party(session))
 
     original_archive = campaign._archive_campaign
 
