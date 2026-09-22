@@ -2,8 +2,9 @@ import asyncio
 from types import SimpleNamespace
 
 from AI import dnd_result_recovery as recovery
-from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
+from AI.dnd_group_action_resilience import _resolution_budget, install_dnd_group_action_resilience
 from AI.dnd_group_progress import (
+    group_resolution_was_noop,
     inspection_was_deferred,
     install_dnd_group_progress,
     progress_correction_reason,
@@ -56,6 +57,7 @@ def _fake_dnd(session, generate):
         with_scene_direction=lambda _session, prompt: prompt,
         generate_session_response=generate,
         parse_and_execute_turn=parse_and_execute_turn,
+        DND_SYSTEM_PROMPT="BASE",
     ), persisted
 
 
@@ -316,3 +318,49 @@ def test_parse_replaces_noop_inspection_with_one_correction(monkeypatch):
     )
 
     assert calls == {"parse": 0, "transition": 1, "continue": 1}
+
+
+def test_group_resolution_budget_scales_with_participant_actions():
+    assert _resolution_budget(1) == (90, 120)
+    assert _resolution_budget(2) == (111, 141)
+    assert _resolution_budget(4) == (167, 197)
+    assert _resolution_budget(9) == (170, 200)
+
+
+def test_generic_acknowledgement_only_group_turn_is_noop():
+    source_prompt = (
+        "Игроки заявили действия одновременно:\n"
+        "- Алиса: пытаюсь уговорить стражника (id=1)\n"
+        "- Боря: ем яблоко (id=2)\n"
+        "Сначала явно учти КАЖДУЮ заявку"
+    )
+
+    assert group_resolution_was_noop(
+        source_prompt,
+        "Алиса пытается говорить со стражником, Боря продолжает есть яблоко. "
+        "Думайте, что делать дальше. [ACTION:INPUT]",
+    ) is True
+
+    assert group_resolution_was_noop(
+        source_prompt,
+        "Стражник отказывается пропускать Алису, но называет цену в три серебряных; "
+        "Боря доедает яблоко и замечает на кожуре чужую печать. [ACTION:INPUT]",
+    ) is False
+
+
+def test_generic_noop_reason_precedes_third_input_rule():
+    session = SimpleNamespace(group_input_streak=2)
+    pending = {
+        "source_request_kind": "GROUP_ACTION_CONTINUATION",
+        "source_prompt": (
+            "Игроки заявили действия одновременно:\n"
+            "- Алиса: говорю со стражником (id=1)\n"
+            "Сначала явно учти КАЖДУЮ заявку"
+        ),
+    }
+
+    assert progress_correction_reason(
+        session,
+        pending,
+        "Алиса продолжает разговор. Решайте, что дальше. [ACTION:INPUT]",
+    ) == "group-action-without-consequence"
