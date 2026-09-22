@@ -171,7 +171,7 @@ def _artifact_bonus_line(session, user_id: int) -> str | None:
     return "✨ От артефактов: " + ", ".join(chunks)
 
 
-def install_dnd_artifact_stats(dnd, *, metadata_policy) -> None:
+def install_dnd_artifact_stats(dnd, *, metadata_policy, state_policy=None) -> None:
     """Install artifact stat metadata, effective stat sync, transfer sync and UI."""
     from AI import dnd_campaign as campaign
     from AI import dnd_combat as combat
@@ -180,6 +180,9 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy) -> None:
 
     if getattr(dnd, "_upupa_dnd_artifact_stats_installed", False):
         return
+
+    if state_policy is None:
+        state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
 
     if ARTIFACT_STATS_MARKER not in campaign.RULES:
         campaign.RULES = campaign.RULES.rstrip() + "\n" + ARTIFACT_STAT_RULES
@@ -247,13 +250,8 @@ def install_dnd_artifact_stats(dnd, *, metadata_policy) -> None:
 
     inventory_fun.transfer_inventory = transfer_inventory
 
-    original_restore = campaign._restore_state
-
-    def restore_state(session, data):
-        original_restore(session, data)
-        sync_party(session)
-
-    campaign._restore_state = restore_state
+    if state_policy is not None:
+        state_policy.add_restore_hook(lambda session, _data: sync_party(session))
 
     original_archive = campaign._archive_campaign
 
