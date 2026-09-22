@@ -42,6 +42,10 @@ class DndCampaignStatePolicy:
         if self.downstream_restore is None:
             raise RuntimeError("DnD campaign state restore dependency is not configured")
         self.downstream_restore(session, data)
+        if isinstance(data, dict):
+            for name in self.state_fields:
+                if name in data:
+                    setattr(session, name, data[name])
         for hook in self.restore_hooks:
             hook(session, data)
 
