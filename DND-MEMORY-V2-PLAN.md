@@ -18,7 +18,7 @@
 
 ## Этап 1. Один реестр persisted state
 
-Статус: **в работе**.
+Статус: **готово в PR #724**.
 
 - Все расширения живой DnD-сессии регистрируют persisted-поля через `DndCampaignStatePolicy`.
 - Убрать прямые обёртки `campaign._state/_ensure/_restore_state` там, где они используются только для persistence.
@@ -28,6 +28,9 @@
 Первый перенос: combat state (`character_sheets`, `healing_charge`) и post-restore синхронизация artifact stats.
 
 ## Этап 2. Инвентаризация и инварианты состояния
+
+Статус: **готово в PR #725**.
+
 
 - Составить полный список canonical/runtime/derived полей.
 - Для каждого поля зафиксировать: владелец, источник истины, persist/restore, reset rules, archive rules.
@@ -42,10 +45,16 @@
 
 ## Этап 3. State revision + event journal
 
-- Ввести монотонный `state_revision`.
-- Фиксировать структурированные изменения мира как компактные события с `event_id`, `campaign_id`, `revision`.
-- Начать с критичных типов: move, item add/remove/transfer/use, HP/death/heal, NPC memory, condition, quest/thread.
-- События нужны для диагностики и replay, но не должны дублировать художественную историю.
+Статус: **в работе в текущем stacked PR**.
+
+
+- Ввести устойчивый `campaign_id` и монотонный `state_revision`.
+- Фиксировать структурированные изменения мира как компактные события с `event_id`, `campaign_id`, `revision`, `sequence`.
+- Первая версия автоматически журналирует изменения позиций, инвентаря/передач, HP/status героев и врагов, NPC memory, conditions, reputation, threat и scene clocks.
+- Один durable persist с несколькими изменениями создаёт одну новую revision и несколько событий внутри неё.
+- Journal bounded: хранится последние 200 событий; canonical state остаётся источником истины.
+- Quest/thread события появятся вместе с самой структурированной сущностью quest/thread, а не раньше неё.
+- События нужны для диагностики и будущего replay, но не должны дублировать художественную историю.
 
 ## Этап 4. Context builder
 
