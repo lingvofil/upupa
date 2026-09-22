@@ -283,6 +283,7 @@ def test_lobby_character_rebuild_keeps_existing_inventory_and_heritage(monkeypat
 
     class Message:
         def __init__(self):
+            self.chat = SimpleNamespace(id=session.chat_id)
             self.answers = []
 
         async def answer(self, text, **kwargs):
