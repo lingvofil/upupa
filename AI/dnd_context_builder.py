@@ -23,6 +23,13 @@ _HEADER = (
 )
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _clean(value, limit: int = 220) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[: max(0, int(limit))]
@@ -211,7 +218,7 @@ def _resource_lines(session) -> list[str]:
     special = getattr(session, "special_move_charges", {}) or {}
     if isinstance(special, dict) and special:
         values = ", ".join(
-            f"ID {key}: {int(value or 0)}"
+            f"ID {key}: {_safe_int(value)}"
             for key, value in list(special.items())[:8]
         )
         lines.append("- особые приёмы (заряды): " + values)
