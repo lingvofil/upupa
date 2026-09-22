@@ -376,6 +376,13 @@ def _validate_event_journal(session, issues) -> None:
     if not isinstance(journal, list):
         issues.append(DndStateIssue("invalid_event_journal", "event_journal is not a list"))
         return
+    if len(journal) > 200:
+        issues.append(
+            DndStateIssue(
+                "event_journal_unbounded",
+                f"event_journal contains {len(journal)} entries",
+            )
+        )
 
     seen_ids = set()
     previous_order = None
