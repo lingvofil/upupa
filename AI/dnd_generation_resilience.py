@@ -55,6 +55,11 @@ DND_FALLBACK_CONTINUITY_GUARD = (
     "или указания РЕЖИССЁР СЦЕНЫ. РЕЖИССЁР СЦЕНЫ задаёт подачу, а не заменяет причинность. "
     "Не игнорируй действия игроков даже если часть старой истории сокращена."
 )
+DND_DIRECT_CONTINUITY_GUARD = (
+    "DND MEMORY V2. CURRENT REQUEST содержит актуальный structured state и важнее старой истории. "
+    "Используй несколько последних реплик только для литературной связности; не отменяй ими "
+    "подтверждённые позиции, HP, предметы, состояния и последствия."
+)
 
 
 _state_lock = threading.Lock()
@@ -394,7 +399,13 @@ def _bounded_head_tail(
     return value[:head_size] + marker + value[-tail_size:]
 
 
-def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS) -> str:
+def _fallback_prompt(
+    session,
+    prompt: str,
+    *,
+    max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
+    continuity_guard: str = DND_FALLBACK_CONTINUITY_GUARD,
+) -> str:
     rows = []
     for item in getattr(session, "conversation", None) or []:
         if not isinstance(item, dict) or item.get("content") is None:
@@ -422,7 +433,7 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
     )
     full = "\n\n".join(
         (
-            DND_FALLBACK_CONTINUITY_GUARD,
+            continuity_guard,
             labels[0] + system,
             labels[1] + recent_history,
             labels[2] + current,
@@ -433,14 +444,14 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
 
     separator = "\n\n"
     fixed = (
-        len(DND_FALLBACK_CONTINUITY_GUARD)
+        len(continuity_guard)
         + sum(len(label) for label in labels)
         + 3 * len(separator)
     )
     available = max(0, int(max_chars) - fixed)
     if available < 64:
         emergency = (
-            DND_FALLBACK_CONTINUITY_GUARD
+            continuity_guard
             + separator
             + labels[2]
             + current
@@ -459,7 +470,7 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
 
     compact = separator.join(
         (
-            DND_FALLBACK_CONTINUITY_GUARD,
+            continuity_guard,
             labels[0] + system_excerpt,
             labels[1] + history_excerpt,
             labels[2] + current_excerpt,
@@ -475,7 +486,12 @@ def build_bounded_text_prompt(
     max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
 ) -> str:
     """Public bounded text prompt for non-Gemini DnD provider paths."""
-    return _fallback_prompt(session, prompt, max_chars=max_chars)
+    return _fallback_prompt(
+        session,
+        prompt,
+        max_chars=max_chars,
+        continuity_guard=DND_DIRECT_CONTINUITY_GUARD,
+    )
 
 
 def _run_groq_sync(
