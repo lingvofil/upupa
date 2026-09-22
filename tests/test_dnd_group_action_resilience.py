@@ -97,7 +97,7 @@ def test_group_turn_is_durable_before_provider_call(monkeypatch):
     assert seen[0]["kind"] == "GROUP_ACTION_CONTINUATION"
     assert "Алиса: ломаю дверь (id=1)" in seen[0]["prompt"]
     assert "Боря: ищу ловушку (id=2)" in seen[0]["prompt"]
-    assert "Сначала явно учти КАЖДУЮ заявку" in seen[0]["prompt"]
+    assert "Сначала РАЗРЕШИ КАЖДУЮ заявку" in seen[0]["prompt"]
     assert "ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ" in seen[0]["prompt"]
     assert "не сжимай четыре разных действия" in seen[0]["prompt"].casefold()
     assert "допустим ещё один общий ACTION:INPUT" in seen[0]["prompt"]
@@ -186,7 +186,7 @@ def test_later_group_turn_still_preserves_each_action_without_opening_lock(monke
 
     asyncio.run(dnd.finalize_group_actions(FakeBot(), session.chat_id, 77))
 
-    assert "Сначала явно учти КАЖДУЮ заявку" in seen[0]
+    assert "Сначала РАЗРЕШИ КАЖДУЮ заявку" in seen[0]
     assert "ЭТО ПЕРВЫЙ ОБЩИЙ КРУГ" not in seen[0]
     assert "не обязано запускать новый экшен" in seen[0]
 
