@@ -1203,9 +1203,17 @@ def configure_dnd_campaign(dnd, router, *, completion_policy=None):
         _ensure(session); grade = _roll_grade_from_prompt(prompt)
         if grade:
             prompt += "\nГРАДАЦИЯ ИСХОДА: " + grade + ". Развивай сцену именно по этой ветке."
-        before = len(session.conversation); result = await original_generate(session, prompt + "\n\n" + _campaign_context(dnd, session))
+        context_builder = getattr(dnd, "build_memory_context", None)
+        if callable(context_builder):
+            memory_context = context_builder(session, prompt=prompt)
+        else:
+            memory_context = _campaign_context(dnd, session)
+        provider_prompt = prompt + ("\n\n" + memory_context if memory_context else "")
+        before = len(session.conversation); result = await original_generate(session, provider_prompt)
         for item in session.conversation[before:]:
             if isinstance(item, dict) and item.get("role") == "user":
+                # Durable conversation keeps the human/current-turn request only.
+                # The authoritative memory snapshot is rebuilt from structured state.
                 item["content"] = prompt
                 break
         if dnd.dnd_sessions.get(session.chat_id) is session:
