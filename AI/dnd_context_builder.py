@@ -6,10 +6,10 @@ import re
 
 
 CONTEXT_MAX_CHARS = 6_500
-STATE_MAX_CHARS = 3_300
-EVENTS_MAX_CHARS = 1_350
-SCENES_MAX_CHARS = 1_250
-LEGACY_CONTEXT_MAX_CHARS = 900
+STATE_MAX_CHARS = 3_100
+EVENTS_MAX_CHARS = 1_000
+SCENES_MAX_CHARS = 900
+LEGACY_CONTEXT_MAX_CHARS = 650
 RECENT_EVENT_LIMIT = 12
 RECENT_SCENE_LIMIT = 3
 NPC_LIMIT = 6
@@ -205,6 +205,50 @@ def _clock_lines(session) -> list[str]:
     return lines or ["- нет"]
 
 
+def _resource_lines(session) -> list[str]:
+    lines = []
+
+    special = getattr(session, "special_move_charges", {}) or {}
+    if isinstance(special, dict) and special:
+        values = ", ".join(
+            f"ID {key}: {int(value or 0)}"
+            for key, value in list(special.items())[:8]
+        )
+        lines.append("- особые приёмы (заряды): " + values)
+
+    luck = getattr(session, "luck_tokens", {}) or {}
+    if isinstance(luck, dict) and luck:
+        values = ", ".join(
+            f"ID {key}: {int(value or 0)}"
+            for key, value in list(luck.items())[:8]
+        )
+        lines.append("- жетоны удачи: " + values)
+
+    healing = getattr(session, "healing_charges", None)
+    if isinstance(healing, list) and healing:
+        rendered = []
+        for row in healing[:4]:
+            if not isinstance(row, dict):
+                continue
+            owner = row.get("owner_id")
+            state = "потрачена" if row.get("used") else ("утрачена" if row.get("lost") else "доступна")
+            rendered.append(f"#{row.get('id', '?')} у ID {owner}: {state}")
+        if rendered:
+            lines.append("- лечилки: " + "; ".join(rendered))
+
+    world_facts = getattr(session, "achievement_world_facts", None)
+    if isinstance(world_facts, list):
+        facts = [
+            _clean(row.get("text"), 140)
+            for row in world_facts[-3:]
+            if isinstance(row, dict) and _clean(row.get("text"))
+        ]
+        if facts:
+            lines.append("- активные факты достижений: " + " / ".join(facts))
+
+    return lines or ["- нет"]
+
+
 def _npc_score(name: str, raw: dict, haystack: str, index: int, candidate_name: str) -> tuple:
     score = 0
     normalized_name = name.casefold()
@@ -344,6 +388,7 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         "ГЕРОИ И ИХ ТЕКУЩЕЕ СОСТОЯНИЕ:\n" + "\n".join(_player_lines(session)),
         "АКТИВНЫЕ ПРОТИВНИКИ:\n" + "\n".join(_enemy_lines(session)),
         "ШКАЛЫ И УГРОЗЫ:\n" + "\n".join(_clock_lines(session)),
+        "РЕСУРСЫ И АКТИВНЫЕ ФАКТЫ:\n" + "\n".join(_resource_lines(session)),
         "РЕЛЕВАНТНЫЕ NPC:\n" + "\n".join(_npc_lines(session, prompt, recent_scenes)),
         "СОЦГРАФ — только мягкий контекст, не факт мира:\n" + _soft_relationship_text(session),
     ]
