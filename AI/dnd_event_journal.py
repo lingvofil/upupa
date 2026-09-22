@@ -12,6 +12,7 @@ import uuid
 
 EVENT_JOURNAL_LIMIT = 200
 _BASELINE_ATTR = "_upupa_dnd_event_baseline"
+_STARTED_ATTR = "_upupa_dnd_event_journal_started"
 
 
 def _safe_int(value, default=0):
@@ -409,6 +410,16 @@ def prepare_session_events(session) -> list[dict]:
     """Commit canonical changes since the previous durable snapshot."""
     _ensure(session)
     current = snapshot_canonical_state(session)
+    campaign_started = bool(getattr(session, "campaign_started_at", None))
+    journal_started = bool(getattr(session, _STARTED_ATTR, False))
+
+    # Lobby/profile/bootstrap changes are setup, not events in the played world.
+    # The first durable snapshot after campaign start becomes revision-0 baseline.
+    if not campaign_started or not journal_started:
+        setattr(session, _BASELINE_ATTR, copy.deepcopy(current))
+        setattr(session, _STARTED_ATTR, campaign_started)
+        return []
+
     previous = getattr(session, _BASELINE_ATTR, None)
     if not isinstance(previous, dict):
         setattr(session, _BASELINE_ATTR, copy.deepcopy(current))
@@ -442,6 +453,7 @@ def prepare_session_events(session) -> list[dict]:
 def _restore(session, _data) -> None:
     _ensure(session)
     setattr(session, _BASELINE_ATTR, snapshot_canonical_state(session))
+    setattr(session, _STARTED_ATTR, bool(getattr(session, "campaign_started_at", None)))
 
 
 def current_identity(session) -> tuple[str | None, int]:
@@ -472,6 +484,7 @@ def install_dnd_event_journal(dnd, *, state_policy) -> None:
     for session in (getattr(dnd, "dnd_sessions", {}) or {}).values():
         _ensure(session)
         setattr(session, _BASELINE_ATTR, snapshot_canonical_state(session))
+        setattr(session, _STARTED_ATTR, bool(getattr(session, "campaign_started_at", None)))
 
     dnd._upupa_dnd_event_journal_installed = True
 
