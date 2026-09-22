@@ -193,6 +193,55 @@ def _clock_snapshot(session) -> dict:
     return result
 
 
+_ADDITIONAL_CANONICAL_FIELDS = (
+    "participants",
+    "character_profiles",
+    "heritage",
+    "selected_plot",
+    "continuation_mode",
+    "scene_count",
+    "campaign_started_at",
+    "healing_charge",
+    "healing_charges",
+    "artifact_awards",
+    "special_move_charges",
+    "luck_tokens",
+    "weakness_luck_earned",
+    "weakness_luck_spent",
+    "growth_counts",
+    "growth_evidence",
+    "growth_seen_scene_keys",
+    "learned_achievements",
+    "achievement_world_facts",
+    "world_callback_candidate",
+    "world_inherited_npc_keys",
+    "world_callback_used",
+)
+
+
+def _additional_canonical_snapshot(session) -> dict:
+    return {
+        field: copy.deepcopy(getattr(session, field, None))
+        for field in _ADDITIONAL_CANONICAL_FIELDS
+    }
+
+
+def _additional_canonical_events(before: dict, after: dict) -> list[dict]:
+    changed = [
+        field
+        for field in _ADDITIONAL_CANONICAL_FIELDS
+        if before.get(field) != after.get(field)
+    ]
+    if not changed:
+        return []
+    return [
+        _event(
+            "CANONICAL_FIELDS_CHANGED",
+            fields=changed,
+        )
+    ]
+
+
 def snapshot_canonical_state(session) -> dict:
     """Return the bounded fields whose changes are useful for replay diagnostics."""
     return {
@@ -205,6 +254,7 @@ def snapshot_canonical_state(session) -> dict:
         "reputations": _reputation_snapshot(session),
         "threat": _threat_snapshot(session),
         "clocks": _clock_snapshot(session),
+        "additional": _additional_canonical_snapshot(session),
     }
 
 
@@ -403,6 +453,12 @@ def diff_canonical_state(before: dict, after: dict) -> list[dict]:
     if before.get("threat") != after.get("threat"):
         events.append(_event("THREAT_CHANGED", before=before.get("threat"), after=after.get("threat")))
     events.extend(_map_change_events("SCENE_CLOCK_CHANGED", before.get("clocks", {}), after.get("clocks", {}), "clock_id"))
+    events.extend(
+        _additional_canonical_events(
+            before.get("additional", {}),
+            after.get("additional", {}),
+        )
+    )
     return events
 
 
