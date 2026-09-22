@@ -116,3 +116,19 @@
 - The journal currently records positions, inventory add/remove/transfer, player/enemy HP and status, NPC memory, conditions, reputations, threat and scene clocks.
 - `event_journal` stores only the latest 200 events. Dropping old journal entries never changes canonical game state.
 - Narrative text, prompt context and Telegram runtime fields are deliberately excluded from revision changes.
+
+
+## Stage 4: bounded provider context
+
+`AI/dnd_context_builder.py` rebuilds the current model memory from structured state on every main generation.
+
+Priority order:
+
+1. authoritative current hero state: positions, HP/status, conditions, inventory and compact progression/resources;
+2. active enemies and scene clocks/threat;
+3. relevant NPC memory and open obligations;
+4. latest structured `event_journal` entries;
+5. only the latest three narrative scenes for literary continuity;
+6. a small tail of legacy dynamic mechanics context for compatibility.
+
+The resulting Memory v2 block is capped at 6500 characters. Durable `conversation` remains stored as an audit/recovery transcript, but provider calls are always windowed: system contract + a few latest exchanges + the current request. Old narrative history is therefore no longer a second implicit source of world truth.
