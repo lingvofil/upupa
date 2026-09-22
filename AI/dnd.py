@@ -243,17 +243,15 @@ class GameSession:
             response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "gigachat":
-            history = self.conversation + [{"role": "user", "content": message_text}]
-            full_prompt = "\n".join(
-                f"{item['role']}: {item['content']}" for item in history
-            )
+            from AI.dnd_generation_resilience import build_bounded_text_prompt
+
+            full_prompt = build_bounded_text_prompt(self, message_text)
             response = gigachat_model.generate_content(full_prompt, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "groq":
-            history = self.conversation + [{"role": "user", "content": message_text}]
-            full_prompt = "\n".join(
-                f"{item['role']}: {item['content']}" for item in history
-            )
+            from AI.dnd_generation_resilience import build_bounded_text_prompt
+
+            full_prompt = build_bounded_text_prompt(self, message_text)
             result = groq_ai.generate_text(full_prompt, max_tokens=512)
         else:
             raise RuntimeError(f"Unsupported DnD model: {self.active_model}")

@@ -24,6 +24,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_cinematic_combat import install_dnd_cinematic_combat
     from AI.dnd_combat import install_dnd_combat
     from AI.dnd_current_turn_priority import install_dnd_current_turn_priority
+    from AI.dnd_context_builder import install_dnd_context_builder
     from AI.dnd_conditions import install_dnd_conditions
     from AI.dnd_death_legacy import install_dnd_death_legacy
     from AI.dnd_enemy_command import install_dnd_enemy_command
@@ -200,6 +201,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # Install the journal after all canonical state extensions so its restore
     # baseline sees the fully composed campaign representation.
     install_dnd_event_journal(dnd, state_policy=campaign_state_policy)
+    install_dnd_context_builder(dnd, campaign)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy

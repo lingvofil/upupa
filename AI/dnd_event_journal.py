@@ -193,6 +193,55 @@ def _clock_snapshot(session) -> dict:
     return result
 
 
+_ADDITIONAL_CANONICAL_FIELDS = (
+    "participants",
+    "character_profiles",
+    "heritage",
+    "selected_plot",
+    "continuation_mode",
+    "scene_count",
+    "campaign_started_at",
+    "healing_charge",
+    "healing_charges",
+    "artifact_awards",
+    "special_move_charges",
+    "luck_tokens",
+    "weakness_luck_earned",
+    "weakness_luck_spent",
+    "growth_counts",
+    "growth_evidence",
+    "growth_seen_scene_keys",
+    "learned_achievements",
+    "achievement_world_facts",
+    "world_callback_candidate",
+    "world_inherited_npc_keys",
+    "world_callback_used",
+)
+
+
+def _additional_canonical_snapshot(session) -> dict:
+    return {
+        field: copy.deepcopy(getattr(session, field, None))
+        for field in _ADDITIONAL_CANONICAL_FIELDS
+    }
+
+
+def _additional_canonical_events(before: dict, after: dict) -> list[dict]:
+    changed = [
+        field
+        for field in _ADDITIONAL_CANONICAL_FIELDS
+        if before.get(field) != after.get(field)
+    ]
+    if not changed:
+        return []
+    return [
+        _event(
+            "CANONICAL_FIELDS_CHANGED",
+            fields=changed,
+        )
+    ]
+
+
 def snapshot_canonical_state(session) -> dict:
     """Return the bounded fields whose changes are useful for replay diagnostics."""
     return {
@@ -205,6 +254,7 @@ def snapshot_canonical_state(session) -> dict:
         "reputations": _reputation_snapshot(session),
         "threat": _threat_snapshot(session),
         "clocks": _clock_snapshot(session),
+        "additional": _additional_canonical_snapshot(session),
     }
 
 
@@ -403,7 +453,44 @@ def diff_canonical_state(before: dict, after: dict) -> list[dict]:
     if before.get("threat") != after.get("threat"):
         events.append(_event("THREAT_CHANGED", before=before.get("threat"), after=after.get("threat")))
     events.extend(_map_change_events("SCENE_CLOCK_CHANGED", before.get("clocks", {}), after.get("clocks", {}), "clock_id"))
+    events.extend(
+        _additional_canonical_events(
+            before.get("additional", {}),
+            after.get("additional", {}),
+        )
+    )
     return events
+
+
+def _turn_transaction_open(session) -> bool:
+    pending = getattr(session, "pending_generated_result", None)
+    if not isinstance(pending, dict):
+        return False
+    return (
+        str(pending.get("phase") or "").upper() == "APPLYING"
+        and bool(pending.get("transaction_open"))
+    )
+
+
+def has_pending_canonical_changes(session) -> bool:
+    """Return whether the next normal persist would advance state_revision."""
+    _ensure(session)
+    if not bool(getattr(session, "campaign_started_at", None)):
+        return False
+    if not bool(getattr(session, _STARTED_ATTR, False)):
+        return False
+    previous = getattr(session, _BASELINE_ATTR, None)
+    if not isinstance(previous, dict):
+        return False
+    current = snapshot_canonical_state(session)
+    return bool(diff_canonical_state(previous, current))
+
+
+def prospective_revision(session) -> int:
+    """Revision that canonical state will have after the next commit boundary."""
+    _ensure(session)
+    revision = int(session.state_revision)
+    return revision + (1 if has_pending_canonical_changes(session) else 0)
 
 
 def prepare_session_events(session) -> list[dict]:
@@ -423,6 +510,14 @@ def prepare_session_events(session) -> list[dict]:
     previous = getattr(session, _BASELINE_ATTR, None)
     if not isinstance(previous, dict):
         setattr(session, _BASELINE_ATTR, copy.deepcopy(current))
+        return []
+
+    # Durable turn application may persist several intermediate states while
+    # Telegram effects are being delivered. Keep the journal baseline pinned to
+    # the pre-turn snapshot until the result-recovery layer opens the commit
+    # boundary. A crash can then roll back and replay one exact result without
+    # manufacturing several revisions for one logical turn.
+    if _turn_transaction_open(session):
         return []
 
     changes = diff_canonical_state(previous, current)
@@ -494,6 +589,8 @@ __all__ = [
     "current_identity",
     "diff_canonical_state",
     "install_dnd_event_journal",
+    "has_pending_canonical_changes",
     "prepare_session_events",
+    "prospective_revision",
     "snapshot_canonical_state",
 ]
