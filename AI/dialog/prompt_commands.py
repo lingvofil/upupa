@@ -121,6 +121,21 @@ def _normalize_poem_user_name(raw_name: str | None) -> str:
     return " ".join(_normalize_poem_name_token(token) for token in tokens)
 
 
+_POEM_USER_NAME_ALIASES = {
+    "сикс апе": "Мухтар",
+    "чудо в стране алис": "Света",
+    "мац ня": "Мацоня",
+    "алинаааааа": "Алина",
+}
+
+
+def _replace_poem_user_name_alias(raw_name: str | None) -> str:
+    """Apply chat-specific display-name aliases only for poem character lists."""
+    name = (raw_name or "").strip()
+    normalized_key = _normalize_poem_user_name(name).casefold()
+    return _POEM_USER_NAME_ALIASES.get(normalized_key, name)
+
+
 
 
 def _rank_active_poem_users(valid_users: dict, *, limit: int = _POEM_ACTIVE_POOL_SIZE) -> list[str]:
@@ -228,7 +243,7 @@ def _format_poem_character_instruction(
 ) -> str:
     """Build one neutral, shuffled hero list with an occasional active bot."""
     character_parts = [
-        part.strip()
+        _replace_poem_user_name_alias(part.strip())
         for part in (other_characters or "").split(",")
         if part.strip()
     ]
@@ -270,7 +285,7 @@ async def _get_dynamic_poem_characters(chat_id: str) -> str:
     for raw_name in names:
         if (raw_name or "").startswith("Пользователь "):
             continue
-        name = _normalize_poem_user_name(raw_name)
+        name = _replace_poem_user_name_alias(_normalize_poem_user_name(raw_name))
         if not name:
             continue
         key = name.casefold()
