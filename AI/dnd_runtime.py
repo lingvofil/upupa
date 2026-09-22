@@ -16,6 +16,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI import dnd
     from AI import dnd_campaign as campaign
     from AI import dnd_completion as completion
+    from AI.dnd_adjudication import install_dnd_adjudication
     from AI.dnd_any_bot_reply import configure_dnd_any_bot_replies
     from AI.dnd_artifact_guard import install_dnd_artifact_guard
     from AI.dnd_artifact_stats import install_dnd_artifact_stats
@@ -121,6 +122,7 @@ def configure_dnd_runtime(dnd_router=None) -> None:
 
     # Install the bounded provider path before completion/campaign wrappers
     # capture generate_session_response, so every later DnD layer inherits it.
+    install_dnd_adjudication(dnd, campaign)
     configure_dnd_generation_resilience(dnd)
     install_dnd_group_action_resilience(dnd)
     install_dnd_current_turn_priority(dnd, campaign_marker=campaign.MARKER)
