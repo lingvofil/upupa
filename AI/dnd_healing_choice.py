@@ -184,7 +184,7 @@ async def _continue_after_decision(dnd, callback, session, prompt: str) -> None:
         await dnd.open_action_window(callback.bot, session.chat_id)
 
 
-def install_dnd_healing_choice(dnd_router) -> None:
+def install_dnd_healing_choice(dnd_router, *, state_policy=None) -> None:
     if getattr(dnd_router, "_upupa_dnd_healing_choice_configured", False):
         return
 
@@ -196,27 +196,32 @@ def install_dnd_healing_choice(dnd_router) -> None:
     combat.COMBAT_RULES = combat.COMBAT_RULES.replace(_AUTO_HEAL_RULE, _CHOICE_HEAL_RULE)
     dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.replace(_AUTO_HEAL_RULE, _CHOICE_HEAL_RULE)
 
-    original_ensure = campaign._ensure
+    if state_policy is None:
+        state_policy = getattr(campaign, "_upupa_dnd_campaign_state_policy", None)
+    if state_policy is None:
+        from AI.dnd_campaign_state import DndCampaignStatePolicy, configure_dnd_campaign_state
+
+        state_policy = configure_dnd_campaign_state(
+            campaign,
+            DndCampaignStatePolicy(
+                campaign._ensure,
+                campaign._state,
+                campaign._restore_state,
+            ),
+        )
 
     def ensure(session):
-        original_ensure(session)
         pending = getattr(session, "pending_heal_decision", None)
         if pending is not None and not isinstance(pending, dict):
             session.pending_heal_decision = None
         elif not hasattr(session, "pending_heal_decision"):
             session.pending_heal_decision = None
 
-    campaign._ensure = ensure
-
-    original_state = campaign._state
-
-    def state(session):
-        row = original_state(session)
-        ensure(session)
-        row["pending_heal_decision"] = session.pending_heal_decision
-        return row
-
-    campaign._state = state
+    state_policy.add_ensure_hook(ensure)
+    state_policy.add_state_field(
+        "pending_heal_decision",
+        lambda session: getattr(session, "pending_heal_decision", None),
+    )
 
     original_initialize = combat.initialize_party_combat
 
