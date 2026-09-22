@@ -156,8 +156,6 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
     source_prompt = str(pending.get("source_prompt") or "")
     if inspection_was_deferred(source_prompt, response):
         return "inspection-without-feedback"
-    if group_resolution_was_noop(source_prompt, response):
-        return "group-action-without-consequence"
 
     _ensure(session)
     if (
@@ -165,6 +163,9 @@ def progress_correction_reason(session, pending: dict, response: str) -> str | N
         and _is_untargeted_group_input(response)
     ):
         return "third-consecutive-group-input"
+
+    if group_resolution_was_noop(source_prompt, response):
+        return "group-action-without-consequence"
     return None
 
 
