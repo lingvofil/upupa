@@ -161,6 +161,9 @@ def _identity_mismatch_reason(
 def _discard_stale_request(dnd, session, *, reason: str) -> None:
     request = copy.deepcopy(getattr(session, "pending_generation_request", {}) or {})
     request_id = request.get("id")
+    rewind_to = request.get("conversation_size")
+    if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
+        dnd._rewind_session_conversation(session, rewind_to)
     session.pending_generation_request = {}
     logging.warning(
         "DnD discarded stale generation request chat_id=%s request_id=%s reason=%s",
@@ -175,6 +178,9 @@ def _discard_stale_request(dnd, session, *, reason: str) -> None:
 def _discard_stale_result(dnd, session, *, reason: str) -> None:
     result = copy.deepcopy(getattr(session, "pending_generated_result", {}) or {})
     result_id = result.get("id")
+    rewind_to = result.get("conversation_size")
+    if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
+        dnd._rewind_session_conversation(session, rewind_to)
     session.pending_generated_result = {}
     logging.warning(
         "DnD discarded stale generated result chat_id=%s result_id=%s reason=%s",
@@ -297,6 +303,8 @@ def _new_result(session, text: str) -> dict:
         result["source_request_kind"] = request_kind
     if request_id:
         result["source_request_id"] = request_id
+    if request.get("conversation_size") is not None:
+        result["conversation_size"] = request.get("conversation_size")
     if request.get("source_campaign_id"):
         result["source_campaign_id"] = str(request["source_campaign_id"])
     if request.get("source_revision") is not None:
