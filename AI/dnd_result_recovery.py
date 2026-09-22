@@ -163,7 +163,14 @@ def _discard_stale_request(dnd, session, *, reason: str) -> None:
     request_id = request.get("id")
     rewind_to = request.get("conversation_size")
     if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
-        dnd._rewind_session_conversation(session, rewind_to)
+        try:
+            dnd._rewind_session_conversation(session, rewind_to)
+        except Exception:
+            logging.exception(
+                "DnD stale request conversation rewind failed chat_id=%s request_id=%s",
+                getattr(session, "chat_id", None),
+                request_id,
+            )
     session.pending_generation_request = {}
     logging.warning(
         "DnD discarded stale generation request chat_id=%s request_id=%s reason=%s",
@@ -180,7 +187,14 @@ def _discard_stale_result(dnd, session, *, reason: str) -> None:
     result_id = result.get("id")
     rewind_to = result.get("conversation_size")
     if rewind_to is not None and hasattr(dnd, "_rewind_session_conversation"):
-        dnd._rewind_session_conversation(session, rewind_to)
+        try:
+            dnd._rewind_session_conversation(session, rewind_to)
+        except Exception:
+            logging.exception(
+                "DnD stale result conversation rewind failed chat_id=%s result_id=%s",
+                getattr(session, "chat_id", None),
+                result_id,
+            )
     session.pending_generated_result = {}
     logging.warning(
         "DnD discarded stale generated result chat_id=%s result_id=%s reason=%s",
