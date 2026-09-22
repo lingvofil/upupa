@@ -222,3 +222,32 @@ def test_successor_can_target_prospective_revision_before_parent_commit():
 
     assert session.state_revision == 1
     assert _types(events) == ["PLAYER_HP_CHANGED"]
+
+
+def test_revision_advances_for_canonical_resource_change_not_covered_by_named_events():
+    session = _session()
+    session.special_move_charges = {"1": 1}
+    session.scene_count = 3
+    prepare_session_events(session)
+
+    session.special_move_charges["1"] = 0
+
+    assert prospective_revision(session) == 1
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == ["CANONICAL_FIELDS_CHANGED"]
+    assert events[0]["data"]["fields"] == ["special_move_charges"]
+
+
+def test_scene_counter_alone_still_advances_revision():
+    session = _session()
+    session.scene_count = 10
+    prepare_session_events(session)
+
+    session.scene_count = 11
+    events = prepare_session_events(session)
+
+    assert session.state_revision == 1
+    assert _types(events) == ["CANONICAL_FIELDS_CHANGED"]
+    assert events[0]["data"]["fields"] == ["scene_count"]
