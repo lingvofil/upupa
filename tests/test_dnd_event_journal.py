@@ -9,6 +9,7 @@ from AI.dnd_event_journal import (
 def _session():
     return SimpleNamespace(
         chat_id=-1001,
+        campaign_started_at="2026-09-22T17:00:00+00:00",
         campaign_id="campaign-test",
         state_revision=0,
         event_journal=[],
@@ -158,3 +159,17 @@ def test_event_journal_is_bounded_but_revision_keeps_growing():
     assert len(session.event_journal) == EVENT_JOURNAL_LIMIT
     assert session.event_journal[-1]["revision"] == session.state_revision
     assert session.event_journal[0]["revision"] == 6
+
+
+def test_pre_campaign_bootstrap_changes_do_not_create_world_events():
+    session = _session()
+    session.campaign_started_at = None
+
+    assert prepare_session_events(session) == []
+    session.inventories["1"].append({"name": "Стартовая кружка", "kind": "item"})
+    assert prepare_session_events(session) == []
+
+    session.campaign_started_at = "2026-09-22T18:00:00+00:00"
+    assert prepare_session_events(session) == []
+    assert session.state_revision == 0
+    assert session.event_journal == []
