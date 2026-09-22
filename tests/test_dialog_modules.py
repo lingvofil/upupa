@@ -272,6 +272,30 @@ def test_poem_user_name_keeps_all_words_removes_emoji_and_uses_cyrillic():
     assert _normalize_poem_user_name("Арина 🙃") == "Арина"
 
 
+def test_poem_user_name_aliases_are_applied_only_in_poem_character_lists(monkeypatch):
+    from AI.dialog import prompt_commands
+
+    aliases = {
+        "Six7ape": "Мухтар",
+        "сикс апе": "Мухтар",
+        "чудо в стране алис": "Света",
+        "мац ня": "Мацоня",
+        "алинаааааа": "Алина",
+    }
+    for raw_name, expected in aliases.items():
+        assert prompt_commands._replace_poem_user_name_alias(raw_name) == expected
+
+    assert prompt_commands._replace_poem_user_name_alias("Жека") == "Жека"
+
+    monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: None)
+    characters = prompt_commands._format_poem_character_instruction(
+        [],
+        "Six7ape, чудо в стране алис, мац ня, алинаааааа, Жека",
+    )
+
+    assert characters == "Мухтар, Света, Мацоня, Алина, Жека"
+
+
 def test_poem_bot_pool_ignores_telegram_fake_channel_senders(monkeypatch):
     import asyncio
     from types import SimpleNamespace
