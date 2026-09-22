@@ -38,8 +38,11 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
 
 
 def _refresh_gemini_chat_session(dnd, session) -> None:
-    """Rebuild Gemini state from DnD's canonical conversation before every turn."""
-    if getattr(session, "active_model", None) != "gemini":
+    """Refresh only an already-materialized legacy Gemini chat session."""
+    if (
+        getattr(session, "active_model", None) != "gemini"
+        or getattr(session, "chat_session", None) is None
+    ):
         return
 
     history = []
