@@ -1,4 +1,8 @@
-from features.channels_settings import _extract_post_title, _telegram_preview_url
+from features.channels_settings import (
+    _extract_post_title,
+    _media_source_urls,
+    _telegram_preview_url,
+)
 from prompts.chat_data import CHANNEL_SETTINGS
 
 
@@ -28,3 +32,16 @@ def test_tgstat_channel_builds_public_telegram_fallback():
 
 def test_non_tgstat_channel_has_no_telegram_fallback():
     assert _telegram_preview_url("https://example.com/channel/@neural_recipes") is None
+
+
+def test_tgstat_channel_prefers_public_telegram_source():
+    assert _media_source_urls("https://tgstat.ru/channel/@uhbla") == [
+        "https://t.me/s/uhbla",
+        "https://tgstat.ru/channel/@uhbla",
+    ]
+
+
+def test_non_tgstat_channel_keeps_original_source_only():
+    assert _media_source_urls("https://example.com/feed") == [
+        "https://example.com/feed"
+    ]

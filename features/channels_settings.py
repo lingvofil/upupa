@@ -53,7 +53,7 @@ def _extract_post_title(post_text):
 
 
 def _telegram_preview_url(url):
-    """Построить fallback на публичную Telegram-ленту для страницы TGStat."""
+    """Построить URL публичной Telegram-ленты для страницы TGStat."""
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").lower()
     if hostname not in {"tgstat.ru", "www.tgstat.ru"}:
@@ -68,6 +68,14 @@ def _telegram_preview_url(url):
         return None
 
     return f"https://t.me/s/{username}"
+
+
+def _media_source_urls(url):
+    """Вернуть источники медиа в порядке приоритета: Telegram, затем TGStat."""
+    telegram_url = _telegram_preview_url(url)
+    if telegram_url:
+        return [telegram_url, url]
+    return [url]
 
 
 async def _process_random_media(message: types.Message, channel_info: dict) -> bool:
@@ -124,11 +132,8 @@ async def _process_random_media(message: types.Message, channel_info: dict) -> b
 
 # Вспомогательные функции переименованы с подчеркиванием для ясности
 async def _download_random_media(url, include_post_title=False):
-    """Скачать случайное медиа, с fallback с TGStat на публичную ленту Telegram."""
-    source_urls = [url]
-    telegram_fallback = _telegram_preview_url(url)
-    if telegram_fallback and telegram_fallback not in source_urls:
-        source_urls.append(telegram_fallback)
+    """Скачать случайное медиа: сначала из Telegram, затем fallback через TGStat."""
+    source_urls = _media_source_urls(url)
 
     last_error = None
 
