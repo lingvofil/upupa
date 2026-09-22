@@ -397,3 +397,22 @@ def test_short_but_concrete_roll_is_not_rejected_as_group_noop():
     )
 
     assert group_resolution_was_noop(source_prompt, response) is False
+
+
+def test_action_extraction_does_not_treat_instructions_as_player_intent():
+    from AI.dnd_group_progress import _group_action_block
+
+    prompt = (
+        "Игроки заявили действия одновременно:\n- Алиса: ем яблоко (id=1)\n"
+        "Сначала РАЗРЕШИ КАЖДУЮ заявку. ОСОБЕННО для осмотра, поиска, прислушивания."
+    )
+    assert _group_action_block(prompt) == "- Алиса: ем яблоко (id=1)"
+    assert inspection_was_deferred(prompt, "Думайте. [ACTION:INPUT]") is False
+
+
+def test_individual_continuation_resets_group_streak():
+    from AI.dnd_group_progress import _update_streak
+
+    session = SimpleNamespace(group_input_streak=2)
+    _update_streak(session, {"source_request_kind": "ROLL_CONTINUATION"}, "[ACTION:INPUT;TARGETS:2]")
+    assert session.group_input_streak == 0

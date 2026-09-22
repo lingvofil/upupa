@@ -61,6 +61,52 @@ def test_short_story_response_is_unchanged():
     assert _compact_story_response(source) == source
 
 
+def test_group_generation_keeps_later_actors_consequences_and_action():
+    session = SimpleNamespace(conversation=[])
+    prompt = (
+        "Игроки заявили действия одновременно:\n"
+        + "\n".join(f"- Герой{i}: изучаю стену (id={i})" for i in range(1, 5))
+        + "\nСначала РАЗРЕШИ КАЖДУЮ заявку."
+    )
+    story = " ".join(f"слово{i}" for i in range(140))
+    response = story + " Четвёртый герой обнаружил выход. [ACTION:INPUT;TARGETS:1]"
+
+    async def generate(current, request):
+        assert "до 197 слов" in request
+        current.conversation.append({"role": "assistant", "content": response})
+        return response
+
+    assert asyncio.run(_generate_without_consecutive_input(generate, session, prompt)) == response
+    assert session.conversation[-1]["content"] == response
+
+
+def test_correction_keeps_group_budget():
+    from AI.dnd_group_progress import _correction_prompt
+
+    pending = {"source_prompt": "Игроки заявили действия одновременно:\n- А: ищу\n- Б: слушаю\nСначала РАЗРЕШИ"}
+    prompt = _correction_prompt(pending, "Думайте [ACTION:INPUT]", "no-progress")
+    response = " ".join(["деталь"] * 110) + " [ACTION:INPUT]"
+
+    async def generate(_session, request):
+        assert "до 141 слов" in request
+        return response
+
+    assert asyncio.run(_generate_without_consecutive_input(generate, SimpleNamespace(conversation=[]), prompt)) == response
+
+
+def test_bot_proxy_does_not_append_stock_taunts():
+    from AI.dnd_style import _StyledBotProxy
+
+    received = []
+
+    class Bot:
+        async def send_message(self, chat_id, text, **kwargs):
+            received.append(text)
+
+    asyncio.run(_StyledBotProxy(Bot()).send_message(1, "🎭 Ход партии."))
+    assert received == ["🎭 Ход партии."]
+
+
 def test_runtime_allows_second_input_without_regeneration():
     session = SimpleNamespace(
         chat_id=-100901,

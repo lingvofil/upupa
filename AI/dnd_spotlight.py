@@ -184,7 +184,10 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     # A CHECK emitted while resolving already-declared group actions belongs to
     # the actor of that declaration. Spotlight chooses new proactive initiative;
     # it must not reassign an in-flight consequence to the next player in line.
-    if getattr(session, "_upupa_resolving_group_actions", False):
+    if (
+        getattr(session, "_upupa_resolving_group_actions", False)
+        and _action_info(response)[0] not in {"INPUT", "POLL"}
+    ):
         return str(response or ""), None, False
 
     _ensure(session)
@@ -238,6 +241,13 @@ def _spotlight_context(session) -> str:
     extra = ""
     if int(session.spotlight_individual_streak) >= 2:
         extra += "\nУже было два индивидуальных хода подряд: сейчас особенно предпочтителен общий INPUT/POLL или общий сюжетный бит."
+    if int(getattr(session, "group_input_streak", 0) or 0) >= 2:
+        extra += (
+            f"\nУже было два общих хода подряд. Разреши все текущие заявки и передай инициативу "
+            f"личным [ACTION:INPUT;TARGETS:{expected}] с вопросом этому герою. "
+            "Если ещё требуется бросок по заявке, сохрани её реального исполнителя. "
+            "Не придумывай бросок или голосование ради смены типа хода."
+        )
     if int(session.spotlight_decisions_since_poll) < 2:
         extra += "\nНедавно уже было голосование: не создавай новое без действительно новой общей развилки."
     return (

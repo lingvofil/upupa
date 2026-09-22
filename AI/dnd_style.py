@@ -24,6 +24,8 @@ DND_STYLE_INSTRUCTION = f"""
 ДЛИНА: обычно 40–60 слов художественного текста, жёсткий максимум 70 слов. Пиши плотнее:
 не пересказывай только что случившееся, не повторяй решения игроков и не разжёвывай очевидные
 последствия. Обычно достаточно одного-двух коротких абзацев плюс технический тег.
+Исключение: при разрешении нескольких заявок действует отдельный лимит коллективного хода;
+сохрани последствия каждого героя, даже если для этого нужно больше 70 слов.
 
 СВОБОДНЫЕ ХОДЫ ПАРТИИ — ОСНОВА ИГРЫ. ACTION:INPUT можно ставить несколько эпизодов подряд,
 если игроки исследуют место, разговаривают с NPC, осматриваются, планируют, покупают, отдыхают или просто
@@ -52,7 +54,6 @@ _INSULT_SUFFIXES = (
     " Думайте, кретины.",
     " Не тормозите, долбоёбы.",
     " Решайте уже, герои хуевы.",
-    " Ну давайте, мастера катастроф.",
     " Чо встали, стратеги из ларька.",
     " Соберитесь, цирк уехал без вас.",
     " Пошевелите извилинами, если нашли.",
@@ -128,14 +129,14 @@ def _ensure_style_instruction(prompt: str) -> str:
     return result
 
 
-def _compact_story_response(text: str) -> str:
+def _compact_story_response(text: str, *, max_words: int = DND_STORY_MAX_WORDS) -> str:
     """Keep user-facing story text under the hard cap while preserving the action tag."""
     source = str(text or "").strip()
     action_match = _FULL_ACTION_TAG_RE.search(source)
     action_tag = action_match.group(0) if action_match else ""
     story = _FULL_ACTION_TAG_RE.sub("", source).strip()
     words = story.split()
-    if len(words) <= DND_STORY_MAX_WORDS:
+    if len(words) <= max_words:
         return source
 
     sentences = re.split(r"(?<=[.!?…])\s+", story)
@@ -146,7 +147,7 @@ def _compact_story_response(text: str) -> str:
         if not sentence:
             continue
         sentence_words = len(sentence.split())
-        if kept_words + sentence_words > DND_STORY_MAX_WORDS:
+        if kept_words + sentence_words > max_words:
             break
         kept.append(sentence)
         kept_words += sentence_words
@@ -154,7 +155,7 @@ def _compact_story_response(text: str) -> str:
     if kept:
         compact_story = " ".join(kept).strip()
     else:
-        compact_story = " ".join(words[:DND_STORY_MAX_WORDS]).rstrip(" ,;:") + "…"
+        compact_story = " ".join(words[:max_words]).rstrip(" ,;:") + "…"
 
     if action_tag:
         return f"{compact_story}\n{action_tag}".strip()
@@ -264,8 +265,18 @@ async def _generate_without_consecutive_input(original_generate, session, prompt
         prepared_request = _ensure_style_instruction(prompt)
     else:
         prepared_request = _compact_request_text(prompt)
+    from AI.dnd_group_action_resilience import _resolution_budget
+    from AI.dnd_group_progress import _group_action_count
+
+    action_count = _group_action_count(prompt)
+    max_words = _resolution_budget(action_count)[1] if action_count else DND_STORY_MAX_WORDS
+    if action_count:
+        prepared_request += (
+            f"\nЛИМИТ ЭТОГО КОЛЛЕКТИВНОГО ХОДА: до {max_words} слов. "
+            "Сохрани конкретные последствия КАЖДОЙ заявки; общий лимит 70 слов здесь не применяется."
+        )
     raw_result = await original_generate(session, prepared_request)
-    compact_result = _compact_story_response(raw_result)
+    compact_result = _compact_story_response(raw_result, max_words=max_words)
     balanced_result = _balance_roll_mode(session, compact_result, history=history_before)
     _replace_last_assistant_content(session, raw_result, balanced_result)
     return balanced_result
@@ -278,7 +289,7 @@ class _StyledBotProxy:
     async def send_message(self, chat_id, text, **kwargs):
         return await self._bot.send_message(
             chat_id,
-            errative_text(text, add_insult=True, taunt_key=chat_id),
+            errative_text(text, add_insult=False, taunt_key=chat_id),
             **kwargs,
         )
 
@@ -326,8 +337,7 @@ def configure_dnd_style() -> None:
 
     dnd.with_scene_direction = styled_with_scene_direction
 
-    # Keep DnD presentation hooks local, but let _StyledBotProxy own the single
-    # automatic taunt. Previously these helpers added one taunt and the proxy added another.
+    # Keep presentation hooks local; humor belongs to the authored scene.
     original_action_prompt_text = dnd._action_prompt_text
     dnd._action_prompt_text = lambda session: errative_text(
         original_action_prompt_text(session), add_insult=False

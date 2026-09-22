@@ -69,6 +69,17 @@ def test_spotlight_does_not_retarget_story_bound_roll():
     assert next_spotlight(session) == 2
 
 
+def test_group_continuation_consumes_new_individual_input_but_not_causal_roll():
+    session = _session()
+    session._upupa_resolving_group_actions = True
+    roll = "[ACTION:ROLL;TYPE:CHECK;TARGETS:1;DC:12]"
+    assert enforce_spotlight(session, roll) == (roll, None, False)
+    assert next_spotlight(session) == 1
+    response = "[ACTION:INPUT;TARGETS:1]"
+    assert enforce_spotlight(session, response) == (response, 1, False)
+    assert next_spotlight(session) == 2
+
+
 def test_spotlight_assigns_untargeted_check_but_not_save():
     session = _session()
     checked, consumed, rewritten = enforce_spotlight(
