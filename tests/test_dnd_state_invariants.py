@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from AI.dnd_state_invariants import validate_session_state
@@ -125,3 +126,17 @@ def test_player_scoped_state_must_belong_to_current_participants():
 
     assert "orphan_player_position" in codes
     assert "orphan_condition_owner" in codes
+
+
+def test_dnd_validates_state_before_persist_and_after_restore():
+    source = (Path(__file__).resolve().parents[1] / "AI" / "dnd.py").read_text(encoding="utf-8")
+
+    persist_block = source.split("def persist_dnd_sessions()", 1)[1].split(
+        "def choose_next_scene_type", 1
+    )[0]
+    restore_block = source.split("def restore_dnd_sessions", 1)[1].split(
+        "async def create_game_session", 1
+    )[0]
+
+    assert '_validate_dnd_session_state(session, boundary="persist")' in persist_block
+    assert '_validate_dnd_session_state(session, boundary="restore")' in restore_block
