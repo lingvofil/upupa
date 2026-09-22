@@ -6,10 +6,11 @@ import re
 
 
 CONTEXT_MAX_CHARS = 6_000
-STATE_MAX_CHARS = 2_900
-EVENTS_MAX_CHARS = 900
-SCENES_MAX_CHARS = 800
-LEGACY_CONTEXT_MAX_CHARS = 550
+STATE_MAX_CHARS = 2_500
+NPC_MAX_CHARS = 500
+EVENTS_MAX_CHARS = 700
+SCENES_MAX_CHARS = 600
+LEGACY_CONTEXT_MAX_CHARS = 300
 RECENT_EVENT_LIMIT = 12
 RECENT_SCENE_LIMIT = 3
 NPC_LIMIT = 6
@@ -46,6 +47,21 @@ def _clip(text: str, budget: int, *, marker: str = "\n[…сокращено…]
     head = max(1, int(payload * 0.58))
     tail = payload - head
     return value[:head] + marker + value[-tail:]
+
+
+def _tail_lines(lines: list[str], budget: int) -> str:
+    selected = []
+    used = 0
+    for line in reversed([str(value) for value in lines if str(value)]):
+        extra = len(line) + (1 if selected else 0)
+        if selected and used + extra > budget:
+            break
+        if not selected and len(line) > budget:
+            selected.append(line[-budget:])
+            break
+        selected.append(line)
+        used += extra
+    return "\n".join(reversed(selected))
 
 
 def _inventory_text(rows) -> str:
@@ -337,7 +353,7 @@ def _recent_event_text(session) -> str:
     ]
     if not rows:
         return "- пока нет событий после старта журналирования"
-    return _clip("\n".join(_event_line(event) for event in rows), EVENTS_MAX_CHARS)
+    return _tail_lines([_event_line(event) for event in rows], EVENTS_MAX_CHARS)
 
 
 def _recent_scene_values(session) -> list[str]:
@@ -352,8 +368,8 @@ def _recent_scene_values(session) -> list[str]:
 def _recent_scene_text(rows: list[str]) -> str:
     if not rows:
         return "- пока нет зафиксированных сцен"
-    return _clip(
-        "\n".join(f"- {index + 1}: {value}" for index, value in enumerate(rows)),
+    return _tail_lines(
+        [f"- {index + 1}: {value}" for index, value in enumerate(rows)],
         SCENES_MAX_CHARS,
     )
 
@@ -392,14 +408,21 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         identity.append("сюжетная рамка: " + selected_plot)
 
     state_parts = [
-        "ГЕРОИ И ИХ ТЕКУЩЕЕ СОСТОЯНИЕ:\n" + "\n".join(_player_lines(session)),
-        "АКТИВНЫЕ ПРОТИВНИКИ:\n" + "\n".join(_enemy_lines(session)),
-        "ШКАЛЫ И УГРОЗЫ:\n" + "\n".join(_clock_lines(session)),
-        "РЕСУРСЫ И АКТИВНЫЕ ФАКТЫ:\n" + "\n".join(_resource_lines(session)),
-        "РЕЛЕВАНТНЫЕ NPC:\n" + "\n".join(_npc_lines(session, prompt, recent_scenes)),
-        "СОЦГРАФ — только мягкий контекст, не факт мира:\n" + _soft_relationship_text(session),
+        "ГЕРОИ И ИХ ТЕКУЩЕЕ СОСТОЯНИЕ:\n"
+        + _clip("\n".join(_player_lines(session)), 1_500),
+        "АКТИВНЫЕ ПРОТИВНИКИ:\n"
+        + _clip("\n".join(_enemy_lines(session)), 320),
+        "ШКАЛЫ И УГРОЗЫ:\n"
+        + _clip("\n".join(_clock_lines(session)), 320),
+        "РЕСУРСЫ И АКТИВНЫЕ ФАКТЫ:\n"
+        + _clip("\n".join(_resource_lines(session)), 260),
     ]
     state_text = _clip("\n\n".join(state_parts), STATE_MAX_CHARS)
+    npc_text = _clip(
+        "\n".join(_npc_lines(session, prompt, recent_scenes)),
+        NPC_MAX_CHARS,
+    )
+    relationships = _clip(_soft_relationship_text(session), 220)
 
     legacy = ""
     try:
@@ -411,6 +434,8 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         _HEADER,
         "\n".join(identity),
         state_text,
+        "РЕЛЕВАНТНЫЕ NPC:\n" + npc_text,
+        "СОЦГРАФ — только мягкий контекст, не факт мира:\n" + relationships,
         "ПОСЛЕДНИЕ ПОДТВЕРЖДЁННЫЕ ИЗМЕНЕНИЯ:\n" + _recent_event_text(session),
         "ПОСЛЕДНИЕ ХУДОЖЕСТВЕННЫЕ СЦЕНЫ — только для связности:\n" + _recent_scene_text(recent_scenes),
     ]
