@@ -18,6 +18,7 @@ from infrastructure.ai.clients import (
     openrouter_ai,
     siliconflow_ai,
 )
+from core.settings import MODEL_QUEUE_PLEADING
 from core.history_engine import load_and_find_answer
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import save_chat_settings
@@ -303,12 +304,22 @@ def format_reply_context(message: types.Message) -> str:
     return context
 
 
-async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input: str = "") -> str:
+async def generate_response(
+    prompt: str,
+    chat_id: str,
+    bot_name: str,
+    user_input: str = "",
+    *,
+    force_gemini: bool = False,
+    gemini_model_queue: list[str] | None = None,
+) -> str:
     """Generate a dialogue response through the chat's active model."""
     try:
         update_chat_settings(chat_id)
         current_settings = chat_settings.get(chat_id, {})
         active_model = current_settings.get("active_model", "gemini")
+        if force_gemini:
+            active_model = "gemini"
 
         if active_model == "history":
             ans = await asyncio.to_thread(load_and_find_answer, user_input, chat_id, 3)
@@ -352,6 +363,7 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
             response = model.generate_content(
                 prompt_text,
                 chat_id=int(chat_id),
+                model_queue=gemini_model_queue,
                 **gemini_kwargs,
             )
             return response.text
@@ -404,6 +416,23 @@ async def generate_response(prompt: str, chat_id: str, bot_name: str, user_input
         return error_message
 
 
+async def generate_pleading_response(
+    prompt: str,
+    chat_id: str,
+    bot_name: str,
+    user_input: str = "",
+) -> str:
+    """Route "упупа умоляю" through Gemini 3.8 with normal Gemini fallbacks."""
+    return await generate_response(
+        prompt,
+        chat_id,
+        bot_name,
+        user_input=user_input,
+        force_gemini=True,
+        gemini_model_queue=MODEL_QUEUE_PLEADING,
+    )
+
+
 async def handle_bot_conversation(
     message: types.Message,
     user_first_name: str,
@@ -429,10 +458,24 @@ async def handle_bot_conversation(
     else:
         temp_input_lower = user_input.lower()
 
-    for keyword in DIALOG_TRIGGER_KEYWORDS:
-        if temp_input_lower.startswith(keyword):
-            user_input = user_input[len(keyword):].lstrip(" ,")
-            break
+    pleading_trigger = "упупа умоляю"
+    is_pleading = (
+        temp_input_lower == pleading_trigger
+        or temp_input_lower.startswith(pleading_trigger + " ")
+    )
+
+    if is_pleading:
+        match = re.match(
+            r"^\s*упупа(?:[\s,;:!?.—–-]+)умоляю(?:[\s,;:!?.—–-]+)?(.*)$",
+            user_input,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        user_input = (match.group(1) if match else "").strip()
+    else:
+        for keyword in DIALOG_TRIGGER_KEYWORDS:
+            if temp_input_lower.startswith(keyword):
+                user_input = user_input[len(keyword):].lstrip(" ,")
+                break
 
     if not user_input.strip() and message.from_user and message.from_user.is_bot:
         user_input = original_user_input.strip()
@@ -477,7 +520,11 @@ async def handle_bot_conversation(
     should_search = needs_web_search_func or needs_web_search
     fetch_web_context = get_web_context_func or get_web_context
     web_context = ""
-    if current_settings.get("active_model", "gemini") != "history" and should_search(user_input):
+    uses_history = (
+        current_settings.get("active_model", "gemini") == "history"
+        and not is_pleading
+    )
+    if not uses_history and should_search(user_input):
         try:
             web_context = await fetch_web_context(user_input)
             if web_context:
@@ -514,5 +561,10 @@ async def handle_bot_conversation(
         f"{prompt_name}:"
     )
 
-    generator = generate_response_func or generate_response
+    if generate_response_func is not None:
+        generator = generate_response_func
+    elif is_pleading:
+        generator = generate_pleading_response
+    else:
+        generator = generate_response
     return await generator(full_prompt, chat_id, prompt_name, user_input=user_input)
