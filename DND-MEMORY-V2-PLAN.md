@@ -45,8 +45,7 @@
 
 ## Этап 3. State revision + event journal
 
-Статус: **в работе в текущем stacked PR**.
-
+Статус: **готово в PR #727**.
 
 - Ввести устойчивый `campaign_id` и монотонный `state_revision`.
 - Фиксировать структурированные изменения мира как компактные события с `event_id`, `campaign_id`, `revision`, `sequence`.
@@ -58,7 +57,7 @@
 
 ## Этап 4. Context builder
 
-Статус: **в работе в текущем stacked PR**.
+Статус: **готово в PR #729**.
 
 - Перестать полагаться на длинную `conversation` как на память мира.
 - На каждый основной AI-вызов собирать bounded context из:
@@ -74,6 +73,8 @@
 
 ## Этап 5. Транзакционный turn pipeline
 
+Статус: **в работе в текущем stacked PR**.
+
 Целевая схема:
 
 ```
@@ -88,8 +89,11 @@ player actions
 ```
 
 - Сохранить нынешний durable provider/result recovery.
-- Распространить его guarantees на state mutations.
-- Поздние ответы старой revision/campaign должны отбрасываться детерминированно.
+- Каждый `pending_generation_request` и `pending_generated_result` привязать к `source_campaign_id/source_revision`.
+- До provider call, после provider call и перед apply проверять identity; поздний ответ старой revision/campaign отбрасывать без parse.
+- Во время durable parse промежуточные persist не создают отдельные event-journal revisions; успешный логический ход открывает один commit boundary.
+- Crash в APPLYING восстанавливает `pre_apply_snapshot` и replay-ит тот же exact result с идемпотентными Telegram effects.
+- Явный successor (`transition_to_generation_request`) получает prospective revision родительского canonical commit.
 
 ## Этап 6. Regression suite на реальные поломки
 
