@@ -171,38 +171,6 @@ def test_valid_reply_is_precollected_before_normal_handler(monkeypatch):
     }
 
 
-def test_song_command_is_not_precollected_as_dnd_action(monkeypatch):
-    chat_id = -100815
-    session = _participant_session(chat_id)
-    dnd.dnd_sessions[chat_id] = session
-    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
-    calls = []
-
-    async def fake_finalize(*args):
-        calls.append(args)
-
-    monkeypatch.setattr(dnd, "finalize_group_actions", fake_finalize)
-    event = SimpleNamespace(
-        chat=SimpleNamespace(id=chat_id),
-        from_user=SimpleNamespace(id=4, first_name="Г"),
-        reply_to_message=SimpleNamespace(message_id=777),
-        text="песня чат",
-        caption=None,
-        entities=[],
-    )
-
-    async def handler(_event, _data):
-        return None
-
-    try:
-        asyncio.run(DndParticipantCompletionMiddleware()(handler, event, {"bot": FakeBot()}))
-    finally:
-        dnd.dnd_sessions.pop(chat_id, None)
-
-    assert session.pending_actions == {}
-    assert calls == []
-
-
 def test_unregistered_reply_joins_open_group_turn(monkeypatch):
     chat_id = -100807
     session = _participant_session(chat_id)

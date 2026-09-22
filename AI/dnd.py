@@ -24,7 +24,6 @@ from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
 from core.state import chat_settings
-from features.song.command_guard import is_song_command
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 
@@ -229,14 +228,8 @@ class GameSession:
         else:
             self.conversation = [dict(item) for item in conversation]
 
-        # Production DnD generation uses the bounded provider path and does not
-        # need a legacy SDK chat object. Materialize it only for direct legacy callers.
         self.chat_session = None
-
-    def _ensure_chat_session(self):
-        if self.active_model != "gemini":
-            return None
-        if self.chat_session is None:
+        if self.active_model == "gemini":
             history = [
                 {
                     "role": "model" if item["role"] == "assistant" else "user",
@@ -244,16 +237,11 @@ class GameSession:
                 }
                 for item in self.conversation
             ]
-            self.chat_session = model.start_chat(
-                chat_id=self.chat_id,
-                history=history,
-            )
-        return self.chat_session
+            self.chat_session = model.start_chat(chat_id=chat_id, history=history)
 
     def send_message(self, message_text):
         if self.active_model == "gemini":
-            chat_session = self._ensure_chat_session()
-            response = chat_session.send_message(message_text, chat_id=self.chat_id)
+            response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
             result = response.text
         elif self.active_model == "gigachat":
             from AI.dnd_generation_resilience import build_bounded_text_prompt
@@ -382,10 +370,7 @@ def _rewind_session_conversation(session: GameSession, size: int) -> bool:
     if not isinstance(conversation, list) or len(conversation) <= size:
         return False
     del conversation[size:]
-    if (
-        getattr(session, "active_model", None) == "gemini"
-        and getattr(session, "chat_session", None) is not None
-    ):
+    if getattr(session, "active_model", None) == "gemini":
         history = [
             {
                 "role": "model" if item["role"] == "assistant" else "user",
@@ -1552,8 +1537,6 @@ def _is_backstory_reply(message: Message) -> bool:
         or message.chat.id in _processing_backstories
     ):
         return False
-    if is_song_command(message):
-        return False
     starter_user_id = getattr(session, "starter_user_id", None)
     if starter_user_id is not None and not _user_is_host(session, int(message.from_user.id)):
         return False
@@ -1746,7 +1729,7 @@ def _is_group_action_reply(message: Message) -> bool:
     if not prompt_message_id or not message.reply_to_message:
         return False
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
+    if not user_action or user_action.lower().startswith("упупа"):
         return False
     if not _can_user_act(
         session,
@@ -1762,7 +1745,7 @@ async def handle_free_action(message: Message):
     session = dnd_sessions[message.chat.id]
     prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа") or is_song_command(message):
+    if not user_action or user_action.lower().startswith("упупа"):
         return
     user_id = int(message.from_user.id)
     if not _can_user_act(
