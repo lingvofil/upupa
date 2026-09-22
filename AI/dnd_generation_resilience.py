@@ -468,6 +468,16 @@ def _fallback_prompt(session, prompt: str, *, max_chars: int = DND_FALLBACK_PROM
     return compact[:max_chars]
 
 
+def build_bounded_text_prompt(
+    session,
+    prompt: str,
+    *,
+    max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
+) -> str:
+    """Public bounded text prompt for non-Gemini DnD provider paths."""
+    return _fallback_prompt(session, prompt, max_chars=max_chars)
+
+
 def _run_groq_sync(
     session,
     prompt: str,
@@ -633,6 +643,7 @@ def configure_dnd_generation_resilience(dnd) -> None:
 
 __all__ = [
     "DndGeminiCircuitOpen",
+    "build_bounded_text_prompt",
     "configure_dnd_generation_resilience",
     "generate_auxiliary_text",
 ]
