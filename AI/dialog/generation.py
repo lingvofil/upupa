@@ -49,14 +49,20 @@ def get_error_reply_text() -> str:
     return "Произошла ошибка при обработке."
 
 
-async def generate_simple_response(prompt: str, chat_id: str) -> str:
+async def generate_simple_response(
+    prompt: str,
+    chat_id: str,
+    *,
+    force_gemini: bool = False,
+    gemini_model_queue: list[str] | None = None,
+) -> str:
     """Generate a standalone response without dialogue history."""
     try:
         update_chat_settings(chat_id)
         current_settings = chat_settings.get(chat_id, {})
         active_model = current_settings.get("active_model", "gemini")
 
-        if active_model == "history":
+        if force_gemini or active_model == "history":
             active_model = "gemini"
 
         logging.info("generate_simple_response: используется модель %s", active_model)
@@ -79,7 +85,11 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
                 logging.info("SiliconFlow вернул: %r", result[:100] if result else "")
                 return result
 
-            response = model.generate_content(prompt, chat_id=int(chat_id))
+            response = model.generate_content(
+                prompt,
+                chat_id=int(chat_id),
+                model_queue=gemini_model_queue,
+            )
             return response.text
 
         response_text = await asyncio.to_thread(sync_model_call)
@@ -99,6 +109,16 @@ async def generate_simple_response(prompt: str, chat_id: str) -> str:
     except Exception as exc:
         logging.error("Model API Error in generate_simple_response: %s", exc, exc_info=True)
         return get_error_reply_text()
+
+
+async def generate_pleading_simple_response(prompt: str, chat_id: str) -> str:
+    """Generate serious-mode text through Gemini 3.8 with verified fallbacks."""
+    return await generate_simple_response(
+        prompt,
+        chat_id,
+        force_gemini=True,
+        gemini_model_queue=MODEL_QUEUE_PLEADING,
+    )
 
 
 def update_conversation_history(chat_id: str, name: str, message_text: str, role: str) -> None:

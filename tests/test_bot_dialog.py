@@ -427,3 +427,146 @@ def test_pleading_response_forces_gemini_and_uses_pleading_queue(monkeypatch):
     assert captured["prompt"] == "PREMIUM PROMPT"
     assert captured["kwargs"]["chat_id"] == 12345
     assert captured["kwargs"]["model_queue"] == MODEL_QUEUE_PLEADING
+
+
+
+def test_pleading_simple_response_forces_gemini_and_uses_pleading_queue(monkeypatch):
+    from AI.dialog import generation
+    from core.settings import MODEL_QUEUE_PLEADING
+
+    generation.chat_settings["12345"] = {
+        "active_model": "groq",
+    }
+    monkeypatch.setattr(generation, "update_chat_settings", lambda _chat_id: None)
+
+    captured = {}
+
+    def fake_generate_content(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(text="ответ 3.8")
+
+    monkeypatch.setattr(
+        generation,
+        "model",
+        SimpleNamespace(generate_content=fake_generate_content),
+    )
+
+    response = asyncio.run(
+        generation.generate_pleading_simple_response(
+            "SERIOUS PROMPT",
+            "12345",
+        )
+    )
+
+    assert response == "ответ 3.8"
+    assert captured["prompt"] == "SERIOUS PROMPT"
+    assert captured["kwargs"]["chat_id"] == 12345
+    assert captured["kwargs"]["model_queue"] == MODEL_QUEUE_PLEADING
+
+
+def test_serious_mode_command_uses_pleading_simple_response(monkeypatch):
+    from AI.dialog import serious_mode
+
+    serious_mode.serious_mode_messages.clear()
+    captured = {}
+    replies = []
+
+    async def fake_chat_action(chat_id, action):
+        captured["chat_action"] = (chat_id, action)
+
+    async def fake_generate(prompt, chat_id):
+        captured["prompt"] = prompt
+        captured["chat_id"] = chat_id
+        return "serious answer"
+
+    async def fake_reply(text):
+        replies.append(text)
+        return SimpleNamespace(message_id=777)
+
+    monkeypatch.setattr(
+        serious_mode,
+        "bot",
+        SimpleNamespace(send_chat_action=fake_chat_action),
+    )
+    monkeypatch.setattr(serious_mode, "needs_web_search", lambda _text: False)
+    monkeypatch.setattr(
+        serious_mode,
+        "generate_pleading_simple_response",
+        fake_generate,
+    )
+
+    message = SimpleNamespace(
+        text="упупа умоляю почему небо синее",
+        chat=SimpleNamespace(id=12345),
+        reply=fake_reply,
+    )
+
+    asyncio.run(serious_mode.handle_serious_mode_command(message))
+
+    assert captured["chat_id"] == "12345"
+    assert captured["chat_action"] == ("12345", "typing")
+    assert "Вопрос: почему небо синее" in captured["prompt"]
+    assert replies == ["serious answer"]
+    assert serious_mode.serious_mode_messages[777]["history"] == [
+        {"role": "user", "content": "почему небо синее"},
+        {"role": "assistant", "content": "serious answer"},
+    ]
+
+
+def test_serious_mode_reply_keeps_pleading_queue(monkeypatch):
+    from AI.dialog import serious_mode
+
+    serious_mode.serious_mode_messages.clear()
+    serious_mode.serious_mode_messages[700] = {
+        "chat_id": "12345",
+        "timestamp": None,
+        "history": [
+            {"role": "user", "content": "почему небо синее"},
+            {"role": "assistant", "content": "потому что рассеяние"},
+        ],
+    }
+    captured = {}
+    replies = []
+
+    async def fake_chat_action(chat_id, action):
+        captured["chat_action"] = (chat_id, action)
+
+    async def fake_generate(prompt, chat_id):
+        captured["prompt"] = prompt
+        captured["chat_id"] = chat_id
+        return "continued answer"
+
+    async def fake_reply(text):
+        replies.append(text)
+        return SimpleNamespace(message_id=701)
+
+    monkeypatch.setattr(
+        serious_mode,
+        "bot",
+        SimpleNamespace(send_chat_action=fake_chat_action),
+    )
+    monkeypatch.setattr(serious_mode, "cleanup_old_serious_messages", lambda: None)
+    monkeypatch.setattr(
+        serious_mode,
+        "generate_pleading_simple_response",
+        fake_generate,
+    )
+
+    message = SimpleNamespace(
+        text="а подробнее?",
+        chat=SimpleNamespace(id=12345),
+        reply_to_message=SimpleNamespace(message_id=700),
+        reply=fake_reply,
+    )
+
+    handled = asyncio.run(serious_mode.handle_serious_mode_reply(message))
+
+    assert handled is True
+    assert captured["chat_id"] == "12345"
+    assert "Пользователь: а подробнее?" in captured["prompt"]
+    assert replies == ["continued answer"]
+    assert serious_mode.serious_mode_messages[701]["history"][-1] == {
+        "role": "assistant",
+        "content": "continued answer",
+    }

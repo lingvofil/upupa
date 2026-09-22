@@ -10,7 +10,7 @@ from core.state import cleanup_old_serious_messages, serious_mode_messages
 from prompts import PROMPT_SERIOUS_MODE
 from services.web_context import get_web_context, needs_web_search
 
-from AI.dialog.generation import generate_simple_response
+from AI.dialog.generation import generate_pleading_simple_response
 
 
 async def handle_serious_mode_command(message: types.Message):
@@ -39,7 +39,7 @@ async def handle_serious_mode_command(message: types.Message):
     full_prompt = f"{PROMPT_SERIOUS_MODE}{web_context}\n\nВопрос: {user_question}"
 
     try:
-        response_text = await generate_simple_response(full_prompt, chat_id)
+        response_text = await generate_pleading_simple_response(full_prompt, chat_id)
         sent_message = await message.reply(response_text)
         serious_mode_messages[sent_message.message_id] = {
             "chat_id": chat_id,
@@ -85,7 +85,7 @@ async def handle_serious_mode_reply(message: types.Message) -> bool:
     )
 
     try:
-        response_text = await generate_simple_response(full_prompt, chat_id)
+        response_text = await generate_pleading_simple_response(full_prompt, chat_id)
         sent_message = await message.reply(response_text)
         history.append({"role": "assistant", "content": response_text})
         serious_mode_messages[sent_message.message_id] = {
