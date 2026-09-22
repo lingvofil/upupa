@@ -349,8 +349,8 @@ def test_generic_acknowledgement_only_group_turn_is_noop():
     ) is False
 
 
-def test_generic_noop_reason_precedes_third_input_rule():
-    session = SimpleNamespace(group_input_streak=2)
+def test_generic_noop_reason_is_used_before_streak_limit():
+    session = SimpleNamespace(group_input_streak=0)
     pending = {
         "source_request_kind": "GROUP_ACTION_CONTINUATION",
         "source_prompt": (
