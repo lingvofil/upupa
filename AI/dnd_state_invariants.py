@@ -113,14 +113,6 @@ def _validate_pending_state(session, issues) -> None:
             )
         )
 
-    if state == "WAITING_ACTION" and action_prompt is None:
-        issues.append(
-            DndStateIssue(
-                "waiting_action_without_prompt",
-                "WAITING_ACTION has no action_prompt_message_id",
-                "warning",
-            )
-        )
     if state != "WAITING_ACTION" and action_prompt is not None:
         issues.append(
             DndStateIssue(
