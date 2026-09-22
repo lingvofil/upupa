@@ -48,12 +48,16 @@ def test_gemini_queue_matches_verified_production_probe():
     from core import settings
 
     assert settings.MODEL_QUEUE_DEFAULT == [
-        "gemini-3.8-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-3-flash-preview",
         "gemini-3.1-flash-lite",
     ]
+    assert settings.MODEL_QUEUE_PLEADING == [
+        "gemini-3.8-flash",
+        *settings.MODEL_QUEUE_DEFAULT,
+    ]
+    assert "gemini-3.8-flash" not in settings.MODEL_QUEUE_DEFAULT
     assert settings.TEXT_GENERATION_MODEL_LIGHT == "gemini-2.5-flash-lite"
 
     rejected_from_probe = {
