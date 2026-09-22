@@ -6,8 +6,10 @@ from tests import test_smoke_imports
 del test_smoke_imports
 
 from AI import dnd
+from AI import dnd_combat as combat
 from AI.dnd_completion import (
     DND_PARTICIPANT_CONTEXT_MARKER,
+    DndCompletionPolicy,
     DndParticipantCompletionMiddleware,
     _refresh_gemini_chat_session,
     _with_participant_context,
@@ -442,4 +444,52 @@ def test_abstract_mode_keeps_waiting_for_timer(monkeypatch):
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
+    assert calls == []
+
+def test_late_joiner_without_sheet_still_blocks_group_auto_finalize(monkeypatch):
+    chat_id = -100811
+    session = _participant_session(
+        chat_id,
+        pending_actions={
+            "1": {"user_id": 1, "action": "а"},
+            "2": {"user_id": 2, "action": "б"},
+            "3": {"user_id": 3, "action": "в"},
+            "4": {"user_id": 4, "action": "г"},
+        },
+    )
+    session.participants["9"] = {"user_id": 9, "name": "Новый"}
+    session.character_sheets = {
+        str(user_id): {
+            "hp": 10,
+            "max_hp": 10,
+            "status": "alive",
+        }
+        for user_id in range(1, 5)
+    }
+
+    policy = DndCompletionPolicy()
+    policy.filter_expected_ids = (
+        lambda _dnd, current, expected: {
+            user_id for user_id in expected if user_id in combat._living_ids(current)
+        }
+    )
+    middleware = DndParticipantCompletionMiddleware(policy)
+    dnd.dnd_sessions[chat_id] = session
+    calls = []
+
+    async def fake_finalize(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(dnd, "finalize_group_actions", fake_finalize)
+
+    event = SimpleNamespace(chat=SimpleNamespace(id=chat_id))
+    async def handler(_event, _data):
+        return None
+
+    try:
+        asyncio.run(middleware(handler, event, {"bot": FakeBot()}))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert combat._living_ids(session) == {1, 2, 3, 4, 9}
     assert calls == []
