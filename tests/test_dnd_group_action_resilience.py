@@ -230,12 +230,12 @@ def test_deferred_inspection_response_is_detected():
         "Да-да, осматривайтесь и думайте, что делать дальше. [ACTION:INPUT]",
     ) is True
 
-    assert _inspection_was_deferred(
+    assert inspection_was_deferred(
         source_prompt,
         "Алиса замечает свежие следы у стены, Боря видит приоткрытую дверь. [ACTION:INPUT]",
     ) is False
 
-    assert _inspection_was_deferred(
+    assert inspection_was_deferred(
         source_prompt,
         "Следы смазаны дождём — нужна проверка. "
         "[ACTION:ROLL;TYPE:CHECK;SKILL:Внимательность;TARGETS:2;DC:10;MODE:NORMAL]",
