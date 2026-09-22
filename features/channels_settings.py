@@ -1,5 +1,6 @@
 import random
 import logging
+from urllib.parse import urlparse
 from aiogram import types
 from aiogram.types import BufferedInputFile
 from playwright.async_api import async_playwright
@@ -49,6 +50,24 @@ def _extract_post_title(post_text):
             # Telegram ограничивает подпись к фото/видео 1024 символами.
             return title[:1024]
     return None
+
+
+def _telegram_preview_url(url):
+    """Построить fallback на публичную Telegram-ленту для страницы TGStat."""
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"tgstat.ru", "www.tgstat.ru"}:
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2 || parts[0] != "channel":
+        return None
+
+    username = parts[1].lstrip("@")
+    if not username or any(not (char.isalnum() or char == "_") for char in username):
+        return None
+
+    return f"https://t.me/s/{username}"
 
 
 async def _process_random_media(message: types.Message, channel_info: dict) -> bool:
@@ -105,7 +124,14 @@ async def _process_random_media(message: types.Message, channel_info: dict) -> b
 
 # Вспомогательные функции переименованы с подчеркиванием для ясности
 async def _download_random_media(url, include_post_title=False):
-    """Downloads a random media file from a given URL."""
+    """Скачать случайное медиа, с fallback с TGStat на публичную ленту Telegram."""
+    source_urls = [url]
+    telegram_fallback = _telegram_preview_url(url)
+    if telegram_fallback and telegram_fallback not in source_urls:
+        source_urls.append(telegram_fallback)
+
+    last_error = None
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -121,92 +147,248 @@ async def _download_random_media(url, include_post_title=False):
             )
             page = await context.new_page()
             try:
-                # ИЗМЕНЕНИЕ 1: Увеличен таймаут до 60 сек и изменено условие ожидания на domcontentloaded
-                # Это позволяет не ждать загрузки всей рекламы и счетчиков
-                await page.goto(url, timeout=60000, wait_until='domcontentloaded')
-                
-                # ИЗМЕНЕНИЕ 2: Ожидание networkidle обернуто в try/except
-                # Tgstat может постоянно подгружать данные, из-за чего networkidle никогда не наступит
-                try:
-                    await page.wait_for_load_state('networkidle', timeout=5000)
-                except Exception:
-                    pass # Игнорируем, если сеть не успокоилась, у нас есть явный wait ниже
+                for source_url in source_urls:
+                    try:
+                        response = await page.goto(
+                            source_url,
+                            timeout=60000,
+                            wait_until='domcontentloaded',
+                        )
+                        status = response.status if response is not None else None
+                        if status is not None and status >= 400:
+                            last_error = RuntimeError(
+                                f"Источник {source_url} вернул HTTP {status}"
+                            )
+                            logging.warning(
+                                "Источник медиа недоступен: url=%s status=%s",
+                                source_url,
+                                status,
+                            )
+                            continue
 
-                # Оставляем явное ожидание для подгрузки картинок (infinite scroll / lazy load)
-                await page.wait_for_timeout(10000)
-                
-                media_urls = await page.evaluate(
-                    """
-                    (includePostTitle) => {
-                        const mediaSources = [];
-                        const textSelectors = [
-                            '.post-text',
-                            '.post-description',
-                            '.post-content',
-                            '.post-body',
-                            '.card-text',
-                            '.message-text',
-                            '[class*="post-text"]',
-                            '[class*="post__text"]'
-                        ];
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=5000)
+                        except Exception:
+                            pass
 
-                        const getPostText = (element) => {
-                            if (!includePostTitle) {
-                                return null;
-                            }
+                        # Даём lazy-load медиа отрисоваться и подгружаем нижнюю часть ленты.
+                        await page.wait_for_timeout(3000)
+                        await page.evaluate(
+                            "window.scrollTo(0, document.body.scrollHeight)"
+                        )
+                        await page.wait_for_timeout(1500)
 
-                            let node = element;
-                            let fallback = null;
-                            for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
-                                for (const selector of textSelectors) {
-                                    const candidate = node.matches?.(selector)
-                                        ? node
-                                        : node.querySelector?.(selector);
-                                    const text = candidate?.innerText?.trim();
-                                    if (text) {
-                                        return text;
+                        media_urls = await page.evaluate(
+                            """
+                            (includePostTitle) => {
+                                const mediaSources = [];
+                                const seen = new Set();
+                                const textSelectors = [
+                                    '.tgme_widget_message_text',
+                                    '.post-text',
+                                    '.post-description',
+                                    '.post-content',
+                                    '.post-body',
+                                    '.card-text',
+                                    '.message-text',
+                                    '[class*="post-text"]',
+                                    '[class*="post__text"]'
+                                ];
+
+                                const getPostText = (element) => {
+                                    if (!includePostTitle || !element) {
+                                        return null;
                                     }
-                                }
 
-                                const ancestorText = node.innerText?.trim();
-                                if (ancestorText && ancestorText.length <= 5000) {
-                                    fallback = ancestorText;
-                                }
-                            }
-                            return fallback;
-                        };
+                                    const telegramMessage = element.closest?.(
+                                        '.tgme_widget_message'
+                                    );
+                                    const telegramText = telegramMessage
+                                        ?.querySelector('.tgme_widget_message_text')
+                                        ?.innerText?.trim();
+                                    if (telegramText) {
+                                        return telegramText;
+                                    }
 
-                        document.querySelectorAll('video source, video').forEach(source => {
-                            if (source.src || source.currentSrc) {
-                                const video = source.closest('video') || source;
-                                mediaSources.push({
-                                    type: 'video',
-                                    url: source.src || source.currentSrc,
-                                    post_text: getPostText(video)
+                                    let node = element;
+                                    let fallback = null;
+                                    for (
+                                        let depth = 0;
+                                        node && depth < 8;
+                                        depth += 1, node = node.parentElement
+                                    ) {
+                                        for (const selector of textSelectors) {
+                                            const candidate = node.matches?.(selector)
+                                                ? node
+                                                : node.querySelector?.(selector);
+                                            const text = candidate?.innerText?.trim();
+                                            if (text) {
+                                                return text;
+                                            }
+                                        }
+
+                                        const ancestorText = node.innerText?.trim();
+                                        if (
+                                            ancestorText
+                                            && ancestorText.length <= 5000
+                                        ) {
+                                            fallback = ancestorText;
+                                        }
+                                    }
+                                    return fallback;
+                                };
+
+                                const addMedia = (
+                                    type,
+                                    rawUrl,
+                                    element,
+                                    width = null,
+                                    height = null
+                                ) => {
+                                    if (!rawUrl || rawUrl.includes('placeholder')) {
+                                        return;
+                                    }
+
+                                    let absoluteUrl;
+                                    try {
+                                        absoluteUrl = new URL(
+                                            rawUrl,
+                                            document.baseURI
+                                        ).href;
+                                    } catch (_error) {
+                                        return;
+                                    }
+
+                                    if (
+                                        !/^https?:/i.test(absoluteUrl)
+                                        || seen.has(absoluteUrl)
+                                    ) {
+                                        return;
+                                    }
+
+                                    seen.add(absoluteUrl);
+                                    mediaSources.push({
+                                        type,
+                                        url: absoluteUrl,
+                                        width,
+                                        height,
+                                        post_text: getPostText(element)
+                                    });
+                                };
+
+                                const backgroundUrl = (element) => {
+                                    const value = (
+                                        element.style?.backgroundImage
+                                        || window.getComputedStyle(element)
+                                            ?.backgroundImage
+                                        || ''
+                                    ).trim();
+                                    if (!value.startsWith('url(') || !value.endsWith(')')) {
+                                        return null;
+                                    }
+                                    return value
+                                        .slice(4, -1)
+                                        .trim()
+                                        .replace(/^["']|["']$/g, '');
+                                };
+
+                                document
+                                    .querySelectorAll('video source, video')
+                                    .forEach(source => {
+                                        const video = source.closest('video') || source;
+                                        const mediaUrl = (
+                                            source.currentSrc
+                                            || source.src
+                                            || source.getAttribute?.('src')
+                                            || source.dataset?.src
+                                        );
+                                        addMedia('video', mediaUrl, video);
+                                    });
+
+                                document.querySelectorAll('img').forEach(img => {
+                                    const className = String(img.className || '');
+                                    if (/emoji|avatar|icon|logo/i.test(className)) {
+                                        return;
+                                    }
+
+                                    const width = img.naturalWidth || img.width || 0;
+                                    const height = img.naturalHeight || img.height || 0;
+                                    const inTelegramPost = Boolean(
+                                        img.closest('.tgme_widget_message')
+                                    );
+                                    const largeImage = width > 640 && height > 640;
+                                    const telegramPostImage = (
+                                        inTelegramPost
+                                        && width >= 320
+                                        && height >= 180
+                                    );
+
+                                    if (!largeImage && !telegramPostImage) {
+                                        return;
+                                    }
+
+                                    const mediaUrl = (
+                                        img.currentSrc
+                                        || img.src
+                                        || img.dataset?.src
+                                        || img.dataset?.original
+                                    );
+                                    addMedia(
+                                        'image',
+                                        mediaUrl,
+                                        img,
+                                        width,
+                                        height
+                                    );
                                 });
-                            }
-                        });
-                        document.querySelectorAll('img').forEach(img => {
-                            if (img.src && !img.src.includes('placeholder') && img.naturalWidth > 640 && img.naturalHeight > 640) {
-                                mediaSources.push({
-                                    type: 'image',
-                                    url: img.src,
-                                    width: img.naturalWidth,
-                                    height: img.naturalHeight,
-                                    post_text: getPostText(img)
+
+                                document.querySelectorAll(
+                                    [
+                                        '.tgme_widget_message_photo_wrap',
+                                        '.tgme_widget_message_service_photo',
+                                        '[class*="post"] [style*="background-image"]'
+                                    ].join(',')
+                                ).forEach(element => {
+                                    addMedia(
+                                        'image',
+                                        backgroundUrl(element),
+                                        element
+                                    );
                                 });
+
+                                return mediaSources;
                             }
-                        });
-                        return mediaSources;
-                    }
-                    """,
-                    include_post_title,
-                )
-                
-                if not media_urls:
-                    raise Exception("Не найдено ни одного подходящего медиафайла.")
-                
-                return random.choice(media_urls)
+                            """,
+                            include_post_title,
+                        )
+
+                        if media_urls:
+                            logging.info(
+                                "Найдено медиа: source=%s count=%d",
+                                source_url,
+                                len(media_urls),
+                            )
+                            return random.choice(media_urls)
+
+                        last_error = RuntimeError(
+                            f"Источник {source_url} не содержит подходящего медиа"
+                        )
+                        logging.warning(
+                            "Подходящее медиа не найдено: source=%s",
+                            source_url,
+                        )
+                    except Exception as source_error:
+                        last_error = source_error
+                        logging.warning(
+                            "Не удалось разобрать источник медиа %s: %s",
+                            source_url,
+                            source_error,
+                        )
+
+                error = Exception("Не найдено ни одного подходящего медиафайла.")
+                if last_error is not None:
+                    raise error from last_error
+                raise error
             finally:
                 await context.close()
                 await browser.close()
