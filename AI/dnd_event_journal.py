@@ -183,9 +183,11 @@ def _clock_snapshot(session) -> dict:
         if isinstance(row, dict):
             result[str(key)] = {
                 "name": str(row.get("name") or key)[:100],
+                "kind": str(row.get("kind") or "NEUTRAL")[:40],
                 "value": row.get("value"),
                 "max": row.get("max"),
-                "status": row.get("status"),
+                "full": bool(row.get("full")),
+                "full_cause": str(row.get("full_cause") or "")[:220],
             }
     return result
 
