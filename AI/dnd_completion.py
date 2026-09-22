@@ -7,8 +7,6 @@ import time
 
 from aiogram import BaseMiddleware
 
-from features.song.command_guard import is_song_command
-
 
 DND_PARTICIPANT_CONTEXT_MARKER = "ТЕКУЩИЕ УЧАСТНИКИ ПАРТИИ"
 
@@ -40,11 +38,8 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
 
 
 def _refresh_gemini_chat_session(dnd, session) -> None:
-    """Refresh only an already-materialized legacy Gemini chat session."""
-    if (
-        getattr(session, "active_model", None) != "gemini"
-        or getattr(session, "chat_session", None) is None
-    ):
+    """Rebuild Gemini state from DnD's canonical conversation before every turn."""
+    if getattr(session, "active_model", None) != "gemini":
         return
 
     history = []
@@ -141,7 +136,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         if not action:
             return
         normalized = str(action).strip().casefold()
-        if normalized == "дальше" or normalized.startswith("упупа") or is_song_command(event):
+        if normalized == "дальше" or normalized.startswith("упупа"):
             return
         from AI.dnd_state_commands import is_state_command
         if is_state_command(action):

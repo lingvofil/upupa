@@ -25,7 +25,6 @@ def test_song_command_parser_and_router_order():
 
     chat = SimpleNamespace(entities=[])
     chat.text = "песня чат"
-    assert song_handler.is_song_command(chat) is True
     assert song_handler.parse_song_request(chat) == ("chat", None)
 
     person = SimpleNamespace(text="песня @VaSya_42", entities=[])
@@ -34,7 +33,6 @@ def test_song_command_parser_and_router_order():
     assert target.username == "VaSya_42"
 
     unrelated = SimpleNamespace(text="песня хорошая", entities=[])
-    assert song_handler.is_song_command(unrelated) is False
     assert song_handler.parse_song_request(unrelated) == (None, None)
 
     names = [router.name for router in handlers.ROUTERS]
@@ -48,7 +46,6 @@ def test_song_text_mention_uses_telegram_user_identity():
     entity = SimpleNamespace(type="text_mention", user=user)
     message = SimpleNamespace(text="песня Вася Без Юзернейма", entities=[entity])
 
-    assert song_handler.is_song_command(message) is True
     mode, target = song_handler.parse_song_request(message)
 
     assert mode == "person"

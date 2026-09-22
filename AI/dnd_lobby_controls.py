@@ -49,11 +49,6 @@ def _clear_participant_session_state(session, user_id: int) -> None:
         value = getattr(session, attr, None)
         if isinstance(value, dict):
             value.pop(key, None)
-    rebuild_users = getattr(session, "rebuild_inventory_users", None)
-    if isinstance(rebuild_users, list):
-        session.rebuild_inventory_users = [
-            value for value in rebuild_users if str(value) != key
-        ]
 
 
 def _with_gender_context(prompt: str, session, user_id: int, step: str) -> str:
@@ -109,7 +104,6 @@ async def _rebuild_character(callback, dnd, campaign) -> None:
         return
 
     campaign._ensure(session)
-    campaign._preserve_inventory_for_rebuild(session, user_id)
     session.character_profiles[key] = {}
     session.profile_options.pop(key, None)
     dnd.persist_dnd_sessions()
@@ -203,7 +197,6 @@ def install_dnd_lobby_controls(dnd_router) -> None:
             return await original_profile_callback(callback, dnd_module)
 
         if action == "edit":
-            campaign._preserve_inventory_for_rebuild(session, user_id)
             session.character_profiles[str(user_id)] = {}
             session.profile_options.pop(str(user_id), None)
             dnd_module.persist_dnd_sessions()

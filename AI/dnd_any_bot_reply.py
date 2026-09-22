@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 import re
 
-from features.song.command_guard import is_song_command
-
 
 def _event_text(event) -> str:
     return str(getattr(event, "text", None) or getattr(event, "caption", None) or "").strip()
@@ -56,7 +54,7 @@ def is_any_bot_action_reply(event) -> bool:
         return False
 
     action = _event_text(event)
-    if not action or is_song_command(event):
+    if not action:
         return False
     normalized = action.casefold()
     if normalized == "дальше" or normalized.startswith("упупа") or is_state_command(action):
@@ -101,8 +99,6 @@ def is_any_bot_backstory_reply(event) -> bool:
     reply = getattr(event, "reply_to_message", None)
     if reply is None or not _reply_is_from_this_bot(event) or not _event_text(event):
         return False
-    if is_song_command(event):
-        return False
 
     try:
         user_id = int(user.id)
@@ -143,7 +139,7 @@ def is_any_bot_poll_reply(event) -> bool:
         return False
 
     text = _event_text(event)
-    if not text or is_song_command(event):
+    if not text:
         return False
     normalized = text.casefold()
     if normalized == "дальше" or normalized.startswith("упупа") or is_state_command(text):
