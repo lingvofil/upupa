@@ -8,6 +8,7 @@ from infrastructure.ai.gemini import (
     GeminiModel,
     ModelFallbackWrapper,
     _build_config,
+    _empty_response_details,
     _is_retryable,
     _normalize_contents,
     _normalize_history,
@@ -292,3 +293,114 @@ def test_404_skips_missing_model_without_rotating_all_keys(monkeypatch):
         ("gemini-missing", "key-1"),
         ("gemini-good", "key-1"),
     ]
+
+
+
+def test_model_circuit_cooldown_escalates_and_success_resets(monkeypatch):
+    from infrastructure.ai import gemini
+
+    now = [1000.0]
+    monkeypatch.setattr(gemini.time, "monotonic", lambda: now[0])
+
+    wrapper = ModelFallbackWrapper(
+        ["gemini-test"],
+        ["gemini-test"],
+        keys_pool=["key-1", "key-2"],
+    )
+
+    assert wrapper._record_model_transient_failure("gemini-test") is False
+    assert wrapper._record_model_transient_failure("gemini-test") is True
+    assert wrapper._model_circuit_remaining("gemini-test") == 60.0
+
+    now[0] += 61.0
+    assert wrapper._model_circuit_remaining("gemini-test") == 0.0
+    assert wrapper._record_model_transient_failure("gemini-test") is False
+    assert wrapper._record_model_transient_failure("gemini-test") is True
+    assert wrapper._model_circuit_remaining("gemini-test") == 300.0
+
+    now[0] += 301.0
+    assert wrapper._model_circuit_remaining("gemini-test") == 0.0
+    assert wrapper._record_model_transient_failure("gemini-test") is False
+    assert wrapper._record_model_transient_failure("gemini-test") is True
+    assert wrapper._model_circuit_remaining("gemini-test") == 900.0
+
+    wrapper._record_model_success("gemini-test")
+    assert wrapper._model_circuit_remaining("gemini-test") == 0.0
+
+    assert wrapper._record_model_transient_failure("gemini-test") is False
+    assert wrapper._record_model_transient_failure("gemini-test") is True
+    assert wrapper._model_circuit_remaining("gemini-test") == 60.0
+
+
+def test_empty_response_details_include_provider_metadata():
+    class PromptFeedback:
+        block_reason = "SAFETY"
+        safety_ratings = ["prompt-rating"]
+
+    class Candidate:
+        finish_reason = "MAX_TOKENS"
+        finish_message = "Stopped before text output"
+        safety_ratings = ["candidate-rating"]
+
+    class Response:
+        prompt_feedback = PromptFeedback()
+        candidates = [Candidate()]
+
+    details = _empty_response_details(Response())
+
+    assert "prompt_block_reason=SAFETY" in details
+    assert "prompt_safety_ratings=['prompt-rating']" in details
+    assert "candidate_0_finish_reason=MAX_TOKENS" in details
+    assert "candidate_0_finish_message=Stopped before text output" in details
+    assert "candidate_0_safety_ratings=['candidate-rating']" in details
+
+
+def test_empty_response_details_report_zero_candidates():
+    class Response:
+        prompt_feedback = None
+        candidates = []
+
+    assert _empty_response_details(Response()) == "no candidate text; candidates=0"
+
+
+
+def test_generate_content_uses_per_request_model_queue(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    class FakeGeminiModel:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def generate_content(self, prompt):
+            calls.append(self.model_name)
+            if self.model_name == "premium-bad":
+                raise _FakeGeminiServerError(503)
+            return FakeResponse("fallback ok")
+
+    class FakeWrapper(ModelFallbackWrapper):
+        def _build_model(self, api_key, model_name):
+            return FakeGeminiModel(model_name)
+
+    monkeypatch.setattr(
+        "infrastructure.ai.gemini._throttle_key",
+        lambda api_key: None,
+    )
+
+    wrapper = FakeWrapper(
+        ["default-model"],
+        ["default-model"],
+        keys_pool=["key-1", "key-2"],
+    )
+    result = wrapper.generate_content(
+        "дай текст",
+        model_queue=["premium-bad", "premium-good"],
+    )
+
+    assert result.text == "fallback ok"
+    assert calls == ["premium-bad", "premium-bad", "premium-good"]
+    assert "default-model" not in calls

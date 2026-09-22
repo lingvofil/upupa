@@ -26,7 +26,7 @@ GEMINI_HTTP_TIMEOUT_MS = 60_000
 # cannot consume the entire interactive AI deadline across the key pool.
 MODEL_TRANSIENT_STATUS_CODES = frozenset({500, 502, 503, 504})
 MODEL_CIRCUIT_FAILURE_THRESHOLD = 2
-MODEL_CIRCUIT_COOLDOWN_SECONDS = 60.0
+MODEL_CIRCUIT_COOLDOWNS_SECONDS = (60.0, 300.0, 900.0)
 
 _last_call_ts: dict[str, float] = {}
 _throttle_lock = threading.Lock()
@@ -111,14 +111,31 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _empty_response_details(response: Any) -> str:
-    details = []
-    for candidate in getattr(response, "candidates", None) or []:
+    details = ["no candidate text"]
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        details.append("candidates=0")
+
+    prompt_feedback = getattr(response, "prompt_feedback", None)
+    if prompt_feedback is not None:
+        block_reason = getattr(prompt_feedback, "block_reason", None)
+        if block_reason:
+            details.append(f"prompt_block_reason={block_reason}")
+        safety = getattr(prompt_feedback, "safety_ratings", None)
+        if safety:
+            details.append(f"prompt_safety_ratings={safety}")
+
+    for index, candidate in enumerate(candidates):
         finish_reason = getattr(candidate, "finish_reason", None)
         if finish_reason:
-            details.append(f"finish_reason={finish_reason}")
+            details.append(f"candidate_{index}_finish_reason={finish_reason}")
+        finish_message = getattr(candidate, "finish_message", None)
+        if finish_message:
+            details.append(f"candidate_{index}_finish_message={finish_message}")
         safety = getattr(candidate, "safety_ratings", None)
         if safety:
-            details.append(f"safety_ratings={safety}")
+            details.append(f"candidate_{index}_safety_ratings={safety}")
+
     return "; ".join(details) or "no candidate text"
 
 
@@ -247,6 +264,7 @@ class FallbackChatSession:
                 **kwargs,
             ),
             require_text=True,
+            model_queue=self.model_queue,
         )
 
     def _send_with_model(self, model_obj, content, **kwargs):
@@ -274,6 +292,7 @@ class ModelFallbackWrapper:
         self._model_health_lock = threading.Lock()
         self._model_transient_failures: dict[str, int] = {}
         self._model_circuit_until: dict[str, float] = {}
+        self._model_circuit_level: dict[str, int] = {}
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
@@ -289,6 +308,7 @@ class ModelFallbackWrapper:
         *,
         chat_id=None,
         require_text: bool = True,
+        model_queue: Optional[List[str]] = None,
         **kwargs,
     ):
         return self._run_with_fallback(
@@ -296,6 +316,7 @@ class ModelFallbackWrapper:
             chat_id=chat_id,
             request_fn=lambda model_obj: model_obj.generate_content(prompt, **kwargs),
             require_text=require_text,
+            model_queue=model_queue,
         )
 
     def generate_custom(self, model_name: str, *args, **kwargs):
@@ -355,6 +376,7 @@ class ModelFallbackWrapper:
         with self._model_health_lock:
             self._model_transient_failures.pop(model_name, None)
             self._model_circuit_until.pop(model_name, None)
+            self._model_circuit_level.pop(model_name, None)
 
     def _record_model_transient_failure(self, model_name: str) -> bool:
         with self._model_health_lock:
@@ -362,14 +384,21 @@ class ModelFallbackWrapper:
             self._model_transient_failures[model_name] = failures
             if failures < MODEL_CIRCUIT_FAILURE_THRESHOLD:
                 return False
-            self._model_circuit_until[model_name] = (
-                time.monotonic() + MODEL_CIRCUIT_COOLDOWN_SECONDS
-            )
+
+            previous_level = self._model_circuit_level.get(model_name, 0)
+            level = min(previous_level + 1, len(MODEL_CIRCUIT_COOLDOWNS_SECONDS))
+            cooldown = MODEL_CIRCUIT_COOLDOWNS_SECONDS[level - 1]
+            self._model_circuit_level[model_name] = level
+            self._model_circuit_until[model_name] = time.monotonic() + cooldown
+            self._model_transient_failures.pop(model_name, None)
+
         logging.warning(
-            "Gemini model circuit opened model=%s failures=%s cooldown_s=%.0f",
+            "Gemini model circuit opened model=%s failures=%s level=%s "
+            "cooldown_s=%.0f",
             model_name,
             failures,
-            MODEL_CIRCUIT_COOLDOWN_SECONDS,
+            level,
+            cooldown,
         )
         return True
 
@@ -379,10 +408,12 @@ class ModelFallbackWrapper:
         chat_id: Optional[int],
         request_fn: Callable,
         require_text: bool = False,
+        model_queue: Optional[List[str]] = None,
     ):
+        selected_queue = model_queue if model_queue is not None else self._get_queue(chat_id)
         model_queue = [
             self._normalize_model_name(name)
-            for name in self._get_queue(chat_id)
+            for name in selected_queue
         ]
         key_indices = self._iter_key_indices()
         if not key_indices:
@@ -440,9 +471,11 @@ class ModelFallbackWrapper:
                         temporary_failure_only = False
                         hard_failures.append(error)
                         logging.warning(
-                            "Gemini empty text action=%s model=%s; trying next model",
+                            "Gemini empty text action=%s model=%s details=%s; "
+                            "trying next model",
                             action_name,
                             model_name,
+                            error,
                         )
                         skip_model = True
                         break
