@@ -49,6 +49,7 @@ def test_campaign_and_combat_use_policy_hooks_without_completion_class_mutation(
     assert "state_policy=campaign_state_policy" in runtime_source
     assert "install_dnd_event_journal(dnd, state_policy=campaign_state_policy)" in runtime_source
     assert "install_dnd_context_builder(dnd, campaign)" in runtime_source
+    assert "install_dnd_session_canon_archive(dnd)" in runtime_source
     assert "build_memory_context" in campaign_source
     assert "register_persist_hook" in dnd_source
     assert "build_bounded_text_prompt(self, message_text)" in dnd_source
