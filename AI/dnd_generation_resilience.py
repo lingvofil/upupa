@@ -39,6 +39,10 @@ DND_GROQ_RATE_LIMIT_RETRY_PADDING_SECONDS = 0.15
 DND_AUX_HTTP_TIMEOUT_MS = 12_000
 DND_AUX_GOVERNOR_TIMEOUT_SECONDS = 14.0
 DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
+DND_AUX_GROQ_TIMEOUT_SECONDS = 10.0
+DND_AUX_GROQ_MAX_PROMPT_CHARS = 7_000
+DND_AUX_GROQ_MAX_TOKENS = 500
+DND_AUX_GROQ_TEMPERATURE = 0.1
 # Groq's on-demand tier for the current fallback model is capped at 8k TPM.
 # Cyrillic DnD history can tokenize much denser than Latin text, so keep the
 # normal fallback comfortably below that ceiling and retry once even smaller.
@@ -626,31 +630,85 @@ async def _generate_main_text(session, prompt: str) -> str:
         ) from exc
 
 
-async def generate_auxiliary_text(session, prompt: str) -> str | None:
-    """One short best-effort Gemini call for non-critical DnD post-processing.
+def _run_groq_auxiliary_sync(prompt: str) -> str:
+    """Run one compact Groq-only auxiliary pass without conversation history."""
+    if not GROQ_API_KEY:
+        raise RuntimeError("Groq is not configured")
+    compact = _bounded_head_tail(
+        str(prompt or ""),
+        DND_AUX_GROQ_MAX_PROMPT_CHARS,
+        head_ratio=0.5,
+    )
+    with ai_execution_lane("background"):
+        text = groq_ai.generate_text(
+            compact,
+            max_tokens=DND_AUX_GROQ_MAX_TOKENS,
+            temperature=DND_AUX_GROQ_TEMPERATURE,
+            max_retries=0,
+            request_timeout_seconds=min(
+                DND_GROQ_HTTP_TIMEOUT_SECONDS,
+                DND_AUX_GROQ_TIMEOUT_SECONDS,
+            ),
+            reject_truncated=True,
+        )
+    text = str(text or "").strip()
+    if not text or text == "Ключ Groq не настроен":
+        raise RuntimeError("Groq returned empty auxiliary text")
+    return text
 
-    It never mutates the canonical DnD conversation and never falls through the
-    long provider chain. During an open Gemini circuit it is skipped entirely.
+
+async def generate_auxiliary_text(
+    session,
+    prompt: str,
+    *,
+    allow_groq_fallback: bool = False,
+) -> str | None:
+    """Run one short best-effort auxiliary pass without mutating conversation.
+
+    Gemini remains the default. Callers that guard canonical mechanics may opt in
+    to a compact Groq fallback so a temporary Gemini outage cannot silently skip
+    the repair step.
     """
-    if _circuit_is_open(getattr(session, "chat_id", None)):
+    chat_id = getattr(session, "chat_id", None)
+    if not _circuit_is_open(chat_id):
+        try:
+            return await asyncio.to_thread(
+                _run_gemini_sync,
+                session,
+                prompt,
+                attempts=1,
+                http_timeout_ms=DND_AUX_HTTP_TIMEOUT_MS,
+                governor_timeout_seconds=DND_AUX_GOVERNOR_TIMEOUT_SECONDS,
+                queue_timeout_seconds=DND_AUX_QUEUE_TIMEOUT_SECONDS,
+                include_history=False,
+                lane="background",
+                update_circuit=False,
+            )
+        except Exception as exc:
+            logging.info(
+                "DnD auxiliary Gemini skipped chat_id=%s error=%s",
+                chat_id,
+                exc,
+            )
+            if not allow_groq_fallback:
+                return None
+    elif not allow_groq_fallback:
         return None
+    else:
+        logging.info(
+            "DnD auxiliary Gemini circuit open chat_id=%s; using Groq fallback",
+            chat_id,
+        )
+
     try:
-        return await asyncio.to_thread(
-            _run_gemini_sync,
-            session,
-            prompt,
-            attempts=1,
-            http_timeout_ms=DND_AUX_HTTP_TIMEOUT_MS,
-            governor_timeout_seconds=DND_AUX_GOVERNOR_TIMEOUT_SECONDS,
-            queue_timeout_seconds=DND_AUX_QUEUE_TIMEOUT_SECONDS,
-            include_history=False,
-            lane="background",
-            update_circuit=False,
+        return await asyncio.wait_for(
+            asyncio.to_thread(_run_groq_auxiliary_sync, prompt),
+            timeout=DND_AUX_GROQ_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         logging.info(
-            "DnD auxiliary generation skipped chat_id=%s error=%s",
-            getattr(session, "chat_id", None),
+            "DnD auxiliary Groq skipped chat_id=%s error=%s",
+            chat_id,
             exc,
         )
         return None
