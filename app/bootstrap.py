@@ -206,6 +206,11 @@ class UpupaApplication:
             return
 
         from AI.dnd import dnd_router
+        from core.middlewares import AIUsageContextMiddleware
+
+        # Этот middleware стоит над обоими router'ами, поэтому атрибуция
+        # model usage работает и для DnD, и для обычных команд.
+        self.dispatcher.update.outer_middleware(AIUsageContextMiddleware())
 
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
