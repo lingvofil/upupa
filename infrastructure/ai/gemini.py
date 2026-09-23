@@ -28,6 +28,13 @@ MODEL_TRANSIENT_STATUS_CODES = frozenset({500, 502, 503, 504})
 MODEL_CIRCUIT_FAILURE_THRESHOLD = 2
 MODEL_CIRCUIT_COOLDOWNS_SECONDS = (60.0, 300.0, 900.0)
 
+# A single 429 can be key/project-specific, so keep rotating keys first. If the
+# same model rate-limits several distinct keys in one fallback pass, treat that
+# as model/quota pressure and stop multiplying requests. Small key pools use
+# full-pool exhaustion automatically.
+MODEL_RATE_LIMIT_DISTINCT_KEY_THRESHOLD = 3
+MODEL_RATE_LIMIT_CIRCUIT_COOLDOWNS_SECONDS = (30.0, 120.0, 300.0)
+
 _last_call_ts: dict[str, float] = {}
 _throttle_lock = threading.Lock()
 _genai_lock = threading.RLock()
@@ -66,25 +73,33 @@ def _extract_error_details(error: Exception) -> Tuple[Optional[int], str]:
     return status_code, error.__class__.__name__
 
 
-def _is_retryable(error: Exception) -> bool:
+def _is_rate_limit_error(error: Exception) -> bool:
     status_code, error_type = _extract_error_details(error)
     text = str(error).lower()
-    if error_type == "EmptyModelResponseError":
-        return False
-    if status_code == 429 or status_code in MODEL_TRANSIENT_STATUS_CODES:
+    if status_code == 429:
         return True
     if error_type in ("ResourceExhausted", "QuotaExceeded"):
         return True
     return any(
         marker in text
+        for marker in ("429", "resourceexhausted", "quotaexceeded")
+    )
+
+
+def _is_retryable(error: Exception) -> bool:
+    status_code, error_type = _extract_error_details(error)
+    text = str(error).lower()
+    if error_type == "EmptyModelResponseError":
+        return False
+    if _is_rate_limit_error(error) or status_code in MODEL_TRANSIENT_STATUS_CODES:
+        return True
+    return any(
+        marker in text
         for marker in (
-            "429",
             "500",
             "502",
             "503",
             "504",
-            "resourceexhausted",
-            "quotaexceeded",
         )
     )
 
@@ -293,6 +308,8 @@ class ModelFallbackWrapper:
         self._model_transient_failures: dict[str, int] = {}
         self._model_circuit_until: dict[str, float] = {}
         self._model_circuit_level: dict[str, int] = {}
+        self._model_rate_limit_circuit_until: dict[str, float] = {}
+        self._model_rate_limit_circuit_level: dict[str, int] = {}
         self.last_used_model_name: Optional[str] = None
 
     def _get_queue(self, chat_id: Optional[int]):
@@ -372,11 +389,63 @@ class ModelFallbackWrapper:
                 return 0.0
             return until - now
 
+    def _model_rate_limit_circuit_remaining(self, model_name: str) -> float:
+        now = time.monotonic()
+        with self._model_health_lock:
+            until = self._model_rate_limit_circuit_until.get(model_name, 0.0)
+            if until <= now:
+                self._model_rate_limit_circuit_until.pop(model_name, None)
+                return 0.0
+            return until - now
+
     def _record_model_success(self, model_name: str) -> None:
         with self._model_health_lock:
             self._model_transient_failures.pop(model_name, None)
             self._model_circuit_until.pop(model_name, None)
             self._model_circuit_level.pop(model_name, None)
+            self._model_rate_limit_circuit_until.pop(model_name, None)
+            self._model_rate_limit_circuit_level.pop(model_name, None)
+
+    def _record_model_rate_limit_failure(
+        self,
+        model_name: str,
+        *,
+        distinct_keys: int,
+        pool_size: int,
+    ) -> bool:
+        threshold = min(MODEL_RATE_LIMIT_DISTINCT_KEY_THRESHOLD, pool_size)
+        now = time.monotonic()
+        with self._model_health_lock:
+            active_until = self._model_rate_limit_circuit_until.get(model_name, 0.0)
+            if active_until > now:
+                return True
+            if active_until:
+                self._model_rate_limit_circuit_until.pop(model_name, None)
+
+            if distinct_keys < threshold:
+                return False
+
+            previous_level = self._model_rate_limit_circuit_level.get(model_name, 0)
+            level = min(
+                previous_level + 1,
+                len(MODEL_RATE_LIMIT_CIRCUIT_COOLDOWNS_SECONDS),
+            )
+            cooldown = MODEL_RATE_LIMIT_CIRCUIT_COOLDOWNS_SECONDS[level - 1]
+            self._model_rate_limit_circuit_level[model_name] = level
+            self._model_rate_limit_circuit_until[model_name] = now + cooldown
+            reason = "full_pool" if distinct_keys >= pool_size else "mass"
+
+        logging.warning(
+            "Gemini model 429 circuit opened model=%s distinct_keys=%s "
+            "pool_size=%s reason=%s level=%s cooldown_s=%.0f",
+            model_name,
+            distinct_keys,
+            pool_size,
+            reason,
+            level,
+            cooldown,
+        )
+        return True
 
     def _record_model_transient_failure(self, model_name: str) -> bool:
         with self._model_health_lock:
@@ -423,6 +492,19 @@ class ModelFallbackWrapper:
         temporary_failure_only = True
 
         for model_name in model_queue:
+            rate_limit_circuit_remaining = self._model_rate_limit_circuit_remaining(
+                model_name
+            )
+            if rate_limit_circuit_remaining > 0:
+                logging.warning(
+                    "Gemini skip model action=%s model=%s "
+                    "rate_limit_circuit_remaining_s=%.1f",
+                    action_name,
+                    model_name,
+                    rate_limit_circuit_remaining,
+                )
+                continue
+
             circuit_remaining = self._model_circuit_remaining(model_name)
             if circuit_remaining > 0:
                 logging.warning(
@@ -434,6 +516,7 @@ class ModelFallbackWrapper:
                 continue
 
             skip_model = False
+            rate_limited_key_indices: set[int] = set()
             for key_idx in key_indices:
                 api_key = self.keys_pool[key_idx]
                 try:
@@ -481,10 +564,24 @@ class ModelFallbackWrapper:
                         break
 
                     if retryable:
-                        # 429 is commonly key/project-specific, so rotate the key.
+                        # Keep rotating after an isolated 429 because one key/project
+                        # may be exhausted while the next key still works. Once enough
+                        # distinct keys reject the same model, open a shorter model-level
+                        # rate-limit circuit and stop amplifying the quota storm.
+                        if _is_rate_limit_error(error):
+                            rate_limited_key_indices.add(key_idx)
+                            if self._record_model_rate_limit_failure(
+                                model_name,
+                                distinct_keys=len(rate_limited_key_indices),
+                                pool_size=len(key_indices),
+                            ):
+                                skip_model = True
+                                break
+                            continue
+
                         # 5xx service failures are commonly model-wide; two such
-                        # failures open a short circuit and immediately move to
-                        # the next fallback model.
+                        # failures open the existing circuit and immediately move
+                        # to the next fallback model.
                         if status_code in MODEL_TRANSIENT_STATUS_CODES:
                             if self._record_model_transient_failure(model_name):
                                 skip_model = True
