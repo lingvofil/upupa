@@ -28,6 +28,188 @@ _CURRENT_AI_LANE: contextvars.ContextVar[AILane] = contextvars.ContextVar(
 )
 
 
+@dataclass(frozen=True)
+class AIRequestContext:
+    chat_id: int | None = None
+    user_id: int | None = None
+    chat_title: str | None = None
+    user_name: str | None = None
+    user_username: str | None = None
+
+
+_CURRENT_AI_REQUEST_CONTEXT: contextvars.ContextVar[AIRequestContext] = contextvars.ContextVar(
+    "upupa_ai_request_context",
+    default=AIRequestContext(),
+)
+
+
+@contextmanager
+def ai_request_context(
+    *,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+    chat_title: str | None = None,
+    user_name: str | None = None,
+    user_username: str | None = None,
+) -> Iterator[None]:
+    """Attach Telegram actor metadata to nested AI provider calls."""
+    token = _CURRENT_AI_REQUEST_CONTEXT.set(
+        AIRequestContext(
+            chat_id=chat_id,
+            user_id=user_id,
+            chat_title=chat_title,
+            user_name=user_name,
+            user_username=user_username,
+        )
+    )
+    try:
+        yield
+    finally:
+        _CURRENT_AI_REQUEST_CONTEXT.reset(token)
+
+
+class TokenTrackedText(str):
+    """String-compatible provider result carrying token usage metadata."""
+
+    def __new__(
+        cls,
+        value: str,
+        *,
+        model_name: str | None = None,
+        usage: Any = None,
+    ):
+        instance = super().__new__(cls, value or "")
+        instance._upupa_model_name = model_name
+        instance._upupa_usage = usage
+        return instance
+
+
+def _usage_value(source: Any, *names: str) -> int | None:
+    if source is None:
+        return None
+    for name in names:
+        value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_token_usage(result: Any) -> dict[str, int | None]:
+    usage = getattr(result, "_upupa_usage", None)
+    if usage is None:
+        usage = getattr(result, "usage_metadata", None)
+    if usage is None:
+        usage = getattr(result, "usage", None)
+
+    prompt_details = (
+        usage.get("prompt_tokens_details")
+        if isinstance(usage, dict)
+        else getattr(usage, "prompt_tokens_details", None)
+    ) if usage is not None else None
+    completion_details = (
+        usage.get("completion_tokens_details")
+        if isinstance(usage, dict)
+        else getattr(usage, "completion_tokens_details", None)
+    ) if usage is not None else None
+
+    return {
+        "input_tokens": _usage_value(
+            usage,
+            "prompt_token_count",
+            "prompt_tokens",
+            "input_tokens",
+        ),
+        "output_tokens": _usage_value(
+            usage,
+            "candidates_token_count",
+            "completion_tokens",
+            "output_tokens",
+        ),
+        "cached_tokens": (
+            _usage_value(usage, "cached_content_token_count", "cached_tokens")
+            or _usage_value(prompt_details, "cached_tokens")
+        ),
+        "reasoning_tokens": (
+            _usage_value(usage, "thoughts_token_count", "reasoning_tokens")
+            or _usage_value(completion_details, "reasoning_tokens")
+        ),
+        "total_tokens": _usage_value(
+            usage,
+            "total_token_count",
+            "total_tokens",
+        ),
+    }
+
+
+def _extract_model_name(result: Any) -> str | None:
+    for name in ("_upupa_model_name", "model_version", "model"):
+        value = getattr(result, name, None)
+        if value:
+            return str(value).removeprefix("models/")
+    return None
+
+
+def _provider_from_operation(operation: str) -> str:
+    prefix = operation.split(".", 1)[0]
+    return {
+        "model": "gemini",
+        "gemini_client": "gemini",
+        "groq_ai": "groq",
+        "gigachat_model": "gigachat",
+        "gigachat": "gigachat",
+        "openrouter_ai": "openrouter",
+        "siliconflow_ai": "siliconflow",
+    }.get(prefix, prefix)
+
+
+def _record_ai_usage(
+    *,
+    operation: str,
+    result: Any = None,
+    success: bool,
+    duration_ms: int,
+    lane: AILane,
+    context: AIRequestContext,
+    explicit_chat_id: Any = None,
+) -> None:
+    """Persist one provider call without letting telemetry break generation."""
+    try:
+        from features.statistics import log_model_request
+
+        usage = _extract_token_usage(result)
+        chat_id = context.chat_id
+        if chat_id is None and explicit_chat_id is not None:
+            try:
+                chat_id = int(explicit_chat_id)
+            except (TypeError, ValueError):
+                chat_id = None
+
+        log_model_request(
+            chat_id,
+            context.user_id,
+            _extract_model_name(result) or "unknown",
+            operation,
+            provider=_provider_from_operation(operation),
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            cached_tokens=usage["cached_tokens"],
+            reasoning_tokens=usage["reasoning_tokens"],
+            total_tokens=usage["total_tokens"],
+            duration_ms=duration_ms,
+            success=success,
+            lane=lane,
+            chat_title=context.chat_title,
+            user_name=context.user_name,
+            user_username=context.user_username,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to persist AI usage telemetry")
+
+
 class AIExecutionError(RuntimeError):
     """Base error for execution-governor failures."""
 
@@ -263,6 +445,8 @@ class AIExecutionGovernor:
         **kwargs: Any,
     ) -> Any:
         lane = _CURRENT_AI_LANE.get()
+        request_context = _CURRENT_AI_REQUEST_CONTEXT.get()
+        explicit_chat_id = kwargs.get("chat_id")
         started = time.monotonic()
         total_timeout = float(timeout_seconds or self.request_timeout_seconds)
         queue_timeout = float(queue_timeout_seconds or self.queue_timeout_seconds)
@@ -286,6 +470,14 @@ class AIExecutionGovernor:
                 round(elapsed * 1000),
                 min(queue_timeout, total_timeout),
             )
+            _record_ai_usage(
+                operation=operation,
+                success=False,
+                duration_ms=round(elapsed * 1000),
+                lane=lane,
+                context=request_context,
+                explicit_chat_id=explicit_chat_id,
+            )
             raise
 
         queue_wait = time.monotonic() - started
@@ -302,7 +494,16 @@ class AIExecutionGovernor:
             if background_acquired:
                 self._background_slots.release()
             self._record_completion(error=True)
-            self._record_request_latency(time.monotonic() - started)
+            elapsed = time.monotonic() - started
+            self._record_request_latency(elapsed)
+            _record_ai_usage(
+                operation=operation,
+                success=False,
+                duration_ms=round(elapsed * 1000),
+                lane=lane,
+                context=request_context,
+                explicit_chat_id=explicit_chat_id,
+            )
             raise
 
         released = False
@@ -331,7 +532,16 @@ class AIExecutionGovernor:
         remaining = self._remaining(deadline)
         if remaining <= 0:
             self._record_request_timeout()
-            self._record_request_latency(time.monotonic() - started)
+            elapsed = time.monotonic() - started
+            self._record_request_latency(elapsed)
+            _record_ai_usage(
+                operation=operation,
+                success=False,
+                duration_ms=round(elapsed * 1000),
+                lane=lane,
+                context=request_context,
+                explicit_chat_id=explicit_chat_id,
+            )
             raise AIRequestTimeoutError(
                 f"AI request timeout before provider execution: {operation}"
             )
@@ -340,7 +550,16 @@ class AIExecutionGovernor:
             result = future.result(timeout=remaining)
         except FutureTimeoutError as exc:
             self._record_request_timeout()
-            self._record_request_latency(time.monotonic() - started)
+            elapsed = time.monotonic() - started
+            self._record_request_latency(elapsed)
+            _record_ai_usage(
+                operation=operation,
+                success=False,
+                duration_ms=round(elapsed * 1000),
+                lane=lane,
+                context=request_context,
+                explicit_chat_id=explicit_chat_id,
+            )
             self._logger.warning(
                 "AI request timeout operation=%s lane=%s queue_wait_ms=%d timeout_s=%.1f",
                 operation,
@@ -352,7 +571,16 @@ class AIExecutionGovernor:
                 f"AI request timed out after {total_timeout:.1f}s: {operation}"
             ) from exc
         except Exception:
-            self._record_request_latency(time.monotonic() - started)
+            elapsed = time.monotonic() - started
+            self._record_request_latency(elapsed)
+            _record_ai_usage(
+                operation=operation,
+                success=False,
+                duration_ms=round(elapsed * 1000),
+                lane=lane,
+                context=request_context,
+                explicit_chat_id=explicit_chat_id,
+            )
             self._logger.exception(
                 "AI provider error operation=%s lane=%s queue_wait_ms=%d",
                 operation,
@@ -363,12 +591,22 @@ class AIExecutionGovernor:
 
         request_latency = time.monotonic() - started
         self._record_request_latency(request_latency)
+        duration_ms = round(request_latency * 1000)
         self._logger.info(
             "AI provider success operation=%s lane=%s queue_wait_ms=%d duration_ms=%d",
             operation,
             lane,
             round(queue_wait * 1000),
-            round(request_latency * 1000),
+            duration_ms,
+        )
+        _record_ai_usage(
+            operation=operation,
+            result=result,
+            success=True,
+            duration_ms=duration_ms,
+            lane=lane,
+            context=request_context,
+            explicit_chat_id=explicit_chat_id,
         )
         return result
 
@@ -406,11 +644,14 @@ def get_ai_execution_snapshot() -> AIExecutionSnapshot:
 __all__ = [
     "AIExecutionError",
     "AIExecutionGovernor",
+    "AIRequestContext",
     "AIExecutionSnapshot",
     "AILane",
     "AIQueueTimeoutError",
     "AIRequestTimeoutError",
+    "TokenTrackedText",
     "ai_execution_lane",
+    "ai_request_context",
     "get_ai_execution_snapshot",
     "run_ai_provider_call",
 ]
