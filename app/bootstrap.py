@@ -16,7 +16,7 @@ from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
 from core.logging_setup import logger
 from core.settings import API_TOKEN, HEALTHCHECK_PORT, validate_required_settings
-from infrastructure.ai.execution import ai_execution_lane
+from infrastructure.ai.execution import ai_execution_lane, configure_ai_usage_recorder
 
 
 QUIZ_CHAT_IDS = (-1001707530786, -1001781970364)
@@ -103,6 +103,7 @@ class UpupaApplication:
             SQLiteStatisticsRepository(STATISTICS_DB_PATH)
         )
         bot_statistics.init_db()
+        configure_ai_usage_recorder(bot_statistics.log_model_request)
         configure_social_graph_repository(SQLiteSocialGraphRepository(STATISTICS_DB_PATH))
         init_social_graph_db()
 
