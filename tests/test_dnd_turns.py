@@ -111,6 +111,43 @@ def test_roll_prompt_uses_human_difficulty_label(monkeypatch):
     assert "DC 12" not in prompt
 
 
+def test_markdown_wrapped_action_tags_are_hidden_and_first_action_executes(monkeypatch):
+    chat_id = -1004991
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        mode="abstract",
+        state="RESOLVING",
+        pending_roll=None,
+        last_roll_stat=None,
+        action_prompt_message_id=None,
+        pending_actions={},
+        action_deadline=None,
+        action_target_user_ids=[],
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    bot = FakeBot()
+
+    response = (
+        "Алина рвётся к выходу, Детектор — к кораблю.\n\n"
+        "[**ACTION:ROLL;TYPE:CHECK;SKILL:Скрытность;REASON:проскользнуть незамеченным;"
+        "DC:11;MODE:NORMAL;TARGETS:363361611**]\n"
+        "[**ACTION:ROLL;TYPE:CHECK;SKILL:Атлетика;REASON:добежать до корабля;"
+        "DC:12;MODE:DISADVANTAGE;TARGETS:126386976**]"
+    )
+
+    try:
+        asyncio.run(dnd.parse_and_execute_turn(bot, chat_id, response))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert session.state == "WAITING_ROLL"
+    assert session.pending_roll["skill"] == "Скрытность"
+    assert session.pending_roll["dc"] == 11
+    assert all("ACTION:" not in text for _chat_id, text, _kwargs in bot.messages)
+    assert bot.messages[0][1] == "Алина рвётся к выходу, Детектор — к кораблю."
+
+
 def test_group_action_router_only_accepts_replies_to_current_prompt():
     chat_id = -100500
     session = SimpleNamespace(
