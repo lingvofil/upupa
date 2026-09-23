@@ -12,6 +12,7 @@ from moviepy.editor import AudioFileClip, VideoFileClip, concatenate_audioclips,
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
 from core.state import chat_settings
+from services.video_note_branding import prepare_video_note_for_processing
 
 
 TARGET_DURATION = 10
@@ -600,6 +601,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
     input_path = None
     converted_input_path = None
     normalized_input_path = None
+    branded_input_path = None
     output_path = None
 
     try:
@@ -656,6 +658,13 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
                     return
                 real_input_path = converted_input_path
 
+            if video_note:
+                branded_input_path = input_path + "_upupa_branded.mp4"
+                real_input_path = await prepare_video_note_for_processing(
+                    real_input_path,
+                    branded_input_path,
+                )
+
             if not is_audio_input and _should_normalize_video(file_obj):
                 normalized_input_path = input_path + "_normalized.mp4"
                 normalized = await normalize_video_for_ytp(real_input_path, normalized_input_path)
@@ -704,7 +713,7 @@ async def handle_ytp_command(message: types.Message, bot: Bot) -> None:
         await processing_msg.delete()
         await message.reply("❌ Что-то пошло не так при пупизации.")
     finally:
-        for path in (input_path, converted_input_path, normalized_input_path, output_path):
+        for path in (input_path, converted_input_path, branded_input_path, normalized_input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)

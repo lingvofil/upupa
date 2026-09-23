@@ -167,15 +167,25 @@ def test_ytp_timeout_releases_semaphore(monkeypatch):
 
 
 def test_ytp_accepts_video_note_reply(monkeypatch):
+    branding_calls = []
+    render_inputs = []
     render_outputs = []
 
-    async def fake_render(_func_name, _input_path, output_path, *_args, **_kwargs):
+    async def fake_brand(input_path, output_path):
+        branding_calls.append((input_path, output_path))
+        with open(output_path, "wb") as file:
+            file.write(b"branded mp4")
+        return output_path
+
+    async def fake_render(_func_name, input_path, output_path, *_args, **_kwargs):
+        render_inputs.append(input_path)
         render_outputs.append(output_path)
         with open(output_path, "wb") as file:
             file.write(b"fake mp4")
 
     async def run():
         monkeypatch.setattr(ytp, "_ytp_semaphore", asyncio.Semaphore(1))
+        monkeypatch.setattr(ytp, "prepare_video_note_for_processing", fake_brand)
         monkeypatch.setattr(ytp, "_run_blocking_ytp", fake_render)
 
         video_note = SimpleNamespace(file_id="video-note-file-id", file_size=1024, duration=5)
@@ -184,9 +194,38 @@ def test_ytp_accepts_video_note_reply(monkeypatch):
 
         await ytp.handle_ytp_command(message, DummyBot())
 
+        assert branding_calls
+        assert branding_calls[0][1].endswith("_upupa_branded.mp4")
+        assert render_inputs == [branding_calls[0][1]]
         assert render_outputs and render_outputs[0].endswith(".mp4")
         assert any(reply[0] == "video" for reply in message.replies if isinstance(reply, tuple))
         assert message.processing_messages[0].deleted
+
+    asyncio.run(run())
+
+
+def test_ytp_plain_video_skips_video_note_branding(monkeypatch):
+    render_inputs = []
+
+    async def forbidden_brand(*_args, **_kwargs):
+        raise AssertionError("ordinary video must not be video-note branded")
+
+    async def fake_render(_func_name, input_path, output_path, *_args, **_kwargs):
+        render_inputs.append(input_path)
+        with open(output_path, "wb") as file:
+            file.write(b"fake mp4")
+
+    async def run():
+        monkeypatch.setattr(ytp, "_ytp_semaphore", asyncio.Semaphore(1))
+        monkeypatch.setattr(ytp, "prepare_video_note_for_processing", forbidden_brand)
+        monkeypatch.setattr(ytp, "_run_blocking_ytp", fake_render)
+
+        message = DummyMessage()
+        await ytp.handle_ytp_command(message, DummyBot())
+
+        assert render_inputs
+        assert "_upupa_branded" not in render_inputs[0]
+        assert any(reply[0] == "video" for reply in message.replies if isinstance(reply, tuple))
 
     asyncio.run(run())
 
