@@ -53,5 +53,16 @@ def test_prepare_video_note_builds_ffmpeg_overlay(monkeypatch, tmp_path):
     assert not Path(str(output) + ".brand.png").exists()
 
 
-def test_repo_video_note_mascot_asset_exists():
+def test_repo_video_note_mascot_asset_is_decodable():
     assert branding.MASCOT_PATH.is_file()
+
+    with Image.open(branding.MASCOT_PATH) as source:
+        image_format = source.format
+        image_size = source.size
+        source.load()
+
+    assert image_format == "JPEG"
+    assert min(image_size) >= 64
+
+    plate = branding.build_branding_plate(size=512)
+    assert plate.getbbox() is not None
