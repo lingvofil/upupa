@@ -78,6 +78,13 @@ def test_audit_triggers_for_spoon_theft_without_item_tag():
     assert _should_audit(session, "Тырю ложку со стола", response) is True
 
 
+def test_audit_triggers_for_explicit_take_to_inventory_wording():
+    session = _session()
+    response = "Ключ теперь у тебя.\n[ACTION:INPUT]"
+
+    assert _should_audit(session, "Забираю ключ себе", response) is True
+
+
 def test_audit_skips_when_primary_response_already_has_item_tag():
     session = _session()
     response = (
