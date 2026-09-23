@@ -42,6 +42,15 @@ _CURRENT_AI_REQUEST_CONTEXT: contextvars.ContextVar[AIRequestContext] = contextv
     default=AIRequestContext(),
 )
 
+AIUsageRecorder = Callable[..., None]
+_AI_USAGE_RECORDER: AIUsageRecorder | None = None
+
+
+def configure_ai_usage_recorder(recorder: AIUsageRecorder | None) -> None:
+    """Inject the application-level persistence callback without reversing layers."""
+    global _AI_USAGE_RECORDER
+    _AI_USAGE_RECORDER = recorder
+
 
 @contextmanager
 def ai_request_context(
@@ -184,9 +193,11 @@ def _record_ai_usage(
     explicit_chat_id: Any = None,
 ) -> None:
     """Persist one provider call without letting telemetry break generation."""
-    try:
-        from features.statistics import log_model_request
+    recorder = _AI_USAGE_RECORDER
+    if recorder is None:
+        return
 
+    try:
         usage = _extract_token_usage(result)
         chat_id = context.chat_id
         if chat_id is None and explicit_chat_id is not None:
@@ -195,7 +206,7 @@ def _record_ai_usage(
             except (TypeError, ValueError):
                 chat_id = None
 
-        log_model_request(
+        recorder(
             chat_id,
             context.user_id,
             _extract_model_name(result) or "unknown",
@@ -657,6 +668,7 @@ __all__ = [
     "AIQueueTimeoutError",
     "AIRequestTimeoutError",
     "TokenTrackedText",
+    "configure_ai_usage_recorder",
     "ai_execution_lane",
     "ai_request_context",
     "get_ai_execution_snapshot",
