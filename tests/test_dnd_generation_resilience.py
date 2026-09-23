@@ -189,6 +189,28 @@ def test_auxiliary_generation_is_skipped_while_circuit_is_open(monkeypatch):
     assert asyncio.run(resilience.generate_auxiliary_text(session, "audit")) is None
 
 
+def test_auxiliary_generation_can_fallback_to_groq_while_circuit_is_open(monkeypatch):
+    session = _session()
+    before = list(session.conversation)
+    monkeypatch.setattr(resilience, "_circuit_is_open", lambda _chat_id: True)
+    monkeypatch.setattr(
+        resilience,
+        "_run_groq_auxiliary_sync",
+        lambda _prompt: "[ITEM:ADD;PLAYER:1;NAME:ключ;KIND:item]",
+    )
+
+    result = asyncio.run(
+        resilience.generate_auxiliary_text(
+            session,
+            "audit",
+            allow_groq_fallback=True,
+        )
+    )
+
+    assert result.startswith("[ITEM:ADD")
+    assert session.conversation == before
+
+
 def test_groq_short_rate_limit_retries_once_with_compact_prompt(monkeypatch):
     session = _session()
     calls = []
