@@ -501,6 +501,23 @@ class SQLiteStatisticsRepository:
                 [*params, resolved_limit],
             ).fetchall()
 
+            users_by_requests = conn.execute(
+                f"""
+                SELECT
+                    user_id,
+                    MAX(user_name),
+                    MAX(user_username),
+                    COUNT(*) AS requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {user_where}
+                GROUP BY user_id
+                ORDER BY requests DESC, tokens DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
         return {
             "totals": {
                 "requests": int(totals_row[0] or 0),
@@ -540,6 +557,16 @@ class SQLiteStatisticsRepository:
                     "total_tokens": int(tokens),
                 }
                 for user_id, user_name, user_username, requests, tokens in users
+            ],
+            "users_by_requests": [
+                {
+                    "user_id": int(user_id),
+                    "user_name": user_name,
+                    "user_username": user_username,
+                    "requests": int(requests),
+                    "total_tokens": int(tokens),
+                }
+                for user_id, user_name, user_username, requests, tokens in users_by_requests
             ],
         }
 
