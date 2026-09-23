@@ -6,6 +6,8 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ContentType
 from aiogram.types import Message
 
+from infrastructure.ai.execution import ai_request_context
+
 
 _LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "").strip().lower() in {
     "1",
@@ -57,3 +59,45 @@ class IncomingMessageLogMiddleware(BaseMiddleware):
                 )
 
         return await handler(event, data)
+
+
+class AIUsageContextMiddleware(BaseMiddleware):
+    """Attach Telegram chat/user metadata to every nested AI provider call."""
+
+    async def __call__(
+        self,
+        handler: Callable[..., Awaitable[Any]],
+        event: Any,
+        data: Dict[str, Any],
+    ) -> Any:
+        message = event if isinstance(event, Message) else None
+        user = getattr(event, "from_user", None)
+
+        if message is None:
+            message = (
+                getattr(event, "message", None)
+                or getattr(event, "edited_message", None)
+                or getattr(event, "channel_post", None)
+                or getattr(event, "edited_channel_post", None)
+            )
+
+        callback = getattr(event, "callback_query", None)
+        if callback is not None:
+            user = getattr(callback, "from_user", None) or user
+            message = getattr(callback, "message", None) or message
+
+        if user is None and message is not None:
+            user = getattr(message, "from_user", None)
+
+        chat = getattr(message, "chat", None) if message is not None else None
+        chat_id = getattr(chat, "id", None)
+        user_id = getattr(user, "id", None)
+
+        with ai_request_context(
+            chat_id=int(chat_id) if chat_id is not None else None,
+            user_id=int(user_id) if user_id is not None else None,
+            chat_title=getattr(chat, "title", None) if chat is not None else None,
+            user_name=getattr(user, "full_name", None) if user is not None else None,
+            user_username=getattr(user, "username", None) if user is not None else None,
+        ):
+            return await handler(event, data)
