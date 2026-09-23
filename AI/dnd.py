@@ -72,6 +72,12 @@ DND_ROLL_SKILLS = (
 )
 _DND_ROLL_SKILLS_BY_KEY = {skill.casefold(): skill for skill in DND_ROLL_SKILLS}
 
+_ACTION_TAG_RE = re.compile(
+    r"(?:\*\*|__)?\[\s*(?:\*\*|__)?\s*ACTION:(.*?)(?:\*\*|__)?\s*\](?:\*\*|__)?",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
 _task_supervisor = None
 _finalizing_polls = set()
 _processing_backstories = set()
@@ -85,7 +91,8 @@ DND_SYSTEM_PROMPT = """
 
 Твоя задача:
 1. Генерировать ОЧЕНЬ КОРОТКИЕ куски сюжета (СТРОГО до 100 слов). Не лей воду.
-2. В конце сообщения ОБЯЗАТЕЛЬНО укажи один из технических тегов действий.
+2. В конце сообщения ОБЯЗАТЕЛЬНО укажи РОВНО ОДИН технический тег действия. Пиши его строго
+   как [ACTION:...], без Markdown-жирного, курсива, обратных кавычек и без второго ACTION-тега в том же ответе.
 3. Когда в запросе есть строка «РЕЖИССЁР СЦЕНЫ», используй указанный тип как доминирующий
    характер ближайшего сюжетного эпизода. Не называй тип сцены игрокам и не ломай причинность
    ради него: это творческое ограничение, а не команда резко телепортировать сюжет.
@@ -928,8 +935,15 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     session = dnd_sessions.get(chat_id)
     if not session:
         return
-    action_match = re.search(r"\[ACTION:(.*?)\]", text_response)
-    clean_text = re.sub(r"\[ACTION:.*?\]", "", text_response).strip()
+    action_matches = list(_ACTION_TAG_RE.finditer(text_response))
+    action_match = action_matches[0] if action_matches else None
+    clean_text = _ACTION_TAG_RE.sub("", text_response).strip()
+    if len(action_matches) > 1:
+        logging.warning(
+            "DnD model emitted multiple ACTION tags chat_id=%s count=%s; executing the first one",
+            chat_id,
+            len(action_matches),
+        )
     if clean_text:
         from AI.dnd_adventure import message_chunks
         for chunk in message_chunks(clean_text):
@@ -938,7 +952,7 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
         await open_action_window(bot, chat_id)
         return
 
-    command_str = action_match.group(1)
+    command_str = action_match.group(1).strip()
     if command_str.startswith("POLL"):
         try:
             options_part = command_str.split("OPTIONS:", 1)[1]
