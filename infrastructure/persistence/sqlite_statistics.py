@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,11 @@ SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
 MODEL_USAGE_MIGRATION = "statistics:002-model-token-usage"
+
+
+def _utc_now_naive() -> datetime:
+    """Match SQLite CURRENT_TIMESTAMP, which is stored in UTC without timezone."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class SQLiteStatisticsRepository:
@@ -379,7 +384,7 @@ class SQLiteStatisticsRepository:
             model_time_filter = ""
             if period_hours:
                 model_time_filter = "WHERE timestamp >= ?"
-                model_params.append(datetime.now() - timedelta(hours=period_hours))
+                model_params.append(_utc_now_naive() - timedelta(hours=period_hours))
 
             model_rows = conn.execute(
                 f"""
@@ -421,7 +426,7 @@ class SQLiteStatisticsRepository:
         where = ""
         if period_hours is not None:
             where = "WHERE timestamp >= ?"
-            params.append(datetime.now() - timedelta(hours=period_hours))
+            params.append(_utc_now_naive() - timedelta(hours=period_hours))
 
         effective_total = (
             "COALESCE(total_tokens, "
