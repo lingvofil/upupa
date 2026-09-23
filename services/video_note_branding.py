@@ -64,9 +64,9 @@ def _draw_arc_text(layer: Image.Image, size: int) -> None:
     font_size = max(16, round(size * 0.039))
     font = _load_font(font_size)
     center = size / 2
-    radius = size * 0.548
-    start_deg = 64.0
-    end_deg = 20.0
+    radius = size * 0.535
+    start_deg = 62.0
+    end_deg = 28.0
 
     for index, char in enumerate(BRAND_TEXT):
         progress = index / max(1, len(BRAND_TEXT) - 1)
