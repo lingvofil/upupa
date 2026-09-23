@@ -163,6 +163,37 @@ def build_branding_plate(
     return Image.composite(artwork, transparent, branding_mask)
 
 
+async def _probe_video_size(input_path: str) -> tuple[int, int]:
+    process = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0:s=x",
+        input_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        details = (stderr or stdout).decode(errors="ignore").strip()
+        raise RuntimeError(f"Не удалось определить размер видеокружка: {details}")
+
+    first_line = stdout.decode(errors="ignore").strip().splitlines()
+    if not first_line or "x" not in first_line[0]:
+        raise RuntimeError("FFprobe не вернул размер видеокружка.")
+
+    width_raw, height_raw = first_line[0].split("x", 1)
+    width, height = int(width_raw), int(height_raw)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Некорректный размер видеокружка.")
+    return width, height
+
+
 async def _run_ffmpeg(command: list[str]) -> tuple[bool, str]:
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -182,12 +213,18 @@ async def prepare_video_note_for_processing(
 ) -> str:
     """Replace Telegram's perimeter branding and return the prepared MP4 path."""
     plate_path = f"{output_path}.brand.png"
-    build_branding_plate(mascot_path=mascot_path).save(plate_path, "PNG")
+    width, height = await _probe_video_size(input_path)
 
-    filter_complex = (
-        "[1:v][0:v]scale2ref=w=main_w:h=main_h[brand][base];"
-        "[base][brand]overlay=0:0:format=auto:shortest=1[v]"
-    )
+    # The branding artwork is authored in normalized 512x512 coordinates, but
+    # Telegram video notes are commonly 384x384. The previous scale2ref filter
+    # used main_w/main_h, which resolves to the overlay's own dimensions and
+    # therefore left the 512x512 plate unscaled and cropped on 384x384 inputs.
+    plate = build_branding_plate(mascot_path=mascot_path)
+    if plate.size != (width, height):
+        plate = plate.resize((width, height), Image.Resampling.LANCZOS)
+    plate.save(plate_path, "PNG")
+
+    filter_complex = "[0:v][1:v]overlay=0:0:format=auto:shortest=1[v]"
     command = [
         "ffmpeg",
         "-y",
@@ -229,9 +266,11 @@ async def prepare_video_note_for_processing(
             logging.error("[video_note_branding] FFmpeg failed: %s", details)
             raise RuntimeError("Не удалось заменить оформление видеокружка.")
         logging.info(
-            "[video_note_branding] applied input=%s output=%s output_bytes=%s",
+            "[video_note_branding] applied input=%s output=%s source_size=%sx%s output_bytes=%s",
             input_path,
             output_path,
+            width,
+            height,
             os.path.getsize(output_path) if os.path.exists(output_path) else 0,
         )
         return output_path
