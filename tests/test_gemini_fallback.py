@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from tests import test_smoke_imports  # noqa: F401  (env + provider mocks)
 
 from infrastructure.ai import gemini
