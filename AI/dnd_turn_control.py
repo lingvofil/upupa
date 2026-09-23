@@ -23,6 +23,8 @@ GROUP_TURN_RULES = (
 
 
 def _group_turn_context(session) -> str:
+    if int(getattr(session, "spotlight_decisions_since_poll", 0) or 0) >= 4:
+        return "\nСЕЙЧАС: после текущего действия подготовь общую сюжетную развилку с POLL, 2–3 пути и свободный вариант."
     try:
         streak = max(0, int(getattr(session, "spotlight_individual_streak", 0) or 0))
     except (TypeError, ValueError):

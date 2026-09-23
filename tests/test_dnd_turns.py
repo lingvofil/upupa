@@ -11,7 +11,7 @@ from AI import dnd
 def test_action_prompt_omits_repeated_leader_hint():
     session = SimpleNamespace(mode="participants", participants={}, action_target_user_ids=[])
     text = dnd._action_prompt_text(session)
-    assert "Пишите действия реплаями" in text
+    assert text == "🎭 Ход партии."
     assert "Ведущий может завершить ход раньше" not in text
 
 
@@ -270,7 +270,7 @@ def test_group_turn_collects_players_and_starts_one_timer(monkeypatch):
     }
     assert session.action_deadline == 1000.0 + dnd.DND_ACTION_WINDOW_SECONDS
     assert supervisor.names == [f"dnd-actions:{chat_id}:88"]
-    assert len(first.answers) == 1
+    assert first.answers == []
     assert second.answers == []
 
 
