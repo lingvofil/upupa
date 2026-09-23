@@ -1,6 +1,7 @@
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,8 @@ from infrastructure.ai.execution import (
     AIQueueTimeoutError,
     AIRequestTimeoutError,
     ai_execution_lane,
+    ai_request_context,
+    configure_ai_usage_recorder,
 )
 
 
@@ -188,3 +191,100 @@ def test_lazy_resource_wraps_chat_session_send(monkeypatch):
     assert session.history == ["old"]
     assert session.send_message("ping") == "reply:ping"
     assert calls == ["fake-chat.chat.send_message"]
+
+
+
+def test_governor_records_real_gemini_usage_with_telegram_context():
+    events = []
+
+    def capture(chat_id, user_id, model_name, request_type, **details):
+        events.append(
+            {
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "model_name": model_name,
+                "request_type": request_type,
+                **details,
+            }
+        )
+
+    configure_ai_usage_recorder(capture)
+    response = SimpleNamespace(
+        model_version="gemini-test",
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=120,
+            candidates_token_count=30,
+            cached_content_token_count=20,
+            thoughts_token_count=5,
+            total_token_count=155,
+        ),
+    )
+    governor = _governor(request=0.5, queue=0.1)
+    try:
+        with ai_request_context(
+            chat_id=-1001,
+            user_id=42,
+            chat_title="Test chat",
+            user_name="Tester",
+            user_username="tester",
+        ):
+            assert governor.run("model.generate_content", lambda: response) is response
+    finally:
+        governor.shutdown(wait=True)
+        configure_ai_usage_recorder(None)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["chat_id"] == -1001
+    assert event["user_id"] == 42
+    assert event["provider"] == "gemini"
+    assert event["model_name"] == "gemini-test"
+    assert event["input_tokens"] == 120
+    assert event["output_tokens"] == 30
+    assert event["cached_tokens"] == 20
+    assert event["reasoning_tokens"] == 5
+    assert event["total_tokens"] == 155
+    assert event["success"] is True
+    assert event["chat_title"] == "Test chat"
+    assert event["user_username"] == "tester"
+
+
+def test_governor_records_openai_compatible_usage_from_tracked_text():
+    from infrastructure.ai.execution import TokenTrackedText
+
+    events = []
+    configure_ai_usage_recorder(
+        lambda chat_id, user_id, model_name, request_type, **details: events.append(
+            (chat_id, user_id, model_name, request_type, details)
+        )
+    )
+    result = TokenTrackedText(
+        "ok",
+        model_name="deepseek-test",
+        usage={
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 10},
+            "completion_tokens_details": {"reasoning_tokens": 7},
+        },
+    )
+    governor = _governor(request=0.5, queue=0.1)
+    try:
+        with ai_request_context(chat_id=-2002, user_id=77):
+            assert governor.run("siliconflow_ai.generate_text", lambda: result) == "ok"
+    finally:
+        governor.shutdown(wait=True)
+        configure_ai_usage_recorder(None)
+
+    assert len(events) == 1
+    chat_id, user_id, model_name, request_type, details = events[0]
+    assert (chat_id, user_id) == (-2002, 77)
+    assert model_name == "deepseek-test"
+    assert request_type == "siliconflow_ai.generate_text"
+    assert details["provider"] == "siliconflow"
+    assert details["input_tokens"] == 80
+    assert details["output_tokens"] == 20
+    assert details["cached_tokens"] == 10
+    assert details["reasoning_tokens"] == 7
+    assert details["total_tokens"] == 100

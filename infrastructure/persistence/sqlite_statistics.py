@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,12 @@ from typing import Any
 SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
+MODEL_USAGE_MIGRATION = "statistics:002-model-token-usage"
+
+
+def _utc_now_naive() -> datetime:
+    """Match SQLite CURRENT_TIMESTAMP, which is stored in UTC without timezone."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class SQLiteStatisticsRepository:
@@ -41,33 +47,77 @@ class SQLiteStatisticsRepository:
             )
             """
         )
-        applied = conn.execute(
+
+        index_applied = conn.execute(
             "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
             (STATISTICS_INDEX_MIGRATION,),
         ).fetchone()
-        if applied:
+        if not index_applied:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_message_stats_private_time "
+                "ON message_stats(is_private, message_timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_message_stats_chat_time "
+                "ON message_stats(chat_id, message_timestamp DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_message_stats_user_time "
+                "ON message_stats(user_id, message_timestamp DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_stats_time_chat "
+                "ON model_stats(timestamp, chat_id)"
+            )
+            conn.execute(
+                "INSERT INTO persistence_migrations(migration_id, applied_at) "
+                "VALUES (?, ?)",
+                (STATISTICS_INDEX_MIGRATION, datetime.now().isoformat()),
+            )
+
+        usage_applied = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (MODEL_USAGE_MIGRATION,),
+        ).fetchone()
+        if usage_applied:
             return
 
+        existing_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(model_stats)").fetchall()
+        }
+        new_columns = {
+            "provider": "TEXT",
+            "input_tokens": "INTEGER",
+            "output_tokens": "INTEGER",
+            "cached_tokens": "INTEGER",
+            "reasoning_tokens": "INTEGER",
+            "total_tokens": "INTEGER",
+            "duration_ms": "INTEGER",
+            "success": "BOOLEAN",
+            "lane": "TEXT",
+            "chat_title": "TEXT",
+            "user_name": "TEXT",
+            "user_username": "TEXT",
+        }
+        for column_name, column_type in new_columns.items():
+            if column_name not in existing_columns:
+                conn.execute(
+                    f"ALTER TABLE model_stats ADD COLUMN {column_name} {column_type}"
+                )
+
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_message_stats_private_time "
-            "ON message_stats(is_private, message_timestamp)"
+            "CREATE INDEX IF NOT EXISTS idx_model_stats_time_user "
+            "ON model_stats(timestamp, user_id)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_message_stats_chat_time "
-            "ON message_stats(chat_id, message_timestamp DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_message_stats_user_time "
-            "ON message_stats(user_id, message_timestamp DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_model_stats_time_chat "
-            "ON model_stats(timestamp, chat_id)"
+            "CREATE INDEX IF NOT EXISTS idx_model_stats_model_time "
+            "ON model_stats(model_name, timestamp)"
         )
         conn.execute(
             "INSERT INTO persistence_migrations(migration_id, applied_at) "
             "VALUES (?, ?)",
-            (STATISTICS_INDEX_MIGRATION, datetime.now().isoformat()),
+            (MODEL_USAGE_MIGRATION, datetime.now().isoformat()),
         )
 
     def init_schema(self) -> None:
@@ -96,7 +146,19 @@ class SQLiteStatisticsRepository:
                     chat_id BIGINT,
                     user_id BIGINT,
                     model_name TEXT,
-                    request_type TEXT
+                    request_type TEXT,
+                    provider TEXT,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    cached_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    total_tokens INTEGER,
+                    duration_ms INTEGER,
+                    success BOOLEAN,
+                    lane TEXT,
+                    chat_title TEXT,
+                    user_name TEXT,
+                    user_username TEXT
                 )
                 """
             )
@@ -108,14 +170,49 @@ class SQLiteStatisticsRepository:
         user_id: int | None,
         model_name: str,
         request_type: str,
+        *,
+        provider: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        total_tokens: int | None = None,
+        duration_ms: int | None = None,
+        success: bool | None = None,
+        lane: str | None = None,
+        chat_title: str | None = None,
+        user_name: str | None = None,
+        user_username: str | None = None,
     ) -> None:
         with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO model_stats (chat_id, user_id, model_name, request_type)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO model_stats (
+                    chat_id, user_id, model_name, request_type, provider,
+                    input_tokens, output_tokens, cached_tokens, reasoning_tokens,
+                    total_tokens, duration_ms, success, lane, chat_title,
+                    user_name, user_username
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, user_id, model_name, request_type),
+                (
+                    chat_id,
+                    user_id,
+                    model_name,
+                    request_type,
+                    provider,
+                    input_tokens,
+                    output_tokens,
+                    cached_tokens,
+                    reasoning_tokens,
+                    total_tokens,
+                    duration_ms,
+                    success,
+                    lane,
+                    chat_title,
+                    user_name,
+                    user_username,
+                ),
             )
 
     def log_message(
@@ -287,7 +384,7 @@ class SQLiteStatisticsRepository:
             model_time_filter = ""
             if period_hours:
                 model_time_filter = "WHERE timestamp >= ?"
-                model_params.append(datetime.now() - timedelta(hours=period_hours))
+                model_params.append(_utc_now_naive() - timedelta(hours=period_hours))
 
             model_rows = conn.execute(
                 f"""
@@ -316,6 +413,166 @@ class SQLiteStatisticsRepository:
             "groups": group_stats,
             "private": private_stats,
             "model_usage": model_usage,
+        }
+
+    def get_model_usage_report(
+        self,
+        period_hours: int | None = 24,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Aggregate real provider token usage by model, chat and user."""
+        resolved_limit = max(1, int(limit))
+        params: list[Any] = []
+        where = ""
+        if period_hours is not None:
+            where = "WHERE timestamp >= ?"
+            params.append(_utc_now_naive() - timedelta(hours=period_hours))
+
+        effective_total = (
+            "COALESCE(total_tokens, "
+            "CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL "
+            "THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) END)"
+        )
+
+        with closing(self._connect()) as conn:
+            totals_row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*),
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN input_tokens IS NOT NULL
+                              OR output_tokens IS NOT NULL
+                              OR total_tokens IS NOT NULL THEN 1 ELSE 0 END),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cached_tokens), 0),
+                    COALESCE(SUM(reasoning_tokens), 0),
+                    COALESCE(SUM({effective_total}), 0),
+                    SUM(CASE WHEN chat_id IS NULL THEN 1 ELSE 0 END)
+                FROM model_stats
+                {where}
+                """,
+                params,
+            ).fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+            models = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(provider, 'unknown') AS provider_name,
+                    COALESCE(model_name, 'unknown') AS resolved_model,
+                    COUNT(*) AS requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {where}
+                GROUP BY provider_name, resolved_model
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+            scoped_where = f"{where} {'AND' if where else 'WHERE'} chat_id IS NOT NULL"
+            chats = conn.execute(
+                f"""
+                SELECT
+                    chat_id,
+                    MAX(chat_title),
+                    COUNT(*) AS requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {scoped_where}
+                GROUP BY chat_id
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+            user_where = f"{where} {'AND' if where else 'WHERE'} user_id IS NOT NULL"
+            users = conn.execute(
+                f"""
+                SELECT
+                    user_id,
+                    MAX(user_name),
+                    MAX(user_username),
+                    COUNT(*) AS requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {user_where}
+                GROUP BY user_id
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+            users_by_requests = conn.execute(
+                f"""
+                SELECT
+                    user_id,
+                    MAX(user_name),
+                    MAX(user_username),
+                    COUNT(*) AS requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {user_where}
+                GROUP BY user_id
+                ORDER BY requests DESC, tokens DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+        return {
+            "totals": {
+                "requests": int(totals_row[0] or 0),
+                "successful_requests": int(totals_row[1] or 0),
+                "usage_known_requests": int(totals_row[2] or 0),
+                "input_tokens": int(totals_row[3] or 0),
+                "output_tokens": int(totals_row[4] or 0),
+                "cached_tokens": int(totals_row[5] or 0),
+                "reasoning_tokens": int(totals_row[6] or 0),
+                "total_tokens": int(totals_row[7] or 0),
+                "unattributed_requests": int(totals_row[8] or 0),
+            },
+            "models": [
+                {
+                    "provider": str(provider),
+                    "model_name": str(model_name),
+                    "requests": int(requests),
+                    "total_tokens": int(tokens),
+                }
+                for provider, model_name, requests, tokens in models
+            ],
+            "chats": [
+                {
+                    "chat_id": int(chat_id),
+                    "chat_title": chat_title,
+                    "requests": int(requests),
+                    "total_tokens": int(tokens),
+                }
+                for chat_id, chat_title, requests, tokens in chats
+            ],
+            "users": [
+                {
+                    "user_id": int(user_id),
+                    "user_name": user_name,
+                    "user_username": user_username,
+                    "requests": int(requests),
+                    "total_tokens": int(tokens),
+                }
+                for user_id, user_name, user_username, requests, tokens in users
+            ],
+            "users_by_requests": [
+                {
+                    "user_id": int(user_id),
+                    "user_name": user_name,
+                    "user_username": user_username,
+                    "requests": int(requests),
+                    "total_tokens": int(tokens),
+                }
+                for user_id, user_name, user_username, requests, tokens in users_by_requests
+            ],
         }
 
     def get_activity_by_hour(self, period_hours: int | None = None) -> dict[int, int]:

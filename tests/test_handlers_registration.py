@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 172  # + 4 relationship commands on top of Chronicle handlers
+EXPECTED_TOTAL_HANDLERS = 173  # + 4 relationship commands on top of Chronicle handlers
 
 
 def _count_handlers(router):

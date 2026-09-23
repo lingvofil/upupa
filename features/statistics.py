@@ -24,6 +24,19 @@ class StatisticsRepository(Protocol):
         user_id: int | None,
         model_name: str,
         request_type: str,
+        *,
+        provider: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        total_tokens: int | None = None,
+        duration_ms: int | None = None,
+        success: bool | None = None,
+        lane: str | None = None,
+        chat_title: str | None = None,
+        user_name: str | None = None,
+        user_username: str | None = None,
     ) -> None: ...
 
     def log_message(
@@ -38,6 +51,12 @@ class StatisticsRepository(Protocol):
     ) -> None: ...
 
     def get_stats(self, period_hours: int | None = None) -> dict[str, dict]: ...
+
+    def get_model_usage_report(
+        self,
+        period_hours: int | None = 24,
+        limit: int = 5,
+    ) -> dict: ...
 
     def get_activity_by_hour(self, period_hours: int | None = None) -> dict[int, int]: ...
 
@@ -91,9 +110,24 @@ def init_db():
 
 # --- Логирование использования нейросетей ---
 
-def log_model_request(chat_id: Optional[int], user_id: Optional[int], model_name: str, request_type: str):
+def log_model_request(
+    chat_id: Optional[int],
+    user_id: Optional[int],
+    model_name: str,
+    request_type: str,
+    **details,
+):
     try:
-        _repository().log_model_request(chat_id, user_id, model_name, request_type)
+        _repository().log_model_request(
+            chat_id,
+            user_id,
+            model_name,
+            request_type,
+            **details,
+        )
+    except RuntimeError:
+        # Provider calls can occur in isolated tests before application composition.
+        return
     except Exception as e:
         logging.error(f"Error logging model request: {e}")
 
@@ -133,6 +167,18 @@ async def get_messages_last_24_hours():
 
 async def get_messages_last_hour():
     return await asyncio.to_thread(_repository().get_stats, 1)
+
+
+async def get_model_usage_report(
+    period_hours: Optional[int] = 24,
+    *,
+    limit: int = 5,
+) -> dict:
+    return await asyncio.to_thread(
+        _repository().get_model_usage_report,
+        period_hours,
+        limit,
+    )
 
 
 async def get_activity_by_hour(period_hours: Optional[int] = None) -> Dict[int, int]:

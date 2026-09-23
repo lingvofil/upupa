@@ -14,8 +14,10 @@ GIGACHAT_BASE_URL = "https://api.giga.chat/v1"
 class GigaChatResponse:
     """Compatibility response exposing the `.text` attribute used by Upupa."""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, model_name: str | None = None, usage=None):
         self.text = text
+        self._upupa_model_name = model_name
+        self._upupa_usage = usage
 
 
 class GigaChatConversationWrapper:
@@ -104,7 +106,11 @@ class GigaChatConversationWrapper:
                     model_name,
                     getattr(response, "model", None),
                 )
-                return GigaChatResponse(content)
+                return GigaChatResponse(
+                    content,
+                    model_name=getattr(response, "model", None) or model_name,
+                    usage=getattr(response, "usage", None),
+                )
             except Exception as exc:
                 logging.error(
                     "GigaChat error chat_id=%s model=%s: %s",
@@ -154,7 +160,11 @@ class GigaChatWrapper:
                 ) as giga:
                     response = giga.chat(prompt)
                     self.last_used_model_name = model_name
-                    return GigaChatResponse(response.choices[0].message.content)
+                    return GigaChatResponse(
+                        response.choices[0].message.content,
+                        model_name=getattr(response, "model", None) or model_name,
+                        usage=getattr(response, "usage", None),
+                    )
             except Exception as exc:
                 logging.error("GigaChat error [%s]: %s", model_name, exc)
                 continue

@@ -5,6 +5,7 @@
 """
 from aiogram import Router
 
+from html import escape
 import random
 import logging
 from aiogram import F, types
@@ -19,6 +20,127 @@ from features.lexicon_settings import (
 import features.statistics as bot_statistics
 
 router = Router(name="stats_lexicon")
+
+
+TOKEN_USAGE_PERIODS = {
+    "токены": (24, "Расход токенов за 24 часа"),
+    "токены сутки": (24, "Расход токенов за 24 часа"),
+    "токены час": (1, "Расход токенов за час"),
+    "токены неделя": (24 * 7, "Расход токенов за неделю"),
+    "токены все": (None, "Расход токенов за всё время"),
+}
+
+
+def _format_token_count(value: int) -> str:
+    value = int(value or 0)
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f} млрд"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f} млн"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f} тыс."
+    return str(value)
+
+
+def _format_usage_identity(name, username, fallback: str) -> str:
+    if username:
+        return f"{name} (@{username})" if name else f"@{username}"
+    return str(name or fallback)
+
+
+def format_model_usage_message(report: dict, title: str) -> str:
+    totals = report.get("totals", {})
+    requests = int(totals.get("requests", 0))
+    known = int(totals.get("usage_known_requests", 0))
+    total_tokens = int(totals.get("total_tokens", 0))
+    input_tokens = int(totals.get("input_tokens", 0))
+    output_tokens = int(totals.get("output_tokens", 0))
+    cached_tokens = int(totals.get("cached_tokens", 0))
+    reasoning_tokens = int(totals.get("reasoning_tokens", 0))
+    unattributed = int(totals.get("unattributed_requests", 0))
+
+    parts = [
+        f"🧠 <b>{escape(title)}</b>",
+        (
+            f"Всего: <b>{_format_token_count(total_tokens)}</b> токенов "
+            f"· {requests} запросов"
+        ),
+        (
+            f"Вход: {_format_token_count(input_tokens)} "
+            f"· выход: {_format_token_count(output_tokens)}"
+        ),
+    ]
+    if cached_tokens or reasoning_tokens:
+        extra = []
+        if cached_tokens:
+            extra.append(f"кэш: {_format_token_count(cached_tokens)}")
+        if reasoning_tokens:
+            extra.append(f"reasoning: {_format_token_count(reasoning_tokens)}")
+        parts.append(" · ".join(extra))
+
+    unknown_usage = max(0, requests - known)
+    if unknown_usage:
+        parts.append(
+            f"⚠️ Без token usage от провайдера: {unknown_usage} запросов"
+        )
+    if unattributed:
+        parts.append(
+            f"🛠 Без привязки к чату/пользователю: {unattributed} запросов"
+        )
+
+    models = report.get("models") or []
+    if models:
+        parts.append("\n<b>Модели</b>")
+        for row in models:
+            label = f"{row.get('provider')}/{row.get('model_name')}"
+            parts.append(
+                f"• <code>{escape(label)}</code>: "
+                f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
+                f"· {int(row.get('requests', 0))} запр."
+            )
+
+    chats = report.get("chats") or []
+    if chats:
+        parts.append("\n<b>Топ чатов</b>")
+        for row in chats:
+            label = row.get("chat_title") or f"ID {row.get('chat_id')}"
+            parts.append(
+                f"• {escape(str(label))}: "
+                f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
+                f"· {int(row.get('requests', 0))} запр."
+            )
+
+    users = report.get("users") or []
+    if users:
+        parts.append("\n<b>Топ пользователей по токенам</b>")
+        for row in users:
+            label = _format_usage_identity(
+                row.get("user_name"),
+                row.get("user_username"),
+                f"ID {row.get('user_id')}",
+            )
+            parts.append(
+                f"• {escape(label)}: "
+                f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
+                f"· {int(row.get('requests', 0))} запр."
+            )
+
+    frequent_users = report.get("users_by_requests") or []
+    if frequent_users:
+        parts.append("\n<b>Топ пользователей по числу запросов</b>")
+        for row in frequent_users:
+            label = _format_usage_identity(
+                row.get("user_name"),
+                row.get("user_username"),
+                f"ID {row.get('user_id')}",
+            )
+            parts.append(
+                f"• {escape(label)}: "
+                f"<b>{int(row.get('requests', 0))}</b> запр. "
+                f"· {_format_token_count(row.get('total_tokens', 0))} токенов"
+            )
+
+    return "\n".join(parts)
 
 
 def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
@@ -48,6 +170,24 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
         parts.append("\n_Нет активности в личных сообщениях._")
 
     return "\n".join(parts)
+
+@router.message(
+    lambda message: (
+        message.from_user
+        and message.from_user.id == ADMIN_ID
+        and message.text
+        and message.text.lower().strip() in TOKEN_USAGE_PERIODS
+    )
+)
+async def cmd_token_usage(message: Message):
+    period_hours, title = TOKEN_USAGE_PERIODS[message.text.lower().strip()]
+    report = await bot_statistics.get_model_usage_report(period_hours, limit=7)
+    await message.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=format_model_usage_message(report, title),
+        parse_mode="HTML",
+    )
+
 
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
 async def cmd_stats_total(message: Message):

@@ -7,6 +7,8 @@ import logging
 from groq import Groq
 from PIL import Image
 
+from infrastructure.ai.execution import TokenTrackedText
+
 
 class GroqWrapper:
     def __init__(
@@ -63,7 +65,11 @@ class GroqWrapper:
                 temperature=0.7,
                 max_tokens=1024,
             )
-            return completion.choices[0].message.content or ""
+            return TokenTrackedText(
+                completion.choices[0].message.content or "",
+                model_name=getattr(completion, "model", None) or self.vision_model,
+                usage=getattr(completion, "usage", None),
+            )
         except Exception as exc:
             logging.error("Groq Vision Error: %s", exc)
             raise
@@ -105,7 +111,11 @@ class GroqWrapper:
                 self.text_model,
                 len(result) if result else 0,
             )
-            return result or ""
+            return TokenTrackedText(
+                result or "",
+                model_name=getattr(completion, "model", None) or self.text_model,
+                usage=getattr(completion, "usage", None),
+            )
         except Exception as exc:
             logging.error("Groq Text Error: %s", exc, exc_info=True)
             raise
