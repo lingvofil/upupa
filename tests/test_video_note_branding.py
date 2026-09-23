@@ -10,7 +10,17 @@ def _write_mascot(path: Path) -> None:
     Image.new("RGB", (80, 80), (230, 120, 30)).save(path, "PNG")
 
 
-def test_branding_plate_keeps_circle_transparent_and_replaces_exterior(tmp_path):
+def _polar_point(size: int, radius_ratio: float, angle_deg: float) -> tuple[int, int]:
+    radius = size * radius_ratio
+    angle = __import__("math").radians(angle_deg)
+    center = size / 2
+    return (
+        round(center + radius * __import__("math").cos(angle)),
+        round(center + radius * __import__("math").sin(angle)),
+    )
+
+
+def test_branding_plate_preserves_center_and_covers_service_brand_zones(tmp_path):
     mascot = tmp_path / "mascot.png"
     _write_mascot(mascot)
 
@@ -20,6 +30,21 @@ def test_branding_plate_keeps_circle_transparent_and_replaces_exterior(tmp_path)
     assert plate.getpixel((256, 256))[3] == 0
     assert plate.getpixel((0, 0))[3] == 255
     assert plate.getpixel((511, 511))[3] == 255
+
+    # The previous implementation left the whole inscribed circle transparent,
+    # so Telegram's lower-left logo and lower-right arc text survived.
+    lower_right_rim = _polar_point(512, 0.44, 48)
+    lower_left_rim = _polar_point(512, 0.44, 132)
+    upper_rim = _polar_point(512, 0.44, 270)
+    inner_lower_right = _polar_point(512, 0.30, 48)
+
+    assert plate.getpixel(lower_right_rim)[3] > 240
+    assert plate.getpixel(lower_left_rim)[3] > 240
+    assert plate.getpixel(upper_rim)[3] == 0
+    assert plate.getpixel(inner_lower_right)[3] == 0
+
+    # The mascot itself must be inside the lower-left replacement zone.
+    assert plate.getpixel(lower_left_rim)[:3] != (18, 18, 20)
 
 
 def test_prepare_video_note_builds_ffmpeg_overlay(monkeypatch, tmp_path):
