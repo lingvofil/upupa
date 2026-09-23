@@ -98,6 +98,13 @@ def _usage_value(source: Any, *names: str) -> int | None:
     return None
 
 
+def _first_known(*values: int | None) -> int | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _extract_token_usage(result: Any) -> dict[str, int | None]:
     usage = getattr(result, "_upupa_usage", None)
     if usage is None:
@@ -129,13 +136,13 @@ def _extract_token_usage(result: Any) -> dict[str, int | None]:
             "completion_tokens",
             "output_tokens",
         ),
-        "cached_tokens": (
-            _usage_value(usage, "cached_content_token_count", "cached_tokens")
-            or _usage_value(prompt_details, "cached_tokens")
+        "cached_tokens": _first_known(
+            _usage_value(usage, "cached_content_token_count", "cached_tokens"),
+            _usage_value(prompt_details, "cached_tokens"),
         ),
-        "reasoning_tokens": (
-            _usage_value(usage, "thoughts_token_count", "reasoning_tokens")
-            or _usage_value(completion_details, "reasoning_tokens")
+        "reasoning_tokens": _first_known(
+            _usage_value(usage, "thoughts_token_count", "reasoning_tokens"),
+            _usage_value(completion_details, "reasoning_tokens"),
         ),
         "total_tokens": _usage_value(
             usage,
