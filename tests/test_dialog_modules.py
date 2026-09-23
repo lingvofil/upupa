@@ -281,6 +281,7 @@ def test_poem_user_name_aliases_are_applied_only_in_poem_character_lists(monkeyp
         "чудо в стране алис": "Света",
         "мац ня": "Мацоня",
         "алинаааааа": "Алина",
+        "м м": "Имакс",
     }
     for raw_name, expected in aliases.items():
         assert prompt_commands._replace_poem_user_name_alias(raw_name) == expected
@@ -290,10 +291,10 @@ def test_poem_user_name_aliases_are_applied_only_in_poem_character_lists(monkeyp
     monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: None)
     characters = prompt_commands._format_poem_character_instruction(
         [],
-        "Six7ape, чудо в стране алис, мац ня, алинаааааа, Жека",
+        "Six7ape, чудо в стране алис, мац ня, алинаааааа, м м, Жека",
     )
 
-    assert characters == "Мухтар, Света, Мацоня, Алина, Жека"
+    assert characters == "Мухтар, Света, Мацоня, Алина, Имакс, Жека"
 
 
 def test_poem_bot_pool_ignores_telegram_fake_channel_senders(monkeypatch):
