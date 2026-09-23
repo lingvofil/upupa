@@ -54,11 +54,18 @@ def test_prepare_video_note_builds_ffmpeg_overlay(monkeypatch, tmp_path):
     _write_mascot(mascot)
     captured = {}
 
+    async def fake_probe(_input_path):
+        return 384, 384
+
     async def fake_run(command):
         captured["command"] = command
+        plate_path = next(part for part in command if str(part).endswith(".brand.png"))
+        with Image.open(plate_path) as plate:
+            captured["plate_size"] = plate.size
         output.write_bytes(b"branded")
         return True, ""
 
+    monkeypatch.setattr(branding, "_probe_video_size", fake_probe)
     monkeypatch.setattr(branding, "_run_ffmpeg", fake_run)
 
     result = asyncio.run(
@@ -72,8 +79,9 @@ def test_prepare_video_note_builds_ffmpeg_overlay(monkeypatch, tmp_path):
     assert result == str(output)
     command = captured["command"]
     filter_complex = command[command.index("-filter_complex") + 1]
-    assert "scale2ref" in filter_complex
-    assert "overlay=0:0" in filter_complex
+    assert captured["plate_size"] == (384, 384)
+    assert "scale2ref" not in filter_complex
+    assert filter_complex == "[0:v][1:v]overlay=0:0:format=auto:shortest=1[v]"
     map_positions = [i for i, value in enumerate(command) if value == "-map"]
     assert [command[i + 1] for i in map_positions] == ["[v]", "0:a?"]
     assert not Path(str(output) + ".brand.png").exists()
