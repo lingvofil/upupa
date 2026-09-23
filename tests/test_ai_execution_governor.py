@@ -12,6 +12,7 @@ from infrastructure.ai.execution import (
     AIRequestTimeoutError,
     ai_execution_lane,
     ai_request_context,
+    configure_ai_usage_recorder,
 )
 
 
@@ -193,9 +194,7 @@ def test_lazy_resource_wraps_chat_session_send(monkeypatch):
 
 
 
-def test_governor_records_real_gemini_usage_with_telegram_context(monkeypatch):
-    import features.statistics as statistics
-
+def test_governor_records_real_gemini_usage_with_telegram_context():
     events = []
 
     def capture(chat_id, user_id, model_name, request_type, **details):
@@ -209,7 +208,7 @@ def test_governor_records_real_gemini_usage_with_telegram_context(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(statistics, "log_model_request", capture)
+    configure_ai_usage_recorder(capture)
     response = SimpleNamespace(
         model_version="gemini-test",
         usage_metadata=SimpleNamespace(
@@ -232,6 +231,7 @@ def test_governor_records_real_gemini_usage_with_telegram_context(monkeypatch):
             assert governor.run("model.generate_content", lambda: response) is response
     finally:
         governor.shutdown(wait=True)
+        configure_ai_usage_recorder(None)
 
     assert len(events) == 1
     event = events[0]
@@ -249,17 +249,14 @@ def test_governor_records_real_gemini_usage_with_telegram_context(monkeypatch):
     assert event["user_username"] == "tester"
 
 
-def test_governor_records_openai_compatible_usage_from_tracked_text(monkeypatch):
-    import features.statistics as statistics
+def test_governor_records_openai_compatible_usage_from_tracked_text():
     from infrastructure.ai.execution import TokenTrackedText
 
     events = []
-    monkeypatch.setattr(
-        statistics,
-        "log_model_request",
+    configure_ai_usage_recorder(
         lambda chat_id, user_id, model_name, request_type, **details: events.append(
             (chat_id, user_id, model_name, request_type, details)
-        ),
+        )
     )
     result = TokenTrackedText(
         "ok",
@@ -278,6 +275,7 @@ def test_governor_records_openai_compatible_usage_from_tracked_text(monkeypatch)
             assert governor.run("siliconflow_ai.generate_text", lambda: result) == "ok"
     finally:
         governor.shutdown(wait=True)
+        configure_ai_usage_recorder(None)
 
     assert len(events) == 1
     chat_id, user_id, model_name, request_type, details = events[0]
