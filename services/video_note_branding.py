@@ -1,9 +1,10 @@
 """Shared branding preprocessor for Telegram video notes.
 
 Telegram stores video notes as square MP4 files and applies the circular crop in
-the client. The square area outside that crop can contain Telegram service
-branding. Before effects are applied, this module replaces only that exterior
-area with Upupa branding so both YTP and distortion use the same clean source.
+the client. Its baked service branding occupies the lower perimeter of that
+source frame, including a narrow band just inside the visible circle. Before
+effects are applied, this module replaces only those perimeter zones with Upupa
+branding so both YTP and distortion use the same clean source.
 """
 
 from __future__ import annotations
@@ -179,7 +180,7 @@ async def prepare_video_note_for_processing(
     *,
     mascot_path: str | os.PathLike[str] | None = None,
 ) -> str:
-    """Replace the square exterior around a Telegram video note and return the new MP4 path."""
+    """Replace Telegram's perimeter branding and return the prepared MP4 path."""
     plate_path = f"{output_path}.brand.png"
     build_branding_plate(mascot_path=mascot_path).save(plate_path, "PNG")
 
