@@ -40,6 +40,7 @@ from infrastructure.ai.openai_compatible import OpenAICompatibleWrapper
 _UNSET = object()
 _GOVERNED_METHODS = {
     "analyze_image",
+    "chat",
     "generate_content",
     "generate_custom",
     "generate_text",
