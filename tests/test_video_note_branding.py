@@ -61,7 +61,7 @@ def test_repo_video_note_mascot_asset_is_decodable():
         image_size = source.size
         source.load()
 
-    assert image_format == "PNG"
+    assert image_format == "JPEG"
     assert min(image_size) >= 64
 
     plate = branding.build_branding_plate(size=512)

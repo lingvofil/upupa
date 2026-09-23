@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MASCOT_PATH = PROJECT_ROOT / "assets" / "video_note" / "upupa_mascot.png"
+MASCOT_PATH = PROJECT_ROOT / "assets" / "video_note" / "upupa_mascot.jpg"
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "Impact.ttf"
 
 BRAND_TEXT = "@expertyebaniebot"
