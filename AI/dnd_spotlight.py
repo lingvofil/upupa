@@ -252,7 +252,9 @@ def _spotlight_context(session) -> str:
     participant = (getattr(session, "participants", {}) or {}).get(str(expected), {})
     name = participant.get("name") or f"ID {expected}"
     extra = ""
-    if int(session.spotlight_individual_streak) < 4:
+    if int(session.spotlight_decisions_since_poll) >= 4:
+        extra += "\nПора общей сюжетной развилке: предложи POLL с 2–3 путями после разрешения текущего действия."
+    elif int(session.spotlight_individual_streak) < 4:
         extra += f"\nПредпочти личный [ACTION:INPUT;TARGETS:{expected}] и спроси {name}, что он делает."
     if int(getattr(session, "group_input_streak", 0) or 0) >= 2:
         extra += (
@@ -265,7 +267,8 @@ def _spotlight_context(session) -> str:
         extra += "\nНедавно уже было голосование: не создавай новое без действительно новой общей развилки."
     return (
         f"\n{SPOTLIGHT_MARKER}: СЛЕДУЮЩИЙ ФОКУС — ID {expected} ({name}). "
-        "Если следующий проактивный ход индивидуальный, TARGETS должен указывать именно этот ID."
+        "Для нового личного INPUT используй этот ID. Бросок по уже заявленному действию остаётся за его исполнителем; "
+        "до результата броска не спрашивай следующего героя."
         + extra
     )
 

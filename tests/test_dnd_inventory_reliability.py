@@ -85,7 +85,7 @@ def test_audit_triggers_for_explicit_take_to_inventory_wording():
     assert _should_audit(session, "Забираю ключ себе", response) is True
 
 
-def test_audit_skips_when_primary_response_already_has_item_tag():
+def test_audit_checks_for_other_items_when_primary_response_has_one_tag():
     session = _session()
     response = (
         "Ты стырил ложку.\n"
@@ -93,7 +93,7 @@ def test_audit_skips_when_primary_response_already_has_item_tag():
         "[ACTION:INPUT]"
     )
 
-    assert _should_audit(session, "Тырю ложку", response) is False
+    assert _should_audit(session, "Тырю ложку", response) is True
 
 
 def test_audit_validation_rejects_unknown_players_and_keeps_qty():

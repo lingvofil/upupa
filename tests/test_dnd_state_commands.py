@@ -289,7 +289,8 @@ def test_dnd_links_repairs_empty_memory_from_saved_scenes(monkeypatch):
     session.scene_log = ["Партия договорилась с Капитаном Ржой: он спрятал их от стражи."]
     persisted = []
 
-    async def auxiliary(_session, prompt):
+    async def auxiliary(_session, prompt, *, allow_groq_fallback=False):
+        assert allow_groq_fallback
         assert "Капитаном Ржой" in prompt
         return "[NPC:Капитан Ржа;EVENT:помог скрыться;NOTE:спрятал партию от стражи]"
 

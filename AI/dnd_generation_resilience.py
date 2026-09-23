@@ -280,7 +280,12 @@ def _history_contents(session, prompt: str):
             for role, text in recent
         )
 
-    current = _bounded_current_request(current, DND_GEMINI_CURRENT_PROMPT_MAX_CHARS)
+    from AI.dnd_turn_contract import turn_contract
+
+    contract = turn_contract(session)
+    current = _bounded_current_request(current, DND_GEMINI_CURRENT_PROMPT_MAX_CHARS - len(contract) - 2)
+    if contract:
+        current = contract + "\n\n" + current
     contents = [
         {"role": role, "parts": [{"text": text}]}
         for role, text in compact_rows
@@ -431,6 +436,11 @@ def _fallback_prompt(
     max_chars: int = DND_FALLBACK_PROMPT_MAX_CHARS,
     continuity_guard: str = DND_FALLBACK_CONTINUITY_GUARD,
 ) -> str:
+    from AI.dnd_turn_contract import turn_contract
+
+    contract = turn_contract(session)
+    if contract:
+        continuity_guard += "\n\n" + contract
     rows = []
     for item in getattr(session, "conversation", None) or []:
         if not isinstance(item, dict) or item.get("content") is None:

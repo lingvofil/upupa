@@ -430,6 +430,9 @@ def persist_dnd_sessions() -> None:
 
 
 def choose_next_scene_type(session: GameSession) -> str:
+    if (_is_participant_mode(session) and int(getattr(session, "scene_count", 0) or 0) >= 3
+            and not (getattr(session, "enemy_combatants", {}) or {})):
+        return "первая сюжетная схватка с NPC: подготовь столкновение, дай игрокам выбрать действия; атаки разрешай боевыми тегами"
     recent = set(session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:])
     candidates = [scene for scene in DND_SCENE_TYPES if scene not in recent]
     if not candidates:
@@ -546,23 +549,18 @@ def _action_prompt_text(session) -> str:
     if _is_participant_mode(session):
         if targets:
             names = ", ".join(_target_names(session, targets))
-            heading = f"🎭 Ход: {names}. Только они могут ответить реплаем на это сообщение."
+            heading = f"🎭 Ход: {names}."
         else:
             names = ", ".join(
                 item.get("name") or "Игрок"
                 for item in (getattr(session, "participants", {}) or {}).values()
             )
-            heading = "🎭 Ход партии. Пишите действия реплаями на это сообщение."
+            heading = "🎭 Ход партии."
             if names:
                 heading += f" Участники: {names}."
     else:
-        heading = "🎭 Ход партии. Пишите действия реплаями на это сообщение."
-    return (
-        heading
-        + "\n"
-        + f"После первого действия собираю остальные ещё {DND_ACTION_WINDOW_SECONDS} секунд. "
-        + "Каждый игрок может переписать своё действие новым реплаем."
-    )
+        heading = "🎭 Ход партии."
+    return heading
 
 
 def _lobby_text(session) -> str:
@@ -1789,6 +1787,11 @@ async def handle_free_action(message: Message):
         "name": user_name,
         "action": user_action,
     }
+    targets = list(getattr(session, "action_target_user_ids", []) or [])
+    if _is_participant_mode(session) and len(targets or _participant_ids(session)) == 1:
+        persist_dnd_sessions()
+        await finalize_group_actions(message.bot, message.chat.id, int(prompt_message_id))
+        return
     first_action = session.action_deadline is None
     if first_action:
         session.action_deadline = time.time() + DND_ACTION_WINDOW_SECONDS
@@ -1797,10 +1800,6 @@ async def handle_free_action(message: Message):
         _start_background_task(
             wait_for_action_timeout(message.bot, message.chat.id, int(prompt_message_id)),
             name=f"dnd-actions:{message.chat.id}:{prompt_message_id}",
-        )
-        await message.answer(
-            f"⏳ Первый полез. Остальным {DND_ACTION_WINDOW_SECONDS} секунд на свои действия. "
-            "Ведущий может написать «дальше» и закончить ход раньше."
         )
 
 

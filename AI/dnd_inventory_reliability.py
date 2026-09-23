@@ -27,7 +27,7 @@ _QTY_RE = re.compile(r";QTY:(\d+)", re.I)
 _LOOT_SIGNAL_RE = re.compile(
     r"(?:\bвзял\w*|\bбер[её]т\w*|\bзабрал\w*|\bподобрал\w*|\bполучил\w*|\bнаш[её]л\w*|"
     r"\bукрал\w*|\bстыр\w*|\bутащ\w*|\bприсво\w*|\bкупил\w*|\bвымен\w*|\bподар\w*|"
-    r"\bзабира\w*|\bклад\w*|\bполож\w*|\bостав\w*|\bубира\w*|"
+    r"\bзабира\w*|\bклад\w*|\bполож\w*|\bостав\w*|\bубира\w*|\bхвата\w*|\bподбира\w*|\bдерж\w*|"
     r"\bтрофе\w*|\bартефакт\w*|\bложк\w*|\bкарман\w*|\bинвентар\w*|\bштраф\w*|"
     r"\bпроклят\w*|\bпизд\w*)",
     re.I,
@@ -70,8 +70,6 @@ def _should_audit(session, prompt: str, response: str) -> bool:
         return False
     if "[ACTION:" not in str(response or "").upper():
         return False
-    if _ITEM_TAG_RE.search(str(response or "")):
-        return False
     return bool(_LOOT_SIGNAL_RE.search(f"{prompt}\n{response}"))
 
 
@@ -88,7 +86,8 @@ def _audit_prompt(campaign, session, prompt: str, response: str) -> str:
     return (
         "СЛУЖЕБНАЯ ПРОВЕРКА ИНВЕНТАРЯ. Это не игровой ход и не продолжение сюжета.\n"
         "Проверь уже написанный ответ ведущего и верни ТОЛЬКО отсутствующие ITEM-теги для изменений инвентаря, "
-        "которые этот ответ уже однозначно подтвердил. Ничего не придумывай и не меняй исход сцены.\n"
+        "которые этот ответ уже однозначно подтвердил. Уже имеющиеся ITEM-теги не повторяй. "
+        "Ничего не придумывай и не меняй исход сцены.\n"
         "Если герой лишь попытался взять/украсть предмет и провалился — ничего не добавляй. Если фактически получил даже "
         "обычную ложку, мусор или смешной трофей — добавь. Для нескольких одинаковых единиц используй QTY. "
         "Значимый уникальный предмет можно отметить KIND:artifact. Потерянное/отданное/израсходованное — ITEM:REMOVE.\n"
@@ -165,7 +164,18 @@ async def _audit_missing_inventory_tags(dnd, campaign, session, prompt: str, res
         )
         return response
 
-    tags = _validated_item_tags(campaign, session, audit)
+    def identity(tag):
+        match = _ITEM_TAG_RE.search(tag)
+        head, fields = campaign._parse_fields(match.group(1) + ";" + match.group(2))
+        return (head.upper(), str(fields.get("PLAYER")), str(fields.get("NAME") or "").strip().casefold())
+
+    present = {identity(match.group(0)) for match in _ITEM_TAG_RE.finditer(response)}
+    tags = []
+    for tag in _validated_item_tags(campaign, session, audit):
+        key = identity(tag)
+        if key not in present:
+            tags.append(tag)
+            present.add(key)
     if tags:
         logging.info(
             "DnD inventory repair chat_id=%s tags=%s",

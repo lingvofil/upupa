@@ -75,7 +75,8 @@ def test_npc_repair_uses_best_effort_auxiliary_generation(monkeypatch):
     applied = []
     persisted = []
 
-    async def auxiliary(target, prompt):
+    async def auxiliary(target, prompt, *, allow_groq_fallback=False):
+        assert allow_groq_fallback
         generated.append((target, prompt))
         return "[NPC:Капитан Ржа;EVENT:закрыл ворота;NOTE:остался снаружи]"
 
@@ -120,7 +121,7 @@ def test_npc_repair_skips_cleanly_when_auxiliary_provider_is_unavailable(monkeyp
     applied = []
     persisted = []
 
-    async def unavailable(_session, _prompt):
+    async def unavailable(_session, _prompt, **_kwargs):
         return None
 
     fake_campaign = SimpleNamespace(

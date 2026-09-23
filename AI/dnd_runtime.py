@@ -213,6 +213,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     # baseline sees the fully composed campaign representation.
     install_dnd_event_journal(dnd, state_policy=campaign_state_policy)
     install_dnd_context_builder(dnd, campaign)
+    from AI.dnd_turn_contract import install_turn_contract_guard
+
+    install_turn_contract_guard(dnd)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy

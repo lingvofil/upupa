@@ -421,6 +421,7 @@ async def _begin_player_attack(dnd, combat, campaign, bot, chat_id: int, session
         mode_text = " · помеха"
     await bot.send_message(
         chat_id,
+        f"👹 {enemy['name']} — ❤️ {enemy['hp']}/{enemy['max_hp']} HP · 🛡 КБ {enemy['ac']}\n"
         f"⚔️ {combat._participant_name(session, user_id)} атакует {enemy['name']}: «{attack['weapon']}» — "
         f"{_damage_notation(profile)} + {ability} {modifier:+d}; КБ цели {enemy['ac']}{mode_text}. Пиши «кидаю».",
     )

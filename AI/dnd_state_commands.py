@@ -13,6 +13,7 @@ _STATE_ALIASES = {
     "inventory": {"инвентарь", "днд инвентарь"},
     "npcs": {"днд связи"},
     "status": {"днд сюжет"},
+    "party": {"днд партия"},
     "canon": {"днд канон"},
 }
 _START_ALIASES = {"упупа днд"}
@@ -328,11 +329,11 @@ async def _repair_active_npc_memory(dnd, chat_id: int) -> None:
     try:
         from AI.dnd_generation_resilience import generate_auxiliary_text
 
-        raw = await generate_auxiliary_text(session, prompt)
+        raw = await generate_auxiliary_text(session, prompt, allow_groq_fallback=True)
         if not raw:
             logging.info("DnD NPC memory repair skipped chat_id=%s", chat_id)
             return
-        campaign._apply_metadata(session, raw)
+        campaign._apply_metadata(session, "\n".join(_NPC_TAG_RE.findall(raw)))
         dnd.persist_dnd_sessions()
     except Exception:
         logging.exception("DnD NPC memory repair failed chat_id=%s", chat_id)
@@ -352,6 +353,7 @@ def render_npcs(dnd, chat_id: int) -> str:
         lines = ["🤝 Связи", "Источник: последняя завершённая игра."]
 
     formatted = _format_npcs(memory)
+    lines.append("Здесь знакомые и враги из сюжета и история встреч с ними; отношения между игроками сюда не входят.")
     lines.extend(formatted or ["Пока ни одного сюжетного NPC не запомнили."])
     return "\n".join(lines)
 
@@ -458,6 +460,47 @@ def render_status(dnd, chat_id: int) -> str:
     return "\n\n".join(blocks)
 
 
+def render_party(dnd, chat_id: int) -> str:
+    session = _active_session(dnd, chat_id)
+    if session is None:
+        return "🎭 Активной партии сейчас нет. Начать: «упупа днд»."
+    state = session.state
+    lines = ["🎭 Текущая партия"]
+    if state == "WAITING_ACTION":
+        targets = list(getattr(session, "action_target_user_ids", []) or [])
+        label = "Личный ход" if len(targets) == 1 else "Ход группы"
+        lines.append(label + ": " + ", ".join(dnd._target_names(session, targets)) if targets else "Ход партии.")
+        lines.append("Ответь действием на это сообщение.")
+        submitted = list((getattr(session, "pending_actions", {}) or {}).values())
+        if submitted:
+            lines.append("Уже ответили: " + ", ".join(str(row.get("name") or "Игрок") for row in submitted))
+    elif state == "WAITING_ROLL":
+        roll = getattr(session, "pending_roll", None) or {}
+        names = dnd._target_names(session, roll.get("target_user_ids") or [])
+        lines.append("🎲 Бросок: " + (", ".join(names) or "участник партии"))
+        lines.extend(_active_detail(dnd, session)[1:])
+        if roll.get("ability"):
+            from AI.dnd_roll_ability_display import ABILITY_LABELS
+
+            lines.append("Характеристика: " + ABILITY_LABELS.get(roll["ability"], roll["ability"]))
+        lines.append("Напиши «кидаю».")
+    else:
+        lines.extend(_active_detail(dnd, session))
+        if state == "WAITING_POLL":
+            lines.append("Проголосуй в текущем опросе.")
+        elif state == "RESOLVING":
+            lines.append("Заявки сохранены. Если продолжение задержалось — ведущий может написать «дальше».")
+    scenes = getattr(session, "scene_log", []) or []
+    if scenes:
+        lines.append("\n📍 Сцена\n" + str(scenes[-1]))
+    from AI.dnd_player_combat import _enemy_status_lines
+
+    enemies = _enemy_status_lines(session)
+    if enemies:
+        lines.append("\n👹 Противники\n" + "\n".join(enemies))
+    return "\n".join(lines)
+
+
 def render_state_command(
     kind: str,
     dnd,
@@ -477,6 +520,8 @@ def render_state_command(
             return render_npcs(dnd, chat_id)
         if kind == "status":
             return render_status(dnd, chat_id)
+        if kind == "party":
+            return render_party(dnd, chat_id)
         if kind == "canon":
             from AI.dnd_session_canon import render_session_canon
 
@@ -532,7 +577,24 @@ class DndStateCommandMiddleware(BaseMiddleware):
             getattr(user, "first_name", None),
             view_policy=self.view_policy,
         )
-        await event.answer(text)
+        from AI.dnd_adventure import message_chunks
+
+        for chunk in message_chunks(text):
+            await event.answer(chunk)
+        if kind == "party":
+            session = dnd.dnd_sessions.get(int(chat.id))
+            poll = getattr(session, "pending_poll", None) or {}
+            if session and session.state == "WAITING_POLL" and poll.get("message_id"):
+                # Forward the existing poll so votes still belong to the same decision.
+                try:
+                    await event.bot.forward_message(
+                        chat_id=int(chat.id),
+                        from_chat_id=int(poll.get("poll_chat_id") or chat.id),
+                        message_id=int(poll["message_id"]),
+                    )
+                except Exception:
+                    logging.info("DnD current poll forwarding unavailable chat_id=%s", chat.id, exc_info=True)
+                    await event.answer("Опрос не удалось переслать. Он остаётся в исходном сообщении; ведущий может завершить голосование командой «дальше».")
         return None
 
 

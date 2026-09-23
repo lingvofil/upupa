@@ -220,6 +220,18 @@ def test_special_charge_is_not_spent_by_wrong_actor():
 
 
 def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_path, monkeypatch):
+    # This test needs the recovery layer. Do not depend on another test having
+    # installed it earlier in the full suite (a focused DnD run may not do so).
+    if not getattr(dnd, "_upupa_dnd_result_recovery_configured", False):
+        from AI.dnd_campaign_state import DndCampaignStatePolicy
+        from AI.dnd_result_recovery import configure_dnd_result_recovery
+
+        for name in ("generate_session_response", "parse_and_execute_turn", "open_action_window", "restore_dnd_sessions"):
+            monkeypatch.setattr(dnd, name, getattr(dnd, name))
+        monkeypatch.setattr(dnd, "_upupa_dnd_result_recovery_configured", False, raising=False)
+        configure_dnd_result_recovery(
+            dnd, state_policy=DndCampaignStatePolicy(lambda _session: None, lambda _session: {}),
+        )
     path = tmp_path / "dnd_state.json"
     path.write_text('{"version": 1, "sessions": [{}]}', encoding="utf-8")
     session = SimpleNamespace(
@@ -266,6 +278,7 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
         assert len(scheduled) == 1
         assert scheduled[0]["name"].startswith("dnd-result-replay:-100805:")
         assert not any(item["name"].startswith("dnd-poll:") for item in scheduled)
+        assert session.pending_generated_result["text"] == "готовый ответ"
         assert "poll-existing" not in dnd.poll_map
         assert session.state == "WAITING_POLL"
         assert session.current_poll_id == "poll-existing"
