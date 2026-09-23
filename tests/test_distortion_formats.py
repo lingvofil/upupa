@@ -161,3 +161,89 @@ def test_handler_preserves_audio_extension(monkeypatch, tmp_path):
     assert captured["media_info"]["media_type"] == "audio"
     assert captured["media_info"]["ext"] == ".m4a"
     assert captured["media_info"]["output_file_name"] == "song_distorted.m4a"
+
+
+def test_handler_preprocesses_video_note_before_worker(monkeypatch, tmp_path):
+    from services import distortion
+    from services import distortion_formats
+
+    captured = {}
+    video_note = SimpleNamespace(file_id="video-note-file", file_name=None, mime_type="video/mp4")
+    message = FakeMessage(_target(video_note=video_note))
+
+    async def fake_download(_file_id, local_path):
+        captured["download_path"] = local_path
+        with open(local_path, "wb") as file:
+            file.write(b"telegram video note")
+        return True
+
+    async def fake_brand(input_path, output_path):
+        captured["brand_input"] = input_path
+        captured["brand_output"] = output_path
+        with open(output_path, "wb") as file:
+            file.write(b"branded video note")
+        return output_path
+
+    async def fake_worker(_token, _chat_id, media_info, _intensity):
+        captured["media_info"] = dict(media_info)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(distortion, "download_file", fake_download)
+    monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
+    monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
+    monkeypatch.setattr(distortion_formats, "prepare_video_note_for_processing", fake_brand)
+    monkeypatch.setattr(distortion_formats.random, "randint", lambda *_args: 2222)
+
+    asyncio.run(
+        distortion_formats.handle_format_preserving_distortion_request(
+            message,
+            distortion_module=distortion,
+        )
+    )
+
+    assert captured["download_path"].endswith(os.path.join("temp_worker_2222", "input.mp4"))
+    assert captured["media_info"]["media_type"] == "video_note"
+    assert captured["brand_input"] == captured["download_path"]
+    assert captured["brand_output"].endswith(
+        os.path.join("temp_worker_2222", "input_upupa_branded.mp4")
+    )
+    assert captured["media_info"]["local_path"] == captured["brand_output"]
+
+
+def test_handler_plain_video_skips_video_note_preprocessing(monkeypatch, tmp_path):
+    from services import distortion
+    from services import distortion_formats
+
+    captured = {}
+    video = SimpleNamespace(file_id="video-file", file_name=None, mime_type="video/mp4")
+    message = FakeMessage(_target(video=video))
+
+    async def fake_download(_file_id, local_path):
+        with open(local_path, "wb") as file:
+            file.write(b"ordinary video")
+        return True
+
+    async def forbidden_brand(*_args, **_kwargs):
+        raise AssertionError("ordinary video must not be video-note branded")
+
+    async def fake_worker(_token, _chat_id, media_info, _intensity):
+        captured["media_info"] = dict(media_info)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(distortion, "download_file", fake_download)
+    monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
+    monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
+    monkeypatch.setattr(distortion_formats, "prepare_video_note_for_processing", forbidden_brand)
+    monkeypatch.setattr(distortion_formats.random, "randint", lambda *_args: 3333)
+
+    asyncio.run(
+        distortion_formats.handle_format_preserving_distortion_request(
+            message,
+            distortion_module=distortion,
+        )
+    )
+
+    assert captured["media_info"]["media_type"] == "video"
+    assert captured["media_info"]["local_path"].endswith(
+        os.path.join("temp_worker_3333", "input.mp4")
+    )

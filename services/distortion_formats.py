@@ -15,6 +15,7 @@ import shutil
 from typing import Any
 
 from services import distortion
+from services.video_note_branding import prepare_video_note_for_processing
 
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".ogg", ".opus", ".wav", ".flac", ".aac"}
@@ -257,6 +258,7 @@ async def handle_format_preserving_distortion_request(
     distortion_module=distortion,
 ) -> None:
     """Download media using its real input extension before starting distortion."""
+    temp_dir = None
     try:
         target_message = message.reply_to_message or message
         text_for_parsing = message.text if message.text else message.caption
@@ -336,6 +338,13 @@ async def handle_format_preserving_distortion_request(
                 return
             media_info["local_path"] = local_path
 
+        if media_info.get("media_type") == "video_note":
+            branded_path = os.path.join(temp_dir, "input_upupa_branded.mp4")
+            media_info["local_path"] = await prepare_video_note_for_processing(
+                media_info["local_path"],
+                branded_path,
+            )
+
         await message.answer("🌀 ща, сука...")
         await distortion_module.distortion_worker_async(
             distortion_module.main_bot_instance.token,
@@ -344,6 +353,8 @@ async def handle_format_preserving_distortion_request(
             intensity,
         )
     except Exception as exc:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         logging.error("Format-preserving distortion handler failed: %s", exc, exc_info=True)
         await message.answer("Не удалось запустить обработку.")
 
