@@ -4,6 +4,8 @@ import logging
 
 import requests
 
+from infrastructure.ai.execution import TokenTrackedText
+
 
 class OpenAICompatibleWrapper:
     def __init__(self, api_key: str, base_url: str, model_name: str):
@@ -46,7 +48,11 @@ class OpenAICompatibleWrapper:
                 self.model_name,
                 len(result) if result else 0,
             )
-            return result or ""
+            return TokenTrackedText(
+                result or "",
+                model_name=data.get("model") or self.model_name,
+                usage=data.get("usage"),
+            )
         except Exception as exc:
             logging.error(
                 "OpenAICompatibleWrapper error [%s]: %s",
