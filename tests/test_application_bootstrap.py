@@ -104,9 +104,17 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
 
     fake_main_router = object()
 
+    class RecordingObserver:
+        def __init__(self):
+            self.outer_middlewares = []
+
+        def outer_middleware(self, middleware):
+            self.outer_middlewares.append(middleware)
+
     class RecordingDispatcher:
         def __init__(self):
             self.sub_routers = []
+            self.update = RecordingObserver()
 
         def include_router(self, router):
             self.sub_routers.append(router)
@@ -123,6 +131,7 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
     application.configure_dispatcher()
 
     assert dispatcher.sub_routers == [dnd_router, fake_main_router]
+    assert len(dispatcher.update.outer_middlewares) == 1
 
 
 def test_main_delegates_to_application_runner(monkeypatch):
