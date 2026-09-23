@@ -1,4 +1,5 @@
 import asyncio
+import math
 from pathlib import Path
 
 from PIL import Image
@@ -12,11 +13,11 @@ def _write_mascot(path: Path) -> None:
 
 def _polar_point(size: int, radius_ratio: float, angle_deg: float) -> tuple[int, int]:
     radius = size * radius_ratio
-    angle = __import__("math").radians(angle_deg)
+    angle = math.radians(angle_deg)
     center = size / 2
     return (
-        round(center + radius * __import__("math").cos(angle)),
-        round(center + radius * __import__("math").sin(angle)),
+        round(center + radius * math.cos(angle)),
+        round(center + radius * math.sin(angle)),
     )
 
 
