@@ -112,7 +112,7 @@ def format_model_usage_message(report: dict, title: str) -> str:
 
     users = report.get("users") or []
     if users:
-        parts.append("\n<b>Топ пользователей</b>")
+        parts.append("\n<b>Топ пользователей по токенам</b>")
         for row in users:
             label = _format_usage_identity(
                 row.get("user_name"),
@@ -123,6 +123,21 @@ def format_model_usage_message(report: dict, title: str) -> str:
                 f"• {escape(label)}: "
                 f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
                 f"· {int(row.get('requests', 0))} запр."
+            )
+
+    frequent_users = report.get("users_by_requests") or []
+    if frequent_users:
+        parts.append("\n<b>Топ пользователей по числу запросов</b>")
+        for row in frequent_users:
+            label = _format_usage_identity(
+                row.get("user_name"),
+                row.get("user_username"),
+                f"ID {row.get('user_id')}",
+            )
+            parts.append(
+                f"• {escape(label)}: "
+                f"<b>{int(row.get('requests', 0))}</b> запр. "
+                f"· {_format_token_count(row.get('total_tokens', 0))} токенов"
             )
 
     return "\n".join(parts)
