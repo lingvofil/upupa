@@ -182,8 +182,9 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 async def cmd_token_usage(message: Message):
     period_hours, title = TOKEN_USAGE_PERIODS[message.text.lower().strip()]
     report = await bot_statistics.get_model_usage_report(period_hours, limit=7)
-    await message.answer(
-        format_model_usage_message(report, title),
+    await message.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=format_model_usage_message(report, title),
         parse_mode="HTML",
     )
 
