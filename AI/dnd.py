@@ -475,7 +475,7 @@ def _participant_ids(session) -> set[int]:
     return {
         int(item.get("user_id"))
         for item in (getattr(session, "participants", {}) or {}).values()
-        if item.get("user_id") is not None
+        if item.get("user_id") is not None and item.get("active", True)
     }
 
 
@@ -584,6 +584,8 @@ async def open_action_window(bot: Bot, chat_id: int, target_user_ids=None):
     session.action_prompt_message_id = None
     session.action_target_user_ids = _resolve_targets(session, list(target_user_ids or []))
     persist_dnd_sessions()
+    if _is_participant_mode(session) and not _participant_ids(session):
+        return None
     prompt_message = await bot.send_message(chat_id, _action_prompt_text(session))
     session.action_prompt_message_id = prompt_message.message_id
     persist_dnd_sessions()
@@ -929,7 +931,9 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
     action_match = re.search(r"\[ACTION:(.*?)\]", text_response)
     clean_text = re.sub(r"\[ACTION:.*?\]", "", text_response).strip()
     if clean_text:
-        await bot.send_message(chat_id, clean_text)
+        from AI.dnd_adventure import message_chunks
+        for chunk in message_chunks(clean_text):
+            await bot.send_message(chat_id, chunk)
     if not action_match:
         await open_action_window(bot, chat_id)
         return
@@ -990,6 +994,11 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
 
     elif command_str.startswith("ROLL"):
         roll = _parse_roll_command(command_str)
+        requested = set(roll.get("target_user_ids") or [])
+        if _is_participant_mode(session) and requested and not requested.intersection(_participant_ids(session)):
+            await bot.send_message(chat_id, "Участник этой проверки сейчас вне сцены. Его бросок не выполняется другим героем.")
+            await open_action_window(bot, chat_id)
+            return
         roll["target_user_ids"] = _resolve_targets(session, roll.get("target_user_ids", []))
         session.pending_roll = roll
         session.last_roll_stat = None
@@ -1556,6 +1565,12 @@ async def handle_backstory(message: Message):
     backstory_prompt_message_id = session.backstory_prompt_message_id
     _processing_backstories.add(message.chat.id)
     try:
+        if getattr(session, "mode", None) == "participants":
+            from AI.dnd_campaign import _start_story
+            import sys
+            session.backstory_prompt_message_id = None
+            await _start_story(sys.modules[__name__], message.bot, session, backstory)
+            return
         msg = await message.answer("Генерирую...")
         response_text = await generate_session_response(
             session,

@@ -219,7 +219,7 @@ def test_special_charge_is_not_spent_by_wrong_actor():
     assert session.special_move_charges["1"] == 1
 
 
-def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_path, monkeypatch):
+def test_base_restore_defers_poll_tasks_to_durable_recovery_layer(tmp_path, monkeypatch):
     path = tmp_path / "dnd_state.json"
     path.write_text('{"version": 1, "sessions": [{}]}', encoding="utf-8")
     session = SimpleNamespace(
@@ -263,9 +263,10 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
         restored = dnd.restore_dnd_sessions(SimpleNamespace())
 
         assert restored == 1
-        assert len(scheduled) == 1
-        assert scheduled[0]["name"].startswith("dnd-result-replay:-100805:")
-        assert not any(item["name"].startswith("dnd-poll:") for item in scheduled)
+        # This test imports the uncomposed engine. Its job is to defer the poll;
+        # configure_dnd_result_recovery owns replay scheduling in production.
+        # The composed restart path is exercised by test_dnd_adventure_composition.
+        assert scheduled == []
         assert "poll-existing" not in dnd.poll_map
         assert session.state == "WAITING_POLL"
         assert session.current_poll_id == "poll-existing"

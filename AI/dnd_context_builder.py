@@ -137,6 +137,8 @@ def _player_lines(session) -> list[str]:
         player_id = str(raw_participant.get("user_id", key))
         name = _clean(raw_participant.get("name") or f"ID {player_id}", 80)
         bits = [f"ID {player_id} {name}"]
+        if not raw_participant.get("active", True):
+            bits.append("ОТСУТСТВУЕТ: не действует и не участвует в бою")
 
         profile = profiles.get(player_id)
         if isinstance(profile, dict):

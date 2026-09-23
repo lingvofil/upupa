@@ -15,6 +15,12 @@ def prioritize_current_request(prompt: str, *, campaign_marker: str) -> str:
     text = str(prompt or "")
     marker = str(campaign_marker or "").strip()
     split_token = f"\n\n{marker}" if marker else ""
+    # Memory v2 replaced the legacy campaign header in the production prompt.
+    # Recognize both formats, otherwise the priority guard silently does nothing.
+    memory_marker = "ПАМЯТЬ DND V2 — АВТОРИТЕТНЫЙ СНИМОК."
+    if f"\n\n{memory_marker}" in text:
+        marker = memory_marker
+        split_token = f"\n\n{marker}"
 
     if split_token and split_token in text:
         current_request, context_tail = text.rsplit(split_token, 1)

@@ -103,6 +103,7 @@ def test_spotlight_assigns_untargeted_check_but_not_save():
 
 def test_group_turn_does_not_consume_spotlight():
     session = _session()
+    session.spotlight_individual_streak = 4
     response, consumed, rewritten = enforce_spotlight(session, "Все решают [ACTION:INPUT]")
     assert response.endswith("[ACTION:INPUT]")
     assert consumed is None

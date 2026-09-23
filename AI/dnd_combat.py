@@ -305,6 +305,8 @@ def _ability_for_roll(roll: dict) -> str | None:
 def _living_ids(session) -> set[int]:
     participants = set()
     for value in (getattr(session, "participants", {}) or {}).values():
+        if not value.get("active", True):
+            continue
         try:
             participants.add(int(value["user_id"]))
         except (KeyError, TypeError, ValueError):
@@ -418,8 +420,14 @@ def _commit_enemy_attack_continuation(
 def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
     living = sorted(_living_ids(session))
     if not living:
+        if any(not p.get("active", True) and _alive((getattr(session, "character_sheets", {}) or {}).get(key, {}))
+               for key, p in (getattr(session, "participants", {}) or {}).items()):
+            return "Все живые герои вне сцены.", "Дождись возвращения участников. [ACTION:INPUT]", False
         return "☠️ Атаковать уже некого.", "Вся партия уже погибла. Заверши историю через [ACTION:END].", True
     target_id = attack.get("target_user_id")
+    participant = (getattr(session, "participants", {}) or {}).get(str(target_id), {})
+    if participant and not participant.get("active", True):
+        return "Цель атаки вне сцены; урон не наносится.", "Участник отсутствует. Не переноси его атаку на другого героя. Продолжи сцену адресным INPUT живому присутствующему герою.", False
     if target_id not in living:
         target_id = random.choice(living)
     sheet = session.character_sheets[str(int(target_id))]

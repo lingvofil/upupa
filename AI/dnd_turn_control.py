@@ -2,8 +2,7 @@
 
 Provides two related safeguards:
 - a host/admin can skip an addressed turn when the targeted player is absent;
-- after individual spotlight scenes, the model is nudged back toward a shared
-  party INPUT a little more often without allowing consecutive empty group turns.
+- personal spotlight scenes remain the default; shared decisions are occasional.
 """
 from __future__ import annotations
 
@@ -16,9 +15,9 @@ from aiogram.types import Message
 
 GROUP_TURN_RULES = (
     "БАЛАНС ОБЩИХ ХОДОВ: в режиме с участниками общий свободный ход партии [ACTION:INPUT] без TARGETS "
-    "должен встречаться немного чаще — ориентир примерно каждый второй подходящий интерактивный эпизод. "
-    "После одного индивидуального хода уже повышай приоритет общего INPUT; после двух индивидуальных ходов "
-    "подряд, если нет обязательного немедленного последствия или броска, следующий интерактивный ход делай общим. "
+    "встречается гораздо реже личных: ориентир один общий на 4–6 индивидуальных ходов. "
+    "Обычно спрашивай конкретного героя, что он делает, и указывай TARGETS. "
+    "Общий INPUT нужен для совместного плана, а не по таймеру; бросок требует реальной неопределённости и цены провала. "
     "Не ставь два общих INPUT подряд и не ломай причинность только ради этой частоты."
 )
 
@@ -28,15 +27,14 @@ def _group_turn_context(session) -> str:
         streak = max(0, int(getattr(session, "spotlight_individual_streak", 0) or 0))
     except (TypeError, ValueError):
         streak = 0
-    if streak >= 2:
+    if streak >= 4:
         return (
-            "\nСЕЙЧАС: уже было два индивидуальных хода подряд. Если сцена не требует немедленной адресной реакции, "
-            "верни инициативу всей партии через общий [ACTION:INPUT] без TARGETS."
+            "\nСЕЙЧАС: прошло несколько личных ходов. Общий INPUT допустим, если нужен совместный план. "
+            "Иначе продолжай адресный разговор с героями."
         )
-    if streak == 1:
+    if streak < 4:
         return (
-            "\nСЕЙЧАС: только что был индивидуальный ход. При следующем естественном выборе слегка предпочти "
-            "общий [ACTION:INPUT] без TARGETS, если это не мешает причинности."
+            "\nСЕЙЧАС: предпочти личный INPUT следующему герою очереди и спроси, что он делает."
         )
     return ""
 

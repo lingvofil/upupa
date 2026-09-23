@@ -42,6 +42,19 @@ def test_plain_prompt_without_campaign_context_is_unchanged():
     assert prompt == current
 
 
+def test_memory_v2_priority_survives_provider_compaction():
+    from AI.dnd_generation_resilience import _bounded_current_request
+
+    current = "Алина: обыскать стол (id=1). CURRENT_ACTOR_ACTION\n" + "правила сцены " * 900
+    memory = "ПАМЯТЬ DND V2 — АВТОРИТЕТНЫЙ СНИМОК.\n" + "прошлые события " * 800
+    prompt = priority.prioritize_current_request(current + "\n\n" + memory, campaign_marker=CAMPAIGN_MARKER)
+    for budget in (8000, 4200):
+        compact = _bounded_current_request(prompt, budget)
+        assert len(compact) <= budget
+        assert "Алина: обыскать стол (id=1). CURRENT_ACTOR_ACTION" in compact
+        assert priority.CURRENT_REQUEST_MARKER in compact
+
+
 def test_installed_wrapper_prioritizes_prompt_before_provider_call():
     captured = []
 
