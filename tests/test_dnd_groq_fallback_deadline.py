@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import asyncio
+import pytest
+
 from AI import dnd_generation_resilience as resilience
 from infrastructure.ai.groq import GroqWrapper
 
@@ -71,3 +74,34 @@ def test_groq_wrapper_applies_per_call_request_options():
     assert result == "ok"
     assert wrapper.client.options == {"max_retries": 0, "timeout": 15.0}
     assert wrapper.client.chat.completions.kwargs["max_tokens"] == 123
+
+
+def test_dnd_rejects_truncated_groq_completion():
+    wrapper = object.__new__(GroqWrapper)
+    wrapper.client = _FakeClient()
+    wrapper.text_model = "test-model"
+    wrapper.client.chat.completions.create = lambda **kwargs: SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Оборванная субстан"), finish_reason="length")]
+    )
+    with pytest.raises(RuntimeError, match="truncated text"):
+        wrapper.generate_text("current action", reject_truncated=True)
+
+
+def test_primary_groq_uses_bounded_recovery_path(monkeypatch):
+    session = _session()
+    session.active_model = "groq"
+    calls = []
+
+    async def fallback(current, prompt):
+        calls.append(prompt)
+        return "Алина находит ключ. [ACTION:INPUT;TARGETS:2]"
+
+    async def legacy(*args):
+        raise AssertionError("unbounded legacy provider must not run")
+
+    monkeypatch.setattr(resilience, "_run_groq_fallback", fallback)
+    dnd = SimpleNamespace(generate_session_response=legacy, dnd_sessions={}, persist_dnd_sessions=lambda: None)
+    resilience.configure_dnd_generation_resilience(dnd)
+    result = asyncio.run(dnd.generate_session_response(session, "Алина обыскивает комнату"))
+    assert calls == ["Алина обыскивает комнату"]
+    assert session.conversation[-1]["content"] == result

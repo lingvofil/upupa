@@ -322,10 +322,12 @@ def test_parse_replaces_noop_inspection_with_one_correction(monkeypatch):
 
 
 def test_group_resolution_budget_scales_with_participant_actions():
-    assert _resolution_budget(1) == (90, 120)
-    assert _resolution_budget(2) == (111, 141)
-    assert _resolution_budget(4) == (167, 197)
-    assert _resolution_budget(9) == (170, 200)
+    single = _resolution_budget(1)
+    pair = _resolution_budget(2)
+    party = _resolution_budget(4)
+    assert single[0] >= 140 and single[1] >= 220
+    assert single[0] < pair[0] < party[0]
+    assert party[1] <= _resolution_budget(9)[1] <= 360
 
 
 def test_generic_acknowledgement_only_group_turn_is_noop():

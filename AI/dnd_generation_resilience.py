@@ -45,8 +45,8 @@ DND_AUX_QUEUE_TIMEOUT_SECONDS = 2.0
 DND_FALLBACK_PROMPT_MAX_CHARS = 12_000
 DND_FALLBACK_RETRY_PROMPT_MAX_CHARS = 7_000
 DND_FALLBACK_RECENT_MESSAGES = 4
-DND_GROQ_FALLBACK_MAX_TOKENS = 900
-DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 700
+DND_GROQ_FALLBACK_MAX_TOKENS = 1800
+DND_GROQ_FALLBACK_RETRY_MAX_TOKENS = 1800
 DND_GROQ_FALLBACK_TEMPERATURE = 0.55
 DND_FALLBACK_CONTINUITY_GUARD = (
     "АВАРИЙНЫЙ РЕЖИМ DND. Блок CURRENT REQUEST ниже — главный источник истины. "
@@ -276,7 +276,7 @@ def _history_contents(session, prompt: str):
             for role, text in recent
         )
 
-    current = clip_middle(current, DND_GEMINI_CURRENT_PROMPT_MAX_CHARS)
+    current = _bounded_current_request(current, DND_GEMINI_CURRENT_PROMPT_MAX_CHARS)
     contents = [
         {"role": role, "parts": [{"text": text}]}
         for role, text in compact_rows
@@ -327,7 +327,7 @@ def _run_gemini_sync(
     saw_transient = False
     config = genai_types.GenerateContentConfig(
         temperature=0.8,
-        max_output_tokens=900,
+        max_output_tokens=1800,
     )
 
     for api_key, model_name in pairs:
@@ -344,6 +344,9 @@ def _run_gemini_sync(
                     queue_timeout_seconds=queue_timeout_seconds,
                 )
             text = _extract_text(response)
+            candidates = getattr(response, "candidates", None) or []
+            if any(str(getattr(c, "finish_reason", "")).endswith("MAX_TOKENS") for c in candidates):
+                raise RuntimeError("DnD Gemini returned truncated text")
             if not text:
                 raise RuntimeError("DnD Gemini returned empty text")
             if update_circuit:
@@ -397,6 +400,24 @@ def _bounded_head_tail(
     head_size = max(1, min(payload_budget - 1, int(payload_budget * head_ratio)))
     tail_size = payload_budget - head_size
     return value[:head_size] + marker + value[-tail_size:]
+
+
+def _bounded_current_request(text: str, budget: int) -> str:
+    """Keep actor/action at the start of the live block when clipping memory.
+
+    A generic head/tail slice can remove the live request in the middle between
+    a long memory snapshot and appended style/mechanical instructions.
+    """
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_MARKER
+
+    if len(text) <= budget or CURRENT_REQUEST_MARKER not in text or budget < 512:
+        return _bounded_head_tail(text, budget, head_ratio=0.62)
+    memory, request = text.split(CURRENT_REQUEST_MARKER, 1)
+    request = CURRENT_REQUEST_MARKER + request
+    request_budget = min(len(request), int(budget * 0.75))
+    memory_budget = budget - request_budget - 2
+    return (_bounded_head_tail(memory, memory_budget, head_ratio=0.65) + "\n\n"
+            + _bounded_head_tail(request, request_budget, head_ratio=0.75))
 
 
 def _fallback_prompt(
@@ -466,7 +487,7 @@ def _fallback_prompt(
 
     system_excerpt = _bounded_head_tail(system, system_budget, head_ratio=0.55)
     history_excerpt = recent_history[-history_budget:] if history_budget else ""
-    current_excerpt = _bounded_head_tail(current, current_budget, head_ratio=0.62)
+    current_excerpt = _bounded_current_request(current, current_budget)
 
     compact = separator.join(
         (
@@ -511,6 +532,7 @@ def _run_groq_sync(
             temperature=DND_GROQ_FALLBACK_TEMPERATURE,
             max_retries=0,
             request_timeout_seconds=DND_GROQ_HTTP_TIMEOUT_SECONDS,
+            reject_truncated=True,
         )
     text = str(text or "").strip()
     if not text or text == "Ключ Groq не настроен":
@@ -531,7 +553,7 @@ async def _run_groq_fallback(session, prompt: str) -> str:
             timeout=DND_GROQ_FALLBACK_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        if _is_request_too_large(exc):
+        if _is_request_too_large(exc) or "returned empty text" in str(exc) or "truncated text" in str(exc):
             logging.warning(
                 "DnD Groq fallback request too large chat_id=%s; retrying compact prompt chars=%s",
                 getattr(session, "chat_id", None),
@@ -642,10 +664,14 @@ def configure_dnd_generation_resilience(dnd) -> None:
     original_generate = dnd.generate_session_response
 
     async def resilient_generate(session, prompt: str) -> str:
-        if getattr(session, "active_model", None) != "gemini" or not hasattr(session, "conversation"):
+        if getattr(session, "active_model", None) not in {"gemini", "groq"} or not hasattr(session, "conversation"):
             return await original_generate(session, prompt)
 
-        result = await _generate_main_text(session, prompt)
+        if session.active_model == "groq":
+            result = await _run_groq_fallback(session, prompt)
+            session._dnd_last_generation_provider = "groq"
+        else:
+            result = await _generate_main_text(session, prompt)
         session.conversation.append({"role": "user", "content": str(prompt)})
         session.conversation.append({"role": "assistant", "content": result})
         if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:

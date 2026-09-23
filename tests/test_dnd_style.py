@@ -22,11 +22,11 @@ def test_dnd_style_allows_consecutive_exploratory_party_turns():
     assert "предпочитай INPUT" in DND_STYLE_INSTRUCTION
 
 
-def test_dnd_style_requests_compact_story_text():
-    assert "обычно 40–60 слов" in DND_STYLE_INSTRUCTION
-    assert "жёсткий максимум 70 слов" in DND_STYLE_INSTRUCTION
-    assert "не пересказывай только что случившееся" in DND_STYLE_INSTRUCTION
-    assert DND_STORY_MAX_WORDS == 70
+def test_dnd_style_requests_complete_consequences():
+    assert "обычно 100–180 слов" in DND_STYLE_INSTRUCTION
+    assert "конкретное последствие" in DND_STYLE_INSTRUCTION
+    assert "вопрос следующему игроку" in DND_STYLE_INSTRUCTION
+    assert DND_STORY_MAX_WORDS == 220
 
 
 def test_dnd_style_makes_normal_rolls_the_clear_default():
@@ -43,8 +43,8 @@ def test_legacy_hundred_word_hints_are_rewritten():
     )
 
     assert "100 слов" not in text
-    assert "40–60 слов" in text
-    assert "70 слов" in text
+    assert "100–180 слов" in text
+    assert "220 слов" in text
 
 
 def test_story_response_is_hard_capped_and_keeps_action_tag():
@@ -72,7 +72,7 @@ def test_group_generation_keeps_later_actors_consequences_and_action():
     response = story + " Четвёртый герой обнаружил выход. [ACTION:INPUT;TARGETS:1]"
 
     async def generate(current, request):
-        assert "до 197 слов" in request
+        assert "до 340 слов" in request
         current.conversation.append({"role": "assistant", "content": response})
         return response
 
@@ -88,7 +88,7 @@ def test_correction_keeps_group_budget():
     response = " ".join(["деталь"] * 110) + " [ACTION:INPUT]"
 
     async def generate(_session, request):
-        assert "до 141 слов" in request
+        assert "до 260 слов" in request
         return response
 
     assert asyncio.run(_generate_without_consecutive_input(generate, SimpleNamespace(conversation=[]), prompt)) == response
@@ -175,7 +175,7 @@ def test_runtime_guard_allows_input_after_non_input_turn():
     assert result.endswith("[ACTION:INPUT]")
     assert len(calls) == 1
     assert "продолжай" in calls[0]
-    assert "обычно 40–60 слов" in calls[0]
+    assert "обычно 100–180 слов" in calls[0]
 
 
 def test_roll_mode_guard_breaks_modified_mode_streaks():

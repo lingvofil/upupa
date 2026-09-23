@@ -23,8 +23,8 @@ def _format_group_actions_for_model(actions: list[dict]) -> str:
 def _resolution_budget(action_count: int) -> tuple[int, int]:
     """Give simultaneous actions enough narrative room without flooding chat."""
     count = max(1, int(action_count or 1))
-    preferred = min(170, max(90, 55 + 28 * count))
-    maximum = min(200, preferred + 30)
+    preferred = min(280, 100 + 40 * count)
+    maximum = preferred + 80
     return preferred, maximum
 
 
@@ -47,6 +47,8 @@ def install_dnd_group_action_resilience(dnd) -> None:
             return
 
         actions_text = dnd._format_group_actions(actions)
+        personal = len(getattr(session, "action_target_user_ids", []) or []) == 1
+        heading = "🎭 Личный ход:" if personal else "🎭 Ход партии:"
         actions_prompt_text = _format_group_actions_for_model(actions)
         preferred_words, max_words = _resolution_budget(len(actions))
         opening_round = int(getattr(session, "scene_count", 0) or 0) <= 1
@@ -99,7 +101,7 @@ def install_dnd_group_action_resilience(dnd) -> None:
                 {
                     "method": "send_message",
                     "chat_id": chat_id,
-                    "text": f"🎭 Ход партии:\n{actions_text}",
+                    "text": f"{heading}\n{actions_text}",
                 }
             ],
         ):

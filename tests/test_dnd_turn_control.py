@@ -197,14 +197,15 @@ def test_dalshe_does_not_swallow_general_party_turn_or_non_host():
     assert asyncio.run(skip_absent_turn(dnd, FakeBot(), session.chat_id, 123)) is False
 
 
-def test_group_turn_guidance_increases_after_individual_spotlight():
+def test_personal_turn_guidance_is_default_and_group_turn_remains_optional():
     session = SimpleNamespace(spotlight_individual_streak=0)
-    assert _group_turn_context(session) == ""
+    assert "личный INPUT" in _group_turn_context(session)
 
     session.spotlight_individual_streak = 1
-    assert "слегка предпочти" in _group_turn_context(session)
-    assert "[ACTION:INPUT] без TARGETS" in _group_turn_context(session)
+    assert "личный INPUT" in _group_turn_context(session)
 
     session.spotlight_individual_streak = 2
-    assert "два индивидуальных хода подряд" in _group_turn_context(session)
-    assert "всей партии" in _group_turn_context(session)
+    assert "личный INPUT" in _group_turn_context(session)
+    session.spotlight_individual_streak = 4
+    assert "Общий INPUT допустим" in _group_turn_context(session)
+    assert "если нужен совместный план" in _group_turn_context(session)

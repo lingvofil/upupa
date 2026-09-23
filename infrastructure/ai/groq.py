@@ -76,6 +76,7 @@ class GroqWrapper:
         presence_penalty: float = 0.0,
         max_retries: int | None = None,
         request_timeout_seconds: float | None = None,
+        reject_truncated: bool = False,
     ) -> str:
         if not self.client:
             return "Ключ Groq не настроен"
@@ -97,6 +98,8 @@ class GroqWrapper:
                 max_tokens=max_tokens,
             )
             result = completion.choices[0].message.content
+            if reject_truncated and getattr(completion.choices[0], "finish_reason", None) == "length":
+                raise RuntimeError("Groq returned truncated text")
             logging.info(
                 "Groq generate_text: модель=%s, результат_длина=%s",
                 self.text_model,

@@ -165,6 +165,8 @@ def _ensure(session):
         "npc_memory": {}, "reputations": {}, "threat": {"name": None, "level": 0, "max": THREAT_MAX, "history": []},
         "plot_options": [], "selected_plot": None, "continuation_mode": False, "scene_log": [], "scene_count": 0,
         "next_illustration_at": random.randint(3, 5), "action_opened_at": None, "campaign_started_at": None,
+        "adventure_length": "short", "mission_goal": "", "mission_outcome": "pending",
+        "mission_evidence": "", "setup_prompt_message_id": None, "initial_inventories": {},
     }
     for key, value in defaults.items():
         if not hasattr(session, key):
@@ -183,6 +185,8 @@ def _state(session):
         "character_profiles", "profile_options", "heritage", "social_relationships", "inventories", "npc_memory", "reputations",
         "threat", "plot_options", "selected_plot", "continuation_mode", "scene_log", "scene_count",
         "next_illustration_at", "action_opened_at", "campaign_started_at",
+        "adventure_length", "mission_goal", "mission_outcome", "mission_evidence",
+        "setup_prompt_message_id", "initial_inventories",
     )}
 
 
@@ -329,8 +333,10 @@ def _heritage_keyboard(user_id):
 def _plot_keyboard(options, abstract=False):
     rows = [[InlineKeyboardButton(text=f"{i + 1}. {opt[:44]}", callback_data=f"dnd:plot:{i}")]
             for i, opt in enumerate(options[:5])]
-    if abstract:
-        rows.append([InlineKeyboardButton(text="✍️ Своя предыстория", callback_data="dnd:plot:custom")])
+    rows.append([InlineKeyboardButton(text="✍️ Свой сюжет", callback_data="dnd:plot:custom")])
+    rows.append([InlineKeyboardButton(text="⏱ Короткий", callback_data="dnd:plot:short"),
+                 InlineKeyboardButton(text="📖 Длинный", callback_data="dnd:plot:long")])
+    rows.append([InlineKeyboardButton(text="🎯 Указать цель", callback_data="dnd:plot:goal")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -346,9 +352,12 @@ def _apply_heritage(session, user_id, continuation=False):
         "artifacts": list(old.get("artifacts") or []),
     }
     session.reputations[key] = list(old.get("reputation") or [])[-12:]
-    items = old.get("inventory") if continuation else old.get("artifacts")
-    if items:
-        session.inventories[key] = list(items)
+    # A new plot is not a new life. An existing (including empty) live inventory
+    # is authoritative: reapplying heritage must not resurrect consumed items.
+    items = old.get("inventory", old.get("artifacts", []))
+    if key not in session.inventories:
+        from copy import deepcopy
+        session.inventories[key] = deepcopy(items or [])
     return old
 
 
@@ -841,6 +850,8 @@ async def _start_story(dnd, bot, session, plot, continuation=False, message=None
             inherited = dict(old.get("profile") or {})
             session.character_profiles[str(uid)] = inherited if _profile_complete(inherited) else await _generate_complete_profile(dnd, session, uid)
     session.profile_options = {}
+    from copy import deepcopy
+    session.initial_inventories = deepcopy(session.inventories)
     if continuation:
         old_campaign = _latest_campaign(session.chat_id) or {}; session.npc_memory = dict(old_campaign.get("npc_memory") or {})
         old_threat = old_campaign.get("threat") or {}; session.threat = {"name": old_threat.get("name"), "level": min(2, int(old_threat.get("level", 0))), "max": THREAT_MAX, "history": []}
@@ -894,7 +905,7 @@ async def _choose_plots(dnd, callback, session):
     dnd.persist_dnd_sessions()
     # Text and buttons are deliberately built from the exact same persisted array.
     options = session.plot_options
-    text = "🎬 Выбери сюжет:\n\n" + "\n".join(f"{i + 1}. {x}" for i, x in enumerate(options))
+    text = "🎬 Сначала можно выбрать длительность (по умолчанию короткий) и цель, затем сюжет:\n\n" + "\n".join(f"{i + 1}. {x}" for i, x in enumerate(options))
     try:
         await callback.message.edit_text(text, reply_markup=_plot_keyboard(options, session.mode == "abstract"))
     except Exception:
@@ -908,6 +919,18 @@ async def _plot_callback(callback, dnd):
         return
     if not dnd._callback_is_host(callback, session):
         await callback.answer("Сюжет выбирает ведущий.", show_alert=True)
+        return
+    _ensure(session)
+    if callback.data in {"dnd:plot:short", "dnd:plot:long"}:
+        session.adventure_length = callback.data.rsplit(":", 1)[1]
+        dnd.persist_dnd_sessions()
+        await callback.answer("Короткий сюжет: 8–12 сцен." if session.adventure_length == "short" else "Длинный сюжет: 24–36 сцен.", show_alert=True)
+        return
+    if callback.data == "dnd:plot:goal":
+        await callback.answer()
+        msg = await callback.message.answer("🎯 Какова цель миссии? Ответь на это сообщение. Напиши «без цели», чтобы убрать её.")
+        session.setup_prompt_message_id = msg.message_id
+        dnd.persist_dnd_sessions()
         return
     if callback.data == "dnd:plot:custom":
         session.state = "WAITING_BACKSTORY"; session.plot_options = []; dnd.persist_dnd_sessions(); await callback.answer(); await callback.message.edit_text("🎲 Своя предыстория.")
@@ -1026,6 +1049,8 @@ def _scene_image_prompt(session, scene, *, style=None):
         f"VISUAL STYLE: {visual_style}. Let the style serve this specific scene rather than forcing generic fantasy aesthetics.\n"
         f"EXACT CURRENT SCENE: {scene[:2200]}\n"
         f"CHARACTER PROFILES TO RESPECT: {_profile_context(session)[:1800]}\n"
+        "Profiles are appearance references, not a cast list: depict ONLY characters physically present in EXACT CURRENT SCENE. "
+        "Do not illustrate previous turns, hypothetical plans, flashbacks, or the outcome of an unresolved roll. "
         "Show one unmistakable central action or turning point with readable character poses and expressions. Preserve concrete objects, locations, "
         "actions and absurd details from the scene. If the moment is funny, make the visual joke legible through staging rather than text. "
         "Each named player character is one unique person and must appear at most once in the image unless the scene explicitly says they were cloned or duplicated. "
@@ -1092,6 +1117,10 @@ def _archive_campaign_core(dnd, session, finale, epilogue):
     row = {"completed_at": now, "selected_plot": session.selected_plot, "finale": finale, "epilogue": epilogue,
            "profiles": session.character_profiles, "inventories": session.inventories, "npc_memory": session.npc_memory,
            "reputations": session.reputations, "threat": session.threat, "scenes": session.scene_log[-10:]}
+    row.update(mission_goal=getattr(session, "mission_goal", ""),
+               mission_outcome=getattr(session, "mission_outcome", "pending"),
+               mission_evidence=getattr(session, "mission_evidence", ""),
+               adventure_length=getattr(session, "adventure_length", "short"))
     chat["campaigns"] = (chat.get("campaigns") or [])[-19:] + [row]
     players = chat.setdefault("players", {})
     for p in session.participants.values():
@@ -1108,6 +1137,8 @@ _archive_campaign = _archive_campaign_core
 
 async def _finish_core(dnd, bot, session, response):
     from AI.dnd_result_recovery import finalization_state
+    from AI.dnd_adventure import apply_mission_result, adventure_report, message_chunks
+    response = apply_mission_result(session, response)
 
     finalization = finalization_state(session, create=True)
     if finalization:
@@ -1122,10 +1153,8 @@ async def _finish_core(dnd, bot, session, response):
         dnd.persist_dnd_sessions()
 
     if finale:
-        await bot.send_message(
-            session.chat_id,
-            finale + (("\n\n" + "\n".join(notices)) if notices else ""),
-        )
+        for chunk in message_chunks(finale + (("\n\n" + "\n".join(notices)) if notices else "")):
+            await bot.send_message(session.chat_id, chunk)
 
     if finalization and "epilogue" in finalization:
         ep = str(finalization.get("epilogue") or "")
@@ -1158,7 +1187,11 @@ async def _finish_core(dnd, bot, session, response):
             dnd.persist_dnd_sessions()
 
     if ep:
-        await bot.send_message(session.chat_id, "🏁 Эпилог\n" + ep)
+        for chunk in message_chunks("🏁 Эпилог\n" + ep):
+            await bot.send_message(session.chat_id, chunk)
+
+    for chunk in message_chunks(adventure_report(session)):
+        await bot.send_message(session.chat_id, chunk)
 
     _archive_campaign(dnd, session, finale, ep)
 
@@ -1201,6 +1234,8 @@ def configure_dnd_campaign(dnd, router, *, completion_policy=None):
 
     async def generate(session, prompt):
         _ensure(session); grade = _roll_grade_from_prompt(prompt)
+        from AI.dnd_adventure import adventure_context
+        prompt += "\n" + adventure_context(session)
         if grade:
             prompt += "\nГРАДАЦИЯ ИСХОДА: " + grade + ". Развивай сцену именно по этой ветке."
         context_builder = getattr(dnd, "build_memory_context", None)
@@ -1250,6 +1285,8 @@ def configure_dnd_campaign(dnd, router, *, completion_policy=None):
             return await original_parse_turn(bot, chat_id, response)
         if re.search(r"\[ACTION:END\]", str(response), re.I):
             return await _finish(dnd, bot, session, response)
+        from AI.dnd_adventure import apply_mission_result
+        response = apply_mission_result(session, response)
         clean, notices = _apply_metadata(session, response); story = _record_scene(session, clean); risk = _risk_from_response(response)
         if risk:
             notices.append(f"🎚 Риск: {RISK_RU[risk]} → сложность {RISK_DC[risk]}.")
@@ -1285,6 +1322,9 @@ def configure_dnd_campaign(dnd, router, *, completion_policy=None):
         dnd_module, bot, event, session, user_id, user_name
     ):
         profile = await _auto_profile(dnd_module, session, user_id)
+        from copy import deepcopy
+        _ensure(session)
+        session.initial_inventories.setdefault(str(user_id), deepcopy(session.inventories.get(str(user_id), [])))
         dnd_module.persist_dnd_sessions()
         await bot.send_message(
             session.chat_id,

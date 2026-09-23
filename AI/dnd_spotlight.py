@@ -15,7 +15,8 @@ SPOTLIGHT_RULES = f"""
 реакции тоже не расходуют очередь: персонаж не теряет инициативу за то, что на него свалился потолок.
 TARGETS всегда должен совпадать с героем, для которого написан художественный текст: не описывай действие или проблему
 одного героя, а технический бросок не назначай другому. Если сюжет уже явно требует конкретного героя, сохраняй эту причинность.
-После двух индивидуальных инициатив подряд предпочитай общий сюжетный эпизод/ход партии, чтобы история снова собрала всех.
+Обычный следующий ход — личный INPUT с вопросом конкретному герою. Общий ход допустим для совместного плана,
+ориентир — один на 4–6 индивидуальных инициатив; не создавай общую развилку только ради счётчика.
 Голосование используй для настоящей общей развилки, а не как меню каждого микродействия и не как замену обычному ходу.
 """.strip()
 
@@ -50,6 +51,8 @@ def _ensure(session) -> None:
 def _participant_ids(session) -> list[int]:
     result = []
     for item in (getattr(session, "participants", {}) or {}).values():
+        if not item.get("active", True):
+            continue
         try:
             user_id = int(item["user_id"])
         except (KeyError, TypeError, ValueError):
@@ -201,6 +204,16 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     # Untargeted INPUT/POLL are genuinely collective. A group INPUT is counted
     # only when its replies are finalized, so a one-person "party" turn can
     # still advance that person's spotlight exactly once.
+    if action == "INPUT" and not targets and session.spotlight_individual_streak < 4:
+        expected = next_spotlight(session)
+        if expected is not None:
+            guarded = _replace_or_add_single_target(response, expected)
+            player = session.participants.get(str(expected), {})
+            question = f"{player.get('name') or 'Игрок'}, что ты делаешь?"
+            match = _ACTION_RE.search(guarded)
+            guarded = guarded[:match.start()].rstrip() + "\n\n" + question + "\n" + guarded[match.start():]
+            _advance_after(session, expected, poll=False)
+            return guarded, expected, True
     if action in {"INPUT", "POLL"} and len(targets) != 1:
         _note_group_decision(session, poll=action == "POLL", count=action == "POLL")
         return str(response or ""), None, False
@@ -239,8 +252,8 @@ def _spotlight_context(session) -> str:
     participant = (getattr(session, "participants", {}) or {}).get(str(expected), {})
     name = participant.get("name") or f"ID {expected}"
     extra = ""
-    if int(session.spotlight_individual_streak) >= 2:
-        extra += "\nУже было два индивидуальных хода подряд: сейчас особенно предпочтителен общий INPUT/POLL или общий сюжетный бит."
+    if int(session.spotlight_individual_streak) < 4:
+        extra += f"\nПредпочти личный [ACTION:INPUT;TARGETS:{expected}] и спроси {name}, что он делает."
     if int(getattr(session, "group_input_streak", 0) or 0) >= 2:
         extra += (
             f"\nУже было два общих хода подряд. Разреши все текущие заявки и передай инициативу "

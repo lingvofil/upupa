@@ -20,6 +20,8 @@ def _with_participant_context(dnd, session, prompt: str) -> str:
         return prompt
     roster_lines = []
     for item in participants:
+        if not item.get("active", True):
+            continue
         if item.get("user_id") is None:
             continue
         user_id = int(item["user_id"])
@@ -87,6 +89,14 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         from AI import dnd
 
         bot = data.get("bot")
+        from AI.dnd_adventure import handle_adventure_message
+        if bot is not None and await handle_adventure_message(dnd, bot, event, self.policy):
+            await self._maybe_finalize(event, bot, dnd)
+            session = dnd.dnd_sessions.get(event.chat.id)
+            poll_id = getattr(session, "current_poll_id", None)
+            if poll_id:
+                await self._maybe_finalize_poll(dnd, bot, str(poll_id))
+            return
         try:
             if bot is not None and getattr(event, "poll_id", None) is None:
                 await self._precollect_action_reply(dnd, bot, event)
@@ -149,6 +159,8 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         joined = False
 
         if user_id not in participants:
+            if str(user_id) in session.participants:
+                return  # An absent player rejoins explicitly with «захожу».
             session.participants[str(user_id)] = {
                 "user_id": user_id,
                 "name": user_name,
