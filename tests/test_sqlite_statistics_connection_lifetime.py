@@ -187,6 +187,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert totals["interactive_requests"] == 3
     assert totals["background_requests"] == 1
     assert totals["failed_requests"] == 1
+    assert totals["unknown_outcome_requests"] == 0
     assert totals["telemetry_started_at"]
 
     assert report["models"][0]["model_name"] == "gemini-test"
