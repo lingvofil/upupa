@@ -448,12 +448,25 @@ class SQLiteStatisticsRepository:
                     COALESCE(SUM(cached_tokens), 0),
                     COALESCE(SUM(reasoning_tokens), 0),
                     COALESCE(SUM({effective_total}), 0),
-                    SUM(CASE WHEN chat_id IS NULL THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN chat_id IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN user_id IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN lane = 'interactive' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN lane = 'background' THEN 1 ELSE 0 END)
                 FROM model_stats
                 {where}
                 """,
                 params,
-            ).fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0)
+            ).fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+            telemetry_started_row = conn.execute(
+                """
+                SELECT MIN(timestamp)
+                FROM model_stats
+                WHERE input_tokens IS NOT NULL
+                   OR output_tokens IS NOT NULL
+                   OR total_tokens IS NOT NULL
+                """
+            ).fetchone()
 
             models = conn.execute(
                 f"""
@@ -534,6 +547,19 @@ class SQLiteStatisticsRepository:
                 "reasoning_tokens": int(totals_row[6] or 0),
                 "total_tokens": int(totals_row[7] or 0),
                 "unattributed_requests": int(totals_row[8] or 0),
+                "unattributed_chat_requests": int(totals_row[8] or 0),
+                "unattributed_user_requests": int(totals_row[9] or 0),
+                "interactive_requests": int(totals_row[10] or 0),
+                "background_requests": int(totals_row[11] or 0),
+                "failed_requests": max(
+                    0,
+                    int(totals_row[0] or 0) - int(totals_row[1] or 0),
+                ),
+                "telemetry_started_at": (
+                    telemetry_started_row[0]
+                    if telemetry_started_row and telemetry_started_row[0]
+                    else None
+                ),
             },
             "models": [
                 {
