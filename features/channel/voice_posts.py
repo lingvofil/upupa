@@ -44,10 +44,10 @@ def _validate_voice_text(text: str, recent_posts: list[dict]) -> str | None:
         return "пустой текст голосового"
     if len(clean) > MAX_VOICE_TEXT_LENGTH:
         return f"голосовое длиннее {MAX_VOICE_TEXT_LENGTH} символов"
-    words = re.findall(r"\\S+", clean)
+    words = re.findall(r"\S+", clean)
     if not MIN_VOICE_WORDS <= len(words) <= MAX_VOICE_WORDS:
         return f"нужно {MIN_VOICE_WORDS}–{MAX_VOICE_WORDS} слов"
-    if "\\n-" in clean or "**" in clean or "#" in clean:
+    if "\n-" in clean or "**" in clean or "#" in clean:
         return "текст похож на письменную разметку"
     return base._validate_post(clean, recent_posts)
 
@@ -58,13 +58,13 @@ def _build_prompt(
     retry_note: str = "",
 ) -> str:
     recent = published_posts[-10:]
-    recent_block = "\\n".join(
+    recent_block = "\n".join(
         f"- {str(post.get('text') or '')[:220]}"
         for post in recent
         if str(post.get("text") or "").strip()
     ) or "- пока пусто"
     retry = (
-        f"\\n\\nПредыдущая попытка не прошла проверку: {retry_note}. Скажи что-нибудь совсем другое."
+        f"\n\nПредыдущая попытка не прошла проверку: {retry_note}. Скажи что-нибудь совсем другое."
         if retry_note
         else ""
     )
