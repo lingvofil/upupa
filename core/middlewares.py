@@ -6,6 +6,7 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ContentType
 from aiogram.types import Message
 
+from core.settings import BLOCKED_USERS, BLOCKED_USERNAMES
 from infrastructure.ai.execution import ai_request_context
 
 
@@ -22,6 +23,69 @@ def _message_preview(message_text: str | None) -> str | None:
     if not _LOG_MESSAGE_CONTENT or not message_text:
         return None
     return message_text.replace("\n", "\\n")[:_LOG_MESSAGE_CONTENT_LIMIT]
+
+
+def _extract_event_user(event: Any):
+    """Return the Telegram user responsible for an update-like event, if any."""
+    user = getattr(event, "from_user", None)
+    if user is not None:
+        return user
+
+    for attribute in (
+        "callback_query",
+        "message",
+        "edited_message",
+        "inline_query",
+        "chosen_inline_result",
+        "shipping_query",
+        "pre_checkout_query",
+        "poll_answer",
+        "chat_member",
+        "my_chat_member",
+        "chat_join_request",
+    ):
+        nested = getattr(event, attribute, None)
+        if nested is None:
+            continue
+        user = getattr(nested, "from_user", None) or getattr(nested, "user", None)
+        if user is not None:
+            return user
+
+    return None
+
+
+def _is_blocked_user(user: Any) -> bool:
+    if user is None:
+        return False
+
+    user_id = getattr(user, "id", None)
+    if user_id in BLOCKED_USERS:
+        return True
+
+    username = str(getattr(user, "username", "") or "").strip().lstrip("@").casefold()
+    blocked_usernames = {name.casefold() for name in BLOCKED_USERNAMES}
+    return bool(username and username in blocked_usernames)
+
+
+class BlockedUserMiddleware(BaseMiddleware):
+    """Drop all updates initiated by explicitly blocked Telegram users."""
+
+    async def __call__(
+        self,
+        handler: Callable[..., Awaitable[Any]],
+        event: Any,
+        data: Dict[str, Any],
+    ) -> Any:
+        user = _extract_event_user(event)
+        if _is_blocked_user(user):
+            logging.info(
+                "Blocked Telegram update: user_id=%s username=%s",
+                getattr(user, "id", None),
+                getattr(user, "username", None),
+            )
+            return None
+
+        return await handler(event, data)
 
 
 class IncomingMessageLogMiddleware(BaseMiddleware):
