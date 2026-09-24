@@ -12,7 +12,7 @@ from features.channel.mood import mood_prompt
 from prompts.channel import CHANNEL_PERSONA
 
 
-CONTINUITY_PROBABILITY = 0.18
+CONTINUITY_PROBABILITY = 0.04
 MIN_HISTORY_POSTS = 4
 ARC_LOOKBACK = 8
 
@@ -64,8 +64,8 @@ async def prepare_continuity_post(
     from AI.summarize import _generate_with_active_model
 
     recent = published_posts[-base.RECENT_POSTS_LIMIT:]
-    arc = _recent_arc(published_posts)
-    mode = "arc" if arc and rng.random() < 0.55 else rng.choice(("memory", "rubric", "correspondent", "world"))
+    arc = None
+    mode = rng.choice(("memory", "correspondent", "world"))
     factual_block = ""
     metadata: dict = {
         "post_kind": "normal",

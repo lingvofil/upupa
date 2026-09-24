@@ -7,7 +7,7 @@ import logging
 import random
 import re
 
-from features.channel import chat_context, continuity
+from features.channel import chat_context, continuity, external_mentions
 from features.channel import mood_service
 from features.channel import service as base
 from features.channel.mood import get_current_mood, mood_prompt
@@ -18,30 +18,54 @@ CRINGEDEP_PUN_PROBABILITY = 0.08
 CRINGEDEP_POSTS_LIMIT = 20
 
 CRINGEDEP_PUN_PROMPT = """
-Ты — Упупа, Telegram-бот. Иногда ты читаешь @cringedep: там в основном визуальные каламбуры,
-где изображение и короткая подпись вместе образуют игру слов.
+Ты — Упупа, Telegram-бот. У тебя особое отношение к @cringedep: ты не просто комментируешь его,
+а отвечаешь собственным визуальным каламбуром, который должен быть явно рождён ИМЕННО из конкретного
+исходного поста.
 
-Ниже дан ОДИН реальный пост оттуда. Сначала мысленно пойми, на чём построен исходный каламбур:
-какие слова, значения, созвучия и объекты изображения сцеплены между собой. Своё объяснение НЕ выводи.
+Ниже дан ОДИН реальный пост. Сначала мысленно разложи его механику: что изображено, какой заметный текст
+есть на картинке, какие слова/имена/значения сталкиваются и почему исходный мем работает. Объяснение не выводи.
 
-После этого придумай СВОЙ новый визуальный каламбур по похожему принципу. Это не ремикс исходного поста:
-не копируй исходную подпись, не заменяй в ней одну букву механически, не используй те же ключевые предметы
-или персонажей, если без них можно обойтись. Нужна новая шутка из другой предметной области, но такого же
-типа: короткое неожиданное слово/словосочетание, которое становится понятным при взгляде на картинку.
+После этого придумай СВОЙ новый каламбур КАК ВЕТКУ от исходной идеи. Связь должна считываться при показе
+оригинала и ответа рядом без дополнительных объяснений. Сохрани хотя бы одну центральную тематическую ось
+исходника: персонажа или класс персонажей, предметную область, имя/название, музыкальную/киношную/бытовую тему
+или сам тип словесной подмены. Разрешено использовать тот же ключевой объект или референс, если это помогает
+связи. Не уходи в совершенно другую предметную область только ради случайного удачного слова.
 
-Картинка должна быть визуально простой и однозначной: один главный гэг, без коллажа и без длинного сюжета.
-НЕ проси генератор рисовать надписи, буквы, вывески, логотипы или подпись внутри изображения — каламбур
-будет отдельной подписью Telegram. Не делай инфографику или обычный мем с текстом сверху/снизу.
+Пример принципа: если исходник строится на коте + имени музыканта, ответ тоже должен оставаться в понятной
+связке с котами/музыкой/именами, а не внезапно становиться каламбуром про лавровый лист. Не копируй исходную
+подпись дословно и не ограничивайся заменой одной буквы без новой шутки.
 
-Подпись — сам новый каламбур. Предпочтительно 1–4 слова, максимум 8 слов и 100 символов. Разрешён мат,
-если он действительно нужен шутке. Не упоминай @cringedep, источник, нейросеть, генерацию или объяснение шутки.
+Картинка должна быть визуально простой и однозначной: один главный гэг, без коллажа и длинного сюжета.
+НЕ проси генератор рисовать текст: программа сама наложит каламбур на готовую картинку тем же способом,
+что команда «скаламбурь».
+
+Каламбур — предпочтительно 1–4 слова, максимум 8 слов и 100 символов. Разрешён мат, если он нужен шутке.
+Не упоминай @cringedep, нейросеть, генерацию и не объясняй шутку.
 
 ИСХОДНЫЙ ПОСТ:
 {source_material}
 
 Ответь СТРОГО двумя строками и больше ничем:
 КАРТИНКА: <конкретное описание новой картинки без текста внутри>
-ПОДПИСЬ: <новый каламбур>
+ПОДПИСЬ: <новый каламбур, который будет наложен прямо на изображение>
+""".strip()
+
+CRINGEDEP_GROUNDING_JUDGE_PROMPT = """
+Проверь только связь между исходным мемом и новым визуальным каламбуром.
+Новый вариант считается связанным, только если человек, увидев оригинал и ответ рядом, поймёт,
+почему ответ возник именно из этого оригинала: сохранена центральная тема, объект/класс объектов,
+имя/референс или узнаваемый механизм словесной подмены.
+
+Если это просто другой самостоятельный каламбур из иной области, ответь НЕТ.
+Если связь конкретная и очевидная, ответь ДА.
+Ответь ровно одним словом: ДА или НЕТ.
+
+ИСХОДНИК:
+{source_material}
+
+НОВЫЙ ВАРИАНТ:
+КАРТИНКА: {image_prompt}
+ПОДПИСЬ: {pun_caption}
 """.strip()
 
 
@@ -106,13 +130,32 @@ def _build_pun_prompt(source_material: str, mood: dict, retry_note: str = "") ->
     )
 
 
+async def _is_grounded_pun(
+    source_material: str,
+    image_prompt: str,
+    pun_caption: str,
+) -> bool:
+    from AI.summarize import _generate_with_active_model
+
+    raw = await _generate_with_active_model(
+        CRINGEDEP_GROUNDING_JUDGE_PROMPT.format(
+            source_material=source_material,
+            image_prompt=image_prompt,
+            pun_caption=pun_caption,
+        ),
+        str(base.SPECIAL_CHAT_ID),
+    )
+    verdict = str(raw or "").strip().casefold().replace("ё", "е")
+    return verdict.startswith("да")
+
+
 async def _prepare_cringedep_pun(
     published_posts: list[dict],
     mood: dict,
 ) -> tuple[bytes, str, dict] | None:
     """Analyze one @cringedep image, invent a new pun and generate the reply image."""
     from AI.summarize import _generate_with_active_model
-    from features.channel.image_generation import generate_channel_image
+    from features.channel.image_generation import generate_channel_image, overlay_channel_text
 
     source_posts = await base.fetch_public_posts(CRINGEDEP_CHANNEL, limit=CRINGEDEP_POSTS_LIMIT)
     source_post = _pick_unanswered_image_post(source_posts, published_posts)
@@ -149,6 +192,14 @@ async def _prepare_cringedep_pun(
                 reason = "подпись повторяет исходный пост вместо нового каламбура"
             if not reason and _caption_was_recent(pun_caption, published_posts):
                 reason = "такой каламбур уже недавно публиковался"
+            if not reason:
+                try:
+                    grounded = await _is_grounded_pun(source_material, image_prompt, pun_caption)
+                except Exception as exc:
+                    logging.warning("[channel] @cringedep grounding judge failed: %s", exc)
+                    grounded = False
+                if not grounded:
+                    reason = "новый каламбур не связан достаточно явно с конкретным исходным постом"
 
         final_caption = f"{source_post['url']}\n\n{pun_caption}" if pun_caption else ""
         if not reason and final_caption:
@@ -167,7 +218,12 @@ async def _prepare_cringedep_pun(
         logging.warning("[channel] @cringedep pun image providers returned no image")
         return None
 
-    final_caption = f"{source_post['url']}\n\n{pun_caption}"
+    overlaid_image = await overlay_channel_text(image_bytes, pun_caption)
+    if not overlaid_image:
+        logging.warning("[channel] @cringedep pun text overlay failed")
+        return None
+
+    telegram_caption = str(source_post["url"])
     metadata = {
         "post_kind": "image",
         "image_subtype": "external_pun_reply",
@@ -181,7 +237,76 @@ async def _prepare_cringedep_pun(
         "external_pun_caption": pun_caption,
         **mood_service._mood_metadata(mood),
     }
-    return image_bytes, final_caption, metadata
+    return overlaid_image, telegram_caption, metadata
+
+
+async def _try_publish_external_mention(bot, *, source: str) -> tuple[object, str] | None:
+    """Make a direct mention from a known external channel consume the next publication slot."""
+    await external_mentions.scan_for_mentions()
+
+    # Usually there is at most one item. The loop only skips stale items already handled elsewhere.
+    for _ in range(external_mentions.MAX_PENDING_MENTIONS):
+        mention = await external_mentions.peek_pending()
+        if mention is None:
+            return None
+
+        async with base._publish_lock:
+            published_posts = await asyncio.to_thread(base.load_posts)
+            mention_url = str(mention.get("url") or "")
+            if any(
+                str(post.get("external_source_url") or "") == mention_url
+                for post in published_posts
+            ):
+                await external_mentions.mark_answered(mention_url)
+                continue
+
+            mood = await asyncio.to_thread(get_current_mood)
+            try:
+                prepared = await external_mentions.prepare_reply(
+                    mention,
+                    published_posts,
+                    mood,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "[channel] external mention reply generation crashed url=%s: %s",
+                    mention_url,
+                    exc,
+                    exc_info=True,
+                )
+                prepared = None
+
+            if prepared is None:
+                await external_mentions.note_failure(mention_url)
+                still_pending = await external_mentions.peek_pending()
+                if still_pending and str(still_pending.get("url") or "") == mention_url:
+                    raise RuntimeError(
+                        f"Не удалось подготовить обязательный ответ на внешнее упоминание {mention_url}"
+                    )
+                # The item exhausted its retry budget and was dropped; allow this slot to continue normally.
+                return None
+
+            text, metadata = prepared
+            sent = await bot.send_message(CHANNEL_TARGET, text)
+            await base._store_published_post(
+                sent,
+                source=source,
+                text=text,
+                metadata=metadata,
+            )
+            await external_mentions.mark_answered(mention_url)
+            await mood_service._consume_after_publish(
+                mood,
+                getattr(sent, "message_id", None),
+            )
+            logging.info(
+                "[channel] replied to direct external mention message_id=%s source_url=%s",
+                getattr(sent, "message_id", None),
+                mention_url,
+            )
+            return sent, text
+
+    return None
 
 
 async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | None:
@@ -219,7 +344,11 @@ async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | N
 
 
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
-    """Publish continuity/pun modes when eligible, otherwise delegate to normal mood service."""
+    """Publish priority mentions first, then continuity/pun modes, then the normal mood service."""
+    mention_result = await _try_publish_external_mention(bot, source=source)
+    if mention_result is not None:
+        return mention_result
+
     continuity_result = await _try_publish_continuity(bot, source=source)
     if continuity_result is not None:
         return continuity_result
@@ -250,7 +379,8 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                 image_bytes, caption, metadata = prepared
                 photo = types.BufferedInputFile(image_bytes, filename="upupa-cringedep.png")
                 sent = await bot.send_photo(CHANNEL_TARGET, photo, caption=caption)
-                await base._store_published_post(sent, source=source, text=caption, metadata=metadata)
+                history_text = f"{caption}\n\n{metadata.get('external_pun_caption') or ''}".strip()
+                await base._store_published_post(sent, source=source, text=history_text, metadata=metadata)
                 await mood_service._consume_after_publish(mood, getattr(sent, "message_id", None))
                 logging.info(
                     "[channel] published @cringedep pun message_id=%s source_url=%s provider=%s",
@@ -258,7 +388,7 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                     metadata.get("external_source_url"),
                     metadata.get("image_provider"),
                 )
-                return sent, caption
+                return sent, history_text
 
     if should_fallback:
         return await mood_service.publish_channel_post(bot, source=source)

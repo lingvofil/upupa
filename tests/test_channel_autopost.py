@@ -103,6 +103,28 @@ def test_low_energy_motifs_are_rare_but_not_completely_banned():
     expired.extend({"text": f"другой пост {index}"} for index in range(LOW_ENERGY_COOLDOWN_POSTS))
     assert _validate_post("Пойду гнить в коробке", expired) is None
 
+def test_repeated_household_prop_is_blocked_for_twelve_posts():
+    from features.channel.service import HOUSEHOLD_MOTIF_COOLDOWN_POSTS, _validate_post
+
+    recent = [{"text": f"другая тема {index}"} for index in range(HOUSEHOLD_MOTIF_COOLDOWN_POSTS - 1)]
+    recent.append({"text": "Уволил холодильник."})
+    reason = _validate_post("Холодильник опять охуел.", recent)
+    assert "холодильник" in reason
+
+    expired = [{"text": "Уволил холодильник."}]
+    expired.extend({"text": f"другая тема {index}"} for index in range(HOUSEHOLD_MOTIF_COOLDOWN_POSTS))
+    assert _validate_post("Холодильник опять охуел.", expired) is None
+
+
+def test_repeated_long_opening_and_near_duplicate_are_blocked():
+    from features.channel.service import _validate_post
+
+    recent = [{"text": "Люди в чатах строчат тексты длиннее жизни, чтобы скрыть пустоту."}]
+    reason = _validate_post("Люди в чатах строчат романы, чтобы скрыть, что им нечего сказать.", recent)
+    assert reason is not None
+    assert "зачин" in reason or "похож" in reason
+
+
 
 def test_channel_length_distribution_is_50_40_10():
     from prompts.channel import POST_LENGTH_MODES
@@ -133,17 +155,19 @@ def test_all_normal_length_modes_are_bounded():
     assert sum(mode["weight"] for mode in POST_LENGTH_MODES) == 100
 
 
-def test_content_distribution_includes_philosophy_and_mischief_modes():
+def test_content_distribution_includes_varied_non_domestic_modes():
     from prompts.channel import POST_CONTENT_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_CONTENT_MODES}
     assert sum(weights.values()) == 100
-    assert weights["absurd"] == 8
-    assert weights["philosophy"] == 10
-    assert weights["domestic"] == 20
-    assert weights["mischief"] == 17
+    assert weights["absurd"] == 10
+    assert weights["philosophy"] == 11
+    assert weights["domestic"] == 8
+    assert weights["mischief"] == 16
     assert weights["chat"] == 25
-    assert weights["functionality"] == 15
+    assert weights["functionality"] == 10
+    assert weights["outside"] == 8
+    assert weights["wordplay"] == 7
     assert weights["imperfect"] == 5
 
 

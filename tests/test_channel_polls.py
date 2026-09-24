@@ -122,8 +122,8 @@ def test_due_poll_is_closed_then_reflected_and_saved_to_channel_history(tmp_path
             self.closed.append((chat_id, message_id))
             return final_poll
 
-        async def send_message(self, chat_id, text):
-            self.messages.append((chat_id, text))
+        async def send_message(self, chat_id, text, **kwargs):
+            self.messages.append((chat_id, text, kwargs))
             return SimpleNamespace(message_id=99)
 
     bot = FakeBot()
@@ -157,7 +157,11 @@ def test_due_poll_is_closed_then_reflected_and_saved_to_channel_history(tmp_path
     record = state["polls"][0]
     assert record["status"] == "reflected"
     assert bot.messages == [
-        ("@upupa_channel", "71% выбрали табуретку. Начинаю деревянеть.")
+        (
+            "@upupa_channel",
+            "71% выбрали табуретку. Начинаю деревянеть.",
+            {"reply_to_message_id": 55},
+        )
     ]
     assert saved_posts[0]["post_kind"] == "poll_reflection"
     assert saved_posts[0]["poll_total_voter_count"] == 7

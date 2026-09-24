@@ -45,6 +45,9 @@ MAX_IMAGE_PROMPT_LENGTH = 600
 MAX_GENERATION_ATTEMPTS = 3
 DESIRE_OPENING_COOLDOWN_POSTS = 5
 LOW_ENERGY_COOLDOWN_POSTS = 8
+REPEATED_OPENING_COOLDOWN_POSTS = 12
+HOUSEHOLD_MOTIF_COOLDOWN_POSTS = 12
+SIMILARITY_COOLDOWN_POSTS = 12
 
 # Упупа знает эти публичные каналы. Описание попадает в prompt только когда код
 # уже выбрал редкий режим внешнего комментария, чтобы не праймить обычные посты.
@@ -98,6 +101,31 @@ _LOW_ENERGY_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+_HOUSEHOLD_MOTIFS = {
+    "чайник": re.compile(r"\bчайник\w*", re.IGNORECASE),
+    "холодильник": re.compile(r"\bхолодильник\w*", re.IGNORECASE),
+    "тостер": re.compile(r"\bтостер\w*", re.IGNORECASE),
+    "вилка": re.compile(r"\bвил(?:к|оч)\w*", re.IGNORECASE),
+    "ложка": re.compile(r"\bлож\w*", re.IGNORECASE),
+    "стул": re.compile(r"\bстул\w*", re.IGNORECASE),
+    "табуретка": re.compile(r"\bтабурет\w*", re.IGNORECASE),
+    "роутер": re.compile(r"\bроутер\w*", re.IGNORECASE),
+    "розетка": re.compile(r"\bрозет\w*", re.IGNORECASE),
+    "одеяло": re.compile(r"\bодеял\w*", re.IGNORECASE),
+    "микроволновка": re.compile(r"\bмикроволнов\w*", re.IGNORECASE),
+    "пылесос": re.compile(r"\bпылесос\w*", re.IGNORECASE),
+    "будильник": re.compile(r"\bбудильник\w*", re.IGNORECASE),
+    "монитор": re.compile(r"\bмонитор\w*", re.IGNORECASE),
+    "зеркало": re.compile(r"\bзеркал\w*", re.IGNORECASE),
+    "зарядка": re.compile(r"\bзаряд\w*", re.IGNORECASE),
+}
+
+_STOPWORDS = {
+    "это", "как", "что", "чтобы", "когда", "если", "только", "теперь", "потом", "уже",
+    "ещё", "еще", "просто", "очень", "меня", "мне", "мой", "моя", "мои", "свой", "свои",
+    "люди", "чатах", "сегодня", "сейчас", "будет", "стал", "стала", "решил", "решила",
+}
 
 
 def _sanitize_chat_text(text: str) -> str:
@@ -198,6 +226,50 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"\S+", text.strip()))
 
 
+def _content_tokens(text: str) -> list[str]:
+    cleaned = re.sub(r"https?://\S+", " ", text or "")
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", cleaned.casefold())
+    tokens: list[str] = []
+    for word in words:
+        normalized = word.replace("ё", "е")
+        if normalized in _STOPWORDS or len(normalized) < 4:
+            continue
+        # A light fingerprint catches Russian inflectional variants without adding a heavy stemmer.
+        tokens.append(normalized[:6] if len(normalized) >= 7 else normalized)
+    return tokens
+
+
+def _opening_signature(text: str) -> tuple[str, ...]:
+    cleaned = re.sub(r"https?://\S+", " ", text or "")
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", cleaned.casefold())
+    normalized = [word.replace("ё", "е") for word in words]
+    if len(normalized) < 4:
+        return ()
+    return tuple(word[:6] if len(word) >= 7 else word for word in normalized[:3])
+
+
+def _shared_household_motif(text: str, recent_posts: list[dict]) -> str | None:
+    recent_texts = [str(post.get("text") or "") for post in recent_posts[-HOUSEHOLD_MOTIF_COOLDOWN_POSTS:]]
+    for name, pattern in _HOUSEHOLD_MOTIFS.items():
+        if pattern.search(text or "") and any(pattern.search(item) for item in recent_texts):
+            return name
+    return None
+
+
+def _too_similar_to_recent(text: str, recent_posts: list[dict]) -> bool:
+    candidate = set(_content_tokens(text))
+    if len(candidate) < 4:
+        return False
+    for post in recent_posts[-SIMILARITY_COOLDOWN_POSTS:]:
+        other = set(_content_tokens(str(post.get("text") or "")))
+        if len(other) < 4:
+            continue
+        overlap = len(candidate & other) / min(len(candidate), len(other))
+        if overlap >= 0.65:
+            return True
+    return False
+
+
 def _choose_length_mode(*, rng=random) -> dict:
     modes = list(POST_LENGTH_MODES)
     return rng.choices(modes, weights=[mode["weight"] for mode in modes], k=1)[0]
@@ -226,6 +298,19 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     }
     if normalized in recent_normalized:
         return "точный дубль недавнего поста"
+
+    opening = _opening_signature(clean)
+    if opening:
+        recent_openings = recent_posts[-REPEATED_OPENING_COOLDOWN_POSTS:]
+        if any(_opening_signature(str(post.get("text") or "")) == opening for post in recent_openings):
+            return "повторяется недавний зачин; нужна другая конструкция"
+
+    repeated_motif = _shared_household_motif(clean, recent_posts)
+    if repeated_motif:
+        return f"бытовой мотив «{repeated_motif}» уже недавно использовался; нужен другой материал"
+
+    if _too_similar_to_recent(clean, recent_posts):
+        return "слишком похожая конструкция или словарь на недавний пост"
 
     if _starts_with_desire(clean):
         recent_openings = recent_posts[-DESIRE_OPENING_COOLDOWN_POSTS:]
