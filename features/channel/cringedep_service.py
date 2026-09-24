@@ -50,6 +50,25 @@ CRINGEDEP_PUN_PROMPT = """
 ПОДПИСЬ: <новый каламбур, который будет наложен прямо на изображение>
 """.strip()
 
+CRINGEDEP_GROUNDING_JUDGE_PROMPT = """
+Проверь только связь между исходным мемом и новым визуальным каламбуром.
+Новый вариант считается связанным, только если человек, увидев оригинал и ответ рядом, поймёт,
+почему ответ возник именно из этого оригинала: сохранена центральная тема, объект/класс объектов,
+имя/референс или узнаваемый механизм словесной подмены.
+
+Если это просто другой самостоятельный каламбур из иной области, ответь НЕТ.
+Если связь конкретная и очевидная, ответь ДА.
+Ответь ровно одним словом: ДА или НЕТ.
+
+ИСХОДНИК:
+{source_material}
+
+НОВЫЙ ВАРИАНТ:
+КАРТИНКА: {image_prompt}
+ПОДПИСЬ: {pun_caption}
+""".strip()
+
+
 def _normalize_compact(text: str) -> str:
     return re.sub(r"[^\wа-яё]+", "", str(text or "").casefold(), flags=re.IGNORECASE)
 
@@ -111,6 +130,25 @@ def _build_pun_prompt(source_material: str, mood: dict, retry_note: str = "") ->
     )
 
 
+async def _is_grounded_pun(
+    source_material: str,
+    image_prompt: str,
+    pun_caption: str,
+) -> bool:
+    from AI.summarize import _generate_with_active_model
+
+    raw = await _generate_with_active_model(
+        CRINGEDEP_GROUNDING_JUDGE_PROMPT.format(
+            source_material=source_material,
+            image_prompt=image_prompt,
+            pun_caption=pun_caption,
+        ),
+        str(base.SPECIAL_CHAT_ID),
+    )
+    verdict = str(raw or "").strip().casefold().replace("ё", "е")
+    return verdict.startswith("да")
+
+
 async def _prepare_cringedep_pun(
     published_posts: list[dict],
     mood: dict,
@@ -154,6 +192,14 @@ async def _prepare_cringedep_pun(
                 reason = "подпись повторяет исходный пост вместо нового каламбура"
             if not reason and _caption_was_recent(pun_caption, published_posts):
                 reason = "такой каламбур уже недавно публиковался"
+            if not reason:
+                try:
+                    grounded = await _is_grounded_pun(source_material, image_prompt, pun_caption)
+                except Exception as exc:
+                    logging.warning("[channel] @cringedep grounding judge failed: %s", exc)
+                    grounded = False
+                if not grounded:
+                    reason = "новый каламбур не связан достаточно явно с конкретным исходным постом"
 
         final_caption = f"{source_post['url']}\n\n{pun_caption}" if pun_caption else ""
         if not reason and final_caption:
