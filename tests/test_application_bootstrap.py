@@ -131,7 +131,10 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
     application.configure_dispatcher()
 
     assert dispatcher.sub_routers == [dnd_router, fake_main_router]
-    assert len(dispatcher.update.outer_middlewares) == 1
+    assert [type(middleware).__name__ for middleware in dispatcher.update.outer_middlewares] == [
+        "BlockedUserMiddleware",
+        "AIUsageContextMiddleware",
+    ]
 
 
 def test_main_delegates_to_application_runner(monkeypatch):
