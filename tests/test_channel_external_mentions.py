@@ -148,7 +148,8 @@ def test_prepare_reply_is_grounded_in_mention_and_keeps_source_metadata(monkeypa
     assert metadata["external_mention"] is True
     assert metadata["external_source_owner"] == "Вася"
     assert "Упупа, иди сюда" in prompts[0]
-    assert "ответ именно на это обращение" in prompts[0]
+    assert "следующий пост" in prompts[0]
+    assert "обращение" in prompts[0]
 
 
 def test_direct_mention_consumes_next_channel_slot_before_other_modes(tmp_path, monkeypatch):
