@@ -330,12 +330,14 @@ def _heritage_keyboard(user_id):
     ])
 
 
-def _plot_keyboard(options, abstract=False):
+def _plot_keyboard(options, abstract=False, selected_length="short"):
     rows = [[InlineKeyboardButton(text=f"{i + 1}. {opt[:44]}", callback_data=f"dnd:plot:{i}")]
             for i, opt in enumerate(options[:5])]
     rows.append([InlineKeyboardButton(text="✍️ Свой сюжет", callback_data="dnd:plot:custom")])
-    rows.append([InlineKeyboardButton(text="⏱ Короткий", callback_data="dnd:plot:short"),
-                 InlineKeyboardButton(text="📖 Длинный", callback_data="dnd:plot:long")])
+    short_label = "✅ Короткий · 8–12 сцен" if selected_length == "short" else "⏱ Короткий · 8–12 сцен"
+    long_label = "✅ Длинный · 24–36 сцен" if selected_length == "long" else "📖 Длинный · 24–36 сцен"
+    rows.append([InlineKeyboardButton(text=short_label, callback_data="dnd:plot:short"),
+                 InlineKeyboardButton(text=long_label, callback_data="dnd:plot:long")])
     rows.append([InlineKeyboardButton(text="🎯 Указать цель", callback_data="dnd:plot:goal")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -905,11 +907,20 @@ async def _choose_plots(dnd, callback, session):
     dnd.persist_dnd_sessions()
     # Text and buttons are deliberately built from the exact same persisted array.
     options = session.plot_options
-    text = "🎬 Сначала можно выбрать длительность (по умолчанию короткий) и цель, затем сюжет:\n\n" + "\n".join(f"{i + 1}. {x}" for i, x in enumerate(options))
+    text = (
+        "🎬 Выбери сюжет. Длительность отмечена галочкой (по умолчанию короткий); "
+        "при желании можно указать цель.\n\n"
+        + "\n".join(f"{i + 1}. {x}" for i, x in enumerate(options))
+    )
+    markup = _plot_keyboard(
+        options,
+        session.mode == "abstract",
+        getattr(session, "adventure_length", "short"),
+    )
     try:
-        await callback.message.edit_text(text, reply_markup=_plot_keyboard(options, session.mode == "abstract"))
+        await callback.message.edit_text(text, reply_markup=markup)
     except Exception:
-        await callback.message.answer(text, reply_markup=_plot_keyboard(options, session.mode == "abstract"))
+        await callback.message.answer(text, reply_markup=markup)
 
 
 async def _plot_callback(callback, dnd):
@@ -924,7 +935,18 @@ async def _plot_callback(callback, dnd):
     if callback.data in {"dnd:plot:short", "dnd:plot:long"}:
         session.adventure_length = callback.data.rsplit(":", 1)[1]
         dnd.persist_dnd_sessions()
-        await callback.answer("Короткий сюжет: 8–12 сцен." if session.adventure_length == "short" else "Длинный сюжет: 24–36 сцен.", show_alert=True)
+        await callback.message.edit_reply_markup(
+            reply_markup=_plot_keyboard(
+                session.plot_options,
+                session.mode == "abstract",
+                session.adventure_length,
+            )
+        )
+        await callback.answer(
+            "Выбрано: короткий сюжет (8–12 сцен)."
+            if session.adventure_length == "short"
+            else "Выбрано: длинный сюжет (24–36 сцен)."
+        )
         return
     if callback.data == "dnd:plot:goal":
         await callback.answer()
