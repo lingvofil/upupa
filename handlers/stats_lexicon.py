@@ -57,7 +57,15 @@ def format_model_usage_message(report: dict, title: str) -> str:
     output_tokens = int(totals.get("output_tokens", 0))
     cached_tokens = int(totals.get("cached_tokens", 0))
     reasoning_tokens = int(totals.get("reasoning_tokens", 0))
-    unattributed = int(totals.get("unattributed_requests", 0))
+    successful = int(totals.get("successful_requests", 0))
+    failed = int(totals.get("failed_requests", max(0, requests - successful)))
+    unattributed_chats = int(
+        totals.get("unattributed_chat_requests", totals.get("unattributed_requests", 0))
+    )
+    unattributed_users = int(totals.get("unattributed_user_requests", 0))
+    interactive = int(totals.get("interactive_requests", 0))
+    background = int(totals.get("background_requests", 0))
+    telemetry_started_at = totals.get("telemetry_started_at")
 
     parts = [
         f"🧠 <b>{escape(title)}</b>",
@@ -69,7 +77,16 @@ def format_model_usage_message(report: dict, title: str) -> str:
             f"Вход: {_format_token_count(input_tokens)} "
             f"· выход: {_format_token_count(output_tokens)}"
         ),
+        f"Успешно: {successful} · ошибок: {failed}",
     ]
+    if interactive or background:
+        parts.append(f"Вызовы: пользовательские {interactive} · фоновые {background}")
+    if telemetry_started_at:
+        parts.append(
+            "ℹ️ Детальная токен-телеметрия собирается с "
+            f"<code>{escape(str(telemetry_started_at))} UTC</code>; "
+            "более ранние вызовы в выбранный период восстановить нельзя."
+        )
     if cached_tokens or reasoning_tokens:
         extra = []
         if cached_tokens:
@@ -83,9 +100,13 @@ def format_model_usage_message(report: dict, title: str) -> str:
         parts.append(
             f"⚠️ Без token usage от провайдера: {unknown_usage} запросов"
         )
-    if unattributed:
+    if unattributed_chats:
         parts.append(
-            f"🛠 Без привязки к чату/пользователю: {unattributed} запросов"
+            f"🛠 Без привязки к чату: {unattributed_chats} запросов"
+        )
+    if unattributed_users:
+        parts.append(
+            f"👤 Без привязки к пользователю: {unattributed_users} запросов"
         )
 
     models = report.get("models") or []
