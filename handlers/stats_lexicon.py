@@ -118,10 +118,38 @@ def format_model_usage_message(report: dict, title: str) -> str:
         parts.append("\n<b>Модели</b>")
         for row in models:
             label = f"{row.get('provider')}/{row.get('model_name')}"
+            requests_count = int(row.get("requests", 0))
+            known_count = int(row.get("usage_known_requests", 0))
+            usage_note = (
+                f" · usage {known_count}/{requests_count}"
+                if known_count < requests_count
+                else ""
+            )
             parts.append(
                 f"• <code>{escape(label)}</code>: "
                 f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
-                f"· {int(row.get('requests', 0))} запр."
+                f"· {requests_count} запр. "
+                f"· ср. {_format_token_count(row.get('average_tokens', 0))}/измер. вызов"
+                f"{usage_note}"
+            )
+
+    request_types = report.get("request_types") or []
+    if request_types:
+        parts.append("\n<b>Топ типов AI-вызовов</b>")
+        for row in request_types:
+            requests_count = int(row.get("requests", 0))
+            known_count = int(row.get("usage_known_requests", 0))
+            usage_note = (
+                f" · usage {known_count}/{requests_count}"
+                if known_count < requests_count
+                else ""
+            )
+            parts.append(
+                f"• <code>{escape(str(row.get('request_type') or 'unknown'))}</code>: "
+                f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
+                f"· {requests_count} выз. "
+                f"· ср. {_format_token_count(row.get('average_tokens', 0))}/измер. вызов"
+                f"{usage_note}"
             )
 
     chats = report.get("chats") or []
