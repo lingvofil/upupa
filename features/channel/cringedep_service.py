@@ -18,32 +18,37 @@ CRINGEDEP_PUN_PROBABILITY = 0.08
 CRINGEDEP_POSTS_LIMIT = 20
 
 CRINGEDEP_PUN_PROMPT = """
-Ты — Упупа, Telegram-бот. Иногда ты читаешь @cringedep: там в основном визуальные каламбуры,
-где изображение и короткая подпись вместе образуют игру слов.
+Ты — Упупа, Telegram-бот. У тебя особое отношение к @cringedep: ты не просто комментируешь его,
+а отвечаешь собственным визуальным каламбуром, который должен быть явно рождён ИМЕННО из конкретного
+исходного поста.
 
-Ниже дан ОДИН реальный пост оттуда. Сначала мысленно пойми, на чём построен исходный каламбур:
-какие слова, значения, созвучия и объекты изображения сцеплены между собой. Своё объяснение НЕ выводи.
+Ниже дан ОДИН реальный пост. Сначала мысленно разложи его механику: что изображено, какой заметный текст
+есть на картинке, какие слова/имена/значения сталкиваются и почему исходный мем работает. Объяснение не выводи.
 
-После этого придумай СВОЙ новый визуальный каламбур по похожему принципу. Это не ремикс исходного поста:
-не копируй исходную подпись, не заменяй в ней одну букву механически, не используй те же ключевые предметы
-или персонажей, если без них можно обойтись. Нужна новая шутка из другой предметной области, но такого же
-типа: короткое неожиданное слово/словосочетание, которое становится понятным при взгляде на картинку.
+После этого придумай СВОЙ новый каламбур КАК ВЕТКУ от исходной идеи. Связь должна считываться при показе
+оригинала и ответа рядом без дополнительных объяснений. Сохрани хотя бы одну центральную тематическую ось
+исходника: персонажа или класс персонажей, предметную область, имя/название, музыкальную/киношную/бытовую тему
+или сам тип словесной подмены. Разрешено использовать тот же ключевой объект или референс, если это помогает
+связи. Не уходи в совершенно другую предметную область только ради случайного удачного слова.
 
-Картинка должна быть визуально простой и однозначной: один главный гэг, без коллажа и без длинного сюжета.
-НЕ проси генератор рисовать надписи, буквы, вывески, логотипы или подпись внутри изображения — каламбур
-будет отдельной подписью Telegram. Не делай инфографику или обычный мем с текстом сверху/снизу.
+Пример принципа: если исходник строится на коте + имени музыканта, ответ тоже должен оставаться в понятной
+связке с котами/музыкой/именами, а не внезапно становиться каламбуром про лавровый лист. Не копируй исходную
+подпись дословно и не ограничивайся заменой одной буквы без новой шутки.
 
-Подпись — сам новый каламбур. Предпочтительно 1–4 слова, максимум 8 слов и 100 символов. Разрешён мат,
-если он действительно нужен шутке. Не упоминай @cringedep, источник, нейросеть, генерацию или объяснение шутки.
+Картинка должна быть визуально простой и однозначной: один главный гэг, без коллажа и длинного сюжета.
+НЕ проси генератор рисовать текст: программа сама наложит каламбур на готовую картинку тем же способом,
+что команда «скаламбурь».
+
+Каламбур — предпочтительно 1–4 слова, максимум 8 слов и 100 символов. Разрешён мат, если он нужен шутке.
+Не упоминай @cringedep, нейросеть, генерацию и не объясняй шутку.
 
 ИСХОДНЫЙ ПОСТ:
 {source_material}
 
 Ответь СТРОГО двумя строками и больше ничем:
 КАРТИНКА: <конкретное описание новой картинки без текста внутри>
-ПОДПИСЬ: <новый каламбур>
+ПОДПИСЬ: <новый каламбур, который будет наложен прямо на изображение>
 """.strip()
-
 
 def _normalize_compact(text: str) -> str:
     return re.sub(r"[^\wа-яё]+", "", str(text or "").casefold(), flags=re.IGNORECASE)
@@ -112,7 +117,7 @@ async def _prepare_cringedep_pun(
 ) -> tuple[bytes, str, dict] | None:
     """Analyze one @cringedep image, invent a new pun and generate the reply image."""
     from AI.summarize import _generate_with_active_model
-    from features.channel.image_generation import generate_channel_image
+    from features.channel.image_generation import generate_channel_image, overlay_channel_text
 
     source_posts = await base.fetch_public_posts(CRINGEDEP_CHANNEL, limit=CRINGEDEP_POSTS_LIMIT)
     source_post = _pick_unanswered_image_post(source_posts, published_posts)
@@ -167,7 +172,12 @@ async def _prepare_cringedep_pun(
         logging.warning("[channel] @cringedep pun image providers returned no image")
         return None
 
-    final_caption = f"{source_post['url']}\n\n{pun_caption}"
+    overlaid_image = await overlay_channel_text(image_bytes, pun_caption)
+    if not overlaid_image:
+        logging.warning("[channel] @cringedep pun text overlay failed")
+        return None
+
+    telegram_caption = str(source_post["url"])
     metadata = {
         "post_kind": "image",
         "image_subtype": "external_pun_reply",
@@ -181,7 +191,7 @@ async def _prepare_cringedep_pun(
         "external_pun_caption": pun_caption,
         **mood_service._mood_metadata(mood),
     }
-    return image_bytes, final_caption, metadata
+    return overlaid_image, telegram_caption, metadata
 
 
 async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | None:
@@ -250,7 +260,8 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                 image_bytes, caption, metadata = prepared
                 photo = types.BufferedInputFile(image_bytes, filename="upupa-cringedep.png")
                 sent = await bot.send_photo(CHANNEL_TARGET, photo, caption=caption)
-                await base._store_published_post(sent, source=source, text=caption, metadata=metadata)
+                history_text = f"{caption}\n\n{metadata.get('external_pun_caption') or ''}".strip()
+                await base._store_published_post(sent, source=source, text=history_text, metadata=metadata)
                 await mood_service._consume_after_publish(mood, getattr(sent, "message_id", None))
                 logging.info(
                     "[channel] published @cringedep pun message_id=%s source_url=%s provider=%s",
@@ -258,7 +269,7 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                     metadata.get("external_source_url"),
                     metadata.get("image_provider"),
                 )
-                return sent, caption
+                return sent, history_text
 
     if should_fallback:
         return await mood_service.publish_channel_post(bot, source=source)
