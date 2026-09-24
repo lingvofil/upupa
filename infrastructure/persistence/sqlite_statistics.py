@@ -428,6 +428,11 @@ class SQLiteStatisticsRepository:
             where = "WHERE timestamp >= ?"
             params.append(_utc_now_naive() - timedelta(hours=period_hours))
 
+        usage_known = (
+            "input_tokens IS NOT NULL "
+            "OR output_tokens IS NOT NULL "
+            "OR total_tokens IS NOT NULL"
+        )
         effective_total = (
             "COALESCE(total_tokens, "
             "CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL "
@@ -476,10 +481,27 @@ class SQLiteStatisticsRepository:
                     COALESCE(provider, 'unknown') AS provider_name,
                     COALESCE(model_name, 'unknown') AS resolved_model,
                     COUNT(*) AS requests,
+                    SUM(CASE WHEN {usage_known} THEN 1 ELSE 0 END) AS usage_known_requests,
                     COALESCE(SUM({effective_total}), 0) AS tokens
                 FROM model_stats
                 {where}
                 GROUP BY provider_name, resolved_model
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+            request_types = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(request_type, 'unknown') AS resolved_request_type,
+                    COUNT(*) AS requests,
+                    SUM(CASE WHEN {usage_known} THEN 1 ELSE 0 END) AS usage_known_requests,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {where}
+                GROUP BY resolved_request_type
                 ORDER BY tokens DESC, requests DESC
                 LIMIT ?
                 """,
@@ -566,9 +588,29 @@ class SQLiteStatisticsRepository:
                     "provider": str(provider),
                     "model_name": str(model_name),
                     "requests": int(requests),
+                    "usage_known_requests": int(usage_known_requests or 0),
                     "total_tokens": int(tokens),
+                    "average_tokens": (
+                        round(int(tokens) / int(usage_known_requests))
+                        if usage_known_requests
+                        else 0
+                    ),
                 }
-                for provider, model_name, requests, tokens in models
+                for provider, model_name, requests, usage_known_requests, tokens in models
+            ],
+            "request_types": [
+                {
+                    "request_type": str(request_type),
+                    "requests": int(requests),
+                    "usage_known_requests": int(usage_known_requests or 0),
+                    "total_tokens": int(tokens),
+                    "average_tokens": (
+                        round(int(tokens) / int(usage_known_requests))
+                        if usage_known_requests
+                        else 0
+                    ),
+                }
+                for request_type, requests, usage_known_requests, tokens in request_types
             ],
             "chats": [
                 {
