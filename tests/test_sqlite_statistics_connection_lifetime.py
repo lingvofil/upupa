@@ -160,6 +160,19 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         user_username=None,
     )
     repository.log_model_request(
+        chat_id=-1001,
+        user_id=42,
+        model_name="gemini-test",
+        request_type="model.generate_content",
+        provider="gemini",
+        duration_ms=250,
+        success=False,
+        lane="interactive",
+        chat_title="Heavy chat",
+        user_name="Alice",
+        user_username="alice",
+    )
+    repository.log_model_request(
         chat_id=None,
         user_id=None,
         model_name="unknown",
@@ -173,7 +186,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     report = repository.get_model_usage_report(period_hours=1, limit=5)
     totals = report["totals"]
 
-    assert totals["requests"] == 4
+    assert totals["requests"] == 5
     assert totals["successful_requests"] == 3
     assert totals["usage_known_requests"] == 3
     assert totals["input_tokens"] == 190
@@ -184,14 +197,22 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert totals["unattributed_requests"] == 1
     assert totals["unattributed_chat_requests"] == 1
     assert totals["unattributed_user_requests"] == 1
-    assert totals["interactive_requests"] == 3
+    assert totals["interactive_requests"] == 4
     assert totals["background_requests"] == 1
-    assert totals["failed_requests"] == 1
+    assert totals["failed_requests"] == 2
     assert totals["unknown_outcome_requests"] == 0
     assert totals["telemetry_started_at"]
 
     assert report["models"][0]["model_name"] == "gemini-test"
+    assert report["models"][0]["requests"] == 3
+    assert report["models"][0]["usage_known_requests"] == 2
     assert report["models"][0]["total_tokens"] == 205
+    assert report["models"][0]["average_tokens"] == 102
+    assert report["request_types"][0]["request_type"] == "model.generate_content"
+    assert report["request_types"][0]["requests"] == 3
+    assert report["request_types"][0]["usage_known_requests"] == 2
+    assert report["request_types"][0]["total_tokens"] == 205
+    assert report["request_types"][0]["average_tokens"] == 102
     assert report["chats"][0]["chat_id"] == -1001
     assert report["chats"][0]["chat_title"] == "Heavy chat"
     assert report["chats"][0]["total_tokens"] == 205
