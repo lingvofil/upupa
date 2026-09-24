@@ -42,6 +42,7 @@ channel_posts.json
 channel_schedule.json
 channel_mood.json
 channel_polls.json
+channel_external_mentions.json
 dnd_sessions.json
 blocked_users.json
 group_bans.json
