@@ -207,7 +207,10 @@ class UpupaApplication:
             return
 
         from AI.dnd import dnd_router
-        from core.middlewares import AIUsageContextMiddleware
+        from core.middlewares import AIUsageContextMiddleware, BlockedUserMiddleware
+
+        # Глобальный бан должен срабатывать до любого router, включая DnD.
+        self.dispatcher.update.outer_middleware(BlockedUserMiddleware())
 
         # Этот middleware стоит над обоими router'ами, поэтому атрибуция
         # model usage работает и для DnD, и для обычных команд.
