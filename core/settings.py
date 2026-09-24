@@ -152,6 +152,7 @@ BLOCKED_USERS = [354145389]
 # Usernames are stored without "@" and compared case-insensitively.
 # Keep this as a fallback for users whose numeric Telegram ID is not known yet.
 BLOCKED_USERNAMES = {"mev515"}
+BLOCKED_USERS_PATH = os.getenv("UPUPA_BLOCKED_USERS_PATH", "blocked_users.json")
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
 
