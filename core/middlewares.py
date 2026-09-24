@@ -1,11 +1,15 @@
+import json
 import logging
 import os
+from pathlib import Path
+import threading
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
 from aiogram.enums import ContentType
 from aiogram.types import Message
 
+from core.settings import BLOCKED_USERS, BLOCKED_USERNAMES, BLOCKED_USERS_PATH
 from infrastructure.ai.execution import ai_request_context
 
 
@@ -18,10 +22,125 @@ _LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "").strip().lower() in {
 _LOG_MESSAGE_CONTENT_LIMIT = 200
 
 
+_blocked_users_path = Path(BLOCKED_USERS_PATH)
+_blocked_users_lock = threading.RLock()
+
+
+def _load_persisted_blocked_user_ids() -> set[int]:
+    try:
+        raw = json.loads(_blocked_users_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError, TypeError) as exc:
+        logging.warning("Failed to load persisted blocked users: %s", exc)
+        return set()
+
+    if not isinstance(raw, list):
+        logging.warning("Ignoring invalid persisted blocked users payload")
+        return set()
+
+    result = set()
+    for value in raw:
+        try:
+            result.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+_persisted_blocked_user_ids = _load_persisted_blocked_user_ids()
+
+
+def _persist_blocked_user_id(user_id: int) -> None:
+    user_id = int(user_id)
+    with _blocked_users_lock:
+        if user_id in _persisted_blocked_user_ids:
+            return
+        _persisted_blocked_user_ids.add(user_id)
+        try:
+            _blocked_users_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = _blocked_users_path.with_suffix(_blocked_users_path.suffix + ".tmp")
+            temp_path.write_text(
+                json.dumps(sorted(_persisted_blocked_user_ids), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temp_path.replace(_blocked_users_path)
+        except OSError as exc:
+            _persisted_blocked_user_ids.discard(user_id)
+            logging.error("Failed to persist blocked Telegram user_id=%s: %s", user_id, exc)
+
+
 def _message_preview(message_text: str | None) -> str | None:
     if not _LOG_MESSAGE_CONTENT or not message_text:
         return None
     return message_text.replace("\n", "\\n")[:_LOG_MESSAGE_CONTENT_LIMIT]
+
+
+def _extract_event_user(event: Any):
+    """Return the Telegram user responsible for an update-like event, if any."""
+    user = getattr(event, "from_user", None) or getattr(event, "user", None)
+    if user is not None:
+        return user
+
+    for attribute in (
+        "callback_query",
+        "message",
+        "edited_message",
+        "inline_query",
+        "chosen_inline_result",
+        "shipping_query",
+        "pre_checkout_query",
+        "poll_answer",
+        "message_reaction",
+        "chat_member",
+        "my_chat_member",
+        "chat_join_request",
+    ):
+        nested = getattr(event, attribute, None)
+        if nested is None:
+            continue
+        user = getattr(nested, "from_user", None) or getattr(nested, "user", None)
+        if user is not None:
+            return user
+
+    return None
+
+
+def _is_blocked_user(user: Any) -> bool:
+    if user is None:
+        return False
+
+    user_id = getattr(user, "id", None)
+    if user_id in BLOCKED_USERS or user_id in _persisted_blocked_user_ids:
+        return True
+
+    username = str(getattr(user, "username", "") or "").strip().lstrip("@").casefold()
+    if username and username in BLOCKED_USERNAMES:
+        if user_id is not None:
+            _persist_blocked_user_id(int(user_id))
+        return True
+    return False
+
+
+class BlockedUserMiddleware(BaseMiddleware):
+    """Drop all updates initiated by explicitly blocked Telegram users."""
+
+    async def __call__(
+        self,
+        handler: Callable[..., Awaitable[Any]],
+        event: Any,
+        data: Dict[str, Any],
+    ) -> Any:
+        user = _extract_event_user(event)
+        if _is_blocked_user(user):
+            logging.info(
+                "Blocked Telegram update: user_id=%s username=%s",
+                getattr(user, "id", None),
+                getattr(user, "username", None),
+            )
+            return None
+
+        return await handler(event, data)
 
 
 class IncomingMessageLogMiddleware(BaseMiddleware):

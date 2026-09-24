@@ -43,6 +43,7 @@ channel_schedule.json
 channel_mood.json
 channel_polls.json
 dnd_sessions.json
+blocked_users.json
 crocodile_sessions.json
 crocodile_party_state.json
 crocodile_scores.json
