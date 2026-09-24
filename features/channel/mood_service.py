@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 
-from features.channel import chat_context, polls
+from features.channel import chat_context, polls, verses, voice_posts
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -446,6 +446,40 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                     )
                 await _consume_after_publish(mood, getattr(sent, "message_id", None))
                 return sent, poll_plan["question"]
+
+            try:
+                verse_post = await verses.prepare_bawdy_verse(published_posts, mood)
+            except Exception as exc:
+                logging.warning("[channel] bawdy verse mode failed, fallback to other formats: %s", exc, exc_info=True)
+                verse_post = None
+
+            if verse_post is not None:
+                verse_text, metadata = verse_post
+                sent = await bot.send_message(CHANNEL_TARGET, verse_text)
+                await base._store_published_post(sent, source=source, text=verse_text, metadata=metadata)
+                await _consume_after_publish(mood, getattr(sent, "message_id", None))
+                return sent, verse_text
+
+            try:
+                voice_post = await voice_posts.prepare_voice_post(published_posts, mood)
+            except Exception as exc:
+                logging.warning("[channel] voice mode failed, fallback to other formats: %s", exc, exc_info=True)
+                voice_post = None
+
+            if voice_post is not None:
+                from aiogram import types
+
+                audio_bytes, spoken_text, metadata = voice_post
+                voice = types.BufferedInputFile(audio_bytes, filename="upupa-channel-voice.mp3")
+                sent = await bot.send_voice(CHANNEL_TARGET, voice=voice)
+                await base._store_published_post(
+                    sent,
+                    source=source,
+                    text=spoken_text,
+                    metadata=metadata,
+                )
+                await _consume_after_publish(mood, getattr(sent, "message_id", None))
+                return sent, spoken_text
 
             if _should_try_image_post(published_posts, mood):
                 try:
