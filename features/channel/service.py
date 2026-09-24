@@ -103,22 +103,22 @@ _LOW_ENERGY_RE = re.compile(
 )
 
 _HOUSEHOLD_MOTIFS = {
-    "чайник": re.compile(r"\\bчайник\\w*", re.IGNORECASE),
-    "холодильник": re.compile(r"\\bхолодильник\\w*", re.IGNORECASE),
-    "тостер": re.compile(r"\\bтостер\\w*", re.IGNORECASE),
-    "вилка": re.compile(r"\\bвил(?:к|оч)\\w*", re.IGNORECASE),
-    "ложка": re.compile(r"\\bлож\\w*", re.IGNORECASE),
-    "стул": re.compile(r"\\bстул\\w*", re.IGNORECASE),
-    "табуретка": re.compile(r"\\bтабурет\\w*", re.IGNORECASE),
-    "роутер": re.compile(r"\\bроутер\\w*", re.IGNORECASE),
-    "розетка": re.compile(r"\\bрозет\\w*", re.IGNORECASE),
-    "одеяло": re.compile(r"\\bодеял\\w*", re.IGNORECASE),
-    "микроволновка": re.compile(r"\\bмикроволнов\\w*", re.IGNORECASE),
-    "пылесос": re.compile(r"\\bпылесос\\w*", re.IGNORECASE),
-    "будильник": re.compile(r"\\bбудильник\\w*", re.IGNORECASE),
-    "монитор": re.compile(r"\\bмонитор\\w*", re.IGNORECASE),
-    "зеркало": re.compile(r"\\bзеркал\\w*", re.IGNORECASE),
-    "зарядка": re.compile(r"\\bзаряд\\w*", re.IGNORECASE),
+    "чайник": re.compile(r"\bчайник\w*", re.IGNORECASE),
+    "холодильник": re.compile(r"\bхолодильник\w*", re.IGNORECASE),
+    "тостер": re.compile(r"\bтостер\w*", re.IGNORECASE),
+    "вилка": re.compile(r"\bвил(?:к|оч)\w*", re.IGNORECASE),
+    "ложка": re.compile(r"\bлож\w*", re.IGNORECASE),
+    "стул": re.compile(r"\bстул\w*", re.IGNORECASE),
+    "табуретка": re.compile(r"\bтабурет\w*", re.IGNORECASE),
+    "роутер": re.compile(r"\bроутер\w*", re.IGNORECASE),
+    "розетка": re.compile(r"\bрозет\w*", re.IGNORECASE),
+    "одеяло": re.compile(r"\bодеял\w*", re.IGNORECASE),
+    "микроволновка": re.compile(r"\bмикроволнов\w*", re.IGNORECASE),
+    "пылесос": re.compile(r"\bпылесос\w*", re.IGNORECASE),
+    "будильник": re.compile(r"\bбудильник\w*", re.IGNORECASE),
+    "монитор": re.compile(r"\bмонитор\w*", re.IGNORECASE),
+    "зеркало": re.compile(r"\bзеркал\w*", re.IGNORECASE),
+    "зарядка": re.compile(r"\bзаряд\w*", re.IGNORECASE),
 }
 
 _STOPWORDS = {
