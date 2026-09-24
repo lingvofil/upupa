@@ -28,6 +28,7 @@ def test_group_ban_persists_and_matches_title_username_and_link(monkeypatch):
     assert group_bans.find_group_ban("Brawlhalla")["id"] == -100123
     assert group_bans.find_group_ban("@brawlhallaz")["id"] == -100123
     assert group_bans.find_group_ban("https://t.me/brawlhallaz")["id"] == -100123
+    assert group_bans.find_group_ban("Brawlhalla @brawlhallaz")["id"] == -100123
     assert repo.data["-100123"]["username"] == "brawlhallaz"
 
 
