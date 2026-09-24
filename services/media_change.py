@@ -5,6 +5,8 @@ import tempfile
 from aiogram import Bot, types
 from aiogram.types import FSInputFile
 
+from services.video_note_branding import prepare_video_note_for_processing
+
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 180
 
@@ -47,6 +49,7 @@ def _extract_media_source(message: types.Message) -> types.Message | None:
         source = message.reply_to_message
         if (
             source.video
+            or getattr(source, "video_note", None)
             or source.animation
             or source.audio
             or source.voice
@@ -57,6 +60,7 @@ def _extract_media_source(message: types.Message) -> types.Message | None:
 
     if (
         message.video
+        or getattr(message, "video_note", None)
         or message.animation
         or message.audio
         or message.voice
@@ -71,6 +75,9 @@ def _extract_media_source(message: types.Message) -> types.Message | None:
 def _get_duration_seconds(source: types.Message) -> int | None:
     if source.video and source.video.duration:
         return source.video.duration
+    video_note = getattr(source, "video_note", None)
+    if video_note and video_note.duration:
+        return video_note.duration
     if source.animation and source.animation.duration:
         return source.animation.duration
     if source.audio and source.audio.duration:
@@ -85,6 +92,7 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
         source = message.reply_to_message
         if (
             source.video
+            or getattr(source, "video_note", None)
             or source.animation
             or source.audio
             or source.voice
@@ -95,6 +103,7 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
 
     if (
         message.video
+        or getattr(message, "video_note", None)
         or message.animation
         or message.audio
         or message.voice
@@ -205,11 +214,12 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
     media_source = _extract_media_source(message)
 
     if not media_source:
-        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
+        await message.reply("Реплайни на видео/видеокружок/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
         return
 
     file_obj = (
         media_source.video
+        or getattr(media_source, "video_note", None)
         or media_source.animation
         or media_source.audio
         or media_source.voice
@@ -218,7 +228,7 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
     )
 
     if not file_obj:
-        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
+        await message.reply("Реплайни на видео/видеокружок/гифку/видеостикер/войс/аудио или отправь с подписью «быстрее» / «медленнее».")
         return
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -235,12 +245,14 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
         return
 
     is_voice_input = bool(media_source.voice)
+    is_video_note_input = bool(getattr(media_source, "video_note", None))
     is_audio_input = bool(media_source.audio or (media_source.document and _is_ogg_document(media_source.document)))
 
     processing_msg = await message.reply("⚙️ меняю скорость...")
 
     input_path = None
     converted_input_path = None
+    branded_input_path = None
     output_path = None
 
     try:
@@ -286,6 +298,13 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
                     return
                 real_input_path = converted_input_path
 
+            if is_video_note_input:
+                branded_input_path = input_path + "_upupa_branded.mp4"
+                real_input_path = await prepare_video_note_for_processing(
+                    real_input_path,
+                    branded_input_path,
+                )
+
             if is_voice_input:
                 success, ffmpeg_output = await _change_speed_voice_ffmpeg(real_input_path, output_path, speed)
             else:
@@ -315,7 +334,7 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
         except Exception:
             pass
     finally:
-        for path in (input_path, converted_input_path, output_path):
+        for path in (input_path, converted_input_path, branded_input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
@@ -386,11 +405,12 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     media_source = _extract_reversible_media_source(message)
 
     if not media_source:
-        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
+        await message.reply("Реплайни на видео/видеокружок/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
         return
 
     file_obj = (
         media_source.video
+        or getattr(media_source, "video_note", None)
         or media_source.animation
         or media_source.audio
         or media_source.voice
@@ -399,7 +419,7 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     )
 
     if not file_obj:
-        await message.reply("Реплайни на видео/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
+        await message.reply("Реплайни на видео/видеокружок/гифку/видеостикер/войс/аудио или отправь с подписью «наоборот».")
         return
 
     if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -418,11 +438,13 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     processing_msg = await message.reply("⚙️ обращаю вспять...")
 
     input_path = None
+    branded_input_path = None
     output_path = None
 
     try:
         async with _media_change_semaphore:
             is_voice_input = bool(media_source.voice)
+            is_video_note_input = bool(getattr(media_source, "video_note", None))
             is_audio_input = bool(media_source.audio or (media_source.document and _is_audio_document(media_source.document)))
 
             if _is_video_sticker(media_source):
@@ -446,14 +468,22 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
 
+            real_input_path = input_path
+            if is_video_note_input:
+                branded_input_path = input_path + "_upupa_branded.mp4"
+                real_input_path = await prepare_video_note_for_processing(
+                    real_input_path,
+                    branded_input_path,
+                )
+
             if is_voice_input:
-                success, ffmpeg_output = await _reverse_audio_ffmpeg(input_path, output_path, codec="opus")
+                success, ffmpeg_output = await _reverse_audio_ffmpeg(real_input_path, output_path, codec="opus")
             elif is_audio_input:
-                success, ffmpeg_output = await _reverse_audio_ffmpeg(input_path, output_path, codec="mp3")
+                success, ffmpeg_output = await _reverse_audio_ffmpeg(real_input_path, output_path, codec="mp3")
             else:
-                success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=True)
+                success, ffmpeg_output = await _reverse_video_ffmpeg(real_input_path, output_path, with_audio=True)
                 if not success:
-                    success, ffmpeg_output = await _reverse_video_ffmpeg(input_path, output_path, with_audio=False)
+                    success, ffmpeg_output = await _reverse_video_ffmpeg(real_input_path, output_path, with_audio=False)
 
             if not success:
                 logging.error("[media_change] reverse ffmpeg error: %s", ffmpeg_output)
@@ -476,7 +506,7 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
         except Exception:
             pass
     finally:
-        for path in (input_path, output_path):
+        for path in (input_path, branded_input_path, output_path):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
