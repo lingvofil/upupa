@@ -227,7 +227,8 @@ def _word_count(text: str) -> int:
 
 
 def _content_tokens(text: str) -> list[str]:
-    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", (text or "").casefold())
+    cleaned = re.sub(r"https?://\S+", " ", text or "")
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", cleaned.casefold())
     tokens: list[str] = []
     for word in words:
         normalized = word.replace("ё", "е")
@@ -239,7 +240,8 @@ def _content_tokens(text: str) -> list[str]:
 
 
 def _opening_signature(text: str) -> tuple[str, ...]:
-    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", (text or "").casefold())
+    cleaned = re.sub(r"https?://\S+", " ", text or "")
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", cleaned.casefold())
     normalized = [word.replace("ё", "е") for word in words]
     if len(normalized) < 4:
         return ()
