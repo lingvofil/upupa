@@ -1,5 +1,6 @@
 import base64
 import logging
+from types import SimpleNamespace
 from aiogram import types
 from core.loader import bot
 from core.state import chat_list
@@ -43,7 +44,7 @@ async def process_leave_chat(message: types.Message, chat_identifier: str):
                 try:
                     chat_info = await bot.get_chat(chat["id"])
                 except Exception:
-                    chat_info = types.SimpleNamespace(
+                    chat_info = SimpleNamespace(
                         id=chat["id"], title=chat.get("title"), username=chat.get("username")
                     )
                 break
