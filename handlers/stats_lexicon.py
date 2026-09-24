@@ -72,7 +72,7 @@ def format_model_usage_message(report: dict, title: str) -> str:
         f"🧠 <b>{escape(title)}</b>",
         (
             f"Всего: <b>{_format_token_count(total_tokens)}</b> токенов "
-            f"· {requests} запросов"
+            f"· {requests} AI-вызовов"
         ),
         (
             f"Вход: {_format_token_count(input_tokens)} "
@@ -96,6 +96,8 @@ def format_model_usage_message(report: dict, title: str) -> str:
         if reasoning_tokens:
             extra.append(f"reasoning: {_format_token_count(reasoning_tokens)}")
         parts.append(" · ".join(extra))
+        if reasoning_tokens:
+            parts.append("↳ reasoning уже входит в «Всего»")
 
     unknown_usage = max(0, requests - known)
     if unknown_usage:
