@@ -250,6 +250,61 @@ def test_emergency_plots_do_not_contain_old_examples():
     assert all(not campaign._plot_is_forbidden(plot) for plot in campaign.EMERGENCY_PLOTS)
 
 
+def test_plot_keyboard_marks_selected_duration():
+    short_markup = campaign._plot_keyboard(["сюжет"], selected_length="short")
+    short_buttons = short_markup.inline_keyboard[-2]
+    assert short_buttons[0].text == "✅ Короткий · 8–12 сцен"
+    assert short_buttons[1].text == "📖 Длинный · 24–36 сцен"
+
+    long_markup = campaign._plot_keyboard(["сюжет"], selected_length="long")
+    long_buttons = long_markup.inline_keyboard[-2]
+    assert long_buttons[0].text == "⏱ Короткий · 8–12 сцен"
+    assert long_buttons[1].text == "✅ Длинный · 24–36 сцен"
+
+
+def test_duration_callback_refreshes_visible_selection():
+    session = _session(-1009010)
+    session.state = "WAITING_PLOT"
+    campaign._ensure(session)
+    session.plot_options = ["Плавучий рынок"]
+    persisted = []
+
+    class Message:
+        def __init__(self):
+            self.chat = SimpleNamespace(id=session.chat_id)
+            self.markup = None
+
+        async def edit_reply_markup(self, reply_markup=None):
+            self.markup = reply_markup
+
+    class Callback:
+        def __init__(self):
+            self.data = "dnd:plot:long"
+            self.message = Message()
+            self.from_user = SimpleNamespace(id=1)
+            self.answers = []
+
+        async def answer(self, text=None, **kwargs):
+            self.answers.append((text, kwargs))
+
+    dnd = SimpleNamespace(
+        dnd_sessions={session.chat_id: session},
+        _callback_is_host=lambda _callback, _session: True,
+        persist_dnd_sessions=lambda: persisted.append(session.adventure_length),
+    )
+
+    callback = Callback()
+    asyncio.run(campaign._plot_callback(callback, dnd))
+
+    assert session.adventure_length == "long"
+    assert persisted[-1] == "long"
+    duration_buttons = callback.message.markup.inline_keyboard[-2]
+    assert duration_buttons[0].text == "⏱ Короткий · 8–12 сцен"
+    assert duration_buttons[1].text == "✅ Длинный · 24–36 сцен"
+    assert callback.answers[-1][0] == "Выбрано: длинный сюжет (24–36 сцен)."
+    assert callback.answers[-1][1].get("show_alert") is None
+
+
 def test_plot_text_and_buttons_use_same_final_array(monkeypatch):
     session = _session()
     session.mode = "participants"
