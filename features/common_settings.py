@@ -57,10 +57,8 @@ async def process_leave_chat(message: types.Message, chat_identifier: str):
     title = getattr(chat_info, "title", None)
     username = getattr(chat_info, "username", None)
     try:
-        # Ban is written before leaving, so a transient leave/update race cannot
-        # allow the group to be registered again.
-        ban_group(chat_id, title, username)
         await bot.leave_chat(chat_id)
+        ban_group(chat_id, title, username)
         remove_chat(chat_id)
         await message.reply(f"Ладно, нахуй {title or identifier}")
         logging.info("Упупа покинул и забанил чат: %s (%s)", title or identifier, chat_id)
