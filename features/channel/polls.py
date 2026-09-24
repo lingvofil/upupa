@@ -344,7 +344,11 @@ async def process_due_polls(bot, *, channel_target: str, rng=random, now: dateti
             continue
 
         try:
-            sent = await bot.send_message(channel_target, text)
+            sent = await bot.send_message(
+                channel_target,
+                text,
+                reply_to_message_id=int(record["message_id"]),
+            )
         except Exception as exc:
             logging.warning("[channel] poll reflection send failed: %s", exc, exc_info=True)
             continue
