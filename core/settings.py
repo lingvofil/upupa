@@ -149,6 +149,9 @@ def validate_required_settings() -> None:
 SEARCH_ENGINE_ID = "33026288e406447ea"
 
 BLOCKED_USERS = [354145389]
+# Usernames are stored without "@" and compared case-insensitively.
+# Keep this as a fallback for users whose numeric Telegram ID is not known yet.
+BLOCKED_USERNAMES = {"mev515"}
 ADMIN_ID = 126386976
 SPECIAL_CHAT_ID = -1001707530786
 
