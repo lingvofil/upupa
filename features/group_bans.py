@@ -49,13 +49,20 @@ def find_group_ban(identifier: str) -> dict | None:
     value = identifier.strip()
     if value.startswith("https://t.me/") or value.startswith("http://t.me/"):
         value = value.rstrip("/").rsplit("/", 1)[-1]
+    folded = value.casefold()
     username = value.lstrip("@").casefold()
     for item in _group_bans.values():
         if value.lstrip("-").isdigit() and int(item["id"]) == int(value):
             return item
-        if item.get("username") and item["username"].casefold() == username:
+        item_username = (item.get("username") or "").casefold()
+        if item_username and (
+            item_username == username
+            or f"@{item_username}" in folded
+            or f"t.me/{item_username}" in folded
+        ):
             return item
-        if item.get("title") and item["title"].casefold() == value.casefold():
+        item_title = (item.get("title") or "").casefold()
+        if item_title and (item_title == folded or item_title in folded):
             return item
     return None
 
