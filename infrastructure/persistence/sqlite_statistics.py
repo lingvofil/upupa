@@ -451,12 +451,14 @@ class SQLiteStatisticsRepository:
                     SUM(CASE WHEN chat_id IS NULL THEN 1 ELSE 0 END),
                     SUM(CASE WHEN user_id IS NULL THEN 1 ELSE 0 END),
                     SUM(CASE WHEN lane = 'interactive' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN lane = 'background' THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN lane = 'background' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN success IS NULL THEN 1 ELSE 0 END)
                 FROM model_stats
                 {where}
                 """,
                 params,
-            ).fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            ).fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
             telemetry_started_row = conn.execute(
                 """
@@ -551,10 +553,8 @@ class SQLiteStatisticsRepository:
                 "unattributed_user_requests": int(totals_row[9] or 0),
                 "interactive_requests": int(totals_row[10] or 0),
                 "background_requests": int(totals_row[11] or 0),
-                "failed_requests": max(
-                    0,
-                    int(totals_row[0] or 0) - int(totals_row[1] or 0),
-                ),
+                "failed_requests": int(totals_row[12] or 0),
+                "unknown_outcome_requests": int(totals_row[13] or 0),
                 "telemetry_started_at": (
                     telemetry_started_row[0]
                     if telemetry_started_row and telemetry_started_row[0]
