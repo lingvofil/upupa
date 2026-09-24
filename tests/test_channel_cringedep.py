@@ -170,6 +170,10 @@ def test_publish_cringedep_pun_uses_overlay_image_and_only_link_as_caption(monke
     async def fail_fallback(*_args, **_kwargs):
         raise AssertionError("normal publisher should not be called after successful cringedep reply")
 
+    async def no_external_mention(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(cringedep_service, "_try_publish_external_mention", no_external_mention)
     monkeypatch.setattr(cringedep_service.random, "random", lambda: 0.0)
     monkeypatch.setattr(cringedep_service.base, "load_posts", lambda: [])
     monkeypatch.setattr(cringedep_service.chat_context, "should_force_chat_post", lambda _posts: False)
@@ -201,6 +205,10 @@ def test_cringedep_mode_respects_existing_image_cooldown(monkeypatch):
         fallback_calls.append(source)
         return SimpleNamespace(message_id=902), "обычный пост"
 
+    async def no_external_mention(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(cringedep_service, "_try_publish_external_mention", no_external_mention)
     monkeypatch.setattr(cringedep_service.random, "random", lambda: 0.0)
     monkeypatch.setattr(cringedep_service.base, "load_posts", lambda: [{"post_kind": "image"}])
     monkeypatch.setattr(cringedep_service.chat_context, "should_force_chat_post", lambda _posts: False)
