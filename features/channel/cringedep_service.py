@@ -7,7 +7,7 @@ import logging
 import random
 import re
 
-from features.channel import chat_context, continuity
+from features.channel import chat_context, continuity, external_mentions
 from features.channel import mood_service
 from features.channel import service as base
 from features.channel.mood import get_current_mood, mood_prompt
@@ -240,6 +240,75 @@ async def _prepare_cringedep_pun(
     return overlaid_image, telegram_caption, metadata
 
 
+async def _try_publish_external_mention(bot, *, source: str) -> tuple[object, str] | None:
+    """Make a direct mention from a known external channel consume the next publication slot."""
+    await external_mentions.scan_for_mentions()
+
+    # Usually there is at most one item. The loop only skips stale items already handled elsewhere.
+    for _ in range(external_mentions.MAX_PENDING_MENTIONS):
+        mention = await external_mentions.peek_pending()
+        if mention is None:
+            return None
+
+        async with base._publish_lock:
+            published_posts = await asyncio.to_thread(base.load_posts)
+            mention_url = str(mention.get("url") or "")
+            if any(
+                str(post.get("external_source_url") or "") == mention_url
+                for post in published_posts
+            ):
+                await external_mentions.mark_answered(mention_url)
+                continue
+
+            mood = await asyncio.to_thread(get_current_mood)
+            try:
+                prepared = await external_mentions.prepare_reply(
+                    mention,
+                    published_posts,
+                    mood,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "[channel] external mention reply generation crashed url=%s: %s",
+                    mention_url,
+                    exc,
+                    exc_info=True,
+                )
+                prepared = None
+
+            if prepared is None:
+                await external_mentions.note_failure(mention_url)
+                still_pending = await external_mentions.peek_pending()
+                if still_pending and str(still_pending.get("url") or "") == mention_url:
+                    raise RuntimeError(
+                        f"Не удалось подготовить обязательный ответ на внешнее упоминание {mention_url}"
+                    )
+                # The item exhausted its retry budget and was dropped; allow this slot to continue normally.
+                return None
+
+            text, metadata = prepared
+            sent = await bot.send_message(CHANNEL_TARGET, text)
+            await base._store_published_post(
+                sent,
+                source=source,
+                text=text,
+                metadata=metadata,
+            )
+            await external_mentions.mark_answered(mention_url)
+            await mood_service._consume_after_publish(
+                mood,
+                getattr(sent, "message_id", None),
+            )
+            logging.info(
+                "[channel] replied to direct external mention message_id=%s source_url=%s",
+                getattr(sent, "message_id", None),
+                mention_url,
+            )
+            return sent, text
+
+    return None
+
+
 async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | None:
     """Give own-history continuity a chance without stealing the mandatory daily chat slot."""
     published_posts = await asyncio.to_thread(base.load_posts)
@@ -275,7 +344,11 @@ async def _try_publish_continuity(bot, *, source: str) -> tuple[object, str] | N
 
 
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
-    """Publish continuity/pun modes when eligible, otherwise delegate to normal mood service."""
+    """Publish priority mentions first, then continuity/pun modes, then the normal mood service."""
+    mention_result = await _try_publish_external_mention(bot, source=source)
+    if mention_result is not None:
+        return mention_result
+
     continuity_result = await _try_publish_continuity(bot, source=source)
     if continuity_result is not None:
         return continuity_result
