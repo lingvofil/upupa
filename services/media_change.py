@@ -410,6 +410,7 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
 
     file_obj = (
         media_source.video
+        or getattr(media_source, "video_note", None)
         or media_source.animation
         or media_source.audio
         or media_source.voice
