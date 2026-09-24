@@ -27,3 +27,5 @@ RANK_NOTIFICATIONS_PATH = DATA_DIR / "rank_notifications_settings.json"
 DND_STATE_PATH = DATA_DIR / "dnd_sessions.json"
 CROCODILE_STATE_PATH = DATA_DIR / "crocodile_sessions.json"
 CROCODILE_ARTIST_SCORES_PATH = DATA_DIR / "crocodile_artist_scores.json"
+
+GROUP_BANS_PATH = DATA_DIR / "group_bans.json"
