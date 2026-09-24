@@ -78,6 +78,7 @@ class UpupaApplication:
         from core.history_store import configure_history_repository
         from infrastructure.persistence.sqlite_history import SQLiteHistoryRepository
         from features.chat_settings import load_chat_state
+        from features.group_bans import load_group_bans
         from features.content_filter import load_antispam_settings
         from features.sms_settings import load_sms_disabled_chats
         from features.social_graph import (
@@ -95,6 +96,7 @@ class UpupaApplication:
         )
 
         load_chat_state()
+        load_group_bans()
         load_antispam_settings()
         load_sms_disabled_chats()
         configure_counter_repository(SQLiteRankCountersRepository(STATISTICS_DB_PATH))

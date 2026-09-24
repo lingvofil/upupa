@@ -1,9 +1,11 @@
 import base64
 import logging
+from types import SimpleNamespace
 from aiogram import types
 from core.loader import bot
 from core.state import chat_list
 from features.chat_settings import remove_chat
+from features.group_bans import ban_group
 
 # Функция для обрезки истории разговора
 def trim_history(history, max_length=4096):
@@ -20,28 +22,46 @@ def encode_file_to_base64(file_path):
 
 # Функция выхода из чатов
 async def process_leave_chat(message: types.Message, chat_identifier: str):
-    # Если введён ID чата
-    if chat_identifier.startswith("-") and chat_identifier[1:].isdigit():
-        chat_id = int(chat_identifier)
-    else:
-        # Если введено название чата
-        chat_id = None
+    identifier = chat_identifier.strip()
+    lookup = identifier
+    if lookup.startswith(("https://t.me/", "http://t.me/")):
+        lookup = "@" + lookup.rstrip("/").rsplit("/", 1)[-1]
+
+    chat_info = None
+    # Public @username / t.me links can be resolved directly by Telegram even
+    # when the command is issued from another chat.
+    if lookup.startswith("@"):
+        try:
+            chat_info = await bot.get_chat(lookup)
+        except Exception:
+            chat_info = None
+
+    if chat_info is None:
         for chat in list(chat_list):
-            # Проверяем название и username (если есть)
-            if (chat["title"] and chat["title"].lower() == chat_identifier.lower()) or \
-               (chat.get("username") and chat["username"].lower() == chat_identifier.lower().strip('@')):
-                chat_id = chat["id"]
+            if (identifier.startswith("-") and identifier[1:].isdigit() and chat["id"] == int(identifier)) or \
+               (chat.get("title") and chat["title"].casefold() == identifier.casefold()) or \
+               (chat.get("username") and chat["username"].casefold() == identifier.lstrip("@").casefold()):
+                try:
+                    chat_info = await bot.get_chat(chat["id"])
+                except Exception:
+                    chat_info = SimpleNamespace(
+                        id=chat["id"], title=chat.get("title"), username=chat.get("username")
+                    )
                 break
-    
-    if not chat_id:
+
+    if chat_info is None:
         await message.reply("Не понимаю а чем реч")
         return
-    
+
+    chat_id = chat_info.id
+    title = getattr(chat_info, "title", None)
+    username = getattr(chat_info, "username", None)
     try:
         await bot.leave_chat(chat_id)
+        ban_group(chat_id, title, username)
         remove_chat(chat_id)
-        await message.reply(f"Ладно, нахуй {chat_identifier}")
-        logging.info(f"Упупа покинул чат: {chat_identifier} ({chat_id})")
+        await message.reply(f"Ладно, нахуй {title or identifier}")
+        logging.info("Упупа покинул и забанил чат: %s (%s)", title or identifier, chat_id)
     except Exception as e:
         logging.error(f"Ошибка при выходе из чата {chat_identifier}: {e}")
         await message.reply("Не понимаю а чем реч")

@@ -16,6 +16,7 @@ from features.common_settings import process_leave_chat, process_leave_empty_cha
 from features.chat_settings import (
     process_update_all_chats, get_chats_list, add_chat, remove_chat
 )
+from features.group_bans import is_group_banned, unban_group
 from features.interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
 from features.world.service import get_world_service
 
@@ -74,6 +75,20 @@ async def leave_chat(message: types.Message):
     chat_identifier = normalized[len("упупа выйди из "):].strip()
     await process_leave_chat(message, chat_identifier)
     
+@router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа разбань "))
+async def unban_chat(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("Еще чо сделать?")
+        return
+    normalized = normalize_upupa_command(message.text)
+    identifier = normalized[len("упупа разбань "):].strip()
+    chat = unban_group(identifier)
+    if chat is None:
+        await message.reply("Такой группы в бане нет.")
+        return
+    label = chat.get("title") or (f"@{chat['username']}" if chat.get("username") else str(chat["id"]))
+    await message.reply(f"Разбанил {label}")
+
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
 async def update_all_chats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -101,6 +116,14 @@ async def handle_my_chat_member_update(update: types.ChatMemberUpdated):
         if removed:
             logging.info(f"Bot removed from chat {chat.title or chat.id} ({chat.id}); chat was pruned from lists.")
     elif new_status in ["member", "administrator", "creator"]:
+        if is_group_banned(chat.id):
+            logging.info("Banned group tried to add bot again: %s (%s)", chat.title or chat.id, chat.id)
+            try:
+                await bot.leave_chat(chat.id)
+            except Exception as exc:
+                logging.error("Failed to leave banned group %s: %s", chat.id, exc)
+            remove_chat(chat.id)
+            return
         add_chat(chat.id, chat.title, chat.username)
 
 # ================== БЛОК 5.4: СМС И ММС ==================
