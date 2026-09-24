@@ -27,7 +27,7 @@ def _message_preview(message_text: str | None) -> str | None:
 
 def _extract_event_user(event: Any):
     """Return the Telegram user responsible for an update-like event, if any."""
-    user = getattr(event, "from_user", None)
+    user = getattr(event, "from_user", None) or getattr(event, "user", None)
     if user is not None:
         return user
 
@@ -40,6 +40,7 @@ def _extract_event_user(event: Any):
         "shipping_query",
         "pre_checkout_query",
         "poll_answer",
+        "message_reaction",
         "chat_member",
         "my_chat_member",
         "chat_join_request",
@@ -63,8 +64,7 @@ def _is_blocked_user(user: Any) -> bool:
         return True
 
     username = str(getattr(user, "username", "") or "").strip().lstrip("@").casefold()
-    blocked_usernames = {name.casefold() for name in BLOCKED_USERNAMES}
-    return bool(username and username in blocked_usernames)
+    return bool(username and username in BLOCKED_USERNAMES)
 
 
 class BlockedUserMiddleware(BaseMiddleware):
