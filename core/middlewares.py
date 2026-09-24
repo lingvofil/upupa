@@ -1,12 +1,15 @@
+import json
 import logging
 import os
+from pathlib import Path
+import threading
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
 from aiogram.enums import ContentType
 from aiogram.types import Message
 
-from core.settings import BLOCKED_USERS, BLOCKED_USERNAMES
+from core.settings import BLOCKED_USERS, BLOCKED_USERNAMES, BLOCKED_USERS_PATH
 from infrastructure.ai.execution import ai_request_context
 
 
@@ -17,6 +20,54 @@ _LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "").strip().lower() in {
     "on",
 }
 _LOG_MESSAGE_CONTENT_LIMIT = 200
+
+
+_blocked_users_path = Path(BLOCKED_USERS_PATH)
+_blocked_users_lock = threading.RLock()
+
+
+def _load_persisted_blocked_user_ids() -> set[int]:
+    try:
+        raw = json.loads(_blocked_users_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError, TypeError) as exc:
+        logging.warning("Failed to load persisted blocked users: %s", exc)
+        return set()
+
+    if not isinstance(raw, list):
+        logging.warning("Ignoring invalid persisted blocked users payload")
+        return set()
+
+    result = set()
+    for value in raw:
+        try:
+            result.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+_persisted_blocked_user_ids = _load_persisted_blocked_user_ids()
+
+
+def _persist_blocked_user_id(user_id: int) -> None:
+    user_id = int(user_id)
+    with _blocked_users_lock:
+        if user_id in _persisted_blocked_user_ids:
+            return
+        _persisted_blocked_user_ids.add(user_id)
+        try:
+            _blocked_users_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = _blocked_users_path.with_suffix(_blocked_users_path.suffix + ".tmp")
+            temp_path.write_text(
+                json.dumps(sorted(_persisted_blocked_user_ids), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temp_path.replace(_blocked_users_path)
+        except OSError as exc:
+            _persisted_blocked_user_ids.discard(user_id)
+            logging.error("Failed to persist blocked Telegram user_id=%s: %s", user_id, exc)
 
 
 def _message_preview(message_text: str | None) -> str | None:
@@ -60,11 +111,15 @@ def _is_blocked_user(user: Any) -> bool:
         return False
 
     user_id = getattr(user, "id", None)
-    if user_id in BLOCKED_USERS:
+    if user_id in BLOCKED_USERS or user_id in _persisted_blocked_user_ids:
         return True
 
     username = str(getattr(user, "username", "") or "").strip().lstrip("@").casefold()
-    return bool(username and username in BLOCKED_USERNAMES)
+    if username and username in BLOCKED_USERNAMES:
+        if user_id is not None:
+            _persist_blocked_user_id(int(user_id))
+        return True
+    return False
 
 
 class BlockedUserMiddleware(BaseMiddleware):
