@@ -86,7 +86,8 @@ async def unban_chat(message: types.Message):
     if chat is None:
         await message.reply("Такой группы в бане нет.")
         return
-    await message.reply(f"Разбанил {chat.get('title') or '@' + chat.get('username', '') or chat['id']}")
+    label = chat.get("title") or (f"@{chat['username']}" if chat.get("username") else str(chat["id"]))
+    await message.reply(f"Разбанил {label}")
 
 @router.message(lambda message: message.text and message.text.lower() == "обновить чаты")
 async def update_all_chats(message: types.Message):
