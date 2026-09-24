@@ -1,10 +1,9 @@
 """Shared branding preprocessor for Telegram video notes.
 
 Telegram stores video notes as square MP4 files and applies the circular crop in
-the client. Its baked service branding occupies the lower perimeter of that
-source frame, including a narrow band just inside the visible circle. Before
-effects are applied, this module replaces only those perimeter zones with Upupa
-branding so both YTP and distortion use the same clean source.
+the client. The service marks are part of the square area around that circular
+picture. Before effects are applied, this module repaints only that exterior
+area with Upupa branding, leaving every pixel inside the video circle intact.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import math
 import os
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,12 +25,9 @@ BRAND_TEXT = "@expertyebaniebot"
 PLATE_SIZE = 512
 MASK_SUPERSAMPLE = 4
 
-# Telegram's baked service marks are not confined to the square corners. They
-# sit on the lower perimeter of the source frame, including a narrow band just
-# inside the client-visible circle. Cover only those two lower sectors plus the
-# area outside the circle; leave the rest of the video untouched.
-BRANDING_INNER_RADIUS_RATIO = 0.39
-BRANDING_SECTORS_DEG = ((18.0, 88.0), (92.0, 168.0))
+# Keep the actual video-note circle completely untouched. Telegram's service
+# marks live in the square area around that circle, so the branding layer only
+# needs to repaint the exterior and draw our own marks there.
 
 
 def _load_font(size: int):
@@ -45,32 +41,11 @@ def _load_font(size: int):
 
 
 def _branding_mask(size: int) -> Image.Image:
-    """Return an antialiased mask for the exterior and Telegram watermark zones."""
+    """Return an antialiased mask that is opaque only outside the video-note circle."""
     scale = MASK_SUPERSAMPLE
     hi_size = size * scale
-
-    exterior = Image.new("L", (hi_size, hi_size), 255)
-    ImageDraw.Draw(exterior).ellipse((0, 0, hi_size - 1, hi_size - 1), fill=0)
-
-    rim = Image.new("L", (hi_size, hi_size), 0)
-    rim_draw = ImageDraw.Draw(rim)
-    circle_box = (0, 0, hi_size - 1, hi_size - 1)
-    for start_deg, end_deg in BRANDING_SECTORS_DEG:
-        rim_draw.pieslice(circle_box, start=start_deg, end=end_deg, fill=255)
-
-    center = hi_size / 2
-    inner_radius = hi_size * BRANDING_INNER_RADIUS_RATIO
-    rim_draw.ellipse(
-        (
-            center - inner_radius,
-            center - inner_radius,
-            center + inner_radius,
-            center + inner_radius,
-        ),
-        fill=0,
-    )
-
-    mask = ImageChops.lighter(exterior, rim)
+    mask = Image.new("L", (hi_size, hi_size), 255)
+    ImageDraw.Draw(mask).ellipse((0, 0, hi_size - 1, hi_size - 1), fill=0)
     return mask.resize((size, size), Image.Resampling.LANCZOS)
 
 
@@ -89,13 +64,13 @@ def _round_mascot(path: Path, size: int) -> Image.Image:
 
 
 def _draw_arc_text(layer: Image.Image, size: int) -> None:
-    """Draw the bot handle along the lower-right watermark arc."""
-    font_size = max(16, round(size * 0.039))
+    """Draw the bot handle cleanly along the lower-right exterior arc."""
+    font_size = max(15, round(size * 0.036))
     font = _load_font(font_size)
     center = size / 2
-    radius = size * 0.44
-    start_deg = 78.0
-    end_deg = 24.0
+    radius = size * 0.525
+    start_deg = 56.0
+    end_deg = 34.0
 
     for index, char in enumerate(BRAND_TEXT):
         progress = index / max(1, len(BRAND_TEXT) - 1)
@@ -132,7 +107,7 @@ def build_branding_plate(
     mascot_path: str | os.PathLike[str] | None = None,
     size: int = PLATE_SIZE,
 ) -> Image.Image:
-    """Create an RGBA overlay that replaces Telegram's perimeter branding only."""
+    """Create an RGBA overlay that replaces only the square exterior branding."""
     mascot = Path(mascot_path) if mascot_path is not None else MASCOT_PATH
     if not mascot.is_file():
         raise FileNotFoundError(f"Upupa video-note mascot asset is missing: {mascot}")
@@ -140,22 +115,13 @@ def build_branding_plate(
     branding_mask = _branding_mask(size)
     artwork = Image.new("RGBA", (size, size), (18, 18, 20, 255))
 
-    icon_size = max(48, round(size * 0.125))
+    icon_size = max(40, round(size * 0.105))
     icon = _round_mascot(mascot, icon_size)
     center = size / 2
-    icon_radius = size * 0.44
-    icon_angle = math.radians(132.0)
+    icon_radius = size * 0.565
+    icon_angle = math.radians(135.0)
     icon_x = round(center + icon_radius * math.cos(icon_angle) - icon_size / 2)
     icon_y = round(center + icon_radius * math.sin(icon_angle) - icon_size / 2)
-    ImageDraw.Draw(artwork).ellipse(
-        (
-            icon_x - 2,
-            icon_y - 2,
-            icon_x + icon_size + 1,
-            icon_y + icon_size + 1,
-        ),
-        fill=(245, 245, 245, 255),
-    )
     artwork.alpha_composite(icon, (icon_x, icon_y))
     _draw_arc_text(artwork, size)
 
