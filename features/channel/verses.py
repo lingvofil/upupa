@@ -16,7 +16,7 @@ MAX_VERSE_LENGTH = 280
 MAX_GENERATION_ATTEMPTS = 3
 
 _PROFANITY_RE = re.compile(
-    r"\\b(?:[её]б\\w*|бля\\w*|пизд\\w*|ху[йяеё]\\w*|нахуй|оху\\w*)\\b",
+    r"\b(?:[её]б\w*|бля\w*|пизд\w*|ху[йяеё]\w*|нахуй|оху\w*)\b",
     re.IGNORECASE,
 )
 
