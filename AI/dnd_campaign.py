@@ -933,15 +933,18 @@ async def _plot_callback(callback, dnd):
         return
     _ensure(session)
     if callback.data in {"dnd:plot:short", "dnd:plot:long"}:
-        session.adventure_length = callback.data.rsplit(":", 1)[1]
+        selected_length = callback.data.rsplit(":", 1)[1]
+        changed = session.adventure_length != selected_length
+        session.adventure_length = selected_length
         dnd.persist_dnd_sessions()
-        await callback.message.edit_reply_markup(
-            reply_markup=_plot_keyboard(
-                session.plot_options,
-                session.mode == "abstract",
-                session.adventure_length,
+        if changed:
+            await callback.message.edit_reply_markup(
+                reply_markup=_plot_keyboard(
+                    session.plot_options,
+                    session.mode == "abstract",
+                    session.adventure_length,
+                )
             )
-        )
         await callback.answer(
             "Выбрано: короткий сюжет (8–12 сцен)."
             if session.adventure_length == "short"
