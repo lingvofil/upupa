@@ -58,7 +58,8 @@ def format_model_usage_message(report: dict, title: str) -> str:
     cached_tokens = int(totals.get("cached_tokens", 0))
     reasoning_tokens = int(totals.get("reasoning_tokens", 0))
     successful = int(totals.get("successful_requests", 0))
-    failed = int(totals.get("failed_requests", max(0, requests - successful)))
+    failed = int(totals.get("failed_requests", 0))
+    unknown_outcome = int(totals.get("unknown_outcome_requests", 0))
     unattributed_chats = int(
         totals.get("unattributed_chat_requests", totals.get("unattributed_requests", 0))
     )
@@ -77,10 +78,11 @@ def format_model_usage_message(report: dict, title: str) -> str:
             f"Вход: {_format_token_count(input_tokens)} "
             f"· выход: {_format_token_count(output_tokens)}"
         ),
-        f"Успешно: {successful} · ошибок: {failed}",
+        f"Успешно: {successful} · ошибок: {failed}"
+        + (f" · исход неизвестен: {unknown_outcome}" if unknown_outcome else ""),
     ]
     if interactive or background:
-        parts.append(f"Вызовы: пользовательские {interactive} · фоновые {background}")
+        parts.append(f"Вызовы: интерактивные {interactive} · фоновые {background}")
     if telemetry_started_at:
         parts.append(
             "ℹ️ Детальная токен-телеметрия собирается с "
