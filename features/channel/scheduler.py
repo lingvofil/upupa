@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytz
 
+from features.channel import external_mentions
 from features.channel.cringedep_service import CHANNEL_TARGET, publish_channel_post
 from features.channel.mood import burst_probability, daily_post_target, get_current_mood
 from features.channel.polls import process_due_polls
@@ -262,7 +263,12 @@ def _get_schedule_for_now(now: datetime) -> dict:
 
 
 async def channel_scheduler_loop(bot) -> None:
-    """Background loop with mood-dependent activity plus persistent poll lifecycle processing."""
+    """Background loop with mood-dependent activity plus persistent poll/mention lifecycle processing."""
+    try:
+        await external_mentions.initialize_tracking()
+    except Exception as exc:
+        logging.warning("[channel] external mention tracker initialization failed: %s", exc, exc_info=True)
+
     await asyncio.sleep(60)
     while True:
         try:
