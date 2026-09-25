@@ -13,6 +13,7 @@ SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
 MODEL_USAGE_MIGRATION = "statistics:002-model-token-usage"
+AI_FEATURE_MIGRATION = "statistics:003-ai-feature"
 
 
 def _utc_now_naive() -> datetime:
@@ -36,6 +37,32 @@ class SQLiteStatisticsRepository:
         conn = sqlite3.connect(self.path, timeout=SQLITE_TIMEOUT_SECONDS)
         conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         return conn
+
+    @staticmethod
+    def _apply_feature_migration(conn: sqlite3.Connection) -> None:
+        applied = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (AI_FEATURE_MIGRATION,),
+        ).fetchone()
+        if applied:
+            return
+
+        existing_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(model_stats)").fetchall()
+        }
+        if "feature" not in existing_columns:
+            conn.execute("ALTER TABLE model_stats ADD COLUMN feature TEXT")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_stats_feature_time "
+            "ON model_stats(feature, timestamp)"
+        )
+        conn.execute(
+            "INSERT INTO persistence_migrations(migration_id, applied_at) "
+            "VALUES (?, ?)",
+            (AI_FEATURE_MIGRATION, datetime.now().isoformat()),
+        )
 
     @staticmethod
     def _apply_migrations(conn: sqlite3.Connection) -> None:
@@ -80,6 +107,7 @@ class SQLiteStatisticsRepository:
             (MODEL_USAGE_MIGRATION,),
         ).fetchone()
         if usage_applied:
+            SQLiteStatisticsRepository._apply_feature_migration(conn)
             return
 
         existing_columns = {
@@ -119,6 +147,7 @@ class SQLiteStatisticsRepository:
             "VALUES (?, ?)",
             (MODEL_USAGE_MIGRATION, datetime.now().isoformat()),
         )
+        SQLiteStatisticsRepository._apply_feature_migration(conn)
 
     def init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
@@ -147,6 +176,7 @@ class SQLiteStatisticsRepository:
                     user_id BIGINT,
                     model_name TEXT,
                     request_type TEXT,
+                    feature TEXT,
                     provider TEXT,
                     input_tokens INTEGER,
                     output_tokens INTEGER,
@@ -172,6 +202,7 @@ class SQLiteStatisticsRepository:
         request_type: str,
         *,
         provider: str | None = None,
+        feature: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cached_tokens: int | None = None,
@@ -188,18 +219,19 @@ class SQLiteStatisticsRepository:
             conn.execute(
                 """
                 INSERT INTO model_stats (
-                    chat_id, user_id, model_name, request_type, provider,
+                    chat_id, user_id, model_name, request_type, feature, provider,
                     input_tokens, output_tokens, cached_tokens, reasoning_tokens,
                     total_tokens, duration_ms, success, lane, chat_title,
                     user_name, user_username
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     user_id,
                     model_name,
                     request_type,
+                    feature,
                     provider,
                     input_tokens,
                     output_tokens,
@@ -422,6 +454,7 @@ class SQLiteStatisticsRepository:
     ) -> dict[str, Any]:
         """Aggregate real provider token usage by model, chat and user."""
         resolved_limit = max(1, int(limit))
+        feature_limit = max(10, resolved_limit)
         params: list[Any] = []
         where = ""
         if period_hours is not None:
@@ -474,6 +507,13 @@ class SQLiteStatisticsRepository:
                    OR total_tokens IS NOT NULL
                 """
             ).fetchone()
+            feature_started_row = conn.execute(
+                """
+                SELECT MIN(timestamp)
+                FROM model_stats
+                WHERE feature IS NOT NULL AND TRIM(feature) <> ''
+                """
+            ).fetchone()
 
             models = conn.execute(
                 f"""
@@ -490,6 +530,33 @@ class SQLiteStatisticsRepository:
                 LIMIT ?
                 """,
                 [*params, resolved_limit],
+            ).fetchall()
+
+            features = conn.execute(
+                f"""
+                SELECT
+                    CASE
+                        WHEN feature IS NOT NULL AND TRIM(feature) <> '' THEN TRIM(feature)
+                        WHEN timestamp < (
+                            SELECT MIN(timestamp)
+                            FROM model_stats
+                            WHERE feature IS NOT NULL AND TRIM(feature) <> ''
+                        ) THEN 'до разметки'
+                        ELSE 'не размечено'
+                    END AS resolved_feature,
+                    COUNT(*) AS requests,
+                    SUM(CASE WHEN {usage_known} THEN 1 ELSE 0 END) AS usage_known_requests,
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {where}
+                GROUP BY resolved_feature
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, feature_limit],
             ).fetchall()
 
             request_types = conn.execute(
@@ -582,6 +649,11 @@ class SQLiteStatisticsRepository:
                     if telemetry_started_row and telemetry_started_row[0]
                     else None
                 ),
+                "feature_telemetry_started_at": (
+                    feature_started_row[0]
+                    if feature_started_row and feature_started_row[0]
+                    else None
+                ),
             },
             "models": [
                 {
@@ -597,6 +669,31 @@ class SQLiteStatisticsRepository:
                     ),
                 }
                 for provider, model_name, requests, usage_known_requests, tokens in models
+            ],
+            "features": [
+                {
+                    "feature": str(feature),
+                    "requests": int(requests),
+                    "usage_known_requests": int(usage_known_requests or 0),
+                    "input_tokens": int(input_tokens or 0),
+                    "reasoning_tokens": int(reasoning_tokens or 0),
+                    "output_tokens": int(output_tokens or 0),
+                    "total_tokens": int(tokens),
+                    "average_tokens": (
+                        round(int(tokens) / int(usage_known_requests))
+                        if usage_known_requests
+                        else 0
+                    ),
+                }
+                for (
+                    feature,
+                    requests,
+                    usage_known_requests,
+                    input_tokens,
+                    reasoning_tokens,
+                    output_tokens,
+                    tokens,
+                ) in features
             ],
             "request_types": [
                 {

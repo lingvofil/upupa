@@ -7,6 +7,7 @@ from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
 
 from core.state import chat_settings, conversation_history
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
+from infrastructure.ai.execution import ai_feature
 
 # Полный список доступных реакций Telegram
 TELEGRAM_REACTIONS = [
@@ -40,6 +41,7 @@ async def get_active_model_for_chat(chat_id: int):
     else:  # gemini
         return model, "gemini"
 
+@ai_feature("случайные AI-реакции", only_if_unset=True)
 async def generate_with_model(prompt: str, chat_id: int, temperature: float = 0.7, max_tokens: int = 60) -> str:
     """
     Универсальная генерация текста с автоматическим выбором модели.

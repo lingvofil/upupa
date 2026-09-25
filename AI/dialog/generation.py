@@ -11,6 +11,7 @@ from aiogram import types
 from aiogram.enums import ContentType
 
 from core.state import MAX_HISTORY_LENGTH, chat_settings, conversation_history
+from infrastructure.ai.execution import ai_feature
 from infrastructure.ai.clients import (
     gigachat_model,
     groq_ai,
@@ -49,6 +50,7 @@ def get_error_reply_text() -> str:
     return "Произошла ошибка при обработке."
 
 
+@ai_feature("прочее: простой AI-ответ", only_if_unset=True)
 async def generate_simple_response(
     prompt: str,
     chat_id: str,
@@ -324,6 +326,7 @@ def format_reply_context(message: types.Message) -> str:
     return context
 
 
+@ai_feature("диалог", only_if_unset=True)
 async def generate_response(
     prompt: str,
     chat_id: str,

@@ -11,6 +11,7 @@ from datetime import datetime
 
 from core.settings import SPECIAL_CHAT_ID
 from core.state import chat_list
+from infrastructure.ai.execution import ai_feature
 from features.channel.batya_source import BATYA_CHANNEL, fetch_public_image, fetch_public_posts
 from features.channel.storage import append_post, load_posts
 from prompts.channel import (
@@ -746,6 +747,7 @@ async def _store_published_post(sent, *, source: str, text: str, metadata: dict)
     return record
 
 
+@ai_feature("канал Упупы: пост")
 async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
     """Публикует текст или редкую картинку; историю пишет только после успешной отправки."""
     async with _publish_lock:

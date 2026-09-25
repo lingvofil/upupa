@@ -21,6 +21,7 @@ from prompts import PROMPTS_MEDIA
 from core.upupa_utils import normalize_upupa_command
 from AI.summarize import _generate_with_active_model
 from services.web_context import get_web_context
+from infrastructure.ai.execution import ai_feature
 
 # --- Параметры поиска по истории ---
 MATCH_THRESHOLD = 60   # минимальная схожесть (0-100) для попадания в эпизод
@@ -138,6 +139,7 @@ def _extract_recall_topic(text: str) -> str:
     return tail.strip(" ?!.,")
 
 
+@ai_feature("когда мы говорили")
 async def process_recall_command(message: types.Message):
     topic = _extract_recall_topic(message.text or "")
     if not topic:
@@ -220,6 +222,7 @@ def _build_dispute_context(messages: list[dict], target_text: str) -> list[dict]
     return messages[-VERDICT_FALLBACK_TAIL:]
 
 
+@ai_feature("упупа рассуди")
 async def process_verdict_command(message: types.Message):
     chat_id = str(message.chat.id)
     status = await message.reply("Надеваю мантию судьи...")
@@ -257,6 +260,7 @@ async def process_verdict_command(message: types.Message):
 
 # ================== "ПИЗДИШ" (ФАКТЧЕК) ==================
 
+@ai_feature("пиздиш / фактчек")
 async def process_factcheck_command(message: types.Message):
     if not message.reply_to_message:
         await message.reply("Реплайни на сообщение, которое проверить.")

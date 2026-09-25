@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from infrastructure.ai.execution import ai_feature
+
 
 _HISTORY_FILE = Path(__file__).resolve().parent.parent / "pun_history.json"
 _HISTORY_LIMIT = 120
@@ -324,6 +326,7 @@ async def _generate_pun_image(picgeneration_module, candidate: PunCandidate) -> 
 def install_into_picgeneration(picgeneration_module) -> None:
     """Patch the legacy public handler before handlers import it."""
 
+    @ai_feature("скаламбурь")
     async def handle_pun_image_command(message):
         chat_id = str(message.chat.id)
         await picgeneration_module.bot.send_chat_action(

@@ -115,6 +115,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="gemini-test",
         request_type="model.generate_content",
         provider="gemini",
+        feature="диалог",
         input_tokens=100,
         output_tokens=25,
         total_tokens=130,
@@ -133,6 +134,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="gemini-test",
         request_type="model.generate_content",
         provider="gemini",
+        feature="диалог",
         input_tokens=50,
         output_tokens=20,
         total_tokens=75,
@@ -149,6 +151,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="deepseek-test",
         request_type="siliconflow_ai.generate_text",
         provider="siliconflow",
+        feature="фактчек",
         input_tokens=40,
         output_tokens=10,
         total_tokens=50,
@@ -202,6 +205,17 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert totals["failed_requests"] == 2
     assert totals["unknown_outcome_requests"] == 0
     assert totals["telemetry_started_at"]
+    assert totals["feature_telemetry_started_at"]
+
+    assert report["features"][0]["feature"] == "диалог"
+    assert report["features"][0]["requests"] == 2
+    assert report["features"][0]["usage_known_requests"] == 2
+    assert report["features"][0]["input_tokens"] == 150
+    assert report["features"][0]["output_tokens"] == 45
+    assert report["features"][0]["reasoning_tokens"] == 5
+    assert report["features"][0]["total_tokens"] == 205
+    assert report["features"][0]["average_tokens"] == 102
+    assert any(row["feature"] == "не размечено" for row in report["features"])
 
     assert report["models"][0]["model_name"] == "gemini-test"
     assert report["models"][0]["requests"] == 3
@@ -219,6 +233,88 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert report["users"][0]["user_id"] == 42
     assert report["users"][0]["user_username"] == "alice"
     assert report["users"][0]["total_tokens"] == 205
+
+
+def test_statistics_schema_adds_feature_after_existing_usage_migration(tmp_path):
+    path = tmp_path / "statistics.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE message_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                message_timestamp TIMESTAMP NOT NULL,
+                message_type TEXT NOT NULL,
+                is_private BOOLEAN NOT NULL,
+                chat_title TEXT,
+                user_name TEXT,
+                user_username TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE model_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                chat_id BIGINT,
+                user_id BIGINT,
+                model_name TEXT,
+                request_type TEXT,
+                provider TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cached_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                total_tokens INTEGER,
+                duration_ms INTEGER,
+                success BOOLEAN,
+                lane TEXT,
+                chat_title TEXT,
+                user_name TEXT,
+                user_username TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE persistence_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO persistence_migrations(migration_id, applied_at) VALUES (?, ?)",
+            [
+                (sqlite_statistics.STATISTICS_INDEX_MIGRATION, datetime.now().isoformat()),
+                (sqlite_statistics.MODEL_USAGE_MIGRATION, datetime.now().isoformat()),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    repository = sqlite_statistics.SQLiteStatisticsRepository(path)
+    repository.init_schema()
+
+    conn = sqlite3.connect(path)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(model_stats)").fetchall()
+        }
+        feature_migration = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (sqlite_statistics.AI_FEATURE_MIGRATION,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert "feature" in columns
+    assert feature_migration == (1,)
 
 
 def test_statistics_schema_migrates_legacy_model_stats_table(tmp_path):
@@ -299,5 +395,7 @@ def test_statistics_schema_migrates_legacy_model_stats_table(tmp_path):
         "chat_title",
         "user_name",
         "user_username",
+        "feature",
     } <= columns
     assert sqlite_statistics.MODEL_USAGE_MIGRATION in migrations
+    assert sqlite_statistics.AI_FEATURE_MIGRATION in migrations

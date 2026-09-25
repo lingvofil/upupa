@@ -26,6 +26,7 @@ class StatisticsRepository(Protocol):
         request_type: str,
         *,
         provider: str | None = None,
+        feature: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cached_tokens: int | None = None,

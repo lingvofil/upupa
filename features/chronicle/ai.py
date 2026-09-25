@@ -9,6 +9,7 @@ import re
 
 from AI.summarize import _generate_with_active_model
 from features.chronicle.models import ChronicleCandidate, ChronicleEventDraft
+from infrastructure.ai.execution import ai_feature
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -103,6 +104,7 @@ allowed_participant_ids={allowed_ids}
 """.strip()
 
 
+@ai_feature("летопись")
 async def classify_candidate(candidate: ChronicleCandidate, context: list[dict]) -> ChronicleDecision:
     try:
         raw = await _generate_with_active_model(build_prompt(candidate, context), str(candidate.chat_id))

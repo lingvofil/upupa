@@ -14,6 +14,7 @@ from core.settings import API_TOKEN, ROBOTICS_MODEL
 from core.state import chat_settings
 from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import GeminiModel
+from infrastructure.ai.execution import ai_feature
 from prompts import PROMPTS_MEDIA
 
 
@@ -581,6 +582,7 @@ async def process_robotics_description(message: types.Message) -> tuple[bool, st
 
 
 # ================== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ==================
+@ai_feature("что там")
 async def process_whatisthere_unified(message: types.Message) -> tuple[bool, str]:
     """Универсальная функция для обработки всех типов контента."""
     target_message = message.reply_to_message if message.reply_to_message else message

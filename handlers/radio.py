@@ -11,6 +11,7 @@ from aiogram.types import BufferedInputFile
 from core.settings import BLOCKED_USERS
 from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
+from infrastructure.ai.execution import ai_feature
 from features.radio.service import RadioHistoryError, build_radio_episode
 from services.speech import SpeechSynthesisError
 
@@ -83,6 +84,7 @@ async def _deliver_radio(
     and is_radio_command(message.text)
     and message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("упупа радио")
 async def handle_radio_command(message: types.Message):
     chat_id = str(message.chat.id)
     if not is_radio_enabled(chat_id):

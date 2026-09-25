@@ -10,6 +10,7 @@ from aiogram import Router, types
 from aiogram.types import BufferedInputFile
 
 from core.settings import BLOCKED_USERS
+from infrastructure.ai.execution import ai_feature
 from features.social_graph.ai import (
     interpret_centrality,
     interpret_personal_summary,
@@ -274,6 +275,7 @@ async def handle_social_graph(message: types.Message):
 
 
 @router.message(lambda message: _is_cringe_graph_command(message))
+@ai_feature("соцграф картинка")
 async def handle_cringe_social_graph(message: types.Message):
     if not await _ensure_available(message):
         return
@@ -317,6 +319,7 @@ async def handle_cringe_social_graph(message: types.Message):
 
 
 @router.message(lambda message: _starts_command(message, "отношения") and not _is_command(message, "отношения чата"))
+@ai_feature("отношения")
 async def handle_relationship(message: types.Message):
     if not await _ensure_available(message):
         return
@@ -399,6 +402,7 @@ async def handle_chat_relationships(message: types.Message):
 
 
 @router.message(lambda message: _starts_command(message, "история"))
+@ai_feature("история отношений")
 async def handle_relationship_history(message: types.Message):
     if not await _ensure_available(message):
         return
@@ -439,6 +443,7 @@ async def handle_relationship_history(message: types.Message):
 
 
 @router.message(lambda message: _is_command(message, "мои связи"))
+@ai_feature("мои связи")
 async def handle_my_connections(message: types.Message):
     if not await _ensure_available(message):
         return
@@ -482,6 +487,7 @@ async def handle_my_connections(message: types.Message):
 
 
 @router.message(lambda message: _is_command(message, "центровой"))
+@ai_feature("центровой")
 async def handle_central_participant(message: types.Message):
     if not await _ensure_available(message):
         return
