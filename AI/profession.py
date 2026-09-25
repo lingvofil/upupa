@@ -8,6 +8,7 @@ import requests
 
 from core.state import chat_settings
 from infrastructure.ai.clients import model, gigachat_model, groq_ai
+from infrastructure.ai.execution import ai_feature
 from prompts import actions
 
 # URL для загрузки файла ОКВЭД
@@ -40,6 +41,7 @@ def _extract_okved_descriptions(content: bytes) -> list[str]:
     return descriptions
 
 
+@ai_feature("кем стать")
 async def get_random_okved_and_commentary(message):
     """
     Скачивает случайное описание ОКВЭД, получает саркастичный комментарий от ИИ,
