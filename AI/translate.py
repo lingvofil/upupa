@@ -12,6 +12,7 @@ import re
 from aiogram import types
 
 from AI.dialog.generation import generate_simple_response
+from infrastructure.ai.execution import ai_feature
 from core.loader import bot
 
 # Порог: если кириллицы больше, чем латиницы — считаем текст русским
@@ -59,6 +60,7 @@ def _looks_russian(text: str) -> bool:
     return len(_CYRILLIC_RE.findall(text)) > len(_LATIN_RE.findall(text))
 
 
+@ai_feature("переведи")
 async def process_translate_command(message: types.Message) -> None:
     source_message = message.reply_to_message
     source_text = None
