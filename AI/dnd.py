@@ -25,6 +25,7 @@ from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
+from infrastructure.ai.execution import ai_feature
 
 
 dnd_router = Router()
@@ -246,6 +247,7 @@ class GameSession:
             ]
             self.chat_session = model.start_chat(chat_id=chat_id, history=history)
 
+    @ai_feature("DnD")
     def send_message(self, message_text):
         if self.active_model == "gemini":
             response = self.chat_session.send_message(message_text, chat_id=self.chat_id)
