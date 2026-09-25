@@ -18,6 +18,7 @@ from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from core.history_store import get_history_repository
 from core.state import chat_settings, quiz_questions, quiz_states
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
+from infrastructure.ai.execution import ai_feature
 from AI.dialog.settings import update_chat_settings
 
 
@@ -90,6 +91,7 @@ async def extract_messages(log_file, chat_id=None, limit=100, days=1):
         return []
 
 # Универсальная функция генерации через любую модель
+@ai_feature("викторина", only_if_unset=True)
 async def generate_with_active_model(prompt: str, chat_id: str) -> str:
     """
     Генерирует текст используя активную модель из настроек чата.
@@ -176,6 +178,7 @@ async def generate_quiz_with_gemini(messages, chat_id: str, num_questions=1):
         }]
 
 # Функция для автоматической отправки викторины
+@ai_feature("викторина: ежедневная")
 async def send_daily_quiz(bot: Bot, chat_id: int):
     messages = await extract_messages(LOG_FILE, chat_id, days=1)
 
@@ -244,6 +247,7 @@ async def send_question(bot, chat_id, question_index):
         await bot.send_message(chat_id, "Произошла ошибка при создании вопроса.")
 
 # Вынесенная обработка "Викторина"
+@ai_feature("викторина")
 async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     chat_id = message.chat.id
     chat_id_str = str(chat_id)
@@ -363,6 +367,7 @@ async def generate_participant_quiz(messages, chat_id: str, num_questions=5):
 
 
 # Новая функция-обработчик для запуска викторины по участникам
+@ai_feature("викторина: участники")
 async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     chat_id = message.chat.id
     chat_id_str = str(chat_id)
