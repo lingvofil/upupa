@@ -11,6 +11,7 @@ from infrastructure.ai.execution import (
     AIQueueTimeoutError,
     AIRequestTimeoutError,
     ai_execution_lane,
+    ai_feature_context,
     ai_request_context,
     configure_ai_usage_recorder,
 )
@@ -227,7 +228,7 @@ def test_governor_records_real_gemini_usage_with_telegram_context():
             chat_title="Test chat",
             user_name="Tester",
             user_username="tester",
-        ):
+        ), ai_feature_context("диалог"):
             assert governor.run("model.generate_content", lambda: response) is response
     finally:
         governor.shutdown(wait=True)
@@ -238,6 +239,7 @@ def test_governor_records_real_gemini_usage_with_telegram_context():
     assert event["chat_id"] == -1001
     assert event["user_id"] == 42
     assert event["provider"] == "gemini"
+    assert event["feature"] == "диалог"
     assert event["model_name"] == "gemini-test"
     assert event["input_tokens"] == 120
     assert event["output_tokens"] == 30
