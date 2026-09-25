@@ -535,7 +535,15 @@ class SQLiteStatisticsRepository:
             features = conn.execute(
                 f"""
                 SELECT
-                    COALESCE(NULLIF(TRIM(feature), ''), 'не размечено') AS resolved_feature,
+                    CASE
+                        WHEN feature IS NOT NULL AND TRIM(feature) <> '' THEN TRIM(feature)
+                        WHEN timestamp < (
+                            SELECT MIN(timestamp)
+                            FROM model_stats
+                            WHERE feature IS NOT NULL AND TRIM(feature) <> ''
+                        ) THEN 'до разметки'
+                        ELSE 'не размечено'
+                    END AS resolved_feature,
                     COUNT(*) AS requests,
                     SUM(CASE WHEN {usage_known} THEN 1 ELSE 0 END) AS usage_known_requests,
                     COALESCE(SUM(input_tokens), 0) AS input_tokens,
