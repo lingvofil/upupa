@@ -13,6 +13,7 @@ SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
 MODEL_USAGE_MIGRATION = "statistics:002-model-token-usage"
+AI_FEATURE_MIGRATION = "statistics:003-ai-feature"
 
 
 def _utc_now_naive() -> datetime:
@@ -36,6 +37,32 @@ class SQLiteStatisticsRepository:
         conn = sqlite3.connect(self.path, timeout=SQLITE_TIMEOUT_SECONDS)
         conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         return conn
+
+    @staticmethod
+    def _apply_feature_migration(conn: sqlite3.Connection) -> None:
+        applied = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (AI_FEATURE_MIGRATION,),
+        ).fetchone()
+        if applied:
+            return
+
+        existing_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(model_stats)").fetchall()
+        }
+        if "feature" not in existing_columns:
+            conn.execute("ALTER TABLE model_stats ADD COLUMN feature TEXT")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_stats_feature_time "
+            "ON model_stats(feature, timestamp)"
+        )
+        conn.execute(
+            "INSERT INTO persistence_migrations(migration_id, applied_at) "
+            "VALUES (?, ?)",
+            (AI_FEATURE_MIGRATION, datetime.now().isoformat()),
+        )
 
     @staticmethod
     def _apply_migrations(conn: sqlite3.Connection) -> None:
@@ -80,6 +107,7 @@ class SQLiteStatisticsRepository:
             (MODEL_USAGE_MIGRATION,),
         ).fetchone()
         if usage_applied:
+            SQLiteStatisticsRepository._apply_feature_migration(conn)
             return
 
         existing_columns = {
@@ -119,6 +147,7 @@ class SQLiteStatisticsRepository:
             "VALUES (?, ?)",
             (MODEL_USAGE_MIGRATION, datetime.now().isoformat()),
         )
+        SQLiteStatisticsRepository._apply_feature_migration(conn)
 
     def init_schema(self) -> None:
         with closing(self._connect()) as conn, conn:
@@ -147,6 +176,7 @@ class SQLiteStatisticsRepository:
                     user_id BIGINT,
                     model_name TEXT,
                     request_type TEXT,
+                    feature TEXT,
                     provider TEXT,
                     input_tokens INTEGER,
                     output_tokens INTEGER,
@@ -172,6 +202,7 @@ class SQLiteStatisticsRepository:
         request_type: str,
         *,
         provider: str | None = None,
+        feature: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cached_tokens: int | None = None,
@@ -188,18 +219,19 @@ class SQLiteStatisticsRepository:
             conn.execute(
                 """
                 INSERT INTO model_stats (
-                    chat_id, user_id, model_name, request_type, provider,
+                    chat_id, user_id, model_name, request_type, feature, provider,
                     input_tokens, output_tokens, cached_tokens, reasoning_tokens,
                     total_tokens, duration_ms, success, lane, chat_title,
                     user_name, user_username
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     user_id,
                     model_name,
                     request_type,
+                    feature,
                     provider,
                     input_tokens,
                     output_tokens,
