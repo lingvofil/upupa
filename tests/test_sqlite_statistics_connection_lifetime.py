@@ -115,6 +115,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="gemini-test",
         request_type="model.generate_content",
         provider="gemini",
+        feature="диалог",
         input_tokens=100,
         output_tokens=25,
         total_tokens=130,
@@ -133,6 +134,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="gemini-test",
         request_type="model.generate_content",
         provider="gemini",
+        feature="диалог",
         input_tokens=50,
         output_tokens=20,
         total_tokens=75,
@@ -149,6 +151,7 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
         model_name="deepseek-test",
         request_type="siliconflow_ai.generate_text",
         provider="siliconflow",
+        feature="фактчек",
         input_tokens=40,
         output_tokens=10,
         total_tokens=50,
@@ -202,6 +205,17 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert totals["failed_requests"] == 2
     assert totals["unknown_outcome_requests"] == 0
     assert totals["telemetry_started_at"]
+    assert totals["feature_telemetry_started_at"]
+
+    assert report["features"][0]["feature"] == "диалог"
+    assert report["features"][0]["requests"] == 2
+    assert report["features"][0]["usage_known_requests"] == 2
+    assert report["features"][0]["input_tokens"] == 150
+    assert report["features"][0]["output_tokens"] == 45
+    assert report["features"][0]["reasoning_tokens"] == 5
+    assert report["features"][0]["total_tokens"] == 205
+    assert report["features"][0]["average_tokens"] == 102
+    assert any(row["feature"] == "не размечено" for row in report["features"])
 
     assert report["models"][0]["model_name"] == "gemini-test"
     assert report["models"][0]["requests"] == 3
@@ -299,5 +313,7 @@ def test_statistics_schema_migrates_legacy_model_stats_table(tmp_path):
         "chat_title",
         "user_name",
         "user_username",
+        "feature",
     } <= columns
     assert sqlite_statistics.MODEL_USAGE_MIGRATION in migrations
+    assert sqlite_statistics.AI_FEATURE_MIGRATION in migrations
