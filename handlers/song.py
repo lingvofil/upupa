@@ -9,6 +9,7 @@ from aiogram import Router, types
 from aiogram.types import FSInputFile
 
 from core.settings import ADMIN_ID, BLOCKED_USERS
+from infrastructure.ai.execution import ai_feature
 from features.song.hf_yue2 import (
     Yue2ConfigurationError,
     Yue2GenerationError,
@@ -114,6 +115,7 @@ async def _send_song(message: types.Message, status, song: GeneratedSong) -> Non
     and message.from_user is not None
     and message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("песня")
 async def handle_song_command(message: types.Message):
     # Keep catching song-shaped commands before the catch-all dialog router,
     # but only the bot owner may actually invoke this expensive feature.
