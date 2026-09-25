@@ -10,6 +10,7 @@ import random
 from aiogram import types
 from core.loader import bot
 from core.settings import BLOCKED_USERS
+from infrastructure.ai.execution import ai_feature
 from prompts import actions
 from AI.adddescribe import (
     process_image_description
@@ -78,6 +79,7 @@ def _should_handle_whatisthere(message: types.Message) -> bool:
 
 
 @router.message(_should_handle_whatisthere)
+@ai_feature("что там")
 async def handle_whatisthere_unified(message: types.Message):
     if not _contains_whatisthere_command(message):
         logging.warning(
@@ -116,6 +118,7 @@ async def handle_whatisthere_unified(message: types.Message):
         )
     ) and message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("что там: robotics")
 async def handle_robotics_description(message: types.Message):
     random_action = random.choice(actions)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random_action)
@@ -131,6 +134,7 @@ async def handle_robotics_description(message: types.Message):
         (message.text and "опиши" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
     ) and message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("описать фото")
 async def describe_image(message: types.Message):
     _, response = await process_image_description(bot, message)
     await message.reply(response)
