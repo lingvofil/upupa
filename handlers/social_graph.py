@@ -487,6 +487,7 @@ async def handle_my_connections(message: types.Message):
 
 
 @router.message(lambda message: _is_command(message, "центровой"))
+@ai_feature("центровой")
 async def handle_central_participant(message: types.Message):
     if not await _ensure_available(message):
         return
