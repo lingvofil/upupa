@@ -454,6 +454,7 @@ class SQLiteStatisticsRepository:
     ) -> dict[str, Any]:
         """Aggregate real provider token usage by model, chat and user."""
         resolved_limit = max(1, int(limit))
+        feature_limit = max(10, resolved_limit)
         params: list[Any] = []
         where = ""
         if period_hours is not None:
@@ -547,7 +548,7 @@ class SQLiteStatisticsRepository:
                 ORDER BY tokens DESC, requests DESC
                 LIMIT ?
                 """,
-                [*params, resolved_limit],
+                [*params, feature_limit],
             ).fetchall()
 
             request_types = conn.execute(
