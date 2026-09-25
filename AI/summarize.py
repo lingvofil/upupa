@@ -439,6 +439,7 @@ async def _summarize_messages(message, chat_id, messages_to_summarize, users_in_
     )
 
 
+@ai_feature("итоги года")
 async def summarize_year(message: types.Message, chat_model, log_file_path: str, action_list: list):
     """Итоги года с bounded выборкой истории."""
     chat_id = str(message.chat.id)
