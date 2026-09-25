@@ -59,11 +59,14 @@ def configure_ai_usage_recorder(recorder: AIUsageRecorder | None) -> None:
 
 
 @contextmanager
-def ai_feature_context(feature: str) -> Iterator[None]:
+def ai_feature_context(feature: str, *, only_if_unset: bool = False) -> Iterator[None]:
     """Attach a human-readable Upupa feature/command to nested provider calls."""
     normalized = str(feature or "").strip()
     if not normalized:
         raise ValueError("AI feature name must not be empty")
+    if only_if_unset and _CURRENT_AI_FEATURE.get():
+        yield
+        return
     token = _CURRENT_AI_FEATURE.set(normalized)
     try:
         yield
@@ -71,21 +74,21 @@ def ai_feature_context(feature: str) -> Iterator[None]:
         _CURRENT_AI_FEATURE.reset(token)
 
 
-def ai_feature(feature: str):
+def ai_feature(feature: str, *, only_if_unset: bool = False):
     """Decorate a sync or async feature entry point with token attribution."""
 
     def decorator(func):
         if inspect.iscoroutinefunction(func):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with ai_feature_context(feature):
+                with ai_feature_context(feature, only_if_unset=only_if_unset):
                     return await func(*args, **kwargs)
 
             return async_wrapper
 
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
-            with ai_feature_context(feature):
+            with ai_feature_context(feature, only_if_unset=only_if_unset):
                 return func(*args, **kwargs)
 
         return sync_wrapper
