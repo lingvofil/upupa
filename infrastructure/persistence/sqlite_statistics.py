@@ -506,6 +506,13 @@ class SQLiteStatisticsRepository:
                    OR total_tokens IS NOT NULL
                 """
             ).fetchone()
+            feature_started_row = conn.execute(
+                """
+                SELECT MIN(timestamp)
+                FROM model_stats
+                WHERE feature IS NOT NULL AND TRIM(feature) <> ''
+                """
+            ).fetchone()
 
             models = conn.execute(
                 f"""
@@ -518,6 +525,25 @@ class SQLiteStatisticsRepository:
                 FROM model_stats
                 {where}
                 GROUP BY provider_name, resolved_model
+                ORDER BY tokens DESC, requests DESC
+                LIMIT ?
+                """,
+                [*params, resolved_limit],
+            ).fetchall()
+
+            features = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(TRIM(feature), ''), 'не размечено') AS resolved_feature,
+                    COUNT(*) AS requests,
+                    SUM(CASE WHEN {usage_known} THEN 1 ELSE 0 END) AS usage_known_requests,
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM({effective_total}), 0) AS tokens
+                FROM model_stats
+                {where}
+                GROUP BY resolved_feature
                 ORDER BY tokens DESC, requests DESC
                 LIMIT ?
                 """,
@@ -614,6 +640,11 @@ class SQLiteStatisticsRepository:
                     if telemetry_started_row and telemetry_started_row[0]
                     else None
                 ),
+                "feature_telemetry_started_at": (
+                    feature_started_row[0]
+                    if feature_started_row and feature_started_row[0]
+                    else None
+                ),
             },
             "models": [
                 {
@@ -629,6 +660,31 @@ class SQLiteStatisticsRepository:
                     ),
                 }
                 for provider, model_name, requests, usage_known_requests, tokens in models
+            ],
+            "features": [
+                {
+                    "feature": str(feature),
+                    "requests": int(requests),
+                    "usage_known_requests": int(usage_known_requests or 0),
+                    "input_tokens": int(input_tokens or 0),
+                    "reasoning_tokens": int(reasoning_tokens or 0),
+                    "output_tokens": int(output_tokens or 0),
+                    "total_tokens": int(tokens),
+                    "average_tokens": (
+                        round(int(tokens) / int(usage_known_requests))
+                        if usage_known_requests
+                        else 0
+                    ),
+                }
+                for (
+                    feature,
+                    requests,
+                    usage_known_requests,
+                    input_tokens,
+                    reasoning_tokens,
+                    output_tokens,
+                    tokens,
+                ) in features
             ],
             "request_types": [
                 {
