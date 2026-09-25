@@ -235,6 +235,88 @@ def test_model_usage_report_aggregates_tokens_by_model_chat_and_user(tmp_path):
     assert report["users"][0]["total_tokens"] == 205
 
 
+def test_statistics_schema_adds_feature_after_existing_usage_migration(tmp_path):
+    path = tmp_path / "statistics.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE message_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                message_timestamp TIMESTAMP NOT NULL,
+                message_type TEXT NOT NULL,
+                is_private BOOLEAN NOT NULL,
+                chat_title TEXT,
+                user_name TEXT,
+                user_username TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE model_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                chat_id BIGINT,
+                user_id BIGINT,
+                model_name TEXT,
+                request_type TEXT,
+                provider TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cached_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                total_tokens INTEGER,
+                duration_ms INTEGER,
+                success BOOLEAN,
+                lane TEXT,
+                chat_title TEXT,
+                user_name TEXT,
+                user_username TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE persistence_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO persistence_migrations(migration_id, applied_at) VALUES (?, ?)",
+            [
+                (sqlite_statistics.STATISTICS_INDEX_MIGRATION, datetime.now().isoformat()),
+                (sqlite_statistics.MODEL_USAGE_MIGRATION, datetime.now().isoformat()),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    repository = sqlite_statistics.SQLiteStatisticsRepository(path)
+    repository.init_schema()
+
+    conn = sqlite3.connect(path)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(model_stats)").fetchall()
+        }
+        feature_migration = conn.execute(
+            "SELECT 1 FROM persistence_migrations WHERE migration_id = ?",
+            (sqlite_statistics.AI_FEATURE_MIGRATION,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert "feature" in columns
+    assert feature_migration == (1,)
+
+
 def test_statistics_schema_migrates_legacy_model_stats_table(tmp_path):
     path = tmp_path / "statistics.db"
     conn = sqlite3.connect(path)
