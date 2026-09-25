@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextvars
+from functools import wraps
+import inspect
 import logging
 import threading
 import time
@@ -67,6 +69,28 @@ def ai_feature_context(feature: str) -> Iterator[None]:
         yield
     finally:
         _CURRENT_AI_FEATURE.reset(token)
+
+
+def ai_feature(feature: str):
+    """Decorate a sync or async feature entry point with token attribution."""
+
+    def decorator(func):
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with ai_feature_context(feature):
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            with ai_feature_context(feature):
+                return func(*args, **kwargs)
+
+        return sync_wrapper
+
+    return decorator
 
 
 @contextmanager
