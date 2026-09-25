@@ -7,6 +7,7 @@ from aiogram import Router
 
 from aiogram import types
 from core.settings import BLOCKED_USERS
+from infrastructure.ai.execution import ai_feature
 from AI.adddescribe import (
     handle_add_text_command
 )
@@ -51,6 +52,7 @@ router = Router(name="ai_generation")
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
+@ai_feature("редактировать картинку")
 async def edit_image(message: types.Message):
     await handle_edit_command(message)
 
@@ -63,6 +65,7 @@ async def edit_image(message: types.Message):
         )
     )
 )
+@ai_feature("нарисуй")
 async def generate_image(message: types.Message):
     await handle_image_generation_command(message)
     
@@ -75,6 +78,7 @@ async def generate_image(message: types.Message):
         )
     )
 )
+@ai_feature("нарисуй: GigaChat")
 async def generate_image_gigachat(message: types.Message):
     await handle_kandinsky_generation_command(message)
 
@@ -88,6 +92,7 @@ async def generate_image_gigachat(message: types.Message):
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
+@ai_feature("перерисуй")
 async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
 
@@ -112,6 +117,7 @@ async def redraw_image(message: types.Message):
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
+@ai_feature("магшот")
 async def mugshot_image(message: types.Message):
     await handle_mugshot_command(message)
 
@@ -131,6 +137,7 @@ async def mugshot_image(message: types.Message):
         ) and message.from_user.id not in BLOCKED_USERS
     )
 )
+@ai_feature("нарисуй: NVIDIA")
 async def nvidia_image(message: types.Message):
     await handle_nvidia_command(message)
 
@@ -139,6 +146,7 @@ async def nvidia_image(message: types.Message):
     message.text.lower().strip() == "скаламбурь" and 
     message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("скаламбурь")
 async def generate_pun_with_image(message: types.Message):
     await handle_pun_image_command(message)
     
@@ -148,5 +156,6 @@ async def generate_pun_with_image(message: types.Message):
         (message.text and "добавь" in message.text.lower() and message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.document))
     ) and message.from_user.id not in BLOCKED_USERS
 )
+@ai_feature("текст на картинку")
 async def add_text_to_image(message: types.Message):
     await handle_add_text_command(message)
