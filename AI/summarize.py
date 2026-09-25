@@ -14,6 +14,7 @@ from core.history_store import get_history_repository
 from core.summary_commands import ALL_SUMMARY_COMMANDS
 from core.state import chat_settings
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
+from infrastructure.ai.execution import ai_feature
 from infrastructure.ai.gemini import _empty_response_details
 
 
@@ -217,6 +218,7 @@ def _build_messages_text(messages: list, *, dated: bool = False) -> str:
     )
 
 
+@ai_feature("прочее: генерация текста", only_if_unset=True)
 async def _generate_with_active_model(
     prompt: str,
     chat_id: str,
