@@ -26,6 +26,10 @@ _CURRENT_AI_LANE: contextvars.ContextVar[AILane] = contextvars.ContextVar(
     "upupa_ai_lane",
     default="interactive",
 )
+_CURRENT_AI_FEATURE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "upupa_ai_feature",
+    default=None,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,19 @@ def configure_ai_usage_recorder(recorder: AIUsageRecorder | None) -> None:
     """Inject the application-level persistence callback without reversing layers."""
     global _AI_USAGE_RECORDER
     _AI_USAGE_RECORDER = recorder
+
+
+@contextmanager
+def ai_feature_context(feature: str) -> Iterator[None]:
+    """Attach a human-readable Upupa feature/command to nested provider calls."""
+    normalized = str(feature or "").strip()
+    if not normalized:
+        raise ValueError("AI feature name must not be empty")
+    token = _CURRENT_AI_FEATURE.set(normalized)
+    try:
+        yield
+    finally:
+        _CURRENT_AI_FEATURE.reset(token)
 
 
 @contextmanager
@@ -212,6 +229,7 @@ def _record_ai_usage(
             _extract_model_name(result) or "unknown",
             operation,
             provider=_provider_from_operation(operation),
+            feature=_CURRENT_AI_FEATURE.get(),
             input_tokens=usage["input_tokens"],
             output_tokens=usage["output_tokens"],
             cached_tokens=usage["cached_tokens"],
