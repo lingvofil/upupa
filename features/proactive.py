@@ -16,6 +16,7 @@ import pytz
 from core.state import chat_settings
 from features.chat_settings import save_chat_settings
 from features.statistics import get_group_chat_activity
+from infrastructure.ai.execution import ai_feature
 
 CHECK_INTERVAL = 30 * 60            # проверка раз в полчаса
 SILENCE_MIN_HOURS = 18              # молчание меньше — рано лезть
@@ -48,6 +49,7 @@ def _mark_proactive(chat_id: str):
     save_chat_settings()
 
 
+@ai_feature("проактивный вброс")
 async def _send_ai_topic(bot, chat_id: int, silence_hours: int) -> bool:
     """Вбрасывает тему на основе случайного куска старой переписки."""
     from AI.chat_recall import _read_chat_log
