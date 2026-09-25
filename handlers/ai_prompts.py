@@ -8,6 +8,7 @@ from aiogram import Router
 from aiogram import F, types
 from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
+from infrastructure.ai.execution import ai_feature_context
 from features.chat_settings import save_chat_settings
 from AI.dialog.prompt_commands import (
     handle_list_prompts_command,
@@ -71,7 +72,8 @@ async def change_prompt_randomly_command(message: types.Message):
 @router.message(lambda message: message.text and message.text.lower().startswith(("пирожок", "порошок")))
 async def handle_poem(message: types.Message):
     poem_type = "пирожок" if message.text.lower().startswith("пирожок") else "порошок"
-    await handle_poem_command(message, poem_type)
+    with ai_feature_context(poem_type):
+        await handle_poem_command(message, poem_type)
 
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith("упупа умоляю"))
