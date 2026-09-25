@@ -144,7 +144,8 @@ def format_model_usage_message(report: dict, title: str) -> str:
             parts.append(
                 "ℹ️ Разметка по функциям собирается с "
                 f"<code>{escape(str(feature_telemetry_started_at))} UTC</code>; "
-                "более ранние вызовы попадут в «не размечено»."
+                "более ранние вызовы помечаются как «до разметки», "
+                "а новые без метки — как «не размечено»."
             )
 
     models = report.get("models") or []
