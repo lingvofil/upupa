@@ -67,6 +67,7 @@ def format_model_usage_message(report: dict, title: str) -> str:
     interactive = int(totals.get("interactive_requests", 0))
     background = int(totals.get("background_requests", 0))
     telemetry_started_at = totals.get("telemetry_started_at")
+    feature_telemetry_started_at = totals.get("feature_telemetry_started_at")
 
     parts = [
         f"🧠 <b>{escape(title)}</b>",
@@ -113,6 +114,39 @@ def format_model_usage_message(report: dict, title: str) -> str:
             f"👤 Без привязки к пользователю: {unattributed_users} запросов"
         )
 
+    features = report.get("features") or []
+    if features:
+        parts.append("\n<b>Команды и функции</b>")
+        for row in features:
+            requests_count = int(row.get("requests", 0))
+            known_count = int(row.get("usage_known_requests", 0))
+            usage_note = (
+                f" · usage {known_count}/{requests_count}"
+                if known_count < requests_count
+                else ""
+            )
+            parts.append(
+                f"• <b>{escape(str(row.get('feature') or 'не размечено'))}</b>: "
+                f"{_format_token_count(row.get('total_tokens', 0))} "
+                f"· {requests_count} выз. "
+                f"· ср. {_format_token_count(row.get('average_tokens', 0))}/измер. вызов"
+                f"{usage_note}"
+            )
+            parts.append(
+                "  ↳ вход "
+                f"{_format_token_count(row.get('input_tokens', 0))} "
+                "· reasoning "
+                f"{_format_token_count(row.get('reasoning_tokens', 0))} "
+                "· выход "
+                f"{_format_token_count(row.get('output_tokens', 0))}"
+            )
+        if feature_telemetry_started_at:
+            parts.append(
+                "ℹ️ Разметка по функциям собирается с "
+                f"<code>{escape(str(feature_telemetry_started_at))} UTC</code>; "
+                "более ранние вызовы попадут в «не размечено»."
+            )
+
     models = report.get("models") or []
     if models:
         parts.append("\n<b>Модели</b>")
@@ -135,7 +169,7 @@ def format_model_usage_message(report: dict, title: str) -> str:
 
     request_types = report.get("request_types") or []
     if request_types:
-        parts.append("\n<b>Топ типов AI-вызовов</b>")
+        parts.append("\n<b>Технические типы AI-вызовов</b>")
         for row in request_types:
             requests_count = int(row.get("requests", 0))
             known_count = int(row.get("usage_known_requests", 0))
