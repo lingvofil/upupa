@@ -9,10 +9,12 @@ from core.loader import bot
 from core.state import cleanup_old_serious_messages, serious_mode_messages
 from prompts import PROMPT_SERIOUS_MODE
 from services.web_context import get_web_context, needs_web_search
+from infrastructure.ai.execution import ai_feature
 
 from AI.dialog.generation import generate_pleading_simple_response
 
 
+@ai_feature("упупа умоляю")
 async def handle_serious_mode_command(message: types.Message):
     chat_id = str(message.chat.id)
     await bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -54,6 +56,7 @@ async def handle_serious_mode_command(message: types.Message):
         await message.reply("Ошибка при обработке запроса, попробуй ещё раз.")
 
 
+@ai_feature("упупа умоляю")
 async def handle_serious_mode_reply(message: types.Message) -> bool:
     if not message.reply_to_message:
         return False
