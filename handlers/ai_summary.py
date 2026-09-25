@@ -13,6 +13,7 @@ from core.settings import ADMIN_ID, BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
 from core.summary_commands import summary_mode
 from infrastructure.ai.clients import model
+from infrastructure.ai.execution import ai_feature, ai_feature_context
 from prompts import actions
 from AI.summarize import summarize_chat_history, summarize_year
 from AI.leveltravel import process_tours_command, process_hotels_command
@@ -50,6 +51,7 @@ class _NaturalSummaryMessage:
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
     "упупа когда мы говорили"
 ) and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("когда мы говорили")
 async def handle_recall(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_recall_command(message)
@@ -57,18 +59,21 @@ async def handle_recall(message: types.Message):
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
     "упупа рассуди"
 ) and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("упупа рассуди")
 async def handle_verdict(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_verdict_command(message)
 
 @router.message(lambda message: message.text and message.text.lower().strip() in ("пиздиш", "пиздишь")
                 and message.reply_to_message and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("пиздиш / фактчек")
 async def handle_factcheck(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_factcheck_command(message)
 
 @router.message(lambda message: message.text and normalize_upupa_command(message.text) in ("комикс", "упупа комикс")
                 and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("комикс")
 async def handle_comic(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
     await process_comic_command(message)
@@ -86,13 +91,15 @@ async def handle_chobylo(message: types.Message):
     prompt_context = "\n\n".join(part for part in (social_context, summary_rules) if part)
     token = set_prompt_context(prompt_context)
     try:
-        await summarize_chat_history(
-            _NaturalSummaryMessage(message),
-            model,
-            USER_MESSAGES_LOG_PATH,
-            actions,
-            catchup=catchup,
-        )
+        feature = "что я пропустил" if catchup else "чобыло"
+        with ai_feature_context(feature):
+            await summarize_chat_history(
+                _NaturalSummaryMessage(message),
+                model,
+                USER_MESSAGES_LOG_PATH,
+                actions,
+                catchup=catchup,
+            )
     finally:
         reset_prompt_context(token)
 
@@ -108,6 +115,7 @@ async def handle_holidays(message: types.Message):
 @router.message(lambda message: message.text and normalize_upupa_command(message.text).startswith(
     ("новости футбола", "упупа новости футбола", "футбольные новости", "упупа футбольные новости")
 ) and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("новости футбола")
 async def handle_football_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_football_news_command(message)
@@ -116,11 +124,13 @@ async def handle_football_news(message: types.Message):
     ("чо по телеку", "что по телеку",
      "упупа чо по телеку", "упупа что по телеку", "упупа новости")
 ) and message.from_user.id not in BLOCKED_USERS)
+@ai_feature("новости / что по телеку")
 async def handle_tv_news(message: types.Message):
     await message.bot.send_chat_action(chat_id=message.chat.id, action=random.choice(actions))
     await process_tv_news_command(message)
 
 @router.message(F.text.lower() == "итоги года", F.from_user.id == ADMIN_ID)
+@ai_feature("итоги года")
 async def handle_year_results(message: types.Message):
     await summarize_year(message, model, USER_MESSAGES_LOG_PATH, actions)
 
