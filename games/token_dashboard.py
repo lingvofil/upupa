@@ -60,15 +60,8 @@ async def token_dashboard_api(request: web.Request) -> web.Response:
     return response
 
 
-def register_token_dashboard_routes(app: web.Application) -> None:
-    app.router.add_get("/tokens", serve_token_dashboard)
-    app.router.add_get("/tokens/", serve_token_dashboard)
-    app.router.add_get("/tokens/api", token_dashboard_api)
-
-
 __all__ = [
     "TOKEN_DASHBOARD_PERIODS",
-    "register_token_dashboard_routes",
     "serve_token_dashboard",
     "token_dashboard_api",
 ]
