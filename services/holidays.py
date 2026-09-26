@@ -300,7 +300,7 @@ async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -
     if pending:
         logging.warning(
             "Holiday digest: AI descriptions incomplete for chat %s after %s attempts (%s/%s generated); "
-            "using calend.ru fallback for: %s",
+            "using calend.ru descriptions for: %s",
             chat_id,
             HOLIDAY_AI_ATTEMPTS,
             len(descriptions),
