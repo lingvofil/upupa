@@ -24,6 +24,7 @@ from thefuzz import fuzz
 
 from core.loader import bot
 from core.settings import API_TOKEN
+from games.token_dashboard import register_token_dashboard_routes
 from games.webapp_auth import (
     WebAppAuthError,
     authorize_crocodile_drawer,
@@ -92,6 +93,7 @@ sio = socketio.AsyncServer(
 )
 app = web.Application(client_max_size=20 * 1024 * 1024)
 sio.attach(app)
+register_token_dashboard_routes(app)
 
 
 # ================== УТИЛИТЫ ==================
