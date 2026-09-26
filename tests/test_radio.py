@@ -138,7 +138,13 @@ def test_collect_radio_history_uses_24_hours_when_enough(monkeypatch):
 
 def test_normal_radio_script_uses_dedicated_spoken_prompt(monkeypatch):
     import features.radio.script as radio_script
+    from core.state import chat_settings
 
+    chat_settings["-1001"] = {
+        "active_model": "gemini",
+        "prompt": "Говори как злой пират: рублено, язвительно и с морской лексикой.",
+        "prompt_name": "пират",
+    }
     prompts = []
 
     async def fake_generate(prompt, chat_id, **kwargs):
@@ -161,7 +167,12 @@ def test_normal_radio_script_uses_dedicated_spoken_prompt(monkeypatch):
     assert len(prompts) == 1
     prompt = prompts[0][0]
     assert "Ты — ведущий «Радио Упупы»" in prompt
-    assert "Не используй активную пользовательскую персону" in prompt
+    assert "Говори как злой пират: рублено, язвительно и с морской лексикой." in prompt
+    assert "Текущий промпт чата — обязательный стилевой контракт" in prompt
+    assert "Не усредняй это до нейтрального радиоведущего" in prompt
+    assert "говорит он именно в стиле текущего промпта" in prompt
+    assert "Если текст звучит как нейтральный радиоведущий, перепиши его" in prompt
+    assert "Не используй активную пользовательскую персону" not in prompt
     assert "Вася: Арбуз надо заморозить" in prompt
     assert "Петя: Нет, сначала нужен лёд" in prompt
 
