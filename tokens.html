@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Упупа · Токены</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--tg-theme-bg-color, #0f1115);
+      --panel: var(--tg-theme-secondary-bg-color, #191c22);
+      --text: var(--tg-theme-text-color, #f4f6f8);
+      --muted: var(--tg-theme-hint-color, #89919d);
+      --accent: var(--tg-theme-button-color, #4c8bf5);
+      --accent-text: var(--tg-theme-button-text-color, #fff);
+      --border: color-mix(in srgb, var(--text) 12%, transparent);
+      --bar-bg: color-mix(in srgb, var(--text) 9%, transparent);
+      --warn: #f4b740;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 14px 40px; }
+    .top {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 16px; margin-bottom: 14px;
+    }
+    h1 { margin: 0; font-size: 24px; line-height: 1.15; }
+    .subtitle { color: var(--muted); margin-top: 5px; }
+    .periods { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+    button {
+      border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px;
+      background: var(--panel); color: var(--text); font-weight: 650; cursor: pointer;
+    }
+    button.active { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+    .kpis {
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 9px; margin-bottom: 12px;
+    }
+    .card, .section {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    }
+    .card { padding: 12px; min-height: 84px; }
+    .card .label { color: var(--muted); font-size: 12px; }
+    .card .value { font-size: 22px; font-weight: 800; margin-top: 7px; font-variant-numeric: tabular-nums; }
+    .warnings { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
+    .badge {
+      padding: 6px 9px; border-radius: 999px; background: var(--panel);
+      border: 1px solid var(--border); color: var(--muted); font-size: 12px;
+    }
+    .badge.warn { color: var(--warn); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .section { padding: 14px; min-width: 0; }
+    .section.full { grid-column: 1 / -1; }
+    .section h2 { margin: 0 0 12px; font-size: 16px; }
+    .row { margin: 0 0 12px; }
+    .row:last-child { margin-bottom: 0; }
+    .row-head {
+      display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+      margin-bottom: 5px;
+    }
+    .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+    .metric { flex: 0 0 auto; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .bar { height: 8px; overflow: hidden; border-radius: 999px; background: var(--bar-bg); }
+    .bar > span {
+      display: block; height: 100%; min-width: 2px; border-radius: inherit;
+      background: var(--accent);
+    }
+    .meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 660px; }
+    th, td { padding: 8px 7px; border-bottom: 1px solid var(--border); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-size: 11px; font-weight: 650; }
+    code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .empty, .error { color: var(--muted); padding: 22px 0; text-align: center; }
+    .error { color: #ff6b6b; }
+    .foot { color: var(--muted); font-size: 11px; margin-top: 12px; }
+    @media (max-width: 900px) {
+      .kpis { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 680px) {
+      .top { display: block; }
+      .periods { justify-content: flex-start; margin-top: 12px; }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .grid { grid-template-columns: 1fr; }
+      .section.full { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>🧠 Расход токенов</h1>
+      <div class="subtitle" id="subtitle">Загрузка…</div>
+    </div>
+    <div class="periods" id="periods">
+      <button data-period="1">1 час</button>
+      <button data-period="24" class="active">24 часа</button>
+      <button data-period="168">7 дней</button>
+      <button data-period="720">30 дней</button>
+      <button data-period="all">Всё время</button>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+  <div class="warnings" id="warnings"></div>
+
+  <div class="grid">
+    <section class="section full"><h2>Команды и функции</h2><div id="features"></div></section>
+    <section class="section"><h2>Модели</h2><div id="models"></div></section>
+    <section class="section"><h2>Чаты</h2><div id="chats"></div></section>
+    <section class="section"><h2>Пользователи по токенам</h2><div id="users"></div></section>
+    <section class="section"><h2>Пользователи по вызовам</h2><div id="usersByRequests"></div></section>
+    <section class="section full">
+      <h2>Технические типы AI-вызовов</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Тип</th><th>Токены</th><th>Вызовы</th><th>Usage</th><th>Среднее</th></tr></thead>
+        <tbody id="requestTypes"></tbody>
+      </table></div>
+    </section>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+  if (tg) {
+    if (typeof tg.expand === "function") tg.expand();
+    if (typeof tg.ready === "function") tg.ready();
+  }
+
+  function hashParam(name) {
+    try {
+      const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      return new URLSearchParams(raw).get(name) || "";
+    } catch (_) { return ""; }
+  }
+
+  const initData = (tg && tg.initData) || hashParam("tgWebAppData") || "";
+  let currentPeriod = "24";
+
+  const fmt = (value) => {
+    const n = Number(value || 0);
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + " млрд";
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + " млн";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + " тыс.";
+    return Math.round(n).toLocaleString("ru-RU");
+  };
+
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+  }[ch]));
+
+  function identity(row, fallback) {
+    if (row.user_username) return (row.user_name ? row.user_name + " " : "") + "(@" + row.user_username + ")";
+    return row.user_name || fallback;
+  }
+
+  function bars(targetId, rows, labelFn, valueKey = "total_tokens", metaFn = null) {
+    const target = document.getElementById(targetId);
+    if (!rows || !rows.length) {
+      target.innerHTML = '<div class="empty">Нет данных</div>';
+      return;
+    }
+    const max = Math.max(...rows.map(r => Number(r[valueKey] || 0)), 1);
+    target.innerHTML = rows.map(row => {
+      const value = Number(row[valueKey] || 0);
+      const width = Math.max(0.5, value / max * 100);
+      return '<div class="row">' +
+        '<div class="row-head"><div class="name" title="' + esc(labelFn(row)) + '">' +
+        esc(labelFn(row)) + '</div><div class="metric">' + fmt(value) + '</div></div>' +
+        '<div class="bar"><span style="width:' + width.toFixed(2) + '%"></span></div>' +
+        (metaFn ? '<div class="meta">' + esc(metaFn(row)) + '</div>' : '') +
+        '</div>';
+    }).join("");
+  }
+
+  function render(report, period) {
+    const t = report.totals || {};
+    const known = Number(t.usage_known_requests || 0);
+    const requests = Number(t.requests || 0);
+    const avg = known ? Number(t.total_tokens || 0) / known : 0;
+
+    document.getElementById("subtitle").textContent =
+      period === "all" ? "За всё время" :
+      period === "1" ? "За последний час" :
+      period === "24" ? "За последние 24 часа" :
+      period === "168" ? "За последние 7 дней" : "За последние 30 дней";
+
+    const kpis = [
+      ["Всего токенов", fmt(t.total_tokens)],
+      ["AI-вызовы", fmt(requests)],
+      ["Среднее / измер. вызов", fmt(avg)],
+      ["Вход", fmt(t.input_tokens)],
+      ["Reasoning", fmt(t.reasoning_tokens)],
+      ["Выход", fmt(t.output_tokens)],
+    ];
+    document.getElementById("kpis").innerHTML = kpis.map(([label, value]) =>
+      '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div></div>'
+    ).join("");
+
+    const warnings = [];
+    if (requests - known > 0) warnings.push(["Без token usage: " + (requests - known), true]);
+    if (t.failed_requests) warnings.push(["Ошибок: " + t.failed_requests, true]);
+    if (t.unattributed_chat_requests) warnings.push(["Без чата: " + t.unattributed_chat_requests, false]);
+    if (t.unattributed_user_requests) warnings.push(["Без пользователя: " + t.unattributed_user_requests, false]);
+    warnings.push(["Интерактивные: " + Number(t.interactive_requests || 0), false]);
+    warnings.push(["Фоновые: " + Number(t.background_requests || 0), false]);
+    document.getElementById("warnings").innerHTML = warnings.map(([text, warn]) =>
+      '<span class="badge' + (warn ? ' warn' : '') + '">' + esc(text) + '</span>'
+    ).join("");
+
+    bars("features", report.features || [], r => r.feature || "не размечено", "total_tokens",
+      r => "вызовы " + r.requests + " · вход " + fmt(r.input_tokens) + " · reasoning " + fmt(r.reasoning_tokens) + " · выход " + fmt(r.output_tokens));
+    bars("models", report.models || [], r => (r.provider || "?") + "/" + (r.model_name || "?"), "total_tokens",
+      r => "вызовы " + r.requests + " · ср. " + fmt(r.average_tokens));
+    bars("chats", report.chats || [], r => r.chat_title || ("ID " + r.chat_id), "total_tokens",
+      r => "вызовы " + r.requests);
+    bars("users", report.users || [], r => identity(r, "ID " + r.user_id), "total_tokens",
+      r => "вызовы " + r.requests);
+    bars("usersByRequests", report.users_by_requests || [], r => identity(r, "ID " + r.user_id), "requests",
+      r => fmt(r.total_tokens) + " токенов");
+
+    const requestRows = report.request_types || [];
+    document.getElementById("requestTypes").innerHTML = requestRows.length
+      ? requestRows.map(r => '<tr><td><code>' + esc(r.request_type || "unknown") + '</code></td>' +
+        '<td>' + esc(fmt(r.total_tokens)) + '</td><td>' + esc(r.requests) + '</td>' +
+        '<td>' + esc(r.usage_known_requests) + '/' + esc(r.requests) + '</td>' +
+        '<td>' + esc(fmt(r.average_tokens)) + '</td></tr>').join("")
+      : '<tr><td colspan="5" class="empty">Нет данных</td></tr>';
+
+    const notes = [];
+    if (t.feature_telemetry_started_at) notes.push("Разметка функций с " + t.feature_telemetry_started_at + " UTC");
+    if (t.telemetry_started_at) notes.push("Token usage с " + t.telemetry_started_at + " UTC");
+    document.getElementById("foot").textContent = notes.join(" · ");
+  }
+
+  async function load(period) {
+    if (!initData) {
+      document.getElementById("subtitle").textContent = "Открой дашборд из Telegram";
+      document.getElementById("kpis").innerHTML = '<div class="section error">Нет Telegram initData</div>';
+      return;
+    }
+    currentPeriod = period;
+    document.querySelectorAll("[data-period]").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.period === period);
+      btn.disabled = true;
+    });
+    try {
+      const response = await fetch("/tokens/api?period=" + encodeURIComponent(period), {
+        headers: { "X-Telegram-Init-Data": initData },
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error(response.status === 403 ? "Доступ только администратору" : "HTTP " + response.status);
+      const payload = await response.json();
+      render(payload.report || {}, payload.period || period);
+    } catch (error) {
+      document.getElementById("subtitle").textContent = "Не удалось загрузить статистику";
+      document.getElementById("kpis").innerHTML = '<div class="section error">' + esc(error.message || error) + '</div>';
+    } finally {
+      document.querySelectorAll("[data-period]").forEach(btn => btn.disabled = false);
+    }
+  }
+
+  document.getElementById("periods").addEventListener("click", event => {
+    const button = event.target.closest("[data-period]");
+    if (!button) return;
+    load(button.dataset.period);
+  });
+
+  load(currentPeriod);
+</script>
+</body>
+</html>
