@@ -5,6 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Crocodile</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function redirectTokenDashboard() {
+      const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+      let startParam = tg && tg.initDataUnsafe ? (tg.initDataUnsafe.start_param || "") : "";
+      const hash = window.location.hash && window.location.hash.charAt(0) === "#"
+        ? window.location.hash.slice(1)
+        : window.location.hash;
+      if (!startParam && hash) {
+        try {
+          const initData = new URLSearchParams(hash).get("tgWebAppData") || "";
+          startParam = new URLSearchParams(initData).get("start_param") || "";
+        } catch (_) {
+          startParam = "";
+        }
+      }
+      if (startParam === "tokens") {
+        window.location.replace("/tokens" + window.location.search + window.location.hash);
+      }
+    })();
+  </script>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
   <style>
