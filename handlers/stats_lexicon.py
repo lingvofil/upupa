@@ -53,36 +53,58 @@ def _format_usage_identity(name, username, fallback: str) -> str:
 
 
 def _split_html_message(text: str, *, limit: int = TOKEN_REPORT_CHUNK_LIMIT) -> list[str]:
-    """Split line-oriented HTML into Telegram-safe messages.
+    """Split token report into Telegram-safe messages by logical sections.
 
-    Token report formatting keeps HTML tags self-contained on each line, so
-    splitting only between lines preserves valid markup in every chunk.
+    Sections in the report are separated by blank lines. Keeping them intact
+    prevents continuation messages from starting in the middle of a list.
+    Oversized single sections fall back to line-based splitting.
     """
     if limit <= 0 or limit > TELEGRAM_TEXT_LIMIT:
         raise ValueError("Telegram chunk limit must be between 1 and 4096")
     if len(text) <= limit:
         return [text]
 
+    def split_oversized_block(block: str) -> list[str]:
+        result: list[str] = []
+        current_lines: list[str] = []
+        current_length = 0
+
+        for line in block.splitlines():
+            if len(line) > limit:
+                raise ValueError("Token report line exceeds Telegram message limit")
+            separator = 1 if current_lines else 0
+            if current_lines and current_length + separator + len(line) > limit:
+                result.append("\n".join(current_lines))
+                current_lines = [line]
+                current_length = len(line)
+                continue
+            current_lines.append(line)
+            current_length += separator + len(line)
+
+        if current_lines:
+            result.append("\n".join(current_lines))
+        return result
+
     chunks: list[str] = []
-    current: list[str] = []
-    current_length = 0
+    current = ""
 
-    for line in text.splitlines():
-        if len(line) > limit:
-            raise ValueError("Token report line exceeds Telegram message limit")
-
-        separator = 1 if current else 0
-        if current and current_length + separator + len(line) > limit:
-            chunks.append("\n".join(current))
-            current = [line]
-            current_length = len(line)
+    for block in text.split("\n\n"):
+        if len(block) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(split_oversized_block(block))
             continue
 
-        current.append(line)
-        current_length += separator + len(line)
+        candidate = block if not current else f"{current}\n\n{block}"
+        if len(candidate) <= limit:
+            current = candidate
+        else:
+            chunks.append(current)
+            current = block
 
     if current:
-        chunks.append("\n".join(current))
+        chunks.append(current)
     return chunks
 
 
