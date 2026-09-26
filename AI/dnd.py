@@ -1553,6 +1553,8 @@ async def cmd_stop_dnd(message: Message):
 
 
 def _is_backstory_reply(message: Message) -> bool:
+    if message.text and message.text.strip().casefold() == "дальше":
+        return False
     session = dnd_sessions.get(message.chat.id)
     if (
         not session
@@ -1758,7 +1760,11 @@ def _is_group_action_reply(message: Message) -> bool:
     if not prompt_message_id or not message.reply_to_message:
         return False
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if (
+        not user_action
+        or user_action.lower().startswith("упупа")
+        or user_action.strip().casefold() == "дальше"
+    ):
         return False
     if not _can_user_act(
         session,
@@ -1774,7 +1780,11 @@ async def handle_free_action(message: Message):
     session = dnd_sessions[message.chat.id]
     prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if (
+        not user_action
+        or user_action.lower().startswith("упупа")
+        or user_action.strip().casefold() == "дальше"
+    ):
         return
     user_id = int(message.from_user.id)
     if not _can_user_act(
@@ -1806,19 +1816,15 @@ async def handle_free_action(message: Message):
 
 
 def _is_dnd_next_command(message: Message) -> bool:
+    """Consume «дальше» whenever this chat has a live DnD session.
+
+    State-specific handling belongs in handle_dnd_next. Keeping the filter broad
+    prevents an active game from silently leaking the command into the generic
+    chat router when it is stuck in an unexpected state.
+    """
     if not message.text or message.text.strip().casefold() != "дальше":
         return False
-    session = dnd_sessions.get(message.chat.id)
-    if not session:
-        return False
-    if session.state in {"WAITING_ACTION", "WAITING_POLL"}:
-        return True
-    if session.state == "RESOLVING":
-        return bool(
-            (getattr(session, "pending_generation_request", {}) or {}).get("prompt")
-            or (getattr(session, "pending_generated_result", {}) or {}).get("text")
-        )
-    return False
+    return dnd_sessions.get(message.chat.id) is not None
 
 
 @dnd_router.message(_is_dnd_next_command)
@@ -1826,12 +1832,38 @@ async def handle_dnd_next(message: Message):
     session = dnd_sessions.get(message.chat.id)
     if not session:
         return
+
+    pending_request = getattr(session, "pending_generation_request", {}) or {}
+    pending_result = getattr(session, "pending_generated_result", {}) or {}
+    logging.info(
+        "DnD next command chat_id=%s user_id=%s state=%s generation_active=%s "
+        "pending_request=%s pending_result=%s pending_roll=%s pending_poll=%s "
+        "action_prompt=%s pending_actions=%s",
+        message.chat.id,
+        getattr(message.from_user, "id", None),
+        getattr(session, "state", None),
+        bool(getattr(session, "_upupa_generation_call_active", False)),
+        bool(pending_request.get("prompt")),
+        bool(pending_result.get("text")),
+        bool(getattr(session, "pending_roll", None)),
+        bool(getattr(session, "pending_poll", None)),
+        bool(getattr(session, "action_prompt_message_id", None)),
+        len(getattr(session, "pending_actions", {}) or {}),
+    )
+
     if not _user_is_host(session, int(message.from_user.id)):
         await message.answer("«Дальше» может сказать только ведущий.")
         return
-    if session.state == "RESOLVING":
-        from AI.dnd_result_recovery import retry_pending_recovery
 
+    if session.state == "RESOLVING":
+        if bool(getattr(session, "_upupa_generation_call_active", False)):
+            await message.answer(
+                "⏳ Мастер ещё обрабатывает текущий ход. Второй запрос параллельно не запускаю. "
+                "Если генерация сорвётся, повторное «дальше» восстановит сохранённый ход."
+            )
+            return
+
+        from AI.dnd_result_recovery import retry_pending_recovery
         from AI import dnd as dnd_module
 
         retried = await retry_pending_recovery(
@@ -1839,9 +1871,20 @@ async def handle_dnd_next(message: Message):
             message.bot,
             session,
         )
-        if not retried:
-            await message.answer("Нечего восстанавливать.")
+        if retried:
+            return
+
+        logging.warning(
+            "DnD orphaned resolving state chat_id=%s; restoring action window",
+            message.chat.id,
+        )
+        await message.answer(
+            "⚠️ Мастер застрял между ходами без сохранённого запроса. "
+            "Восстанавливаю окно действий."
+        )
+        await open_action_window(message.bot, message.chat.id)
         return
+
     if session.state == "WAITING_ACTION":
         if not session.action_prompt_message_id:
             targets = list(getattr(session, "action_target_user_ids", []) or [])
@@ -1869,11 +1912,51 @@ async def handle_dnd_next(message: Message):
             int(session.action_prompt_message_id),
         )
         return
+
+    if session.state == "WAITING_ROLL":
+        session.pending_roll = None
+        session.state = "RESOLVING"
+        persist_dnd_sessions()
+        await message.answer("⏭️ Бросок пропущен ведущим.")
+        await open_action_window(message.bot, message.chat.id)
+        return
+
     if session.state == "WAITING_POLL":
         poll = session.pending_poll or {}
-        await finalize_poll(
-            message.bot,
+        message_id = poll.get("message_id")
+        options = list(poll.get("options") or [])
+        if message_id and len(options) >= 2:
+            await finalize_poll(
+                message.bot,
+                message.chat.id,
+                int(message_id),
+                options,
+            )
+            return
+
+        logging.warning(
+            "DnD malformed waiting poll chat_id=%s poll_id=%s; restoring action window",
             message.chat.id,
-            int(poll["message_id"]),
-            list(poll["options"]),
+            getattr(session, "current_poll_id", None),
         )
+        poll_id = str(getattr(session, "current_poll_id", "") or "")
+        if poll_id:
+            poll_map.pop(poll_id, None)
+        session.current_poll_id = None
+        session.pending_poll = None
+        await message.answer("⚠️ Голосование потеряло состояние. Восстанавливаю ход партии.")
+        await open_action_window(message.bot, message.chat.id)
+        return
+
+    state_hints = {
+        "WAITING_MODE": "Сначала выбери режим истории кнопкой.",
+        "LOBBY": "Сейчас открыто лобби: запусти игру кнопкой «Начать игру».",
+        "WAITING_BACKSTORY": "Сначала пришли предысторию реплаем на сообщение мастера.",
+        "WAITING_PLOT": "Сначала выбери вариант сюжета.",
+    }
+    await message.answer(
+        state_hints.get(
+            str(getattr(session, "state", "") or ""),
+            f"Сейчас «дальше» неприменимо: состояние игры {getattr(session, 'state', 'неизвестно')}.",
+        )
+    )
