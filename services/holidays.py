@@ -19,9 +19,11 @@ from bs4 import BeautifulSoup
 from AI.dialog.generation import generate_simple_response
 from AI.dialog.settings import build_prompt_with_current_chat_prompt
 from core.state import chat_settings
+from infrastructure.ai.execution import ai_feature
 
 CALEND_BASE_URL = "https://www.calend.ru"
 MAX_HOLIDAYS = 5
+HOLIDAY_AI_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -194,31 +196,11 @@ def _resolve_generated_holiday_title(
     return None, "unmatched"
 
 
-async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -> dict[str, str]:
-    if not holidays:
-        return {}
-
-    response_text = ""
-    try:
-        task_prompt = _build_digest_prompt(holidays)
-        prompt = build_prompt_with_current_chat_prompt(
-            str(chat_id),
-            task_prompt,
-            task_name="ежедневную рассылку праздников",
-        )
-        response_text = await generate_simple_response(prompt, str(chat_id))
-        generated = _extract_json_list(response_text)
-    except Exception as e:
-        logging.warning(
-            "Holiday digest: AI post-processing failed for chat %s; using calend.ru descriptions. "
-            "Reason: %s. Response preview: %r",
-            chat_id,
-            e,
-            response_text[:300],
-            exc_info=True,
-        )
-        return {}
-
+def _map_generated_descriptions(
+    generated: list[dict],
+    holidays: list[Holiday],
+    chat_id: int,
+) -> dict[str, str]:
     descriptions: dict[str, str] = {}
     title_lookup = {
         _normalize_title_key(holiday.title): holiday.title
@@ -252,15 +234,78 @@ async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -
                 chat_id,
             )
 
-    missing_titles = [holiday.title for holiday in holidays if holiday.title not in descriptions]
-    if missing_titles:
+    return descriptions
+
+
+@ai_feature("праздники")
+async def generate_holiday_descriptions(holidays: list[Holiday], chat_id: int) -> dict[str, str]:
+    if not holidays:
+        return {}
+
+    descriptions: dict[str, str] = {}
+    pending = list(holidays)
+
+    for attempt in range(1, HOLIDAY_AI_ATTEMPTS + 1):
+        if not pending:
+            break
+
+        task_prompt = _build_digest_prompt(pending)
+        if attempt > 1:
+            task_prompt += (
+                "\n\nЭто повторная попытка: предыдущий ответ не удалось полностью разобрать. "
+                "КРИТИЧЕСКИ ВАЖНО вернуть только валидный JSON-массив указанного формата, "
+                "без пояснений, markdown и текста вне JSON. Стиль описаний всё равно должен "
+                "соответствовать текущему промпту чата."
+            )
+
+        prompt = build_prompt_with_current_chat_prompt(
+            str(chat_id),
+            task_prompt,
+            task_name="ежедневную рассылку праздников",
+        )
+
+        response_text = ""
+        try:
+            response_text = await generate_simple_response(prompt, str(chat_id))
+            generated = _extract_json_list(response_text)
+        except Exception as e:
+            logging.warning(
+                "Holiday digest: AI attempt %s/%s failed for chat %s. "
+                "Reason: %s. Response preview: %r",
+                attempt,
+                HOLIDAY_AI_ATTEMPTS,
+                chat_id,
+                e,
+                response_text[:300],
+                exc_info=True,
+            )
+            continue
+
+        attempt_descriptions = _map_generated_descriptions(generated, pending, chat_id)
+        descriptions.update(attempt_descriptions)
+        pending = [holiday for holiday in holidays if holiday.title not in descriptions]
+
+        if pending:
+            logging.warning(
+                "Holiday digest: AI attempt %s/%s incomplete for chat %s (%s/%s total generated); "
+                "retrying missing holidays: %s",
+                attempt,
+                HOLIDAY_AI_ATTEMPTS,
+                chat_id,
+                len(descriptions),
+                len(holidays),
+                "; ".join(holiday.title for holiday in pending),
+            )
+
+    if pending:
         logging.warning(
-            "Holiday digest: AI descriptions incomplete for chat %s (%s/%s generated); "
-            "using calend.ru fallback for: %s",
+            "Holiday digest: AI descriptions incomplete for chat %s after %s attempts (%s/%s generated); "
+            "using calend.ru descriptions for: %s",
             chat_id,
+            HOLIDAY_AI_ATTEMPTS,
             len(descriptions),
             len(holidays),
-            "; ".join(missing_titles),
+            "; ".join(holiday.title for holiday in pending),
         )
 
     return descriptions
