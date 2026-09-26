@@ -422,3 +422,124 @@ def test_only_host_can_finish_action_window_early(monkeypatch):
 
     assert calls == [(bot, chat_id, 222)]
     assert non_host.answers[0][0] == "«Дальше» может сказать только ведущий."
+
+
+
+def test_next_command_is_captured_for_any_live_dnd_state():
+    chat_id = -100505
+    message = FakeMessage(
+        chat_id=chat_id,
+        user_id=1,
+        user_name="Алиса",
+        text="дальше",
+    )
+
+    try:
+        for state in ("WAITING_ROLL", "RESOLVING", "WAITING_BACKSTORY"):
+            dnd.dnd_sessions[chat_id] = SimpleNamespace(state=state)
+            assert dnd._is_dnd_next_command(message) is True
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_host_can_skip_untargeted_waiting_roll_with_next(monkeypatch):
+    chat_id = -100506
+    session = SimpleNamespace(
+        starter_user_id=1,
+        state="WAITING_ROLL",
+        pending_roll={
+            "type": "CHECK",
+            "reason": "общая проверка",
+            "target_user_ids": [],
+        },
+        pending_generation_request={},
+        pending_generated_result={},
+        pending_poll=None,
+        action_prompt_message_id=None,
+        pending_actions={},
+    )
+    dnd.dnd_sessions[chat_id] = session
+    opened = []
+
+    async def fake_open(bot, resolved_chat_id, target_user_ids=None):
+        opened.append((bot, resolved_chat_id, target_user_ids))
+        session.state = "WAITING_ACTION"
+
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(dnd, "open_action_window", fake_open)
+    bot = object()
+    message = FakeMessage(
+        chat_id=chat_id,
+        user_id=1,
+        user_name="Алиса",
+        text="дальше",
+        bot=bot,
+    )
+
+    try:
+        asyncio.run(dnd.handle_dnd_next(message))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert session.pending_roll is None
+    assert session.state == "WAITING_ACTION"
+    assert opened == [(bot, chat_id, None)]
+    assert message.answers[0][0] == "⏭️ Бросок пропущен ведущим."
+
+
+def test_non_host_next_in_waiting_roll_gets_explicit_reply():
+    chat_id = -100507
+    session = SimpleNamespace(
+        starter_user_id=1,
+        state="WAITING_ROLL",
+        pending_roll={"type": "CHECK", "target_user_ids": []},
+        pending_generation_request={},
+        pending_generated_result={},
+        pending_poll=None,
+        action_prompt_message_id=None,
+        pending_actions={},
+    )
+    dnd.dnd_sessions[chat_id] = session
+    message = FakeMessage(
+        chat_id=chat_id,
+        user_id=2,
+        user_name="Боря",
+        text="дальше",
+    )
+
+    try:
+        asyncio.run(dnd.handle_dnd_next(message))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert message.answers[0][0] == "«Дальше» может сказать только ведущий."
+    assert session.pending_roll is not None
+
+
+def test_next_during_active_generation_is_not_silent():
+    chat_id = -100508
+    session = SimpleNamespace(
+        starter_user_id=1,
+        state="RESOLVING",
+        pending_roll=None,
+        pending_generation_request={"prompt": "Продолжай сцену"},
+        pending_generated_result={},
+        pending_poll=None,
+        action_prompt_message_id=None,
+        pending_actions={},
+        _upupa_generation_call_active=True,
+    )
+    dnd.dnd_sessions[chat_id] = session
+    message = FakeMessage(
+        chat_id=chat_id,
+        user_id=1,
+        user_name="Алиса",
+        text="дальше",
+    )
+
+    try:
+        asyncio.run(dnd.handle_dnd_next(message))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert "Мастер ещё обрабатывает текущий ход" in message.answers[0][0]
