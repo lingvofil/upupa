@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 from AI import dnd_generation_resilience as resilience
+from infrastructure.ai import execution as ai_execution
 
 
 def _session():
@@ -13,6 +14,38 @@ def _session():
             {"role": "assistant", "content": "Погнали."},
         ],
     )
+
+
+def test_resilient_gemini_provider_call_is_attributed_to_dnd(monkeypatch):
+    session = _session()
+    features = []
+
+    fake_client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=lambda **_kwargs: None)
+    )
+    monkeypatch.setattr(resilience, "_attempt_pairs", lambda _chat_id, _attempts: [("key", "model")])
+    monkeypatch.setattr(resilience, "_get_client", lambda _key, _timeout: fake_client)
+
+    def fake_provider_call(_operation, _func, **_kwargs):
+        features.append(ai_execution._CURRENT_AI_FEATURE.get())
+        return SimpleNamespace(text="ответ", candidates=[])
+
+    monkeypatch.setattr(resilience, "run_ai_provider_call", fake_provider_call)
+
+    result = resilience._run_gemini_sync(
+        session,
+        "ход",
+        attempts=1,
+        http_timeout_ms=1000,
+        governor_timeout_seconds=1.0,
+        queue_timeout_seconds=1.0,
+        include_history=False,
+        lane="interactive",
+        update_circuit=False,
+    )
+
+    assert result == "ответ"
+    assert features == ["DnD"]
 
 
 def test_main_generation_falls_back_to_groq_after_fast_gemini_failure(monkeypatch):
