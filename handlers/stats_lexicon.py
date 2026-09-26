@@ -22,6 +22,10 @@ import features.statistics as bot_statistics
 router = Router(name="stats_lexicon")
 
 
+TELEGRAM_TEXT_LIMIT = 4096
+TOKEN_REPORT_CHUNK_LIMIT = 3800
+
+
 TOKEN_USAGE_PERIODS = {
     "токены": (24, "Расход токенов за 24 часа"),
     "токены сутки": (24, "Расход токенов за 24 часа"),
@@ -46,6 +50,40 @@ def _format_usage_identity(name, username, fallback: str) -> str:
     if username:
         return f"{name} (@{username})" if name else f"@{username}"
     return str(name or fallback)
+
+
+def _split_html_message(text: str, *, limit: int = TOKEN_REPORT_CHUNK_LIMIT) -> list[str]:
+    """Split line-oriented HTML into Telegram-safe messages.
+
+    Token report formatting keeps HTML tags self-contained on each line, so
+    splitting only between lines preserves valid markup in every chunk.
+    """
+    if limit <= 0 or limit > TELEGRAM_TEXT_LIMIT:
+        raise ValueError("Telegram chunk limit must be between 1 and 4096")
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for line in text.splitlines():
+        if len(line) > limit:
+            raise ValueError("Token report line exceeds Telegram message limit")
+
+        separator = 1 if current else 0
+        if current and current_length + separator + len(line) > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_length = len(line)
+            continue
+
+        current.append(line)
+        current_length += separator + len(line)
+
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 def format_model_usage_message(report: dict, title: str) -> str:
@@ -270,11 +308,13 @@ def format_stats_message(stats: Dict[str, Dict], title: str) -> str:
 async def cmd_token_usage(message: Message):
     period_hours, title = TOKEN_USAGE_PERIODS[message.text.lower().strip()]
     report = await bot_statistics.get_model_usage_report(period_hours, limit=7)
-    await message.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=format_model_usage_message(report, title),
-        parse_mode="HTML",
-    )
+    rendered = format_model_usage_message(report, title)
+    for chunk in _split_html_message(rendered):
+        await message.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=chunk,
+            parse_mode="HTML",
+        )
 
 
 @router.message(F.text.lower() == "стотистика", F.from_user.id == ADMIN_ID)
