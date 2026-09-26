@@ -24,6 +24,7 @@ router = Router(name="stats_lexicon")
 
 TELEGRAM_TEXT_LIMIT = 4096
 TOKEN_REPORT_CHUNK_LIMIT = 3800
+TOKEN_DASHBOARD_URL = "https://t.me/expertyebaniebot/upupadile?startapp=tokens"
 
 
 TOKEN_USAGE_PERIODS = {
@@ -331,11 +332,23 @@ async def cmd_token_usage(message: Message):
     period_hours, title = TOKEN_USAGE_PERIODS[message.text.lower().strip()]
     report = await bot_statistics.get_model_usage_report(period_hours, limit=7)
     rendered = format_model_usage_message(report, title)
-    for chunk in _split_html_message(rendered):
+    chunks = _split_html_message(rendered)
+    dashboard_keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="📊 Открыть дашборд",
+                    url=TOKEN_DASHBOARD_URL,
+                )
+            ]
+        ]
+    )
+    for index, chunk in enumerate(chunks):
         await message.bot.send_message(
             chat_id=ADMIN_ID,
             text=chunk,
             parse_mode="HTML",
+            reply_markup=dashboard_keyboard if index == 0 else None,
         )
 
 
