@@ -245,6 +245,35 @@ def _generation_effects(effects) -> list[dict]:
     return rows
 
 
+def _supersede_stale_generation_request(session, *, replacement_kind: str) -> bool:
+    """Drop stale durable bookkeeping before reserving authoritative newer work.
+
+    A request tied to an older campaign revision cannot be retried safely. When
+    the current state machine is explicitly reserving a new continuation, the
+    current canonical state is the source of truth. Do not rewind conversation
+    here: the stale request may be residue from the scene that already produced
+    the current WAITING_* state.
+    """
+    request = getattr(session, "pending_generation_request", {}) or {}
+    if not request.get("prompt"):
+        return False
+    if bool(getattr(session, "_upupa_generation_call_active", False)):
+        return False
+    stale_reason = _identity_mismatch_reason(session, request)
+    if not stale_reason:
+        return False
+    logging.warning(
+        "DnD superseding stale generation request chat_id=%s request_id=%s "
+        "reason=%s replacement_kind=%s",
+        getattr(session, "chat_id", None),
+        request.get("id"),
+        stale_reason,
+        replacement_kind,
+    )
+    session.pending_generation_request = {}
+    return True
+
+
 def reserve_generation_request(
     session,
     prompt: str,
@@ -256,10 +285,17 @@ def reserve_generation_request(
     _ensure(session)
     if _pending_text(session):
         return False
+    prompt = str(prompt or "")
     existing = _pending_generation_prompt(session)
     if existing:
-        return existing == str(prompt or "")
-    request = _new_generation_request(session, str(prompt or ""))
+        if existing == prompt:
+            return True
+        if not _supersede_stale_generation_request(
+            session,
+            replacement_kind=str(kind or "GENERATION"),
+        ):
+            return False
+    request = _new_generation_request(session, prompt)
     request["kind"] = str(kind or "GENERATION")
     request["telegram_effects"] = _generation_effects(effects)
     session.pending_generation_request = request
@@ -275,11 +311,18 @@ def transition_to_generation_request(
 ) -> bool:
     """Commit the current parsed result and atomically reserve its successor."""
     _ensure(session)
+    prompt = str(prompt or "")
     existing = _pending_generation_prompt(session)
     if existing:
-        return existing == str(prompt or "")
+        if existing == prompt:
+            return True
+        if not _supersede_stale_generation_request(
+            session,
+            replacement_kind=str(kind or "GENERATION"),
+        ):
+            return False
     parent_id = (getattr(session, "pending_generated_result", {}) or {}).get("id")
-    request = _new_generation_request(session, str(prompt or ""))
+    request = _new_generation_request(session, prompt)
     request["kind"] = str(kind or "GENERATION")
     request["parent_result_id"] = parent_id
     request["telegram_effects"] = _generation_effects(effects)
