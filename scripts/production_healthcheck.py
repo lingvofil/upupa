@@ -115,6 +115,27 @@ def check_crocodile_mini_app(
     if any(marker not in html for marker in required_markers):
         raise HealthCheckError("Crocodile Mini App returned invalid HTML")
 
+    dashboard_request = Request(
+        f"{base_url}/game?view=tokens",
+        headers={"User-Agent": "upupa-deploy-healthcheck/1"},
+    )
+    try:
+        with opener(dashboard_request, timeout=timeout) as response:
+            dashboard_html = response.read().decode("utf-8")
+    except (HTTPError, URLError, OSError):
+        raise HealthCheckError("Token dashboard is unreachable") from None
+    except UnicodeDecodeError:
+        raise HealthCheckError("Token dashboard returned invalid HTML") from None
+
+    dashboard_markers = (
+        "<title>Упупа · Токены</title>",
+        'id="features"',
+        'id="models"',
+        "X-Telegram-Init-Data",
+    )
+    if any(marker not in dashboard_html for marker in dashboard_markers):
+        raise HealthCheckError("Token dashboard returned invalid HTML")
+
     handshake_request = Request(
         f"{base_url}/socket.io/?EIO=4&transport=polling",
         headers={"User-Agent": "upupa-deploy-healthcheck/1"},
@@ -183,7 +204,7 @@ def main() -> int:
 
     print(
         f"healthcheck ok: process_pid={process['pid']} polling=ok databases=ok tasks=ok telegram=getMe "
-        f"bot_id={result['id']} username={result.get('username', 'unknown')} mini_app=game+socketio"
+        f"bot_id={result['id']} username={result.get('username', 'unknown')} mini_app=game+tokens+socketio"
     )
     return 0
 

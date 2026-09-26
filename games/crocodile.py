@@ -24,6 +24,7 @@ from thefuzz import fuzz
 
 from core.loader import bot
 from core.settings import API_TOKEN
+from games.token_dashboard import serve_token_dashboard, token_dashboard_api
 from games.webapp_auth import (
     WebAppAuthError,
     authorize_crocodile_drawer,
@@ -699,6 +700,12 @@ async def final_frame(sid, data):
 
 # ================== HTTP ==================
 async def serve_index(request: web.Request):
+    view = str(request.query.get("view", "")).strip().lower()
+    if view == "tokens":
+        return await serve_token_dashboard(request)
+    if view == "tokens-api":
+        return await token_dashboard_api(request)
+
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
