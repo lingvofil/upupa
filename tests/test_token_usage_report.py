@@ -25,7 +25,7 @@ def test_split_html_message_keeps_chunks_under_telegram_limit():
 
 
 def test_split_html_message_does_not_break_section_when_it_fits():
-    intro = "<b>Сводка</b>\n" + ("x" * 3000)
+    intro = "<b>Сводка</b>\n" + ("x" * 3500)
     users = "<b>Топ пользователей</b>\n" + "\n".join(
         f"• пользователь {index}" for index in range(20)
     )
