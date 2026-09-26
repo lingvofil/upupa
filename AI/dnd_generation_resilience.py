@@ -19,7 +19,7 @@ from core.settings import (
     SPECIAL_CHAT_ID,
 )
 from infrastructure.ai.clients import groq_ai
-from infrastructure.ai.execution import ai_execution_lane, run_ai_provider_call
+from infrastructure.ai.execution import ai_execution_lane, ai_feature, run_ai_provider_call
 
 
 DND_GEMINI_HTTP_TIMEOUT_MS = 12_000
@@ -311,6 +311,7 @@ def _history_contents(session, prompt: str):
     return contents
 
 
+@ai_feature("DnD", only_if_unset=True)
 def _run_gemini_sync(
     session,
     prompt: str,
@@ -529,6 +530,7 @@ def build_bounded_text_prompt(
     )
 
 
+@ai_feature("DnD", only_if_unset=True)
 def _run_groq_sync(
     session,
     prompt: str,
@@ -640,6 +642,7 @@ async def _generate_main_text(session, prompt: str) -> str:
         ) from exc
 
 
+@ai_feature("DnD", only_if_unset=True)
 def _run_groq_auxiliary_sync(prompt: str) -> str:
     """Run one compact Groq-only auxiliary pass without conversation history."""
     if not GROQ_API_KEY:
