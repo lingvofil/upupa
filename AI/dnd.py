@@ -1553,6 +1553,8 @@ async def cmd_stop_dnd(message: Message):
 
 
 def _is_backstory_reply(message: Message) -> bool:
+    if message.text and message.text.strip().casefold() == "дальше":
+        return False
     session = dnd_sessions.get(message.chat.id)
     if (
         not session
@@ -1758,7 +1760,11 @@ def _is_group_action_reply(message: Message) -> bool:
     if not prompt_message_id or not message.reply_to_message:
         return False
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if (
+        not user_action
+        or user_action.lower().startswith("упупа")
+        or user_action.strip().casefold() == "дальше"
+    ):
         return False
     if not _can_user_act(
         session,
@@ -1774,7 +1780,11 @@ async def handle_free_action(message: Message):
     session = dnd_sessions[message.chat.id]
     prompt_message_id = session.action_prompt_message_id
     user_action = message.text or message.caption
-    if not user_action or user_action.lower().startswith("упупа"):
+    if (
+        not user_action
+        or user_action.lower().startswith("упупа")
+        or user_action.strip().casefold() == "дальше"
+    ):
         return
     user_id = int(message.from_user.id)
     if not _can_user_act(
