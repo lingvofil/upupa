@@ -125,6 +125,69 @@ def test_generate_holiday_descriptions_falls_back_by_position(monkeypatch):
     }
 
 
+def test_generate_holiday_descriptions_retries_malformed_response_with_current_prompt(monkeypatch):
+    sample = [_holiday("День повторной попытки")]
+    chat_id = -1010
+    monkeypatch.setitem(
+        holidays.chat_settings,
+        str(chat_id),
+        {
+            "dialog_enabled": True,
+            "reactions_enabled": True,
+            "prompt": "ГОВОРИ КАК ПИРАТ И ДОБАВЛЯЙ МОРСКУЮ ЛЕКСИКУ.",
+            "prompt_name": "пират",
+            "prompt_source": "user",
+            "active_model": "gemini",
+        },
+    )
+
+    prompts = []
+
+    async def fake_generate(prompt, generated_chat_id):
+        assert generated_chat_id == str(chat_id)
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "Йо-хо-хо, JSON сегодня утонул."
+        return '[{"id": 1, "description": "Йо-хо-хо, праздник спасён со второй попытки."}]'
+
+    monkeypatch.setattr(holidays, "generate_simple_response", fake_generate)
+
+    result = asyncio.run(holidays.generate_holiday_descriptions(sample, chat_id))
+
+    assert result == {
+        "День повторной попытки": "Йо-хо-хо, праздник спасён со второй попытки."
+    }
+    assert len(prompts) == 2
+    assert all("ГОВОРИ КАК ПИРАТ" in prompt for prompt in prompts)
+    assert "повторная попытка" in prompts[1]
+
+
+def test_generate_holiday_descriptions_retries_only_missing_items(monkeypatch):
+    sample = [
+        _holiday("Первый праздник"),
+        _holiday("Второй праздник"),
+    ]
+    prompts = []
+
+    async def fake_generate(prompt, _chat_id):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return '[{"id": 1, "description": "Первый обработан"}]'
+        assert "Второй праздник" in prompt
+        assert "Первый праздник" not in prompt
+        return '[{"id": 1, "description": "Второй тоже обработан"}]'
+
+    monkeypatch.setattr(holidays, "generate_simple_response", fake_generate)
+
+    result = asyncio.run(holidays.generate_holiday_descriptions(sample, -1011))
+
+    assert result == {
+        "Первый праздник": "Первый обработан",
+        "Второй праздник": "Второй тоже обработан",
+    }
+    assert len(prompts) == 2
+
+
 def test_generate_holiday_descriptions_logs_calend_fallback(monkeypatch, caplog):
     sample = [_holiday()]
 
