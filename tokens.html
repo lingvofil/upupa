@@ -206,6 +206,96 @@
     }).join("");
   }
 
+  function userBars(targetId, rows, valueKey) {
+    const target = document.getElementById(targetId);
+    if (!rows || !rows.length) {
+      target.innerHTML = '<div class="empty">Нет данных</div>';
+      return;
+    }
+    const max = Math.max(...rows.map(r => Number(r[valueKey] || 0)), 1);
+    target.innerHTML = rows.map(row => {
+      const value = Number(row[valueKey] || 0);
+      const width = Math.max(0.5, value / max * 100);
+      const label = identity(row, "ID " + row.user_id);
+      const meta = valueKey === "requests"
+        ? fmt(row.total_tokens) + " токенов"
+        : "вызовы " + row.requests;
+      return '<div class="row clickable" data-user-id="' + Number(row.user_id) + '">' +
+        '<div class="row-head"><div class="name" title="' + esc(label) + '">' +
+        esc(label) + '</div><div class="metric">' + fmt(value) + '</div></div>' +
+        '<div class="bar"><span style="width:' + width.toFixed(2) + '%"></span></div>' +
+        '<div class="meta">' + esc(meta) + ' · нажми для деталей</div></div>';
+    }).join("");
+  }
+
+  function renderUserDetail(detail) {
+    const section = document.getElementById("userDetailSection");
+    const user = detail.user;
+    if (!user) {
+      section.hidden = false;
+      document.getElementById("userDetailTitle").textContent = "Пользователь не найден";
+      document.getElementById("userDetailMeta").textContent = "";
+      document.getElementById("userCalls").innerHTML =
+        '<tr><td colspan="5" class="empty">Нет данных за выбранный период</td></tr>';
+      return;
+    }
+
+    document.getElementById("userDetailTitle").textContent =
+      identity(user, "ID " + user.user_id);
+    document.getElementById("userDetailMeta").textContent =
+      fmt(user.total_tokens) + " токенов · " + user.requests + " AI-вызовов";
+
+    bars("userChats", detail.chats || [], r => r.chat_title || ("ID " + r.chat_id), "total_tokens",
+      r => "AI-вызовы " + r.requests);
+    bars("userFeatures", detail.features || [], r => r.feature || "не размечено", "total_tokens",
+      r => "AI-вызовы " + r.requests);
+
+    const calls = detail.calls || [];
+    document.getElementById("userCalls").innerHTML = calls.length
+      ? calls.map(r => {
+          const chat = r.chat_title || (r.chat_id != null ? "ID " + r.chat_id : "без чата");
+          const when = String(r.timestamp || "").replace("T", " ").slice(0, 19);
+          const model = (r.provider || "unknown") + "/" + (r.model_name || "unknown");
+          const status = r.success === false ? " · ошибка" : "";
+          return '<tr>' +
+            '<td><b>' + esc(when) + '</b><div class="meta">' + esc(chat) + '</div></td>' +
+            '<td>' + esc(r.feature || "не размечено") + '</td>' +
+            '<td><code>' + esc(r.request_type || "unknown") + '</code></td>' +
+            '<td><code>' + esc(model) + '</code></td>' +
+            '<td><b>' + esc(fmt(r.total_tokens)) + '</b>' +
+            '<div class="meta">вход ' + esc(fmt(r.input_tokens)) +
+            ' · reasoning ' + esc(fmt(r.reasoning_tokens)) +
+            ' · выход ' + esc(fmt(r.output_tokens)) + status + '</div></td></tr>';
+        }).join("")
+      : '<tr><td colspan="5" class="empty">Нет AI-вызовов за выбранный период</td></tr>';
+
+    section.hidden = false;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function loadUserDetail(userId) {
+    const section = document.getElementById("userDetailSection");
+    section.hidden = false;
+    document.getElementById("userDetailTitle").textContent = "Загрузка…";
+    document.getElementById("userDetailMeta").textContent = "";
+    try {
+      const response = await fetch(
+        "/game?view=tokens-api&period=" + encodeURIComponent(currentPeriod) +
+        "&user_id=" + encodeURIComponent(userId),
+        {
+          headers: { "X-Telegram-Init-Data": initData },
+          cache: "no-store"
+        }
+      );
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const payload = await response.json();
+      renderUserDetail(payload.user_detail || {});
+    } catch (error) {
+      document.getElementById("userDetailTitle").textContent = "Не удалось загрузить пользователя";
+      document.getElementById("userDetailMeta").textContent = String(error.message || error);
+    }
+  }
+
   function render(report, period) {
     const t = report.totals || {};
     const known = Number(t.usage_known_requests || 0);
@@ -247,10 +337,8 @@
       r => "вызовы " + r.requests + " · ср. " + fmt(r.average_tokens));
     bars("chats", report.chats || [], r => r.chat_title || ("ID " + r.chat_id), "total_tokens",
       r => "вызовы " + r.requests);
-    bars("users", report.users || [], r => identity(r, "ID " + r.user_id), "total_tokens",
-      r => "вызовы " + r.requests);
-    bars("usersByRequests", report.users_by_requests || [], r => identity(r, "ID " + r.user_id), "requests",
-      r => fmt(r.total_tokens) + " токенов");
+    userBars("users", report.users || [], "total_tokens");
+    userBars("usersByRequests", report.users_by_requests || [], "requests");
 
     const requestRows = report.request_types || [];
     document.getElementById("requestTypes").innerHTML = requestRows.length
@@ -273,6 +361,7 @@
       return;
     }
     currentPeriod = period;
+    document.getElementById("userDetailSection").hidden = true;
     document.querySelectorAll("[data-period]").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.period === period);
       btn.disabled = true;
@@ -292,6 +381,18 @@
       document.querySelectorAll("[data-period]").forEach(btn => btn.disabled = false);
     }
   }
+
+  document.getElementById("users").addEventListener("click", event => {
+    const row = event.target.closest("[data-user-id]");
+    if (row) loadUserDetail(row.dataset.userId);
+  });
+  document.getElementById("usersByRequests").addEventListener("click", event => {
+    const row = event.target.closest("[data-user-id]");
+    if (row) loadUserDetail(row.dataset.userId);
+  });
+  document.getElementById("closeUserDetail").addEventListener("click", () => {
+    document.getElementById("userDetailSection").hidden = true;
+  });
 
   document.getElementById("periods").addEventListener("click", event => {
     const button = event.target.closest("[data-period]");
