@@ -60,6 +60,8 @@
     .section h2 { margin: 0 0 12px; font-size: 16px; }
     .row { margin: 0 0 12px; }
     .row:last-child { margin-bottom: 0; }
+    .row.clickable { cursor: pointer; padding: 6px; margin-left: -6px; margin-right: -6px; border-radius: 9px; }
+    .row.clickable:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
     .row-head {
       display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
       margin-bottom: 5px;
@@ -80,6 +82,9 @@
     code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
     .empty, .error { color: var(--muted); padding: 22px 0; text-align: center; }
     .error { color: #ff6b6b; }
+    .detail-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .detail-title { font-size: 18px; font-weight: 800; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
     .foot { color: var(--muted); font-size: 11px; margin-top: 12px; }
     @media (max-width: 900px) {
       .kpis { grid-template-columns: repeat(3, 1fr); }
@@ -90,6 +95,7 @@
       .kpis { grid-template-columns: repeat(2, 1fr); }
       .grid { grid-template-columns: 1fr; }
       .section.full { grid-column: auto; }
+      .detail-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -118,6 +124,24 @@
     <section class="section"><h2>Чаты</h2><div id="chats"></div></section>
     <section class="section"><h2>Пользователи по токенам</h2><div id="users"></div></section>
     <section class="section"><h2>Пользователи по вызовам</h2><div id="usersByRequests"></div></section>
+    <section class="section full" id="userDetailSection" hidden>
+      <div class="detail-head">
+        <div>
+          <div class="detail-title" id="userDetailTitle">Пользователь</div>
+          <div class="subtitle" id="userDetailMeta"></div>
+        </div>
+        <button id="closeUserDetail" type="button">Закрыть</button>
+      </div>
+      <div class="detail-grid">
+        <div><h2>В каких чатах пишет</h2><div id="userChats"></div></div>
+        <div><h2>Что запускает</h2><div id="userFeatures"></div></div>
+      </div>
+      <h2>Конкретные AI-вызовы</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Время / чат</th><th>Функция</th><th>Тип</th><th>Модель</th><th>Токены</th></tr></thead>
+        <tbody id="userCalls"></tbody>
+      </table></div>
+    </section>
     <section class="section full">
       <h2>Технические типы AI-вызовов</h2>
       <div class="table-wrap"><table>
