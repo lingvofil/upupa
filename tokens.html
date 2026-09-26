@@ -254,7 +254,7 @@
       btn.disabled = true;
     });
     try {
-      const response = await fetch("/tokens/api?period=" + encodeURIComponent(period), {
+      const response = await fetch("/game?view=tokens-api&period=" + encodeURIComponent(period), {
         headers: { "X-Telegram-Init-Data": initData },
         cache: "no-store"
       });
