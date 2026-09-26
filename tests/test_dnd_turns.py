@@ -177,10 +177,41 @@ def test_group_action_router_only_accepts_replies_to_current_prompt():
             text="ломаю дверь",
             reply_to_message_id=77,
         )
+        next_reply = FakeMessage(
+            chat_id=chat_id,
+            user_id=1,
+            user_name="Алиса",
+            text="дальше",
+            reply_to_message_id=77,
+        )
 
         assert dnd._is_group_action_reply(plain_chat) is False
         assert dnd._is_group_action_reply(wrong_reply) is False
         assert dnd._is_group_action_reply(correct_reply) is True
+        assert dnd._is_group_action_reply(next_reply) is False
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+
+def test_next_reply_is_not_consumed_as_backstory():
+    chat_id = -1005002
+    session = SimpleNamespace(
+        state="WAITING_BACKSTORY",
+        starter_user_id=1,
+        backstory_prompt_message_id=177,
+    )
+    dnd.dnd_sessions[chat_id] = session
+    message = FakeMessage(
+        chat_id=chat_id,
+        user_id=1,
+        user_name="Алиса",
+        text="дальше",
+        reply_to_message_id=177,
+    )
+
+    try:
+        assert dnd._is_backstory_reply(message) is False
+        assert dnd._is_dnd_next_command(message) is True
     finally:
         dnd.dnd_sessions.pop(chat_id, None)
 
