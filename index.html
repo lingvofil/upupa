@@ -21,7 +21,10 @@
         }
       }
       if (startParam === "tokens") {
-        window.location.replace("/tokens" + window.location.search + window.location.hash);
+        const target = new URL(window.location.href);
+        target.pathname = "/game";
+        target.searchParams.set("view", "tokens");
+        window.location.replace(target.pathname + target.search + target.hash);
       }
     })();
   </script>
