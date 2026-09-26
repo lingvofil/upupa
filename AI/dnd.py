@@ -1096,18 +1096,7 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
         )
 
         poll_snapshot = dict(getattr(session, "pending_poll", None) or {})
-        session.last_resolved_poll = {
-            "poll_id": poll_id,
-            "scene_text": str(poll_snapshot.get("scene_text") or "").strip(),
-            "options": list(options),
-            "outcome": outcome,
-            "resolved_at": time.time(),
-        }
-        poll_map.pop(poll_id, None)
-        session.current_poll_id = None
-        session.pending_poll = None
-        session.state = "RESOLVING"
-        transition_to_generation_request(
+        transitioned = transition_to_generation_request(
             session,
             continuation_prompt,
             kind="POLL_CONTINUATION",
@@ -1125,6 +1114,34 @@ async def finalize_poll(bot: Bot, chat_id: int, message_id: int, options: list):
                 },
             ],
         )
+        if not transitioned:
+            active_request = getattr(session, "pending_generation_request", {}) or {}
+            logging.error(
+                "DnD poll continuation reservation blocked chat_id=%s poll_id=%s "
+                "active_request_id=%s active_kind=%s",
+                chat_id,
+                poll_id,
+                active_request.get("id"),
+                active_request.get("kind"),
+            )
+            await bot.send_message(
+                chat_id,
+                "Мастер уже восстанавливает другой ход. Голосование пока не закрываю; "
+                "ведущий может написать «дальше».",
+            )
+            return
+
+        session.last_resolved_poll = {
+            "poll_id": poll_id,
+            "scene_text": str(poll_snapshot.get("scene_text") or "").strip(),
+            "options": list(options),
+            "outcome": outcome,
+            "resolved_at": time.time(),
+        }
+        poll_map.pop(poll_id, None)
+        session.current_poll_id = None
+        session.pending_poll = None
+        session.state = "RESOLVING"
         persist_dnd_sessions()
 
         from AI import dnd as dnd_module
