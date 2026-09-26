@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from aiohttp import web
 
+from core.paths import STATISTICS_DB_PATH
 from core.settings import ADMIN_ID, API_TOKEN
 import features.statistics as bot_statistics
 from games.webapp_auth import WebAppAuthError, validate_telegram_init_data
+from infrastructure.persistence.token_dashboard import TokenDashboardDrilldownRepository
+
+
+_drilldown_repository = TokenDashboardDrilldownRepository(STATISTICS_DB_PATH)
 
 
 TOKEN_DASHBOARD_PERIODS: dict[str, int | None] = {
@@ -45,16 +52,36 @@ async def token_dashboard_api(request: web.Request) -> web.Response:
     if period_key not in TOKEN_DASHBOARD_PERIODS:
         raise web.HTTPBadRequest(text="invalid period")
 
-    report = await bot_statistics.get_model_usage_report(
-        TOKEN_DASHBOARD_PERIODS[period_key],
-        limit=20,
-    )
-    response = web.json_response(
-        {
-            "period": period_key,
-            "report": report,
-        }
-    )
+    period_hours = TOKEN_DASHBOARD_PERIODS[period_key]
+    user_id_raw = request.query.get("user_id")
+    if user_id_raw is not None:
+        try:
+            user_id = int(user_id_raw)
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="invalid user_id") from None
+        detail = await asyncio.to_thread(
+            _drilldown_repository.get_user_detail,
+            user_id,
+            period_hours,
+            request_limit=100,
+        )
+        response = web.json_response(
+            {
+                "period": period_key,
+                "user_detail": detail,
+            }
+        )
+    else:
+        report = await bot_statistics.get_model_usage_report(
+            period_hours,
+            limit=20,
+        )
+        response = web.json_response(
+            {
+                "period": period_key,
+                "report": report,
+            }
+        )
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
