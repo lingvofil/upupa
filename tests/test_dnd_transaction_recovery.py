@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 from AI import dnd
+from AI import dnd_result_recovery as recovery
 from AI import dnd_special_moves as special
 
 
@@ -403,6 +404,66 @@ def test_base_roll_reserves_exact_continuation_before_provider_call(monkeypatch)
 
 
 
+def test_successor_transition_supersedes_stale_generation_request():
+    session = SimpleNamespace(
+        chat_id=-1008071,
+        state="WAITING_POLL",
+        campaign_id="campaign-stale-transition",
+        state_revision=8,
+        campaign_started_at=None,
+        pending_generated_result={},
+        pending_generation_request={
+            "id": "gen:old",
+            "prompt": "старое продолжение",
+            "source_campaign_id": "campaign-stale-transition",
+            "source_revision": 6,
+        },
+        generated_result_seq=0,
+        conversation=[],
+    )
+
+    changed = recovery.transition_to_generation_request(
+        session,
+        "результат голосования",
+        kind="POLL_CONTINUATION",
+    )
+
+    assert changed is True
+    assert session.pending_generation_request["id"] != "gen:old"
+    assert session.pending_generation_request["prompt"] == "результат голосования"
+    assert session.pending_generation_request["kind"] == "POLL_CONTINUATION"
+    assert session.pending_generation_request["source_revision"] == 8
+
+
+def test_successor_transition_does_not_replace_current_different_request():
+    session = SimpleNamespace(
+        chat_id=-1008072,
+        state="RESOLVING",
+        campaign_id="campaign-current-transition",
+        state_revision=8,
+        campaign_started_at=None,
+        pending_generated_result={},
+        pending_generation_request={
+            "id": "gen:current",
+            "prompt": "уже выполняемый ход",
+            "source_campaign_id": "campaign-current-transition",
+            "source_revision": 8,
+        },
+        generated_result_seq=0,
+        conversation=[],
+    )
+
+    changed = recovery.transition_to_generation_request(
+        session,
+        "другое продолжение",
+        kind="POLL_CONTINUATION",
+    )
+
+    assert changed is False
+    assert session.pending_generation_request["id"] == "gen:current"
+    assert session.pending_generation_request["prompt"] == "уже выполняемый ход"
+
+
 def test_poll_outcome_is_committed_before_continuation_provider(monkeypatch):
     chat_id = -100808
     session = SimpleNamespace(
@@ -488,3 +549,77 @@ def test_poll_outcome_is_committed_before_continuation_provider(monkeypatch):
         dnd.dnd_sessions.pop(chat_id, None)
         dnd.poll_map.pop("poll-808", None)
         dnd._finalizing_polls.discard("poll-808")
+
+
+
+def test_poll_finalization_replaces_stale_request_and_keeps_new_continuation(monkeypatch):
+    chat_id = -100809
+    session = SimpleNamespace(
+        chat_id=chat_id,
+        mode="abstract",
+        state="WAITING_POLL",
+        campaign_id="campaign-poll-stale",
+        state_revision=8,
+        campaign_started_at=None,
+        current_poll_id="poll-809",
+        pending_poll={
+            "poll_id": "poll-809",
+            "message_id": 809,
+            "poll_chat_id": chat_id,
+            "options": ["налево", "направо"],
+            "target_user_ids": [],
+            "votes": {"1": 1},
+        },
+        pending_generated_result={},
+        pending_generation_request={
+            "id": "gen:1790433994503:old",
+            "prompt": "старое продолжение из revision 6",
+            "kind": "GENERATION",
+            "source_campaign_id": "campaign-poll-stale",
+            "source_revision": 6,
+        },
+        generated_result_seq=0,
+        conversation=[],
+    )
+    provider_seen = []
+
+    class Bot:
+        async def stop_poll(self, *, chat_id, message_id):
+            return SimpleNamespace(options=[])
+
+        async def send_message(self, chat_id, text, **kwargs):
+            del kwargs
+            return SimpleNamespace(message_id=990, chat=SimpleNamespace(id=chat_id))
+
+    async def fail_generation(current, prompt):
+        provider_seen.append(
+            {
+                "prompt": prompt,
+                "request": dict(current.pending_generation_request),
+            }
+        )
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(dnd, "generate_session_response", fail_generation)
+    monkeypatch.setattr(dnd, "with_scene_direction", lambda session, prompt: prompt)
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    dnd.dnd_sessions[chat_id] = session
+    dnd.poll_map["poll-809"] = chat_id
+
+    try:
+        asyncio.run(dnd.finalize_poll(Bot(), chat_id, 809, ["налево", "направо"]))
+
+        assert len(provider_seen) == 1
+        request = provider_seen[0]["request"]
+        assert request["id"] != "gen:1790433994503:old"
+        assert request["kind"] == "POLL_CONTINUATION"
+        assert request["source_revision"] == 8
+        assert "направо" in request["prompt"]
+        assert session.state == "RESOLVING"
+        assert session.current_poll_id is None
+        assert session.pending_poll is None
+        assert "poll-809" not in dnd.poll_map
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+        dnd.poll_map.pop("poll-809", None)
+        dnd._finalizing_polls.discard("poll-809")
