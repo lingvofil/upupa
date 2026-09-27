@@ -169,3 +169,36 @@ def test_epilogue_does_not_become_another_forced_finale():
     install_turn_contract_guard(module)
     assert asyncio.run(module.generate_session_response(game, "Напиши эпилог")) == "Эпилог."
     assert turn_contract(game) == ""
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_restored_roll_timer_waits_until_durable_replay_is_done(monkeypatch, tmp_path, recovering):
+    import json
+    path = tmp_path / "roll.json"
+    path.write_text(json.dumps({"sessions": [{"chat_id": settings.ALLOWED_CHAT_ID}]}), encoding="utf-8")
+    game = SimpleNamespace(chat_id=settings.ALLOWED_CHAT_ID, state="WAITING_ROLL", pending_poll=None,
+                           current_poll_id=None, pending_roll={"target_user_ids": [1]},
+                           pending_generated_result={"text": "saved"} if recovering else {},
+                           pending_generation_request={}, action_prompt_message_id=None, action_deadline=None,
+                           pending_actions={}, action_target_user_ids=[])
+    scheduled = []
+    monkeypatch.setattr(dnd, "_state_path", lambda: path)
+    monkeypatch.setattr(dnd, "dnd_sessions", {})
+    monkeypatch.setattr(dnd, "poll_map", {})
+    monkeypatch.setattr(dnd.GameSession, "from_record", classmethod(lambda cls, row: game))
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(dnd, "_validate_dnd_session_state", lambda *a, **k: None)
+    monkeypatch.setattr(dnd, "schedule_personal_turn", lambda *args: scheduled.append(args))
+    monkeypatch.setattr(dnd, "_start_background_task", lambda coro, **k: coro.close())
+    assert dnd.restore_dnd_sessions(object()) == 1
+    assert bool(scheduled) is not recovering
+
+
+def test_automatic_skip_works_for_legacy_session_without_host():
+    from AI.dnd_turn_control import skip_absent_turn
+    game = SimpleNamespace(state="WAITING_ACTION", action_target_user_ids=[1], pending_actions={})
+    bot = SimpleNamespace(send_message=AsyncMock())
+    module = SimpleNamespace(dnd_sessions={-1: game}, _participant_name=lambda *a: "Игрок",
+                             persist_dnd_sessions=lambda: None, open_action_window=AsyncMock())
+    assert asyncio.run(skip_absent_turn(module, bot, -1, None, automatic=True))
+    module.open_action_window.assert_awaited_once()

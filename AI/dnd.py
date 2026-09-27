@@ -686,13 +686,13 @@ def restore_dnd_sessions(bot: Bot) -> int:
             session = GameSession.from_record(record)
             dnd_sessions[session.chat_id] = session
             restored += 1
-            if session.state == "WAITING_ROLL":
-                schedule_personal_turn(sys.modules[__name__], bot, session)
             durable_result = getattr(session, "pending_generated_result", {}) or {}
             generation_request = getattr(session, "pending_generation_request", {}) or {}
             has_durable_result = bool(durable_result.get("text"))
             has_pending_generation = bool(generation_request.get("prompt"))
             has_recovery_work = has_durable_result or has_pending_generation
+            if session.state == "WAITING_ROLL" and not has_recovery_work:
+                schedule_personal_turn(sys.modules[__name__], bot, session)
             poll = session.pending_poll
             if (
                 not has_recovery_work

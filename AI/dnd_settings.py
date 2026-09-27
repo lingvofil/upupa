@@ -98,7 +98,7 @@ async def wait_personal_turn(dnd, bot, session, prompt_id, deadline):
             or session.pending_actions or not session.action_target_user_ids):
         return
     from AI.dnd_turn_control import skip_absent_turn
-    await skip_absent_turn(dnd, bot, session.chat_id, session.starter_user_id, automatic=True)
+    await skip_absent_turn(dnd, bot, session.chat_id, getattr(session, "starter_user_id", None), automatic=True)
 
 
 async def wait_personal_roll(dnd, bot, session, roll, deadline):
@@ -107,7 +107,7 @@ async def wait_personal_roll(dnd, bot, session, roll, deadline):
             or session.pending_roll is not roll or roll.get("personal_deadline") != deadline):
         return
     from AI.dnd_turn_control import skip_absent_turn
-    await skip_absent_turn(dnd, bot, session.chat_id, session.starter_user_id, automatic=True)
+    await skip_absent_turn(dnd, bot, session.chat_id, getattr(session, "starter_user_id", None), automatic=True)
 
 
 def schedule_personal_turn(dnd, bot, session):
