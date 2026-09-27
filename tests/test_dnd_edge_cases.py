@@ -39,6 +39,7 @@ def test_upupa_command_reply_is_not_consumed_as_group_action():
 
 def test_restore_resolving_session_reopens_group_turn(monkeypatch, tmp_path):
     chat_id = -100601
+    monkeypatch.setattr(dnd, "ALLOWED_CHAT_ID", chat_id)
     state_path = tmp_path / "dnd_sessions.json"
     state_path.write_text(
         json.dumps({"version": 1, "sessions": [{"chat_id": chat_id}]}),

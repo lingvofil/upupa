@@ -342,6 +342,12 @@ def _run_gemini_sync(
 
     for api_key, model_name in pairs:
         try:
+            # Flash 2.5 counts thinking against max_output_tokens. A small text
+            # budget otherwise gets exhausted before ACTION/ITEM can be emitted.
+            config.thinking_config = (
+                genai_types.ThinkingConfig(thinking_budget=0)
+                if model_name.startswith("gemini-2.5-flash") else None
+            )
             client = _get_client(api_key, http_timeout_ms)
             with ai_execution_lane(lane):
                 response = run_ai_provider_call(

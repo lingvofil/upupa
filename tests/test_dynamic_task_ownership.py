@@ -201,6 +201,7 @@ def test_dnd_state_is_persisted_atomically(monkeypatch, tmp_path):
 
 def test_dnd_restore_rebuilds_poll_mapping_and_timer(monkeypatch, tmp_path):
     chat_id = -100201
+    monkeypatch.setattr(dnd, "ALLOWED_CHAT_ID", chat_id)
     poll_id = "restored-poll"
     state_path = tmp_path / "dnd_sessions.json"
     state_path.write_text(

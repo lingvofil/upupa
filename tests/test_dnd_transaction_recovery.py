@@ -135,6 +135,7 @@ def test_restore_keeps_collected_group_turn_if_process_died_while_resolving(tmp_
     monkeypatch.setattr(dnd, "_state_path", lambda: path)
 
     try:
+        monkeypatch.setattr(dnd, "ALLOWED_CHAT_ID", payload["sessions"][0]["chat_id"])
         restored = dnd.restore_dnd_sessions(SimpleNamespace())
         session = dnd.dnd_sessions[-100803]
 
@@ -177,6 +178,7 @@ def test_restore_without_collected_group_turn_still_falls_back_to_fresh_action(t
     )
 
     try:
+        monkeypatch.setattr(dnd, "ALLOWED_CHAT_ID", payload["sessions"][0]["chat_id"])
         restored = dnd.restore_dnd_sessions(SimpleNamespace())
         session = dnd.dnd_sessions[-100804]
 
@@ -234,7 +236,7 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
             dnd, state_policy=DndCampaignStatePolicy(lambda _session: None, lambda _session: {}),
         )
     path = tmp_path / "dnd_state.json"
-    path.write_text('{"version": 1, "sessions": [{}]}', encoding="utf-8")
+    path.write_text('{"version": 1, "sessions": [{"chat_id": -100805}]}', encoding="utf-8")
     session = SimpleNamespace(
         chat_id=-100805,
         state="WAITING_POLL",
@@ -273,6 +275,7 @@ def test_restore_defers_waiting_poll_tasks_while_durable_result_is_pending(tmp_p
     )
 
     try:
+        monkeypatch.setattr(dnd, "ALLOWED_CHAT_ID", session.chat_id)
         restored = dnd.restore_dnd_sessions(SimpleNamespace())
 
         assert restored == 1

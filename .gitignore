@@ -44,6 +44,8 @@ channel_mood.json
 channel_polls.json
 channel_external_mentions.json
 dnd_sessions.json
+dnd_settings.json
+.local-audit-dnd/
 blocked_users.json
 group_bans.json
 crocodile_sessions.json

@@ -9,11 +9,10 @@ import re
 
 
 TURN_CONTRACT = """ОБЯЗАТЕЛЬНЫЙ ПРОТОКОЛ DND (ID бери из участников, примеры не факты мира):
-До 100 слов сцены, затем скрытые метаданные, последним один ACTION.
+Обычно 100–180 слов сцены, затем скрытые метаданные, последним один ACTION.
 Свободный личный ход [ACTION:INPUT;TARGETS:id], общий [ACTION:INPUT].
-Общий выбор [ACTION:POLL;OPTIONS:путь 1;путь 2;путь 3]. Планируй хотя бы одну общую
-развилку за сюжет и затем иногда повторяй; варианты не обязаны исчерпывать все идеи:
-кнопка «Свой вариант» добавляется кодом. Не заменяй голосованием заявленное действие.
+Общий выбор [ACTION:POLL;OPTIONS:путь 1;путь 2;путь 3]. Планируй общую
+развилку по выбранной частоте; только конкретные пути, без «Свой вариант». Не заменяй голосованием заявленное действие.
 Проверка только для возможного, неопределённого действия с ценой провала:
 [ACTION:ROLL;TYPE:CHECK;ABILITY:DEX;SKILL:Ловкость рук;REASON:открыть заевший замок;DC:12;TARGETS:id].
 Для реакции на опасность TYPE:SAVE. ABILITY выбирай по действию, DC 6–17.
@@ -25,8 +24,8 @@ REASON всегда конкретен, «проверка по ситуации
 STYLE:MELEE/RANGED/SPECIAL. Попадание d20 + модификатор + владение против КБ,
 затем кубики урона + модификатор считает код. Не описывай исход до бросков.
 HP/AC обязательны, имена врагов стабильны, сохранённые HP не сбрасывай.
-За полный сюжет запланируй 1–2 настоящие схватки с NPC: первую после знакомства
-и первого круга действий, вторую ближе к развязке. Не заменяй бой погоней или CHECK.
+Число схваток задают настройки. Первая допустима после знакомства и первого круга действий.
+Не заменяй бой погоней или CHECK.
 Не атакуй от имени героя без его заявки. Между схватками дай мирные сцены.
 Уважай успешный обход боя, сдачу и досрочное завершение игроками.
 Дроны и кибер-монстры не враги по умолчанию: выбирай противников из темы сюжета,
@@ -35,21 +34,44 @@ HP/AC обязательны, имена врагов стабильны, сох
 Потеря/расход [ITEM:REMOVE;PLAYER:id;NAME:название]. Нерешённая попытка не даёт вещь.
 Каждого встреченного сюжетного NPC сохраняй [NPC:имя;EVENT:взаимодействие;NOTE:отношение и факт].
 Это память знакомых и врагов, а не отношения между игроками. Не выдумывай знакомства.
+Сначала разреши описанный способ действия; не переспрашивай уже сообщённые детали.
+Уточнение допустимо только если без отсутствующей детали нельзя определить исход.
+После последствия передай НОВУЮ инициативу следующему фокусу; бросок текущего действия оставь исполнителю.
 """.strip()
 
 
 def turn_contract(session) -> str:
-    if getattr(session, "mode", None) != "participants":
+    if (getattr(session, "mode", None) != "participants"
+            or getattr(session, "_upupa_ephemeral_generation_depth", 0)):
         return ""
     scene = int(getattr(session, "scene_count", 0) or 0)
     enemies = getattr(session, "enemy_combatants", {}) or {}
     decisions = int(getattr(session, "spotlight_decisions_since_poll", 0) or 0)
     notes = [f"Сцена {scene}; зарегистрировано противников: {len(enemies)}."]
-    if scene >= 3 and not enemies:
+    from AI.dnd_settings import settings_for, settings_context
+    from AI.dnd_adventure import adventure_pacing, adventure_limit
+
+    settings = settings_for(session)
+    if 3 <= scene < adventure_limit(session) - 4 and not enemies and settings["monsters"]:
         notes.append("Первой схватки ещё не было: подведи к сюжетному противнику в ближайшем эпизоде и дай героям действовать.")
-    if decisions >= 4:
+    if settings["poll"] and decisions >= settings["poll"]:
         notes.append("Давно не было голосования: следующую общую сюжетную развилку оформи POLL с 2–3 конкретными путями.")
-    return TURN_CONTRACT + "\n" + " ".join(notes)
+    return TURN_CONTRACT + "\n" + " ".join(notes) + "\n" + adventure_pacing(session) + "\n" + settings_context(session)
+
+
+def repair_known_roll(response: str) -> str:
+    """A declared skill already determines the standard ability; no AI needed."""
+    from AI.dnd_combat import SKILL_ABILITIES
+
+    def repair(match):
+        tag = match[0]
+        if re.search(r";ABILITY:", tag, re.I):
+            return tag
+        skill = re.search(r";SKILL:([^;\]]+)", tag, re.I)
+        ability = SKILL_ABILITIES.get(skill[1].strip()) if skill else None
+        return tag[:-1] + f";ABILITY:{ability}]" if ability else tag
+
+    return _ROLL.sub(repair, response)
 
 
 _ROLL = re.compile(r"\[ACTION:ROLL(?:;([^\]]*))?\]", re.I)
@@ -108,10 +130,21 @@ def install_turn_contract_guard(dnd) -> None:
 
     async def generate(session, prompt):
         response = await original(session, prompt)
-        if getattr(session, "mode", None) != "participants":
+        if (getattr(session, "mode", None) != "participants"
+                or getattr(session, "_upupa_ephemeral_generation_depth", 0)):
             return response
+        from AI.dnd_adventure import adventure_limit
+        if int(getattr(session, "scene_count", 0) or 0) >= adventure_limit(session) - 1:
+            if "[ACTION:END]" not in response.upper():
+                # A scene budget must not award a fabricated success or roll outcome.
+                response = re.sub(r"\[MISSION:[^\]]*\]", "", response, flags=re.I)
+                response = re.sub(r"\[ACTION:[^\]]*\]", "", response, flags=re.I).rstrip()
+                response += "\n\nЛимит сцен приключения достигнут. Неразрешённые действия остаются без результата.\n[ACTION:END]"
+            return response
+        response = repair_known_roll(response)
         if roll_needs_repair(response, session):
             from AI.dnd_generation_resilience import generate_auxiliary_text
+            from AI.dnd_inventory_reliability import _current_actions
 
             roster = ", ".join(f"{key}: {row.get('name')}" for key, row in session.participants.items())
             repaired = await generate_auxiliary_text(
@@ -119,7 +152,7 @@ def install_turn_contract_guard(dnd) -> None:
                 "Исправь только ACTION:ROLL для уже заявленного действия. Верни один тег с TYPE, "
                 "ABILITY, конкретным REASON, DC и TARGETS реального исполнителя из списка. "
                 "Не назначай следующего героя по очереди. Если действие/исполнитель неясны, верни NONE.\n"
-                f"Участники: {roster}\nТекущая заявка: {str(prompt)[-3500:]}\nОтвет: {response}",
+                f"Участники: {roster}\nТекущая заявка: {_current_actions(prompt)}\nОтвет: {response}",
                 allow_groq_fallback=True,
             )
             candidate = _ROLL.search(repaired or "")

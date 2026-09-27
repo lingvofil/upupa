@@ -433,7 +433,7 @@ async def _resolve_player_attack_roll(dnd, combat, message, session) -> None:
     pending = getattr(session, "pending_roll", None) or {}
     user_id = int(message.from_user.id)
     if not dnd._can_user_act(session, user_id, pending.get("target_user_ids") or []):
-        await message.answer("Этот бросок не твой. Или ты уже героически помер.")
+        await message.answer("Этот бросок не твой.")
         return
     rolls, natural = dnd._roll_d20(pending.get("mode", "NORMAL"))
     summary, prompt = _resolve_attack_mechanics(combat, session, user_id, pending, natural)

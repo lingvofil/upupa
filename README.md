@@ -121,6 +121,9 @@ Push/merge в `main` запускает GitHub Actions:
 
 ## Как вносить изменения
 
+Локальная диагностика production через настроенный `ssh server` описана в
+[docs/LOCAL-SSH.md](docs/LOCAL-SSH.md).
+
 - отдельная ветка под изменение;
 - pull request в `main`;
 - изменение должно быть ограниченным по scope;

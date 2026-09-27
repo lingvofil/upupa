@@ -94,6 +94,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     if getattr(router, "_upupa_dnd_runtime_configured", False):
         return
 
+    from AI.dnd_settings import configure_dnd_settings
+
+    configure_dnd_settings(dnd, router)
+
     # Presentation-level roll labels belong to the DnD composition root rather
     # than the generic application bootstrap mutating a private DnD function.
     dnd.configure_natural_roll_note(_critical_dnd_roll_note)
@@ -216,6 +220,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_turn_contract import install_turn_contract_guard
 
     install_turn_contract_guard(dnd)
+    from AI.dnd_settings import configure_personal_roll_timer
+
+    configure_personal_roll_timer(dnd)
 
     completion.configure_dnd_campaign_compat(dnd)
     router._upupa_dnd_completion_policy = completion_policy

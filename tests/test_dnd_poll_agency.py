@@ -81,7 +81,7 @@ def test_poll_rules_require_text_and_options_to_match():
     assert "используй action:input" in rules
 
 
-def test_group_poll_gets_three_authored_options_plus_free_choice():
+def test_group_poll_keeps_four_concrete_options_without_free_choice():
     source = (
         "Можно договориться, уйти, спрятаться или полезть в драку. "
         "[ACTION:POLL;OPTIONS:Договориться;Уйти;Спрятаться;Драться]"
@@ -92,9 +92,9 @@ def test_group_poll_gets_three_authored_options_plus_free_choice():
     assert "Договориться" in result
     assert "Уйти" in result
     assert "Спрятаться" in result
-    assert "Драться" not in result
+    assert "Драться" in result
     assert result.endswith(
-        f"[ACTION:POLL;OPTIONS:Договориться;Уйти;Спрятаться;{agency.CUSTOM_POLL_OPTION}]"
+        "[ACTION:POLL;OPTIONS:Договориться;Уйти;Спрятаться;Драться]"
     )
 
 
@@ -107,7 +107,7 @@ def test_personal_poll_keeps_exact_model_options():
     assert agency.ensure_group_poll_free_choice(source) == source
 
 
-def test_parse_wrapper_adds_free_choice_before_core_parser():
+def test_parse_wrapper_does_not_add_free_choice():
     session = _session()
     dnd, parsed, _finalized, _opened, _persisted = _fake_dnd(
         session,
@@ -124,7 +124,7 @@ def test_parse_wrapper_adds_free_choice_before_core_parser():
     )
 
     assert len(parsed) == 1
-    assert agency.CUSTOM_POLL_OPTION in parsed[0]
+    assert agency.CUSTOM_POLL_OPTION not in parsed[0]
 
 
 def test_custom_choice_wins_tie_and_opens_free_action():

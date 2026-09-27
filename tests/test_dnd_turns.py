@@ -301,7 +301,8 @@ def test_group_turn_collects_players_and_starts_one_timer(monkeypatch):
     }
     assert session.action_deadline == 1000.0 + dnd.DND_ACTION_WINDOW_SECONDS
     assert supervisor.names == [f"dnd-actions:{chat_id}:88"]
-    assert first.answers == []
+    assert len(first.answers) == 1
+    assert "Первый ход принят" in first.answers[0][0]
     assert second.answers == []
 
 
