@@ -300,7 +300,9 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         if not prompt_message_id:
             return
 
-        session.action_deadline = time.time() + dnd.DND_ACTION_WINDOW_SECONDS
+        from AI.dnd_settings import settings_for
+
+        session.action_deadline = time.time() + settings_for(session)["turn_seconds"]
         dnd.persist_dnd_sessions()
         dnd._start_background_task(
             dnd.wait_for_action_timeout(bot, chat_id, prompt_message_id),

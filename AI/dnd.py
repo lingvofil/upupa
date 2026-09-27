@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import re
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ from aiogram.types import (
 )
 
 from AI.summarize import _get_chat_messages
+from AI.dnd_settings import ALLOWED_CHAT_ID, settings_for, schedule_personal_turn
 from core.json_repository import JsonFileRepository
 from core.paths import DND_STATE_PATH, USER_MESSAGES_LOG_PATH
 from core.settings import ADMIN_ID
@@ -32,6 +34,8 @@ dnd_router = Router()
 
 dnd_sessions = {}
 poll_map = {}
+_suspended_sessions = []
+_suspended_state_path = None
 
 DND_MODEL_TIMEOUT_SECONDS = 90
 DND_POLL_TIMEOUT_SECONDS = 180
@@ -426,13 +430,18 @@ def persist_dnd_sessions() -> None:
         _validate_dnd_session_state(session, boundary="persist")
     payload = {
         "version": 1,
-        "sessions": [session.to_record() for session in sessions],
+        "sessions": [session.to_record() for session in sessions]
+        + (_suspended_sessions if path == _suspended_state_path else []),
     }
     JsonFileRepository(path, indent=2).save(payload)
 
 
 def choose_next_scene_type(session: GameSession) -> str:
+    from AI.dnd_adventure import adventure_limit
+    if int(getattr(session, "scene_count", 0) or 0) >= adventure_limit(session) - 4:
+        return "развязка основной цели; без новых врагов и побочных задач"
     if (_is_participant_mode(session) and int(getattr(session, "scene_count", 0) or 0) >= 3
+            and settings_for(session)["monsters"]
             and not (getattr(session, "enemy_combatants", {}) or {})):
         return "первая сюжетная схватка с NPC: подготовь столкновение, дай игрокам выбрать действия; атаки разрешай боевыми тегами"
     recent = set(session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:])
@@ -596,6 +605,7 @@ async def open_action_window(bot: Bot, chat_id: int, target_user_ids=None):
     prompt_message = await bot.send_message(chat_id, _action_prompt_text(session))
     session.action_prompt_message_id = prompt_message.message_id
     persist_dnd_sessions()
+    schedule_personal_turn(sys.modules[__name__], bot, session)
     return prompt_message
 
 
@@ -653,6 +663,7 @@ async def _restore_action_prompt(bot: Bot, chat_id: int):
 
 
 def restore_dnd_sessions(bot: Bot) -> int:
+    global _suspended_sessions, _suspended_state_path
     path = _state_path()
     if not path.exists():
         return 0
@@ -663,13 +674,20 @@ def restore_dnd_sessions(bot: Bot) -> int:
         return 0
 
     restored = 0
+    _suspended_state_path = path
+    _suspended_sessions = [record for record in payload.get("sessions", [])
+                           if str(record.get("chat_id")) != str(ALLOWED_CHAT_ID)]
     dnd_sessions.clear()
     poll_map.clear()
     for record in payload.get("sessions", []):
         try:
+            if int(record.get("chat_id", 0)) != ALLOWED_CHAT_ID:
+                continue
             session = GameSession.from_record(record)
             dnd_sessions[session.chat_id] = session
             restored += 1
+            if session.state == "WAITING_ROLL":
+                schedule_personal_turn(sys.modules[__name__], bot, session)
             durable_result = getattr(session, "pending_generated_result", {}) or {}
             generation_request = getattr(session, "pending_generation_request", {}) or {}
             has_durable_result = bool(durable_result.get("text"))
@@ -753,6 +771,8 @@ def restore_dnd_sessions(bot: Bot) -> int:
                 prompt_id = getattr(session, "action_prompt_message_id", None)
                 action_deadline = getattr(session, "action_deadline", None)
                 pending_actions = getattr(session, "pending_actions", {}) or {}
+                if prompt_id and not pending_actions and getattr(session, "action_target_user_ids", []):
+                    schedule_personal_turn(sys.modules[__name__], bot, session)
                 if prompt_id and action_deadline is not None and pending_actions:
                     delay = max(0.0, float(action_deadline) - time.time())
                     _start_background_task(
@@ -974,7 +994,7 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
                 is_anonymous=False,
             )
             poll_id = str(poll_msg.poll.id)
-            deadline = time.time() + DND_POLL_TIMEOUT_SECONDS
+            deadline = time.time() + settings_for(session)["turn_seconds"]
             session.current_poll_id = poll_id
             session.pending_poll = {
                 "poll_id": poll_id,
@@ -1172,7 +1192,11 @@ async def wait_for_poll_timeout(
     delay_seconds: float | None = None,
 ):
     del poll_chat_id
-    delay = DND_POLL_TIMEOUT_SECONDS if delay_seconds is None else max(0.0, delay_seconds)
+    session = dnd_sessions.get(chat_id)
+    deadline = (getattr(session, "pending_poll", None) or {}).get("deadline")
+    delay = max(0.0, deadline - time.time()) if deadline is not None else settings_for(session)["turn_seconds"]
+    if delay_seconds is not None:
+        delay = max(0.0, delay_seconds)
     await asyncio.sleep(delay)
     session = dnd_sessions.get(chat_id)
     if not session or str(session.current_poll_id) != str(poll_id):
@@ -1231,7 +1255,11 @@ async def wait_for_action_timeout(
     *,
     delay_seconds: float | None = None,
 ):
-    delay = DND_ACTION_WINDOW_SECONDS if delay_seconds is None else max(0.0, delay_seconds)
+    session = dnd_sessions.get(chat_id)
+    deadline = getattr(session, "action_deadline", None)
+    delay = max(0.0, deadline - time.time()) if deadline is not None else settings_for(session)["turn_seconds"]
+    if delay_seconds is not None:
+        delay = max(0.0, delay_seconds)
     await asyncio.sleep(delay)
     session = dnd_sessions.get(chat_id)
     if not session or session.state != "WAITING_ACTION":
@@ -1823,13 +1851,14 @@ async def handle_free_action(message: Message):
         return
     first_action = session.action_deadline is None
     if first_action:
-        session.action_deadline = time.time() + DND_ACTION_WINDOW_SECONDS
+        session.action_deadline = time.time() + settings_for(session)["turn_seconds"]
     persist_dnd_sessions()
     if first_action:
         _start_background_task(
             wait_for_action_timeout(message.bot, message.chat.id, int(prompt_message_id)),
             name=f"dnd-actions:{message.chat.id}:{prompt_message_id}",
         )
+        await message.answer(f"✅ Первый ход принят. Остальным — {settings_for(session)['turn_seconds']} сек. на свои действия.")
 
 
 def _is_dnd_next_command(message: Message) -> bool:

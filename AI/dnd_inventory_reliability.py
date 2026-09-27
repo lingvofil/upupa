@@ -29,7 +29,7 @@ _LOOT_SIGNAL_RE = re.compile(
     r"\bукрал\w*|\bстыр\w*|\bутащ\w*|\bприсво\w*|\bкупил\w*|\bвымен\w*|\bподар\w*|"
     r"\bзабира\w*|\bклад\w*|\bполож\w*|\bостав\w*|\bубира\w*|\bхвата\w*|\bподбира\w*|\bдерж\w*|"
     r"\bтрофе\w*|\bартефакт\w*|\bложк\w*|\bкарман\w*|\bинвентар\w*|\bштраф\w*|"
-    r"\bпроклят\w*|\bпизд\w*)",
+    r"\bпроклят\w*|\bпизд\w*|\bзапих\w*|\bнабира\w*)",
     re.I,
 )
 
@@ -70,7 +70,49 @@ def _should_audit(session, prompt: str, response: str) -> bool:
         return False
     if "[ACTION:" not in str(response or "").upper():
         return False
-    return bool(_LOOT_SIGNAL_RE.search(f"{prompt}\n{response}"))
+    # System instructions and saved inventories mention loot on every turn.
+    # Inspect the actual declaration only, not those repeated instructions.
+    return bool(_LOOT_SIGNAL_RE.search(f"{_current_actions(prompt)}\n{response}"))
+
+
+def _current_actions(prompt: str) -> str:
+    from AI.dnd_group_progress import _group_action_block
+    actions = _group_action_block(prompt)
+    if actions:
+        return actions
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_MARKER
+    text = str(prompt).split(CURRENT_REQUEST_MARKER)[-1]
+    for marker in ("\nРЕЖИССЁР СЦЕНЫ:", "\n\nСТИЛЬ УПУПЫ", "\nПАРАМЕТРЫ ПРИКЛЮЧЕНИЯ:", "\n\nПАМЯТЬ DND"):
+        text = text.split(marker)[0]
+    return text[:1800]
+
+
+def _confirmed_bottle_tag(session, prompt: str, response: str) -> list[str]:
+    """Recover an unambiguous narrated bottling action, even during API outage.
+
+    Deliberately narrow: one actor, an explicit liquid in their declaration,
+    completed bottling and storage in the reply, no failed/conditional wording.
+    Never derive ownership from ACTION TARGETS (that may be the NEXT player).
+    """
+    actions = _current_actions(prompt)
+    ids = re.findall(r"\(id=(\d+)\)", actions)
+    if len(ids) != 1 or ids[0] not in _participant_ids(session):
+        return []
+    narrative = re.sub(r"\[[^\]]+\]", "", response)
+    if re.search(r"\b(?:не|если|пыта\w*|попыта\w*|собираешься)\b", narrative.split(".")[0], re.I):
+        return []
+    if not re.search(r"\bнабираешь в бутылку\b", narrative, re.I):
+        return []
+    if not re.search(r"\b(?:запихиваешь|убираешь|кладешь|кладёшь) в (?:свой )?инвентарь\b", narrative, re.I):
+        return []
+    item = re.search(r"\bнабираю в бутылку\s+([^\n.;]+?)(?:,?\s+(?:убираю|кладу|прячу)\b|[.;\n])", actions, re.I)
+    if not item:
+        return []
+    name = "бутылка: " + item[1].strip(" ,")[:100]
+    # A model-provided ADD may use a different noun phrase for the same bottle.
+    if re.search(r"\[ITEM:ADD;[^\]]*PLAYER:" + ids[0] + r"(?:;|\])", response, re.I):
+        return []
+    return [f"[ITEM:ADD;PLAYER:{ids[0]};NAME:{name};KIND:item]"]
 
 
 def _audit_prompt(campaign, session, prompt: str, response: str) -> str:
@@ -93,8 +135,8 @@ def _audit_prompt(campaign, session, prompt: str, response: str) -> str:
         "Значимый уникальный предмет можно отметить KIND:artifact. Потерянное/отданное/израсходованное — ITEM:REMOVE.\n"
         "Если изменений нет, верни ровно NONE.\n\n"
         f"УЧАСТНИКИ:\n{chr(10).join(roster) or '- нет'}\n"
-        f"ТЕКУЩИЙ ИНВЕНТАРЬ:\n{inventory}\n\n"
-        f"ИСХОДНЫЙ ЗАПРОС/ДЕЙСТВИЯ:\n{str(prompt)[-3500:]}\n\n"
+        f"ТЕКУЩИЙ ИНВЕНТАРЬ:\n{inventory[:1200]}\n\n"
+        f"ИСХОДНЫЙ ЗАПРОС/ДЕЙСТВИЯ:\n{_current_actions(prompt)}\n\n"
         f"УЖЕ НАПИСАННЫЙ ОТВЕТ:\n{str(response)[:4500]}\n"
     )
 
@@ -149,6 +191,8 @@ def _insert_tags_before_action(campaign, response: str, tags: list[str]) -> str:
 async def _audit_missing_inventory_tags(dnd, campaign, session, prompt: str, response: str) -> str:
     if not _should_audit(session, prompt, response):
         return response
+
+    response = _insert_tags_before_action(campaign, response, _confirmed_bottle_tag(session, prompt, response))
 
     from AI.dnd_generation_resilience import generate_auxiliary_text
 

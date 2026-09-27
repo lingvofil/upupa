@@ -1069,11 +1069,20 @@ async def _image(bot, chat_id, prompt, filename, caption, *, deliver_if=None):
 
 def _scene_image_prompt(session, scene, *, style=None):
     visual_style = style or random.choice(ILLUSTRATION_STYLES)
+    # Biography, weaknesses and special powers often describe events that never
+    # happened. Give the image model only appearance for the named scene cast.
+    cast = []
+    for key, profile in (getattr(session, "character_profiles", {}) or {}).items():
+        player = (getattr(session, "participants", {}) or {}).get(str(key), {})
+        name = str(player.get("name") or "")
+        if name and name.casefold() in str(scene).casefold() and player.get("active", True):
+            cast.append(f"{name}: {str(profile.get('style') or '')[:180]}")
+    appearances = "\n".join(cast)[:1000] or "Use only the people explicitly described in the scene."
     return (
         "Create a vivid key-scene illustration for an absurd tabletop adventure. No text, captions, speech bubbles, UI or watermarks.\n"
         f"VISUAL STYLE: {visual_style}. Let the style serve this specific scene rather than forcing generic fantasy aesthetics.\n"
         f"EXACT CURRENT SCENE: {scene[:2200]}\n"
-        f"CHARACTER PROFILES TO RESPECT: {_profile_context(session)[:1800]}\n"
+        f"CHARACTER PROFILES TO RESPECT (appearance only): {appearances}\n"
         "Profiles are appearance references, not a cast list: depict ONLY characters physically present in EXACT CURRENT SCENE. "
         "Do not illustrate previous turns, hypothetical plans, flashbacks, or the outcome of an unresolved roll. "
         "Show one unmistakable central action or turning point with readable character poses and expressions. Preserve concrete objects, locations, "

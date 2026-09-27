@@ -16,8 +16,7 @@ POLL_AGENCY_RULES = f"""
 тексте как доступную возможность (например «попробовать договориться», «уйти», «осмотреть рынок»), обязан присутствовать
 среди OPTIONS этого же POLL. Не упоминай доступный путь в тексте и одновременно не прячь его из кнопок.
 Для общей развилки предложи 2–3 конкретных пути даже если возможна импровизация.
-Runtime добавляет «Свой вариант». За сюжет нужна хотя бы одна такая развилка;
-после 4–6 решений без голосования подготовь следующую, сохраняя причинность.
+Не добавляй «Свой вариант» или «Другое». Частоту развилок задают настройки партии.
 """.strip()
 
 _POLL_RE = re.compile(r"\[ACTION:POLL(?P<body>[^\]]*)\]", re.I | re.S)
@@ -49,15 +48,13 @@ def _is_custom_option(value: str) -> bool:
 
 
 def ensure_group_poll_free_choice(response: str) -> str:
-    """Append one free-choice escape hatch to participant group polls."""
+    """Keep concrete choices only; old persisted custom polls still resolve."""
     text = str(response or "")
     match = _POLL_RE.search(text)
     if not match:
         return text
 
     body = match.group("body") or ""
-    if len(_targets(body)) == 1:
-        return text
 
     options_match = _OPTIONS_RE.search(body)
     if not options_match:
@@ -68,10 +65,10 @@ def ensure_group_poll_free_choice(response: str) -> str:
         for item in options_match.group(1).split(";")
         if item.strip() and not _is_custom_option(item)
     ]
-    if not authored:
-        return text
 
-    options = authored[:3] + [CUSTOM_POLL_OPTION]
+    if len(authored) < 2:
+        return text[:match.start()] + "[ACTION:INPUT]" + text[match.end():]
+    options = authored[:4]
     prefix = body[: options_match.start()].rstrip(";")
     if prefix and not prefix.startswith(";"):
         prefix = ";" + prefix
@@ -159,7 +156,7 @@ def install_dnd_poll_agency(dnd) -> None:
 
     async def parse_turn(bot, chat_id, response):
         session = dnd.dnd_sessions.get(chat_id)
-        if session and dnd._is_participant_mode(session):
+        if session:
             response = ensure_group_poll_free_choice(response)
         return await original_parse(bot, chat_id, response)
 

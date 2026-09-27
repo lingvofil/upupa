@@ -17,6 +17,7 @@ def test_composed_personal_turn_keeps_actor_inventory_and_complete_narrative(tmp
         from AI.dnd_style import configure_dnd_style
         from AI.dnd_result_recovery import configure_dnd_result_recovery
 
+        dnd.ALLOWED_CHAT_ID = -9001
         dnd.DND_STATE_PATH = Path(__import__('sys').argv[1]) / 'state.json'
         dnd.get_active_model = lambda _: 'groq'
         dnd._start_background_task = lambda coro, **kwargs: coro.close()

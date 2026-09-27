@@ -7,6 +7,7 @@ that exact text instead of asking the model for a different scene.
 from __future__ import annotations
 
 import copy
+import asyncio
 import hashlib
 import logging
 import time
@@ -908,7 +909,10 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         active_request_id = str(active_request.get("id") or "")
         session._upupa_generation_call_active = True
         try:
-            result = await original_generate(session, effective_prompt)
+            result = await asyncio.wait_for(
+                original_generate(session, effective_prompt),
+                timeout=getattr(dnd, "DND_MODEL_TIMEOUT_SECONDS", 90),
+            )
         except Exception:
             if getattr(dnd, "dnd_sessions", {}).get(getattr(session, "chat_id", None)) is session:
                 dnd.persist_dnd_sessions()

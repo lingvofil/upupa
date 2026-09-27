@@ -1,6 +1,8 @@
 """Fairly rotate proactive individual DnD turns between living participants."""
 from __future__ import annotations
 
+from AI.dnd_settings import settings_for
+
 import logging
 import random
 import re
@@ -204,7 +206,7 @@ def enforce_spotlight(session, response: str) -> tuple[str, int | None, bool]:
     # Untargeted INPUT/POLL are genuinely collective. A group INPUT is counted
     # only when its replies are finalized, so a one-person "party" turn can
     # still advance that person's spotlight exactly once.
-    if action == "INPUT" and not targets and session.spotlight_individual_streak < 4:
+    if action == "INPUT" and not targets and session.spotlight_individual_streak < settings_for(session)["personal"]:
         expected = next_spotlight(session)
         if expected is not None:
             guarded = _replace_or_add_single_target(response, expected)
@@ -252,9 +254,9 @@ def _spotlight_context(session) -> str:
     participant = (getattr(session, "participants", {}) or {}).get(str(expected), {})
     name = participant.get("name") or f"ID {expected}"
     extra = ""
-    if int(session.spotlight_decisions_since_poll) >= 4:
+    if settings_for(session)["poll"] and int(session.spotlight_decisions_since_poll) >= settings_for(session)["poll"]:
         extra += "\nПора общей сюжетной развилке: предложи POLL с 2–3 путями после разрешения текущего действия."
-    elif int(session.spotlight_individual_streak) < 4:
+    elif int(session.spotlight_individual_streak) < settings_for(session)["personal"]:
         extra += f"\nПредпочти личный [ACTION:INPUT;TARGETS:{expected}] и спроси {name}, что он делает."
     if int(getattr(session, "group_input_streak", 0) or 0) >= 2:
         extra += (

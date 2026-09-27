@@ -6,6 +6,8 @@ Provides two related safeguards:
 """
 from __future__ import annotations
 
+from AI.dnd_settings import settings_for
+
 import logging
 from typing import Any, Awaitable, Callable, Dict
 
@@ -23,18 +25,18 @@ GROUP_TURN_RULES = (
 
 
 def _group_turn_context(session) -> str:
-    if int(getattr(session, "spotlight_decisions_since_poll", 0) or 0) >= 4:
-        return "\nСЕЙЧАС: после текущего действия подготовь общую сюжетную развилку с POLL, 2–3 пути и свободный вариант."
+    if settings_for(session)["poll"] and int(getattr(session, "spotlight_decisions_since_poll", 0) or 0) >= settings_for(session)["poll"]:
+        return "\nСЕЙЧАС: после текущего действия подготовь общую сюжетную развилку с POLL, 2–3 конкретных пути."
     try:
         streak = max(0, int(getattr(session, "spotlight_individual_streak", 0) or 0))
     except (TypeError, ValueError):
         streak = 0
-    if streak >= 4:
+    if streak >= settings_for(session)["personal"]:
         return (
             "\nСЕЙЧАС: прошло несколько личных ходов. Общий INPUT допустим, если нужен совместный план. "
             "Иначе продолжай адресный разговор с героями."
         )
-    if streak < 4:
+    if streak < settings_for(session)["personal"]:
         return (
             "\nСЕЙЧАС: предпочти личный INPUT следующему герою очереди и спроси, что он делает."
         )
@@ -101,7 +103,7 @@ def _skippable_state(session) -> tuple[str, list[int]] | None:
     return None
 
 
-async def skip_absent_turn(dnd, bot, chat_id: int, requester_user_id: int) -> bool:
+async def skip_absent_turn(dnd, bot, chat_id: int, requester_user_id: int, *, automatic: bool = False) -> bool:
     """Skip an unanswered addressed action/roll/poll. Return whether it was consumed."""
     session = dnd.dnd_sessions.get(chat_id)
     if not session or not dnd._user_is_host(session, int(requester_user_id)):
@@ -139,7 +141,8 @@ async def skip_absent_turn(dnd, bot, chat_id: int, requester_user_id: int) -> bo
     dnd.persist_dnd_sessions()
 
     who = ", ".join(names) if names else ", ".join(f"ID {value}" for value in targets)
-    await bot.send_message(chat_id, f"⏭️ {kind.capitalize()} {who} пропущен ведущим: игрока сейчас нет.")
+    reason = "пропущен автоматически: время на ответ истекло" if automatic else "пропущен ведущим: игрока сейчас нет"
+    await bot.send_message(chat_id, f"⏭️ {kind.capitalize()} {who} {reason}.")
 
     # Do not ask the model to narrate an immediate continuation here. The scene
     # still contains the unresolved addressed action, so the model can naturally

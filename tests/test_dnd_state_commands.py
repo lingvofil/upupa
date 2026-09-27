@@ -141,7 +141,7 @@ def test_command_aliases_accept_requested_phrases_and_punctuation():
     assert command_kind("УПУПА ДНД") == "start"
     assert command_kind("упупа заверши историю") == "legacy_end"
     assert command_kind("упупа закончи историю пожалуйста") == "legacy_end"
-    assert command_kind("мой герой") is None
+    assert command_kind("мой герой") == "hero"
     assert command_kind("наши знакомые") is None
     assert command_kind("что происходит") is None
     assert command_kind("упупа днд что-нибудь") is None

@@ -148,6 +148,24 @@ def test_generation_is_persisted_and_reused_without_second_model_call():
     assert calls["persist"] >= 1
 
 
+def test_total_generation_timeout_preserves_request_and_unlocks_retry():
+    policy = FakeStatePolicy()
+    dnd, session, calls, _, _ = _fake_dnd(policy)
+
+    async def stalled(*args):
+        await asyncio.sleep(10)
+
+    dnd.generate_session_response = stalled
+    dnd.DND_MODEL_TIMEOUT_SECONDS = 0.01
+    recovery.configure_dnd_result_recovery(dnd, state_policy=policy)
+    with pytest.raises(TimeoutError):
+        asyncio.run(dnd.generate_session_response(session, "Открываю дверь"))
+    assert session.pending_generation_request["prompt"] == "Открываю дверь"
+    assert not getattr(session, "_upupa_generation_call_active", False)
+    assert not session.pending_generated_result
+    assert calls["persist"] >= 1
+
+
 def test_ephemeral_generation_bypasses_outbox_and_does_not_overwrite_pending_result():
     policy = FakeStatePolicy()
     dnd, session, calls, _, _ = _fake_dnd(policy, generated="основной ответ")

@@ -23,7 +23,9 @@ def test_dnd_help_lists_current_commands():
 def test_dnd_help_stops_advertising_replaced_triggers():
     section = HELP_DICT["creative"]
 
-    assert "<code>мой герой</code>" not in section
+    assert "<code>мой герой</code>" in section
+    assert "<code>мой инвентарь</code>" in section
+    assert "<code>днд настройки</code>" in section
     assert "<code>наши знакомые</code>" not in section
     assert "<code>что происходит?</code>" not in section
     assert "<code>упупа заверши историю</code>" not in section

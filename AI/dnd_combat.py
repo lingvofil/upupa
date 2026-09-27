@@ -497,7 +497,7 @@ async def _resolve_player_roll(dnd, message, session) -> None:
     }
     user_id = int(message.from_user.id)
     if not dnd._can_user_act(session, user_id, roll.get("target_user_ids") or []):
-        await message.answer("Этот бросок не твой. Или ты уже героически помер.")
+        await message.answer("Этот бросок не твой.")
         return
 
     rolls, natural_result = dnd._roll_d20(roll.get("mode", "NORMAL"))

@@ -38,6 +38,25 @@ def is_dead(sheet) -> bool:
     return sheet.get("status") == "dead" or hp <= 0
 
 
+def adventure_limit(session) -> int:
+    return 12 if getattr(session, "adventure_length", "short") == "short" else 36
+
+
+def adventure_pacing(session) -> str:
+    limit = adventure_limit(session)
+    scene = int(getattr(session, "scene_count", 0) or 0)
+    remaining = max(0, limit - scene)
+    goal = str(getattr(session, "mission_goal", "") or getattr(session, "selected_plot", ""))[:350]
+    phase = "Развивай основную цель."
+    if remaining <= 4:
+        phase = "РАЗВЯЗКА: не вводи новых врагов, веток и промежуточных задач; сведи текущие последствия к цели."
+    if remaining <= 1:
+        phase = "ФИНАЛ СЕЙЧАС: разреши текущую заявку и закончи ACTION:END. Незавершённую цель честно отметь как недостигнутую."
+    return (f"ДЛИНА: {getattr(session, 'adventure_length', 'short')}, сцена {scene}/{limit}, осталось {remaining}. "
+            f"ЦЕЛЬ: {goal or 'сохрани цель из завязки'}. {phase} "
+            "Победа только по фактам: [MISSION:SUCCESS;EVIDENCE:факт] или [MISSION:FAILURE;EVIDENCE:причина].")
+
+
 def adventure_context(session) -> str:
     length = getattr(session, "adventure_length", "short")
     budget = "8–12" if length == "short" else "24–36"
@@ -55,7 +74,8 @@ def adventure_context(session) -> str:
         "ОТСУТСТВУЮТ: " + (", ".join(absent) or "никто") + ". "
         "Отсутствующие не принимают решений, не получают ход, урон или броски.\n"
         "Разреши именно последнюю заявку её автора; старые действия не подменяют её. "
-        "Не назначай бросок для очевидного или невозможного действия либо при отсутствии цены провала."
+        "Не назначай бросок для очевидного или невозможного действия либо при отсутствии цены провала.\n"
+        + adventure_pacing(session)
     )
 
 
