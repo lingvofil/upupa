@@ -22,10 +22,12 @@ def reset_revoice_update_guards():
     revoice._inflight_updates.clear()
     revoice._recent_updates.clear()
     revoice._recent_update_order.clear()
+    revoice.chat_settings.pop("-100123", None)
     yield
     revoice._inflight_updates.clear()
     revoice._recent_updates.clear()
     revoice._recent_update_order.clear()
+    revoice.chat_settings.pop("-100123", None)
 
 
 class FakeMessage:
@@ -115,9 +117,6 @@ def test_extracts_custom_prompt():
         revoice.parse_revoice_command("переозвучь голосом старой ведьмы")
         == "голосом старой ведьмы"
     )
-    description = revoice.prepare_voice_description("ведьма")
-    assert description.startswith("ведьма")
-    assert len(description) >= 20
 
 
 def test_command_without_reply_gets_short_hint():
@@ -217,69 +216,48 @@ def test_random_voice_flow_never_designs_voice(monkeypatch):
     assert client.delete_calls == []
 
 
-def test_custom_voice_design_flow(monkeypatch):
-    async def fake_download(_bot, _file_id):
-        return b"source-audio"
+def test_custom_prompt_points_to_settings_without_api_call(monkeypatch):
+    async def fail_download(*_args, **_kwargs):
+        raise AssertionError("custom prompt must not download or call ElevenLabs")
 
-    monkeypatch.setattr(revoice, "download_telegram_bytes", fake_download)
-    monkeypatch.setattr(revoice.random, "choice", lambda values: values[-1])
+    monkeypatch.setattr(revoice, "download_telegram_bytes", fail_download)
     client = FakeElevenLabsClient()
-
-    asyncio.run(
-        revoice.handle_revoice_command(
-            FakeMessage(
-                text="переозвучь голосом пьяного гоблина",
-                reply_to_message=voice_reply(),
-            ),
-            FakeBot(),
-            client=client,
-        )
-    )
-
-    assert client.cleanup_calls == 1
-    assert len(client.design_calls) == 1
-    assert "пьяного гоблина" in client.design_calls[0]
-    assert client.create_calls[0]["generated_voice_id"] == "generated-b"
-    assert client.change_calls == [("tmp-voice", b"source-audio")]
-
-
-def test_temporary_voice_deleted_after_success(monkeypatch):
-    async def fake_download(_bot, _file_id):
-        return b"source-audio"
-
-    monkeypatch.setattr(revoice, "download_telegram_bytes", fake_download)
-    client = FakeElevenLabsClient()
-
-    asyncio.run(
-        revoice.handle_revoice_command(
-            FakeMessage(
-                text="переозвучь как уставший диктор",
-                reply_to_message=voice_reply(),
-            ),
-            FakeBot(),
-            client=client,
-        )
-    )
-
-    assert client.delete_calls == ["tmp-voice"]
-
-
-def test_temporary_voice_deleted_after_later_error(monkeypatch):
-    async def fake_download(_bot, _file_id):
-        return b"source-audio"
-
-    monkeypatch.setattr(revoice, "download_telegram_bytes", fake_download)
-    client = FakeElevenLabsClient()
-    client.raise_on_change = ElevenLabsTemporaryError("boom")
     message = FakeMessage(
-        text="переозвучь очень высоким мультяшным голосом",
+        text="переозвучь голосом пьяного гоблина",
         reply_to_message=voice_reply(),
     )
 
     asyncio.run(revoice.handle_revoice_command(message, FakeBot(), client=client))
 
-    assert client.delete_calls == ["tmp-voice"]
-    assert message.replies == ["ElevenLabs сейчас не отвечает. Попробуй позже."]
+    assert message.replies == [
+        "Голос по описанию через API недоступен на бесплатном ElevenLabs. "
+        "Выбери голос: «упупа настройки» → «🎙 Переозвучка»."
+    ]
+    assert client.random_calls == 0
+    assert client.change_calls == []
+
+
+def test_fixed_voice_from_chat_settings_is_used(monkeypatch):
+    async def fake_download(_bot, _file_id):
+        return b"source-audio"
+
+    monkeypatch.setattr(revoice, "download_telegram_bytes", fake_download)
+    revoice.chat_settings["-100123"] = {
+        "revoice_voice_id": "fixed-voice",
+        "revoice_voice_name": "Bella",
+    }
+    client = FakeElevenLabsClient()
+
+    asyncio.run(
+        revoice.handle_revoice_command(
+            FakeMessage(reply_to_message=voice_reply()),
+            FakeBot(),
+            client=client,
+        )
+    )
+
+    assert client.random_calls == 0
+    assert client.change_calls == [("fixed-voice", b"source-audio")]
 
 
 def test_missing_api_key_does_not_crash_bot(monkeypatch):
