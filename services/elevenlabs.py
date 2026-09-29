@@ -33,7 +33,22 @@ VOICE_DESIGN_PREVIEW_TEXT = (
 
 
 class ElevenLabsError(RuntimeError):
-    """Base error for ElevenLabs failures."""
+    """Base error for ElevenLabs failures with safe provider metadata."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_code: str | None = None,
+        provider_status: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.provider_code = provider_code
+        self.provider_status = provider_status
+        self.request_id = request_id
 
 
 class ElevenLabsConfigurationError(ElevenLabsError):
@@ -41,7 +56,11 @@ class ElevenLabsConfigurationError(ElevenLabsError):
 
 
 class ElevenLabsAuthenticationError(ElevenLabsError):
-    """The API key is invalid or lacks permission."""
+    """The API key is invalid or missing."""
+
+
+class ElevenLabsAuthorizationError(ElevenLabsError):
+    """The authenticated account/key is not allowed to perform an operation."""
 
 
 class ElevenLabsQuotaError(ElevenLabsError):
@@ -93,6 +112,33 @@ class ElevenLabsClient:
         self._last_random_voice_id: str | None = None
         self._stale_cleanup_done = False
 
+    @staticmethod
+    def _error_metadata(
+        response: httpx.Response,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Extract non-sensitive provider error identifiers without logging messages."""
+        try:
+            payload = response.json()
+        except ValueError:
+            return None, None, None
+        if not isinstance(payload, dict):
+            return None, None, None
+
+        detail = payload.get("detail")
+        provider_code: str | None = None
+        provider_status: str | None = None
+        request_id: str | None = None
+
+        if isinstance(detail, dict):
+            provider_code = str(detail.get("code") or "").strip() or None
+            provider_status = str(detail.get("status") or "").strip() or None
+            request_id = str(detail.get("request_id") or "").strip() or None
+
+        if request_id is None:
+            request_id = str(payload.get("request_id") or "").strip() or None
+
+        return provider_code, provider_status, request_id
+
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         started = time.monotonic()
         url = f"{ELEVENLABS_BASE_URL}{path}"
@@ -140,18 +186,56 @@ class ElevenLabsClient:
                 len(response.content or b""),
             )
 
-            if response.status_code in (401, 403):
-                raise ElevenLabsAuthenticationError(
-                    f"ElevenLabs authentication failed with HTTP {response.status_code}"
+            provider_code = None
+            provider_status = None
+            request_id = None
+            if response.status_code >= 400:
+                (
+                    provider_code,
+                    provider_status,
+                    request_id,
+                ) = self._error_metadata(response)
+                logger.warning(
+                    "[elevenlabs] api_error method=%s path=%s status=%s provider_code=%s provider_status=%s request_id=%s",
+                    method,
+                    path,
+                    response.status_code,
+                    provider_code,
+                    provider_status,
+                    request_id,
                 )
-            if response.status_code == 429:
-                raise ElevenLabsQuotaError("ElevenLabs quota/rate limit reached")
+
+            error_kwargs = {
+                "status_code": response.status_code,
+                "provider_code": provider_code,
+                "provider_status": provider_status,
+                "request_id": request_id,
+            }
+            if response.status_code == 401:
+                raise ElevenLabsAuthenticationError(
+                    "ElevenLabs authentication failed",
+                    **error_kwargs,
+                )
+            if response.status_code == 403:
+                raise ElevenLabsAuthorizationError(
+                    "ElevenLabs authorization failed",
+                    **error_kwargs,
+                )
+            if response.status_code in (402, 429):
+                raise ElevenLabsQuotaError(
+                    "ElevenLabs quota/rate limit reached",
+                    **error_kwargs,
+                )
             if 500 <= response.status_code <= 599:
                 raise ElevenLabsTemporaryError(
-                    f"ElevenLabs temporary HTTP {response.status_code}"
+                    f"ElevenLabs temporary HTTP {response.status_code}",
+                    **error_kwargs,
                 )
             if response.status_code >= 400:
-                raise ElevenLabsError(f"ElevenLabs HTTP {response.status_code}")
+                raise ElevenLabsError(
+                    f"ElevenLabs HTTP {response.status_code}",
+                    **error_kwargs,
+                )
             return response
         finally:
             if owns_client:
@@ -399,6 +483,7 @@ __all__ = [
     "ELEVENLABS_BASE_URL",
     "TEMP_VOICE_PREFIX",
     "ElevenLabsAuthenticationError",
+    "ElevenLabsAuthorizationError",
     "ElevenLabsClient",
     "ElevenLabsConfigurationError",
     "ElevenLabsError",
