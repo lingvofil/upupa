@@ -99,6 +99,12 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or (
     else None
 )
 
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY") or (
+    getattr(_config_private, "ELEVENLABS_API_KEY", None)
+    if _config_private is not None
+    else None
+)
+
 # AI Horde supports anonymous access with the documented 0000000000 key. Keep
 # it as the default reserve while allowing a registered key to raise priority.
 AIHORDE_API_KEY = os.getenv("AIHORDE_API_KEY") or (

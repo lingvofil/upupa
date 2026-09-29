@@ -12,6 +12,7 @@ from core.loader import bot
 from core.settings import BLOCKED_USERS
 from services.ytp import handle_ytp_command
 from services.media_change import handle_fast_command, handle_reverse_command, handle_slow_command
+from services.revoice import handle_revoice_command, parse_revoice_command
 
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
 
@@ -53,6 +54,17 @@ def is_reverse_command(message: types.Message) -> bool:
 
 
 router = Router(name="media_tools")
+
+
+@router.message(
+    lambda message: (
+        parse_revoice_command(message.text) is not None
+        and message.from_user
+        and message.from_user.id not in BLOCKED_USERS
+    )
+)
+async def handle_revoice_media_command(message: types.Message):
+    await handle_revoice_command(message, bot)
 
 
 @router.message(
