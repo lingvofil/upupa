@@ -17,6 +17,7 @@ from core.settings import ELEVENLABS_API_KEY
 from infrastructure.media_io import download_telegram_bytes
 from services.elevenlabs import (
     ElevenLabsAuthenticationError,
+    ElevenLabsAuthorizationError,
     ElevenLabsClient,
     ElevenLabsConfigurationError,
     ElevenLabsError,
@@ -179,6 +180,8 @@ def _user_error_message(exc: BaseException) -> str:
         return "Сейчас нет доступных голосов для переозвучки."
     if isinstance(exc, ElevenLabsAuthenticationError):
         return "Переозвучка сейчас недоступна."
+    if isinstance(exc, ElevenLabsAuthorizationError):
+        return "ElevenLabs запретил эту операцию для текущего ключа/аккаунта."
     if isinstance(exc, (ElevenLabsTimeoutError, ElevenLabsTemporaryError)):
         return "ElevenLabs сейчас не отвечает. Попробуй позже."
     if isinstance(exc, ElevenLabsInvalidResponseError):
@@ -343,11 +346,14 @@ async def handle_revoice_command(
 
     except ElevenLabsError as exc:
         logger.warning(
-            "[revoice] ElevenLabs failure chat_id=%s user_id=%s mode=%s error=%s",
+            "[revoice] ElevenLabs failure chat_id=%s user_id=%s mode=%s error=%s provider_code=%s provider_status=%s request_id=%s",
             chat_id,
             user_id,
             mode,
             type(exc).__name__,
+            getattr(exc, "provider_code", None),
+            getattr(exc, "provider_status", None),
+            getattr(exc, "request_id", None),
         )
         await message.reply(_user_error_message(exc))
     except Exception as exc:

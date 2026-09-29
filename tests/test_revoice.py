@@ -5,6 +5,8 @@ import httpx
 import pytest
 
 from services.elevenlabs import (
+    ElevenLabsAuthenticationError,
+    ElevenLabsAuthorizationError,
     ElevenLabsClient,
     ElevenLabsNoVoicesError,
     ElevenLabsQuotaError,
@@ -294,6 +296,9 @@ def test_missing_api_key_does_not_crash_bot(monkeypatch):
 @pytest.mark.parametrize(
     ("status_code", "expected_error"),
     [
+        (401, ElevenLabsAuthenticationError),
+        (402, ElevenLabsQuotaError),
+        (403, ElevenLabsAuthorizationError),
         (429, ElevenLabsQuotaError),
         (503, ElevenLabsTemporaryError),
     ],
@@ -311,6 +316,41 @@ def test_http_status_errors_are_mapped(status_code, expected_error):
                 await client.get_available_voices(force_refresh=True)
 
     asyncio.run(scenario())
+
+
+def test_http_403_preserves_safe_provider_metadata(caplog):
+    def handler(request):
+        return httpx.Response(
+            403,
+            request=request,
+            json={
+                "detail": {
+                    "type": "authorization_error",
+                    "code": "insufficient_permissions",
+                    "status": "missing_permissions",
+                    "message": "sensitive-provider-message",
+                    "request_id": "req_test_403",
+                }
+            },
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = ElevenLabsClient("fake-key", http_client=http_client)
+            with pytest.raises(ElevenLabsAuthorizationError) as error:
+                await client.get_available_voices(force_refresh=True)
+
+            assert error.value.status_code == 403
+            assert error.value.provider_code == "insufficient_permissions"
+            assert error.value.provider_status == "missing_permissions"
+            assert error.value.request_id == "req_test_403"
+
+    asyncio.run(scenario())
+
+    assert "provider_code=insufficient_permissions" in caplog.text
+    assert "sensitive-provider-message" not in caplog.text
 
 
 def test_http_timeout_is_mapped():
