@@ -46,23 +46,43 @@ def test_fallback_queue_when_empty():
     assert pg._IMAGE_FALLBACK_QUEUE[0] == "flux"
 
 
-def test_add_nvidia_comparison_labels_below_image():
+def test_add_nvidia_comparison_labels_preserves_content_below_source_labels():
     image = Image.new("RGB", (800, 400), (90, 100, 110))
     draw = ImageDraw.Draw(image)
     draw.rectangle((90, 280, 310, 340), fill=(0, 0, 0))
     draw.rectangle((500, 275, 720, 335), fill=(255, 255, 255))
     draw.rectangle((500, 335, 720, 340), fill=(118, 185, 0))
+    draw.rectangle((0, 360, 799, 399), fill=(180, 70, 60))
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
 
     result = Image.open(BytesIO(pg.add_nvidia_comparison_labels_below_image(buffer.getvalue()))).convert("RGB")
-    label_start = 275
 
-    assert result.size == (800, 365)
+    # Only the upstream label strip is removed. Content that was below it is
+    # shifted upward instead of being discarded.
+    assert result.size == (800, 424)
+    assert result.getpixel((10, 324)) == (180, 70, 60)
+
+    label_start = 334
     assert result.getpixel((10, label_start + 10)) == (0, 0, 0)
     assert result.getpixel((790, label_start + 10)) == (255, 255, 255)
     assert result.getpixel((790, result.height - 2)) == (118, 185, 0)
+
+
+def test_add_nvidia_comparison_labels_never_crops_when_source_labels_are_missing():
+    image = Image.new("RGB", (320, 800), (90, 100, 110))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 760, 319, 799), fill=(180, 70, 60))
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+
+    result = Image.open(BytesIO(pg.add_nvidia_comparison_labels_below_image(buffer.getvalue()))).convert("RGB")
+
+    assert result.size == (320, 928)
+    assert result.getpixel((10, 799)) == (180, 70, 60)
+    assert result.getpixel((10, 810)) == (0, 0, 0)
 
 
 @pytest.mark.anyio

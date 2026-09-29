@@ -362,23 +362,41 @@ def _draw_centered_nvidia_label(
 def add_nvidia_comparison_labels_below_image(image_bytes: bytes) -> bytes:
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     width, height = image.size
-    boxes = [
-        _find_nvidia_label_box(image, 0, width // 2, "dark"),
-        _find_nvidia_label_box(image, width // 2, width, "light"),
-    ]
-    boxes = [box for box in boxes if box]
-    crop_bottom = min((box[1] for box in boxes), default=int(height * 0.82))
-    crop_bottom = max(int(height * 0.6), min(crop_bottom, height))
-    image = image.crop((0, 0, width, crop_bottom))
+    left_box = _find_nvidia_label_box(image, 0, width // 2, "dark")
+    right_box = _find_nvidia_label_box(image, width // 2, width, "light")
 
-    label_height = max(90, int(crop_bottom * 0.16))
+    # The upstream DLSS demo draws its own comparison labels over the image.
+    # Remove only that horizontal label strip when both halves are detected.
+    # Never crop everything below the labels: on tall images that used to cut
+    # off real source content (for example, the last panel of a comic).
+    if left_box and right_box:
+        strip_top = min(left_box[1], right_box[1])
+        strip_bottom = max(left_box[3], right_box[3])
+        strip_height = strip_bottom - strip_top
+        labels_overlap = min(left_box[3], right_box[3]) - max(left_box[1], right_box[1])
+
+        if (
+            strip_height > 0
+            and strip_height <= int(height * 0.25)
+            and labels_overlap > 0
+        ):
+            upper = image.crop((0, 0, width, strip_top))
+            lower = image.crop((0, strip_bottom, width, height))
+            preserved_height = height - strip_height
+            preserved = Image.new("RGB", (width, preserved_height))
+            preserved.paste(upper, (0, 0))
+            preserved.paste(lower, (0, strip_top))
+            image = preserved
+
+    content_height = image.height
+    label_height = max(90, int(content_height * 0.16))
     green_height = max(8, int(label_height * 0.12))
-    output_image = Image.new("RGB", (width, crop_bottom + label_height), (255, 255, 255))
+    output_image = Image.new("RGB", (width, content_height + label_height), (255, 255, 255))
     output_image.paste(image, (0, 0))
 
     draw = ImageDraw.Draw(output_image)
-    label_top = crop_bottom
-    label_bottom = crop_bottom + label_height
+    label_top = content_height
+    label_bottom = content_height + label_height
     half_width = width // 2
     draw.rectangle((0, label_top, half_width, label_bottom), fill=(0, 0, 0))
     draw.rectangle((half_width, label_top, width, label_bottom), fill=(255, 255, 255))
