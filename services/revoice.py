@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 from pathlib import Path
 import random
@@ -38,6 +39,9 @@ _REVOICE_COMMAND_RE = re.compile(
 
 _revoice_semaphore = asyncio.Semaphore(1)
 _inflight_updates: set[tuple[int, int]] = set()
+_recent_updates: set[tuple[int, int]] = set()
+_recent_update_order: deque[tuple[int, int]] = deque()
+_recent_update_limit = 2048
 _inflight_lock = asyncio.Lock()
 _default_client: ElevenLabsClient | None = None
 _default_client_key: str | None = None
@@ -187,8 +191,13 @@ def _user_error_message(exc: BaseException) -> str:
 async def _claim_update(chat_id: int, message_id: int) -> bool:
     key = (chat_id, message_id)
     async with _inflight_lock:
-        if key in _inflight_updates:
+        if key in _inflight_updates or key in _recent_updates:
             return False
+        if len(_recent_update_order) >= _recent_update_limit:
+            oldest = _recent_update_order.popleft()
+            _recent_updates.discard(oldest)
+        _recent_update_order.append(key)
+        _recent_updates.add(key)
         _inflight_updates.add(key)
         return True
 
@@ -268,6 +277,10 @@ async def handle_revoice_command(
     resolved_client: ElevenLabsClient | None = None
 
     try:
+        if _revoice_semaphore.locked():
+            await message.reply("Переозвучка уже занята. Попробуй чуть позже.")
+            return
+
         async with _revoice_semaphore:
             audio_bytes = await download_telegram_bytes(
                 bot,
@@ -280,9 +293,12 @@ async def handle_revoice_command(
                 )
 
             resolved_client = client or _get_default_client()
-            await resolved_client.ensure_stale_temporary_voice_cleanup()
 
             if description:
+                # Stale custom voices only threaten the limited custom-voice
+                # slots, so clean them immediately before Voice Design. The
+                # cheap random path avoids this extra API request entirely.
+                await resolved_client.ensure_stale_temporary_voice_cleanup()
                 voice_description = prepare_voice_description(description)
                 generated_voice_ids = await resolved_client.design_voice(
                     voice_description
