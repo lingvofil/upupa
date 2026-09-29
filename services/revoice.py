@@ -6,7 +6,6 @@ import asyncio
 from collections import deque
 import logging
 from pathlib import Path
-import random
 import re
 import tempfile
 
@@ -14,6 +13,7 @@ from aiogram import Bot, types
 from aiogram.types import BufferedInputFile
 
 from core.settings import ELEVENLABS_API_KEY
+from core.state import chat_settings
 from infrastructure.media_io import download_telegram_bytes
 from services.elevenlabs import (
     ElevenLabsAuthenticationError,
@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 MAX_REVOICE_SECONDS = 30
 FFMPEG_TIMEOUT_SECONDS = 30.0
+REVOICE_RANDOM_VOICE_ID = "random"
 _REVOICE_COMMAND_RE = re.compile(
     r"^\s*переозвучь(?:\s+(.+?))?\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -57,17 +58,6 @@ def parse_revoice_command(text: str | None) -> str | None:
         return None
     return (match.group(1) or "").strip()
 
-
-def prepare_voice_description(description: str) -> str:
-    """Satisfy Voice Design's 20-char minimum without changing user intent."""
-    normalized = re.sub(r"\s+", " ", description or "").strip()
-    if not normalized:
-        raise ValueError("Custom voice description is empty")
-    if len(normalized) < 20:
-        normalized = (
-            f"{normalized}. Естественный выразительный голос с указанным характером."
-        )
-    return normalized[:1000]
 
 
 async def _run_ffmpeg(command: list[str]) -> tuple[bool, str]:
@@ -173,6 +163,13 @@ def _get_default_client() -> ElevenLabsClient:
     return _default_client
 
 
+async def get_revoice_voices(*, force_refresh: bool = False):
+    """Return every ElevenLabs voice currently available to this API key."""
+    return await _get_default_client().get_available_voices(
+        force_refresh=force_refresh
+    )
+
+
 def _user_error_message(exc: BaseException) -> str:
     if isinstance(exc, ElevenLabsQuotaError):
         return "У переозвучки закончилась квота. Попробуй позже."
@@ -229,6 +226,13 @@ async def handle_revoice_command(
         await message.reply("Переозвучивать пока умею только голосовые сообщения.")
         return
 
+    if description:
+        await message.reply(
+            "Голос по описанию через API недоступен на бесплатном ElevenLabs. "
+            "Выбери голос: «упупа настройки» → «🎙 Переозвучка»."
+        )
+        return
+
     if client is None and not str(ELEVENLABS_API_KEY or "").strip():
         logger.error("[revoice] ELEVENLABS_API_KEY is not configured")
         await message.reply("Переозвучка сейчас недоступна.")
@@ -264,19 +268,28 @@ async def handle_revoice_command(
         if source_duration_value is not None
         else MAX_REVOICE_SECONDS
     )
-    mode = "custom" if description else "random"
+    settings = chat_settings.get(str(chat_id), {})
+    configured_voice_id = str(
+        settings.get("revoice_voice_id", REVOICE_RANDOM_VOICE_ID)
+        or REVOICE_RANDOM_VOICE_ID
+    )
+    configured_voice_name = str(settings.get("revoice_voice_name") or "").strip()
+    mode = (
+        "random"
+        if configured_voice_id == REVOICE_RANDOM_VOICE_ID
+        else "fixed"
+    )
 
     logger.info(
-        "[revoice] start chat_id=%s user_id=%s source_duration=%s processed_duration=%s mode=%s prompt_chars=%s",
+        "[revoice] start chat_id=%s user_id=%s source_duration=%s processed_duration=%s mode=%s configured_voice_id=%s",
         chat_id,
         user_id,
         source_duration_value,
         processed_duration,
         mode,
-        len(description),
+        configured_voice_id,
     )
 
-    temporary_voice_id: str | None = None
     resolved_client: ElevenLabsClient | None = None
 
     try:
@@ -297,35 +310,24 @@ async def handle_revoice_command(
 
             resolved_client = client or _get_default_client()
 
-            if description:
-                # Stale custom voices only threaten the limited custom-voice
-                # slots, so clean them immediately before Voice Design. The
-                # cheap random path avoids this extra API request entirely.
-                await resolved_client.ensure_stale_temporary_voice_cleanup()
-                voice_description = prepare_voice_description(description)
-                generated_voice_ids = await resolved_client.design_voice(
-                    voice_description
-                )
-                generated_voice_id = random.choice(generated_voice_ids)
-                temporary_voice_id = await resolved_client.create_temporary_voice(
-                    generated_voice_id=generated_voice_id,
-                    voice_description=voice_description,
-                )
-                voice_id = temporary_voice_id
-                logger.info(
-                    "[revoice] temporary voice created chat_id=%s user_id=%s voice_id=%s",
-                    chat_id,
-                    user_id,
-                    voice_id,
-                )
-            else:
+            if configured_voice_id == REVOICE_RANDOM_VOICE_ID:
                 selected_voice = await resolved_client.choose_random_voice()
                 voice_id = selected_voice.voice_id
                 logger.info(
-                    "[revoice] random voice selected chat_id=%s user_id=%s voice_id=%s",
+                    "[revoice] random voice selected chat_id=%s user_id=%s voice_id=%s voice_name=%s",
                     chat_id,
                     user_id,
                     voice_id,
+                    selected_voice.name,
+                )
+            else:
+                voice_id = configured_voice_id
+                logger.info(
+                    "[revoice] configured voice selected chat_id=%s user_id=%s voice_id=%s voice_name=%s",
+                    chat_id,
+                    user_id,
+                    voice_id,
+                    configured_voice_name or None,
                 )
 
             result = await resolved_client.voice_change(voice_id, audio_bytes)
@@ -367,37 +369,14 @@ async def handle_revoice_command(
         )
         await message.reply("Не удалось переозвучить сообщение.")
     finally:
-        if temporary_voice_id is not None and resolved_client is not None:
-            try:
-                await resolved_client.delete_voice(temporary_voice_id)
-                logger.info(
-                    "[revoice] temporary voice deleted chat_id=%s user_id=%s voice_id=%s",
-                    chat_id,
-                    user_id,
-                    temporary_voice_id,
-                )
-            except ElevenLabsError as cleanup_exc:
-                logger.warning(
-                    "[revoice] temporary voice delete failed chat_id=%s user_id=%s voice_id=%s error=%s",
-                    chat_id,
-                    user_id,
-                    temporary_voice_id,
-                    type(cleanup_exc).__name__,
-                )
-            except Exception:
-                logger.exception(
-                    "[revoice] unexpected temporary voice cleanup failure chat_id=%s user_id=%s voice_id=%s",
-                    chat_id,
-                    user_id,
-                    temporary_voice_id,
-                )
         await _release_update(chat_id, message_id)
 
 
 __all__ = [
     "MAX_REVOICE_SECONDS",
+    "REVOICE_RANDOM_VOICE_ID",
+    "get_revoice_voices",
     "handle_revoice_command",
     "parse_revoice_command",
-    "prepare_voice_description",
     "trim_voice_to_seconds",
 ]

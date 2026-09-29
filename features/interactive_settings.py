@@ -12,6 +12,11 @@ from features.sms_settings import save_sms_disabled_chats
 from prompts import PROMPTS_DICT, HELP_DICT
 from features.content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
 from features.stat_rank_settings import rank_notifications_disabled_chats, save_rank_notifications_settings
+from features.revoice_settings import (
+    get_revoice_selection_label,
+    get_revoice_settings_markup,
+    set_revoice_voice,
+)
 from features.world.permissions import is_chat_admin
 from features.world.service import get_world_service, is_world_enabled
 
@@ -89,6 +94,7 @@ async def get_main_settings_markup(chat_id: str):
     antispam_enabled = int(chat_id) in ANTISPAM_ENABLED_CHATS
     rank_notifications_enabled = chat_id not in rank_notifications_disabled_chats
     current_prompt_name = settings.get("prompt_name", "Не установлен")
+    revoice_label = get_revoice_selection_label(chat_id)
 
     text = "⚙️ *Настройки чата*\n\n"
     text += f"🗣️ *Болталка:* {'Вкл. ✅' if dialog_enabled else 'Выкл. ❌'}\n"
@@ -103,6 +109,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"📅 *Празднеки:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
     text += f"🕸 *Соцграф:* {'Вкл. ✅' if social_graph_enabled else 'Выкл. ❌'}\n"
     text += f"📻 *Радио Упупы:* {'Вкл. ✅' if radio_enabled else 'Выкл. ❌'}\n"
+    text += f"🎙 *Переозвучка:* {revoice_label}\n"
     text += f"🎭 *Текущий промпт:* `{current_prompt_name.capitalize()}`\n\n"
     text += "_Нажмите '📊 Настроить шансы', чтобы изменить частоту конкретных реакций._"
 
@@ -122,6 +129,7 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
     builder.button(text="🎭 Выбрать промпт", callback_data="settings:view:prompts")
     builder.button(text="🎬 Настройки YTP", callback_data="settings:view:ytp_menu")
+    builder.button(text="🎙 Переозвучка", callback_data="settings:view:revoice_menu")
 
     builder.adjust(2)
     return text, builder.as_markup()
@@ -235,6 +243,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             text, markup = await get_probs_menu_markup(chat_id)
         elif target == "ytp_menu":
             text, markup = await get_ytp_menu_markup(chat_id)
+        elif target == "revoice_menu":
+            text, markup = await get_revoice_settings_markup(chat_id)
         else:
             text, markup = await get_main_settings_markup(chat_id)
 
@@ -305,6 +315,47 @@ async def handle_settings_callback(query: types.CallbackQuery):
                 await query.answer(f"Установлено: {YTP_PRESETS[preset_key]}")
                 text, markup = await get_ytp_menu_markup(chat_id)
                 await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+
+    elif action == "revoice":
+        sub = parts[2]
+
+        if sub == "page":
+            page = int(parts[3])
+            text, markup = await get_revoice_settings_markup(chat_id, page=page)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+            await query.answer()
+
+        elif sub == "refresh":
+            page = int(parts[3]) if len(parts) > 3 else 0
+            text, markup = await get_revoice_settings_markup(
+                chat_id,
+                page=page,
+                force_refresh=True,
+            )
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+            await query.answer("Список обновлён")
+
+        elif sub == "set":
+            voice_id = parts[3]
+            try:
+                selected_name = await set_revoice_voice(chat_id, voice_id)
+            except ValueError:
+                await query.answer(
+                    "Этот голос больше недоступен. Обнови список.",
+                    show_alert=True,
+                )
+                return
+            except Exception as exc:
+                logging.warning("Failed to save revoice voice: %s", type(exc).__name__)
+                await query.answer(
+                    "Не удалось выбрать голос ElevenLabs.",
+                    show_alert=True,
+                )
+                return
+
+            text, markup = await get_revoice_settings_markup(chat_id)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+            await query.answer(f"Переозвучка: {selected_name}")
 
     elif action == "toggle":
         value = parts[2]
