@@ -15,6 +15,17 @@ from services.elevenlabs import (
 import services.revoice as revoice
 
 
+@pytest.fixture(autouse=True)
+def reset_revoice_update_guards():
+    revoice._inflight_updates.clear()
+    revoice._recent_updates.clear()
+    revoice._recent_update_order.clear()
+    yield
+    revoice._inflight_updates.clear()
+    revoice._recent_updates.clear()
+    revoice._recent_update_order.clear()
+
+
 class FakeMessage:
     def __init__(self, text="переозвучь", *, reply_to_message=None, message_id=500):
         self.text = text
@@ -196,7 +207,7 @@ def test_random_voice_flow_never_designs_voice(monkeypatch):
         )
     )
 
-    assert client.cleanup_calls == 1
+    assert client.cleanup_calls == 0
     assert client.random_calls == 1
     assert client.design_calls == []
     assert client.create_calls == []
@@ -223,6 +234,7 @@ def test_custom_voice_design_flow(monkeypatch):
         )
     )
 
+    assert client.cleanup_calls == 1
     assert len(client.design_calls) == 1
     assert "пьяного гоблина" in client.design_calls[0]
     assert client.create_calls[0]["generated_voice_id"] == "generated-b"
