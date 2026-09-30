@@ -125,11 +125,16 @@ async def _run_command(
     *,
     timeout_seconds: float = FFMPEG_TIMEOUT_SECONDS,
 ) -> tuple[bool, str]:
+    process_kwargs = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    if os.name == "posix":
+        process_kwargs["start_new_session"] = True
+
     proc = await asyncio.create_subprocess_exec(
         *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
+        **process_kwargs,
     )
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -138,7 +143,10 @@ async def _run_command(
         )
     except asyncio.TimeoutError:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
         except ProcessLookupError:
             pass
         except OSError:
