@@ -298,23 +298,6 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
         await message.reply(f"Слишком длинно. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
         return
 
-    is_voice_input = bool(media_source.voice)
-    is_audio_input = bool(
-        media_source.audio
-        or (media_source.document and _is_audio_document(media_source.document))
-    )
-    is_video_input = not is_voice_input and not is_audio_input
-    if (
-        is_video_input
-        and duration
-        and duration > MAX_REVERSE_VIDEO_DURATION_SEC
-    ):
-        await message.reply(
-            f"Для «наоборот» видео максимум {MAX_REVERSE_VIDEO_DURATION_SEC} секунд. "
-            "Длинный реверс слишком прожорлив по памяти."
-        )
-        return
-
     if _media_change_semaphore.locked():
         await message.reply("Я тут вообще-то работаю, отъебись.")
         return
@@ -515,6 +498,23 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
     duration = _get_duration_seconds(media_source)
     if duration and duration > MAX_INPUT_DURATION_SEC:
         await message.reply(f"Слишком длинно. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
+        return
+
+    is_voice_input = bool(media_source.voice)
+    is_audio_input = bool(
+        media_source.audio
+        or (media_source.document and _is_audio_document(media_source.document))
+    )
+    is_video_input = not is_voice_input and not is_audio_input
+    if (
+        is_video_input
+        and duration
+        and duration > MAX_REVERSE_VIDEO_DURATION_SEC
+    ):
+        await message.reply(
+            f"Для «наоборот» видео максимум {MAX_REVERSE_VIDEO_DURATION_SEC} секунд. "
+            "Длинный реверс слишком прожорлив по памяти."
+        )
         return
 
     if _media_change_semaphore.locked():
