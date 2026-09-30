@@ -560,7 +560,11 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
 
-            if is_video_input and duration is None:
+            if (
+                is_video_input
+                and duration is None
+                and not _is_video_sticker(media_source)
+            ):
                 probed_duration = await _probe_duration_seconds(input_path)
                 if probed_duration is None:
                     await processing_msg.delete()
