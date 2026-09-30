@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import signal
 import tempfile
 from aiogram import Bot, types
 from aiogram.types import FSInputFile
@@ -9,6 +10,10 @@ from services.video_note_branding import prepare_video_note_for_processing
 
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 180
+MAX_REVERSE_VIDEO_DURATION_SEC = 30
+REVERSE_VIDEO_MAX_EDGE = 640
+FFMPEG_TIMEOUT_SECONDS = 90.0
+FFPROBE_TIMEOUT_SECONDS = 10.0
 
 _media_change_semaphore = asyncio.Semaphore(1)
 
@@ -115,16 +120,69 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
     return None
 
 
-async def _run_command(command: list[str]) -> tuple[bool, str]:
+async def _run_command(
+    command: list[str],
+    *,
+    timeout_seconds: float = FFMPEG_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        stdout, stderr = await proc.communicate()
+        detail = stderr.decode(errors="ignore").strip()
+        logging.warning(
+            "[media_change] process timeout after %.1fs: %s",
+            timeout_seconds,
+            " ".join(command[:4]),
+        )
+        return False, (
+            f"process timed out after {timeout_seconds:.1f}s"
+            + (f": {detail}" if detail else "")
+        )
     if proc.returncode != 0:
         return False, stderr.decode(errors="ignore")
     return True, stdout.decode(errors="ignore")
+
+
+async def _probe_duration_seconds(input_path: str) -> float | None:
+    success, output = await _run_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            input_path,
+        ],
+        timeout_seconds=FFPROBE_TIMEOUT_SECONDS,
+    )
+    if not success:
+        return None
+    try:
+        duration = float(output.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+    return duration if duration > 0 else None
 
 
 async def _convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
@@ -240,6 +298,23 @@ async def handle_speed_command(message: types.Message, bot: Bot, speed: float) -
         await message.reply(f"Слишком длинно. Максимум {MAX_INPUT_DURATION_SEC} секунд.")
         return
 
+    is_voice_input = bool(media_source.voice)
+    is_audio_input = bool(
+        media_source.audio
+        or (media_source.document and _is_audio_document(media_source.document))
+    )
+    is_video_input = not is_voice_input and not is_audio_input
+    if (
+        is_video_input
+        and duration
+        and duration > MAX_REVERSE_VIDEO_DURATION_SEC
+    ):
+        await message.reply(
+            f"Для «наоборот» видео максимум {MAX_REVERSE_VIDEO_DURATION_SEC} секунд. "
+            "Длинный реверс слишком прожорлив по памяти."
+        )
+        return
+
     if _media_change_semaphore.locked():
         await message.reply("Я тут вообще-то работаю, отъебись.")
         return
@@ -351,12 +426,21 @@ async def handle_fast_command(message: types.Message, bot: Bot) -> None:
 
 
 async def _reverse_video_ffmpeg(input_path: str, output_path: str, with_audio: bool) -> tuple[bool, str]:
+    # FFmpeg's reverse filter buffers every decoded frame until EOF. Bound the
+    # buffered frame size before reverse so one clip cannot consume the service
+    # cgroup's memory and stall the Telegram event loop.
+    reverse_filter = (
+        "scale="
+        f"w='if(gt(iw,ih),min({REVERSE_VIDEO_MAX_EDGE},iw),-2)':"
+        f"h='if(gt(iw,ih),-2,min({REVERSE_VIDEO_MAX_EDGE},ih))',"
+        "reverse"
+    )
     cmd = [
         "ffmpeg",
         "-i",
         input_path,
         "-vf",
-        "reverse",
+        reverse_filter,
     ]
 
     if with_audio:
@@ -367,6 +451,8 @@ async def _reverse_video_ffmpeg(input_path: str, output_path: str, with_audio: b
     cmd += [
         "-c:v",
         "libx264",
+        "-threads",
+        "1",
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -375,7 +461,7 @@ async def _reverse_video_ffmpeg(input_path: str, output_path: str, with_audio: b
         output_path,
     ]
 
-    return await _run_command(cmd)
+    return await _run_command(cmd, timeout_seconds=FFMPEG_TIMEOUT_SECONDS)
 
 
 async def _reverse_audio_ffmpeg(input_path: str, output_path: str, codec: str) -> tuple[bool, str]:
@@ -443,9 +529,7 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
 
     try:
         async with _media_change_semaphore:
-            is_voice_input = bool(media_source.voice)
             is_video_note_input = bool(getattr(media_source, "video_note", None))
-            is_audio_input = bool(media_source.audio or (media_source.document and _is_audio_document(media_source.document)))
 
             if _is_video_sticker(media_source):
                 input_suffix = ".webm"
@@ -467,6 +551,21 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
 
             file_info = await bot.get_file(file_obj.file_id)
             await bot.download_file(file_info.file_path, input_path)
+
+            if is_video_input and duration is None:
+                probed_duration = await _probe_duration_seconds(input_path)
+                if probed_duration is None:
+                    await processing_msg.delete()
+                    await message.reply("❌ Не удалось определить длительность видео.")
+                    return
+                if probed_duration > MAX_REVERSE_VIDEO_DURATION_SEC:
+                    await processing_msg.delete()
+                    await message.reply(
+                        f"Для «наоборот» видео максимум "
+                        f"{MAX_REVERSE_VIDEO_DURATION_SEC} секунд. "
+                        "Длинный реверс слишком прожорлив по памяти."
+                    )
+                    return
 
             real_input_path = input_path
             if is_video_note_input:
