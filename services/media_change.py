@@ -11,7 +11,7 @@ from services.video_note_branding import prepare_video_note_for_processing
 MAX_FILE_SIZE_MB = 50
 MAX_INPUT_DURATION_SEC = 180
 MAX_REVERSE_VIDEO_DURATION_SEC = 30
-REVERSE_VIDEO_MAX_EDGE = 640
+REVERSE_VIDEO_MAX_EDGE = 480
 FFMPEG_TIMEOUT_SECONDS = 90.0
 FFPROBE_TIMEOUT_SECONDS = 10.0
 
@@ -580,9 +580,17 @@ async def handle_reverse_command(message: types.Message, bot: Bot) -> None:
             elif is_audio_input:
                 success, ffmpeg_output = await _reverse_audio_ffmpeg(real_input_path, output_path, codec="mp3")
             else:
-                success, ffmpeg_output = await _reverse_video_ffmpeg(real_input_path, output_path, with_audio=True)
-                if not success:
-                    success, ffmpeg_output = await _reverse_video_ffmpeg(real_input_path, output_path, with_audio=False)
+                success, ffmpeg_output = await _reverse_video_ffmpeg(
+                    real_input_path,
+                    output_path,
+                    with_audio=True,
+                )
+                if not success and "timed out" not in ffmpeg_output.lower():
+                    success, ffmpeg_output = await _reverse_video_ffmpeg(
+                        real_input_path,
+                        output_path,
+                        with_audio=False,
+                    )
 
             if not success:
                 logging.error("[media_change] reverse ffmpeg error: %s", ffmpeg_output)
