@@ -259,6 +259,52 @@ def format_model_usage_message(report: dict, title: str) -> str:
                 f"· {int(row.get('requests', 0))} запр."
             )
 
+    anomalous_users = report.get("anomalous_users") or []
+    if anomalous_users:
+        thresholds = report.get("anomaly_thresholds") or {}
+        token_threshold = int(thresholds.get("total_tokens", 100_000))
+        request_threshold = int(thresholds.get("requests", 50))
+        parts.append("\n🚨 <b>Аномальная активность за 24 часа</b>")
+        parts.append(
+            "Порог: ≥"
+            f"{_format_token_count(token_threshold)} токенов "
+            f"или ≥{request_threshold} AI-вызовов на пользователя."
+        )
+        for row in anomalous_users:
+            label = _format_usage_identity(
+                row.get("user_name"),
+                row.get("user_username"),
+                f"ID {row.get('user_id')}",
+            )
+            share_percent = float(row.get("share_percent") or 0)
+            parts.append(
+                f"• {escape(label)}: "
+                f"<b>{_format_token_count(row.get('total_tokens', 0))}</b> "
+                f"· {int(row.get('requests', 0))} запр. "
+                f"· {share_percent:.1f}% общего расхода"
+            )
+
+            anomaly_chats = row.get("chats") or []
+            if anomaly_chats:
+                chat_parts = []
+                for chat in anomaly_chats:
+                    chat_label = chat.get("chat_title") or f"ID {chat.get('chat_id')}"
+                    chat_parts.append(
+                        f"{escape(str(chat_label))} "
+                        f"{_format_token_count(chat.get('total_tokens', 0))}"
+                    )
+                parts.append("  ↳ чаты: " + "; ".join(chat_parts))
+
+            anomaly_features = row.get("features") or []
+            if anomaly_features:
+                feature_parts = []
+                for feature in anomaly_features:
+                    feature_parts.append(
+                        f"{escape(str(feature.get('feature') or 'не размечено'))} "
+                        f"{_format_token_count(feature.get('total_tokens', 0))}"
+                    )
+                parts.append("  ↳ функции: " + "; ".join(feature_parts))
+
     users = report.get("users") or []
     if users:
         parts.append("\n<b>Топ пользователей по токенам</b>")
