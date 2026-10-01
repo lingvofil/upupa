@@ -399,3 +399,100 @@ def test_statistics_schema_migrates_legacy_model_stats_table(tmp_path):
     } <= columns
     assert sqlite_statistics.MODEL_USAGE_MIGRATION in migrations
     assert sqlite_statistics.AI_FEATURE_MIGRATION in migrations
+
+
+def test_daily_model_usage_report_flags_heavy_and_frequent_users(tmp_path):
+    repository = sqlite_statistics.SQLiteStatisticsRepository(tmp_path / "statistics.db")
+    repository.init_schema()
+
+    repository.log_model_request(
+        chat_id=-1001,
+        user_id=42,
+        model_name="gemini-test",
+        request_type="model.generate_content",
+        provider="gemini",
+        feature="диалог",
+        total_tokens=70_000,
+        success=True,
+        lane="interactive",
+        chat_title="Нейроисход",
+        user_name="Alice",
+        user_username="alice",
+    )
+    repository.log_model_request(
+        chat_id=-2002,
+        user_id=42,
+        model_name="gemini-test",
+        request_type="model.generate_content",
+        provider="gemini",
+        feature="летопись",
+        total_tokens=40_000,
+        success=True,
+        lane="interactive",
+        chat_title="Экспертная группа",
+        user_name="Alice",
+        user_username="alice",
+    )
+
+    for _ in range(51):
+        repository.log_model_request(
+            chat_id=-3003,
+            user_id=77,
+            model_name="gemini-test",
+            request_type="model.generate_content",
+            provider="gemini",
+            feature="диалог",
+            total_tokens=10,
+            success=True,
+            lane="interactive",
+            chat_title="Частый чат",
+            user_name="Bob",
+            user_username="bob",
+        )
+
+    report = repository.get_model_usage_report(period_hours=24, limit=5)
+
+    assert report["anomaly_thresholds"] == {
+        "period_hours": 24,
+        "total_tokens": 100_000,
+        "requests": 50,
+    }
+    assert [row["user_id"] for row in report["anomalous_users"]] == [42, 77]
+
+    heavy = report["anomalous_users"][0]
+    assert heavy["total_tokens"] == 110_000
+    assert heavy["requests"] == 2
+    assert heavy["triggered_by_tokens"] is True
+    assert heavy["triggered_by_requests"] is False
+    assert heavy["chats"][0]["chat_title"] == "Нейроисход"
+    assert heavy["features"][0]["feature"] == "диалог"
+    assert heavy["share_percent"] > 99
+
+    frequent = report["anomalous_users"][1]
+    assert frequent["total_tokens"] == 510
+    assert frequent["requests"] == 51
+    assert frequent["triggered_by_tokens"] is False
+    assert frequent["triggered_by_requests"] is True
+
+
+def test_anomaly_detection_is_disabled_outside_daily_report(tmp_path):
+    repository = sqlite_statistics.SQLiteStatisticsRepository(tmp_path / "statistics.db")
+    repository.init_schema()
+    repository.log_model_request(
+        chat_id=-1001,
+        user_id=42,
+        model_name="gemini-test",
+        request_type="model.generate_content",
+        provider="gemini",
+        feature="диалог",
+        total_tokens=150_000,
+        success=True,
+        lane="interactive",
+        chat_title="Heavy chat",
+        user_name="Alice",
+        user_username="alice",
+    )
+
+    report = repository.get_model_usage_report(period_hours=1, limit=5)
+
+    assert report["anomalous_users"] == []
