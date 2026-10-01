@@ -14,6 +14,11 @@ SQLITE_BUSY_TIMEOUT_MS = 30_000
 STATISTICS_INDEX_MIGRATION = "statistics:001-query-indexes"
 MODEL_USAGE_MIGRATION = "statistics:002-model-token-usage"
 AI_FEATURE_MIGRATION = "statistics:003-ai-feature"
+DAILY_ANOMALY_PERIOD_HOURS = 24
+DAILY_ANOMALY_TOKEN_THRESHOLD = 100_000
+DAILY_ANOMALY_REQUEST_THRESHOLD = 50
+DAILY_ANOMALY_LIMIT = 7
+DAILY_ANOMALY_BREAKDOWN_LIMIT = 3
 
 
 def _utc_now_naive() -> datetime:
@@ -627,6 +632,128 @@ class SQLiteStatisticsRepository:
                 [*params, resolved_limit],
             ).fetchall()
 
+            anomaly_thresholds = {
+                "period_hours": DAILY_ANOMALY_PERIOD_HOURS,
+                "total_tokens": DAILY_ANOMALY_TOKEN_THRESHOLD,
+                "requests": DAILY_ANOMALY_REQUEST_THRESHOLD,
+            }
+            anomalous_users: list[dict[str, Any]] = []
+            if period_hours == DAILY_ANOMALY_PERIOD_HOURS:
+                anomaly_rows = conn.execute(
+                    f"""
+                    SELECT
+                        user_id,
+                        MAX(user_name),
+                        MAX(user_username),
+                        COUNT(*) AS requests,
+                        COALESCE(SUM({effective_total}), 0) AS tokens
+                    FROM model_stats
+                    {user_where}
+                    GROUP BY user_id
+                    HAVING COUNT(*) >= ?
+                        OR COALESCE(SUM({effective_total}), 0) >= ?
+                    ORDER BY tokens DESC, requests DESC
+                    LIMIT ?
+                    """,
+                    [
+                        *params,
+                        DAILY_ANOMALY_REQUEST_THRESHOLD,
+                        DAILY_ANOMALY_TOKEN_THRESHOLD,
+                        DAILY_ANOMALY_LIMIT,
+                    ],
+                ).fetchall()
+
+                total_tokens_for_share = int(totals_row[7] or 0)
+                user_scoped_where = (
+                    f"{where} {'AND' if where else 'WHERE'} user_id = ?"
+                )
+                anomaly_chat_where = f"{user_scoped_where} AND chat_id IS NOT NULL"
+
+                for (
+                    user_id,
+                    user_name,
+                    user_username,
+                    requests,
+                    tokens,
+                ) in anomaly_rows:
+                    anomaly_chats = conn.execute(
+                        f"""
+                        SELECT
+                            chat_id,
+                            MAX(chat_title),
+                            COUNT(*) AS requests,
+                            COALESCE(SUM({effective_total}), 0) AS tokens
+                        FROM model_stats
+                        {anomaly_chat_where}
+                        GROUP BY chat_id
+                        ORDER BY tokens DESC, requests DESC
+                        LIMIT ?
+                        """,
+                        [*params, user_id, DAILY_ANOMALY_BREAKDOWN_LIMIT],
+                    ).fetchall()
+                    anomaly_features = conn.execute(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(TRIM(feature), ''), 'не размечено') AS resolved_feature,
+                            COUNT(*) AS requests,
+                            COALESCE(SUM({effective_total}), 0) AS tokens
+                        FROM model_stats
+                        {user_scoped_where}
+                        GROUP BY resolved_feature
+                        ORDER BY tokens DESC, requests DESC
+                        LIMIT ?
+                        """,
+                        [*params, user_id, DAILY_ANOMALY_BREAKDOWN_LIMIT],
+                    ).fetchall()
+
+                    user_tokens = int(tokens or 0)
+                    anomalous_users.append(
+                        {
+                            "user_id": int(user_id),
+                            "user_name": user_name,
+                            "user_username": user_username,
+                            "requests": int(requests),
+                            "total_tokens": user_tokens,
+                            "share_percent": (
+                                round(user_tokens * 100 / total_tokens_for_share, 1)
+                                if total_tokens_for_share
+                                else 0.0
+                            ),
+                            "triggered_by_tokens": (
+                                user_tokens >= DAILY_ANOMALY_TOKEN_THRESHOLD
+                            ),
+                            "triggered_by_requests": (
+                                int(requests) >= DAILY_ANOMALY_REQUEST_THRESHOLD
+                            ),
+                            "chats": [
+                                {
+                                    "chat_id": int(chat_id),
+                                    "chat_title": chat_title,
+                                    "requests": int(chat_requests),
+                                    "total_tokens": int(chat_tokens or 0),
+                                }
+                                for (
+                                    chat_id,
+                                    chat_title,
+                                    chat_requests,
+                                    chat_tokens,
+                                ) in anomaly_chats
+                            ],
+                            "features": [
+                                {
+                                    "feature": str(feature),
+                                    "requests": int(feature_requests),
+                                    "total_tokens": int(feature_tokens or 0),
+                                }
+                                for (
+                                    feature,
+                                    feature_requests,
+                                    feature_tokens,
+                                ) in anomaly_features
+                            ],
+                        }
+                    )
+
         return {
             "totals": {
                 "requests": int(totals_row[0] or 0),
@@ -738,6 +865,8 @@ class SQLiteStatisticsRepository:
                 }
                 for user_id, user_name, user_username, requests, tokens in users_by_requests
             ],
+            "anomaly_thresholds": anomaly_thresholds,
+            "anomalous_users": anomalous_users,
         }
 
     def get_activity_by_hour(self, period_hours: int | None = None) -> dict[int, int]:
