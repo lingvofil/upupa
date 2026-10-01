@@ -129,6 +129,13 @@ _POEM_USER_NAME_ALIASES = {
     "м м": "Имакс",
 }
 
+_POEM_EXCLUDED_USER_NAME_KEYS = {"чаннел"}
+
+
+def _is_excluded_poem_user_name(raw_name: str | None) -> bool:
+    """Exclude service-like participant names from poem character lists."""
+    return _normalize_poem_user_name(raw_name).casefold() in _POEM_EXCLUDED_USER_NAME_KEYS
+
 
 def _replace_poem_user_name_alias(raw_name: str | None) -> str:
     """Apply chat-specific display-name aliases only for poem character lists."""
@@ -246,7 +253,7 @@ def _format_poem_character_instruction(
     character_parts = [
         _replace_poem_user_name_alias(part.strip())
         for part in (other_characters or "").split(",")
-        if part.strip()
+        if part.strip() and not _is_excluded_poem_user_name(part)
     ]
     if max_characters is not None:
         character_parts = character_parts[:max_characters]

@@ -297,6 +297,18 @@ def test_poem_user_name_aliases_are_applied_only_in_poem_character_lists(monkeyp
     assert characters == "Мухтар, Света, Мацоня, Алина, Имакс, Жека"
 
 
+def test_poem_character_list_excludes_channel_user(monkeypatch):
+    from AI.dialog import prompt_commands
+
+    monkeypatch.setattr(prompt_commands.random, "shuffle", lambda values: None)
+    characters = prompt_commands._format_poem_character_instruction(
+        [],
+        "Жека, channel, Чаннел, Мацоня",
+    )
+
+    assert characters == "Жека, Мацоня"
+
+
 def test_poem_bot_pool_ignores_telegram_fake_channel_senders(monkeypatch):
     import asyncio
     from types import SimpleNamespace
