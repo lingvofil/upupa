@@ -457,12 +457,18 @@ class DndMenuService:
             await self.show(message.bot, session)
 
     async def show_turn_cards(self, bot, session):
-        """Refresh the shared card and the addressed player's card for a live input window."""
-        if getattr(session, "mode", None) != "participants" or getattr(session, "state", None) != "WAITING_ACTION":
+        """Refresh shared/player cards for the current participant input or roll."""
+        state = getattr(session, "state", None)
+        if getattr(session, "mode", None) != "participants" or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
             return
         async with self._lock(session.chat_id, 0):
             await self.show(bot, session, 0, "overview")
-        targets = [int(value) for value in (getattr(session, "action_target_user_ids", None) or [])]
+        targets = (
+            (getattr(session, "pending_roll", None) or {}).get("target_user_ids", [])
+            if state == "WAITING_ROLL"
+            else (getattr(session, "action_target_user_ids", None) or [])
+        )
+        targets = [int(value) for value in targets]
         if len(targets) == 1:
             owner = targets[0]
             async with self._lock(session.chat_id, owner):
