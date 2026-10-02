@@ -557,6 +557,16 @@ def configure_dnd_local_runtime(dnd=None, router=None):
             _ensure(session)
             if not session.paused and (session.local_delivery_outbox or session.local_pending_transition):
                 runtime.restart_narration(bot, session)
+            if (
+                menu_service is not None
+                and not session.paused
+                and getattr(session, "mode", None) == "participants"
+                and getattr(session, "state", None) in {"WAITING_ACTION", "WAITING_ROLL"}
+            ):
+                dnd._start_background_task(
+                    menu_service.show_turn_cards(bot, session, force_new=True),
+                    name=f"dnd-menu:{session.chat_id}:restore",
+                )
         return restored
 
     dnd.restore_dnd_sessions = restore
