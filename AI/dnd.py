@@ -934,6 +934,8 @@ def register_roll_commit_hook(hook: Callable) -> None:
 
 def _commit_roll_transaction(session, pending_roll: dict, user_id: int) -> list[str]:
     """Apply all post-roll resource effects before the continuation LLM call."""
+    if pending_roll.get("_resources_committed"):
+        return []
     notices: list[str] = []
     for hook in list(_roll_commit_hooks):
         result = hook(session, pending_roll, int(user_id))
@@ -941,6 +943,7 @@ def _commit_roll_transaction(session, pending_roll: dict, user_id: int) -> list[
             notices.append(result.strip())
         elif isinstance(result, (list, tuple)):
             notices.extend(str(item).strip() for item in result if str(item).strip())
+    pending_roll["_resources_committed"] = True
     return notices
 
 
