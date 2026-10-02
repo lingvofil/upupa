@@ -25,12 +25,13 @@ _FIELDS = (
     "mission_goal", "selected_plot", "scene_log", "participants", "character_profiles",
     "character_sheets", "inventories", "reputations", "player_positions", "scene_objects",
     "enemy_combatants", "enemy_intent", "scene_clocks", "threat", "pending_actions",
-    "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id",
+    "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
     "local_wait_rule",
 )
 _PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
+_ABILITY_LABELS = {"STR": "Сила", "DEX": "Ловкость", "CON": "Телосложение", "INT": "Интеллект", "WIS": "Мудрость", "CHA": "Харизма"}
 _STATES = {"LOBBY": "Собираем участников", "WAITING_MODE": "Выбираем режим", "WAITING_PLOT": "Выбираем сюжет",
            "WAITING_ACTION": "Ждём действий", "WAITING_ROLL": "Ждём бросок", "WAITING_POLL": "Голосование",
            "WAITING_HEAL": "Решение о лечении", "RESOLVING": "Разрешаем последствия"}
@@ -99,6 +100,25 @@ def _clock_lines(snapshot):
 def _hp(snapshot, user_id):
     sheet = _mapping(_mapping(snapshot.get("character_sheets")).get(str(user_id)))
     return f"❤️ {sheet.get('hp', 0)}/{sheet.get('max_hp', 0)} HP" if sheet else ""
+
+
+def _ability_modifier(value) -> int:
+    return (_int(value, 10) - 10) // 2
+
+
+def _quick_interactions(snapshot, limit=3):
+    result = []
+    for object_id, row in _mapping(snapshot.get("scene_objects")).items():
+        if not isinstance(row, dict) or not _public(row) or not row.get("available", True):
+            continue
+        for rule_id, raw in _mapping(row.get("interactions")).items():
+            rule = _public_interaction(raw)
+            if rule is None:
+                continue
+            result.append((str(object_id), str(rule_id), rule))
+            if len(result) >= limit:
+                return result
+    return result
 
 
 def _wait_rule(snapshot):
@@ -209,7 +229,17 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
     participants = _mapping(snapshot.get("participants"))
     if page == "hero":
         profile = _mapping(_mapping(snapshot.get("character_profiles")).get(str(user_id)))
+        sheet = _mapping(_mapping(snapshot.get("character_sheets")).get(str(user_id)))
+        stats = _mapping(sheet.get("stats"))
         lines = [f"👤 {_name(snapshot, user_id)}", _hp(snapshot, user_id)]
+        if sheet.get("ac") is not None:
+            lines.append(f"🛡 КБ {sheet['ac']}")
+        if stats:
+            lines.append("Характеристики:")
+            for ability, label in _ABILITY_LABELS.items():
+                if ability in stats:
+                    score = _int(stats[ability], 10)
+                    lines.append(f"• {label} ({ability}) {score} ({_ability_modifier(score):+d})")
         lines.extend(f"{label}: {_text(profile[key], 160)}" for key, label in _PROFILE_LABELS.items() if profile.get(key))
         position = _mapping(_mapping(snapshot.get("player_positions")).get(str(user_id)))
         if _public(position) and position.get("location"):
@@ -256,6 +286,11 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
     if snapshot.get("pending_actions"):
         active = sum(1 for row in participants.values() if isinstance(row, dict) and row.get("active", True))
         lines.append(f"Ответили: {len(snapshot['pending_actions'])}/{len(targets) or active}")
+    deadline = snapshot.get("action_deadline")
+    if snapshot.get("state") == "WAITING_ACTION" and deadline and len(targets) == 1:
+        remaining = max(0, int(float(deadline) - time.time()))
+        minutes, seconds = divmod(remaining, 60)
+        lines.append(f"⏱ Автопропуск через ~{minutes}:{seconds:02d}")
     if scene:
         lines.extend(["", scene])
     lines.extend(_clock_lines(snapshot))
@@ -330,7 +365,7 @@ class DndMenuService:
     def keyboard(self, session, owner, page, *, card, seq):
         snapshot = snapshot_session(session)
         button = lambda text, operation, **payload: self._button(session, owner, text, operation, card=card, seq=seq, **payload)
-        rows = [[button("✍️ Свой ход", "compose")]] if owner else []
+        rows = [[button("✍️ Свой ход", "compose")]] if snapshot.get("state") == "WAITING_ACTION" else []
         if owner and snapshot.get("state") == "WAITING_ROLL":
             rows.append([button("🎲 Бросить", "confirm", kind="ROLL")])
         if owner and page == "overview" and _wait_rule(snapshot):
@@ -341,8 +376,17 @@ class DndMenuService:
             choices = list(ARCHETYPES)
             rows.extend([[button("🎯 " + choice.capitalize(), "confirm", kind="CHOOSE_ARCHETYPE", choice=choice)
                           for choice in choices[index:index + 2]] for index in range(0, len(choices), 2)])
-        if page in {"overview", "scene"}:
-            for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:4]:
+        if page == "overview":
+            quick = _quick_interactions(snapshot)
+            for object_id, rule_id, rule in quick:
+                rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
+                                    kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
+            if not quick:
+                for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:3]:
+                    if isinstance(row, dict) and _public(row) and row.get("available", True):
+                        rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
+        if page == "scene":
+            for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
                     rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
         if owner and page == "items":
@@ -411,6 +455,18 @@ class DndMenuService:
             return
         async with self._lock(session.chat_id, 0):
             await self.show(message.bot, session)
+
+    async def show_turn_cards(self, bot, session):
+        """Refresh the shared card and the addressed player's card for a live input window."""
+        if getattr(session, "mode", None) != "participants" or getattr(session, "state", None) != "WAITING_ACTION":
+            return
+        async with self._lock(session.chat_id, 0):
+            await self.show(bot, session, 0, "overview")
+        targets = [int(value) for value in (getattr(session, "action_target_user_ids", None) or [])]
+        if len(targets) == 1:
+            owner = targets[0]
+            async with self._lock(session.chat_id, owner):
+                await self.show(bot, session, owner, "overview")
 
     def _can_act(self, session, actor, *, state="WAITING_ACTION"):
         if self.paused(session) or getattr(session, "state", None) != state:
