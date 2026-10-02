@@ -164,38 +164,10 @@ def _parse_stats_payload(raw, user_ids: list[int]) -> dict[str, dict[str, int]]:
 
 
 async def _generate_stats(dnd, session, user_ids: list[int]) -> dict[str, dict[str, int]]:
-    if not user_ids:
-        return {}
-    from AI import dnd_campaign as campaign
+    from AI.dnd_character_templates import stats_for_profile
 
-    lines = []
     profiles = getattr(session, "character_profiles", {}) or {}
-    for user_id in user_ids:
-        key = str(int(user_id))
-        profile = profiles.get(key) or {}
-        lines.append(
-            f"- ID {key} {_participant_name(session, user_id)}: "
-            f"образ={profile.get('style')}; сила={profile.get('strength')}; "
-            f"слабость={profile.get('weakness')}; приём={profile.get('special')}"
-        )
-    prompt = (
-        "Служебно распредели характеристики героям по их профилям. Это не игровой ход, без ACTION-тегов.\n"
-        "Для КАЖДОГО героя используй ровно один и тот же набор значений 16,14,13,12,10,8, каждое число ровно один раз. "
-        "Назначь их осмысленно: сила STR, ловкость DEX, телосложение CON, интеллект INT, мудрость WIS, харизма CHA. "
-        "Сильные/слабые стороны и образ должны влиять на распределение.\n"
-        + "\n".join(lines)
-        + "\nВерни только JSON-объект вида {\"123\":{\"STR\":16,\"DEX\":14,\"CON\":13,\"INT\":12,\"WIS\":10,\"CHA\":8}}."
-    )
-    try:
-        raw = await campaign._ephemeral_generate(dnd, session, prompt)
-        parsed = _parse_stats_payload(raw, user_ids)
-    except Exception:
-        logging.exception("DnD combat stat generation failed chat_id=%s", getattr(session, "chat_id", None))
-        parsed = {}
-    for user_id in user_ids:
-        key = str(int(user_id))
-        parsed.setdefault(key, _random_stats())
-    return parsed
+    return {str(int(uid)): stats_for_profile(profiles.get(str(int(uid)))) for uid in user_ids}
 
 
 def _history_stats(campaign, session, user_id: int):

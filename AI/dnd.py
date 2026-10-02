@@ -522,6 +522,10 @@ def _can_user_act(session, user_id: int, target_user_ids=None) -> bool:
     participants = _participant_ids(session)
     if user_id not in participants:
         return False
+    window = (getattr(session, "dnd_lifecycle_v1", {}) or {}).get("window") or {}
+    if (getattr(session, "state", None) == "WAITING_ACTION" and window.get("status") == "open"
+            and user_id in window.get("resolved_actors", [])):
+        return False
     targets = {int(value) for value in (target_user_ids or [])}
     return not targets or user_id in targets
 
@@ -690,7 +694,9 @@ def restore_dnd_sessions(bot: Bot) -> int:
             generation_request = getattr(session, "pending_generation_request", {}) or {}
             has_durable_result = bool(durable_result.get("text"))
             has_pending_generation = bool(generation_request.get("prompt"))
-            has_recovery_work = has_durable_result or has_pending_generation
+            has_recovery_work = (has_durable_result or has_pending_generation
+                                 or bool(getattr(session, "local_pending_transition", None))
+                                 or bool(getattr(session, "local_delivery_outbox", None)))
             if session.state == "WAITING_ROLL" and not has_recovery_work:
                 schedule_personal_turn(sys.modules[__name__], bot, session)
             poll = session.pending_poll
@@ -702,20 +708,21 @@ def restore_dnd_sessions(bot: Bot) -> int:
             ):
                 poll_id = str(session.current_poll_id)
                 poll_map[poll_id] = session.chat_id
-                deadline = float(poll.get("deadline", time.time()))
+                deadline = float(poll.get("deadline") or time.time())
                 delay = max(0.0, deadline - time.time())
-                _start_background_task(
-                    wait_for_poll_timeout(
-                        bot,
-                        session.chat_id,
-                        int(poll.get("poll_chat_id", session.chat_id)),
-                        int(poll["message_id"]),
-                        list(poll["options"]),
-                        poll_id,
-                        delay_seconds=delay,
-                    ),
-                    name=f"dnd-poll:{session.chat_id}:{poll_id}:restored",
-                )
+                if not getattr(session, "paused", False):
+                    _start_background_task(
+                        wait_for_poll_timeout(
+                            bot,
+                            session.chat_id,
+                            int(poll.get("poll_chat_id", session.chat_id)),
+                            int(poll["message_id"]),
+                            list(poll["options"]),
+                            poll_id,
+                            delay_seconds=delay,
+                        ),
+                        name=f"dnd-poll:{session.chat_id}:{poll_id}:restored",
+                    )
             elif not has_recovery_work and session.state == "WAITING_POLL":
                 session.state = "WAITING_ACTION"
                 session.current_poll_id = None
@@ -1202,7 +1209,8 @@ async def wait_for_poll_timeout(
         delay = max(0.0, delay_seconds)
     await asyncio.sleep(delay)
     session = dnd_sessions.get(chat_id)
-    if not session or str(session.current_poll_id) != str(poll_id):
+    if (not session or getattr(session, "paused", False) or str(session.current_poll_id) != str(poll_id)
+            or (getattr(session, "pending_poll", None) or {}).get("deadline") != deadline):
         return
     await finalize_poll(bot, chat_id, message_id, options)
 
@@ -1215,7 +1223,7 @@ def _format_group_actions(actions: list[dict]) -> str:
 
 async def finalize_group_actions(bot: Bot, chat_id: int, prompt_message_id: int):
     session = dnd_sessions.get(chat_id)
-    if not session or session.state != "WAITING_ACTION":
+    if not session or getattr(session, "paused", False) or session.state != "WAITING_ACTION":
         return
     if int(session.action_prompt_message_id or 0) != int(prompt_message_id):
         return
@@ -1265,7 +1273,8 @@ async def wait_for_action_timeout(
         delay = max(0.0, delay_seconds)
     await asyncio.sleep(delay)
     session = dnd_sessions.get(chat_id)
-    if not session or session.state != "WAITING_ACTION":
+    if (not session or getattr(session, "paused", False) or session.state != "WAITING_ACTION"
+            or getattr(session, "action_deadline", None) != deadline):
         return
     if int(session.action_prompt_message_id or 0) != int(prompt_message_id):
         return
@@ -1284,7 +1293,7 @@ async def handle_poll_answer(poll_answer: PollAnswer, bot: Bot):
     if not chat_id:
         return
     session = dnd_sessions.get(chat_id)
-    if not session or not session.pending_poll:
+    if not session or getattr(session, "paused", False) or not session.pending_poll:
         return
     user_id = int(poll_answer.user.id)
     if not _poll_user_is_eligible(session, user_id):

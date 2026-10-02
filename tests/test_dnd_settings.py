@@ -153,6 +153,9 @@ def test_settings_callback_persists_and_rejects_non_host():
     assert settings.settings_for()["personal"] == 4
     callback.bot.get_chat_member.return_value.status = "administrator"
     asyncio.run(change(callback))
+    assert settings.settings_for()["personal"] == 4  # picker alone has no effect
+    callback.data = "dnd:settings:set:personal:3"
+    asyncio.run(change(callback))
     assert settings.settings_for()["personal"] == 6
     assert settings._repository.load()["personal"] == 6
 

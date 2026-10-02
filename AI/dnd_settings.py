@@ -22,8 +22,17 @@ OPTIONS = {
     "complexity": ("Сложность сюжета", ("простая", "обычная", "сложная")),
     "turn_seconds": ("Общий ход / голосование, сек", (60, 120, 180, 300, 600)),
     "personal_seconds": ("Пропуск личного хода, сек", (0, 120, 180, 300, 600)),
+    "ai_mode": ("Режим мастера", ("balanced", "economy")),
+    "images": ("Иллюстрации", ("important", "off")),
 }
-DEFAULTS = dict(personal=4, poll=6, monsters=1, complexity="обычная", turn_seconds=180, personal_seconds=0)
+DEFAULTS = dict(personal=4, poll=6, monsters=1, complexity="обычная", turn_seconds=180, personal_seconds=0,
+                ai_mode="balanced", images="important")
+PRESETS = {
+    "quick": {"turn_seconds": 60, "personal_seconds": 120, "personal": 2, "poll": 4},
+    "normal": {"turn_seconds": 180, "personal_seconds": 0, "personal": 4, "poll": 6},
+    "slow": {"turn_seconds": 600, "personal_seconds": 0, "personal": 6, "poll": 8},
+}
+VALUE_LABELS = {"balanced": "Обычный", "economy": "Экономный", "important": "Важные сцены", "off": "Выключены"}
 _repository = JsonFileRepository(DATA_DIR / "dnd_settings.json")
 _settings = None
 
@@ -56,8 +65,19 @@ def settings_context(session):
 
 def keyboard():
     values = settings_for()
-    rows = [[InlineKeyboardButton(text=f"{label}: {values[key] or 'выкл'}", callback_data=f"dnd:settings:{key}")]
+    rows = [[InlineKeyboardButton(text=f"{label}: {VALUE_LABELS.get(values[key], values[key]) or 'выкл'}", callback_data=f"dnd:settings:{key}")]
             for key, (label, _) in OPTIONS.items()]
+    rows.append([InlineKeyboardButton(text=label, callback_data=f"dnd:settings:preset:{key}")
+                 for key, label in (("quick", "Быстро"), ("normal", "Обычно"), ("slow", "Неспешно"))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def choices_keyboard(key):
+    choices = OPTIONS[key][1]
+    rows = [[InlineKeyboardButton(text=str(VALUE_LABELS.get(value, value) or "выкл"),
+                                  callback_data=f"dnd:settings:set:{key}:{index}")]
+            for index, value in enumerate(choices)]
+    rows.append([InlineKeyboardButton(text="← Настройки", callback_data="dnd:settings:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -76,7 +96,7 @@ class SettingsMiddleware(BaseMiddleware):
 
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.chat.id == ALLOWED_CHAT_ID and (event.text or "").strip().casefold() in {"днд настройки", "упупа днд настройки"}:
-            await event.answer("⚙️ ДНД: нажмите настройку, чтобы выбрать следующее значение.\n"
+            await event.answer("⚙️ ДНД: выберите настройку или готовый темп.\n"
                                "Частота партии — один общий ход после указанного числа личных. 0 — выключено.\n"
                                "Менять могут ведущий и администраторы. Новые сроки действуют со следующего хода.", reply_markup=keyboard())
             return
@@ -94,6 +114,7 @@ class ScopeMiddleware(BaseMiddleware):
 async def wait_personal_turn(dnd, bot, session, prompt_id, deadline):
     await asyncio.sleep(max(0, deadline - time.time()))
     if (dnd.dnd_sessions.get(session.chat_id) is not session or session.state != "WAITING_ACTION"
+            or getattr(session, "paused", False)
             or session.action_prompt_message_id != prompt_id or session.action_deadline != deadline
             or session.pending_actions or not session.action_target_user_ids):
         return
@@ -104,6 +125,7 @@ async def wait_personal_turn(dnd, bot, session, prompt_id, deadline):
 async def wait_personal_roll(dnd, bot, session, roll, deadline):
     await asyncio.sleep(max(0, deadline - time.time()))
     if (dnd.dnd_sessions.get(session.chat_id) is not session or session.state != "WAITING_ROLL"
+            or getattr(session, "paused", False)
             or session.pending_roll is not roll or roll.get("personal_deadline") != deadline):
         return
     from AI.dnd_turn_control import skip_absent_turn
@@ -111,6 +133,8 @@ async def wait_personal_roll(dnd, bot, session, roll, deadline):
 
 
 def schedule_personal_turn(dnd, bot, session):
+    if getattr(session, "paused", False):
+        return
     seconds = settings_for(session)["personal_seconds"]
     if seconds and getattr(session, "state", "") == "WAITING_ROLL":
         roll = getattr(session, "pending_roll", None) or {}
@@ -140,13 +164,31 @@ def configure_dnd_settings(dnd, router):
 
     async def change(callback):
         global _settings
-        key = callback.data.rsplit(":", 1)[-1]
-        if key not in OPTIONS or not await can_edit(dnd, callback):
+        parts = callback.data.split(":")[2:]
+        if not await can_edit(dnd, callback):
             await callback.answer("Настройки меняет ведущий или администратор.", show_alert=True)
             return
+        if parts == ["back"]:
+            await callback.message.edit_reply_markup(reply_markup=keyboard())
+            await callback.answer()
+            return
+        if len(parts) == 1 and parts[0] in OPTIONS:
+            await callback.message.edit_reply_markup(reply_markup=choices_keyboard(parts[0]))
+            await callback.answer("Выберите значение")
+            return
         updated = settings_for()
-        choices = OPTIONS[key][1]
-        updated[key] = choices[(choices.index(updated[key]) + 1) % len(choices)]
+        if len(parts) == 2 and parts[0] == "preset" and parts[1] in PRESETS:
+            updated.update(PRESETS[parts[1]])
+        elif len(parts) == 3 and parts[0] == "set" and parts[1] in OPTIONS and parts[2].isdigit():
+            key, index = parts[1], int(parts[2])
+            choices = OPTIONS[key][1]
+            if index >= len(choices):
+                await callback.answer("Выберите настройку заново")
+                return
+            updated[key] = choices[index]
+        else:
+            await callback.answer("Выберите настройку заново")
+            return
         _repository.save(updated)
         _settings = updated
         await callback.message.edit_reply_markup(reply_markup=keyboard())
