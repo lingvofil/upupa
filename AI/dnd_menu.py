@@ -475,6 +475,7 @@ class DndMenuService:
 
     async def show_turn_cards(self, bot, session, *, force_new=False):
         """Refresh shared/player cards for the current participant input or roll."""
+        _ensure_ui(session)
         state = getattr(session, "state", None)
         if getattr(session, "mode", None) != "participants" or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
             return
