@@ -177,6 +177,10 @@ def build_compact_system(
         optional_sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
 
     limit = max(0, int(max_chars))
+    if getattr(session, "mode", None) == "participants" and not objects:
+        # Opening/no-object scenes are part of the normal Gemini system block:
+        # optional schemas must never push that block past its hard 8k budget.
+        limit = min(limit, DND_GEMINI_SYSTEM_MAX_CHARS)
     result = "\n\n".join(sections)
     if len(result) > limit:
         raise DndAIBudgetExhausted("Обязательный контракт DnD превышает безопасный бюджет; заявка сохранена.")
