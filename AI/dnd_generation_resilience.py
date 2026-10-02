@@ -129,8 +129,13 @@ OBLIGATION:долг, WANTS:цель, UNRESOLVED:незакрытый вопро�
 }
 
 
-def build_compact_system(session, prompt: str = "") -> str:
-    """Versioned protocol plus relevant mechanics; never clip its middle."""
+def build_compact_system(
+    session,
+    prompt: str = "",
+    *,
+    max_chars: int = DND_COMPACT_SYSTEM_MAX_CHARS,
+) -> str:
+    """Versioned protocol plus relevant mechanics; omit optional schemas rather than clip them."""
     from AI.dnd_turn_contract import TURN_CONTRACT, turn_contract
 
     contract = turn_contract(session) or TURN_CONTRACT
@@ -148,25 +153,41 @@ def build_compact_system(session, prompt: str = "") -> str:
     }
     sections = [contract, _COMPACT_CORE]
     sections.extend(_COMPACT_MECHANICS[name].strip() for name, enabled in active.items() if enabled)
+    optional_sections = []
     objects = getattr(session, "scene_objects", None) or {}
-    if any(isinstance(row, dict) and row.get("available", True) and not row.get("interactions")
-           for row in objects.values()):
+    needs_scene_rules = getattr(session, "mode", None) == "participants" and (
+        not objects or any(
+            isinstance(row, dict) and row.get("available", True) and not row.get("interactions")
+            for row in objects.values()
+        )
+    )
+    if needs_scene_rules:
         from AI.dnd_scene_rules import RULES_PROTOCOL
-        sections.append(RULES_PROTOCOL)
+        optional_sections.append(RULES_PROTOCOL)
     enemies = getattr(session, "enemy_combatants", None) or {}
     enemy_rules = getattr(session, "local_enemy_rules", None) or {}
     if any(isinstance(row, dict) and row.get("status") != "dead" and int(row.get("hp", 0)) > 0
            and key not in enemy_rules for key, row in enemies.items()):
         from AI.dnd_scene_rules import ENEMY_RULES_PROTOCOL
-        sections.append(ENEMY_RULES_PROTOCOL)
+        optional_sections.append(ENEMY_RULES_PROTOCOL)
     if objects and not getattr(session, "local_wait_rule", None):
         from AI.dnd_scene_rules import WAIT_RULES_PROTOCOL
-        sections.append(WAIT_RULES_PROTOCOL)
+        optional_sections.append(WAIT_RULES_PROTOCOL)
     if getattr(session, "mode", None) != "participants":
-        sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
+        optional_sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
+
+    limit = max(0, int(max_chars))
+    if getattr(session, "mode", None) == "participants" and not objects:
+        # Opening/no-object scenes are part of the normal Gemini system block:
+        # optional schemas must never push that block past its hard 8k budget.
+        limit = min(limit, DND_GEMINI_SYSTEM_MAX_CHARS)
     result = "\n\n".join(sections)
-    if len(result) > DND_COMPACT_SYSTEM_MAX_CHARS:
-        raise DndAIBudgetExhausted("Контракт DnD превышает безопасный бюджет; заявка сохранена.")
+    if len(result) > limit:
+        raise DndAIBudgetExhausted("Обязательный контракт DnD превышает безопасный бюджет; заявка сохранена.")
+    for section in optional_sections:
+        candidate = result + "\n\n" + section
+        if len(candidate) <= limit:
+            result = candidate
     return result
 
 
@@ -356,6 +377,10 @@ def _history_contents(session, prompt: str):
 
     compact_protocol = getattr(session, "mode", None) in {"participants", "abstract"}
     current = _without_repeated_instructions(str(prompt)) if compact_protocol else str(prompt)
+    if compact_protocol and len(current) >= DND_GEMINI_INPUT_MAX_CHARS:
+        raise DndAIBudgetExhausted(
+            "Текущие действия и память не помещаются в бюджет AI; заявка сохранена без обрезки."
+        )
     total_chars = sum(len(text) for _role, text in rows) + len(current)
 
     def clip_middle(text: str, budget: int) -> str:
@@ -376,15 +401,25 @@ def _history_contents(session, prompt: str):
     compact_rows = []
     prefix = rows[:2]
     if prefix:
-        opening = prefix[1][1] if len(prefix) > 1 else ""
+        opening = prefix[1][1][:256] if len(prefix) > 1 else ""
         system_budget = max(
             0,
-            DND_GEMINI_SYSTEM_MAX_CHARS - min(len(opening), 256),
+            DND_GEMINI_SYSTEM_MAX_CHARS - len(opening),
         )
-        system = build_compact_system(session, current) if compact_protocol else clip_middle(prefix[0][1], system_budget)
+        if compact_protocol:
+            # CURRENT REQUEST contains the authoritative Memory v2 snapshot and
+            # unresolved player actions. Reserve it before optional history and
+            # shrink only optional system schemas when a rich live turn grows.
+            system_budget = min(
+                system_budget,
+                max(0, DND_GEMINI_INPUT_MAX_CHARS - len(current) - len(opening)),
+            )
+            system = build_compact_system(session, current, max_chars=system_budget)
+        else:
+            system = clip_middle(prefix[0][1], system_budget)
         compact_rows.append((prefix[0][0], system))
-        if len(prefix) > 1:
-            compact_rows.append((prefix[1][0], opening[:256]))
+        if opening:
+            compact_rows.append((prefix[1][0], opening))
 
     recent_source = rows[2:]
     recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent_source))
@@ -393,16 +428,30 @@ def _history_contents(session, prompt: str):
     recent = recent_source[-recent_count:] if recent_count else []
     if recent:
         budget = current_turn_budget()
-        history_budget = min(DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
-                             budget.policy.history_chars if budget is not None else DND_GEMINI_RECENT_HISTORY_MAX_CHARS)
-        per_message_budget = max(
-            1,
-            history_budget // len(recent),
+        history_budget = min(
+            DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
+            budget.policy.history_chars if budget is not None else DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
         )
-        compact_rows.extend(
-            (role, clip_middle(text, per_message_budget))
-            for role, text in recent
-        )
+        if compact_protocol:
+            # Old prose is the first thing to sacrifice. Never let it crowd out
+            # the exact durable turn that result recovery must be able to retry.
+            history_budget = min(
+                history_budget,
+                max(
+                    0,
+                    DND_GEMINI_INPUT_MAX_CHARS
+                    - len(current)
+                    - sum(len(text) for _role, text in compact_rows),
+                ),
+            )
+        if history_budget:
+            per_message_budget = max(1, history_budget // len(recent))
+            compact_rows.extend(
+                (role, clip_middle(text, per_message_budget))
+                for role, text in recent
+            )
+        else:
+            recent = []
 
     from AI.dnd_turn_contract import turn_contract
 
@@ -625,7 +674,9 @@ def _fallback_prompt(
 
     if getattr(session, "mode", None) in {"participants", "abstract"}:
         current = _without_repeated_instructions(str(prompt or ""))
-        system = build_compact_system(session, current)
+        fixed_overhead = len(continuity_guard) + len("\n\nSYSTEM EXCERPT:\n") + len("\n\nCURRENT REQUEST:\n") + len(current)
+        system_budget = max_chars - fixed_overhead
+        system = build_compact_system(session, current, max_chars=system_budget)
         fixed = f"{continuity_guard}\n\nSYSTEM EXCERPT:\n{system}\n\nCURRENT REQUEST:\n{current}"
         if len(fixed) > max_chars:
             raise DndAIBudgetExhausted("Полные текущие действия и канон не помещаются в контекст резервной модели; заявка сохранена.")

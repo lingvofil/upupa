@@ -183,6 +183,23 @@ def test_compact_contract_keeps_all_active_mechanics_and_never_old_boilerplate()
     assert sent.count(TURN_CONTRACT) == 1
 
 
+def test_large_durable_current_turn_drops_old_history_before_failing():
+    session = _session()
+    session.conversation.extend([
+        {"role": "user", "content": "OLD_USER_HISTORY " * 700},
+        {"role": "assistant", "content": "OLD_MODEL_HISTORY " * 700},
+    ])
+    request = "LIVE_CURRENT_CANON " + ("x" * 12_000) + " LIVE_CURRENT_TAIL"
+
+    contents = resilience._history_contents(session, request)
+    sent = "\n".join(part["text"] for row in contents for part in row["parts"])
+
+    assert request in sent
+    assert "LIVE_CURRENT_TAIL" in sent
+    assert TURN_CONTRACT in sent
+    assert sum(len(part["text"]) for row in contents for part in row["parts"]) <= resilience.DND_GEMINI_INPUT_MAX_CHARS
+
+
 def test_overlong_canonical_current_request_is_not_silently_cut(providers):
     calls, _ = providers
     with pytest.raises(budgets.DndAIBudgetExhausted, match="без обрезки"):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import logging
 import re
 import time
 from contextlib import asynccontextmanager
@@ -446,8 +447,8 @@ def configure_dnd_local_runtime(dnd=None, router=None):
     runtime = LocalRuntime(dnd)
     from AI.dnd_menu import configure_dnd_menu
 
-    configure_dnd_menu(dnd, router, state_policy=router._upupa_dnd_campaign_state_policy,
-                       execute_action=runtime.execute, identity_for=identity_for)
+    menu_service = configure_dnd_menu(dnd, router, state_policy=router._upupa_dnd_campaign_state_policy,
+                                      execute_action=runtime.execute, identity_for=identity_for)
     guard = GameUpdateMiddleware(runtime)
     # Install before collectors/consent middlewares so pause and serialization
     # guard their mutations too. Read-only cards remain available on pause.
@@ -461,6 +462,20 @@ def configure_dnd_local_runtime(dnd=None, router=None):
         return original_persist()
 
     dnd.persist_dnd_sessions = persist
+
+    original_open_action_window = dnd.open_action_window
+
+    async def open_action_window(bot, chat_id, target_user_ids=None):
+        prompt = await original_open_action_window(bot, chat_id, target_user_ids=target_user_ids)
+        session = dnd.dnd_sessions.get(chat_id)
+        if session is not None and menu_service is not None:
+            try:
+                await menu_service.show_turn_cards(bot, session)
+            except Exception:
+                logging.exception("DnD automatic turn card failed chat_id=%s", chat_id)
+        return prompt
+
+    dnd.open_action_window = open_action_window
     original_direction = dnd.with_scene_direction
 
     def direction(session, prompt):
@@ -506,6 +521,11 @@ def configure_dnd_local_runtime(dnd=None, router=None):
                 row = lifecycle.ensure(session)
                 row.update(round_id=None, round_number=0, round_acted=[])
             dnd.persist_dnd_sessions()
+            if getattr(session, "state", None) == "WAITING_ROLL" and menu_service is not None:
+                try:
+                    await menu_service.show_turn_cards(bot, session)
+                except Exception:
+                    logging.exception("DnD automatic roll card failed chat_id=%s", chat_id)
         return result
 
     dnd.parse_and_execute_turn = parse

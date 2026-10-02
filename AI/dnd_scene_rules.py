@@ -15,9 +15,11 @@ import re
 
 ABILITIES = {"STR", "DEX", "CON", "INT", "WIS", "CHA"}
 EFFECT_KINDS = {"clock", "object", "item", "fact", "position"}
-RULES_PROTOCOL = """Если взаимодействие уже имеет однозначные последствия, можешь задать локальное правило для существующего SCENE объекта:
+RULES_PROTOCOL = """Для заметных взаимодействий сцены задавай локальные правила для существующего SCENE объекта
+или объекта, объявленного [SCENE:UPSERT] выше в ЭТОМ ЖЕ ответе:
 <DND_RULES>{"cart":{"push":{"label":"Толкнуть телегу","uncertain":true,"ability":"STR","dc":12,"failure_price":true,"once":true,"success":{"text":"Телега перекрыла проход.","effects":[{"kind":"object","object_id":"cart","state":"перекрывает проход"}]},"failure":{"text":"Телега загрохотала.","effects":[{"kind":"clock","clock_id":"alarm","delta":1}]}}}}</DND_RULES>
-Только существующие object_id/clock_id. Для очевидного действия uncertain:false и success, без DC. Своя идея всегда разрешена отдельно.
+Если содержательная сцена заканчивается ACTION:INPUT и в ней есть хотя бы одна конкретная возможность, ОБЯЗАТЕЛЬНО дай 1–3 публичных быстрых действия.
+Только существующие или объявленные в том же ответе object_id/clock_id. Для очевидного действия uncertain:false и success, без DC. Своя идея всегда разрешена отдельно.
 Не задавай бросок без сохранённой цены провала. Не назначай цены за отсутствие игрока или время ответа. Скрытые правила помечай public:false.
 Это служебный JSON; художественный текст и финальный ACTION остаются отдельно.""".strip()
 _RULES_RE = re.compile(r"<DND_RULES>(.*?)</DND_RULES>", re.S | re.I)

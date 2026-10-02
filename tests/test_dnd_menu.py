@@ -12,11 +12,17 @@ def session(**extra):
     values = dict(
         chat_id=-10044, campaign_id="campaign-one", turn_id="turn-one", state_revision=3,
         state="WAITING_ACTION", mode="participants", scene_count=5, paused=False,
-        action_prompt_message_id=50, action_target_user_ids=[1], pending_actions={}, pending_roll=None,
+        action_prompt_message_id=50, action_target_user_ids=[1], action_deadline=None,
+        pending_actions={}, pending_roll=None,
         participants={"1": {"user_id": 1, "name": "Маша"}, "2": {"user_id": 2, "name": "Денис"}},
         mission_goal="Вывести купца", scene_log=["Купец у северных ворот."],
         character_profiles={"1": {"style": "Проводник", "special": "Блеф"}},
-        character_sheets={"1": {"hp": 11, "max_hp": 18}, "2": {"hp": 18, "max_hp": 18}},
+        character_sheets={
+            "1": {"hp": 11, "max_hp": 18, "ac": 13,
+                  "stats": {"STR": 16, "DEX": 14, "CON": 13, "INT": 12, "WIS": 10, "CHA": 8}},
+            "2": {"hp": 18, "max_hp": 18, "ac": 12,
+                  "stats": {"STR": 10, "DEX": 16, "CON": 14, "INT": 13, "WIS": 12, "CHA": 8}},
+        },
         inventories={"1": [{"name": "Зелье", "quantity": 1, "mechanic": "ADVANTAGE_SOCIAL", "charges_max": 1, "charges_remaining": 1}]},
         scene_objects={"cart": {"name": "Телега", "state": "У ворот", "available": True,
                                 "interactions": {"hide": {"label": "Спрятаться", "uncertain": False,
@@ -127,6 +133,39 @@ def test_snapshot_and_all_views_never_ensure_repair_or_mutate_game_state():
         assert menu.render_page(snapshot, page, 1)
     snapshot["inventories"]["1"][0]["quantity"] = 999
     assert vars(current) == before
+
+
+def test_hero_card_shows_numeric_stats_ac_and_modifiers():
+    current = session()
+    text = menu.render_page(menu.snapshot_session(current), "hero", 1)
+    assert "🛡 КБ 13" in text
+    assert "Сила (STR) 16 (+3)" in text
+    assert "Ловкость (DEX) 14 (+2)" in text
+    assert "Харизма (CHA) 8 (-1)" in text
+
+
+def test_personal_timeout_is_visible_in_overview():
+    current = session(action_deadline=menu.time.time() + 125)
+    text = menu.render_page(menu.snapshot_session(current), "overview", 1)
+    assert "⏱ Автопропуск через ~2:" in text
+
+
+def test_show_turn_cards_creates_shared_and_addressed_player_cards():
+    async def run():
+        current, _dnd, bot, service = make_service()
+        await service.show_turn_cards(bot, current)
+        assert set(current.menu_ui_state["cards"]) == {"party", "1"}
+        assert len(bot.sent) == 2
+        assert "Ход: Маша" in bot.sent[0].text
+        assert "Карточка для тебя" in bot.sent[1].text
+
+        current.action_target_user_ids = [2]
+        await service.show_turn_cards(bot, current)
+        assert set(current.menu_ui_state["cards"]) == {"party", "1", "2"}
+        assert len(bot.sent) == 3
+        assert bot.edited
+
+    asyncio.run(run())
 
 
 def test_navigation_reuses_shared_and_one_player_card_without_ai_or_world_changes():
@@ -416,7 +455,8 @@ def test_shared_card_only_navigates_and_public_wait_requires_a_saved_rule():
                                   "success": {"text": "Патруль прошёл мимо.", "effects": []}}
         await service.command(Message(bot, current))
         shared = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
-        assert "✍️ Свой ход" not in shared and "⏳ Подождать" not in shared
+        assert "✍️ Свой ход" in shared and "⏳ Подождать" not in shared
+        assert "⚡ Спрятаться" in shared
         await service.callback(Callback(bot, current, button(latest_markup(bot), "👤 Герой")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔄 Обновить"), message_id=102))
         await service.show(bot, current, 1, "overview")
