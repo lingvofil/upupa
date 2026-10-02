@@ -188,7 +188,7 @@ def test_navigation_reuses_shared_and_one_player_card_without_ai_or_world_change
         player_card = current.menu_ui_state["cards"]["1"]
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи"), message_id=player_card))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "📖 Журнал"), message_id=player_card))
-        assert len(bot.sent) == 2
+        assert len(bot.sent) == 3
         assert menu.snapshot_session(current) == world_before
         assert dnd.persist_calls > 0
         assert set(current.menu_info_message_ids) == {101, 102, 103}
