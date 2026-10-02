@@ -115,6 +115,52 @@ def _wait_rule(snapshot):
     return rule if not rule["uncertain"] else None
 
 
+def _public_interaction(raw):
+    """Only validated public contracts can become local action buttons."""
+    from AI.dnd_scene_rules import SceneRuleError, validate_rule
+
+    if not isinstance(raw, dict) or not _public(raw):
+        return None
+    try:
+        rule = validate_rule(raw)
+    except SceneRuleError:
+        return None
+    for name in ("success", "failure", "success_with_cost"):
+        branch = rule.get(name)
+        if branch is not None and (not _public(branch) or any(not _public(effect) for effect in branch.get("effects", []))):
+            return None
+    return rule
+
+
+def _outcome_preview(snapshot, branch):
+    lines = [_text(branch["text"], 400)]
+    effects = branch.get("effects", [])
+    for effect in effects[:4]:
+        kind = effect["kind"]
+        if kind == "clock":
+            clock = _mapping(_mapping(snapshot.get("scene_clocks")).get(str(effect["clock_id"])))
+            if clock and _public(clock):
+                lines.append(f"{_text(clock.get('name'), 80)} {effect['delta']:+d}")
+        elif kind == "object":
+            obj = _mapping(_mapping(snapshot.get("scene_objects")).get(str(effect["object_id"])))
+            if obj and _public(obj):
+                changes = []
+                if "state" in effect:
+                    changes.append(_text(effect["state"], 100))
+                if "available" in effect:
+                    changes.append("доступен" if effect["available"] else "недоступен")
+                lines.append(_text(obj.get("name"), 80) + ": " + ", ".join(changes))
+        elif kind == "item":
+            lines.append(f"{'Получить' if effect['operation'] == 'add' else 'Потратить'}: {_text(effect['name'], 80)} ×{effect['quantity']}")
+        elif kind == "position":
+            lines.append("Позиция: " + _text(effect["location"], 100))
+        elif kind == "fact":
+            lines.append(_text(effect["text"], 100))
+    if len(effects) > 4:
+        lines.append(f"Дополнительных эффектов: {len(effects) - 4}")
+    return " · ".join(lines)
+
+
 def render_journal(snapshot) -> str:
     """Project known public events; never print prompts, arbitrary data or secrets."""
     lines = []
@@ -408,7 +454,7 @@ class DndMenuService:
             rule_id = _mapping(payload.get("inputs")).get("rule_id")
             if rule_id:
                 rule = _mapping(row.get("interactions")).get(str(rule_id))
-                return isinstance(rule, dict) and _public(rule)
+                return _public_interaction(rule) is not None
             return True
         return True
 
@@ -470,10 +516,20 @@ class DndMenuService:
             description += " → " + _name(snapshot, payload.get("target_id"))
         if payload.get("kind") == "ATTACK":
             description += " → " + _text(_mapping(_mapping(snapshot.get("enemy_combatants")).get(str(payload.get("target_id")))).get("name"), 90)
+            description += "\nОружие: " + _text(payload.get("item_id") or "без оружия", 100)
         if payload.get("kind") == "OBJECT":
             row = _mapping(_mapping(snapshot.get("scene_objects")).get(str(payload.get("object_id"))))
-            rule = _mapping(_mapping(row.get("interactions")).get(str(_mapping(payload.get("inputs")).get("rule_id"))))
+            rule = _public_interaction(_mapping(row.get("interactions")).get(str(_mapping(payload.get("inputs")).get("rule_id"))))
             description += ": " + _text(row.get("name"), 80) + " — " + _text(rule.get("label"), 100)
+            if rule["uncertain"]:
+                description += f"\nПроверка: {rule['ability']}, DC {rule['dc']}."
+            description += "\nУспех: " + _outcome_preview(snapshot, rule["success"])
+            if rule.get("success_with_cost"):
+                description += "\nУспех с ценой: " + _outcome_preview(snapshot, rule["success_with_cost"])
+                if rule["uncertain"]:
+                    description += f" (результат {rule['dc']}–{rule['dc'] + rule['clean_success_margin'] - 1}; без цены — от {rule['dc'] + rule['clean_success_margin']})."
+            if rule["uncertain"]:
+                description += "\nЦена провала: " + _outcome_preview(snapshot, rule["failure"])
         request = {**payload, "operation_id": secrets.token_hex(16), "actor_id": actor}
 
         def markup(card, seq):
@@ -524,7 +580,8 @@ class DndMenuService:
                     rows = [[self._button(session, actor, "✍️ Своя идея", "idea", card=card, seq=seq, object_id=str(payload.get("object_id")))]]
                     if row.get("available", True):
                         for rule_id, rule in list(_mapping(row.get("interactions")).items())[:5]:
-                            if isinstance(rule, dict) and _public(rule):
+                            rule = _public_interaction(rule)
+                            if rule is not None:
                                 rows.append([self._button(session, actor, _text(rule.get("label") or rule_id, 50), "confirm", card=card, seq=seq,
                                                          kind="OBJECT", object_id=str(payload.get("object_id")), inputs={"rule_id": str(rule_id)})])
                     rows.append([self._button(session, actor, "← Сцена", "nav", card=card, seq=seq, page="scene")])

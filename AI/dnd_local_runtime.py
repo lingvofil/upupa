@@ -207,12 +207,12 @@ class LocalRuntime:
                     restart_timers(self.dnd, bot, session)
                     self.restart_narration(bot, session)
                 elif kind == "RETRY" and not session.paused:
-                    from AI.dnd_result_recovery import continue_pending_generation
+                    from AI.dnd_result_recovery import retry_pending_recovery
                     await flush_local_outbox(self.dnd, bot, session)
                     if await self.complete_transition(bot, session):
                         return
                     with dnd_turn_budget(session, turn_id=lifecycle.current_turn_id(session)):
-                        await continue_pending_generation(self.dnd, bot, session)
+                        await retry_pending_recovery(self.dnd, bot, session)
                 return
             if session.paused:
                 await bot.send_message(chat_id, "Партия на паузе. Меню доступно; ход продолжит ведущий.")

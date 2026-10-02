@@ -306,6 +306,45 @@ def test_paused_saved_generated_result_does_not_replay_until_resume():
             coro.close()
 
 
+@pytest.mark.parametrize("parse_failed", [False, True])
+def test_host_retry_replays_saved_narration_without_new_generation_or_duplicate_delivery(parse_failed):
+    policy = FakeStatePolicy()
+    module, sess, calls, _markers, _scheduled = _fake_dnd(policy)
+    sess.starter_user_id = 1
+    module._user_is_host = lambda current, uid: uid == current.starter_user_id
+    seen = []
+
+    async def parse(bot, chat_id, text):
+        calls["parse"] += 1
+        seen.append((sess.campaign_marker, text))
+        await bot.send_message(chat_id, text)
+        if parse_failed and calls["parse"] == 1:
+            sess.campaign_marker = "partially-mutated"
+            raise RuntimeError("interrupted after narration delivery")
+        sess.state = "WAITING_ACTION"
+
+    module.parse_and_execute_turn = parse
+    recovery.configure_dnd_result_recovery(module, state_policy=policy)
+    local = runtime.LocalRuntime(module)
+    bot = Bot()
+
+    async def scenario():
+        response = await module.generate_session_response(sess, "Уже применённый исход")
+        assert not sess.pending_generation_request and sess.pending_generated_result["text"] == response
+        if parse_failed:
+            with pytest.raises(RuntimeError, match="interrupted"):
+                await module.parse_and_execute_turn(bot, sess.chat_id, response)
+            assert sess.pending_generated_result["phase"] == recovery.RESULT_PHASE_APPLYING
+        await local.execute(bot, sess.chat_id, 1, {"kind": "RETRY"})
+        assert not sess.pending_generated_result and sess.state == "WAITING_ACTION"
+        assert calls["generate"] == 1
+        assert calls["parse"] == (2 if parse_failed else 1)
+        assert seen == [("before", response)] * calls["parse"]
+        assert len(bot.messages) == 1 and bot.messages[0][1] == response
+
+    asyncio.run(scenario())
+
+
 def test_restoring_paused_poll_keeps_mapping_without_timer_or_restore_error(monkeypatch, tmp_path):
     sess = session()
     sess.state = "WAITING_POLL"

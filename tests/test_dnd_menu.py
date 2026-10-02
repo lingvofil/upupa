@@ -19,7 +19,8 @@ def session(**extra):
         character_sheets={"1": {"hp": 11, "max_hp": 18}, "2": {"hp": 18, "max_hp": 18}},
         inventories={"1": [{"name": "Зелье", "quantity": 1, "mechanic": "ADVANTAGE_SOCIAL", "charges_max": 1, "charges_remaining": 1}]},
         scene_objects={"cart": {"name": "Телега", "state": "У ворот", "available": True,
-                                "interactions": {"hide": {"label": "Спрятаться", "uncertain": False}}}},
+                                "interactions": {"hide": {"label": "Спрятаться", "uncertain": False,
+                                    "success": {"text": "Герой спрятался за телегой.", "effects": []}}}}},
         enemy_combatants={"guard": {"name": "Страж", "hp": 10, "max_hp": 10, "ac": 12}},
         scene_clocks={"gates": {"name": "Ворота", "value": 2, "max": 4, "kind": "DANGER"}},
         player_positions={"1": {"location": "У телеги"}}, event_journal=[], action_records=[],
@@ -283,6 +284,80 @@ def test_known_scene_rule_has_explicit_confirmation_and_hidden_rule_stays_hidden
         assert "Телега — Спрятаться" in bot.edited[-1].text
         token = button(latest_markup(bot), "✅ Подтвердить").removeprefix(menu.CALLBACK_PREFIX)
         assert current.menu_ui_state["tokens"][token]["payload"]["inputs"] == {"rule_id": "hide"}
+    asyncio.run(run())
+
+
+def test_object_confirmation_previews_known_check_outcomes_without_applying_them():
+    async def run():
+        calls = []
+        async def execute(*args):
+            calls.append(args)
+        current, _dnd, bot, service = make_service(execute=execute)
+        rule = {"label": "Толкнуть телегу", "uncertain": True, "ability": "STR", "dc": 12,
+                "failure_price": True, "clean_success_margin": 5,
+                "success": {"text": "Проход перекрыт.", "effects": [{"kind": "object", "object_id": "cart", "state": "перекрывает проход"}]},
+                "failure": {"text": "Телега загрохотала.", "effects": [{"kind": "clock", "clock_id": "gates", "delta": 1}]},
+                "success_with_cost": {"text": "Проход перекрыт, но стража услышала шум.",
+                    "effects": [{"kind": "clock", "clock_id": "gates", "delta": 1}]}}
+        rule["success"]["effects"].extend({"kind": "fact", "text": f"Последствие {index}"} for index in range(1, 5))
+        current.scene_objects["cart"]["interactions"] = {"push": rule}
+        before = menu.snapshot_session(current)
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "Толкнуть телегу"), message_id=102))
+        preview = bot.edited[-1].text
+        assert "Проверка: STR, DC 12" in preview
+        assert "Успех: Проход перекрыт." in preview
+        assert "Цена провала: Телега загрохотала." in preview and "Ворота +1" in preview
+        assert "Успех с ценой: Проход перекрыт, но стража услышала шум." in preview
+        assert "результат 12–16; без цены — от 17" in preview
+        assert "Дополнительных эффектов: 1" in preview and "Последствие 4" not in preview
+        assert menu.snapshot_session(current) == before
+        assert calls == []
+    asyncio.run(run())
+
+
+def test_invalid_or_hidden_object_outcomes_never_become_action_previews():
+    async def run():
+        current, _dnd, bot, service = make_service()
+        valid = {"label": "Публичное действие", "uncertain": False,
+                 "success": {"text": "Известный итог.", "effects": []}}
+        nested_secret = copy.deepcopy(valid)
+        nested_secret["label"] = "Скрытый исход"
+        nested_secret["success"].update(hidden=True, text="SECRET OUTCOME")
+        private_effect = copy.deepcopy(valid)
+        private_effect["label"] = "Скрытый эффект"
+        private_effect["success"]["effects"] = [{"kind": "fact", "text": "SECRET EFFECT", "hidden": True}]
+        invalid = {"label": "Неполное правило", "uncertain": True, "ability": "STR", "dc": 12}
+        current.scene_objects["cart"]["interactions"] = {
+            "valid": valid, "secret": nested_secret, "private_effect": private_effect, "invalid": invalid}
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
+        labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
+        assert "Публичное действие" in labels
+        assert not {"Скрытый исход", "Скрытый эффект", "Неполное правило"} & set(labels)
+        data = button(latest_markup(bot), "Публичное действие")
+        # The same opaque action button must be revalidated if its rule changes.
+        current.scene_objects["cart"]["interactions"]["valid"] = nested_secret
+        callback = Callback(bot, current, data, message_id=102)
+        await service.callback(callback)
+        assert "недоступно" in callback.answers[-1]
+        assert all("SECRET" not in row.text for row in bot.sent + bot.edited)
+    asyncio.run(run())
+
+
+def test_menu_attack_confirmation_explicitly_shows_unarmed_weapon_choice():
+    async def run():
+        calls = []
+        async def execute(*args):
+            calls.append(args)
+        current, _dnd, bot, service = make_service(execute=execute)
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "👹 Враги")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж"), message_id=102))
+        assert "Атаковать → Страж" in bot.edited[-1].text
+        assert "Оружие: без оружия" in bot.edited[-1].text
+        assert calls == [] and current.enemy_combatants["guard"]["hp"] == 10
     asyncio.run(run())
 
 
