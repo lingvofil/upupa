@@ -111,6 +111,15 @@ def _add(session, fields: dict[str, str]) -> str | None:
         "uses_remaining": uses or None,
         "skip_scene_tick": int(getattr(session, "scene_count", 0) or 0) + 1 if scenes else None,
     }
+    tick = str(fields.get("TICK") or "").casefold()
+    if tick in {"action", "window", "round", "scene"}:
+        try:
+            remaining = max(1, min(12, int(fields.get("TICKS", 1))))
+        except (TypeError, ValueError):
+            remaining = 1
+        item["expiry"] = {"version": 1, "tick": tick, "remaining": remaining, "actor_id": player if tick == "action" else None}
+        item["scenes_remaining"] = None
+        item["skip_scene_tick"] = None
     rows = _rows(session, player)
     rows[:] = [row for row in rows if str(row.get("effect") or "").upper() != effect]
     rows.append(item)

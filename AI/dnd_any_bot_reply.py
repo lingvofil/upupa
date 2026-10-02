@@ -26,6 +26,17 @@ def _reply_is_from_this_bot(event) -> bool:
         return False
 
 
+def is_menu_reply(session, event) -> bool:
+    """Menu cards and registered input prompts have their own guarded route."""
+    reply = getattr(event, "reply_to_message", None)
+    message_id = str(getattr(reply, "message_id", "") or "")
+    if not message_id:
+        return False
+    info_ids = getattr(session, "menu_info_message_ids", None) or []
+    prompts = getattr(session, "menu_action_prompts", None) or {}
+    return message_id in {str(value) for value in info_ids} or message_id in prompts
+
+
 def is_any_bot_action_reply(event) -> bool:
     """Match old Upupa replies while leaving the current prompt to the canonical handler."""
     from AI import dnd
@@ -38,6 +49,8 @@ def is_any_bot_action_reply(event) -> bool:
 
     session = dnd.dnd_sessions.get(int(chat.id))
     if not session or getattr(session, "state", None) != "WAITING_ACTION":
+        return False
+    if is_menu_reply(session, event):
         return False
 
     prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
@@ -57,7 +70,7 @@ def is_any_bot_action_reply(event) -> bool:
     if not action:
         return False
     normalized = action.casefold()
-    if normalized == "дальше" or normalized.startswith("упупа") or is_state_command(action):
+    if normalized in {"дальше", "днд меню"} or normalized.startswith("упупа") or is_state_command(action):
         return False
 
     try:
@@ -94,6 +107,8 @@ def is_any_bot_backstory_reply(event) -> bool:
         or getattr(session, "state", None) != "WAITING_BACKSTORY"
         or chat_id in dnd._processing_backstories
     ):
+        return False
+    if is_menu_reply(session, event):
         return False
 
     reply = getattr(event, "reply_to_message", None)
@@ -136,6 +151,8 @@ def is_any_bot_poll_reply(event) -> bool:
         or not getattr(session, "pending_poll", None)
         or not _reply_is_from_this_bot(event)
     ):
+        return False
+    if is_menu_reply(session, event):
         return False
 
     text = _event_text(event)

@@ -436,6 +436,13 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         _HEADER,
         "\n".join(identity),
         state_text,
+        "ЛОКАЛЬНЫЕ ФАКТЫ ТЕКУЩЕЙ СЦЕНЫ:\n" + _clip("\n".join(
+            str(row.get("text") or "") for row in (getattr(session, "local_world_facts", []) or [])[-8:]
+            if isinstance(row, dict)), 800),
+        "ОБЪЕКТЫ ТЕКУЩЕЙ СЦЕНЫ:\n" + _clip("\n".join(
+            f"{key}: {row.get('name', '')}; {row.get('state', '')}; доступен={row.get('available', True)}; "
+            + "известные действия=" + ", ".join(str(rule.get("label") or rid) for rid, rule in (row.get("interactions") or {}).items())
+            for key, row in (getattr(session, "scene_objects", {}) or {}).items() if isinstance(row, dict)), 800),
         "РЕЛЕВАНТНЫЕ NPC:\n" + npc_text,
         "СОЦГРАФ — только мягкий контекст, не факт мира:\n" + relationships,
         "ПОСЛЕДНИЕ ПОДТВЕРЖДЁННЫЕ ИЗМЕНЕНИЯ:\n" + _recent_event_text(session),

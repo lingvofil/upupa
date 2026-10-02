@@ -106,7 +106,9 @@ def _skippable_state(session) -> tuple[str, list[int]] | None:
 async def skip_absent_turn(dnd, bot, chat_id: int, requester_user_id: int, *, automatic: bool = False) -> bool:
     """Skip an unanswered addressed action/roll/poll. Return whether it was consumed."""
     session = dnd.dnd_sessions.get(chat_id)
-    if not session or (not automatic and not dnd._user_is_host(session, int(requester_user_id))):
+    if (not session or getattr(session, "paused", False) or getattr(session, "local_pending_transition", None)
+            or getattr(session, "pending_generation_request", None) or getattr(session, "pending_generated_result", None)
+            or (not automatic and not dnd._user_is_host(session, int(requester_user_id)))):
         return False
 
     skippable = _skippable_state(session)

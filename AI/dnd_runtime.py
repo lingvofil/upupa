@@ -213,6 +213,9 @@ def configure_dnd_runtime(dnd_router=None) -> None:
         dnd,
         state_policy=campaign_state_policy,
     )
+    from AI.dnd_local_runtime import configure_dnd_local_state
+
+    configure_dnd_local_state(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     # Install the journal after all canonical state extensions so its restore
     # baseline sees the fully composed campaign representation.
     install_dnd_event_journal(dnd, state_policy=campaign_state_policy)

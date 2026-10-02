@@ -13,6 +13,7 @@ import logging
 import time
 from contextlib import contextmanager
 from types import SimpleNamespace
+from functools import wraps
 
 
 RESULT_PHASE_READY = "READY"
@@ -20,6 +21,22 @@ RESULT_PHASE_APPLYING = "APPLYING"
 EFFECT_IN_FLIGHT = "IN_FLIGHT"
 EFFECT_DONE = "DONE"
 GROUP_ACTION_REQUEST_KIND = "GROUP_ACTION_CONTINUATION"
+
+
+def _recovery_step(function):
+    """Startup retries share the same lock/budget as live logical game steps."""
+    @wraps(function)
+    async def run(dnd, bot, session, *args, **kwargs):
+        from AI.dnd_ai_budget import dnd_turn_budget
+        from AI.dnd_local_runtime import game_lock
+
+        async with game_lock(session.chat_id):
+            if getattr(session, "paused", False):
+                return None if function.__name__ == "_resume_pending_result" else False
+            window = (getattr(session, "dnd_lifecycle_v1", {}) or {}).get("window") or {}
+            with dnd_turn_budget(session, turn_id=window.get("turn_id")):
+                return await function(dnd, bot, session, *args, **kwargs)
+    return run
 
 
 class StaleDndSessionError(RuntimeError):
@@ -675,8 +692,11 @@ async def _deliver_generation_effects(dnd, bot, session) -> bool:
     return True
 
 
+@_recovery_step
 async def continue_pending_generation(dnd, bot, session) -> bool:
     """Finish durable pre-generation side effects, generate, then parse."""
+    if getattr(session, "paused", False):
+        return False
     _ensure(session)
     if not _pending_generation_prompt(session):
         return False
@@ -690,7 +710,10 @@ async def continue_pending_generation(dnd, bot, session) -> bool:
     return await _resume_pending_generation(dnd, bot, session)
 
 
+@_recovery_step
 async def _resume_pending_generation(dnd, bot, session) -> bool:
+    if getattr(session, "paused", False):
+        return False
     _ensure(session)
     prompt = _pending_generation_prompt(session)
     if not prompt:
@@ -758,7 +781,10 @@ async def retry_pending_recovery(dnd, bot, session) -> bool:
     return False
 
 
+@_recovery_step
 async def _resume_pending_result(dnd, bot, session, state_policy) -> None:
+    if getattr(session, "paused", False):
+        return
     _ensure(session)
     pending = copy.deepcopy(session.pending_generated_result)
     if not pending or not pending.get("text"):
@@ -1049,6 +1075,8 @@ def configure_dnd_result_recovery(dnd_module=None, *, state_policy=None) -> None
         restored = original_restore_sessions(bot)
         for session in list(getattr(dnd, "dnd_sessions", {}).values()):
             _ensure(session)
+            if getattr(session, "paused", False):
+                continue
             pending = session.pending_generated_result
             if pending and pending.get("text"):
                 dnd._start_background_task(

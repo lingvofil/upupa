@@ -622,10 +622,13 @@ async def _generate_complete_profile(dnd, session, user_id):
 
 
 async def _auto_profile(dnd, session, user_id):
+    allocation = {key: value for key, value in (session.character_profiles.get(str(int(user_id))) or {}).items()
+                  if key in {"archetype", "stat_allocation"}}
     old = _apply_heritage(session, user_id, continuation=bool(session.continuation_mode)) or {}
     profile = dict(old.get("profile") or {})
     if not _profile_complete(profile):
         profile = await _generate_complete_profile(dnd, session, user_id)
+    profile.update(allocation)
     session.character_profiles[str(int(user_id))] = profile
     return profile
 
@@ -1109,6 +1112,11 @@ def _final_comic_prompt(session, epilogue, *, style=None):
 
 
 def _maybe_image(dnd, bot, session, story):
+    from AI.dnd_settings import settings_for
+
+    values = settings_for(session)
+    if values.get("images") == "off" or values.get("ai_mode") == "economy" or getattr(session, "paused", False):
+        return
     if session.scene_count < session.next_illustration_at:
         return
     session.next_illustration_at = session.scene_count + random.randint(3, 5)

@@ -2,6 +2,8 @@ import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
+
 from tests import test_smoke_imports
 
 del test_smoke_imports
@@ -29,7 +31,7 @@ def session():
 
 def test_critical_mechanics_survive_both_provider_budgets():
     game = session()
-    request = "CURRENT_ACTOR_1_OPENS_GATE " + "y" * 12000 + " CURRENT_TAIL"
+    request = "CURRENT_ACTOR_1_OPENS_GATE " + "y" * 600 + " CURRENT_TAIL"
     contents = providers._history_contents(game, request)
     direct = "\n".join(part["text"] for row in contents for part in row["parts"])
     assert len(direct) <= providers.DND_GEMINI_INPUT_MAX_CHARS
@@ -38,9 +40,22 @@ def test_critical_mechanics_survive_both_provider_budgets():
         assert len(fallback) <= budget
         for sent in (direct, fallback):
             assert TURN_CONTRACT in sent
+            assert request in sent
             assert "CURRENT_ACTOR_1_OPENS_GATE" in sent
             assert "CURRENT_TAIL" in sent
             assert "Первой схватки ещё не было" in sent
+
+
+def test_fallback_rejects_overlong_current_facts_instead_of_clipping_them():
+    from AI.dnd_ai_budget import DndAIBudgetExhausted
+
+    game = session()
+    request = "CURRENT_ACTOR_1_OPENS_GATE " + "y" * 12000 + " CURRENT_TAIL"
+    before = deepcopy(vars(game))
+    for budget in (7000, 12000):
+        with pytest.raises(DndAIBudgetExhausted, match="заявка сохранена"):
+            providers._fallback_prompt(game, request, max_chars=budget)
+    assert vars(game) == before
 
 
 def test_other_hero_question_does_not_override_pending_roll():

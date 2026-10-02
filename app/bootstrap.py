@@ -148,9 +148,14 @@ class UpupaApplication:
         configure_dnd_style()
         configure_dnd_player_agency()
         configure_dnd_target_mentions()
-        # Install the durable generated-result outbox last so it sees the exact
+        # Install the durable generated-result outbox after presentation so it sees the exact
         # final response after style/agency wrappers and the final parse surface.
         configure_dnd_result_recovery()
+        # UI/local execution wraps the final durable surface; navigation performs
+        # no generation and mechanical results are persisted before delivery.
+        from AI.dnd_local_runtime import configure_dnd_local_runtime
+
+        configure_dnd_local_runtime()
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
         configure_crocodile_runtime()

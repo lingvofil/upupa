@@ -107,6 +107,7 @@ def _upsert_object(session, head: str, fields: dict[str, str]) -> None:
         "detail": _clean(fields.get("DETAIL") or current.get("detail"), 180),
         "available": bool(available),
         "updated_scene": int(getattr(session, "scene_count", 0) or 0),
+        **({"interactions": current["interactions"]} if "interactions" in current else {}),
     }
     if len(session.scene_objects) > 8:
         ordered = sorted(session.scene_objects.values(), key=lambda item: int(item.get("updated_scene", 0) or 0))

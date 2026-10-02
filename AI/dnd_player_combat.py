@@ -431,6 +431,9 @@ async def _begin_player_attack(dnd, combat, campaign, bot, chat_id: int, session
 
 async def _resolve_player_attack_roll(dnd, combat, message, session) -> None:
     pending = getattr(session, "pending_roll", None) or {}
+    if pending.get("type") != "ATTACK":
+        await message.answer("Этот бросок уже завершён.")
+        return
     user_id = int(message.from_user.id)
     if not dnd._can_user_act(session, user_id, pending.get("target_user_ids") or []):
         await message.answer("Этот бросок не твой.")
@@ -441,18 +444,24 @@ async def _resolve_player_attack_roll(dnd, combat, message, session) -> None:
         summary = f"🎲 Кубики: {rolls[0]} и {rolls[1]}, выбран {natural}.\n" + summary
     session.state = "RESOLVING"
     session.pending_roll = None
+    notices = dnd._commit_roll_transaction(session, pending, user_id)
+    if notices:
+        summary += "\n" + "\n".join(notices)
+    from AI.dnd_result_recovery import reserve_generation_request
+
+    continuation_prompt = dnd.with_scene_direction(session, prompt)
+    reserve_generation_request(session, continuation_prompt, kind="ROLL_CONTINUATION")
     dnd.persist_dnd_sessions()
     await message.answer(summary)
     try:
         response_text = await dnd.generate_session_response(
             session,
-            dnd.with_scene_direction(session, prompt),
+            continuation_prompt,
         )
         await dnd.parse_and_execute_turn(message.bot, message.chat.id, response_text)
     except Exception:
         logging.exception("DnD player attack continuation failed chat_id=%s", message.chat.id)
-        await message.answer("Мастер завис после удара, но HP и результат атаки сохранены.")
-        await dnd.open_action_window(message.bot, message.chat.id)
+        await message.answer("HP, результат атаки и расход бонусов сохранены. «днд дальше» продолжит без повторного броска.")
 
 
 def install_dnd_player_combat(dnd, *, state_policy) -> None:

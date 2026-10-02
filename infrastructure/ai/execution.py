@@ -214,6 +214,8 @@ def _extract_model_name(result: Any) -> str | None:
 
 
 def _provider_from_operation(operation: str) -> str:
+    if operation.startswith("dnd.gemini."):
+        return "gemini"
     prefix = operation.split(".", 1)[0]
     return {
         "model": "gemini",
@@ -235,6 +237,7 @@ def _record_ai_usage(
     lane: AILane,
     context: AIRequestContext,
     explicit_chat_id: Any = None,
+    requested_model: str | None = None,
 ) -> None:
     """Persist one provider call without letting telemetry break generation."""
     recorder = _AI_USAGE_RECORDER
@@ -253,7 +256,7 @@ def _record_ai_usage(
         recorder(
             chat_id,
             context.user_id,
-            _extract_model_name(result) or "unknown",
+            _extract_model_name(result) or requested_model or "unknown",
             operation,
             provider=_provider_from_operation(operation),
             feature=_CURRENT_AI_FEATURE.get(),
@@ -505,6 +508,9 @@ class AIExecutionGovernor:
         *args: Any,
         timeout_seconds: float | None = None,
         queue_timeout_seconds: float | None = None,
+        provider_deadline: float | None = None,
+        provider_start_guard: Callable[[], None] | None = None,
+        requested_model: str | None = None,
         **kwargs: Any,
     ) -> Any:
         lane = _CURRENT_AI_LANE.get()
@@ -514,7 +520,12 @@ class AIExecutionGovernor:
         total_timeout = float(timeout_seconds or self.request_timeout_seconds)
         queue_timeout = float(queue_timeout_seconds or self.queue_timeout_seconds)
         deadline = started + total_timeout
+        if provider_deadline is not None:
+            deadline = min(deadline, float(provider_deadline))
         queue_deadline = started + min(queue_timeout, total_timeout)
+        requested_model = requested_model or (
+            str(kwargs["model"]).removeprefix("models/") if kwargs.get("model") else None
+        )
 
         try:
             global_acquired, background_acquired = self._acquire_slots(
@@ -540,6 +551,7 @@ class AIExecutionGovernor:
                 lane=lane,
                 context=request_context,
                 explicit_chat_id=explicit_chat_id,
+                requested_model=requested_model,
             )
             raise
 
@@ -549,7 +561,16 @@ class AIExecutionGovernor:
         provider_started = time.monotonic()
 
         try:
-            future: Future[Any] = self._get_executor().submit(func, *args, **kwargs)
+            call_context = contextvars.copy_context()
+
+            def guarded_provider_call():
+                if self._remaining(deadline) <= 0:
+                    raise AIRequestTimeoutError("AI request expired before provider dispatch")
+                if provider_start_guard is not None:
+                    provider_start_guard()
+                return func(*args, **kwargs)
+
+            future: Future[Any] = self._get_executor().submit(call_context.run, guarded_provider_call)
         except Exception:
             self._change_in_flight(lane, -1)
             if global_acquired:
@@ -566,6 +587,7 @@ class AIExecutionGovernor:
                 lane=lane,
                 context=request_context,
                 explicit_chat_id=explicit_chat_id,
+                requested_model=requested_model,
             )
             raise
 
@@ -604,6 +626,7 @@ class AIExecutionGovernor:
                 lane=lane,
                 context=request_context,
                 explicit_chat_id=explicit_chat_id,
+                requested_model=requested_model,
             )
             raise AIRequestTimeoutError(
                 f"AI request timeout before provider execution: {operation}"
@@ -622,6 +645,7 @@ class AIExecutionGovernor:
                 lane=lane,
                 context=request_context,
                 explicit_chat_id=explicit_chat_id,
+                requested_model=requested_model,
             )
             self._logger.warning(
                 "AI request timeout operation=%s lane=%s queue_wait_ms=%d timeout_s=%.1f",
@@ -643,6 +667,7 @@ class AIExecutionGovernor:
                 lane=lane,
                 context=request_context,
                 explicit_chat_id=explicit_chat_id,
+                requested_model=requested_model,
             )
             self._logger.exception(
                 "AI provider error operation=%s lane=%s queue_wait_ms=%d",
@@ -670,6 +695,7 @@ class AIExecutionGovernor:
             lane=lane,
             context=request_context,
             explicit_chat_id=explicit_chat_id,
+            requested_model=requested_model,
         )
         return result
 

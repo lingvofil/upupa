@@ -244,7 +244,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
 
     async def _maybe_finalize_action(self, dnd, bot, chat_id: int) -> bool:
         session = dnd.dnd_sessions.get(chat_id)
-        if not session or session.state != "WAITING_ACTION":
+        if not session or getattr(session, "paused", False) or session.state != "WAITING_ACTION":
             return False
 
         prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
@@ -260,6 +260,9 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
             return False
 
         submitted = set()
+        window = (getattr(session, "dnd_lifecycle_v1", {}) or {}).get("window") or {}
+        if window.get("status") == "open":
+            submitted.update(int(value) for value in window.get("resolved_actors", []))
         for key, value in (getattr(session, "pending_actions", {}) or {}).items():
             raw_id = value.get("user_id") if isinstance(value, dict) else key
             try:
@@ -291,6 +294,7 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
         if (
             not session
             or session.state != "WAITING_ACTION"
+            or getattr(session, "paused", False)
             or not dnd._is_participant_mode(session)
             or getattr(session, "action_deadline", None) is not None
             or not (getattr(session, "pending_actions", {}) or {})
