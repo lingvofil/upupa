@@ -397,15 +397,25 @@ def _history_contents(session, prompt: str):
     compact_rows = []
     prefix = rows[:2]
     if prefix:
-        opening = prefix[1][1] if len(prefix) > 1 else ""
+        opening = prefix[1][1][:256] if len(prefix) > 1 else ""
         system_budget = max(
             0,
-            DND_GEMINI_SYSTEM_MAX_CHARS - min(len(opening), 256),
+            DND_GEMINI_SYSTEM_MAX_CHARS - len(opening),
         )
-        system = build_compact_system(session, current, max_chars=system_budget) if compact_protocol else clip_middle(prefix[0][1], system_budget)
+        if compact_protocol:
+            # CURRENT REQUEST contains the authoritative Memory v2 snapshot and
+            # unresolved player actions. Reserve it before optional history and
+            # shrink only optional system schemas when a rich live turn grows.
+            system_budget = min(
+                system_budget,
+                max(0, DND_GEMINI_INPUT_MAX_CHARS - len(current) - len(opening)),
+            )
+            system = build_compact_system(session, current, max_chars=system_budget)
+        else:
+            system = clip_middle(prefix[0][1], system_budget)
         compact_rows.append((prefix[0][0], system))
-        if len(prefix) > 1:
-            compact_rows.append((prefix[1][0], opening[:256]))
+        if opening:
+            compact_rows.append((prefix[1][0], opening))
 
     recent_source = rows[2:]
     recent_count = min(DND_GEMINI_RECENT_MESSAGES, len(recent_source))
@@ -414,16 +424,30 @@ def _history_contents(session, prompt: str):
     recent = recent_source[-recent_count:] if recent_count else []
     if recent:
         budget = current_turn_budget()
-        history_budget = min(DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
-                             budget.policy.history_chars if budget is not None else DND_GEMINI_RECENT_HISTORY_MAX_CHARS)
-        per_message_budget = max(
-            1,
-            history_budget // len(recent),
+        history_budget = min(
+            DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
+            budget.policy.history_chars if budget is not None else DND_GEMINI_RECENT_HISTORY_MAX_CHARS,
         )
-        compact_rows.extend(
-            (role, clip_middle(text, per_message_budget))
-            for role, text in recent
-        )
+        if compact_protocol:
+            # Old prose is the first thing to sacrifice. Never let it crowd out
+            # the exact durable turn that result recovery must be able to retry.
+            history_budget = min(
+                history_budget,
+                max(
+                    0,
+                    DND_GEMINI_INPUT_MAX_CHARS
+                    - len(current)
+                    - sum(len(text) for _role, text in compact_rows),
+                ),
+            )
+        if history_budget:
+            per_message_budget = max(1, history_budget // len(recent))
+            compact_rows.extend(
+                (role, clip_middle(text, per_message_budget))
+                for role, text in recent
+            )
+        else:
+            recent = []
 
     from AI.dnd_turn_contract import turn_contract
 
