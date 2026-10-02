@@ -230,12 +230,16 @@ def test_rich_durable_turn_compacts_memory_before_mandatory_contract():
     from AI.dnd_current_turn_priority import CURRENT_REQUEST_GUARD, CURRENT_REQUEST_MARKER
 
     session = _session(
+        scene_count=5,
+        mission_goal="Ц" * 350,
+        spotlight_decisions_since_poll=8,
         enemy_combatants={"огр": {"hp": 20}},
         inventories={"1": [{"name": "ключ"}]},
         conditions={"1": [{"name": "ранен"}]},
         scene_clocks={"alarm": {"value": 1, "max": 4}},
         scene_objects={"cart": {"available": True}},
     )
+    session.conversation[1]["content"] = "OPENING " * 80
     memory = "ПАМЯТЬ DND V2 — АВТОРИТЕТНЫЙ СНИМОК.\n" + ("STATE " * 1_000)
     live_request = "LIVE_ACTION_START " + ("x" * 8_000) + " LIVE_ACTION_END"
     request = (
