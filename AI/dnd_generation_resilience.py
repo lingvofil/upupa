@@ -129,8 +129,13 @@ OBLIGATION:долг, WANTS:цель, UNRESOLVED:незакрытый вопро�
 }
 
 
-def build_compact_system(session, prompt: str = "") -> str:
-    """Versioned protocol plus relevant mechanics; never clip its middle."""
+def build_compact_system(
+    session,
+    prompt: str = "",
+    *,
+    max_chars: int = DND_COMPACT_SYSTEM_MAX_CHARS,
+) -> str:
+    """Versioned protocol plus relevant mechanics; omit optional schemas rather than clip them."""
     from AI.dnd_turn_contract import TURN_CONTRACT, turn_contract
 
     contract = turn_contract(session) or TURN_CONTRACT
@@ -148,6 +153,7 @@ def build_compact_system(session, prompt: str = "") -> str:
     }
     sections = [contract, _COMPACT_CORE]
     sections.extend(_COMPACT_MECHANICS[name].strip() for name, enabled in active.items() if enabled)
+    optional_sections = []
     objects = getattr(session, "scene_objects", None) or {}
     needs_scene_rules = getattr(session, "mode", None) == "participants" and (
         not objects or any(
@@ -157,21 +163,27 @@ def build_compact_system(session, prompt: str = "") -> str:
     )
     if needs_scene_rules:
         from AI.dnd_scene_rules import RULES_PROTOCOL
-        sections.append(RULES_PROTOCOL)
+        optional_sections.append(RULES_PROTOCOL)
     enemies = getattr(session, "enemy_combatants", None) or {}
     enemy_rules = getattr(session, "local_enemy_rules", None) or {}
     if any(isinstance(row, dict) and row.get("status") != "dead" and int(row.get("hp", 0)) > 0
            and key not in enemy_rules for key, row in enemies.items()):
         from AI.dnd_scene_rules import ENEMY_RULES_PROTOCOL
-        sections.append(ENEMY_RULES_PROTOCOL)
+        optional_sections.append(ENEMY_RULES_PROTOCOL)
     if objects and not getattr(session, "local_wait_rule", None):
         from AI.dnd_scene_rules import WAIT_RULES_PROTOCOL
-        sections.append(WAIT_RULES_PROTOCOL)
+        optional_sections.append(WAIT_RULES_PROTOCOL)
     if getattr(session, "mode", None) != "participants":
-        sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
+        optional_sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
+
+    limit = max(0, int(max_chars))
     result = "\n\n".join(sections)
-    if len(result) > DND_COMPACT_SYSTEM_MAX_CHARS:
-        raise DndAIBudgetExhausted("Контракт DnD превышает безопасный бюджет; заявка сохранена.")
+    if len(result) > limit:
+        raise DndAIBudgetExhausted("Обязательный контракт DnD превышает безопасный бюджет; заявка сохранена.")
+    for section in optional_sections:
+        candidate = result + "\n\n" + section
+        if len(candidate) <= limit:
+            result = candidate
     return result
 
 
@@ -386,7 +398,7 @@ def _history_contents(session, prompt: str):
             0,
             DND_GEMINI_SYSTEM_MAX_CHARS - min(len(opening), 256),
         )
-        system = build_compact_system(session, current) if compact_protocol else clip_middle(prefix[0][1], system_budget)
+        system = build_compact_system(session, current, max_chars=system_budget) if compact_protocol else clip_middle(prefix[0][1], system_budget)
         compact_rows.append((prefix[0][0], system))
         if len(prefix) > 1:
             compact_rows.append((prefix[1][0], opening[:256]))
@@ -630,7 +642,9 @@ def _fallback_prompt(
 
     if getattr(session, "mode", None) in {"participants", "abstract"}:
         current = _without_repeated_instructions(str(prompt or ""))
-        system = build_compact_system(session, current)
+        fixed_overhead = len(continuity_guard) + len("\n\nSYSTEM EXCERPT:\n") + len("\n\nCURRENT REQUEST:\n") + len(current)
+        system_budget = max_chars - fixed_overhead
+        system = build_compact_system(session, current, max_chars=system_budget)
         fixed = f"{continuity_guard}\n\nSYSTEM EXCERPT:\n{system}\n\nCURRENT REQUEST:\n{current}"
         if len(fixed) > max_chars:
             raise DndAIBudgetExhausted("Полные текущие действия и канон не помещаются в контекст резервной модели; заявка сохранена.")
