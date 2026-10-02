@@ -200,6 +200,39 @@ def test_large_durable_current_turn_drops_old_history_before_failing():
     assert sum(len(part["text"]) for row in contents for part in row["parts"]) <= resilience.DND_GEMINI_INPUT_MAX_CHARS
 
 
+def test_rich_durable_turn_compacts_memory_before_mandatory_contract():
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_GUARD, CURRENT_REQUEST_MARKER
+
+    session = _session(
+        enemy_combatants={"огр": {"hp": 20}},
+        inventories={"1": [{"name": "ключ"}]},
+        conditions={"1": [{"name": "ранен"}]},
+        scene_clocks={"alarm": {"value": 1, "max": 4}},
+        scene_objects={"cart": {"available": True}},
+    )
+    memory = "ПАМЯТЬ DND V2 — АВТОРИТЕТНЫЙ СНИМОК.\n" + ("STATE " * 1_000)
+    live_request = "LIVE_ACTION_START " + ("x" * 8_000) + " LIVE_ACTION_END"
+    request = (
+        memory
+        + "\n\n"
+        + CURRENT_REQUEST_MARKER
+        + ".\n"
+        + CURRENT_REQUEST_GUARD
+        + "\n\n"
+        + live_request
+    )
+
+    contents = resilience._history_contents(session, request)
+    sent = "\n".join(part["text"] for row in contents for part in row["parts"])
+
+    assert "LIVE_ACTION_START" in sent
+    assert "LIVE_ACTION_END" in sent
+    assert live_request in sent
+    assert TURN_CONTRACT in sent
+    assert "Memory v2 сокращена" in sent
+    assert sum(len(part["text"]) for row in contents for part in row["parts"]) <= resilience.DND_GEMINI_INPUT_MAX_CHARS
+
+
 def test_overlong_canonical_current_request_is_not_silently_cut(providers):
     calls, _ = providers
     with pytest.raises(budgets.DndAIBudgetExhausted, match="без обрезки"):

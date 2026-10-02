@@ -134,6 +134,7 @@ def build_compact_system(
     prompt: str = "",
     *,
     max_chars: int = DND_COMPACT_SYSTEM_MAX_CHARS,
+    include_optional: bool = True,
 ) -> str:
     """Versioned protocol plus relevant mechanics; omit optional schemas rather than clip them."""
     from AI.dnd_turn_contract import TURN_CONTRACT, turn_contract
@@ -184,10 +185,11 @@ def build_compact_system(
     result = "\n\n".join(sections)
     if len(result) > limit:
         raise DndAIBudgetExhausted("Обязательный контракт DnD превышает безопасный бюджет; заявка сохранена.")
-    for section in optional_sections:
-        candidate = result + "\n\n" + section
-        if len(candidate) <= limit:
-            result = candidate
+    if include_optional:
+        for section in optional_sections:
+            candidate = result + "\n\n" + section
+            if len(candidate) <= limit:
+                result = candidate
     return result
 
 
@@ -360,6 +362,48 @@ def _groq_retry_after_seconds(error: Exception) -> float | None:
     return value / 1000.0 if unit == "ms" else value
 
 
+def _fit_prioritized_current(current: str, budget: int) -> str:
+    """Fit provider-only Memory v2 context without truncating the unresolved live request."""
+    value = str(current or "")
+    limit = max(0, int(budget))
+    if len(value) <= limit:
+        return value
+
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_GUARD, CURRENT_REQUEST_MARKER
+
+    marker_index = value.find(CURRENT_REQUEST_MARKER)
+    if marker_index < 0:
+        raise DndAIBudgetExhausted(
+            "Текущие действия и память не помещаются в бюджет AI; заявка сохранена без обрезки."
+        )
+
+    context = value[:marker_index].rstrip()
+    tail = value[marker_index + len(CURRENT_REQUEST_MARKER):].lstrip(". \n")
+    if tail.startswith(CURRENT_REQUEST_GUARD):
+        live_request = tail[len(CURRENT_REQUEST_GUARD):].lstrip()
+    else:
+        live_request = tail.lstrip()
+
+    live_block = (
+        f"{CURRENT_REQUEST_MARKER}.\n"
+        f"{CURRENT_REQUEST_GUARD}\n\n"
+        f"{live_request}"
+    )
+    if len(live_block) > limit:
+        raise DndAIBudgetExhausted(
+            "Текущий незавершённый ход сам по себе не помещается в бюджет AI; заявка сохранена без обрезки."
+        )
+
+    context_budget = max(0, limit - len(live_block) - 2)
+    compact_context = _bounded_head_tail(
+        context,
+        context_budget,
+        head_ratio=0.7,
+        marker="\n[…авторитетная Memory v2 сокращена под лимит провайдера…]\n",
+    )
+    return ((compact_context + "\n\n") if compact_context else "") + live_block
+
+
 def _history_contents(session, prompt: str):
     """Build Gemini contents from system + a tiny recent window + current state.
 
@@ -402,21 +446,35 @@ def _history_contents(session, prompt: str):
     prefix = rows[:2]
     if prefix:
         opening = prefix[1][1][:256] if len(prefix) > 1 else ""
-        system_budget = max(
+        system_ceiling = max(
             0,
             DND_GEMINI_SYSTEM_MAX_CHARS - len(opening),
         )
         if compact_protocol:
-            # CURRENT REQUEST contains the authoritative Memory v2 snapshot and
-            # unresolved player actions. Reserve it before optional history and
-            # shrink only optional system schemas when a rich live turn grows.
+            # First reserve the mandatory protocol. The previous implementation
+            # shrank the *system* budget according to an oversized provider
+            # prompt, which could make the mandatory protocol impossible to fit
+            # and fail before any provider call.
+            mandatory_system = build_compact_system(
+                session,
+                current,
+                max_chars=system_ceiling,
+                include_optional=False,
+            )
+            current_budget = max(
+                0,
+                DND_GEMINI_INPUT_MAX_CHARS - len(mandatory_system) - len(opening),
+            )
+            current = _fit_prioritized_current(current, current_budget)
+            # Optional scene/enemy schemas use only genuinely remaining room;
+            # they must never evict the live request or Memory v2 facts.
             system_budget = min(
-                system_budget,
+                system_ceiling,
                 max(0, DND_GEMINI_INPUT_MAX_CHARS - len(current) - len(opening)),
             )
             system = build_compact_system(session, current, max_chars=system_budget)
         else:
-            system = clip_middle(prefix[0][1], system_budget)
+            system = clip_middle(prefix[0][1], system_ceiling)
         compact_rows.append((prefix[0][0], system))
         if opening:
             compact_rows.append((prefix[1][0], opening))
