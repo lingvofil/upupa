@@ -165,6 +165,13 @@ def test_show_turn_cards_creates_shared_and_addressed_player_cards():
         assert len(bot.sent) == 3
         assert bot.edited
 
+        current.turn_id = "turn-two"
+        current.state_revision += 1
+        await service.show_turn_cards(bot, current)
+        assert len(bot.sent) == 5
+        assert current.menu_ui_state["cards"]["party"] == 104
+        assert current.menu_ui_state["cards"]["2"] == 105
+
     asyncio.run(run())
 
 
@@ -174,17 +181,17 @@ def test_navigation_reuses_shared_and_one_player_card_without_ai_or_world_change
         world_before = menu.snapshot_session(current)
         await service.command(Message(bot, current))
         await service.command(Message(bot, current))
-        assert len(bot.sent) == 1
-        data = button(latest_markup(bot), "👤 Герой")
-        await service.callback(Callback(bot, current, data))
         assert len(bot.sent) == 2
+        data = button(latest_markup(bot), "👤 Герой")
+        await service.callback(Callback(bot, current, data, message_id=current.menu_ui_state["cards"]["party"]))
+        assert len(bot.sent) == 3
         player_card = current.menu_ui_state["cards"]["1"]
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи"), message_id=player_card))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "📖 Журнал"), message_id=player_card))
         assert len(bot.sent) == 2
         assert menu.snapshot_session(current) == world_before
         assert dnd.persist_calls > 0
-        assert set(current.menu_info_message_ids) == {101, 102}
+        assert set(current.menu_info_message_ids) == {101, 102, 103}
         assert all(len(item.callback_data.encode("utf-8")) <= 64 for row in latest_markup(bot).inline_keyboard for item in row)
     asyncio.run(run())
 
@@ -194,8 +201,8 @@ def test_concurrent_commands_do_not_create_duplicate_shared_cards():
         current, _dnd, bot, service = make_service()
         bot.delay = 0.01
         await asyncio.gather(*(service.command(Message(bot, current)) for _ in range(5)))
-        assert len(bot.sent) == 1
-        assert len(bot.edited) == 4
+        assert len(bot.sent) == 5
+        assert len(bot.edited) == 0
     asyncio.run(run())
 
 
@@ -205,14 +212,14 @@ def test_deleted_card_replaced_but_timeout_never_creates_a_second_card():
         await service.command(Message(bot, current))
         bot.error = asyncio.TimeoutError()
         try:
-            await service.command(Message(bot, current))
+            await service.show(bot, current)
         except asyncio.TimeoutError:
             pass
         else:
             raise AssertionError("A timeout must remain ambiguous")
         assert len(bot.sent) == 1
         bot.error = TelegramBadRequest(method=EditMessageText(chat_id=current.chat_id, message_id=101, text="x"), message="Bad Request: message to edit not found")
-        await service.command(Message(bot, current))
+        await service.show(bot, current)
         assert len(bot.sent) == 2
         assert current.menu_ui_state["cards"]["party"] == 102
         assert 101 in current.menu_info_message_ids
