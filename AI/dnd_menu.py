@@ -108,8 +108,12 @@ def _ability_modifier(value) -> int:
 
 def _quick_interactions(snapshot, limit=3):
     result = []
+    current_scene = _int(snapshot.get("scene_count"))
     for object_id, row in _mapping(snapshot.get("scene_objects")).items():
         if not isinstance(row, dict) or not _public(row) or not row.get("available", True):
+            continue
+        updated_scene = row.get("updated_scene")
+        if updated_scene is not None and _int(updated_scene, -1) != current_scene:
             continue
         for rule_id, raw in _mapping(row.get("interactions")).items():
             rule = _public_interaction(raw)
@@ -288,9 +292,13 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         lines.append(f"Ответили: {len(snapshot['pending_actions'])}/{len(targets) or active}")
     deadline = snapshot.get("action_deadline")
     if snapshot.get("state") == "WAITING_ACTION" and deadline and len(targets) == 1:
-        remaining = max(0, int(float(deadline) - time.time()))
-        minutes, seconds = divmod(remaining, 60)
-        lines.append(f"⏱ Автопропуск через ~{minutes}:{seconds:02d}")
+        try:
+            remaining = max(0, int(float(deadline) - time.time()))
+        except (TypeError, ValueError):
+            remaining = None
+        if remaining is not None:
+            minutes, seconds = divmod(remaining, 60)
+            lines.append(f"⏱ Автопропуск через ~{minutes}:{seconds:02d}")
     if scene:
         lines.extend(["", scene])
     lines.extend(_clock_lines(snapshot))
