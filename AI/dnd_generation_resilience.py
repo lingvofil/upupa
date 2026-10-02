@@ -377,6 +377,10 @@ def _history_contents(session, prompt: str):
 
     compact_protocol = getattr(session, "mode", None) in {"participants", "abstract"}
     current = _without_repeated_instructions(str(prompt)) if compact_protocol else str(prompt)
+    if compact_protocol and len(current) >= DND_GEMINI_INPUT_MAX_CHARS:
+        raise DndAIBudgetExhausted(
+            "Текущие действия и память не помещаются в бюджет AI; заявка сохранена без обрезки."
+        )
     total_chars = sum(len(text) for _role, text in rows) + len(current)
 
     def clip_middle(text: str, budget: int) -> str:
