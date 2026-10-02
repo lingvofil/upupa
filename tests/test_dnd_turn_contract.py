@@ -46,6 +46,15 @@ def test_critical_mechanics_survive_both_provider_budgets():
             assert "Первой схватки ещё не было" in sent
 
 
+def test_initial_participant_prompt_includes_scene_quick_action_schema():
+    game = session()
+    game.scene_objects = {}
+    compact = providers.build_compact_system(game, "Начинай первую содержательную сцену.")
+    assert "<DND_RULES>" in compact
+    assert "объявленного [SCENE:UPSERT]" in compact
+    assert "ОБЯЗАТЕЛЬНО дай 1–3 публичных быстрых действия" in compact
+
+
 def test_fallback_rejects_overlong_current_facts_instead_of_clipping_them():
     from AI.dnd_ai_budget import DndAIBudgetExhausted
 
