@@ -377,14 +377,12 @@ class DndMenuService:
             rows.extend([[button("🎯 " + choice.capitalize(), "confirm", kind="CHOOSE_ARCHETYPE", choice=choice)
                           for choice in choices[index:index + 2]] for index in range(0, len(choices), 2)])
         if page == "overview":
-            quick = _quick_interactions(snapshot)
-            for object_id, rule_id, rule in quick:
+            for object_id, rule_id, rule in _quick_interactions(snapshot):
                 rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
                                     kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
-            if not quick:
-                for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:3]:
-                    if isinstance(row, dict) and _public(row) and row.get("available", True):
-                        rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
+            for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:3]:
+                if isinstance(row, dict) and _public(row) and row.get("available", True):
+                    rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
         if page == "scene":
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
