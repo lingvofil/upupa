@@ -149,8 +149,13 @@ def build_compact_system(session, prompt: str = "") -> str:
     sections = [contract, _COMPACT_CORE]
     sections.extend(_COMPACT_MECHANICS[name].strip() for name, enabled in active.items() if enabled)
     objects = getattr(session, "scene_objects", None) or {}
-    if any(isinstance(row, dict) and row.get("available", True) and not row.get("interactions")
-           for row in objects.values()):
+    needs_scene_rules = getattr(session, "mode", None) == "participants" and (
+        not objects or any(
+            isinstance(row, dict) and row.get("available", True) and not row.get("interactions")
+            for row in objects.values()
+        )
+    )
+    if needs_scene_rules:
         from AI.dnd_scene_rules import RULES_PROTOCOL
         sections.append(RULES_PROTOCOL)
     enemies = getattr(session, "enemy_combatants", None) or {}
