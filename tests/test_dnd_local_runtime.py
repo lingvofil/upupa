@@ -412,6 +412,48 @@ def test_runtime_open_action_window_automatically_refreshes_turn_cards(monkeypat
     assert card_calls == [("WAITING_ACTION", [2])]
 
 
+def test_runtime_restore_reposts_current_turn_cards_at_chat_bottom(monkeypatch):
+    from AI import dnd_menu
+    from AI import dnd_turn_control
+
+    sess = session()
+    module, _saved, _tasks, _prompts = fake_dnd(sess)
+    router = Router()
+    router._upupa_dnd_campaign_state_policy = FakeStatePolicy()
+    module.dnd_router = router
+
+    async def parse(_bot, _chat_id, _response):
+        return None
+
+    async def no_finalize(*_args, **_kwargs):
+        return None
+
+    module.parse_and_execute_turn = parse
+    module.finalize_group_actions = no_finalize
+    module.finalize_poll = no_finalize
+    card_calls = []
+    scheduled = []
+
+    class MenuService:
+        async def show_turn_cards(self, _bot, current, *, force_new=False):
+            card_calls.append((current.state, force_new))
+
+    menu_service = MenuService()
+    monkeypatch.setattr(dnd_menu, "configure_dnd_menu", lambda *args, **kwargs: menu_service)
+    monkeypatch.setattr(dnd_turn_control, "skip_absent_turn", dnd_turn_control.skip_absent_turn)
+
+    def run_task(coro, *, name):
+        scheduled.append(name)
+        asyncio.run(coro)
+
+    module._start_background_task = run_task
+    runtime.configure_dnd_local_runtime(module, router)
+
+    assert module.restore_dnd_sessions(Bot()) == 1
+    assert card_calls == [("WAITING_ACTION", True)]
+    assert scheduled == [f"dnd-menu:{sess.chat_id}:restore"]
+
+
 @pytest.mark.parametrize("enemy_retreats", [False, True])
 def test_narration_after_completed_combat_round_starts_next_round_or_finishes_combat(monkeypatch, enemy_retreats):
     from AI import dnd_menu
