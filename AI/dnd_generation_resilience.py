@@ -139,7 +139,13 @@ def build_compact_system(
     """Versioned protocol plus relevant mechanics; omit optional schemas rather than clip them."""
     from AI.dnd_turn_contract import TURN_CONTRACT, turn_contract
 
-    contract = turn_contract(session) or TURN_CONTRACT
+    dynamic_contract = turn_contract(session)
+    contract = TURN_CONTRACT
+    runtime_contract = ""
+    if dynamic_contract and dynamic_contract.startswith(TURN_CONTRACT):
+        runtime_contract = dynamic_contract[len(TURN_CONTRACT):].strip()
+    elif dynamic_contract and dynamic_contract != TURN_CONTRACT:
+        runtime_contract = dynamic_contract.strip()
     text = str(prompt).casefold()
     active = {
         "battle": bool(getattr(session, "enemy_combatants", None) or getattr(session, "scene_objects", None))
@@ -155,6 +161,11 @@ def build_compact_system(
     sections = [contract, _COMPACT_CORE]
     sections.extend(_COMPACT_MECHANICS[name].strip() for name, enabled in active.items() if enabled)
     optional_sections = []
+    if runtime_contract:
+        # Scene pacing/settings are useful, but the durable current request also
+        # carries adventure context. They must never make the non-truncatable
+        # action/mechanics protocol exceed the provider's system budget.
+        optional_sections.append(runtime_contract)
     objects = getattr(session, "scene_objects", None) or {}
     needs_scene_rules = getattr(session, "mode", None) == "participants" and (
         not objects or any(
