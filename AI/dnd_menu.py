@@ -10,6 +10,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -314,8 +315,8 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
 
 def _ensure_ui(session):
     if not isinstance(getattr(session, "menu_ui_state", None), dict):
-        session.menu_ui_state = {"cards": {}, "tokens": {}, "seq": {}}
-    for key in ("cards", "tokens", "seq"):
+        session.menu_ui_state = {"cards": {}, "tokens": {}, "seq": {}, "windows": {}}
+    for key in ("cards", "tokens", "seq", "windows"):
         if not isinstance(session.menu_ui_state.get(key), dict):
             session.menu_ui_state[key] = {}
     if not isinstance(getattr(session, "menu_info_message_ids", None), list):
@@ -414,16 +415,18 @@ class DndMenuService:
             rows.append([button("↻ Повторить продолжение", "confirm", kind="RETRY")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    async def _deliver_card(self, bot, session, owner, text, markup):
+    async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):
         card = "party" if not owner else str(owner)
-        old_id = session.menu_ui_state["cards"].get(card)
+        old_id = None if force_new else session.menu_ui_state["cards"].get(card)
         if old_id:
             try:
                 await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
+                logging.info("DnD menu card updated chat_id=%s card=%s message_id=%s", session.chat_id, card, old_id)
                 return int(old_id)
             except TelegramBadRequest as error:
                 message = str(error).casefold()
                 if "message is not modified" in message:
+                    logging.info("DnD menu card already current chat_id=%s card=%s message_id=%s", session.chat_id, card, old_id)
                     return int(old_id)
                 if "message to edit not found" not in message:
                     raise
@@ -432,9 +435,11 @@ class DndMenuService:
         session.menu_ui_state["cards"][card] = int(sent.message_id)
         if int(sent.message_id) not in session.menu_info_message_ids:
             session.menu_info_message_ids.append(int(sent.message_id))
+        logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s",
+                     session.chat_id, card, sent.message_id, bool(force_new))
         return int(sent.message_id)
 
-    async def show(self, bot, session, owner=0, page="overview", *, text=None, build_markup=None):
+    async def show(self, bot, session, owner=0, page="overview", *, text=None, build_markup=None, force_new=False):
         """Caller holds the card lock; all navigation renders the newest snapshot."""
         _ensure_ui(session)
         card = "party" if not owner else str(owner)
@@ -450,7 +455,11 @@ class DndMenuService:
             if page in {"overview", "scene"}:
                 text += "\n\nБыстрые идеи — подсказки. Свой ход можно описать свободно."
         self._save()  # Persist nonce registration before publishing its keyboard.
-        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup)
+        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new)
+        identity = self.identity(session)
+        session.menu_ui_state["windows"][card] = (
+            f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
+        )
         self._save()
         return message_id
 
@@ -459,16 +468,26 @@ class DndMenuService:
         if session is None:
             await message.answer("Активной партии нет. Начать: «упупа днд».")
             return
+        # An explicit command means "show the menu here", not "silently edit a
+        # card that may be hundreds of messages above in the chat".
         async with self._lock(session.chat_id, 0):
-            await self.show(message.bot, session)
+            await self.show(message.bot, session, force_new=True)
 
-    async def show_turn_cards(self, bot, session):
+    async def show_turn_cards(self, bot, session, *, force_new=False):
         """Refresh shared/player cards for the current participant input or roll."""
         state = getattr(session, "state", None)
         if getattr(session, "mode", None) != "participants" or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
             return
-        async with self._lock(session.chat_id, 0):
-            await self.show(bot, session, 0, "overview")
+        identity = self.identity(session)
+        window_key = f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
+
+        async def show_current(owner):
+            card = "party" if not owner else str(owner)
+            fresh = force_new or session.menu_ui_state["windows"].get(card) != window_key
+            async with self._lock(session.chat_id, owner):
+                await self.show(bot, session, owner, "overview", force_new=fresh)
+
+        await show_current(0)
         targets = (
             (getattr(session, "pending_roll", None) or {}).get("target_user_ids", [])
             if state == "WAITING_ROLL"
@@ -476,9 +495,7 @@ class DndMenuService:
         )
         targets = [int(value) for value in targets]
         if len(targets) == 1:
-            owner = targets[0]
-            async with self._lock(session.chat_id, owner):
-                await self.show(bot, session, owner, "overview")
+            await show_current(targets[0])
 
     def _can_act(self, session, actor, *, state="WAITING_ACTION"):
         if self.paused(session) or getattr(session, "state", None) != state:
