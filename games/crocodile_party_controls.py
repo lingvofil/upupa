@@ -714,15 +714,19 @@ async def send_gallery_page(message, page: int = 0) -> None:
 
 async def handle_gallery_callback(callback) -> None:
     data = callback.data or ""
+    legacy_page = False
     if data.startswith("cgal_item_"):
         raw_index = data[len("cgal_item_"):]
     elif data.startswith("cgal_page_"):
-        # Old buttons may survive a deploy; keep them usable.
+        # Old buttons may survive a deploy; preserve their old 10-item page offset.
         raw_index = data[len("cgal_page_"):]
+        legacy_page = True
     else:
         return
     try:
         index = max(0, int(raw_index))
+        if legacy_page:
+            index *= 10
     except ValueError:
         return await callback.answer("Кривая страница", show_alert=True)
 
@@ -733,6 +737,7 @@ async def handle_gallery_callback(callback) -> None:
     media, keyboard = slide
     await callback.answer()
     await callback.message.edit_media(media=media, reply_markup=keyboard)
+
 
 async def start_duel_with_party_controls(message, next_handler) -> None:
     chat_id = str(message.chat.id)
