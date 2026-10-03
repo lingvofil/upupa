@@ -1,5 +1,7 @@
+import asyncio
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from PIL import Image
 
@@ -106,3 +108,79 @@ def test_reverse_mode_menu_contains_combined_proverbs_and_pun():
     assert "🗣 Поговорка" not in texts
     assert "rcrocm_proverbs" in callbacks
     assert "rcrocm_pun" in callbacks
+
+
+
+def test_gallery_navigation_uses_single_item_callbacks():
+    from games.crocodile_party_controls import _gallery_nav_keyboard
+
+    newest = _gallery_nav_keyboard(0, 3)
+    assert [button.callback_data for button in newest.inline_keyboard[0]] == [
+        "cgal_item_1"
+    ]
+
+    middle = _gallery_nav_keyboard(1, 3)
+    assert [button.callback_data for button in middle.inline_keyboard[0]] == [
+        "cgal_item_0",
+        "cgal_item_2",
+    ]
+
+
+def test_gallery_initial_open_sends_only_one_photo(monkeypatch):
+    from aiogram.types import BufferedInputFile, InputMediaPhoto
+    from games import crocodile_party_controls as controls
+
+    media = InputMediaPhoto(
+        media=BufferedInputFile(b"jpeg", filename="crocodile.jpg"),
+        caption="slide",
+    )
+    keyboard = controls._gallery_nav_keyboard(0, 2)
+    monkeypatch.setattr(
+        controls,
+        "_gallery_slide",
+        AsyncMock(return_value=(media, keyboard)),
+    )
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-42),
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_media_group=AsyncMock(),
+    )
+    asyncio.run(controls.send_gallery_page(message))
+
+    message.answer_photo.assert_awaited_once()
+    message.answer_media_group.assert_not_awaited()
+    message.answer.assert_not_awaited()
+
+
+def test_gallery_callback_edits_existing_photo(monkeypatch):
+    from aiogram.types import BufferedInputFile, InputMediaPhoto
+    from games import crocodile_party_controls as controls
+
+    media = InputMediaPhoto(
+        media=BufferedInputFile(b"jpeg", filename="crocodile.jpg"),
+        caption="older",
+    )
+    keyboard = controls._gallery_nav_keyboard(1, 3)
+    monkeypatch.setattr(
+        controls,
+        "_gallery_slide",
+        AsyncMock(return_value=(media, keyboard)),
+    )
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-42),
+        edit_media=AsyncMock(),
+        answer_photo=AsyncMock(),
+    )
+    callback = SimpleNamespace(
+        data="cgal_item_1",
+        message=message,
+        answer=AsyncMock(),
+    )
+    asyncio.run(controls.handle_gallery_callback(callback))
+
+    callback.answer.assert_awaited_once_with()
+    message.edit_media.assert_awaited_once_with(media=media, reply_markup=keyboard)
+    message.answer_photo.assert_not_awaited()

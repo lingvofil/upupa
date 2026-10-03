@@ -16,8 +16,6 @@ from games import crocodile, crocodile_modes
 from games import crocodile_party_state as party_state
 
 
-GALLERY_PAGE_SIZE = 10
-
 _configured = False
 _original_finish_telephone = None
 _original_record_drawing = None
@@ -624,95 +622,121 @@ async def handle_menu_callback(callback) -> None:
     return await _menu_callback_handler(callback)
 
 
-def _gallery_rows_for_page(chat_id: int | str, page: int) -> tuple[list[dict], int]:
+def _gallery_items(chat_id: int | str) -> list[dict]:
     rows = [
         row
         for row in crocodile_archive._load()
         if str(row.get("chat_id")) == str(chat_id)
     ]
     rows.reverse()
-    page = max(0, int(page))
-    start = page * GALLERY_PAGE_SIZE
-    selected = rows[start : start + GALLERY_PAGE_SIZE]
-    selected.reverse()
-    return selected, len(rows)
+    return [
+        row
+        for row in rows
+        if row.get("file")
+        and (crocodile_archive.GALLERY_DIR / str(row["file"])).is_file()
+    ]
 
 
-def _gallery_nav_keyboard(page: int, total: int) -> InlineKeyboardMarkup | None:
-    page = max(0, int(page))
+def _gallery_nav_keyboard(index: int, total: int) -> InlineKeyboardMarkup | None:
+    index = max(0, int(index))
     buttons = []
-    if page > 0:
+    if index > 0:
         buttons.append(
-            InlineKeyboardButton(text="⬅️ Новее", callback_data=f"cgal_page_{page - 1}")
+            InlineKeyboardButton(text="⬅️ Новее", callback_data=f"cgal_item_{index - 1}")
         )
-    if (page + 1) * GALLERY_PAGE_SIZE < total:
+    if index + 1 < total:
         buttons.append(
-            InlineKeyboardButton(text="Старее ➡️", callback_data=f"cgal_page_{page + 1}")
+            InlineKeyboardButton(text="Старее ➡️", callback_data=f"cgal_item_{index + 1}")
         )
     if not buttons:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
-async def send_gallery_page(message, page: int = 0) -> None:
-    rows, total = await asyncio.to_thread(_gallery_rows_for_page, message.chat.id, page)
-    valid: list[tuple[dict, bytes]] = []
-    for row in rows:
-        try:
-            image = await asyncio.to_thread(
-                (crocodile_archive.GALLERY_DIR / row["file"]).read_bytes
-            )
-        except (OSError, KeyError):
-            continue
-        valid.append((row, image))
-
-    if not valid:
-        if total and page > 0:
-            await message.answer(
-                "🖼 На этой странице файлы уже протухли. Вернись к более новым."
-            )
-        else:
-            await message.answer(
-                "🖼 Галерея пока пустая. Сначала хоть что-нибудь нарисуйте."
-            )
-        return
-
-    media = []
+def _gallery_media(row: dict, image: bytes, index: int, total: int) -> InputMediaPhoto:
     mode_labels = {
         "classic": "обычный",
         "duo": "вдвоём",
         "duel": "дуэль",
         "telephone": "телефон",
     }
-    for row, image in valid:
-        artists = " + ".join(row.get("artists") or ["неизвестный хуйдожник"])
-        word = row.get("word") or "?"
-        raw_mode = str(row.get("mode") or "classic")
-        mode = mode_labels.get(raw_mode, raw_mode)
-        media.append(
-            InputMediaPhoto(
-                media=BufferedInputFile(image, filename="crocodile.jpg"),
-                caption=f"🎨 {artists}\nСлово: {word}\nРежим: {mode}",
-            )
+    artists = " + ".join(row.get("artists") or ["неизвестный хуйдожник"])
+    word = row.get("word") or "?"
+    raw_mode = str(row.get("mode") or "classic")
+    mode = mode_labels.get(raw_mode, raw_mode)
+    return InputMediaPhoto(
+        media=BufferedInputFile(image, filename="crocodile.jpg"),
+        caption=(
+            f"🎨 {artists}\n"
+            f"Слово: {word}\n"
+            f"Режим: {mode}\n"
+            f"🖼 {index + 1}/{total}"
+        ),
+    )
+
+
+async def _gallery_slide(
+    chat_id: int | str,
+    index: int,
+) -> tuple[InputMediaPhoto, InlineKeyboardMarkup | None] | None:
+    items = await asyncio.to_thread(_gallery_items, chat_id)
+    if not items:
+        return None
+    index = min(max(0, int(index)), len(items) - 1)
+    row = items[index]
+    try:
+        image = await asyncio.to_thread(
+            (crocodile_archive.GALLERY_DIR / str(row["file"])).read_bytes
         )
-    await message.answer_media_group(media)
-    pages = max(1, (total + GALLERY_PAGE_SIZE - 1) // GALLERY_PAGE_SIZE)
-    await message.answer(
-        f"🖼 Галерея: страница {min(page + 1, pages)}/{pages}",
-        reply_markup=_gallery_nav_keyboard(page, total),
+    except (OSError, KeyError):
+        return None
+    return (
+        _gallery_media(row, image, index, len(items)),
+        _gallery_nav_keyboard(index, len(items)),
+    )
+
+
+async def send_gallery_page(message, page: int = 0) -> None:
+    # Public argument name is kept for compatibility; it now points to one slide.
+    slide = await _gallery_slide(message.chat.id, page)
+    if slide is None:
+        await message.answer(
+            "🖼 Галерея пока пустая. Сначала хоть что-нибудь нарисуйте."
+        )
+        return
+    media, keyboard = slide
+    await message.answer_photo(
+        media.media,
+        caption=media.caption,
+        reply_markup=keyboard,
     )
 
 
 async def handle_gallery_callback(callback) -> None:
     data = callback.data or ""
-    if not data.startswith("cgal_page_"):
+    legacy_page = False
+    if data.startswith("cgal_item_"):
+        raw_index = data[len("cgal_item_"):]
+    elif data.startswith("cgal_page_"):
+        # Old buttons may survive a deploy; preserve their old 10-item page offset.
+        raw_index = data[len("cgal_page_"):]
+        legacy_page = True
+    else:
         return
     try:
-        page = max(0, int(data[len("cgal_page_"):]))
+        index = max(0, int(raw_index))
+        if legacy_page:
+            index *= 10
     except ValueError:
         return await callback.answer("Кривая страница", show_alert=True)
+
+    slide = await _gallery_slide(callback.message.chat.id, index)
+    if slide is None:
+        return await callback.answer("Этот рисунок уже недоступен", show_alert=True)
+
+    media, keyboard = slide
     await callback.answer()
-    await send_gallery_page(callback.message, page=page)
+    await callback.message.edit_media(media=media, reply_markup=keyboard)
 
 
 async def start_duel_with_party_controls(message, next_handler) -> None:
