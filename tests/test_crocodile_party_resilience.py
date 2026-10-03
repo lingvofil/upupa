@@ -332,23 +332,23 @@ def test_telephone_gallery_is_hidden_until_final_reveal(monkeypatch):
         crocodile_modes.telephone_games.clear()
 
 
-def test_gallery_paginates_beyond_latest_ten(monkeypatch):
+def test_gallery_carousel_reaches_beyond_latest_ten(monkeypatch, tmp_path):
     from games import crocodile_party_controls as controls
 
     rows = [{"chat_id": "-42", "file": f"{index}.jpg"} for index in range(25)]
+    for row in rows:
+        (tmp_path / row["file"]).write_bytes(b"jpeg")
     monkeypatch.setattr(controls.crocodile_archive, "_load", lambda: rows)
+    monkeypatch.setattr(controls.crocodile_archive, "GALLERY_DIR", tmp_path)
 
-    first, total = controls._gallery_rows_for_page(-42, 0)
-    second, _ = controls._gallery_rows_for_page(-42, 1)
-    third, _ = controls._gallery_rows_for_page(-42, 2)
+    items = controls._gallery_items(-42)
 
-    assert total == 25
-    assert [row["file"] for row in first] == [f"{i}.jpg" for i in range(15, 25)]
-    assert [row["file"] for row in second] == [f"{i}.jpg" for i in range(5, 15)]
-    assert [row["file"] for row in third] == [f"{i}.jpg" for i in range(0, 5)]
-    nav = controls._gallery_nav_keyboard(1, total)
+    assert len(items) == 25
+    assert items[0]["file"] == "24.jpg"
+    assert items[-1]["file"] == "0.jpg"
+    nav = controls._gallery_nav_keyboard(10, len(items))
     callbacks = [button.callback_data for button in nav.inline_keyboard[0]]
-    assert callbacks == ["cgal_page_0", "cgal_page_2"]
+    assert callbacks == ["cgal_item_9", "cgal_item_11"]
 
 
 def test_menu_shows_active_telephone_status_and_controls():
