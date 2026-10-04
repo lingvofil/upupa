@@ -19,6 +19,7 @@ from features.chat_settings import (
 from features.group_bans import is_group_banned, unban_group
 from features.interactive_settings import send_settings_menu, handle_settings_callback, send_help_menu, handle_help_callback
 from features.world.service import get_world_service
+from services.holidays import process_holidays_command as process_holidays_service
 
 router = Router(name="basic")
 
@@ -37,6 +38,10 @@ async def process_clear_command(message: types.Message):
         await message.reply("Смыто всё говно")
     else:
         await message.reply("История и так пустая, долбоёб")
+
+@router.message(lambda message: message.text is not None and message.text.strip().lower() == "праздники" and message.from_user.id not in BLOCKED_USERS)
+async def holidays_command_handler(message: types.Message):
+    await process_holidays_service(message)
 
 # ================== БЛОК 5.2: СПРАВКА И НАСТРОЙКИ ==================
 
