@@ -10,7 +10,7 @@ from aiogram import F, types
 from aiogram.filters import CommandStart
 from core.loader import bot
 from core.settings import ADMIN_ID, BLOCKED_USERS
-from core.state import conversation_history
+from core.state import chat_settings, conversation_history
 from core.upupa_utils import normalize_upupa_command
 from features.common_settings import process_leave_chat, process_leave_empty_chats
 from features.chat_settings import (
@@ -105,6 +105,27 @@ async def update_all_chats(message: types.Message):
 async def handle_where_sits(message: types.Message):
     response = get_chats_list(message.chat.id, message.chat.title, message.chat.username)
     await message.reply(response)
+
+
+@router.message(F.left_chat_member)
+async def handle_left_chat_member(message: types.Message):
+    """Сообщить об уходе человека, если уведомления включены для чата."""
+    member = message.left_chat_member
+    if member is None or member.is_bot:
+        return
+
+    chat_id = str(message.chat.id)
+    if not chat_settings.get(chat_id, {}).get("leave_notifications_enabled", False):
+        return
+
+    full_name = getattr(member, "full_name", None)
+    display_name = str(full_name).strip() if full_name else ""
+    if not display_name:
+        username = getattr(member, "username", None)
+        display_name = f"@{username}" if username else str(member.id)
+
+    await message.answer(f"этот пидорас {display_name} только что убежал")
+
 
 @router.my_chat_member()
 async def handle_my_chat_member_update(update: types.ChatMemberUpdated):
