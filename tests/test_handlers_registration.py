@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 177  # current registry, including holidays and leave-chat handlers
+EXPECTED_TOTAL_HANDLERS = 178  # + chat_member leave-notification handler
 
 
 def _count_handlers(router):

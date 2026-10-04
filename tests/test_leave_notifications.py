@@ -8,9 +8,10 @@ import pytest
 from tests import test_smoke_imports  # noqa: F401
 
 import features.interactive_settings as interactive_settings
+import handlers.basic as basic
 from core.settings import ADMIN_ID
 from core.state import chat_settings
-from handlers.basic import handle_left_chat_member
+from handlers.basic import handle_chat_member_update, handle_left_chat_member
 
 
 def _run(coro):
@@ -24,7 +25,9 @@ def _button_texts(markup):
 @pytest.fixture(autouse=True)
 def restore_chat_settings():
     saved = deepcopy(chat_settings)
+    basic._recent_leave_notifications.clear()
     yield
+    basic._recent_leave_notifications.clear()
     chat_settings.clear()
     chat_settings.update(saved)
 
@@ -47,6 +50,34 @@ def _message(chat_id=-1001, member=None):
         chat=SimpleNamespace(id=chat_id),
         left_chat_member=member or _member(),
         answer=AsyncMock(),
+    )
+
+
+def _chat_member_state(status, member, *, is_member=True):
+    return SimpleNamespace(
+        status=status,
+        user=member,
+        is_member=is_member,
+    )
+
+
+def _chat_member_update(
+    *,
+    chat_id=-1001,
+    member=None,
+    old_status="member",
+    new_status="left",
+    old_is_member=True,
+):
+    member = member or _member()
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        old_chat_member=_chat_member_state(
+            old_status,
+            member,
+            is_member=old_is_member,
+        ),
+        new_chat_member=_chat_member_state(new_status, member),
     )
 
 
@@ -127,3 +158,61 @@ def test_leave_notifications_toggle_defaults_to_enable(monkeypatch):
     assert chat_settings["-1001"]["leave_notifications_enabled"] is True
     save_mock.assert_called_once_with()
     query.answer.assert_awaited_once_with("Настройка сохранена")
+
+
+def test_chat_member_update_sends_leave_notification_in_large_chat_path(monkeypatch):
+    chat_settings.clear()
+    chat_settings["-1001"] = {"leave_notifications_enabled": True}
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(basic, "bot", fake_bot)
+    update = _chat_member_update(member=_member(name="Большой Чат"))
+
+    _run(handle_chat_member_update(update))
+
+    fake_bot.send_message.assert_awaited_once_with(
+        -1001,
+        "этот пидорас Большой Чат только что убежал",
+    )
+
+
+def test_chat_member_update_ignores_kick(monkeypatch):
+    chat_settings.clear()
+    chat_settings["-1001"] = {"leave_notifications_enabled": True}
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(basic, "bot", fake_bot)
+    update = _chat_member_update(new_status="kicked")
+
+    _run(handle_chat_member_update(update))
+
+    fake_bot.send_message.assert_not_awaited()
+
+
+def test_chat_member_update_ignores_already_absent_restricted_member(monkeypatch):
+    chat_settings.clear()
+    chat_settings["-1001"] = {"leave_notifications_enabled": True}
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(basic, "bot", fake_bot)
+    update = _chat_member_update(old_status="restricted", old_is_member=False)
+
+    _run(handle_chat_member_update(update))
+
+    fake_bot.send_message.assert_not_awaited()
+
+
+def test_leave_notification_is_deduplicated_between_update_types(monkeypatch):
+    chat_settings.clear()
+    chat_settings["-1001"] = {"leave_notifications_enabled": True}
+    member = _member(name="Дубль")
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(basic, "bot", fake_bot)
+
+    _run(handle_chat_member_update(_chat_member_update(member=member)))
+    message = _message(member=member)
+    _run(handle_left_chat_member(message))
+
+    fake_bot.send_message.assert_awaited_once()
+    message.answer.assert_not_awaited()
+
+
+def test_basic_router_subscribes_to_chat_member_updates():
+    assert "chat_member" in basic.router.resolve_used_update_types()

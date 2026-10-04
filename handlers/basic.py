@@ -6,6 +6,8 @@
 from aiogram import Router
 
 import logging
+from time import monotonic
+
 from aiogram import F, types
 from aiogram.filters import CommandStart
 from core.loader import bot
@@ -22,6 +24,66 @@ from features.world.service import get_world_service
 from services.holidays import process_holidays_command as process_holidays_service
 
 router = Router(name="basic")
+
+_LEAVE_NOTIFICATION_DEDUPE_SECONDS = 10.0
+_recent_leave_notifications = {}
+
+
+def _is_present_member(chat_member) -> bool:
+    status = getattr(chat_member, "status", None)
+    if status in {"member", "administrator", "creator"}:
+        return True
+    if status == "restricted":
+        return bool(getattr(chat_member, "is_member", False))
+    return False
+
+
+def _is_member_leave_update(update: types.ChatMemberUpdated) -> bool:
+    return (
+        _is_present_member(update.old_chat_member)
+        and getattr(update.new_chat_member, "status", None) == "left"
+    )
+
+
+def _member_display_name(member) -> str:
+    full_name = getattr(member, "full_name", None)
+    display_name = str(full_name).strip() if full_name else ""
+    if display_name:
+        return display_name
+
+    username = getattr(member, "username", None)
+    return f"@{username}" if username else str(member.id)
+
+
+def _claim_leave_notification(chat_id: int, user_id: int) -> bool:
+    now = monotonic()
+    cutoff = now - _LEAVE_NOTIFICATION_DEDUPE_SECONDS
+    stale = [key for key, seen_at in _recent_leave_notifications.items() if seen_at <= cutoff]
+    for key in stale:
+        _recent_leave_notifications.pop(key, None)
+
+    key = (int(chat_id), int(user_id))
+    seen_at = _recent_leave_notifications.get(key)
+    if seen_at is not None and now - seen_at < _LEAVE_NOTIFICATION_DEDUPE_SECONDS:
+        return False
+
+    _recent_leave_notifications[key] = now
+    return True
+
+
+async def _notify_member_left(chat_id: int, member, send_message) -> bool:
+    if member is None or member.is_bot:
+        return False
+
+    chat_id_str = str(chat_id)
+    if not chat_settings.get(chat_id_str, {}).get("leave_notifications_enabled", False):
+        return False
+
+    if not _claim_leave_notification(chat_id, member.id):
+        return False
+
+    await send_message(f"этот пидорас {_member_display_name(member)} только что убежал")
+    return True
 
 
 # ================== БЛОК 5.1: БАЗОВЫЕ КОМАНДЫ ==================
@@ -109,22 +171,26 @@ async def handle_where_sits(message: types.Message):
 
 @router.message(F.left_chat_member)
 async def handle_left_chat_member(message: types.Message):
-    """Сообщить об уходе человека, если уведомления включены для чата."""
-    member = message.left_chat_member
-    if member is None or member.is_bot:
+    """Fallback для сервисного сообщения об уходе в небольших чатах."""
+    await _notify_member_left(
+        message.chat.id,
+        message.left_chat_member,
+        message.answer,
+    )
+
+
+@router.chat_member()
+async def handle_chat_member_update(update: types.ChatMemberUpdated):
+    """Отследить реальный выход участника независимо от сервисного сообщения."""
+    if not _is_member_leave_update(update):
         return
 
-    chat_id = str(message.chat.id)
-    if not chat_settings.get(chat_id, {}).get("leave_notifications_enabled", False):
-        return
-
-    full_name = getattr(member, "full_name", None)
-    display_name = str(full_name).strip() if full_name else ""
-    if not display_name:
-        username = getattr(member, "username", None)
-        display_name = f"@{username}" if username else str(member.id)
-
-    await message.answer(f"этот пидорас {display_name} только что убежал")
+    member = update.new_chat_member.user
+    await _notify_member_left(
+        update.chat.id,
+        member,
+        lambda text: bot.send_message(update.chat.id, text),
+    )
 
 
 @router.my_chat_member()
