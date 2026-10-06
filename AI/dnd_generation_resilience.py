@@ -743,8 +743,14 @@ def _fallback_prompt(
 
     if getattr(session, "mode", None) in {"participants", "abstract"}:
         current = _without_repeated_instructions(str(prompt or ""))
-        fixed_overhead = len(continuity_guard) + len("\n\nSYSTEM EXCERPT:\n") + len("\n\nCURRENT REQUEST:\n") + len(current)
-        system_budget = max_chars - fixed_overhead
+        fixed_overhead = len(continuity_guard) + len("\n\nSYSTEM EXCERPT:\n") + len("\n\nCURRENT REQUEST:\n")
+        mandatory_system = build_compact_system(
+            session, current, max_chars=max_chars - fixed_overhead, include_optional=False,
+        )
+        # Use the same priority as Gemini: keep the entire live request, then
+        # fit memory, and only then optional schemas and old conversation.
+        current = _fit_prioritized_current(current, max_chars - fixed_overhead - len(mandatory_system))
+        system_budget = max_chars - fixed_overhead - len(current)
         system = build_compact_system(session, current, max_chars=system_budget)
         fixed = f"{continuity_guard}\n\nSYSTEM EXCERPT:\n{system}\n\nCURRENT REQUEST:\n{current}"
         if len(fixed) > max_chars:

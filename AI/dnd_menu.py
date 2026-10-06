@@ -14,6 +14,7 @@ import logging
 import re
 import secrets
 import time
+from types import SimpleNamespace
 
 from aiogram import BaseMiddleware, F
 from aiogram.exceptions import TelegramBadRequest
@@ -28,7 +29,7 @@ _FIELDS = (
     "enemy_combatants", "enemy_intent", "scene_clocks", "threat", "pending_actions",
     "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
-    "local_wait_rule",
+    "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
 )
 _PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
@@ -74,7 +75,21 @@ def _name(snapshot, user_id) -> str:
 
 def _visible_items(snapshot, user_id):
     rows = _mapping(snapshot.get("inventories")).get(str(user_id)) or []
-    return [(index, row) for index, row in enumerate(rows) if _public(row) and _item_name(row)]
+    return [(index, row) for index, row in enumerate(rows)
+            if _public(row) and _item_name(row) and _int(_mapping(row).get("quantity"), 1) > 0]
+
+
+def _active_enemy(snapshot, enemy_id, row):
+    return (isinstance(row, dict) and _public(row) and _int(row.get("hp")) > 0
+            and str(row.get("status", "")).casefold() not in {"dead", "defeated"}
+            and not _mapping(_mapping(snapshot.get("local_enemy_rules")).get(str(enemy_id))).get("retreated"))
+
+
+def _available_interaction(snapshot, object_id, rule_id, raw):
+    rule = _public_interaction(raw)
+    if rule and rule.get("once") and f"{object_id}:{rule_id}" in _mapping(snapshot.get("local_object_uses")):
+        return None
+    return rule
 
 
 def _item_name(item):
@@ -94,7 +109,8 @@ def _clock_lines(snapshot):
             continue
         maximum = max(1, _int(row.get("max"), 4))
         value = min(maximum, max(0, _int(row.get("value"))))
-        lines.append(f"{'⚠️' if row.get('kind') == 'DANGER' else '🎯'} {_text(row.get('name') or row.get('id'), 80)}: {value}/{maximum}")
+        bar = " " + "●" * value + "○" * (maximum - value) if maximum <= 8 else ""
+        lines.append(f"{'⚠️' if row.get('kind') == 'DANGER' else '🎯'} {_text(row.get('name') or row.get('id'), 80)}:{bar} {value}/{maximum}")
     return lines[:2]
 
 
@@ -117,7 +133,7 @@ def _quick_interactions(snapshot, limit=3):
         if updated_scene is not None and _int(updated_scene, -1) != current_scene:
             continue
         for rule_id, raw in _mapping(row.get("interactions")).items():
-            rule = _public_interaction(raw)
+            rule = _available_interaction(snapshot, object_id, rule_id, raw)
             if rule is None:
                 continue
             result.append((str(object_id), str(rule_id), rule))
@@ -128,16 +144,8 @@ def _quick_interactions(snapshot, limit=3):
 
 def _wait_rule(snapshot):
     """Offer waiting only when a public, deterministic consequence is saved."""
-    from AI.dnd_scene_rules import SceneRuleError, validate_rule
-
-    raw = snapshot.get("local_wait_rule")
-    if not isinstance(raw, dict) or not _public(raw):
-        return None
-    try:
-        rule = validate_rule(raw)
-    except SceneRuleError:
-        return None
-    return rule if not rule["uncertain"] else None
+    rule = _public_interaction(snapshot.get("local_wait_rule"))
+    return rule if rule and not rule["uncertain"] else None
 
 
 def _public_interaction(raw):
@@ -246,6 +254,16 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
                     score = _int(stats[ability], 10)
                     lines.append(f"• {label} ({ability}) {score} ({_ability_modifier(score):+d})")
         lines.extend(f"{label}: {_text(profile[key], 160)}" for key, label in _PROFILE_LABELS.items() if profile.get(key))
+        for condition in _mapping(snapshot.get("conditions")).get(str(user_id)) or []:
+            if isinstance(condition, dict) and _public(condition):
+                lines.append("🩹 " + _text(condition.get("name"), 80))
+                if condition.get("clear"):
+                    lines.append("  Снять: " + _text(condition["clear"], 160))
+        boost = _mapping(_mapping(snapshot.get("item_boosts")).get(str(user_id)))
+        if boost and _public(boost):
+            domains = {"MOVE": "движение", "SOCIAL": "общение", "PERCEPTION": "наблюдение", "COMBAT": "бой"}
+            lines.append("✨ Преимущество: " + domains.get(boost.get("domain"), "следующая подходящая проверка")
+                         + " · " + _text(boost.get("source"), 80))
         position = _mapping(_mapping(snapshot.get("player_positions")).get(str(user_id)))
         if _public(position) and position.get("location"):
             lines.append("📍 " + _text(position.get("location"), 130))
@@ -261,11 +279,13 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
             lines.append(f"{'✨' if row.get('kind') == 'artifact' else '•'} {_item_name(item)} ×{quantity}")
             if row.get("description"):
                 lines.append("  " + _text(row["description"], 180))
+            if row.get("charges_remaining") is not None:
+                lines.append(f"  ⚡ Заряды: {_int(row['charges_remaining'])}/{_int(row.get('charges_max'), _int(row['charges_remaining']))}")
         return "\n".join(lines) if len(lines) > 1 else lines[0] + "\nПусто."
     if page == "enemies":
         lines = ["👹 Противники"]
-        for row in _mapping(snapshot.get("enemy_combatants")).values():
-            if isinstance(row, dict) and _public(row) and row.get("status") not in {"DEAD", "DEFEATED"}:
+        for enemy_id, row in _mapping(snapshot.get("enemy_combatants")).items():
+            if _active_enemy(snapshot, enemy_id, row):
                 lines.append(f"• {_text(row.get('name'), 90)} — {row.get('hp', 0)}/{row.get('max_hp', 0)} HP · КБ {row.get('ac', '?')}")
         return "\n".join(lines) if len(lines) > 1 else "👹 Сейчас нет известных активных противников."
     if page == "journal":
@@ -403,13 +423,15 @@ class DndMenuService:
                 operation = "confirm" if str(row.get("mechanic") or "").upper() in _ITEM_MECHANICS and str(row.get("requirement") or "NONE").upper() == "NONE" else "item_idea"
                 rows.append([button("🧰 " + _item_name(item)[:32], operation, kind="USE_ITEM", **ref),
                              button("Передать", "recipients", **ref)])
-        if owner and page == "enemies":
+        if owner and page == "enemies" and self._can_act(session, owner):
             for enemy_id, row in list(_mapping(snapshot.get("enemy_combatants")).items())[:6]:
-                if isinstance(row, dict) and _public(row) and _int(row.get("hp"), 1) > 0 and row.get("status") not in {"DEAD", "DEFEATED"}:
-                    rows.append([button("⚔️ " + _text(row.get("name"), 40), "confirm", kind="ATTACK", target_id=str(enemy_id))])
+                if _active_enemy(snapshot, enemy_id, row):
+                    rows.append([button("⚔️ " + _text(row.get("name"), 40), "weapons", kind="ATTACK", target_id=str(enemy_id))])
         labels = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
                   ("👥 Партия", "party"), ("📖 Журнал", "journal"), ("⚙️ Управление", "manage"), ("🔄 Обновить", page)]
         rows.extend([[button(text, "nav", page=target) for text, target in labels[index:index + 2]] for index in range(0, len(labels), 2)])
+        if page != "overview":
+            rows.append([button("← К ходу", "nav", page="overview")])
         if owner and page == "manage" and self.dnd._user_is_host(session, owner):
             rows.append([button("▶️ Продолжить" if self.paused(session) else "⏸ Пауза", "confirm", kind="RESUME" if self.paused(session) else "PAUSE")])
             rows.append([button("↻ Повторить продолжение", "confirm", kind="RETRY")])
@@ -532,7 +554,13 @@ class DndMenuService:
                 return isinstance(target, dict) and _public(target) and target.get("active", True) and str(payload.get("target_id")) != str(actor)
         if kind == "ATTACK":
             target = _mapping(snapshot.get("enemy_combatants")).get(str(payload.get("target_id")))
-            return isinstance(target, dict) and _public(target) and _int(target.get("hp"), 1) > 0 and target.get("status") not in {"DEAD", "DEFEATED"}
+            if not _active_enemy(snapshot, payload.get("target_id"), target):
+                return False
+            if payload.get("item_id"):
+                index = _int(payload.get("item_index"), -1)
+                item = next((row for row_index, row in _visible_items(snapshot, actor) if row_index == index), None)
+                return item is not None and _item_ref(index, item) == {key: payload.get(key) for key in _item_ref(index, item)}
+            return True
         if payload.get("object_id"):
             row = _mapping(snapshot.get("scene_objects")).get(str(payload["object_id"]))
             if not isinstance(row, dict) or not _public(row) or not row.get("available", True):
@@ -540,7 +568,15 @@ class DndMenuService:
             rule_id = _mapping(payload.get("inputs")).get("rule_id")
             if rule_id:
                 rule = _mapping(row.get("interactions")).get(str(rule_id))
-                return _public_interaction(rule) is not None
+                rule = _available_interaction(snapshot, payload["object_id"], rule_id, rule)
+                if rule is None:
+                    return False
+                from AI.dnd_scene_rules import SceneRuleError, validate_targets
+                try:
+                    validate_targets(SimpleNamespace(**snapshot), actor, rule)
+                except SceneRuleError:
+                    return False
+                return True
             return True
         return True
 
@@ -577,7 +613,7 @@ class DndMenuService:
         snapshot = snapshot_session(session)
         if payload.get("kind") == "WAIT":
             rule = _wait_rule(snapshot)
-            description += ": " + _text(rule["label"], 100) + "\n" + _text(rule["success"]["text"], 300)
+            description += ": " + _text(rule["label"], 100) + "\n" + _outcome_preview(snapshot, rule["success"])
         if payload.get("kind") == "CHOOSE_ARCHETYPE":
             from AI.dnd_character_templates import stats_for_profile
 
@@ -602,13 +638,19 @@ class DndMenuService:
             description += " → " + _name(snapshot, payload.get("target_id"))
         if payload.get("kind") == "ATTACK":
             description += " → " + _text(_mapping(_mapping(snapshot.get("enemy_combatants")).get(str(payload.get("target_id")))).get("name"), 90)
-            description += "\nОружие: " + _text(payload.get("item_id") or "без оружия", 100)
+            description += "\nОружие: " + _text(payload.get("item_name") or "без оружия", 100)
         if payload.get("kind") == "OBJECT":
             row = _mapping(_mapping(snapshot.get("scene_objects")).get(str(payload.get("object_id"))))
             rule = _public_interaction(_mapping(row.get("interactions")).get(str(_mapping(payload.get("inputs")).get("rule_id"))))
             description += ": " + _text(row.get("name"), 80) + " — " + _text(rule.get("label"), 100)
             if rule["uncertain"]:
-                description += f"\nПроверка: {rule['ability']}, DC {rule['dc']}."
+                stats = _mapping(_mapping(_mapping(snapshot.get("character_sheets")).get(str(actor))).get("stats"))
+                modifier = _ability_modifier(_int(stats.get(rule["ability"]), 10))
+                description += f"\nПроверка: {_ABILITY_LABELS[rule['ability']]} ({rule['ability']}) {modifier:+d}, сложность {rule['dc']}."
+            if rule.get("required_item"):
+                description += "\nНужен предмет: " + _text(rule["required_item"], 100)
+            if rule.get("once"):
+                description += "\nОдна попытка: действие будет исчерпано при любом исходе."
             description += "\nУспех: " + _outcome_preview(snapshot, rule["success"])
             if rule.get("success_with_cost"):
                 description += "\nУспех с ценой: " + _outcome_preview(snapshot, rule["success_with_cost"])
@@ -666,7 +708,7 @@ class DndMenuService:
                     rows = [[self._button(session, actor, "✍️ Своя идея", "idea", card=card, seq=seq, object_id=str(payload.get("object_id")))]]
                     if row.get("available", True):
                         for rule_id, rule in list(_mapping(row.get("interactions")).items())[:5]:
-                            rule = _public_interaction(rule)
+                            rule = _available_interaction(snapshot_session(session), payload.get("object_id"), rule_id, rule)
                             if rule is not None:
                                 rows.append([self._button(session, actor, _text(rule.get("label") or rule_id, 50), "confirm", card=card, seq=seq,
                                                          kind="OBJECT", object_id=str(payload.get("object_id")), inputs={"rule_id": str(rule_id)})])
@@ -693,6 +735,30 @@ class DndMenuService:
                 await self._input_prompt(callback, session, actor, object_id=payload.get("object_id"), item_name=payload.get("item_name"))
             elif operation == "confirm":
                 await self._confirm(callback, session, actor, payload)
+            elif operation == "weapons":
+                if not self._valid_payload(session, actor, payload):
+                    await callback.answer("Цель сейчас недоступна. Обнови меню.", show_alert=True)
+                    return
+                items = _visible_items(snapshot_session(session), actor)
+                offset = min(max(0, _int(payload.get("offset"))), max(0, len(items) - 1))
+
+                def weapon_markup(card, seq):
+                    rows = [[self._button(session, actor, "👊 Без оружия", "confirm", card=card, seq=seq,
+                                          kind="ATTACK", target_id=payload["target_id"])]]
+                    for index, item in items[offset:offset + 8]:
+                        rows.append([self._button(session, actor, "⚔️ " + _item_name(item)[:45], "confirm", card=card, seq=seq,
+                                                  kind="ATTACK", target_id=payload["target_id"], **_item_ref(index, item))])
+                    for label, start in (("← Предыдущие", offset - 8), ("Ещё →", offset + 8)):
+                        if 0 <= start < len(items):
+                            rows.append([self._button(session, actor, label, "weapons", card=card, seq=seq,
+                                                      kind="ATTACK", target_id=payload["target_id"], offset=start)])
+                    rows.append([self._button(session, actor, "← Враги", "nav", card=card, seq=seq, page="enemies")])
+                    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+                await self.show(callback.bot, session, actor,
+                                text="⚔️ Чем атакуешь?\nВыбери вещь из своего инвентаря или безоружную атаку.\nОбычные вещи используются как импровизированное оружие.\nВыбор ничего не расходует; затем появится подтверждение.",
+                                build_markup=weapon_markup)
+                await callback.answer()
             elif operation == "recipients":
                 if not self._valid_payload(session, actor, {**payload, "kind": "USE_ITEM"}):
                     await callback.answer("Предмет сейчас недоступен.", show_alert=True)

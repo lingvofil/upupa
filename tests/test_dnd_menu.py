@@ -352,7 +352,7 @@ def test_object_confirmation_previews_known_check_outcomes_without_applying_them
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "Толкнуть телегу"), message_id=102))
         preview = bot.edited[-1].text
-        assert "Проверка: STR, DC 12" in preview
+        assert "Сила (STR) +3, сложность 12" in preview
         assert "Успех: Проход перекрыт." in preview
         assert "Цена провала: Телега загрохотала." in preview and "Ворота +1" in preview
         assert "Успех с ценой: Проход перекрыт, но стража услышала шум." in preview
@@ -401,6 +401,8 @@ def test_menu_attack_confirmation_explicitly_shows_unarmed_weapon_choice():
         await service.command(Message(bot, current))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "👹 Враги")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж"), message_id=102))
+        assert "Чем атакуешь?" in bot.edited[-1].text
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "👊 Без оружия"), message_id=102))
         assert "Атаковать → Страж" in bot.edited[-1].text
         assert "Оружие: без оружия" in bot.edited[-1].text
         assert calls == [] and current.enemy_combatants["guard"]["hp"] == 10
@@ -498,4 +500,53 @@ def test_archetype_choices_are_actor_owned_confirmed_and_available_only_in_lobby
         current.state = "WAITING_ACTION"
         await service.show(bot, current, 1, "hero")
         assert all(not item.text.startswith("🎯 ") for row in latest_markup(bot).inline_keyboard for item in row)
+    asyncio.run(run())
+
+
+def test_menu_shows_conditions_charges_and_hides_spent_rules_and_retreats():
+    current = session(
+        conditions={"1": [{"name": "Вывих", "clear": "Перевязать ногу"}, {"name": "SECRET", "hidden": True}]},
+        item_boosts={"1": {"domain": "MOVE", "source": "Сапоги"}},
+        local_object_uses={"cart:hide": "done"}, local_enemy_rules={"guard": {"retreated": True}},
+    )
+    current.scene_objects["cart"]["interactions"]["hide"]["once"] = True
+    snapshot = menu.snapshot_session(current)
+    hero = menu.render_page(snapshot, "hero", 1)
+    assert "Вывих" in hero and "Перевязать ногу" in hero and "движение · Сапоги" in hero
+    assert "SECRET" not in hero
+    assert "Заряды: 1/1" in menu.render_page(snapshot, "items", 1)
+    assert "●●○○ 2/4" in menu.render_page(snapshot)
+    assert "Страж" not in menu.render_page(snapshot, "enemies", 1)
+    assert menu._quick_interactions(snapshot) == []
+
+
+def test_unreachable_and_missing_required_item_rules_cannot_be_confirmed():
+    current, _, _, service = make_service()
+    rule = current.scene_objects["cart"]["interactions"]["hide"]
+    payload = {"kind": "OBJECT", "object_id": "cart", "inputs": {"rule_id": "hide"}}
+    rule["locations"] = ["Другая площадь"]
+    assert not service._valid_payload(current, 1, payload)
+    rule.pop("locations")
+    rule["required_item"] = "Ключ"
+    assert not service._valid_payload(current, 1, payload)
+    current.inventories["1"].append({"name": "Ключ", "quantity": 1})
+    assert service._valid_payload(current, 1, payload)
+
+
+def test_weapon_picker_pages_and_revalidates_selected_inventory():
+    async def run():
+        current, _, bot, service = make_service()
+        current.inventories["1"] = [{"name": f"Вещь {index}", "quantity": 1} for index in range(10)]
+        current.inventories["1"].append({"name": "SECRET", "hidden": True})
+        await service.show(bot, current, 1, "enemies")
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "Ещё →")))
+        assert "SECRET" not in str(latest_markup(bot))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Вещь 9")))
+        assert "Оружие: Вещь 9" in bot.edited[-1].text
+        execute = button(latest_markup(bot), "✅ Подтвердить")
+        current.inventories["1"][9]["quantity"] = 0
+        callback = Callback(bot, current, execute)
+        await service.callback(callback)
+        assert "Действие сейчас недоступно" in callback.answers[-1]
     asyncio.run(run())
