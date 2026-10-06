@@ -19,7 +19,7 @@ from games import (
     reverse_crocodile,
     reverse_crocodile_modes,
 )
-from AI.quiz import process_poll_answer
+from AI.quiz import process_poll_answer, stop_quiz
 
 
 router = Router(name="games")
@@ -73,6 +73,15 @@ async def handle_poll_answers(poll_answer: PollAnswer, bot: Bot):
     is_egra_handled = await handle_egra_answer(poll_answer, bot)
     if not is_egra_handled:
         await _process_quiz_poll_answer_once(poll_answer, bot)
+
+
+@router.message(lambda m: m.text and m.text.strip().lower() == "викторина стоп")
+async def stop_quiz_text(message: types.Message):
+    stopped = await stop_quiz(message.bot, message.chat.id)
+    if stopped:
+        await message.answer("🛑 Викторина остановлена.")
+    else:
+        await message.answer("Сейчас викторина не идёт.")
 
 
 @router.callback_query(F.data == "egra_final_choice")
