@@ -47,6 +47,23 @@ def session(*, group=False):
     return sess
 
 
+def test_new_scene_installs_its_wait_contract_after_clearing_previous_one():
+    from AI.dnd_metadata import DndMetadataPolicy
+
+    sess = session()
+    state = DndCampaignStatePolicy(lambda s: None, lambda s: {})
+    metadata = DndMetadataPolicy(lambda s, text: (text, []))
+    runtime.configure_dnd_local_state(SimpleNamespace(), state_policy=state, metadata_policy=metadata)
+    sess.local_wait_rule = {"label": "Старая сцена"}
+    wait = {"label": "Переждать патруль", "uncertain": False,
+            "success": {"text": "Патруль проходит мимо.", "effects": []}}
+    metadata.apply(sess, '[SCENE:BEGIN;ID:new-square]<DND_WAIT>' + json.dumps(wait) + '</DND_WAIT>')
+    assert sess.local_wait_rule["label"] == wait["label"]
+    assert lifecycle.ensure(sess)["scene_id"] == "new-square"
+    metadata.apply(sess, '[SCENE:BEGIN;ID:next-square]')
+    assert sess.local_wait_rule is None
+
+
 def fake_dnd(sess):
     saved, tasks, prompts = [], [], []
 
