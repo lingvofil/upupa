@@ -20,6 +20,12 @@ def test_short_birthday_form_is_parseable():
     assert parse_birthday_date("мой др 01.04") == (1, 4)
 
 
+def test_help_main_page_advertises_upupa_channel():
+    from prompts.help_texts import HELP_DICT
+
+    assert "@upupa_channel - мой конал" in HELP_DICT["main"]
+
+
 def test_help_uses_short_birthday_example_without_placeholder_brackets():
     from prompts.help_texts import HELP_DICT, HELP_TEXT
 
