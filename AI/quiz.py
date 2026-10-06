@@ -22,6 +22,25 @@ from infrastructure.ai.execution import ai_feature
 from AI.dialog.settings import update_chat_settings
 
 
+# Версия активной сессии нужна, чтобы "викторина стоп" не гонялась
+# с уже начавшейся отправкой следующего вопроса.
+_quiz_generations: dict[str, int] = {}
+
+
+def _start_quiz_session(chat_id_str: str) -> int:
+    generation = _quiz_generations.get(chat_id_str, 0) + 1
+    _quiz_generations[chat_id_str] = generation
+    return generation
+
+
+def _cancel_quiz_session(chat_id_str: str) -> None:
+    _quiz_generations[chat_id_str] = _quiz_generations.get(chat_id_str, 0) + 1
+
+
+def _is_current_quiz_session(chat_id_str: str, generation: int) -> bool:
+    return _quiz_generations.get(chat_id_str, 0) == generation
+
+
 # Функция для получения временного диапазона
 def get_time_range(days=1):
     moscow_tz = pytz.timezone('Europe/Moscow')
@@ -192,8 +211,10 @@ async def send_daily_quiz(bot: Bot, chat_id: int):
         await bot.send_message(chat_id, "Не удалось создать викторину.")
         return
 
-    quiz_questions[str(chat_id)] = questions
-    await send_question(bot, chat_id, 0)
+    chat_id_str = str(chat_id)
+    generation = _start_quiz_session(chat_id_str)
+    quiz_questions[chat_id_str] = questions
+    await send_question(bot, chat_id, 0, generation=generation)
 
 # Функция для запуска ежедневной викторины
 async def schedule_daily_quiz(bot: Bot, chat_id: int):
@@ -211,11 +232,18 @@ async def schedule_daily_quiz(bot: Bot, chat_id: int):
         await send_daily_quiz(bot, chat_id)
 
 # Обновленная функция send_question
-async def send_question(bot, chat_id, question_index):
+async def send_question(bot, chat_id, question_index, *, generation=None):
     try:
         chat_id_str = str(chat_id)
+        if generation is None:
+            generation = _quiz_generations.get(chat_id_str, 0)
+
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return
+
         if chat_id_str not in quiz_questions or question_index >= len(quiz_questions[chat_id_str]):
-            quiz_states[chat_id_str] = None
+            quiz_states.pop(chat_id_str, None)
+            quiz_questions.pop(chat_id_str, None)
             return
 
         questions = quiz_questions[chat_id_str]
@@ -235,9 +263,28 @@ async def send_question(bot, chat_id, question_index):
             allows_multiple_answers=False
         )
 
+        # Команда остановки могла прийти, пока Telegram создавал poll.
+        # Такой poll сразу закрываем и не восстанавливаем состояние викторины.
+        if (
+            not _is_current_quiz_session(chat_id_str, generation)
+            or chat_id_str not in quiz_questions
+        ):
+            try:
+                await bot.stop_poll(chat_id=chat_id, message_id=poll.message_id)
+            except Exception as exc:
+                logging.warning(
+                    "Не удалось закрыть отменённый poll викторины chat_id=%s message_id=%s: %s",
+                    chat_id,
+                    poll.message_id,
+                    exc,
+                )
+            return
+
         quiz_states[chat_id_str] = {
             'current_question': question_index,
-            'poll_id': poll.poll.id
+            'poll_id': poll.poll.id,
+            'message_id': poll.message_id,
+            'generation': generation,
         }
 
         logging.info(f"Вопрос успешно отправлен, poll_id: {poll.poll.id}")
@@ -245,6 +292,30 @@ async def send_question(bot, chat_id, question_index):
     except Exception as e:
         logging.error(f"Ошибка при отправке вопроса: {e}")
         await bot.send_message(chat_id, "Произошла ошибка при создании вопроса.")
+
+
+async def stop_quiz(bot: Bot, chat_id: int) -> bool:
+    """Остановить текущую викторину и инвалидировать все переходы к следующему вопросу."""
+    chat_id_str = str(chat_id)
+    state = quiz_states.pop(chat_id_str, None)
+    had_quiz = state is not None or chat_id_str in quiz_questions
+
+    _cancel_quiz_session(chat_id_str)
+    quiz_questions.pop(chat_id_str, None)
+
+    if state and state.get('message_id') is not None:
+        try:
+            await bot.stop_poll(chat_id=chat_id, message_id=state['message_id'])
+        except Exception as exc:
+            # Состояние всё равно должно быть очищено: poll мог уже закрыться сам.
+            logging.warning(
+                "Не удалось закрыть poll при остановке викторины chat_id=%s message_id=%s: %s",
+                chat_id,
+                state['message_id'],
+                exc,
+            )
+
+    return had_quiz
 
 # Вынесенная обработка "Викторина"
 @ai_feature("викторина")
@@ -272,9 +343,10 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         if not questions:
             return False, "Не удалось создать вопросы для викторины."
 
+        generation = _start_quiz_session(chat_id_str)
         quiz_questions[chat_id_str] = questions
 
-        await send_question(bot, chat_id, 0)
+        await send_question(bot, chat_id, 0, generation=generation)
         return True, ""
 
     except Exception as e:
@@ -297,10 +369,33 @@ async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
 
         if chat_id_str and quiz_state:
             logging.info(f"Найдена активная викторина в чате {chat_id_str}")
+            generation = quiz_state.get(
+                'generation',
+                _quiz_generations.get(chat_id_str, 0),
+            )
 
             await asyncio.sleep(3)
 
-            await send_question(bot, int(chat_id_str), quiz_state['current_question'] + 1)
+            current_state = quiz_states.get(chat_id_str)
+            if (
+                not current_state
+                or current_state.get('poll_id') != poll_answer.poll_id
+                or current_state.get('generation', generation) != generation
+                or not _is_current_quiz_session(chat_id_str, generation)
+            ):
+                logging.info(
+                    "Переход к следующему вопросу отменён chat_id=%s poll_id=%s",
+                    chat_id_str,
+                    poll_answer.poll_id,
+                )
+                return
+
+            await send_question(
+                bot,
+                int(chat_id_str),
+                quiz_state['current_question'] + 1,
+                generation=generation,
+            )
 
     except Exception as e:
         logging.error(f"Ошибка при обработке ответа на опрос: {e}")
@@ -390,8 +485,9 @@ async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bo
             logging.error("Не удалось сгенерировать вопросы для викторины по участникам.")
             return False, "Не смог придумать вопросы. Видимо, вы все одинаково скучные."
 
+        generation = _start_quiz_session(chat_id_str)
         quiz_questions[chat_id_str] = questions
-        await send_question(bot, chat_id, 0)
+        await send_question(bot, chat_id, 0, generation=generation)
         return True, ""
 
     except Exception as e:
