@@ -34,65 +34,42 @@ AI_REQUEST_TIMEOUT_SECONDS = max(
 # === ИМПОРТ СЕКРЕТОВ ===
 # =========================
 try:
-    from config_private import (
-        API_TOKEN,
-        GENERIC_API_KEY,
-        GENERIC_API_KEY2,
-        GENERIC_API_KEY3,
-        GENERIC_API_KEY4,
-        GENERIC_API_KEY5,
-        GENERIC_API_KEY6,
-        GENERIC_API_KEY8,
-        GENERIC_API_KEY9,
-        GENERIC_API_KEY10,
-        OPENROUTER_API_KEY,
-        SILICONFLOW_API_KEY,
-        GOOGLE_API_KEY,
-        GOOGLE_API_KEY2,
-        giphy_api_key,
-        KANDINSKY_API_KEY,
-        KANDINSKY_SECRET_KEY,
-        GIGACHAT_API_KEY,
-        GIGACHAT_CLIENT_ID,
-        CLOUDFLARE_ACCOUNT_ID,
-        CLOUDFLARE_API_TOKEN,
-        HUGGINGFACE_TOKEN,
-        GROQ_API_KEY,
-        POLLINATIONS_API_KEY
-    )
-except ImportError:
-    API_TOKEN = os.getenv("API_TOKEN")
-    GENERIC_API_KEY = os.getenv("GENERIC_API_KEY")
-    GENERIC_API_KEY2 = os.getenv("GENERIC_API_KEY2")
-    GENERIC_API_KEY3 = os.getenv("GENERIC_API_KEY3")
-    GENERIC_API_KEY4 = os.getenv("GENERIC_API_KEY4")
-    GENERIC_API_KEY5 = os.getenv("GENERIC_API_KEY5")
-    GENERIC_API_KEY6 = os.getenv("GENERIC_API_KEY6")
-    GENERIC_API_KEY8 = os.getenv("GENERIC_API_KEY8")
-    GENERIC_API_KEY9 = os.getenv("GENERIC_API_KEY9")
-    GENERIC_API_KEY10 = os.getenv("GENERIC_API_KEY10")
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-    SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GOOGLE_API_KEY2 = os.getenv("GOOGLE_API_KEY2")
-    giphy_api_key = os.getenv("giphy_api_key")
-    KANDINSKY_API_KEY = os.getenv("KANDINSKY_API_KEY")
-    KANDINSKY_SECRET_KEY = os.getenv("KANDINSKY_SECRET_KEY")
-    GIGACHAT_API_KEY = os.getenv("GIGACHAT_API_KEY")
-    GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
-    CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
-    CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
-    HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
-
-# Optional feature keys may be added to config_private independently from the
-# legacy required import block above. Environment variables take precedence.
-try:
     import config_private as _config_private
 except ImportError:
     _config_private = None
 
+
+def _private_or_env(name: str):
+    # Resolve independently: one absent provider must not erase the bot token.
+    return getattr(_config_private, name, os.getenv(name))
+
+
+API_TOKEN = _private_or_env("API_TOKEN")
+GENERIC_API_KEY = _private_or_env("GENERIC_API_KEY")
+GENERIC_API_KEY2 = _private_or_env("GENERIC_API_KEY2")
+GENERIC_API_KEY3 = _private_or_env("GENERIC_API_KEY3")
+GENERIC_API_KEY4 = _private_or_env("GENERIC_API_KEY4")
+GENERIC_API_KEY5 = _private_or_env("GENERIC_API_KEY5")
+GENERIC_API_KEY6 = _private_or_env("GENERIC_API_KEY6")
+GENERIC_API_KEY8 = _private_or_env("GENERIC_API_KEY8")
+GENERIC_API_KEY9 = _private_or_env("GENERIC_API_KEY9")
+GENERIC_API_KEY10 = _private_or_env("GENERIC_API_KEY10")
+OPENROUTER_API_KEY = _private_or_env("OPENROUTER_API_KEY")
+SILICONFLOW_API_KEY = _private_or_env("SILICONFLOW_API_KEY")
+GOOGLE_API_KEY = _private_or_env("GOOGLE_API_KEY")
+GOOGLE_API_KEY2 = _private_or_env("GOOGLE_API_KEY2")
+giphy_api_key = _private_or_env("giphy_api_key")
+KANDINSKY_API_KEY = _private_or_env("KANDINSKY_API_KEY")
+KANDINSKY_SECRET_KEY = _private_or_env("KANDINSKY_SECRET_KEY")
+GIGACHAT_API_KEY = _private_or_env("GIGACHAT_API_KEY")
+GIGACHAT_CLIENT_ID = _private_or_env("GIGACHAT_CLIENT_ID")
+CLOUDFLARE_ACCOUNT_ID = _private_or_env("CLOUDFLARE_ACCOUNT_ID")
+CLOUDFLARE_API_TOKEN = _private_or_env("CLOUDFLARE_API_TOKEN")
+HUGGINGFACE_TOKEN = _private_or_env("HUGGINGFACE_TOKEN")
+GROQ_API_KEY = _private_or_env("GROQ_API_KEY")
+POLLINATIONS_API_KEY = _private_or_env("POLLINATIONS_API_KEY")
+
+# New optional feature keys retain their environment-first precedence.
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or (
     getattr(_config_private, "OPENWEATHER_API_KEY", None)
     if _config_private is not None

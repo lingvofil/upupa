@@ -9,12 +9,13 @@ import logging
 
 from features.world.service import WorldService, get_world_service
 from features.world.visit_feedback import expire_due_feedback_windows, open_feedback_window
-from features.world.visit_report import build_visit_report
+from features.world.visit_report import VisitReport, build_visit_report
 
 
 INSULT_COOLDOWN = timedelta(minutes=30)
 VISIT_DURATION = timedelta(hours=24)
 VISIT_EXPIRATION_POLL_SECONDS = 60
+_visit_delivery_lock = asyncio.Lock()
 _VISIT_EVENT_TYPES = {"state_visit_accepted", "state_visit_finished"}
 
 
@@ -140,6 +141,9 @@ async def finish_visit(
             "reason": reason,
             "finished_by": finished_by or "",
             "accepted_event_id": visit.accepted_event_id,
+            "accepted_at": visit.accepted_at.isoformat(),
+            "expires_at": visit.expires_at.isoformat(),
+            "delivery_version": 1,
         },
         dedupe_key=f"visit_finished:{visit.accepted_event_id}",
     )
@@ -185,7 +189,21 @@ async def list_expired_open_visits(
     return tuple(expired)
 
 
+async def _delivery_event(service: WorldService, key: str):
+    if service.ledger is None:
+        return None
+    return await asyncio.to_thread(service.ledger.get_event_by_dedupe_key, key)
+
+
 async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *, reason: str) -> None:
+    # Manual completion and the periodic retry may see the same visit.
+    async with _visit_delivery_lock:
+        await _deliver_visit_finished(bot, service, visit, reason=reason)
+
+
+async def _deliver_visit_finished(bot, service: WorldService, visit: StateVisit, *, reason: str) -> None:
+    if await _delivery_event(service, f"visit_delivery_done:{visit.accepted_event_id}"):
+        return
     host, guest = await asyncio.gather(
         service.get_state_by_world_id(visit.host_state),
         service.get_state_by_world_id(visit.guest_state),
@@ -193,29 +211,40 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
     if host is None or guest is None:
         return
 
-    report = await build_visit_report(
-        service,
-        host_state=visit.host_state,
-        guest_state=visit.guest_state,
-        accepted_at=visit.accepted_at,
-        host_chat_id=host.chat_id,
-        host_title=host.title,
-        guest_title=guest.title,
-    )
-    report_display = report.text.replace("Экскурс", "Екскурс").replace("экскурс", "екскурс")
-    await record_interaction_event(
-        service,
-        "state_visit_report",
-        actor_state=visit.host_state,
-        target_state=visit.guest_state,
-        payload={
-            "accepted_event_id": visit.accepted_event_id,
-            "showcase_count": report.showcase_count,
-            "contributor_count": report.contributor_count,
-            "summary": report_display,
-        },
-        dedupe_key=f"visit_report:{visit.accepted_event_id}",
-    )
+    cached = await _delivery_event(service, f"visit_report:{visit.accepted_event_id}")
+    if cached is not None:
+        report = VisitReport(
+            text=str(cached.payload["summary"]),
+            showcase_count=int(cached.payload["showcase_count"]),
+            contributor_count=int(cached.payload["contributor_count"]),
+        )
+        report_display = report.text
+    else:
+        finished = await _delivery_event(service, f"visit_finished:{visit.accepted_event_id}")
+        report = await build_visit_report(
+            service,
+            host_state=visit.host_state,
+            guest_state=visit.guest_state,
+            accepted_at=visit.accepted_at,
+            host_chat_id=host.chat_id,
+            host_title=host.title,
+            guest_title=guest.title,
+            finished_at=finished.created_at if finished else None,
+        )
+        report_display = report.text.replace("Экскурс", "Екскурс").replace("экскурс", "екскурс")
+        await record_interaction_event(
+            service,
+            "state_visit_report",
+            actor_state=visit.host_state,
+            target_state=visit.guest_state,
+            payload={
+                "accepted_event_id": visit.accepted_event_id,
+                "showcase_count": report.showcase_count,
+                "contributor_count": report.contributor_count,
+                "summary": report_display,
+            },
+            dedupe_key=f"visit_report:{visit.accepted_event_id}",
+        )
 
     auto = " Прошло 24 часа." if reason == "timeout" else ""
     report_text = (
@@ -234,13 +263,23 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
         "Делегация вернулась домой. Впечатления противоречивые, пакет при них."
         f"{report_text}"
     )
+    delivered = True
     for chat_id, text, label in (
         (host.chat_id, host_text, "host"),
         (guest.chat_id, guest_text, "guest"),
     ):
+        delivery_key = f"visit_delivery:{visit.accepted_event_id}:{label}"
+        if await _delivery_event(service, delivery_key):
+            continue
         try:
             await bot.send_message(chat_id, text)
+            await record_interaction_event(
+                service, "state_visit_notification_delivered",
+                payload={"accepted_event_id": visit.accepted_event_id, "side": label},
+                dedupe_key=delivery_key,
+            )
         except Exception:
+            delivered = False
             logging.exception(
                 "World visit finish notification failed side=%s host=%s guest=%s",
                 label,
@@ -248,7 +287,7 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
                 visit.guest_state,
             )
 
-    await open_feedback_window(
+    window = await open_feedback_window(
         bot,
         service,
         accepted_event_id=visit.accepted_event_id,
@@ -258,10 +297,36 @@ async def notify_visit_finished(bot, service: WorldService, visit: StateVisit, *
         guest_chat_id=guest.chat_id,
     )
 
+    if delivered and window is not None:
+        await record_interaction_event(
+            service, "state_visit_delivery_completed",
+            payload={"accepted_event_id": visit.accepted_event_id},
+            dedupe_key=f"visit_delivery_done:{visit.accepted_event_id}",
+        )
+
+
+async def retry_visit_deliveries(bot, service: WorldService) -> None:
+    if service.ledger is None:
+        return
+    pending = await asyncio.to_thread(service.ledger.pending_visit_deliveries)
+    for event in pending:
+        try:
+            visit = StateVisit(
+                host_state=int(event.actor_state),
+                guest_state=int(event.target_state),
+                accepted_event_id=int(event.payload["accepted_event_id"]),
+                accepted_at=_utc(datetime.fromisoformat(str(event.payload["accepted_at"]))),
+                expires_at=_utc(datetime.fromisoformat(str(event.payload["expires_at"]))),
+            )
+            await notify_visit_finished(bot, service, visit, reason=str(event.payload["reason"]))
+        except Exception:
+            logging.exception("World visit delivery retry failed event_id=%s", event.event_id)
+
 
 async def expire_due_visits(bot, service: WorldService | None = None) -> int:
     """Close and notify all visits whose 24-hour window has elapsed."""
     service = service or get_world_service()
+    await retry_visit_deliveries(bot, service)
     expired = await list_expired_open_visits(service)
     closed = 0
     for candidate in expired:
@@ -274,7 +339,10 @@ async def expire_due_visits(bot, service: WorldService | None = None) -> int:
         if visit is None:
             continue
         closed += 1
-        await notify_visit_finished(bot, service, visit, reason="timeout")
+        try:
+            await notify_visit_finished(bot, service, visit, reason="timeout")
+        except Exception:
+            logging.exception("World visit delivery failed visit=%s", visit.accepted_event_id)
     return closed
 
 

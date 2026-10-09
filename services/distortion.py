@@ -8,6 +8,7 @@ import logging
 import re
 import subprocess
 import shutil
+import tempfile
 import time
 import concurrent.futures
 import numpy as np
@@ -429,7 +430,7 @@ async def distortion_worker_async(bot_token: str, chat_id: int, media_info: dict
                 os.remove(converted_path)
             except Exception:
                 pass
-        if input_path and os.path.dirname(input_path).startswith("temp_worker_"):
+        if input_path and os.path.basename(os.path.dirname(input_path)).startswith("temp_worker_"):
             shutil.rmtree(os.path.dirname(input_path), ignore_errors=True)
         await bot_instance.session.close()
 
@@ -460,6 +461,7 @@ async def handle_distortion_request(message: types.Message):
     """
     Основной обработчик. Скачивает файл и запускает искажение в основном async-потоке.
     """
+    temp_dir = None
     try:
         target_message = message.reply_to_message or message
         text_for_parsing = message.text if message.text else message.caption
@@ -507,8 +509,7 @@ async def handle_distortion_request(message: types.Message):
             return
 
         if file_to_download:
-            temp_dir = f"temp_worker_{random.randint(1000, 9999)}"
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_dir = tempfile.mkdtemp(prefix="temp_worker_")
             local_path = os.path.join(temp_dir, f"input{media_info['ext']}")
             
             if not await download_file(file_to_download.file_id, local_path):
@@ -523,3 +524,6 @@ async def handle_distortion_request(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка в handle_distortion_request: {e}", exc_info=True)
         await message.answer("Не удалось запустить обработку.")
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)

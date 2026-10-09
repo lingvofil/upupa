@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -46,7 +47,7 @@ def _load_showcases_sync(
     finished_at: datetime,
 ) -> tuple[VisitShowcase, ...]:
     """Load every showcase for one visit without the generic ledger 200-row cap."""
-    with sqlite3.connect(Path(db_path), timeout=30) as conn:
+    with closing(sqlite3.connect(Path(db_path), timeout=30)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

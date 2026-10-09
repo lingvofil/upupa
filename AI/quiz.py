@@ -25,12 +25,27 @@ from AI.dialog.settings import update_chat_settings
 # Версия активной сессии нужна, чтобы "викторина стоп" не гонялась
 # с уже начавшейся отправкой следующего вопроса.
 _quiz_generations: dict[str, int] = {}
+_quiz_preparing: dict[str, int] = {}
 
 
 def _start_quiz_session(chat_id_str: str) -> int:
     generation = _quiz_generations.get(chat_id_str, 0) + 1
     _quiz_generations[chat_id_str] = generation
     return generation
+
+
+def _begin_quiz_preparation(chat_id_str: str) -> int | None:
+    if chat_id_str in _quiz_preparing:
+        return None
+    generation = _start_quiz_session(chat_id_str)
+    _quiz_preparing[chat_id_str] = generation
+    return generation
+
+
+def _end_quiz_preparation(chat_id_str: str, generation: int) -> None:
+    # An older cancelled generator must not release a newer reservation.
+    if _quiz_preparing.get(chat_id_str) == generation:
+        _quiz_preparing.pop(chat_id_str, None)
 
 
 def _cancel_quiz_session(chat_id_str: str) -> None:
@@ -199,22 +214,29 @@ async def generate_quiz_with_gemini(messages, chat_id: str, num_questions=1):
 # Функция для автоматической отправки викторины
 @ai_feature("викторина: ежедневная")
 async def send_daily_quiz(bot: Bot, chat_id: int):
-    messages = await extract_messages(LOG_FILE, chat_id, days=1)
-
-    if not messages:
-        await bot.send_message(chat_id, "Недостаточно сообщений для создания викторины.")
-        return
-
-    questions = await generate_quiz_with_gemini(messages, str(chat_id))
-
-    if not questions:
-        await bot.send_message(chat_id, "Не удалось создать викторину.")
-        return
-
     chat_id_str = str(chat_id)
-    generation = _start_quiz_session(chat_id_str)
-    quiz_questions[chat_id_str] = questions
-    await send_question(bot, chat_id, 0, generation=generation)
+    generation = _begin_quiz_preparation(chat_id_str)
+    if generation is None:
+        return
+    try:
+        messages = await extract_messages(LOG_FILE, chat_id, days=1)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return
+        if not messages:
+            await bot.send_message(chat_id, "Недостаточно сообщений для создания викторины.")
+            return
+
+        questions = await generate_quiz_with_gemini(messages, chat_id_str)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return
+        if not questions:
+            await bot.send_message(chat_id, "Не удалось создать викторину.")
+            return
+
+        quiz_questions[chat_id_str] = questions
+        await send_question(bot, chat_id, 0, generation=generation)
+    finally:
+        _end_quiz_preparation(chat_id_str, generation)
 
 # Функция для запуска ежедневной викторины
 async def schedule_daily_quiz(bot: Bot, chat_id: int):
@@ -298,7 +320,9 @@ async def stop_quiz(bot: Bot, chat_id: int) -> bool:
     """Остановить текущую викторину и инвалидировать все переходы к следующему вопросу."""
     chat_id_str = str(chat_id)
     state = quiz_states.pop(chat_id_str, None)
-    had_quiz = state is not None or chat_id_str in quiz_questions
+    had_quiz = (state is not None or chat_id_str in quiz_questions
+                or chat_id_str in _quiz_preparing)
+    _quiz_preparing.pop(chat_id_str, None)
 
     _cancel_quiz_session(chat_id_str)
     quiz_questions.pop(chat_id_str, None)
@@ -328,8 +352,14 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     if quiz_states.get(chat_id_str) and chat_id_str != '-1001781970364':
         return False, "В этом чате уже идет викторина! Отъебись"
 
+    generation = _begin_quiz_preparation(chat_id_str)
+    if generation is None:
+        return False, "Викторина уже готовится."
+
     try:
         messages = await extract_messages(LOG_FILE, chat_id, days=4)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return False, "Подготовка викторины отменена."
         logging.info(f"Извлечено {len(messages)} сообщений для викторины")
 
         if not messages:
@@ -338,12 +368,13 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
         num_questions = 1 if chat_id_str == '-1001781970364' else 5
 
         questions = await generate_quiz_with_gemini(messages, chat_id_str, num_questions)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return False, "Подготовка викторины отменена."
         logging.info(f"Сгенерировано {len(questions)} вопросов")
 
         if not questions:
             return False, "Не удалось создать вопросы для викторины."
 
-        generation = _start_quiz_session(chat_id_str)
         quiz_questions[chat_id_str] = questions
 
         await send_question(bot, chat_id, 0, generation=generation)
@@ -352,6 +383,9 @@ async def process_quiz_start(message: Message, bot: Bot) -> tuple[bool, str]:
     except Exception as e:
         logging.error(f"Ошибка при запуске викторины: {e}")
         return False, "Произошла ошибка при создании викторины."
+    finally:
+        _end_quiz_preparation(chat_id_str, generation)
+
 
 # Вынесенная обработка ответов
 async def process_poll_answer(poll_answer: PollAnswer, bot: Bot) -> None:
@@ -472,20 +506,27 @@ async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bo
     if quiz_states.get(chat_id_str) and chat_id_str != '-1001781970364':
         return False, "Угомонись, тут уже идет другая викторина. Отъебись."
 
+    generation = _begin_quiz_preparation(chat_id_str)
+    if generation is None:
+        return False, "Викторина уже готовится."
+
     try:
         messages = await extract_messages(LOG_FILE, chat_id, days=7)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return False, "Подготовка викторины отменена."
         logging.info(f"Извлечено {len(messages)} сообщений для викторины по участникам")
 
         if len(messages) < 20:
             return False, "Слишком мало сообщений в чате, чтобы понять, кто тут что высирает. Общайтесь больше, далбаёбы!"
 
         questions = await generate_participant_quiz(messages, chat_id_str, num_questions=5)
+        if not _is_current_quiz_session(chat_id_str, generation):
+            return False, "Подготовка викторины отменена."
 
         if not questions:
             logging.error("Не удалось сгенерировать вопросы для викторины по участникам.")
             return False, "Не смог придумать вопросы. Видимо, вы все одинаково скучные."
 
-        generation = _start_quiz_session(chat_id_str)
         quiz_questions[chat_id_str] = questions
         await send_question(bot, chat_id, 0, generation=generation)
         return True, ""
@@ -493,3 +534,5 @@ async def process_participant_quiz_start(message: Message, bot: Bot) -> tuple[bo
     except Exception as e:
         logging.error(f"Критическая ошибка при запуске викторины по участникам: {e}")
         return False, "Что-то пошло по пизде при создании викторины."
+    finally:
+        _end_quiz_preparation(chat_id_str, generation)

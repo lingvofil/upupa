@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -129,7 +130,7 @@ def _window_from_row(row: sqlite3.Row, closed_ids: set[int]) -> FeedbackWindow |
 
 
 def _load_windows_sync(db_path: str | Path) -> tuple[FeedbackWindow, ...]:
-    with sqlite3.connect(Path(db_path), timeout=30) as conn:
+    with closing(sqlite3.connect(Path(db_path), timeout=30)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -206,7 +207,7 @@ def _load_feedback_sync(
     guest_state: int,
     accepted_event_id: int,
 ) -> tuple[VisitFeedback, ...]:
-    with sqlite3.connect(Path(db_path), timeout=30) as conn:
+    with closing(sqlite3.connect(Path(db_path), timeout=30)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
