@@ -120,11 +120,10 @@ def test_handler_preserves_video_document_extension(monkeypatch, tmp_path):
     monkeypatch.setattr(distortion, "download_file", fake_download)
     monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
     monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
-    monkeypatch.setattr("services.distortion_formats.random.randint", lambda *_args: 1234)
 
     asyncio.run(handle_format_preserving_distortion_request(message, distortion_module=distortion))
 
-    assert captured["download_path"].endswith(os.path.join("temp_worker_1234", "input.webm"))
+    assert os.path.basename(captured["download_path"]) == "input.webm"
     assert captured["media_info"]["media_type"] == "video_document"
     assert captured["media_info"]["ext"] == ".webm"
     assert captured["media_info"]["output_file_name"] == "camera_distorted.webm"
@@ -153,11 +152,10 @@ def test_handler_preserves_audio_extension(monkeypatch, tmp_path):
     monkeypatch.setattr(distortion, "download_file", fake_download)
     monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
     monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
-    monkeypatch.setattr("services.distortion_formats.random.randint", lambda *_args: 5678)
 
     asyncio.run(handle_format_preserving_distortion_request(message, distortion_module=distortion))
 
-    assert captured["download_path"].endswith(os.path.join("temp_worker_5678", "input.m4a"))
+    assert os.path.basename(captured["download_path"]) == "input.m4a"
     assert captured["media_info"]["media_type"] == "audio"
     assert captured["media_info"]["ext"] == ".m4a"
     assert captured["media_info"]["output_file_name"] == "song_distorted.m4a"
@@ -192,7 +190,6 @@ def test_handler_preprocesses_video_note_before_worker(monkeypatch, tmp_path):
     monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
     monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
     monkeypatch.setattr(distortion_formats, "prepare_video_note_for_processing", fake_brand)
-    monkeypatch.setattr(distortion_formats.random, "randint", lambda *_args: 2222)
 
     asyncio.run(
         distortion_formats.handle_format_preserving_distortion_request(
@@ -201,11 +198,11 @@ def test_handler_preprocesses_video_note_before_worker(monkeypatch, tmp_path):
         )
     )
 
-    assert captured["download_path"].endswith(os.path.join("temp_worker_2222", "input.mp4"))
+    assert os.path.basename(captured["download_path"]) == "input.mp4"
     assert captured["media_info"]["media_type"] == "video_note"
     assert captured["brand_input"] == captured["download_path"]
-    assert captured["brand_output"].endswith(
-        os.path.join("temp_worker_2222", "input_upupa_branded.mp4")
+    assert captured["brand_output"] == os.path.join(
+        os.path.dirname(captured["download_path"]), "input_upupa_branded.mp4"
     )
     assert captured["media_info"]["local_path"] == captured["brand_output"]
 
@@ -234,7 +231,6 @@ def test_handler_plain_video_skips_video_note_preprocessing(monkeypatch, tmp_pat
     monkeypatch.setattr(distortion, "distortion_worker_async", fake_worker)
     monkeypatch.setattr(distortion, "main_bot_instance", SimpleNamespace(token="token"))
     monkeypatch.setattr(distortion_formats, "prepare_video_note_for_processing", forbidden_brand)
-    monkeypatch.setattr(distortion_formats.random, "randint", lambda *_args: 3333)
 
     asyncio.run(
         distortion_formats.handle_format_preserving_distortion_request(
@@ -244,6 +240,4 @@ def test_handler_plain_video_skips_video_note_preprocessing(monkeypatch, tmp_pat
     )
 
     assert captured["media_info"]["media_type"] == "video"
-    assert captured["media_info"]["local_path"].endswith(
-        os.path.join("temp_worker_3333", "input.mp4")
-    )
+    assert os.path.basename(captured["media_info"]["local_path"]) == "input.mp4"

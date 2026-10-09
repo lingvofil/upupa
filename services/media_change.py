@@ -120,6 +120,21 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
     return None
 
 
+def _kill_process(proc) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+    except OSError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
 async def _run_command(
     command: list[str],
     *,
@@ -141,19 +156,12 @@ async def _run_command(
             proc.communicate(),
             timeout=timeout_seconds,
         )
+    except asyncio.CancelledError:
+        _kill_process(proc)
+        await proc.communicate()
+        raise
     except asyncio.TimeoutError:
-        try:
-            if os.name == "posix":
-                os.killpg(proc.pid, signal.SIGKILL)
-            else:
-                proc.kill()
-        except ProcessLookupError:
-            pass
-        except OSError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+        _kill_process(proc)
         stdout, stderr = await proc.communicate()
         detail = stderr.decode(errors="ignore").strip()
         logging.warning(

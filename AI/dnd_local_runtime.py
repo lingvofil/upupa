@@ -358,6 +358,35 @@ class LocalRuntime:
         return results
 
 
+def _is_game_reply(session, event) -> bool:
+    """Only replies routed to DnD should acquire its lock or be blocked by pause."""
+    from AI.dnd_any_bot_reply import (
+        _reply_is_from_this_bot,
+        is_any_bot_action_reply,
+        is_any_bot_backstory_reply,
+        is_any_bot_poll_reply,
+        is_menu_reply,
+    )
+
+    reply = getattr(event, "reply_to_message", None)
+    if session is None or reply is None:
+        return False
+    if is_menu_reply(session, event):
+        return True
+    message_id = getattr(reply, "message_id", None)
+    prompt_ids = {
+        getattr(session, "action_prompt_message_id", None),
+        getattr(session, "backstory_prompt_message_id", None),
+        (getattr(session, "pending_poll", None) or {}).get("message_id"),
+    }
+    if message_id is not None and message_id in prompt_ids:
+        return True
+    if not _reply_is_from_this_bot(event):
+        return False
+    return (is_any_bot_action_reply(event) or is_any_bot_backstory_reply(event)
+            or is_any_bot_poll_reply(event))
+
+
 class GameUpdateMiddleware(BaseMiddleware):
     def __init__(self, runtime):
         self.runtime = runtime
@@ -380,7 +409,7 @@ class GameUpdateMiddleware(BaseMiddleware):
             if token.get("operation") in {"nav", "object"}:
                 return await handler(event, data)
         relevant = (text.startswith(("днд", "упупа днд")) or text in {"кидаю", "дальше", "лечить"}
-                    or bool(getattr(event, "reply_to_message", None)) or callback_data.startswith("dnd:")
+                    or _is_game_reply(session, event) or callback_data.startswith("dnd:")
                     or bool(getattr(event, "poll_id", None)))
         if not relevant:
             return await handler(event, data)

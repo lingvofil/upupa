@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import shutil
+import tempfile
 from typing import Any
 
 from services import distortion
@@ -329,8 +329,7 @@ async def handle_format_preserving_distortion_request(
             return
 
         if file_to_download:
-            temp_dir = f"temp_worker_{random.randint(1000, 9999)}"
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_dir = tempfile.mkdtemp(prefix="temp_worker_")
             local_path = os.path.join(temp_dir, f"input{media_info['ext']}")
             if not await distortion_module.download_file(file_to_download.file_id, local_path):
                 await message.answer("Не смог скачать файл.")
@@ -353,10 +352,11 @@ async def handle_format_preserving_distortion_request(
             intensity,
         )
     except Exception as exc:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
         logging.error("Format-preserving distortion handler failed: %s", exc, exc_info=True)
         await message.answer("Не удалось запустить обработку.")
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def install_into_distortion(distortion_module: Any = distortion) -> None:

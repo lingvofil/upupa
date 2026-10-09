@@ -7,6 +7,7 @@ append-only journal used by the hub, map, news and Radio Upupa.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -329,6 +330,30 @@ class WorldLedger:
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
+    def get_event_by_dedupe_key(self, key: str) -> WorldEvent | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT * FROM world_events WHERE dedupe_key = ?", (key,)).fetchone()
+        return self._event(row) if row is not None else None
+
+    def pending_visit_deliveries(self) -> list[WorldEvent]:
+        # The finish event itself queues delivery, atomically with closing the visit.
+        # Only versioned events participate: do not resend historical visits on upgrade.
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT finished.* FROM world_events AS finished
+                WHERE finished.event_type = 'state_visit_finished'
+                  AND json_extract(finished.payload_json, '$.delivery_version') = 1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM world_events AS done
+                      WHERE done.dedupe_key = 'visit_delivery_done:' ||
+                          json_extract(finished.payload_json, '$.accepted_event_id')
+                  )
+                ORDER BY finished.id
+                """
+            ).fetchall()
+        return [self._event(row) for row in rows]
+
     def list_events(
         self,
         *,
@@ -350,6 +375,10 @@ class WorldLedger:
             placeholders = ",".join("?" for _ in event_types)
             clauses.append(f"event_type IN ({placeholders})")
             params.extend(sorted(event_types))
+        else:
+            # Delivery bookkeeping is internal, not material for the public chronicle.
+            clauses.append("event_type NOT IN (?, ?)")
+            params.extend(("state_visit_notification_delivered", "state_visit_delivery_completed"))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(max(1, min(int(limit), 200)))
         with self._connect() as conn:

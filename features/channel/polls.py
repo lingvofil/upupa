@@ -31,6 +31,7 @@ MAX_REFLECTION_LENGTH = 240
 MAX_STORED_POLLS = 50
 
 _state_lock = asyncio.Lock()
+_processing_lock = asyncio.Lock()
 
 POLL_PROMPT = """
 Ты иногда вместо обычного поста устраиваешь в своём Telegram-канале анонимный опрос.
@@ -293,7 +294,24 @@ def _reflection_delay(*, rng=random) -> timedelta:
     return timedelta(seconds=rng.randint(low, high))
 
 
+async def _save_poll_record(record: dict) -> None:
+    """Merge a completed network operation without replacing newer registrations."""
+    async with _state_lock:
+        current = await asyncio.to_thread(_read_state)
+        for index, existing in enumerate(current.get("polls", [])):
+            if existing.get("poll_id") == record.get("poll_id"):
+                current["polls"][index] = dict(record)
+                await asyncio.to_thread(_write_state, current)
+                return
+
+
 async def process_due_polls(bot, *, channel_target: str, rng=random, now: datetime | None = None) -> None:
+    """Serialize sweeps while allowing publication during reflection generation."""
+    async with _processing_lock:
+        await _process_due_polls(bot, channel_target=channel_target, rng=rng, now=now)
+
+
+async def _process_due_polls(bot, *, channel_target: str, rng=random, now: datetime | None = None) -> None:
     """Close due polls and later publish one AI reaction to their final results."""
     current = (now or _utcnow()).astimezone(timezone.utc)
 
@@ -319,8 +337,7 @@ async def process_due_polls(bot, *, channel_target: str, rng=random, now: dateti
         record["reflection_due_at"] = (current + _reflection_delay(rng=rng)).isoformat()
         record["status"] = "awaiting_reflection"
 
-        async with _state_lock:
-            await asyncio.to_thread(_write_state, state)
+        await _save_poll_record(record)
         logging.info(
             "[channel] poll closed message_id=%s voters=%s reflection_due=%s",
             record.get("message_id"),
@@ -342,8 +359,7 @@ async def process_due_polls(bot, *, channel_target: str, rng=random, now: dateti
             text = None
         if not text:
             record["reflection_due_at"] = (current + timedelta(minutes=30)).isoformat()
-            async with _state_lock:
-                await asyncio.to_thread(_write_state, state)
+            await _save_poll_record(record)
             continue
 
         try:
@@ -372,8 +388,7 @@ async def process_due_polls(bot, *, channel_target: str, rng=random, now: dateti
         record["status"] = "reflected"
         record["reflection_message_id"] = getattr(sent, "message_id", None)
         record["reflected_at"] = current.isoformat()
-        async with _state_lock:
-            await asyncio.to_thread(_write_state, state)
+        await _save_poll_record(record)
         logging.info(
             "[channel] poll reflection published poll_message_id=%s reflection_message_id=%s",
             record.get("message_id"),
