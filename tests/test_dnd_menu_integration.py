@@ -154,6 +154,34 @@ def test_confirmed_item_reaches_real_engine_and_duplicate_consumes_once(monkeypa
     asyncio.run(run())
 
 
+def test_weapon_selection_reaches_real_attack_without_ai_and_replays_once(monkeypatch):
+    from tests.test_dnd_local_engine import Dice
+
+    async def run():
+        current, offline, bot, runtime, service = setup_service(monkeypatch)
+        current.inventories["1"].append({"id": "sword-1", "name": "меч", "quantity": 1})
+        current.enemy_combatants = {"guard": {"name": "Страж", "power": "HIGH", "hp": 50, "max_hp": 50, "ac": 12, "status": "alive"}}
+        runtime.backend.rng = Dice(18)
+        monkeypatch.setattr("AI.dnd_player_combat.random.randint", lambda lo, hi: 4)
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "👹 Враги")))
+        card_id = current.menu_ui_state["cards"]["1"]
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж"), message_id=card_id))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ меч"), message_id=card_id))
+        assert "Оружие: меч" in bot.edited[-1].text
+        assert current.enemy_combatants["guard"]["hp"] == 50
+        callback = Callback(bot, current, button(latest_markup(bot), "✅ Подтвердить"), message_id=card_id)
+        await service.callback(callback)
+        await service.callback(callback)
+        assert current.enemy_combatants["guard"]["hp"] == 43
+        assert current.inventories["1"][-1]["quantity"] == 1
+        assert len(current.action_records) == 1
+        assert runtime.backend.rng.calls == 1
+        assert offline.ai_calls == 0
+        assert offline.tasks == []
+    asyncio.run(run())
+
+
 def test_owned_effect_rejects_foreign_actor_and_stale_phase_before_engine(monkeypatch):
     async def run():
         current, offline, bot, _runtime, service = setup_service(monkeypatch)

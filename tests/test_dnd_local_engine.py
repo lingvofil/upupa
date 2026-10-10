@@ -217,6 +217,63 @@ def rule():
             "failure": {"text": "Стража услышала шум.", "effects": [{"kind": "clock", "clock_id": "alarm", "delta": 1}]}}
 
 
+@pytest.mark.parametrize("kind,domain", [("ATTACK", "COMBAT"), ("OBJECT", "MOVE")])
+@pytest.mark.parametrize("penalty", [False, True])
+def test_local_actions_use_item_advantage_once_and_cancel_matching_penalty(kind, domain, penalty):
+    sess = session()
+    sess.item_boosts = {"1": {"domain": domain, "source": "Талисман"}}
+    sess.scene_objects["cart"]["interactions"] = {"push": rule() | {"domain": domain}}
+    if penalty:
+        conditions._add(sess, {"PLAYER": "1", "NAME": "шок", "EFFECT": "NEXT_ROLL_DISADVANTAGE", "USES": "1"})
+    be, commits = backend(8, 19)
+    act = action(sess, kind, target_id="огр", object_id="cart", inputs={"rule_id": "push"})
+    result = engine.execute_action(sess, act, backend=be)
+    assert result.dice[0]["values"] == ([8] if penalty else [8, 19])
+    assert result.dice[0]["selected"] == (8 if penalty else 19)
+    assert "Талисман" in result.text
+    assert "1" not in sess.item_boosts
+    assert not sess.conditions.get("1")
+    assert len(commits) == 1
+    replay = engine.execute_action(sess, act, backend=be)
+    assert replay.replayed and replay.text == result.text
+    assert be.rng.calls == (1 if penalty else 2)
+
+
+def test_unrelated_item_boost_survives_local_attack():
+    sess = session()
+    sess.item_boosts = {"1": {"domain": "SOCIAL", "source": "Духи"}}
+    be, _ = backend(12)
+    engine.execute_action(sess, action(sess, target_id="огр"), backend=be)
+    assert sess.item_boosts["1"]["source"] == "Духи"
+    assert be.rng.calls == 1
+
+
+def test_failed_local_consequence_does_not_spend_prepared_boost():
+    sess = session()
+    sess.item_boosts = {"1": {"domain": "MOVE", "source": "Талисман"}}
+    contract = rule() | {"domain": "MOVE"}
+    contract["success"]["effects"] = [{"kind": "item", "operation": "remove", "name": "нет", "quantity": 1}]
+    sess.scene_objects["cart"]["interactions"] = {"push": contract}
+    before = copy.deepcopy(vars(sess))
+    be, _ = backend(8, 19)
+    with pytest.raises(engine.LocalActionError):
+        engine.execute_action(sess, action(sess, "OBJECT", object_id="cart", inputs={"rule_id": "push"}), backend=be)
+    assert vars(sess) == before
+
+
+def test_saved_roll_does_not_prepare_item_boost_twice():
+    sess = session()
+    sess.item_boosts = {"1": {"domain": "COMBAT", "source": "Новый эффект"}}
+    sess.pending_roll = {"type": "ATTACK", "mode": "ADVANTAGE", "target_user_ids": [1],
+                         "attack": {"enemy_key": "огр", "weapon": "без оружия", "style": "MELEE"}}
+    sess.state = "WAITING_ROLL"
+    lifecycle.sync_window(sess)
+    be, _ = backend(3, 16)
+    result = engine.execute_action(sess, action(sess), backend=be)
+    assert result.dice[0]["selected"] == 16
+    assert sess.item_boosts["1"]["source"] == "Новый эффект"
+
+
 def test_object_rule_declares_failure_and_clock_changes_once():
     sess = session()
     sess.scene_objects["cart"]["interactions"] = {"push": rule()}
