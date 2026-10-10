@@ -150,27 +150,43 @@ def test_personal_timeout_is_visible_in_overview():
     assert "⏱ Автопропуск через ~2:" in text
 
 
-def test_show_turn_cards_creates_shared_and_addressed_player_cards():
+def test_show_turn_cards_single_actor_gets_one_card_group_gets_shared():
     async def run():
         current, _dnd, bot, service = make_service()
+        deleted = []
+
+        async def delete_message(chat_id, message_id):
+            deleted.append(message_id)
+
+        bot.delete_message = delete_message
         await service.show_turn_cards(bot, current)
-        assert set(current.menu_ui_state["cards"]) == {"party", "1"}
-        assert len(bot.sent) == 2
-        assert "Ход: Маша" in bot.sent[0].text
-        assert "Карточка для тебя" in bot.sent[1].text
+        assert set(current.menu_ui_state["cards"]) == {"1"}
+        assert len(bot.sent) == 1 and "Карточка для тебя" in bot.sent[0].text
+
+        current.action_target_user_ids = [1, 2]
+        current.turn_id = "group-turn"
+        await service.show_turn_cards(bot, current)
+        assert "party" in current.menu_ui_state["cards"] and len(bot.sent) == 2
 
         current.action_target_user_ids = [2]
-        await service.show_turn_cards(bot, current)
-        assert set(current.menu_ui_state["cards"]) == {"party", "1", "2"}
-        assert len(bot.sent) == 3
-        assert bot.edited
-
         current.turn_id = "turn-two"
-        current.state_revision += 1
         await service.show_turn_cards(bot, current)
-        assert len(bot.sent) == 5
-        assert current.menu_ui_state["cards"]["party"] == 104
-        assert current.menu_ui_state["cards"]["2"] == 105
+        assert "party" not in current.menu_ui_state["cards"]
+        assert 102 in deleted  # the shared card of the group window
+        assert "Денис" in bot.sent[-1].text
+
+    asyncio.run(run())
+
+
+def test_restore_and_resumed_window_race_publishes_one_fresh_card():
+    async def run():
+        current, _dnd, bot, service = make_service()
+        bot.delay = 0.01
+        await asyncio.gather(service.show_turn_cards(bot, current, force_new=True),
+                             service.show_turn_cards(bot, current, force_new=True))
+        assert len(bot.sent) == 1
+        await service.show_turn_cards(bot, current, force_new=True)
+        assert len(bot.sent) == 1
 
     asyncio.run(run())
 
@@ -559,6 +575,7 @@ def test_new_window_deletes_superseded_turn_cards():
             deleted.append(message_id)
 
         bot.delete_message = delete_message
+        current.action_target_user_ids = [1, 2]
         await service.show_turn_cards(bot, current)
         first = dict(current.menu_ui_state["cards"])
         current.turn_id = "turn-two"
