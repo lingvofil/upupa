@@ -14,6 +14,8 @@ from typing import Any, Callable, List, Optional, Tuple
 from google import genai
 from google.genai import types as genai_types
 
+from infrastructure.ai import gemini_quota
+
 
 PER_KEY_MIN_DELAY = 2.5
 # google-genai HttpOptions.timeout is expressed in milliseconds. Keep each
@@ -515,9 +517,21 @@ class ModelFallbackWrapper:
                 )
                 continue
 
+            available_key_indices = [
+                key_idx for key_idx in key_indices
+                if not gemini_quota.is_exhausted(self.keys_pool[key_idx], model_name)
+            ]
+            if not available_key_indices:
+                logging.info(
+                    "Gemini skip model action=%s model=%s daily_quota_exhausted_all_keys",
+                    action_name,
+                    model_name,
+                )
+                continue
+
             skip_model = False
             rate_limited_key_indices: set[int] = set()
-            for key_idx in key_indices:
+            for key_idx in available_key_indices:
                 api_key = self.keys_pool[key_idx]
                 try:
                     _throttle_key(api_key)
@@ -569,11 +583,17 @@ class ModelFallbackWrapper:
                         # distinct keys reject the same model, open a shorter model-level
                         # rate-limit circuit and stop amplifying the quota storm.
                         if _is_rate_limit_error(error):
+                            # A per-day 429 parks only this key+model until the
+                            # Pacific-midnight reset; it says nothing about the
+                            # model on other projects, so it doesn't feed the
+                            # model-wide burst circuit.
+                            if gemini_quota.mark_if_daily_quota(api_key, model_name, error):
+                                continue
                             rate_limited_key_indices.add(key_idx)
                             if self._record_model_rate_limit_failure(
                                 model_name,
                                 distinct_keys=len(rate_limited_key_indices),
-                                pool_size=len(key_indices),
+                                pool_size=len(available_key_indices),
                             ):
                                 skip_model = True
                                 break
