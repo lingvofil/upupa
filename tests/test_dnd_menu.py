@@ -499,3 +499,72 @@ def test_archetype_choices_are_actor_owned_confirmed_and_available_only_in_lobby
         await service.show(bot, current, 1, "hero")
         assert all(not item.text.startswith("🎯 ") for row in latest_markup(bot).inline_keyboard for item in row)
     asyncio.run(run())
+
+
+def test_same_actor_next_window_from_reply_does_not_deadlock_card_lock():
+    """Prod 2026-10-10: reply → execute → новое окно тому же игроку → show_turn_cards
+    повторно брал (chat, actor) lock в той же задаче и вешал game_lock навсегда."""
+    async def run():
+        holder = {}
+
+        async def execute(bot, chat_id, actor, payload):
+            current = holder["session"]
+            current.turn_id = "turn-next"
+            current.state_revision += 1
+            current.action_target_user_ids = [actor]
+            await holder["service"].show_turn_cards(bot, current)
+
+        current, _dnd, bot, service = make_service(execute=execute)
+        holder.update(session=current, service=service)
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "👤 Герой")))
+        compose = button(latest_markup(bot), "✍️ Свой ход")
+        await service.callback(Callback(bot, current, compose, message_id=102))
+        prompt_id = int(next(iter(current.menu_action_prompts)))
+        message = Message(bot, current, text="Отвлекаю стража", reply=prompt_id)
+        assert await asyncio.wait_for(service.handle_message(message), timeout=2)
+        assert current.menu_ui_state["windows"]["1"].endswith(":turn-next:WAITING_ACTION")
+
+    asyncio.run(run())
+
+
+def test_same_actor_next_window_from_confirm_callback_does_not_deadlock():
+    async def run():
+        holder = {}
+
+        async def execute(bot, chat_id, actor, payload):
+            current = holder["session"]
+            current.turn_id = "turn-next"
+            current.state_revision += 1
+            current.action_target_user_ids = [actor]
+            await holder["service"].show_turn_cards(bot, current)
+
+        current, _dnd, bot, service = make_service(execute=execute)
+        holder.update(session=current, service=service)
+        await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🧰 Зелье"), message_id=102))
+        confirm = button(latest_markup(bot), "✅ Подтвердить")
+        await asyncio.wait_for(service.callback(Callback(bot, current, confirm, message_id=102)), timeout=2)
+
+    asyncio.run(run())
+
+
+def test_new_window_deletes_superseded_turn_cards():
+    async def run():
+        current, _dnd, bot, service = make_service()
+        deleted = []
+
+        async def delete_message(chat_id, message_id):
+            deleted.append(message_id)
+
+        bot.delete_message = delete_message
+        await service.show_turn_cards(bot, current)
+        first = dict(current.menu_ui_state["cards"])
+        current.turn_id = "turn-two"
+        current.state_revision += 1
+        await service.show_turn_cards(bot, current)
+        assert sorted(deleted) == sorted(first.values())
+        assert set(current.menu_ui_state["cards"].values()).isdisjoint(deleted)
+
+    asyncio.run(run())

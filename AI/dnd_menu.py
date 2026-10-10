@@ -7,6 +7,7 @@ callback. UI bookkeeping is deliberately separate from canonical game state.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import copy
 import hashlib
 import json
@@ -331,9 +332,29 @@ class DndMenuService:
         self.execute_action = execute_action
         self.identity_for = identity_for
         self._locks = {}
+        self._owners = {}
 
-    def _lock(self, chat_id, owner):
-        return self._locks.setdefault((int(chat_id), int(owner)), asyncio.Lock())
+    @asynccontextmanager
+    async def _lock(self, chat_id, owner):
+        """Per-card lock, reentrant within one task.
+
+        A reply/confirm holds the actor's card lock while the action runs; the
+        action may open the next window for the same actor and refresh their
+        card via show_turn_cards in the same task. A plain asyncio.Lock
+        deadlocked there forever while the outer game_lock was held.
+        """
+        key = (int(chat_id), int(owner))
+        task = asyncio.current_task()
+        if self._owners.get(key) is task:
+            yield
+            return
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            self._owners[key] = task
+            try:
+                yield
+            finally:
+                self._owners.pop(key, None)
 
     def identity(self, session):
         if self.identity_for:
@@ -417,7 +438,8 @@ class DndMenuService:
 
     async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):
         card = "party" if not owner else str(owner)
-        old_id = None if force_new else session.menu_ui_state["cards"].get(card)
+        previous_id = session.menu_ui_state["cards"].get(card)
+        old_id = None if force_new else previous_id
         if old_id:
             try:
                 await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
@@ -437,6 +459,16 @@ class DndMenuService:
             session.menu_info_message_ids.append(int(sent.message_id))
         logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s",
                      session.chat_id, card, sent.message_id, bool(force_new))
+        if previous_id and int(previous_id) != int(sent.message_id):
+            # The superseded card carries only stale buttons; drop it so the chat
+            # doesn't fill with near-identical copies every window.
+            delete = getattr(bot, "delete_message", None)
+            if delete is not None:
+                try:
+                    await delete(session.chat_id, int(previous_id))
+                except Exception as error:  # already deleted / too old / no rights
+                    logging.info("DnD stale menu card not deleted chat_id=%s message_id=%s error=%s",
+                                 session.chat_id, previous_id, error)
         return int(sent.message_id)
 
     async def show(self, bot, session, owner=0, page="overview", *, text=None, build_markup=None, force_new=False):
