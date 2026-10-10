@@ -301,7 +301,9 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         if remaining is not None:
             minutes, seconds = divmod(remaining, 60)
             lines.append(f"⏱ Автопропуск через ~{minutes}:{seconds:02d}")
-    if scene:
+    # The narration is already its own chat message; the overview card repeated
+    # it verbatim right under it. Full text stays on the explicit scene page.
+    if scene and page == "scene":
         lines.extend(["", scene])
     lines.extend(_clock_lines(snapshot))
     intent = _mapping(snapshot.get("enemy_intent"))

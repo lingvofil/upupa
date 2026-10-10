@@ -47,25 +47,19 @@ def test_throttle_is_per_key(monkeypatch):
 def test_gemini_queue_matches_verified_production_probe():
     from core import settings
 
-    assert settings.MODEL_QUEUE_DEFAULT == [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite",
-    ]
-    assert settings.MODEL_QUEUE_PLEADING == [
-        "gemini-3.8-flash",
-        *settings.MODEL_QUEUE_DEFAULT,
-    ]
-    assert "gemini-3.8-flash" not in settings.MODEL_QUEUE_DEFAULT
+    verified = {
+        "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash-preview", "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash",
+    }
+    for queue in (settings.MODEL_QUEUE_DEFAULT, settings.DND_MODEL_QUEUE, settings.MODEL_QUEUE_PLEADING):
+        assert set(queue) <= verified
+        assert len(queue) == len(set(queue)), "дубли в очереди"
+    assert settings.MODEL_QUEUE_DEFAULT[0] == "gemini-2.5-flash"
+    assert settings.DND_MODEL_QUEUE[0] == "gemini-3.8-flash"
+    assert settings.MODEL_QUEUE_PLEADING[0] == "gemini-3.8-flash"
     assert settings.TEXT_GENERATION_MODEL_LIGHT == "gemini-2.5-flash-lite"
 
-    rejected_from_probe = {
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemma-3-12b-it",
-        "gemma-3-4b-it",
-    }
-    assert rejected_from_probe.isdisjoint(settings.MODEL_QUEUE_DEFAULT)
+    # 15-секундный выброс на промпте ДнД; pro недоступен на бесплатном тарифе.
+    rejected_from_probe = {"gemini-3.5-flash", "gemini-2.5-pro", "gemma-3-12b-it", "gemma-3-4b-it"}
+    for queue in (settings.MODEL_QUEUE_DEFAULT, settings.DND_MODEL_QUEUE):
+        assert rejected_from_probe.isdisjoint(queue)
