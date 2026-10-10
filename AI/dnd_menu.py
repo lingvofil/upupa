@@ -333,6 +333,7 @@ class DndMenuService:
         self.identity_for = identity_for
         self._locks = {}
         self._owners = {}
+        self._fresh_windows = {}
 
     @asynccontextmanager
     async def _lock(self, chat_id, owner):
@@ -506,21 +507,35 @@ class DndMenuService:
             await self.show(message.bot, session, force_new=True)
 
     async def show_turn_cards(self, bot, session, *, force_new=False):
-        """Refresh shared/player cards for the current participant input or roll."""
+        """Refresh the cards for the current participant input or roll.
+
+        One addressed actor gets only their personal card (it is public in the
+        group anyway); a shared card with identical text was a visible duplicate.
+        Group windows get only the shared card.
+        """
         _ensure_ui(session)
         state = getattr(session, "state", None)
         if getattr(session, "mode", None) != "participants" or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
             return
-        identity = self.identity(session)
-        window_key = f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
+
+        def current_window():
+            identity = self.identity(session)
+            return f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
 
         async def show_current(owner):
             card = "party" if not owner else str(owner)
-            fresh = force_new or session.menu_ui_state["windows"].get(card) != window_key
             async with self._lock(session.chat_id, owner):
+                # Decide under the card lock: a restore and a resumed transition
+                # can race right after restart; only the first one per window
+                # publishes a fresh card, the other edits it.
+                window_key = current_window()
+                fresh_key = (int(session.chat_id), card)
+                already_fresh = self._fresh_windows.get(fresh_key) == window_key
+                fresh = (force_new and not already_fresh) or session.menu_ui_state["windows"].get(card) != window_key
                 await self.show(bot, session, owner, "overview", force_new=fresh)
+                if fresh:
+                    self._fresh_windows[fresh_key] = window_key
 
-        await show_current(0)
         targets = (
             (getattr(session, "pending_roll", None) or {}).get("target_user_ids", [])
             if state == "WAITING_ROLL"
@@ -528,7 +543,27 @@ class DndMenuService:
         )
         targets = [int(value) for value in targets]
         if len(targets) == 1:
+            await self._drop_card(bot, session, 0)
             await show_current(targets[0])
+        else:
+            await show_current(0)
+
+    async def _drop_card(self, bot, session, owner):
+        card = "party" if not owner else str(owner)
+        async with self._lock(session.chat_id, owner):
+            message_id = session.menu_ui_state["cards"].pop(card, None)
+            session.menu_ui_state["windows"].pop(card, None)
+            if not message_id:
+                return
+            self._save()
+            delete = getattr(bot, "delete_message", None)
+            if delete is None:
+                return
+            try:
+                await delete(session.chat_id, int(message_id))
+            except Exception as error:
+                logging.info("DnD stale menu card not deleted chat_id=%s message_id=%s error=%s",
+                             session.chat_id, message_id, error)
 
     def _can_act(self, session, actor, *, state="WAITING_ACTION"):
         if self.paused(session) or getattr(session, "state", None) != state:
