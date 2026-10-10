@@ -14,9 +14,6 @@ import hashlib
 import logging
 import threading
 import time
-from zoneinfo import ZoneInfo
-
-_PACIFIC = ZoneInfo("America/Los_Angeles")
 _RESET_MARGIN_SECONDS = 60.0
 
 _lock = threading.Lock()
@@ -31,11 +28,33 @@ def _model(model_name: str) -> str:
     return str(model_name or "").removeprefix("models/")
 
 
+def _nth_sunday(year: int, month: int, nth: int) -> _dt.date:
+    first = _dt.date(year, month, 1)
+    first_sunday = first + _dt.timedelta(days=(6 - first.weekday()) % 7)
+    return first_sunday + _dt.timedelta(weeks=nth - 1)
+
+
+def _pacific_offset(utc: _dt.datetime) -> _dt.timedelta:
+    """US Pacific offset without a tz database (Windows CI has no tzdata).
+
+    DST: second Sunday of March 02:00 PST (10:00 UTC) to first Sunday of
+    November 02:00 PDT (09:00 UTC).
+    """
+    year = utc.year
+    start = _dt.datetime.combine(_nth_sunday(year, 3, 2), _dt.time(10), tzinfo=_dt.timezone.utc)
+    end = _dt.datetime.combine(_nth_sunday(year, 11, 1), _dt.time(9), tzinfo=_dt.timezone.utc)
+    return _dt.timedelta(hours=-7 if start <= utc < end else -8)
+
+
 def next_daily_reset(now: float | None = None) -> float:
-    """Unix time of the next midnight in America/Los_Angeles (DST-aware)."""
-    current = _dt.datetime.fromtimestamp(time.time() if now is None else now, _PACIFIC)
-    tomorrow = (current + _dt.timedelta(days=1)).date()
-    reset = _dt.datetime.combine(tomorrow, _dt.time(0, 0), tzinfo=_PACIFIC)
+    """Unix time of the next midnight in US Pacific time (DST-aware)."""
+    utc = _dt.datetime.fromtimestamp(time.time() if now is None else now, _dt.timezone.utc)
+    local = utc + _pacific_offset(utc)
+    tomorrow = local.date() + _dt.timedelta(days=1)
+    midnight_local = _dt.datetime.combine(tomorrow, _dt.time(0))
+    # Offset at the reset instant can differ from now only on DST-switch days.
+    guess = (midnight_local - _pacific_offset(utc)).replace(tzinfo=_dt.timezone.utc)
+    reset = (midnight_local - _pacific_offset(guess)).replace(tzinfo=_dt.timezone.utc)
     return reset.timestamp()
 
 
@@ -70,7 +89,7 @@ def mark_if_daily_quota(api_key: str, model_name: str, error: BaseException, *, 
             "Gemini daily quota exhausted key=%s model=%s parked_until=%s",
             _fingerprint(api_key),
             _model(model_name),
-            _dt.datetime.fromtimestamp(until, _PACIFIC).astimezone(_dt.timezone.utc).isoformat(timespec="minutes"),
+            _dt.datetime.fromtimestamp(until, _dt.timezone.utc).isoformat(timespec="minutes"),
         )
     return True
 

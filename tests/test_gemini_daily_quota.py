@@ -1,7 +1,6 @@
 import asyncio
 import datetime as dt
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -34,11 +33,25 @@ def test_daily_and_minute_429_are_distinguished():
     assert not gemini_quota.is_daily_quota_error(RuntimeError("503 UNAVAILABLE"))
 
 
-def test_reset_is_next_pacific_midnight_and_pair_scoped():
-    pacific = ZoneInfo("America/Los_Angeles")
-    now = dt.datetime(2026, 10, 10, 13, 54, tzinfo=pacific).timestamp()
-    reset = dt.datetime.fromtimestamp(gemini_quota.next_daily_reset(now), pacific)
-    assert (reset.year, reset.month, reset.day, reset.hour, reset.minute) == (2026, 10, 11, 0, 0)
+def _utc(*parts):
+    return dt.datetime(*parts, tzinfo=dt.timezone.utc).timestamp()
+
+
+def test_reset_is_next_pacific_midnight_across_dst():
+    # PDT (UTC-7): 2026-10-10 20:54 UTC = 13:54 PDT -> reset 2026-10-11 07:00 UTC
+    assert gemini_quota.next_daily_reset(_utc(2026, 10, 10, 20, 54)) == _utc(2026, 10, 11, 7, 0)
+    # PST (UTC-8) in winter
+    assert gemini_quota.next_daily_reset(_utc(2026, 12, 1, 12, 0)) == _utc(2026, 12, 2, 8, 0)
+    # DST ends 2026-11-01: reset at midnight PST of Nov 2
+    assert gemini_quota.next_daily_reset(_utc(2026, 11, 1, 12, 0)) == _utc(2026, 11, 2, 8, 0)
+    # DST starts 2026-03-08: reset at midnight PDT of Mar 9
+    assert gemini_quota.next_daily_reset(_utc(2026, 3, 8, 20, 0)) == _utc(2026, 3, 9, 7, 0)
+    # Just before midnight PDT -> the reset is minutes away, not a day
+    assert gemini_quota.next_daily_reset(_utc(2026, 10, 11, 6, 59)) == _utc(2026, 10, 11, 7, 0)
+
+
+def test_daily_quota_is_pair_scoped():
+    now = _utc(2026, 10, 10, 20, 54)
 
     assert gemini_quota.mark_if_daily_quota("k1", "models/gemini-2.5-flash", QuotaError(DAILY_TEXT), now=now)
     assert gemini_quota.is_exhausted("k1", "gemini-2.5-flash", now=now + 3600)
