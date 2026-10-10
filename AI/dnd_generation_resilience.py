@@ -18,6 +18,7 @@ from core.settings import (
     MODEL_QUEUE_SPECIAL,
     SPECIAL_CHAT_ID,
 )
+from infrastructure.ai import gemini_quota
 from infrastructure.ai.clients import groq_ai
 from infrastructure.ai.execution import ai_execution_lane, ai_feature, run_ai_provider_call
 from infrastructure.ai.execution import _extract_token_usage
@@ -251,6 +252,13 @@ def _model_queue(chat_id: int | None) -> list[str]:
 
 
 def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:
+    """One key per attempt, each attempt on a different model of the queue.
+
+    The whole configured queue is eligible (it used to be capped at the first
+    two models, so preview/3.x fallbacks never ran for DnD). Key+model pairs
+    whose free-tier daily quota is spent are skipped until the reset, so a
+    turn never wastes its primary attempt on a known 429.
+    """
     keys = list(GEMINI_KEYS_POOL)
     models = _model_queue(chat_id)
     if not keys or not models or attempts <= 0:
@@ -261,11 +269,28 @@ def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:
         start = _key_cursor % len(keys)
         _key_cursor = (start + max(1, attempts)) % len(keys)
 
-    model_span = min(2, len(models))
-    return [
-        (keys[(start + index) % len(keys)], models[index % model_span])
-        for index in range(attempts)
-    ]
+    pairs: list[tuple[str, str]] = []
+    offset = 0
+    for model_name in models:
+        if len(pairs) >= attempts:
+            break
+        for step in range(len(keys)):
+            api_key = keys[(start + offset + step) % len(keys)]
+            if not gemini_quota.is_exhausted(api_key, model_name):
+                pairs.append((api_key, model_name))
+                offset += step + 1
+                break
+    return pairs
+
+
+def _thinking_config(model_name: str):
+    # Thinking tokens count against max_output_tokens; with a 1800-token cap a
+    # default-thinking model can truncate before ACTION/ITEM tags are emitted.
+    if model_name.startswith("gemini-2.5-flash"):
+        return genai_types.ThinkingConfig(thinking_budget=0)
+    if model_name.startswith("gemini-3"):
+        return genai_types.ThinkingConfig(thinking_level="low")
+    return None
 
 
 def _circuit_is_open(chat_id: int | None) -> bool:
@@ -605,6 +630,8 @@ def _run_gemini_sync(
 
     pairs = _attempt_pairs(chat_id, attempts)
     if not pairs:
+        if GEMINI_KEYS_POOL and _model_queue(chat_id):
+            raise RuntimeError("DnD Gemini daily quota exhausted for every key/model")
         raise RuntimeError("DnD Gemini keys/models are not configured")
 
     contents = _history_contents(session, prompt) if include_history else _service_prompt(session, prompt)
@@ -631,10 +658,7 @@ def _run_gemini_sync(
             reservation = _call_admission(provider_text, max_tokens, optional=is_optional)
             # Flash 2.5 counts thinking against max_output_tokens. A small text
             # budget otherwise gets exhausted before ACTION/ITEM can be emitted.
-            config.thinking_config = (
-                genai_types.ThinkingConfig(thinking_budget=0)
-                if model_name.startswith("gemini-2.5-flash") else None
-            )
+            config.thinking_config = _thinking_config(model_name)
             client = _get_client(api_key, min(http_timeout_ms, max(1, int(remaining * 1000))))
             with ai_execution_lane(lane):
                 response = run_ai_provider_call(
@@ -671,6 +695,10 @@ def _run_gemini_sync(
             if isinstance(exc, DndAIBudgetExhausted):
                 raise
             errors.append(exc)
+            if gemini_quota.mark_if_daily_quota(api_key, model_name, exc):
+                # Spent for the day on this project/model only: the next pair is
+                # a different model, so don't freeze the whole chat's DnD route.
+                continue
             transient = _is_transient(exc)
             saw_transient = saw_transient or transient
             logging.warning(
