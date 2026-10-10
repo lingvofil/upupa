@@ -65,10 +65,12 @@ def configure_dnd_local_state(dnd, *, state_policy, metadata_policy):
     for name in ("paused", "pause_state", "local_delivery_outbox", "local_enemy_rules", "local_wait_rule", "local_pending_transition", "local_round_transition"):
         state_policy.add_state_field(name, lambda s, key=name: copy.deepcopy(getattr(s, key, None)))
     state_policy.add_restore_hook(lambda s, _data: _ensure(s))
+    # Clear the previous scene's wait contract before installing this response's
+    # contracts, otherwise SCENE:BEGIN deletes a newly authored DND_WAIT.
+    metadata_policy.add_postprocessor(_scene_lifecycle_metadata)
     metadata_policy.add_postprocessor(apply_scene_rule_metadata)
     metadata_policy.add_postprocessor(apply_enemy_rule_metadata)
     metadata_policy.add_postprocessor(apply_wait_rule_metadata)
-    metadata_policy.add_postprocessor(_scene_lifecycle_metadata)
 
 
 def _scene_lifecycle_metadata(session, original_text, cleaned, notices):

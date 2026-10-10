@@ -348,6 +348,33 @@ def _roll_commit(backend, draft, pending, actor_id):
     return backend.dnd._commit_roll_transaction(draft, pending, actor_id) or []
 
 
+def _prepare_local_roll(backend, draft, pending, actor_id, *, domain="OTHER"):
+    """Apply existing boosts/penalties on the transaction draft exactly once.
+
+    Saved roll windows have already passed through the narrator's hooks. Only
+    rolls created directly by a local action need preparation here.
+    """
+    action_type = "PLAYER_ATTACK" if pending.get("type") == "ATTACK" else "ROLL"
+    tag = f"[ACTION:{action_type};TARGETS:{actor_id};MODE:NORMAL;DOMAIN:{domain}]"
+    source = None
+    if backend.items is not None:
+        tag, source = backend.items.apply_item_boost(draft, tag)
+    consumed = []
+    if backend.conditions is not None:
+        tag, consumed = backend.conditions.apply_condition_penalties(draft, tag)
+    pending["mode"] = next((mode for mode in ("ADVANTAGE", "DISADVANTAGE") if f"MODE:{mode}" in tag), "NORMAL")
+    draft.pending_roll = pending
+    if backend.conditions is not None:
+        backend.conditions._queue_pending_uses(draft, consumed)
+    return f"✨ Подготовленный эффект: {source}.\n" if source else ""
+
+
+def _dice_summary(values, selected):
+    if len(values) < 2:
+        return ""
+    return f"🎲 Броски: {' / '.join(map(str, values))} → {selected}.\n"
+
+
 def _resolve(draft, action, backend):
     text, prompt, events, dice = "", "", [], []
     if action.kind == "ROLL":
@@ -384,13 +411,7 @@ def _resolve(draft, action, backend):
             prompt = f"Подтверждённый результат проверки: {pending.get('reason') or 'заявленное действие'}. {text} Разреши конкретные последствия, не меняя кубик и исход."
     elif action.kind in {"ATTACK", "CINEMATIC_ATTACK"}:
         pending = _attack_pending(draft, action)
-        if action.phase != "roll" and backend.conditions is not None:
-            tag = f"[ACTION:PLAYER_ATTACK;TARGETS:{action.actor_id};MODE:NORMAL]"
-            adjusted, consumed = backend.conditions.apply_condition_penalties(draft, tag)
-            pending["mode"] = "DISADVANTAGE" if "MODE:DISADVANTAGE" in adjusted else "NORMAL"
-            draft.pending_roll = pending
-            backend.conditions._queue_pending_uses(draft, consumed)
-            pending = draft.pending_roll
+        preparation = _prepare_local_roll(backend, draft, pending, action.actor_id, domain="COMBAT") if action.phase != "roll" else ""
         values, natural = _dice(backend, pending.get("mode"))
         dice.append({"kind": "d20", "values": values, "selected": natural})
         enemy_key = (pending.get("cinematic") or pending.get("attack") or {}).get("enemy_key")
@@ -399,6 +420,7 @@ def _resolve(draft, action, backend):
             text, prompt = backend.player_combat._resolve_attack_mechanics(backend.combat, draft, action.actor_id, pending, natural)
         else:
             text, prompt = backend.cinematic._resolve_cinematic_mechanics(backend.combat, backend.player_combat, draft, action.actor_id, pending, natural)
+        text = preparation + _dice_summary(values, natural) + text
         notices = _roll_commit(backend, draft, pending, action.actor_id)
         if notices:
             text += "\n" + "\n".join(notices)
@@ -442,14 +464,9 @@ def _resolve(draft, action, backend):
             # therefore resolve in one operation, without a second AI step.
             stats = ((getattr(draft, "character_sheets", {}) or {}).get(str(action.actor_id)) or {}).get("stats") or {}
             pending = {"type": "CHECK", "ability": rule["ability"], "dc": rule["dc"], "target_user_ids": [action.actor_id], "mode": "NORMAL"}
-            if backend.conditions is not None:
-                tag = f"[ACTION:ROLL;TARGETS:{action.actor_id};MODE:NORMAL;DOMAIN:{str(rule.get('domain') or 'OTHER')}]"
-                adjusted, consumed = backend.conditions.apply_condition_penalties(draft, tag)
-                pending["mode"] = "DISADVANTAGE" if "MODE:DISADVANTAGE" in adjusted else "NORMAL"
-                draft.pending_roll = pending
-                backend.conditions._queue_pending_uses(draft, consumed)
-                pending = draft.pending_roll
+            text += _prepare_local_roll(backend, draft, pending, action.actor_id, domain=rule.get("domain") or "OTHER")
             values, natural = _dice(backend, pending.get("mode"))
+            text += _dice_summary(values, natural)
             total = natural + (int(stats.get(rule["ability"], 10)) - 10) // 2
             dice.append({"kind": "d20", "values": values, "selected": natural})
             events.append({"type": "RollResolved", "actor_id": action.actor_id, "ability": rule["ability"], "dc": rule["dc"], "total": total, "success": total >= rule["dc"]})

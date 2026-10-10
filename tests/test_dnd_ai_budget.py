@@ -167,6 +167,32 @@ def test_expired_deadline_prevents_admission_without_calling_provider(providers)
     assert calls == []
 
 
+@pytest.mark.parametrize("limit", [12_000, 7_000])
+def test_fallback_compacts_memory_before_rejecting_intact_live_request(limit):
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_GUARD, CURRENT_REQUEST_MARKER
+
+    session = _session()
+    live = "Герой открывает дверь своим ключом. LIVE_TAIL"
+    request = ("ПАМЯТЬ DND V2 — АВТОРИТЕТНЫЙ СНИМОК.\n" + "Старый факт. " * 1000
+               + f"\n{CURRENT_REQUEST_MARKER}.\n{CURRENT_REQUEST_GUARD}\n\n{live}")
+    before = list(session.conversation)
+    with budgets.dnd_turn_budget(mode="economy") as budget:
+        sent = resilience._fallback_prompt(session, request, max_chars=limit)
+        assert budget.calls == 0  # Packing context does not dispatch an AI call.
+    assert len(sent) <= limit
+    assert TURN_CONTRACT in sent
+    assert live in sent
+    assert "Memory v2 сокращена" in sent
+    assert session.conversation == before
+
+
+def test_fallback_never_clips_a_live_request_that_cannot_fit():
+    from AI.dnd_current_turn_priority import CURRENT_REQUEST_MARKER
+
+    with pytest.raises(budgets.DndAIBudgetExhausted):
+        resilience._fallback_prompt(_session(), CURRENT_REQUEST_MARKER + "x" * 12_000, max_chars=12_000)
+
+
 def test_compact_contract_keeps_all_active_mechanics_and_never_old_boilerplate():
     session = _session(enemy_combatants={"огр": {}}, inventories={"1": []},
                        conditions={"1": []}, scene_clocks={"alarm": {}})
