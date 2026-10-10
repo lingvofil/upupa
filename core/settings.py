@@ -145,24 +145,45 @@ SPECIAL_CHAT_ID = -1001707530786
 
 # --- GEMINI MODEL QUEUES ---
 # ВАЖНО: gemini-2.0-* отключены Google 1 июня 2026 — в очередь не добавлять.
-# Очередь проверена живыми запросами с тремя production-ключами 22.09.2026.
-# gemini-3.7-flash давал 503, gemini-3.5-* — 504, gemini-3.6-flash —
-# пустой текст, gemma-3-*-it — 404 для generateContent.
+# Перепроверено 11.10.2026 scripts/probe_gemini_models.py на production-ключах
+# (2 ключа x 2 раунда, плюс промпт размера ДнД ~15 тыс. символов):
+# все flash/flash-lite ниже отвечают 4/4 и ставят теги; 3.5/3.6/3.7 больше не
+# дают 503/504/пустой текст. gemini-3.5-flash исключён: выброс 15 с на длинном
+# промпте (таймаут ДнД 12 с). *-pro на бесплатном тарифе — 429/404.
+# У каждой модели своя суточная квота на проект, поэтому длинная очередь =
+# больше запросов в сутки; исчерпанные пары ключ+модель пропускаются
+# (infrastructure/ai/gemini_quota.py).
 MODEL_QUEUE_DEFAULT = [
-    "gemini-2.5-flash",       # быстрый стабильный primary
-    "gemini-2.5-flash-lite",  # самый быстрый из проверенных fallback
-    "gemini-3-flash-preview", # рабочий preview-резерв
-    "gemini-3.1-flash-lite",  # оставляем последним: периодические 503
+    "gemini-2.5-flash",       # быстрый стабильный primary для чата (~1.3 с)
+    "gemini-3.5-flash-lite",  # ~1.1 с, без thinking
+    "gemini-2.5-flash-lite",  # ~0.8 с
+    "gemini-3.8-flash",       # ~2.3 с, лучшее качество из быстрых
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.7-flash",       # бывают выбросы до ~11 с
+    "gemini-3.1-flash-lite",
 ]
 
-# "упупа умоляю ..." — отдельный high-quality route. Если 3.8 недоступен,
-# автоматически откатываемся на обычную проверенную очередь.
-MODEL_QUEUE_PLEADING = [
+# ДнД ценит качество сцены больше скорости чата; все модели здесь укладываются
+# в 12-секундный HTTP-таймаут ДнД на промпте реального размера (3–6 с).
+DND_MODEL_QUEUE = [
     "gemini-3.8-flash",
-] + MODEL_QUEUE_DEFAULT
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
+]
+
+# "упупа умоляю ..." — отдельный high-quality route.
+MODEL_QUEUE_PLEADING = ["gemini-3.8-flash"] + [
+    name for name in MODEL_QUEUE_DEFAULT if name != "gemini-3.8-flash"
+]
 
 MODEL_QUEUE_SPECIAL = [
-    #"gemini-2.5-pro",
+    #"gemini-2.5-pro",  # 404 для новых пользователей
 ] + MODEL_QUEUE_DEFAULT
 
 # --- GEMINI PUBLIC MODEL CONSTANTS ---

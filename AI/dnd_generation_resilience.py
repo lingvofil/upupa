@@ -14,8 +14,7 @@ from google.genai import types as genai_types
 from core.settings import (
     GEMINI_KEYS_POOL,
     GROQ_API_KEY,
-    MODEL_QUEUE_DEFAULT,
-    MODEL_QUEUE_SPECIAL,
+    DND_MODEL_QUEUE,
     SPECIAL_CHAT_ID,
 )
 from infrastructure.ai import gemini_quota
@@ -244,11 +243,7 @@ def _get_client(api_key: str, timeout_ms: int) -> genai.Client:
 
 
 def _model_queue(chat_id: int | None) -> list[str]:
-    if chat_id is not None and str(chat_id) == str(SPECIAL_CHAT_ID):
-        queue = MODEL_QUEUE_SPECIAL
-    else:
-        queue = MODEL_QUEUE_DEFAULT
-    return [str(name).removeprefix("models/") for name in queue if name]
+    return [str(name).removeprefix("models/") for name in DND_MODEL_QUEUE if name]
 
 
 def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:

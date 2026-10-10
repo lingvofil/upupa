@@ -585,3 +585,10 @@ def test_new_window_deletes_superseded_turn_cards():
         assert set(current.menu_ui_state["cards"].values()).isdisjoint(deleted)
 
     asyncio.run(run())
+
+
+def test_overview_card_does_not_repeat_narration_but_scene_page_does():
+    current = session(scene_log=["Длинное описание алтаря с рунами."])
+    snapshot = menu.snapshot_session(current)
+    assert "алтаря" not in menu.render_page(snapshot, "overview", 1)
+    assert "алтаря" in menu.render_page(snapshot, "scene", 1)
