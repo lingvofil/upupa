@@ -15,7 +15,6 @@ from core.settings import (
     GEMINI_KEYS_POOL,
     GROQ_API_KEY,
     DND_MODEL_QUEUE,
-    SPECIAL_CHAT_ID,
 )
 from infrastructure.ai import gemini_quota
 from infrastructure.ai.clients import groq_ai
