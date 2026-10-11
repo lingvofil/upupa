@@ -105,7 +105,11 @@ def test_generate_hf_video_classifies_quota_errors(monkeypatch):
     assert status == "quota"
 
 
-def test_animate_uses_hf_first_without_touching_pollinations(monkeypatch):
+async def _kandinsky_fails(image, prompt):
+    return None, "unavailable"
+
+
+def test_animate_uses_wan_when_kandinsky_fails_without_touching_pollinations(monkeypatch):
     calls = {"upload": 0, "sent": 0}
 
     class Status:
@@ -154,6 +158,7 @@ def test_animate_uses_hf_first_without_touching_pollinations(monkeypatch):
 
     monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: True)
     monkeypatch.setattr(vg, "download_telegram_image", fake_download)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", _kandinsky_fails)
     monkeypatch.setattr(vg, "generate_hf_zerogpu_video", fake_hf)
     monkeypatch.setattr(vg, "upload_media", forbidden_upload)
 
@@ -216,6 +221,7 @@ def test_animate_falls_back_to_pollinations_after_hf_failure(monkeypatch):
 
     monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: True)
     monkeypatch.setattr(vg, "download_telegram_image", fake_download)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", _kandinsky_fails)
     monkeypatch.setattr(vg, "generate_hf_zerogpu_video", fake_hf)
     monkeypatch.setattr(vg, "upload_media", fake_upload)
     monkeypatch.setattr(vg, "generate_video", fake_pollinations)

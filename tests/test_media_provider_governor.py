@@ -103,6 +103,9 @@ def test_videogeneration_media_wrappers_bound_entire_waterfall(monkeypatch):
 
     monkeypatch.setattr(media_execution, "run_ai_provider_call", fake_governor)
 
+    async def kandinsky_video(image, prompt):
+        return b"k-video", "ok"
+
     async def hf_video(image, prompt):
         return b"hf-video", "ok"
 
@@ -110,11 +113,13 @@ def test_videogeneration_media_wrappers_bound_entire_waterfall(monkeypatch):
         return b"pollinations-video", "wan"
 
     module = SimpleNamespace(
+        generate_kandinsky_video=kandinsky_video,
         generate_hf_zerogpu_video=hf_video,
         generate_video=pollinations_video,
     )
     media_execution.install_into_videogeneration(module)
 
+    assert asyncio.run(module.generate_kandinsky_video(b"img", "move")) == (b"k-video", "ok")
     assert asyncio.run(module.generate_hf_zerogpu_video(b"img", "move")) == (
         b"hf-video",
         "ok",
@@ -124,6 +129,7 @@ def test_videogeneration_media_wrappers_bound_entire_waterfall(monkeypatch):
         "wan",
     )
     assert calls == [
+        ("huggingface.kandinsky.video", media_execution.KANDINSKY_VIDEO_REQUEST_TIMEOUT_SECONDS),
         ("huggingface.zerogpu.video", media_execution.HF_VIDEO_REQUEST_TIMEOUT_SECONDS),
         ("pollinations.video.generate", media_execution.POLLINATIONS_VIDEO_REQUEST_TIMEOUT_SECONDS),
     ]

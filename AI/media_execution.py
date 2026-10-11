@@ -34,6 +34,8 @@ GRADIO_IMG2IMG_JOB_TIMEOUT_SECONDS = 180
 GRADIO_IMG2IMG_REQUEST_TIMEOUT_SECONDS = 200
 HF_VIDEO_INNER_TIMEOUT_SECONDS = 220
 HF_VIDEO_REQUEST_TIMEOUT_SECONDS = 230
+KANDINSKY_VIDEO_INNER_TIMEOUT_SECONDS = 260
+KANDINSKY_VIDEO_REQUEST_TIMEOUT_SECONDS = 270
 POLLINATIONS_VIDEO_INNER_TIMEOUT_SECONDS = 430
 POLLINATIONS_VIDEO_REQUEST_TIMEOUT_SECONDS = 440
 
@@ -231,6 +233,13 @@ def install_into_videogeneration(videogeneration_module) -> None:
     if getattr(videogeneration_module, "_media_governor_installed", False):
         return
 
+    if hasattr(videogeneration_module, "generate_kandinsky_video"):
+        videogeneration_module.generate_kandinsky_video = _wrap_async_provider(
+            videogeneration_module.generate_kandinsky_video,
+            "huggingface.kandinsky.video",
+            request_timeout_seconds=KANDINSKY_VIDEO_REQUEST_TIMEOUT_SECONDS,
+            inner_timeout_seconds=KANDINSKY_VIDEO_INNER_TIMEOUT_SECONDS,
+        )
     videogeneration_module.generate_hf_zerogpu_video = _wrap_async_provider(
         videogeneration_module.generate_hf_zerogpu_video,
         "huggingface.zerogpu.video",
