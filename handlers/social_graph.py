@@ -34,9 +34,11 @@ from features.social_graph.interaction_analysis import (
     build_edge_interaction_profiles,
     edge_keywords,
 )
+from features.social_graph.dynamics import SPARK_WEEKS, RelationshipDynamics
 from features.social_graph.relationship_history import (
     RelationshipTimelineItem,
     get_integrated_relationship_history,
+    load_relationship_dynamics,
 )
 from features.social_graph.relationships import (
     RelationshipView,
@@ -56,6 +58,9 @@ from features.social_graph.service import (
 router = Router(name="social_graph")
 CRINGE_GRAPH_CAPTION = "рожи и художественная хуита"
 _USERNAME_RE = re.compile(r"@([A-Za-z0-9_]{3,})")
+# Хвост парной команды: пусто, «@user» или «@user1 @user2». Любой другой текст —
+# это обычная реплика вроде «история такая, короче…», а не команда.
+_PAIR_TAIL_RE = re.compile(r"(?:@[a-z0-9_]{3,}(?:\s+@[a-z0-9_]{3,})?)?")
 _MONTHS = (
     "январь", "февраль", "март", "апрель", "май", "июнь",
     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
@@ -76,6 +81,19 @@ def _starts_command(message: types.Message, command: str) -> bool:
         return False
     text = message.text.strip().lower()
     return text == command or text.startswith(command + " ")
+
+
+def _is_pair_command(message: types.Message, *commands: str) -> bool:
+    """Match «команда», «команда @user» and «команда @user1 @user2» only."""
+    if not message.text or not message.from_user or message.from_user.id in BLOCKED_USERS:
+        return False
+    text = " ".join(message.text.strip().lower().split())
+    for command in commands:
+        if text == command:
+            return True
+        if text.startswith(command + " ") and _PAIR_TAIL_RE.fullmatch(text[len(command):].strip()):
+            return True
+    return False
 
 
 def _is_cringe_graph_command(message: types.Message) -> bool:
@@ -173,6 +191,23 @@ def _chronicle_event_html(view: RelationshipView) -> str | None:
     else:
         title = f"«{title}»"
     return f"Главный исторический эпизод: <b>{title}</b>"
+
+
+def _dynamics_line(dynamics: RelationshipDynamics | None) -> str | None:
+    if dynamics is None or dynamics.total_events <= 0:
+        return None
+    return (
+        f"Динамика за {SPARK_WEEKS} нед.: <code>{escape(dynamics.sparkline)}</code> — "
+        f"<b>{escape(dynamics.phase)}</b>"
+    )
+
+
+def _reactions_line(view: RelationshipView) -> str | None:
+    positive = view.positive_reaction_count
+    negative = view.negative_reaction_count
+    if positive + negative <= 0:
+        return None
+    return f"Реакции друг на друга: тёплых <b>{positive}</b>, ядовитых <b>{negative}</b>."
 
 
 def _history_command(message: types.Message) -> str:
@@ -318,7 +353,7 @@ async def handle_cringe_social_graph(message: types.Message):
     await message.answer(build_cringe_graph_explanation(view, profiles, data.names))
 
 
-@router.message(lambda message: _starts_command(message, "отношения") and not _is_command(message, "отношения чата"))
+@router.message(lambda message: _is_pair_command(message, "отношения"))
 @ai_feature("отношения")
 async def handle_relationship(message: types.Message):
     if not await _ensure_available(message):
@@ -333,6 +368,7 @@ async def handle_relationship(message: types.Message):
         return
 
     comment = await interpret_relationship(view, str(message.chat.id)) or _relationship_description(view)
+    dynamics = await load_relationship_dynamics(message.chat.id, view.user_a_id, view.user_b_id)
     lines = [
         f"❤️ <b>{escape(_pair_name(view))}</b>",
         "",
@@ -343,9 +379,11 @@ async def handle_relationship(message: types.Message):
             f"взаимность {_reciprocity_label(view.reciprocity)} (<b>{round(view.reciprocity * 100)}%</b>)."
         ),
         f"Сейчас: <b>{escape(view.trend)}</b>.",
-        "",
-        escape(comment),
     ]
+    for extra in (_dynamics_line(dynamics), _reactions_line(view)):
+        if extra:
+            lines.append(extra)
+    lines.extend(("", escape(comment)))
     main_event = _chronicle_event_html(view)
     if main_event:
         lines.extend(("", main_event))
@@ -401,7 +439,7 @@ async def handle_chat_relationships(message: types.Message):
     await message.reply("\n".join(lines), parse_mode="HTML")
 
 
-@router.message(lambda message: _starts_command(message, "история"))
+@router.message(lambda message: _is_pair_command(message, "история отношений", "история"))
 @ai_feature("история отношений")
 async def handle_relationship_history(message: types.Message):
     if not await _ensure_available(message):
@@ -422,6 +460,9 @@ async def handle_relationship_history(message: types.Message):
         item for item in history.timeline if item.event_type != "relationship_snapshot"
     )
     lines = [f"📖 <b>{escape(_pair_name(view))}</b>", ""]
+    dynamics_line = _dynamics_line(history.dynamics)
+    if dynamics_line:
+        lines.extend((dynamics_line, ""))
 
     if meaningful_timeline:
         narrative = await narrate_relationship_history(view, meaningful_timeline, str(message.chat.id))

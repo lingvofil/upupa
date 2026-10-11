@@ -22,6 +22,7 @@ from aiogram.types import (
 )
 from thefuzz import fuzz
 
+from core.chronicle_sink import chronicle_participant, report_chronicle_event
 from core.loader import bot
 from core.settings import API_TOKEN
 from games.token_dashboard import serve_token_dashboard, token_dashboard_api
@@ -205,17 +206,67 @@ def _scores_save():
         logging.error(f"[scores] save failed: {e}", exc_info=True)
 
 
+CHRONICLE_SCORE_MILESTONES = frozenset({25, 50, 100, 200, 300, 500, 750, 1000})
+CHRONICLE_MIN_LEADER_POINTS = 10
+
+
+def _leader(table: dict) -> tuple[str, int] | None:
+    if not table:
+        return None
+    uid, row = max(table.items(), key=lambda item: int(item[1].get("pts", 0)))
+    return uid, int(row.get("pts", 0))
+
+
+def _report_score_to_chronicle(chat_id: str, uid: str, before_leader: tuple[str, int] | None) -> None:
+    """Only rare score moments reach the Chronicle: round milestones and a new leader."""
+    table = _scores.get(chat_id) or {}
+    row = table.get(uid) or {}
+    pts = int(row.get("pts", 0))
+    name = str(row.get("name") or "Игрок")
+    facts = []
+    if pts in CHRONICLE_SCORE_MILESTONES:
+        facts.append(f"{name} набрал {pts} очков в Крокодиле за всё время.")
+    if (
+        before_leader is not None
+        and before_leader[0] != uid
+        and pts > before_leader[1]
+        and pts >= CHRONICLE_MIN_LEADER_POINTS
+    ):
+        previous = table.get(before_leader[0]) or {}
+        facts.append(
+            f"{name} вышел на первое место рейтинга Крокодила с {pts} очками, "
+            f"обогнав {previous.get('name') or 'прежнего лидера'} ({before_leader[1]})."
+        )
+    if not facts or not str(chat_id).startswith("-"):
+        return
+    try:
+        user_id = int(uid)
+    except ValueError:
+        return
+    report_chronicle_event(
+        chat_id=int(chat_id),
+        context="Крокодил: " + " ".join(facts),
+        source="crocodile",
+        participants=[chronicle_participant(user_id, name)],
+    )
+
+
 def add_point(chat_id: str, user_id: int, user_name: str = ""):
     cid = str(chat_id)
     uid = str(user_id)
     if cid not in _scores:
         _scores[cid] = {}
+    before_leader = _leader(_scores[cid])
     if uid not in _scores[cid]:
         _scores[cid][uid] = {"pts": 0, "name": ""}
     _scores[cid][uid]["pts"] = int(_scores[cid][uid].get("pts", 0)) + 1
     if user_name:
         _scores[cid][uid]["name"] = str(user_name)
     _scores_save()
+    try:
+        _report_score_to_chronicle(cid, uid, before_leader)
+    except Exception as exc:
+        logging.warning("[crocodile] chronicle report failed: %s", exc)
 
 
 def format_leaderboard(chat_id: str, title: str = "🏆 Рейтинг игроков") -> str:

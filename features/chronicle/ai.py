@@ -65,7 +65,16 @@ def build_prompt(candidate: ChronicleCandidate, context: list[dict]) -> str:
             f"user_id={candidate.anchor_user_id} {candidate.anchor_display_name}: {anchor[:700]}"
         )
 
-    source = "исторического backfill" if candidate.source == "backfill" else "живого чата"
+    if candidate.source == "backfill":
+        source = "исторического backfill"
+    elif candidate.source == "live":
+        source = "живого чата"
+    else:
+        source = (
+            f"встроенной механики бота «{candidate.source}» (суд, игра и т.п.). "
+            "Событие уже состоялось и описано в [anchor]; реши, войдёт ли оно в историю чата, "
+            "а не является ли рядовым эпизодом. Цитаты из [anchor] — это текст бота, не участников"
+        )
     return f"""
 Ты отбираешь события для долговременной «Летописи» Telegram-чата Упупы.
 Это кандидат из {source}. Будь КОНСЕРВАТИВЕН: сохраняй только то, что участники

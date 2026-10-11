@@ -187,7 +187,18 @@ class SQLiteSocialGraphRepository:
                 "CREATE INDEX IF NOT EXISTS idx_social_relationship_snapshots_pair "
                 "ON social_relationship_snapshots(chat_id, user_a_id, user_b_id, captured_at DESC)"
             )
+            self._ensure_relationship_columns(conn)
             self._backfill_relationships(conn)
+
+    @staticmethod
+    def _ensure_relationship_columns(conn: sqlite3.Connection) -> None:
+        """Additive migrations for lifetime pair state."""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(social_relationships)")}
+        for column in ("positive_reaction_count", "negative_reaction_count"):
+            if column not in existing:
+                conn.execute(
+                    f"ALTER TABLE social_relationships ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _backfill_relationships(self, conn: sqlite3.Connection) -> None:
         """Seed lifetime pair state once from retained raw interactions."""
@@ -264,6 +275,7 @@ class SQLiteSocialGraphRepository:
         interaction_type: str,
         weight: float,
         timestamp: str,
+        valence: int = 0,
     ) -> None:
         user_a_id, user_b_id = sorted((int(actor_user_id), int(target_user_id)))
         activity_date = timestamp[:10]
@@ -296,8 +308,9 @@ class SQLiteSocialGraphRepository:
             INSERT INTO social_relationships (
                 chat_id,user_a_id,user_b_id,xp,interaction_count,reply_count,mention_count,
                 reaction_count,a_to_b_count,b_to_a_count,a_to_b_weight,b_to_a_weight,
-                first_interaction_at,last_interaction_at,updated_at
-            ) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)
+                first_interaction_at,last_interaction_at,updated_at,
+                positive_reaction_count,negative_reaction_count
+            ) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(chat_id,user_a_id,user_b_id) DO UPDATE SET
                 xp=xp+excluded.xp,
                 interaction_count=interaction_count+1,
@@ -308,6 +321,8 @@ class SQLiteSocialGraphRepository:
                 b_to_a_count=b_to_a_count+excluded.b_to_a_count,
                 a_to_b_weight=a_to_b_weight+excluded.a_to_b_weight,
                 b_to_a_weight=b_to_a_weight+excluded.b_to_a_weight,
+                positive_reaction_count=positive_reaction_count+excluded.positive_reaction_count,
+                negative_reaction_count=negative_reaction_count+excluded.negative_reaction_count,
                 last_interaction_at=CASE WHEN excluded.last_interaction_at > last_interaction_at
                                          THEN excluded.last_interaction_at ELSE last_interaction_at END,
                 updated_at=excluded.updated_at
@@ -327,6 +342,8 @@ class SQLiteSocialGraphRepository:
                 timestamp,
                 timestamp,
                 timestamp,
+                int(interaction_type == "reaction" and valence > 0),
+                int(interaction_type == "reaction" and valence < 0),
             ),
         )
 
@@ -455,6 +472,7 @@ class SQLiteSocialGraphRepository:
         message_id: int,
         timestamp: datetime,
         weight: float,
+        valence: int = 0,
     ) -> bool:
         if actor[0] == target_user_id or weight <= 0:
             return False
@@ -488,6 +506,7 @@ class SQLiteSocialGraphRepository:
                     interaction_type=interaction_type,
                     weight=float(weight),
                     timestamp=timestamp_str,
+                    valence=int(valence),
                 )
                 return True
             return False
@@ -620,3 +639,32 @@ class SQLiteSocialGraphRepository:
                 (int(chat_id), user_a_id, user_b_id, max(1, int(limit))),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def load_relationship_daily(
+        self,
+        chat_id: int,
+        user_a_id: int,
+        user_b_id: int,
+    ) -> list[dict[str, Any]]:
+        """Lifetime per-day activity of one pair (not subject to raw-event retention)."""
+        user_a_id, user_b_id = sorted((int(user_a_id), int(user_b_id)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT activity_date,event_count,xp_earned
+                FROM social_relationship_daily
+                WHERE chat_id=? AND user_a_id=? AND user_b_id=?
+                ORDER BY activity_date ASC
+                """,
+                (int(chat_id), user_a_id, user_b_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_active_chats(self, since: datetime) -> list[int]:
+        """Chats that have at least one pair active since the given moment."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT chat_id FROM social_relationships WHERE last_interaction_at >= ?",
+                (self._timestamp(since),),
+            ).fetchall()
+        return [int(row[0]) for row in rows]

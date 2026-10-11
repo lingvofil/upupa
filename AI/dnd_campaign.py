@@ -1172,6 +1172,37 @@ def _archive_campaign_core(dnd, session, finale, epilogue):
                         "inventory": inv, "artifacts": [x for x in inv if isinstance(x, dict) and x.get("kind") == "artifact"],
                         "reputation": list(session.reputations.get(key) or old.get("reputation") or [])[-12:], "adventures": adventures[-6:]}
     _save_archive(dnd)
+    try:
+        _report_campaign_to_chronicle(session, finale, epilogue)
+    except Exception:
+        logging.exception("DnD chronicle report failed")
+
+
+def _report_campaign_to_chronicle(session, finale, epilogue):
+    """A finished campaign is a rare, shared event: report it with a high base score."""
+    from core.chronicle_sink import chronicle_participant, report_chronicle_event
+
+    people = [
+        chronicle_participant(int(p["user_id"]), p.get("name"))
+        for p in (getattr(session, "participants", None) or {}).values()
+        if p.get("user_id") is not None
+    ]
+    outcome = {"success": "миссия выполнена", "failure": "миссия провалена"}.get(
+        str(getattr(session, "mission_outcome", "") or ""), "исход неоднозначный"
+    )
+    context = (
+        f"Завершена D&D-кампания «{session.selected_plot or 'без названия'}». "
+        f"Игроки: {', '.join(p['name'] for p in people) or 'неизвестны'}. Итог: {outcome}.\n"
+        f"Финал: {str(finale or '')[:700]}\nЭпилог: {str(epilogue or '')[:700]}"
+    )
+    # 7.0 = SAVE_THRESHOLD + 2: a campaign finale bypasses the live cooldown/daily caps.
+    report_chronicle_event(
+        chat_id=int(session.chat_id),
+        context=context,
+        source="dnd",
+        participants=people,
+        base_score=7.0,
+    )
 
 
 _archive_campaign = _archive_campaign_core

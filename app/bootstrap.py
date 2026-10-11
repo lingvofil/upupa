@@ -138,6 +138,9 @@ class UpupaApplication:
             restore_crocodile_sessions,
         )
         from games.crocodile_runtime import configure_crocodile_runtime
+        from core.chronicle_sink import configure_chronicle_sink
+        from features.chronicle.runtime import register_external_candidate
+        from features.social_graph.relationships import relationship_snapshot_loop
         from games.crocodile_socket_server import crocodile_socket_server_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
@@ -156,6 +159,9 @@ class UpupaApplication:
         from AI.dnd_local_runtime import configure_dnd_local_runtime
 
         configure_dnd_local_runtime()
+        # Games and features report notable moments (verdicts, finales, records)
+        # to the Chronicle through a decoupled sink.
+        configure_chronicle_sink(register_external_candidate)
         configure_dnd_tasks(self.supervisor)
         crocodile.configure_task_supervisor(self.supervisor)
         configure_crocodile_runtime()
@@ -198,6 +204,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             history_maintenance_loop,
             name="history-maintenance",
+        )
+        self.supervisor.start_resilient(
+            relationship_snapshot_loop,
+            name="relationship-snapshots",
         )
         self.supervisor.start_resilient(
             lambda: resource_snapshot_loop(self.supervisor),

@@ -36,7 +36,7 @@ class FakeRepository:
     def resolve_message_author(self, chat_id, message_id):
         return self.message_authors.get((chat_id, message_id))
 
-    def record_interaction(self, chat_id, actor, target_user_id, interaction_type, message_id, timestamp, weight):
+    def record_interaction(self, chat_id, actor, target_user_id, interaction_type, message_id, timestamp, weight, valence=0):
         item = (chat_id, actor[0], target_user_id, interaction_type, message_id, weight)
         if item in self.interactions:
             return False

@@ -3,7 +3,8 @@
 The social graph records facts (reply/mention/reaction).  This module turns the
 facts plus grounded Chronicle events into a pair-level relationship view.  Raw
 swearing is deliberately *not* used as a conflict signal: tension is raised by
-Chronicle events that were classified as conflicts in context.
+Chronicle events that were classified as conflicts in context and, more weakly,
+by explicitly negative reactions (🤡, 👎, 💩 …) the pair puts on each other.
 """
 
 from __future__ import annotations
@@ -11,12 +12,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import math
 from typing import Iterable
 
 from features.chronicle.models import ChronicleEvent
 from features.chronicle.runtime import list_events as list_chronicle_events
 from features.social_graph.service import (
+    is_social_graph_enabled,
+    list_active_chats,
     load_relationship_snapshots,
     load_relationship_states,
     save_relationship_snapshot,
@@ -24,6 +28,10 @@ from features.social_graph.service import (
 
 
 CHRONICLE_EVENT_LIMIT = 300
+SNAPSHOT_INTERVAL_SECONDS = 6 * 3600
+SNAPSHOT_ACTIVE_DAYS = 30
+# Reactions are a weaker conflict signal than a Chronicle-confirmed conflict.
+REACTION_TENSION_CAP = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,8 @@ class RelationshipView:
     previous_21d: int
     last_interaction_at: datetime | None
     shared_events: tuple[ChronicleEvent, ...]
+    positive_reaction_count: int = 0
+    negative_reaction_count: int = 0
 
     @property
     def strength(self) -> float:
@@ -126,6 +136,8 @@ def _archetype(
     reciprocity: float,
     interaction_count: int,
     events: tuple[ChronicleEvent, ...],
+    positive_reactions: int = 0,
+    negative_reactions: int = 0,
 ) -> str:
     categories = [event.category for event in events]
     if interaction_count >= 6 and reciprocity < 0.35:
@@ -134,6 +146,8 @@ def _archetype(
         return "заклятые друзья"
     if tension >= 60 and affinity < 50:
         return "взаимная аллергия"
+    if negative_reactions >= 4 and negative_reactions >= positive_reactions and tension >= 20:
+        return "взаимный троллинг"
     if categories.count("game") >= 2 and affinity >= 35:
         return "игровые союзники"
     meme_count = sum(category in {"funny", "absurd", "local_meme"} for category in categories)
@@ -190,7 +204,21 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
         idle_days = max(0.0, (now - latest_event).total_seconds() / 86400.0)
         affinity *= 0.55 + 0.45 * math.exp(-idle_days / 90.0)
 
-    tension = 100.0 * (1.0 - math.exp(-conflict_signal / 18.0))
+    positive_reactions = int(row.get("positive_reaction_count", 0) or 0)
+    negative_reactions = int(row.get("negative_reaction_count", 0) or 0)
+    valenced = positive_reactions + negative_reactions
+    negative_share = negative_reactions / valenced if valenced else 0.0
+    # Warm reactions add a little closeness; it is already partly counted in xp.
+    affinity += min(6.0, positive_reactions * 0.3) * (1.0 - negative_share)
+
+    chronicle_tension = 1.0 - math.exp(-conflict_signal / 18.0)
+    reaction_tension = (
+        REACTION_TENSION_CAP / 100.0
+        * (1.0 - math.exp(-negative_reactions / 8.0))
+        * (0.3 + 0.7 * negative_share)
+    )
+    # Independent signals combine like probabilities and never exceed 100.
+    tension = 100.0 * (1.0 - (1.0 - chronicle_tension) * (1.0 - reaction_tension))
     affinity_i = int(round(_clamp(affinity)))
     tension_i = int(round(_clamp(tension)))
     total_xp = base_xp + event_xp
@@ -208,6 +236,8 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
         reciprocity=reciprocity,
         interaction_count=interaction_count,
         events=shared,
+        positive_reactions=positive_reactions,
+        negative_reactions=negative_reactions,
     )
 
     return RelationshipView(
@@ -234,6 +264,8 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
         previous_21d=previous_21d,
         last_interaction_at=last_interaction_at,
         shared_events=shared,
+        positive_reaction_count=positive_reactions,
+        negative_reaction_count=negative_reactions,
     )
 
 
@@ -271,7 +303,13 @@ def _synthetic_rows_from_events(events: Iterable[ChronicleEvent], existing: set[
     return rows
 
 
-async def get_relationships(chat_id: int, *, user_id: int | None = None, persist_snapshots: bool = True) -> list[RelationshipView]:
+async def get_relationships(chat_id: int, *, user_id: int | None = None, persist_snapshots: bool = False) -> list[RelationshipView]:
+    """Compute pair views.
+
+    Reads are side-effect free by default: snapshots are captured on a fixed
+    schedule by ``relationship_snapshot_loop`` so that history reflects time,
+    not the moments somebody happened to call a command.
+    """
     rows, events = await asyncio.gather(
         load_relationship_states(chat_id, user_id=user_id),
         list_chronicle_events(chat_id, limit=CHRONICLE_EVENT_LIMIT),
@@ -295,7 +333,7 @@ async def get_relationship(chat_id: int, user_a_id: int, user_b_id: int) -> Rela
     if int(user_a_id) == int(user_b_id):
         return None
     pair = {int(user_a_id), int(user_b_id)}
-    views = await get_relationships(chat_id, persist_snapshots=True)
+    views = await get_relationships(chat_id)
     return next((view for view in views if {view.user_a_id, view.user_b_id} == pair), None)
 
 
@@ -316,3 +354,31 @@ async def get_relationship_history(chat_id: int, user_a_id: int, user_b_id: int)
         for row in rows
     ]
     return view, snapshots
+
+
+async def capture_relationship_snapshots(*, active_days: int = SNAPSHOT_ACTIVE_DAYS) -> int:
+    """Persist one snapshot per pair for every recently active chat."""
+    total = 0
+    for chat_id in await list_active_chats(days=active_days):
+        if not is_social_graph_enabled(chat_id):
+            continue
+        try:
+            views = await get_relationships(chat_id, persist_snapshots=True)
+        except Exception as exc:
+            logging.warning("[social_graph] relationship snapshot failed chat=%s: %s", chat_id, exc)
+            continue
+        total += len(views)
+    return total
+
+
+async def relationship_snapshot_loop() -> None:
+    """Snapshots are upserted per day, so a few runs a day are idempotent."""
+    while True:
+        try:
+            saved = await capture_relationship_snapshots()
+            logging.info("[social_graph] relationship snapshots captured pairs=%s", saved)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.error("[social_graph] relationship snapshot loop error: %s", exc, exc_info=True)
+        await asyncio.sleep(SNAPSHOT_INTERVAL_SECONDS)
