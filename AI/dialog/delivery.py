@@ -31,8 +31,8 @@ def split_participant_series(text: str, *, max_parts: int = SERIES_MAX_PARTS) ->
     """Split a participant reply into series messages (one per non-empty line).
 
     Code blocks are never split. When the model wrote more lines than a real
-    series would have, the tail is merged into the last message instead of
-    flooding the chat.
+    series would have, neighbouring lines are joined into one message instead
+    of flooding the chat.
     """
     stripped = (text or "").strip()
     if not stripped:
@@ -44,7 +44,12 @@ def split_participant_series(text: str, *, max_parts: int = SERIES_MAX_PARTS) ->
     if len(parts) <= 1:
         return [stripped]
     if len(parts) > max_parts:
-        parts = parts[: max_parts - 1] + ["\n".join(parts[max_parts - 1 :])]
+        # Glue the extra lines into neighbours with spaces, spread evenly, so the
+        # chat never gets one message that is a column of short phrases.
+        groups: list[list[str]] = [[] for _ in range(max_parts)]
+        for index, line in enumerate(parts):
+            groups[index * max_parts // len(parts)].append(line)
+        parts = [" ".join(group) for group in groups if group]
     return parts
 
 

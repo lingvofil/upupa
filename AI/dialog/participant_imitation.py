@@ -35,7 +35,7 @@ PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
-STYLE_PROFILE_VERSION = 5
+STYLE_PROFILE_VERSION = 6
 # Messages from one person closer than this are one conversational turn
 # ("серия"): Telegram users often split one thought into several messages.
 BURST_GAP_SECONDS = 90
@@ -183,6 +183,15 @@ class ParticipantHistory:
         self._turn_words += words
         if seconds is not None:
             self._last_timestamp = seconds
+
+    def note_other_message(self) -> None:
+        """Someone else wrote in the chat: the participant's current series is over.
+
+        Without this, an active conversation where the participant answers every
+        few seconds collapsed into one giant «series» of 10–25 short messages.
+        """
+        self._close_turn()
+        self._last_timestamp = None
 
     def add_logged_message(self, text: str, timestamp=None) -> None:
         """Apply one newly persisted log message without rereading the log."""
@@ -516,24 +525,30 @@ def _scan_participant_history_sync(
     )
     repository = get_history_repository(LOG_FILE)
     if repository is not None:
-        repository.scan(
-            chat_id,
-            lambda row: entry.add_logged_message(row["text"], row.get("timestamp")),
-            user_id=user_id,
-        )
+        # The whole chat is scanned (≈0.2–0.7 s per 100k–400k rows) because
+        # other people's messages are what end a participant's series.
+        def visit(row: dict) -> None:
+            if _row_user_id(row) == int(user_id):
+                entry.add_logged_message(row["text"], row.get("timestamp"))
+            elif (row.get("text") or "").strip():
+                entry.note_other_message()
+
+        repository.scan(chat_id, visit)
         return entry
     chat_marker = f" - Chat {chat_id}"
-    user_marker = f"User {int(user_id)} "
     pattern = _log_pattern(chat_id)
 
     with open(LOG_FILE, mode="r", encoding="utf-8", buffering=1024 * 1024) as file:
         for line in file:
-            if chat_marker not in line or user_marker not in line:
+            if chat_marker not in line:
                 continue
             match = pattern.match(line)
-            if not match or int(match.group("user_id")) != int(user_id):
+            if not match:
                 continue
-            entry.add_logged_message(match.group("text"), match.group("timestamp"))
+            if int(match.group("user_id")) == int(user_id):
+                entry.add_logged_message(match.group("text"), match.group("timestamp"))
+            elif match.group("text").strip():
+                entry.note_other_message()
 
     return entry
 
@@ -675,9 +690,13 @@ def record_participant_message(message) -> None:
     timestamp = getattr(message, "date", None)
 
     for key, entry in list(_PARTICIPANT_HISTORY_CACHE.items()):
-        if key[0] == chat_id and key[1] == user_id:
+        if key[0] != chat_id:
+            continue
+        if key[1] == user_id:
             entry.add_logged_message(text, timestamp)
             _PARTICIPANT_HISTORY_CACHE.move_to_end(key)
+        elif text.strip():
+            entry.note_other_message()
 
 
 def _profile_needs_refresh(settings: dict, message_count: int) -> bool:
