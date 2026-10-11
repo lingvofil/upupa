@@ -411,11 +411,20 @@ def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
     power = attack["power"]
     bonus, sides = ENEMY_POWER[power]
     natural = random.randint(1, 20)
+    from AI.dnd_archetype_abilities import consume_dodge
+
+    if consume_dodge(session, target_id):
+        # Dodge: the attack is made with disadvantage, once.
+        second = random.randint(1, 20)
+        reason_suffix = f" (🛡 уклонение: {natural}/{second})"
+        natural = min(natural, second)
+    else:
+        reason_suffix = ""
     total = natural + bonus
     ac = int(sheet["ac"])
     hit = natural == 20 or (natural != 1 and total >= ac)
     name = _participant_name(session, target_id)
-    reason = attack.get("reason") or "враг атакует"
+    reason = (attack.get("reason") or "враг атакует") + reason_suffix
     if not hit:
         summary = f"👹 {reason}. Бросок врага: {natural} + {bonus} = {total} против КБ {ac} — мимо."
         prompt = (

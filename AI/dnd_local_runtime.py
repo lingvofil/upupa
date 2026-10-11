@@ -232,7 +232,23 @@ class LocalRuntime:
             if session.paused:
                 await bot.send_message(chat_id, "Партия на паузе. Меню доступно; ход продолжит ведущий.")
                 return
-            if kind == "FREE_TEXT":
+            if kind == "ABILITY":
+                from AI.dnd_archetype_abilities import AbilityError, ability_for, use_ability
+
+                ability = ability_for(session, actor_id) or {}
+                if session.state not in {"WAITING_ACTION", "WAITING_ROLL"} or (
+                        ability.get("effect") == "boost" and session.state != "WAITING_ACTION"):
+                    await bot.send_message(chat_id, "Умение сейчас недоступно.")
+                    return
+                try:
+                    text = use_ability(session, actor_id, payload.get("target_id"))
+                except AbilityError as error:
+                    await bot.send_message(chat_id, str(error), parse_mode=None)
+                    return
+                self.dnd.persist_dnd_sessions()
+                await bot.send_message(chat_id, text, parse_mode=None)
+                return
+            if kind in {"FREE_TEXT", "DODGE"}:
                 current = identity_for(session)
                 if any(payload.get(key) != current[key] for key in ("campaign_id", "turn_id", "phase")):
                     await bot.send_message(chat_id, "Этот ход уже изменился. Открой меню заново.")
@@ -243,7 +259,28 @@ class LocalRuntime:
                         or getattr(session, "pending_generation_request", None) or getattr(session, "pending_generated_result", None)):
                     await bot.send_message(chat_id, "Твой ход уже разрешён или ожидает продолжения мастера.")
                     return
-                await self.dnd.handle_free_action(_message(bot, session, actor_id, str(payload.get("text") or "")))
+                text = str(payload.get("text") or "")
+                effect = payload.get("effect") if isinstance(payload.get("effect"), dict) else {}
+                from AI.dnd_archetype_abilities import AbilityError, prepare_dodge, prepare_help
+
+                try:
+                    # Applied before submission: a single-actor window generates
+                    # the continuation inside handle_free_action, and the helped
+                    # ally may be asked to roll right away.
+                    if kind == "DODGE":
+                        notice = prepare_dodge(session, actor_id)
+                        text = "[Оборона] Герой уходит в глухую оборону: уклоняется и прикрывается от ударов."
+                    elif effect.get("type") == "help":
+                        notice = prepare_help(session, actor_id, effect.get("target_id"))
+                    else:
+                        notice = ""
+                except AbilityError as error:
+                    await bot.send_message(chat_id, str(error), parse_mode=None)
+                    return
+                if notice:
+                    self.dnd.persist_dnd_sessions()
+                    await bot.send_message(chat_id, notice, parse_mode=None)
+                await self.dnd.handle_free_action(_message(bot, session, actor_id, text))
                 await self.maybe_finalize(bot, session)
                 return
             pending = getattr(session, "pending_roll", None) or {}

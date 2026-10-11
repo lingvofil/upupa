@@ -31,7 +31,7 @@ _FIELDS = (
     "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
     "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
-    "hero_progress",
+    "hero_progress", "archetype_ability_uses", "dodge_flags",
 )
 _PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
@@ -250,6 +250,15 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         from AI.dnd_progression import progress_lines
 
         lines.extend(progress_lines(_mapping(snapshot.get("hero_progress")).get(str(user_id))))
+        from AI.dnd_archetype_abilities import ability_for, charges
+
+        view = SimpleNamespace(**copy.deepcopy(snapshot))
+        ability = ability_for(view, user_id) if user_id else None
+        if ability:
+            remaining, maximum = charges(view, user_id)
+            lines.append(f"{ability['emoji']} Умение «{ability['title']}» ({remaining}/{maximum}): {ability['text']}")
+        if _mapping(snapshot.get("dodge_flags")).get(str(user_id)):
+            lines.append("🛡 В обороне: следующая атака по герою с помехой")
         if sheet.get("ac") is not None:
             lines.append(f"🛡 КБ {sheet['ac']}")
         if stats:
@@ -266,7 +275,7 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
                     lines.append("  Снять: " + _text(condition["clear"], 160))
         boost = _mapping(_mapping(snapshot.get("item_boosts")).get(str(user_id)))
         if boost and _public(boost):
-            domains = {"MOVE": "движение", "SOCIAL": "общение", "PERCEPTION": "наблюдение", "COMBAT": "бой"}
+            domains = {"MOVE": "движение", "SOCIAL": "общение", "PERCEPTION": "наблюдение", "COMBAT": "бой", "ANY": "любой следующий бросок"}
             lines.append("✨ Преимущество: " + domains.get(boost.get("domain"), "следующая подходящая проверка")
                          + " · " + _text(boost.get("source"), 80))
         position = _mapping(_mapping(snapshot.get("player_positions")).get(str(user_id)))
@@ -422,12 +431,15 @@ class DndMenuService:
     def keyboard(self, session, owner, page, *, card, seq):
         snapshot = snapshot_session(session)
         button = lambda text, operation, **payload: self._button(session, owner, text, operation, card=card, seq=seq, **payload)
-        rows = [[button("✍️ Свой ход", "compose")]] if snapshot.get("state") == "WAITING_ACTION" else []
-        if owner and snapshot.get("state") == "WAITING_ROLL":
+        state = snapshot.get("state")
+        rows = []
+        if owner and state == "WAITING_ROLL":
             rows.append([button("🎲 Бросить", "confirm", kind="ROLL")])
-        if owner and page == "overview" and _wait_rule(snapshot):
-            rows.append([button("⏳ Подождать", "confirm", kind="WAIT")])
-        if owner and page == "hero" and snapshot.get("state") == "LOBBY" and str(owner) in _mapping(snapshot.get("participants")):
+        if page == "overview" and state == "WAITING_ACTION" and (not owner or self._can_act(session, owner)):
+            rows.extend(self._action_rows(session, snapshot, owner, button))
+        elif state == "WAITING_ACTION":
+            rows.append([button("✍️ Свой ход", "compose")])
+        if owner and page == "hero" and state == "LOBBY" and str(owner) in _mapping(snapshot.get("participants")):
             from AI.dnd_character_templates import ARCHETYPES
 
             choices = list(ARCHETYPES)
@@ -438,13 +450,10 @@ class DndMenuService:
             abilities = list(_ABILITY_LABELS.items())
             rows.extend([[button(f"⬆️ {label} +2", "confirm", kind="ASI", choice=ability)
                           for ability, label in abilities[index:index + 2]] for index in range(0, len(abilities), 2)])
-        if page == "overview":
-            for object_id, rule_id, rule in _quick_interactions(snapshot):
-                rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
-                                    kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
-            for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:3]:
-                if isinstance(row, dict) and _public(row) and row.get("available", True):
-                    rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
+        if owner and page == "hero" and state in {"WAITING_ACTION", "WAITING_ROLL"}:
+            ability = self._ability(session, owner)
+            if ability:
+                rows.append([button(f"{ability['emoji']} {ability['title']}", "ability")])
         if page == "scene":
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
@@ -462,13 +471,62 @@ class DndMenuService:
                     rows.append([button("⚔️ " + _text(row.get("name"), 40), "weapons", kind="ATTACK", target_id=str(enemy_id))])
         labels = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
                   ("👥 Партия", "party"), ("📖 Журнал", "journal"), ("⚙️ Управление", "manage"), ("🔄 Обновить", page)]
-        rows.extend([[button(text, "nav", page=target) for text, target in labels[index:index + 2]] for index in range(0, len(labels), 2)])
+        rows.extend([[button(text, "nav", page=target) for text, target in labels[index:index + 3]] for index in range(0, len(labels), 3)])
         if page != "overview":
             rows.append([button("← К ходу", "nav", page="overview")])
         if owner and page == "manage" and self.dnd._user_is_host(session, owner):
             rows.append([button("▶️ Продолжить" if self.paused(session) else "⏸ Пауза", "confirm", kind="RESUME" if self.paused(session) else "PAUSE")])
             rows.append([button("↻ Повторить продолжение", "confirm", kind="RETRY")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @staticmethod
+    def _ability(session, owner):
+        if not owner:
+            return None
+        from AI.dnd_archetype_abilities import ability_for
+
+        return ability_for(session, owner)
+
+    def _action_rows(self, session, snapshot, owner, button):
+        """DnD-style action block: what a hero can do with their turn."""
+        from AI.dnd_archetype_abilities import charges
+
+        enemies = any(_active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
+        living = [key for key, row in _mapping(snapshot.get("participants")).items()
+                  if isinstance(row, dict) and row.get("active", True) and _int(_mapping(_mapping(snapshot.get("character_sheets")).get(str(key))).get("hp"), 1) > 0]
+        rows = []
+        first = [button("⚔️ Атака", "nav", page="enemies")] if enemies else []
+        first.append(button("🎯 Навык", "skills"))
+        rows.append(first)
+        second = []
+        if len(living) > 1:
+            second.append(button("🤝 Помочь", "help"))
+        ability = self._ability(session, owner)
+        if ability:
+            remaining, maximum = charges(session, owner)
+            second.append(button(f"{ability['emoji']} {ability['title']} {remaining}/{maximum}", "ability"))
+        elif not owner:
+            second.append(button("✨ Умение", "ability"))
+        if second:
+            rows.append(second)
+        third = [button("🎒 Предмет", "nav", page="items")]
+        # The shared card only navigates; direct confirmable actions live on
+        # the actor's own card.
+        if owner and enemies:
+            third.append(button("🛡 Уклонение", "confirm", kind="DODGE"))
+        if owner and _wait_rule(snapshot):
+            third.append(button("⏳ Подождать", "confirm", kind="WAIT"))
+        rows.append(third)
+        rows.append([button("✍️ Свой ход", "compose")])
+        for object_id, rule_id, rule in _quick_interactions(snapshot):
+            rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
+                                kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
+        objects = [button("🔎 " + _text(row.get("name") or object_id, 28), "object", object_id=str(object_id))
+                   for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())
+                   if isinstance(row, dict) and _public(row) and row.get("available", True)][:3]
+        if objects:
+            rows.append(objects)
+        return rows
 
     async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):
         card = "party" if not owner else str(owner)
@@ -519,7 +577,7 @@ class DndMenuService:
             if owner:
                 text += "\n\nКарточка для тебя; в группе её видят все."
             if page in {"overview", "scene"}:
-                text += "\n\nБыстрые идеи — подсказки. Свой ход можно описать свободно."
+                text += "\n\nВыбери действие кнопкой или опиши свой ход свободно."
         self._save()  # Persist nonce registration before publishing its keyboard.
         message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new)
         identity = self.identity(session)
@@ -610,6 +668,20 @@ class DndMenuService:
             return self.dnd._user_is_host(session, actor) and (kind in {"RESUME", "PAUSE"} or not self.paused(session))
         if kind == "ROLL":
             return self._can_act(session, actor, state="WAITING_ROLL")
+        if kind == "ABILITY":
+            from AI.dnd_archetype_abilities import ability_for, charges, valid_targets
+
+            ability = ability_for(session, actor)
+            state = getattr(session, "state", None)
+            if ability is None or self.paused(session) or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
+                return False
+            if ability["effect"] == "boost" and state != "WAITING_ACTION":
+                return False
+            return charges(session, actor)[0] > 0 and _int(payload.get("target_id"), -1) in valid_targets(session, actor, ability)
+        if kind == "DODGE":
+            snapshot = snapshot_session(session)
+            return self._can_act(session, actor) and any(
+                _active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
         if kind == "ASI":
             progress = _mapping(_mapping(getattr(session, "hero_progress", None)).get(str(actor)))
             return (str(actor) in _mapping(getattr(session, "participants", None)) and not self.paused(session)
@@ -662,7 +734,80 @@ class DndMenuService:
             return True
         return True
 
-    async def _input_prompt(self, callback, session, actor, *, object_id=None, item_name=None):
+    @staticmethod
+    def _modifier(session, actor, ability) -> int:
+        stats = _mapping(_mapping(_mapping(getattr(session, "character_sheets", None)).get(str(actor))).get("stats"))
+        return _ability_modifier(_int(stats.get(ability), 10))
+
+    async def _action_view(self, callback, session, actor, operation):
+        """Actor-specific choice screens; final actions are re-validated on execute."""
+        from AI.dnd_archetype_abilities import DOMAIN_LABELS, ability_for, allies, charges, valid_targets
+
+        snapshot = snapshot_session(session)
+        if operation in {"skills", "help"} and not self._can_act(session, actor):
+            await callback.answer("Сейчас не твой ход или партия на паузе.", show_alert=True)
+            return
+        back = lambda card, seq: [self._button(session, actor, "← К ходу", "nav", card=card, seq=seq, page="overview")]
+        if operation == "skills":
+            from AI.dnd_combat import SKILL_ABILITIES
+
+            skills = sorted(SKILL_ABILITIES, key=lambda name: (list(_ABILITY_LABELS).index(SKILL_ABILITIES[name]), name))
+
+            def markup(card, seq):
+                buttons = [self._button(session, actor, f"{name} {self._modifier(session, actor, SKILL_ABILITIES[name]):+d}",
+                                        "skill_input", card=card, seq=seq, skill=name) for name in skills]
+                rows = [buttons[index:index + 3] for index in range(0, len(buttons), 3)]
+                return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+            text = ("🎯 Навык\nВыбери, чем действует герой, и коротко опиши действие. "
+                    "Мастер решит, нужна ли проверка; число — модификатор характеристики.")
+            await self.show(callback.bot, session, actor, text=text, build_markup=markup)
+            await callback.answer()
+            return
+        if operation == "help":
+            targets = allies(session, actor)
+            if not targets:
+                await callback.answer("Рядом нет союзника, которому можно помочь.", show_alert=True)
+                return
+
+            def markup(card, seq):
+                rows = [[self._button(session, actor, "🤝 " + _name(snapshot, target), "help_input", card=card, seq=seq, target_id=target)]
+                        for target in targets]
+                return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+            text = ("🤝 Помощь\nТы тратишь свой ход, а союзник получает преимущество на следующий бросок "
+                    "(один раз, не суммируется с другим подготовленным преимуществом).")
+            await self.show(callback.bot, session, actor, text=text, build_markup=markup)
+            await callback.answer()
+            return
+        ability = ability_for(session, actor)
+        if ability is None:
+            await callback.answer("Умение появится, когда у героя будут характеристики.", show_alert=True)
+            return
+        remaining, maximum = charges(session, actor)
+        boost_only_in_action = ability["effect"] == "boost" and getattr(session, "state", None) != "WAITING_ACTION"
+        usable = (remaining > 0 and not self.paused(session) and not boost_only_in_action
+                  and getattr(session, "state", None) in {"WAITING_ACTION", "WAITING_ROLL"})
+        targets = valid_targets(session, actor, ability) if usable else []
+
+        def markup(card, seq):
+            rows = []
+            for target in targets:
+                label = "✅ Применить" if ability["target"] == "self" else ("→ себе" if target == actor else "→ " + _name(snapshot, target))
+                rows.append([self._button(session, actor, label, "confirm", card=card, seq=seq, kind="ABILITY", target_id=target)])
+            return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+        lines = [f"{ability['emoji']} {ability['title']} — умение роли «{ability['archetype']}»",
+                 ability["text"] + ".", f"Заряды на приключение: {remaining}/{maximum} (растут на 5 и 9 уровне).",
+                 "Бонусное действие: ход не тратит."]
+        if ability["effect"] == "boost":
+            lines.append("Преимущество: " + DOMAIN_LABELS[ability["domain"]] + "; не суммируется с другим подготовленным.")
+        if boost_only_in_action:
+            lines.append("Подготовить преимущество можно во время своего хода, до назначенного броска.")
+        await self.show(callback.bot, session, actor, text="\n".join(lines), build_markup=markup)
+        await callback.answer()
+
+    async def _input_prompt(self, callback, session, actor, *, object_id=None, item_name=None, prefix=None, hint=None, effect=None):
         if not self._can_act(session, actor):
             await callback.answer("Сейчас не твой свободный ход или партия на паузе.", show_alert=True)
             return
@@ -681,8 +826,15 @@ class DndMenuService:
             text += f"\nБыстрая идея: взаимодействовать с {_text(row.get('name') or object_id, 90)}. Любая другая идея тоже допустима."
         if item_name:
             text += f"\nПредмет: {_text(item_name, 100)}. Опиши, как применяешь его, и выполни указанные условия предмета."
+            prefix = prefix or f"[Предмет: {_text(item_name, 80)}] "
+        if object_id and not prefix:
+            row = _mapping(getattr(session, "scene_objects", None)).get(str(object_id)) or {}
+            prefix = f"[Объект: {_text(row.get('name') or object_id, 80)}] "
+        if hint:
+            text += "\n" + hint
         sent = await callback.bot.send_message(session.chat_id, text, reply_markup=ForceReply(selective=True, input_field_placeholder="Действие твоего героя"), parse_mode=None)
-        session.menu_action_prompts[str(sent.message_id)] = {**identity, "actor_id": actor, "object_id": object_id, "operation_id": secrets.token_hex(16), "closed": False}
+        session.menu_action_prompts[str(sent.message_id)] = {**identity, "actor_id": actor, "object_id": object_id, "operation_id": secrets.token_hex(16), "closed": False,
+                                                             "prefix": prefix or "", "effect": effect}
         self._save()
         await callback.answer()
 
@@ -690,12 +842,19 @@ class DndMenuService:
         if not self._valid_payload(session, actor, payload):
             await callback.answer("Действие сейчас недоступно. Обнови меню.", show_alert=True)
             return
-        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "ASI": "Повысить характеристику", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
+        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "ASI": "Повысить характеристику", "ABILITY": "Применить умение", "DODGE": "Уйти в оборону (это твой ход)", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
         description = labels.get(payload.get("kind"), "Действие")
         snapshot = snapshot_session(session)
         if payload.get("kind") == "WAIT":
             rule = _wait_rule(snapshot)
             description += ": " + _text(rule["label"], 100) + "\n" + _outcome_preview(snapshot, rule["success"])
+        if payload.get("kind") == "ABILITY":
+            from AI.dnd_archetype_abilities import ability_for
+
+            ability = ability_for(session, actor) or {}
+            description += f": {ability.get('title', '?')} → {_name(snapshot, payload.get('target_id'))}\n{ability.get('text', '')}."
+        if payload.get("kind") == "DODGE":
+            description += "\nСледующая атака по тебе будет с помехой."
         if payload.get("kind") == "ASI":
             description += ": " + _ABILITY_LABELS.get(payload.get("choice"), "?") + " +2 (до максимума 20). Выбор постоянный."
         if payload.get("kind") == "CHOOSE_ARCHETYPE":
@@ -803,6 +962,9 @@ class DndMenuService:
                 await self.show(callback.bot, session, actor, text=object_text, build_markup=object_markup)
                 await callback.answer()
                 return
+            if operation in {"skills", "help", "ability"}:
+                await self._action_view(callback, session, actor, operation)
+                return
             card_seq = _int(session.menu_ui_state["seq"].get(token.get("card")))
             current_message = session.menu_ui_state["cards"].get(token.get("card"))
             if (not self._current(session, token) or card_seq != token.get("ui_seq")
@@ -817,6 +979,30 @@ class DndMenuService:
                     await callback.answer("Предмет сейчас недоступен.", show_alert=True)
                     return
                 await self._input_prompt(callback, session, actor, object_id=payload.get("object_id"), item_name=payload.get("item_name"))
+            elif operation == "skill_input":
+                skill = str(payload.get("skill") or "")
+                from AI.dnd_combat import SKILL_ABILITIES
+
+                if skill not in SKILL_ABILITIES:
+                    await callback.answer("Навык не найден.", show_alert=True)
+                    return
+                ability = SKILL_ABILITIES[skill]
+                await self._input_prompt(callback, session, actor,
+                                         prefix=f"[Навык: {skill} ({_ABILITY_LABELS[ability]})] ",
+                                         hint=f"🎯 Навык: {skill} ({_ABILITY_LABELS[ability]} {self._modifier(session, actor, ability):+d}). "
+                                              "Коротко опиши, что именно делаешь.")
+            elif operation == "help_input":
+                from AI.dnd_archetype_abilities import allies
+
+                target = _int(payload.get("target_id"), -1)
+                if target not in allies(session, actor):
+                    await callback.answer("Этому союзнику сейчас не помочь.", show_alert=True)
+                    return
+                name = _name(snapshot_session(session), target)
+                await self._input_prompt(callback, session, actor, prefix=f"[Помощь: {name}] ",
+                                         hint=f"🤝 Помощь: {name} получит преимущество на следующий бросок. "
+                                              "Коротко опиши, как помогаешь. Это твой ход.",
+                                         effect={"type": "help", "target_id": target})
             elif operation == "confirm":
                 await self._confirm(callback, session, actor, payload)
             elif operation == "weapons":
@@ -896,7 +1082,10 @@ class DndMenuService:
                     return True
                 message_id = getattr(event, "message_id", None)
                 operation_id = hashlib.sha256(f"{prompt['operation_id']}:{message_id}:{action}".encode("utf-8")).hexdigest()[:32]
-                request = {**self.identity(session), "kind": "FREE_TEXT", "actor_id": int(user.id), "text": action, "operation_id": operation_id}
+                request = {**self.identity(session), "kind": "FREE_TEXT", "actor_id": int(user.id),
+                           "text": str(prompt.get("prefix") or "") + action, "operation_id": operation_id}
+                if isinstance(prompt.get("effect"), dict):
+                    request["effect"] = dict(prompt["effect"])
                 if self.execute_action:
                     await self.execute_action(event.bot, chat.id, int(user.id), request)
                 else:
