@@ -200,8 +200,8 @@ def build_compact_system(
     sections = [contract]
     sections.extend(row.text for row in registered if not row.optional)
     # Priority: tag schemas first (the only place the model learns formats the
-    # code parses), then registered extras, then the runtime contract, which
-    # degrades instead of disappearing (see _runtime_contract_variants).
+    # code parses), then the runtime contract, which degrades instead of
+    # disappearing (see _runtime_contract_variants), then registered extras.
     optional_sections = []
     objects = getattr(session, "scene_objects", None) or {}
     needs_scene_rules = getattr(session, "mode", None) == "participants" and (
@@ -224,7 +224,7 @@ def build_compact_system(
         optional_sections.append(WAIT_RULES_PROTOCOL)
     if getattr(session, "mode", None) != "participants":
         optional_sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
-    optional_sections.extend(row.text for row in registered if row.optional)
+    extra_sections = [row.text for row in registered if row.optional]
 
     limit = max(0, int(max_chars))
     if getattr(session, "mode", None) == "participants" and not objects:
@@ -247,6 +247,10 @@ def build_compact_system(
             if len(candidate) <= limit:
                 result = candidate
                 break
+        for section in extra_sections:
+            candidate = result + "\n\n" + section
+            if len(candidate) <= limit:
+                result = candidate
     return result
 
 
