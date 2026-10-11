@@ -35,7 +35,7 @@ PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
-STYLE_PROFILE_VERSION = 4
+STYLE_PROFILE_VERSION = 5
 # Messages from one person closer than this are one conversational turn
 # ("серия"): Telegram users often split one thought into several messages.
 BURST_GAP_SECONDS = 90
@@ -46,6 +46,28 @@ BASELINE_MESSAGE_LIMIT = 6000
 INTERACTION_TRIGGER_MAX_CHARS = 300
 INTERACTION_ANSWER_MAX_CHARS = 900
 INTERACTION_BURST_RADIUS = 4
+SERIES_TIMING_TRACK_LIMIT = 512
+SERIES_TIMING_SAMPLE_SLOTS = 32
+# Typing speed, chars/s including thinking. Faster means a paste or forward,
+# slower means the person was distracted — neither is how they type a series.
+SERIES_RATE_MIN = 0.15
+SERIES_RATE_MAX = 12.0
+
+
+def compact_series_timing(rates, gaps) -> dict | None:
+    """Persistable summary of how fast the participant sends series messages."""
+    usable = sorted(rate for rate in rates if SERIES_RATE_MIN <= rate <= SERIES_RATE_MAX)
+    if len(usable) < 5:
+        return None
+    if len(usable) > SERIES_TIMING_SAMPLE_SLOTS:
+        slots = SERIES_TIMING_SAMPLE_SLOTS
+        usable = [usable[round(i * (len(usable) - 1) / (slots - 1))] for i in range(slots)]
+    positive_gaps = sorted(gap for gap in gaps if gap > 0)
+    min_gap = positive_gaps[len(positive_gaps) // 10] if positive_gaps else 3.0
+    return {
+        "rates": [round(rate, 2) for rate in usable],
+        "min_gap": round(min(max(min_gap, 1.5), 10.0), 1),
+    }
 
 
 def _timestamp_seconds(value) -> float | None:
@@ -86,6 +108,8 @@ class ParticipantHistory:
     message_lengths: deque[int] = field(default_factory=deque, repr=False)
     turns: deque[tuple[int, int]] = field(default_factory=deque, repr=False)
     burst_examples: deque[str] = field(default_factory=deque, repr=False)
+    series_rates: deque[float] = field(default_factory=deque, repr=False)
+    series_gaps: deque[float] = field(default_factory=deque, repr=False)
     _turn_texts: list[str] = field(default_factory=list, repr=False)
     _turn_words: int = field(default=0, repr=False)
     _last_timestamp: float | None = field(default=None, repr=False)
@@ -96,6 +120,8 @@ class ParticipantHistory:
         self.message_lengths = deque(self.message_lengths, maxlen=PARTICIPANT_LENGTH_WINDOW)
         self.turns = deque(self.turns, maxlen=PARTICIPANT_LENGTH_WINDOW)
         self.burst_examples = deque(self.burst_examples, maxlen=PARTICIPANT_BURST_EXAMPLES)
+        self.series_rates = deque(self.series_rates, maxlen=SERIES_TIMING_TRACK_LIMIT)
+        self.series_gaps = deque(self.series_gaps, maxlen=SERIES_TIMING_TRACK_LIMIT)
 
     @property
     def historical_capacity(self) -> int:
@@ -146,6 +172,13 @@ class ParticipantHistory:
         )
         if not same_turn:
             self._close_turn()
+        else:
+            gap = seconds - self._last_timestamp
+            if gap > 0:
+                # The pause before a series message is the time to think and
+                # type it: a direct measurement of this person's pace.
+                self.series_gaps.append(gap)
+                self.series_rates.append(len(text) / gap)
         self._turn_texts.append(text)
         self._turn_words += words
         if seconds is not None:
@@ -206,6 +239,7 @@ class ParticipantHistory:
             ),
             "lexicon": distinctive_lexicon(self.token_counts, self.baseline_counts),
             "burst_examples": list(self.burst_examples),
+            "series_timing": compact_series_timing(self.series_rates, self.series_gaps),
         }
 
     def recurring_messages(self) -> list[str]:
@@ -691,6 +725,11 @@ def _apply_style_profile(
     if not turn_samples:
         turn_samples = compact_turn_samples([(word_count(message), 1) for message in usable])
     settings["style_turn_samples"] = turn_samples
+    series_timing = (style_stats or {}).get("series_timing")
+    if series_timing:
+        settings["style_series_timing"] = series_timing
+    else:
+        settings.pop("style_series_timing", None)
 
 
 def refresh_style_profile(
