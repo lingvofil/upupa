@@ -191,6 +191,21 @@ def _relationship_description(view: RelationshipView) -> str:
     return "Связь уже видна, но до отдельного сериала про этих двоих пока далеко."
 
 
+def _rank_suffix(view: RelationshipView) -> str:
+    if not view.rank or not view.rank_total:
+        return ""
+    return f" (#{view.rank} из {view.rank_total} пар чата)"
+
+
+def _tension_line(view: RelationshipView) -> str | None:
+    if view.tension <= 0:
+        return None
+    return (
+        f"Откуда напряжение: стычек между ними в Летописи — <b>{view.conflict_episodes}</b>, "
+        f"ядовитых реакций друг на друга — <b>{view.negative_reaction_count}</b>."
+    )
+
+
 def _scale_label(value: int) -> str:
     if value < 20:
         return "низкая"
@@ -431,7 +446,7 @@ async def send_relationship_card(message: types.Message, chat_id: int, user_a_id
     lines = [
         f"❤️ <b>{escape(_pair_name(view))}</b>",
         "",
-        f"Уровень <b>{view.level}/15</b> — «<b>{escape(view.archetype)}</b>».",
+        f"Уровень <b>{view.level}/100</b>{_rank_suffix(view)} — «<b>{escape(view.archetype)}</b>».",
         (
             f"Близость {_scale_label(view.affinity)} (<b>{view.affinity}/100</b>), "
             f"напряжение {_scale_label(view.tension)} (<b>{view.tension}/100</b>), "
@@ -439,7 +454,7 @@ async def send_relationship_card(message: types.Message, chat_id: int, user_a_id
         ),
         f"Сейчас: <b>{escape(view.trend)}</b>.",
     ]
-    for extra in (_dynamics_line(dynamics), _reactions_line(view)):
+    for extra in (_dynamics_line(dynamics), _reactions_line(view), _tension_line(view)):
         if extra:
             lines.append(extra)
     lines.extend(("", escape(comment)))
@@ -490,15 +505,17 @@ async def _send_pair_card_photo(
             main_event=main_event,
             avatar_a=avatar_a,
             avatar_b=avatar_b,
+            rank=view.rank,
+            rank_total=view.rank_total,
         ))
     except Exception as exc:
         logging.warning("[social_graph] pair card render failed: %s", exc, exc_info=True)
         return False
 
     parts = [f"❤️ <b>{escape(_pair_name(view))}</b>"]
-    reactions = _reactions_line(view)
-    if reactions:
-        parts.append(reactions)
+    for extra in (_reactions_line(view), _tension_line(view)):
+        if extra:
+            parts.append(extra)
     parts.append(escape(comment))
     if main_event_html:
         parts.append(main_event_html)
@@ -581,7 +598,7 @@ async def send_chat_relationships(message: types.Message, chat_id: int) -> None:
     if rising.recent_7d > 0:
         lines.append(f"📈 Быстрее всех оживают: <b>{escape(_pair_name(rising))}</b> — {escape(rising.trend)}")
     if strongest is not closest:
-        lines.append(f"🏛 Главная институция: <b>{escape(_pair_name(strongest))}</b> — уровень {strongest.level}/15")
+        lines.append(f"🏛 Главная институция: <b>{escape(_pair_name(strongest))}</b> — уровень {strongest.level}/100")
     await message.reply("\n".join(lines), parse_mode="HTML")
 
 
@@ -629,7 +646,7 @@ async def send_relationship_history(message: types.Message, chat_id: int, user_a
     lines.extend((
         "",
         "<b>Сейчас</b>",
-        f"Уровень <b>{view.level}/15</b> — «<b>{escape(view.archetype)}</b>»; {escape(view.trend)}.",
+        f"Уровень <b>{view.level}/100</b>{_rank_suffix(view)} — «<b>{escape(view.archetype)}</b>»; {escape(view.trend)}.",
     ))
     await message.reply(
         "\n".join(lines),

@@ -212,6 +212,8 @@ class PairCardData:
     main_event: str | None = None
     avatar_a: bytes | None = None
     avatar_b: bytes | None = None
+    rank: int = 0
+    rank_total: int = 0
 
 
 def render_pair_card(data: PairCardData) -> bytes:
@@ -233,9 +235,9 @@ def render_pair_card(data: PairCardData) -> bytes:
         _centered(draw, center_x, 262, name, name_font, max_width=360)
 
     center = (CARD_WIDTH // 2, 150)
-    _ring(draw, center, 100, data.level / 15.0, tint)
+    _ring(draw, center, 100, data.level / 100.0, tint)
     _centered(draw, center[0], center[1] - 56, str(data.level), big_font)
-    _centered(draw, center[0], center[1] + 26, "из 15", small_font, fill=MUTED)
+    _centered(draw, center[0], center[1] + 26, f"#{data.rank} из {data.rank_total}" if data.rank else "из 100", small_font, fill=MUTED)
     _badge(draw, CARD_WIDTH / 2, 300, data.archetype, tint, title_font)
 
     meter_y = 386
@@ -323,10 +325,10 @@ def render_dossier_card(data: DossierCardData) -> bytes:
         y += 60
     for relation in data.relations[:3]:
         draw.text((x, y), _fit(draw, relation.name, label_font, width - 140), font=label_font, fill=INK)
-        level_text = f"{relation.level}/15"
+        level_text = f"{relation.level}/100"
         draw.text((x + width - draw.textlength(level_text, font=label_font), y), level_text, font=label_font, fill=INK)
         draw.rounded_rectangle((x, y + 38, x + width, y + 50), radius=6, fill=TRACK)
-        draw.rounded_rectangle((x, y + 38, x + max(12, int(width * relation.level / 15)), y + 50), radius=6, fill=tint)
+        draw.rounded_rectangle((x, y + 38, x + max(12, int(width * relation.level / 100)), y + 50), radius=6, fill=tint)
         draw.text((x, y + 58), _fit(draw, relation.archetype, small_font, width), font=small_font, fill=MUTED)
         y += 108
 

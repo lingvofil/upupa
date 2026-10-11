@@ -108,13 +108,13 @@ def test_significant_snapshot_transition_is_kept_without_chronicle_duplicate():
     history = assemble_relationship_history(
         _view(),
         (
-            _snapshot(april_1, level=4, affinity=35, tension=10, archetype="периодически пересекаются"),
-            _snapshot(may_5, level=8, affinity=67, tension=12, archetype="стабильный дуэт"),
+            _snapshot(april_1, level=40, affinity=35, tension=10, archetype="периодически пересекаются"),
+            _snapshot(may_5, level=80, affinity=67, tension=12, archetype="стабильный дуэт"),
         ),
     )
 
     transition = next(item for item in history.timeline if item.event_type == "archetype_change")
-    assert "уровень: 4/15 → 8/15" in transition.summary
+    assert "уровень: 40 → 80 из 100" in transition.summary
     assert "близость заметно выросла" in transition.summary
 
 
