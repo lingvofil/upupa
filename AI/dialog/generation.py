@@ -1,6 +1,7 @@
 """Dialogue generation, conversation history and context enrichment."""
 
 import asyncio
+import contextvars
 import logging
 import random
 import re
@@ -28,6 +29,7 @@ from services.web_context import get_web_context, needs_web_search
 
 from AI.response_sanitizer import strip_confidence_percentages
 from AI.dialog.participant_imitation import prepare_participant_turn
+from AI.dialog.style import format_turn_length_directive, pick_turn_length_target, word_count
 from AI.dialog.settings import (
     NO_CONFIDENCE_PERCENTAGES_INSTRUCTION,
     get_current_chat_prompt,
@@ -41,6 +43,21 @@ GetWebContextCallable = Callable[[str], Awaitable[str]]
 MAX_REPLY_CONTEXT_LENGTH = 6000
 PARTICIPANT_REPEAT_WINDOW = 6
 PARTICIPANT_REPEAT_SIMILARITY = 0.78
+# A participant reply shorter than this share of its sampled target (when the
+# target is a real paragraph) gets one regeneration with an explicit note.
+PARTICIPANT_MIN_LENGTH_RATIO = 0.4
+PARTICIPANT_LENGTH_RETRY_MIN_TARGET = 15
+# Low on purpose: a strong presence penalty suppresses exactly the repeated
+# pet words and verbal tics that make a participant recognizable.
+PARTICIPANT_PRESENCE_PENALTY = 0.15
+PARTICIPANT_TEMPERATURE = 0.9
+
+# Set by handle_bot_conversation for the current task; read by generate_response
+# without changing its public signature (tests and callers inject generators).
+_participant_length_target: contextvars.ContextVar[tuple[int, int] | None] = contextvars.ContextVar(
+    "participant_length_target",
+    default=None,
+)
 
 
 def get_error_reply_text() -> str:
@@ -355,8 +372,8 @@ async def generate_response(
         generation_kwargs = {}
         if prompt_type == "user_style":
             generation_kwargs = {
-                "temperature": 0.9,
-                "presence_penalty": 0.6,
+                "temperature": PARTICIPANT_TEMPERATURE,
+                "presence_penalty": PARTICIPANT_PRESENCE_PENALTY,
             }
 
         def sync_model_call(prompt_text: str):
@@ -398,30 +415,59 @@ async def generate_response(
         )
         response_text = await asyncio.to_thread(sync_model_call, prompt)
 
-        if (
-            prompt_type == "user_style"
-            and response_text
-            and _participant_reply_is_too_repetitive(response_text, recent_participant_replies)
-        ):
-            logging.info(
-                "Participant imitation repetition detected chat=%s persona=%s; retrying once",
-                chat_id,
-                bot_name,
-            )
-            recent_lines = "\n".join(
-                f"- {reply[:240]}" for reply in recent_participant_replies
-            )
-            retry_prompt = (
-                f"{prompt}\n\n[ANTI-REPETITION RETRY]\n"
-                "Черновик получился слишком похожим на один из недавних ответов. Сохрани манеру этого "
-                "участника, но полностью смени конкретную формулировку и разговорный ход. Не используй "
-                "ту же фирменную фразу как заполнитель.\n"
-                f"Недавние ответы:\n{recent_lines}\n"
-                f"Отбракованный черновик: {str(response_text)[:240]}\n"
-                "[/ANTI-REPETITION RETRY]\n"
-                f"{bot_name}:"
-            )
-            response_text = await asyncio.to_thread(sync_model_call, retry_prompt)
+        if prompt_type == "user_style" and response_text:
+            retry_blocks = []
+            if _participant_reply_is_too_repetitive(response_text, recent_participant_replies):
+                logging.info(
+                    "Participant imitation repetition detected chat=%s persona=%s; retrying once",
+                    chat_id,
+                    bot_name,
+                )
+                recent_lines = "\n".join(
+                    f"- {reply[:240]}" for reply in recent_participant_replies
+                )
+                retry_blocks.append(
+                    "[ANTI-REPETITION RETRY]\n"
+                    "Черновик получился слишком похожим на один из недавних ответов. Сохрани манеру этого "
+                    "участника, но полностью смени конкретную формулировку и разговорный ход. Не используй "
+                    "ту же фирменную фразу как заполнитель.\n"
+                    f"Недавние ответы:\n{recent_lines}\n"
+                    "[/ANTI-REPETITION RETRY]"
+                )
+
+            length_target = _participant_length_target.get()
+            draft_words = word_count(str(response_text))
+            if (
+                length_target
+                and length_target[0] >= PARTICIPANT_LENGTH_RETRY_MIN_TARGET
+                and draft_words < length_target[0] * PARTICIPANT_MIN_LENGTH_RATIO
+            ):
+                logging.info(
+                    "Participant imitation too short chat=%s persona=%s words=%s target=%s; retrying once",
+                    chat_id,
+                    bot_name,
+                    draft_words,
+                    length_target[0],
+                )
+                retry_blocks.append(
+                    "[LENGTH RETRY]\n"
+                    f"Черновик слишком короткий: {draft_words} слов при цели около {length_target[0]}. "
+                    "Этот участник в таких репликах пишет развёрнуто. Напиши ответ заново в его манере и "
+                    "нужном объёме: развей мысль его словами, добавь его типичные детали, оценки, подколы "
+                    "и отступления. Не добавляй воды и пересказа чужих реплик.\n"
+                    "[/LENGTH RETRY]"
+                )
+
+            if retry_blocks:
+                retry_prompt = (
+                    f"{prompt}\n\n"
+                    + "\n".join(retry_blocks)
+                    + f"\nОтбракованный черновик: {str(response_text)[:400]}\n"
+                    f"{bot_name}:"
+                )
+                retried = await asyncio.to_thread(sync_model_call, retry_prompt)
+                if retried and str(retried).strip():
+                    response_text = retried
         if response_text is None:
             logging.warning("generate_response: модель вернула None")
             response_text = ""
@@ -563,11 +609,21 @@ async def handle_bot_conversation(
         )
 
     chat_history_formatted = format_chat_history(chat_id)
+    is_participant_style = current_settings.get("prompt_type") == "user_style"
     repetition_guard = (
         _format_participant_repetition_guard(chat_id, prompt_name)
-        if current_settings.get("prompt_type") == "user_style"
+        if is_participant_style
         else ""
     )
+    length_target = (
+        pick_turn_length_target(current_settings.get("style_turn_samples"), user_input)
+        if is_participant_style
+        else None
+    )
+    _participant_length_target.set(length_target)
+    # Placed right before the answer slot: the last instruction the model sees
+    # wins over the habit of answering chat messages in one short line.
+    length_directive = format_turn_length_directive(length_target)
     full_prompt = (
         f"{selected_prompt}\n"
         f"{NO_CONFIDENCE_PERCENTAGES_INSTRUCTION}\n"
@@ -577,6 +633,7 @@ async def handle_bot_conversation(
         f"{reply_context_block}"
         f"Это текущий диалог в групповом чате. Твоя задача — органично его продолжить от лица '{prompt_name}'.\n"
         f"Вот история диалога:\n{chat_history_formatted}\n"
+        f"{length_directive}"
         f"{prompt_name}:"
     )
 

@@ -11,7 +11,14 @@ from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from AI.dialog.style import create_user_style_prompt, is_participant_style_message
+from AI.dialog.style import (
+    compact_turn_samples,
+    create_user_style_prompt,
+    distinctive_lexicon,
+    is_participant_style_message,
+    word_count,
+    WORD_RE,
+)
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from core.history_store import get_history_repository
 from services.smart_search import find_relevant_context
@@ -28,7 +35,36 @@ PARTICIPANT_COLD_CACHE_WAIT_SECONDS = 0.75
 SEMANTIC_MEMORY_TIMEOUT_SECONDS = 5.0
 PROFILE_REFRESH_MESSAGE_DELTA = 50
 PROFILE_REFRESH_MAX_AGE = timedelta(days=3)
-STYLE_PROFILE_VERSION = 3
+STYLE_PROFILE_VERSION = 4
+# Messages from one person closer than this are one conversational turn
+# ("серия"): Telegram users often split one thought into several messages.
+BURST_GAP_SECONDS = 90
+PARTICIPANT_LENGTH_WINDOW = 2000
+PARTICIPANT_BURST_EXAMPLES = 12
+PARTICIPANT_TOKEN_TRACK_LIMIT = 20000
+BASELINE_MESSAGE_LIMIT = 6000
+INTERACTION_TRIGGER_MAX_CHARS = 300
+INTERACTION_ANSWER_MAX_CHARS = 900
+INTERACTION_BURST_RADIUS = 4
+
+
+def _timestamp_seconds(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        # The history index stores naive local time; comparisons only need
+        # consistency within one participant, so treating it as UTC is fine.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 @dataclass
@@ -45,10 +81,21 @@ class ParticipantHistory:
     recent: deque[tuple[int, str]] = field(default_factory=deque)
     interactions: list[str] = field(default_factory=list)
     recurring_counts: Counter[str] = field(default_factory=Counter, repr=False)
+    token_counts: Counter[str] = field(default_factory=Counter, repr=False)
+    baseline_counts: Counter[str] | None = field(default=None, repr=False)
+    message_lengths: deque[int] = field(default_factory=deque, repr=False)
+    turns: deque[tuple[int, int]] = field(default_factory=deque, repr=False)
+    burst_examples: deque[str] = field(default_factory=deque, repr=False)
+    _turn_texts: list[str] = field(default_factory=list, repr=False)
+    _turn_words: int = field(default=0, repr=False)
+    _last_timestamp: float | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.recent_size = min(max(self.recent_size, 0), self.sample_size)
         self.recent = deque(self.recent, maxlen=self.recent_size or None)
+        self.message_lengths = deque(self.message_lengths, maxlen=PARTICIPANT_LENGTH_WINDOW)
+        self.turns = deque(self.turns, maxlen=PARTICIPANT_LENGTH_WINDOW)
+        self.burst_examples = deque(self.burst_examples, maxlen=PARTICIPANT_BURST_EXAMPLES)
 
     @property
     def historical_capacity(self) -> int:
@@ -74,7 +121,37 @@ class ParticipantHistory:
         if candidate[0] < self.historical[worst_index][0]:
             self.historical[worst_index] = candidate
 
-    def add_logged_message(self, text: str) -> None:
+    def _close_turn(self) -> None:
+        if not self._turn_texts:
+            return
+        self.turns.append((self._turn_words, len(self._turn_texts)))
+        if len(self._turn_texts) >= 2:
+            self.burst_examples.append("\n".join(self._turn_texts))
+        self._turn_texts = []
+        self._turn_words = 0
+
+    def _track_style(self, text: str, timestamp) -> None:
+        words = word_count(text)
+        self.message_lengths.append(words)
+        self.token_counts.update(WORD_RE.findall(text.lower()))
+        if len(self.token_counts) > PARTICIPANT_TOKEN_TRACK_LIMIT * 2:
+            self.token_counts = Counter(dict(self.token_counts.most_common(PARTICIPANT_TOKEN_TRACK_LIMIT)))
+
+        seconds = _timestamp_seconds(timestamp)
+        same_turn = (
+            seconds is not None
+            and self._last_timestamp is not None
+            and 0 <= seconds - self._last_timestamp <= BURST_GAP_SECONDS
+            and self._turn_texts
+        )
+        if not same_turn:
+            self._close_turn()
+        self._turn_texts.append(text)
+        self._turn_words += words
+        if seconds is not None:
+            self._last_timestamp = seconds
+
+    def add_logged_message(self, text: str, timestamp=None) -> None:
         """Apply one newly persisted log message without rereading the log."""
         self.message_count += 1
         stripped = (text or "").strip()
@@ -82,6 +159,8 @@ class ParticipantHistory:
             return
 
         self.sequence += 1
+        if is_participant_style_message(stripped):
+            self._track_style(stripped, timestamp)
 
         normalized_short = re.sub(r"\s+", " ", stripped.casefold())
         word_count = len(re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", normalized_short))
@@ -109,6 +188,25 @@ class ParticipantHistory:
         messages = [text for _score, _sequence, text in historical]
         messages.extend(text for _sequence, text in self.recent)
         return messages, self.message_count
+
+    def style_stats(self) -> dict:
+        """Full-history length/lexicon statistics for the persona prompt."""
+        turns = list(self.turns)
+        if self._turn_texts:
+            turns.append((self._turn_words, len(self._turn_texts)))
+        total_turns = len(turns)
+        multi_turns = sum(1 for _words, messages in turns if messages >= 2)
+        return {
+            "message_count": self.message_count,
+            "message_lengths": list(self.message_lengths),
+            "turn_samples": compact_turn_samples(turns),
+            "multi_message_turn_share": round(multi_turns * 100 / total_turns) if total_turns else 0,
+            "avg_messages_per_turn": (
+                round(sum(messages for _words, messages in turns) / total_turns, 1) if total_turns else 1
+            ),
+            "lexicon": distinctive_lexicon(self.token_counts, self.baseline_counts),
+            "burst_examples": list(self.burst_examples),
+        }
 
     def recurring_messages(self) -> list[str]:
         """Return bounded repeated short utterances mined across the full scan."""
@@ -156,7 +254,7 @@ def clear_participant_history_cache() -> None:
 
 def _log_pattern(chat_id: int | str) -> re.Pattern:
     return re.compile(
-        rf".* - Chat {re.escape(str(chat_id))}\b.*User (?P<user_id>\d+) "
+        rf"(?P<timestamp>\S+) - Chat {re.escape(str(chat_id))}\b.*User (?P<user_id>\d+) "
         r"\((?P<username>[^)]+)\) \[(?P<full_name>.+?)\]: (?P<text>.*)"
     )
 
@@ -166,11 +264,41 @@ def _normalize_optional(value: str, sentinel: str) -> str | None:
     return None if not value or value == sentinel else value
 
 
-def _compact_interaction_text(text: str, limit: int = 240) -> str:
-    compact = re.sub(r"\s+", " ", (text or "").strip())
+def _compact_interaction_text(text: str, limit: int = INTERACTION_TRIGGER_MAX_CHARS, *, keep_lines: bool = False) -> str:
+    if keep_lines:
+        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in (text or "").strip().splitlines()]
+        compact = "\n".join(line for line in lines if line)
+    else:
+        compact = re.sub(r"\s+", " ", (text or "").strip())
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
+
+
+def _row_user_id(row: dict) -> int | None:
+    try:
+        return int(row["user_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _collect_answer_burst(context_rows: list[dict], row_id: int, user_id: int) -> str:
+    """Join the participant's consecutive messages starting at row_id into one turn."""
+    following = sorted((row for row in context_rows if int(row["id"]) >= row_id), key=lambda row: int(row["id"]))
+    parts: list[str] = []
+    previous_seconds = None
+    for row in following:
+        if _row_user_id(row) != int(user_id):
+            break
+        text = (row.get("text") or "").strip()
+        if not is_participant_style_message(text):
+            break
+        seconds = _timestamp_seconds(row.get("timestamp"))
+        if parts and seconds is not None and previous_seconds is not None and seconds - previous_seconds > BURST_GAP_SECONDS:
+            break
+        parts.append(text)
+        previous_seconds = seconds if seconds is not None else previous_seconds
+    return "\n".join(parts)
 
 
 def _sample_participant_interactions_sync(
@@ -231,20 +359,23 @@ def _sample_participant_interactions_sync(
 
     interactions: list[str] = []
     for _item_sequence, row_id, response in selected:
-        context_rows = repository.context(chat_id, row_id, radius=1)
+        context_rows = repository.context(chat_id, row_id, radius=INTERACTION_BURST_RADIUS)
         previous_rows = [row for row in context_rows if int(row["id"]) < row_id]
         if not previous_rows:
             continue
         previous = max(previous_rows, key=lambda row: int(row["id"]))
-        try:
-            previous_user_id = int(previous["user_id"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if previous_user_id == int(user_id):
+        previous_user_id = _row_user_id(previous)
+        if previous_user_id is None or previous_user_id == int(user_id):
             continue
 
         trigger = _compact_interaction_text(previous.get("text") or "")
-        answer = _compact_interaction_text(response)
+        # The whole series the participant sent in reply, newlines preserved:
+        # truncating answers to a one-liner taught the model to be terse.
+        answer = _compact_interaction_text(
+            _collect_answer_burst(context_rows, row_id, user_id) or response,
+            INTERACTION_ANSWER_MAX_CHARS,
+            keep_lines=True,
+        )
         if not is_participant_style_message(trigger) or not answer:
             continue
         interactions.append(
@@ -351,7 +482,11 @@ def _scan_participant_history_sync(
     )
     repository = get_history_repository(LOG_FILE)
     if repository is not None:
-        repository.scan(chat_id, lambda row: entry.add_logged_message(row["text"]), user_id=user_id)
+        repository.scan(
+            chat_id,
+            lambda row: entry.add_logged_message(row["text"], row.get("timestamp")),
+            user_id=user_id,
+        )
         return entry
     chat_marker = f" - Chat {chat_id}"
     user_marker = f"User {int(user_id)} "
@@ -364,9 +499,40 @@ def _scan_participant_history_sync(
             match = pattern.match(line)
             if not match or int(match.group("user_id")) != int(user_id):
                 continue
-            entry.add_logged_message(match.group("text"))
+            entry.add_logged_message(match.group("text"), match.group("timestamp"))
 
     return entry
+
+
+def _scan_chat_baseline_sync(chat_id: int | str, user_id: int, limit: int = BASELINE_MESSAGE_LIMIT) -> Counter[str] | None:
+    """Word frequencies of the rest of the chat (newest first, bounded).
+
+    Used to find words that are characteristic of the participant rather than
+    of the chat in general. Without the indexed history it returns None and the
+    lexicon falls back to a stopword-filtered frequency list.
+    """
+    repository = get_history_repository(LOG_FILE)
+    if repository is None or limit <= 0:
+        return None
+    counts: Counter[str] = Counter()
+    seen = 0
+
+    def visit(row: dict):
+        nonlocal seen
+        if _row_user_id(row) == int(user_id):
+            return None
+        text = (row.get("text") or "").strip()
+        if not is_participant_style_message(text):
+            return None
+        counts.update(WORD_RE.findall(text.lower()))
+        seen += 1
+        return False if seen >= limit else None
+
+    try:
+        repository.scan(chat_id, visit, descending=True)
+    except TypeError:
+        repository.scan(chat_id, visit)
+    return counts
 
 
 async def _build_and_store_history(key: CacheKey) -> ParticipantHistory:
@@ -385,6 +551,11 @@ async def _build_and_store_history(key: CacheKey) -> ParticipantHistory:
             user_id,
             chat_id,
         )
+        try:
+            entry.baseline_counts = await asyncio.to_thread(_scan_chat_baseline_sync, chat_id, user_id)
+        except Exception as exc:  # lexicon quality only; never block imitation
+            logging.warning("Participant baseline scan failed chat=%s: %s", chat_id, exc)
+            entry.baseline_counts = None
         _cache_put(key, entry)
         logging.info(
             "Participant history warmup chat=%s user_id=%s messages=%s sample=%s interactions=%s elapsed=%.3fs",
@@ -467,10 +638,11 @@ def record_participant_message(message) -> None:
     chat_id = str(chat.id)
     user_id = int(user.id)
     text = getattr(message, "text", None) or ""
+    timestamp = getattr(message, "date", None)
 
     for key, entry in list(_PARTICIPANT_HISTORY_CACHE.items()):
         if key[0] == chat_id and key[1] == user_id:
-            entry.add_logged_message(text)
+            entry.add_logged_message(text, timestamp)
             _PARTICIPANT_HISTORY_CACHE.move_to_end(key)
 
 
@@ -497,12 +669,37 @@ def _profile_needs_refresh(settings: dict, message_count: int) -> bool:
     return datetime.now(timezone.utc) - parsed >= PROFILE_REFRESH_MAX_AGE
 
 
+def _apply_style_profile(
+    settings: dict,
+    usable: list[str],
+    display_name: str,
+    *,
+    interaction_examples: list[str] | None,
+    recurring_examples: list[str] | None,
+    style_stats: dict | None,
+) -> None:
+    settings["prompt"] = create_user_style_prompt(
+        usable,
+        display_name,
+        interaction_examples=interaction_examples,
+        recurring_examples=recurring_examples,
+        stats=style_stats,
+    )
+    # Persist a compact turn-length sample so every reply can get its own
+    # length target even while the history cache is still warming up.
+    turn_samples = (style_stats or {}).get("turn_samples")
+    if not turn_samples:
+        turn_samples = compact_turn_samples([(word_count(message), 1) for message in usable])
+    settings["style_turn_samples"] = turn_samples
+
+
 def refresh_style_profile(
     settings: dict,
     messages: list[str],
     message_count: int,
     interaction_examples: list[str] | None = None,
     recurring_examples: list[str] | None = None,
+    style_stats: dict | None = None,
 ) -> bool:
     """Refresh the cached prompt when the participant has materially evolved."""
     identity = settings.get("imitated_user", {})
@@ -511,11 +708,13 @@ def refresh_style_profile(
     if not usable or not _profile_needs_refresh(settings, message_count):
         return False
 
-    settings["prompt"] = create_user_style_prompt(
+    _apply_style_profile(
+        settings,
         usable,
         display_name,
         interaction_examples=interaction_examples,
         recurring_examples=recurring_examples,
+        style_stats=style_stats,
     )
     settings["style_profile_message_count"] = message_count
     settings["style_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -546,11 +745,13 @@ async def initialize_participant_profile(
     if not usable:
         return None
 
-    settings["prompt"] = create_user_style_prompt(
+    _apply_style_profile(
+        settings,
         usable,
         identity["display_name"],
         interaction_examples=entry.interactions,
         recurring_examples=entry.recurring_messages(),
+        style_stats=entry.style_stats(),
     )
     settings["prompt_name"] = identity["display_name"]
     settings["prompt_source"] = "user_imitation"
@@ -630,6 +831,7 @@ async def prepare_participant_turn(
         message_count,
         entry.interactions,
         entry.recurring_messages(),
+        entry.style_stats(),
     ):
         changed = True
 
