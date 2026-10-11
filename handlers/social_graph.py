@@ -35,6 +35,7 @@ from features.social_graph.interaction_analysis import (
     build_edge_interaction_profiles,
     edge_keywords,
 )
+from features.social_graph.cards import PairCardData, fetch_avatar, render_pair_card_async
 from features.social_graph.dynamics import SPARK_WEEKS, RelationshipDynamics
 from features.social_graph.relationship_history import (
     RelationshipTimelineItem,
@@ -441,12 +442,76 @@ async def send_relationship_card(message: types.Message, chat_id: int, user_a_id
     main_event = _chronicle_event_html(view)
     if main_event:
         lines.extend(("", main_event))
+
+    if await _send_pair_card_photo(message, view, dynamics, comment, main_event):
+        return
     await message.reply(
         "\n".join(lines),
         parse_mode="HTML",
         disable_web_page_preview=True,
         reply_markup=relationship_keyboard(view),
     )
+
+
+CAPTION_LIMIT = 1024
+
+
+async def _send_pair_card_photo(
+    message: types.Message,
+    view: RelationshipView,
+    dynamics: RelationshipDynamics | None,
+    comment: str,
+    main_event_html: str | None,
+) -> bool:
+    """Card image with the numbers; the caption keeps the AI comment and links."""
+    bot = getattr(message, "bot", None)
+    if bot is None or not hasattr(message, "reply_photo"):
+        return False
+    try:
+        avatar_a, avatar_b = await fetch_avatar(bot, view.user_a_id), await fetch_avatar(bot, view.user_b_id)
+        main_event = max(view.shared_events, key=lambda item: item.importance_score).title if view.shared_events else None
+        png = await render_pair_card_async(PairCardData(
+            user_a_id=view.user_a_id,
+            user_b_id=view.user_b_id,
+            user_a_name=view.user_a_name,
+            user_b_name=view.user_b_name,
+            level=view.level,
+            archetype=view.archetype,
+            affinity=view.affinity,
+            tension=view.tension,
+            reciprocity=view.reciprocity,
+            trend=view.trend,
+            weekly=tuple(bucket.events for bucket in dynamics.weeks) if dynamics else (),
+            phase=dynamics.phase if dynamics and dynamics.total_events else None,
+            main_event=main_event,
+            avatar_a=avatar_a,
+            avatar_b=avatar_b,
+        ))
+    except Exception as exc:
+        logging.warning("[social_graph] pair card render failed: %s", exc, exc_info=True)
+        return False
+
+    parts = [f"❤️ <b>{escape(_pair_name(view))}</b>"]
+    reactions = _reactions_line(view)
+    if reactions:
+        parts.append(reactions)
+    parts.append(escape(comment))
+    if main_event_html:
+        parts.append(main_event_html)
+    caption = "\n\n".join(parts)
+    if len(caption) > CAPTION_LIMIT:
+        caption = f"❤️ <b>{escape(_pair_name(view))}</b>\n\n{escape(comment[:700])}"
+    try:
+        await message.reply_photo(
+            BufferedInputFile(png, filename="relationship.png"),
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=relationship_keyboard(view),
+        )
+    except Exception as exc:
+        logging.warning("[social_graph] pair card send failed, falling back to text: %s", exc)
+        return False
+    return True
 
 
 @router.message(lambda message: _is_command(message, "мои отношения"))

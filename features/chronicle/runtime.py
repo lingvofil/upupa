@@ -81,6 +81,11 @@ async def list_events(chat_id: int, **kwargs):
     return await service.list_events(chat_id, **kwargs)
 
 
+async def recent_events(chat_id: int, **kwargs):
+    ensure_initialized()
+    return await service.recent_events(chat_id, **kwargs)
+
+
 async def count_events(chat_id: int, **kwargs):
     ensure_initialized()
     return await service.count_events(chat_id, **kwargs)

@@ -98,6 +98,8 @@ class SocialGraphRepository(Protocol):
 
     def list_active_chats(self, since: datetime) -> list[int]: ...
 
+    def load_chat_daily(self, chat_id: int, since_date: str) -> list[dict[str, Any]]: ...
+
 
 _repository_instance: SocialGraphRepository | None = None
 
@@ -295,6 +297,10 @@ async def load_relationship_daily(chat_id: int, user_a_id: int, user_b_id: int) 
         int(user_a_id),
         int(user_b_id),
     )
+
+
+async def load_chat_daily(chat_id: int, since_date: str) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_repository().load_chat_daily, int(chat_id), str(since_date))
 
 
 async def list_active_chats(*, days: int = 30) -> list[int]:

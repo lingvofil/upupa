@@ -169,6 +169,8 @@ class Dossier:
     graph_names: dict[int, str]
     chronicle_count: int
     latest_event: ChronicleEvent | None
+    faction_index: int | None = None
+    antagonist_name: str | None = None
 
 
 def _other(view: RelationshipView, user_id: int) -> tuple[int, str]:
@@ -221,6 +223,8 @@ async def build_dossier(chat_id: int, user_id: int, fallback_name: str) -> Dossi
         graph_names=structure.names,
         chronicle_count=int(chronicle_count),
         latest_event=latest[0] if latest else None,
+        faction_index=index,
+        antagonist_name=_other(antagonist, user_id)[1] if antagonist is not None else None,
     )
 
 
@@ -260,3 +264,52 @@ def format_dossier_html(dossier: Dossier, event_link: str | None = None) -> str:
     else:
         lines.append("📜 В Летописи пока не засветился.")
     return "\n".join(lines)
+
+
+def dossier_card_data(dossier: Dossier, avatar: bytes | None = None):
+    from features.social_graph.cards import DossierCardData, DossierRelation
+
+    relations = tuple(
+        DossierRelation(name=_other(view, dossier.user_id)[1], level=view.level, archetype=view.archetype)
+        for view in dossier.relationships
+    )
+    antagonist = None
+    if dossier.antagonist is not None:
+        antagonist = DossierRelation(
+            name=dossier.antagonist_name or "Участник",
+            level=dossier.antagonist.level,
+            archetype=dossier.antagonist.archetype,
+        )
+    return DossierCardData(
+        user_id=dossier.user_id,
+        name=dossier.name,
+        role_title=dossier.role.role.title if dossier.role else None,
+        role_blurb=dossier.role.role.blurb if dossier.role else None,
+        faction_name=dossier.faction_name,
+        faction_color=faction_color(dossier.faction_index) if dossier.faction_index else None,
+        connections=dossier.connections,
+        period_days=dossier.period_days,
+        relations=relations,
+        antagonist=antagonist,
+        antagonist_tension=dossier.antagonist.tension if dossier.antagonist is not None else 0,
+        chronicle_count=dossier.chronicle_count,
+        latest_event=dossier.latest_event.title if dossier.latest_event is not None else None,
+        avatar=avatar,
+    )
+
+
+def format_dossier_caption_html(dossier: Dossier, event_link: str | None = None) -> str:
+    """Short caption under the dossier card: what the picture cannot hold (links, perekos)."""
+    lines = [f"🗂 <b>Досье: {escape(dossier.name)}</b>"]
+    if dossier.role is not None:
+        lines.append(f"{dossier.role.role.emoji} {escape(dossier.role.reason)}")
+    if dossier.asymmetry is not None:
+        other = escape(dossier.graph_names.get(dossier.asymmetry.user_id, "Участник"))
+        if dossier.asymmetry.outgoing > dossier.asymmetry.incoming:
+            lines.append(f"🫠 Сам заметно чаще обращается к {other}, чем наоборот.")
+        else:
+            lines.append(f"🧲 {other} обращается к нему заметно чаще, чем он в ответ.")
+    if dossier.latest_event is not None and event_link:
+        lines.append(f'📜 <a href="{escape(event_link, quote=True)}">{escape(dossier.latest_event.title)}</a>')
+    return "\n".join(lines)
+

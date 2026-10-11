@@ -141,6 +141,7 @@ class UpupaApplication:
         from core.chronicle_sink import configure_chronicle_sink
         from features.chronicle.runtime import register_external_candidate
         from features.social_graph.relationships import relationship_snapshot_loop
+        from features.social_graph.digest import social_digest_loop
         from games.crocodile_socket_server import crocodile_socket_server_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
@@ -208,6 +209,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             relationship_snapshot_loop,
             name="relationship-snapshots",
+        )
+        self.supervisor.start_resilient(
+            _background_ai_factory(lambda: social_digest_loop(self.bot)),
+            name="social-digest",
         )
         self.supervisor.start_resilient(
             lambda: resource_snapshot_loop(self.supervisor),

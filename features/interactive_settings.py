@@ -87,6 +87,7 @@ async def get_main_settings_markup(chat_id: str):
     proactive_enabled = settings.get("proactive_enabled", True)
     holidays_enabled = settings.get("holidays_enabled", False)
     social_graph_enabled = settings.get("social_graph_enabled", True)
+    social_digest_enabled = settings.get("social_digest_enabled", True)
     radio_enabled = settings.get("radio_enabled", True)
     leave_notifications_enabled = settings.get("leave_notifications_enabled", False)
 
@@ -109,6 +110,7 @@ async def get_main_settings_markup(chat_id: str):
     text += f"👻 *Проактивный режим:* {'Вкл. ✅' if proactive_enabled else 'Выкл. ❌'}\n"
     text += f"📅 *Празднеки:* {'Вкл. ✅' if holidays_enabled else 'Выкл. ❌'}\n"
     text += f"🕸 *Соцграф:* {'Вкл. ✅' if social_graph_enabled else 'Выкл. ❌'}\n"
+    text += f"🥂 *Светская хроника:* {'Вкл. ✅' if social_digest_enabled else 'Выкл. ❌'}\n"
     text += f"📻 *Радио Упупы:* {'Вкл. ✅' if radio_enabled else 'Выкл. ❌'}\n"
     text += f"🚪 *Уведомления об уходе:* {'Вкл. ✅' if leave_notifications_enabled else 'Выкл. ❌'}\n"
     text += f"🎙 *Переозвучка:* {revoice_label}\n"
@@ -127,6 +129,7 @@ async def get_main_settings_markup(chat_id: str):
     builder.button(text=f"{'Выкл.' if proactive_enabled else 'Вкл.'} проактив", callback_data="settings:toggle:proactive")
     builder.button(text=f"{'Выкл.' if holidays_enabled else 'Вкл.'} празднеки", callback_data="settings:toggle:holidays")
     builder.button(text=f"{'Выкл.' if social_graph_enabled else 'Вкл.'} соцграф", callback_data="settings:toggle:social_graph")
+    builder.button(text=f"{'Выкл.' if social_digest_enabled else 'Вкл.'} светскую хронику", callback_data="settings:toggle:social_digest")
     builder.button(text=f"{'Выкл.' if leave_notifications_enabled else 'Вкл.'} уходы", callback_data="settings:toggle:leave_notifications")
 
     builder.button(text="📊 Настроить шансы", callback_data="settings:view:probs_menu")
@@ -415,6 +418,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             chat_settings[chat_id]["holidays_enabled"] = not chat_settings[chat_id].get("holidays_enabled", False)
         elif value == "social_graph":
             chat_settings[chat_id]["social_graph_enabled"] = not chat_settings[chat_id].get("social_graph_enabled", True)
+        elif value == "social_digest":
+            chat_settings[chat_id]["social_digest_enabled"] = not chat_settings[chat_id].get("social_digest_enabled", True)
         elif value == "radio":
             chat_settings[chat_id]["radio_enabled"] = not chat_settings[chat_id].get("radio_enabled", True)
         elif value == "leave_notifications":

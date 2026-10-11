@@ -367,6 +367,10 @@ async def list_events(
     )
 
 
+async def recent_events(chat_id: int, *, days: int = 7, limit: int = 50) -> list[ChronicleEvent]:
+    return await asyncio.to_thread(_stores()[1].recent, int(chat_id), days=days, limit=limit)
+
+
 async def count_events(chat_id: int, *, user_id: int | None = None, username: str | None = None) -> int:
     return await asyncio.to_thread(_stores()[1].count, int(chat_id), user_id=user_id, username=username)
 
