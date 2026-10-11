@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Соцграф чата</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.34.3/cytoscape.min.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #ffffff);
+      --bg2: var(--tg-theme-secondary-bg-color, #f2f3f5);
+      --text: var(--tg-theme-text-color, #1f2024);
+      --hint: var(--tg-theme-hint-color, #7d8088);
+      --link: var(--tg-theme-link-color, #2f7cf6);
+      --accent: var(--tg-theme-button-color, #2f7cf6);
+      --accent-text: var(--tg-theme-button-text-color, #ffffff);
+      --line: color-mix(in srgb, var(--hint) 22%, transparent);
+      --warm: #ea605c;
+      --green: #34a867;
+      --blue: #4285f4;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    body { display: flex; flex-direction: column; overflow: hidden; }
+    header { padding: 12px 16px 8px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; }
+    .seg { display: inline-flex; background: var(--bg2); border-radius: 10px; padding: 2px; }
+    .seg button { border: 0; background: transparent; color: var(--text); padding: 6px 10px; border-radius: 8px; font: inherit; font-size: 13px; }
+    .seg button.on { background: var(--bg); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+    nav { display: flex; gap: 4px; padding: 0 12px 8px; overflow-x: auto; scrollbar-width: none; }
+    nav button { border: 0; background: transparent; color: var(--hint); padding: 8px 12px; border-radius: 18px; font: inherit; white-space: nowrap; }
+    nav button.on { background: var(--accent); color: var(--accent-text); }
+    main { flex: 1; min-height: 0; position: relative; }
+    .view { position: absolute; inset: 0; overflow-y: auto; padding: 4px 16px 24px; display: none; }
+    .view.on { display: block; }
+    #view-graph { padding: 0; overflow: hidden; }
+    #cy { position: absolute; inset: 40px 0 0 0; }
+    #legend { position: absolute; top: 0; left: 0; right: 0; height: 40px; display: flex; gap: 6px; overflow-x: auto; padding: 4px 12px; scrollbar-width: none; z-index: 2; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 16px; padding: 4px 10px; font: inherit; font-size: 13px; white-space: nowrap; }
+    .chip.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+    #find-me { position: absolute; right: 12px; bottom: 16px; z-index: 2; border: 0; border-radius: 22px; padding: 10px 14px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+    .card { background: var(--bg2); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+    .card.tap { cursor: pointer; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .grow { flex: 1; min-width: 0; }
+    .title { font-weight: 600; }
+    .hint { color: var(--hint); font-size: 13px; }
+    .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 6px; }
+    .bar > i { display: block; height: 100%; border-radius: 3px; }
+    .meter { margin: 8px 0; }
+    .meter .row { justify-content: space-between; font-size: 13px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; color: #fff; font-size: 13px; font-weight: 600; }
+    .avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; }
+    .avatar.big { width: 64px; height: 64px; font-size: 22px; }
+    .ring { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+    .ring > div { width: 56px; height: 56px; border-radius: 50%; background: var(--bg); display: grid; place-items: center; font-weight: 700; font-size: 20px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    input[type=search] { width: 100%; border: 0; background: var(--bg2); color: var(--text); border-radius: 10px; padding: 10px 12px; font: inherit; margin: 6px 0; }
+    .empty, .state { text-align: center; color: var(--hint); padding: 40px 16px; }
+    #state { position: absolute; inset: 0; background: var(--bg); z-index: 3; }
+    a, .link { color: var(--link); text-decoration: none; cursor: pointer; }
+    h3 { font-size: 15px; margin: 16px 0 4px; }
+    #backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+    #backdrop.on { opacity: 1; pointer-events: auto; }
+    #sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 82vh; overflow-y: auto; background: var(--bg); border-radius: 18px 18px 0 0; padding: 8px 16px 28px; transform: translateY(100%); transition: transform .25s ease; z-index: 11; box-shadow: 0 -4px 24px rgba(0,0,0,.18); }
+    #sheet.on { transform: translateY(0); }
+    #sheet .grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 4px auto 10px; }
+    #sheet-close { position: absolute; right: 12px; top: 10px; border: 0; background: var(--bg2); color: var(--hint); width: 30px; height: 30px; border-radius: 50%; font-size: 16px; }
+    .event-date { font-size: 12px; color: var(--hint); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🕸 Соцграф</h1>
+    <div class="seg" id="periods"></div>
+  </header>
+  <nav id="tabs">
+    <button data-tab="graph" class="on">Граф</button>
+    <button data-tab="pairs">Пары</button>
+    <button data-tab="factions">Фракции</button>
+    <button data-tab="chronicle">Летопись</button>
+  </nav>
+  <main>
+    <section class="view on" id="view-graph">
+      <div id="legend"></div>
+      <div id="cy"></div>
+      <button id="find-me" hidden>Где я?</button>
+    </section>
+    <section class="view" id="view-pairs"></section>
+    <section class="view" id="view-factions"></section>
+    <section class="view" id="view-chronicle"></section>
+    <div class="state" id="state">Загружаю связи…</div>
+  </main>
+  <div id="backdrop"></div>
+  <div id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><button id="sheet-close" aria-label="Закрыть">✕</button><div id="sheet-body"></div></div>
+
+<script>
+(function () {
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+  if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+
+  var MONTHS = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
+  var CATEGORY = {funny:"😂 смешное", absurd:"🌀 абсурд", conflict:"⚔️ конфликт", fail:"💥 провал", local_meme:"🧠 мем",
+    confession:"🙊 признание", decision:"✅ решение", promise:"🤞 обещание", bet:"🎲 пари", record:"🏆 рекорд",
+    game:"🎮 игра", relationship:"❤️ отношения", other:"📌 другое"};
+  var PALETTE = ["#4285f4","#ea5852","#34a867","#f6b22e","#9c66d6","#26b6c4","#e878ba","#808a34"];
+
+  var state = { data: null, period: 30, tab: "graph", faction: null, pairFilter: "all", query: "", category: null };
+  var cy = null;
+  var byId = {};
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+  function name(id) { return byId[id] ? byId[id].name : (pairName(id) || "Участник"); }
+  function pairName(id) {
+    var rels = (state.data && state.data.relationships) || [];
+    for (var i = 0; i < rels.length; i++) {
+      if (rels[i].a === id) return rels[i].a_name;
+      if (rels[i].b === id) return rels[i].b_name;
+    }
+    return null;
+  }
+  function initials(text) {
+    var parts = String(text || "?").replace(/@/g, " ").trim().split(/\s+/);
+    return ((parts[0] || "?")[0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+  }
+  function colorFor(id) { return byId[id] ? byId[id].color : PALETTE[Math.abs(id) % PALETTE.length]; }
+  function avatar(id, big) {
+    var node = el("div", "avatar" + (big ? " big" : ""), initials(name(id)));
+    node.style.background = colorFor(id);
+    return node;
+  }
+  function fmtDate(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear();
+  }
+  function plural(n, one, few, many) {
+    var t = n % 100; if (t >= 11 && t <= 14) return many;
+    t %= 10; if (t === 1) return one; if (t >= 2 && t <= 4) return few; return many;
+  }
+  function meter(label, value, max, color, text) {
+    var wrap = el("div", "meter");
+    var row = el("div", "row");
+    row.appendChild(el("span", "hint", label));
+    row.appendChild(el("span", "title", text));
+    wrap.appendChild(row);
+    var bar = el("div", "bar"); var fill = el("i");
+    fill.style.width = Math.max(2, Math.min(100, value / max * 100)) + "%";
+    fill.style.background = color;
+    bar.appendChild(fill); wrap.appendChild(bar);
+    return wrap;
+  }
+  function openLink(url) {
+    if (!url) return;
+    if (tg && tg.openTelegramLink) { try { tg.openTelegramLink(url); return; } catch (e) {} }
+    window.open(url, "_blank", "noopener");
+  }
+  function haptic() { try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+
+  // ---------- sheet ----------
+  var sheet = document.getElementById("sheet");
+  var backdrop = document.getElementById("backdrop");
+  function openSheet(content) {
+    var body = clear(document.getElementById("sheet-body"));
+    body.appendChild(content);
+    sheet.scrollTop = 0;
+    sheet.classList.add("on"); backdrop.classList.add("on");
+    if (tg && tg.BackButton) { try { tg.BackButton.show(); } catch (e) {} }
+  }
+  function closeSheet() {
+    sheet.classList.remove("on"); backdrop.classList.remove("on");
+    if (tg && tg.BackButton) { try { tg.BackButton.hide(); } catch (e) {} }
+    if (cy) cy.elements().removeClass("faded focus");
+  }
+  backdrop.addEventListener("click", closeSheet);
+  document.getElementById("sheet-close").addEventListener("click", closeSheet);
+  if (tg && tg.BackButton) { try { tg.BackButton.onClick(closeSheet); } catch (e) {} }
+
+  // ---------- data helpers ----------
+  function relationshipFor(a, b) {
+    var rels = state.data.relationships;
+    for (var i = 0; i < rels.length; i++) {
+      var r = rels[i];
+      if ((r.a === a && r.b === b) || (r.a === b && r.b === a)) return r;
+    }
+    return null;
+  }
+  function edgeFor(a, b) {
+    var edges = state.data.edges;
+    for (var i = 0; i < edges.length; i++) {
+      var e = edges[i];
+      if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return e;
+    }
+    return null;
+  }
+  function eventsWith(ids) {
+    return state.data.chronicle.filter(function (event) {
+      return ids.every(function (id) { return event.participants.indexOf(id) !== -1; });
+    });
+  }
+  function eventCard(event) {
+    var card = el("div", "card");
+    card.appendChild(el("div", "event-date", fmtDate(event.date) + " · " + (CATEGORY[event.category] || event.category)));
+    card.appendChild(el("div", "title", event.title));
+    card.appendChild(el("div", null, event.summary));
+    var people = event.participants.map(name).join(", ");
+    if (people) card.appendChild(el("div", "hint", people));
+    if (event.link) {
+      var link = el("span", "link", "↗ к месту событий");
+      link.addEventListener("click", function () { openLink(event.link); });
+      card.appendChild(link);
+    }
+    return card;
+  }
+
+  // ---------- person & pair sheets ----------
+  function personSheet(id) {
+    var node = byId[id];
+    var box = el("div");
+    var head = el("div", "row");
+    head.appendChild(avatar(id, true));
+    var meta = el("div", "grow");
+    meta.appendChild(el("div", "title", name(id)));
+    if (node && node.role) meta.appendChild(el("div", null, node.role.emoji + " " + node.role.title));
+    if (node && node.faction) {
+      var faction = state.data.factions.filter(function (f) { return f.index === node.faction; })[0];
+      if (faction) {
+        var chip = el("span", "badge", faction.name); chip.style.background = faction.color;
+        meta.appendChild(chip);
+      }
+    }
+    head.appendChild(meta); box.appendChild(head);
+    if (node && node.role) box.appendChild(el("p", "hint", node.role.reason));
+
+    var links = state.data.edges.filter(function (e) { return e.a === id || e.b === id; })
+      .sort(function (x, y) { return y.total - x.total; });
+    if (links.length) {
+      box.appendChild(el("h3", null, "Связи за " + state.data.period_days + " дней"));
+      links.slice(0, 8).forEach(function (e) {
+        var other = e.a === id ? e.b : e.a;
+        var out = e.a === id ? e.a_to_b : e.b_to_a;
+        var inc = e.a === id ? e.b_to_a : e.a_to_b;
+        var card = el("div", "card tap"); var row = el("div", "row");
+        row.appendChild(avatar(other));
+        var info = el("div", "grow");
+        info.appendChild(el("div", "title ellipsis", name(other)));
+        info.appendChild(el("div", "hint", e.genre + " · сам → " + out + " · к нему ← " + inc));
+        row.appendChild(info); card.appendChild(row);
+        card.addEventListener("click", function () { haptic(); openSheet(pairSheet(id, other)); });
+        box.appendChild(card);
+      });
+    }
+    var rels = state.data.relationships.filter(function (r) { return r.a === id || r.b === id; }).slice(0, 5);
+    if (rels.length) {
+      box.appendChild(el("h3", null, "Долгие отношения"));
+      rels.forEach(function (r) { box.appendChild(pairCard(r, id)); });
+    }
+    var events = eventsWith([id]);
+    box.appendChild(el("h3", null, "Летопись"));
+    if (events.length) events.slice(0, 6).forEach(function (event) { box.appendChild(eventCard(event)); });
+    else box.appendChild(el("div", "hint", "Пока не засветился."));
+    return box;
+  }
+
+  function pairSheet(a, b) {
+    var rel = relationshipFor(a, b);
+    var edge = edgeFor(a, b);
+    var box = el("div");
+    var head = el("div", "row");
+    head.appendChild(avatar(a));
+    var title = el("div", "grow");
+    title.appendChild(el("div", "title", name(a) + " & " + name(b)));
+    if (rel) {
+      var badge = el("span", "badge", rel.archetype);
+      badge.style.background = rel.tension >= 45 ? "var(--warm)" : (rel.affinity >= 60 ? "var(--green)" : "var(--blue)");
+      title.appendChild(badge);
+    }
+    head.appendChild(title);
+    if (rel) {
+      var ring = el("div", "ring");
+      ring.style.background = "conic-gradient(var(--accent) " + (rel.level / 15 * 360) + "deg, var(--line) 0)";
+      var inner = el("div", null, rel.level); ring.appendChild(inner);
+      head.appendChild(ring);
+    }
+    head.appendChild(avatar(b));
+    box.appendChild(head);
+
+    if (rel) {
+      box.appendChild(meter("Близость", rel.affinity, 100, "var(--green)", rel.affinity + "/100"));
+      box.appendChild(meter("Напряжение", rel.tension, 100, "var(--warm)", rel.tension + "/100"));
+      box.appendChild(meter("Взаимность", rel.reciprocity, 1, "var(--blue)", Math.round(rel.reciprocity * 100) + "%"));
+      box.appendChild(el("p", null, "Сейчас: " + rel.trend + ". Уровень " + rel.level + " из 15."));
+      if (rel.positive_reactions || rel.negative_reactions) {
+        box.appendChild(el("p", "hint", "Реакции друг на друга: тёплых " + rel.positive_reactions + ", ядовитых " + rel.negative_reactions + "."));
+      }
+    } else {
+      box.appendChild(el("p", "hint", "Долгих отношений пока не накопилось — только свежие взаимодействия."));
+    }
+    if (edge) {
+      box.appendChild(el("p", "hint", "За " + state.data.period_days + " дней: " + edge.genre + "; " +
+        name(edge.a) + " → " + edge.a_to_b + ", " + name(edge.b) + " → " + edge.b_to_a + "."));
+    }
+    var events = eventsWith([a, b]);
+    box.appendChild(el("h3", null, "Общие эпизоды"));
+    if (events.length) events.forEach(function (event) { box.appendChild(eventCard(event)); });
+    else box.appendChild(el("div", "hint", "В Летописи вместе пока не попадали."));
+    return box;
+  }
+
+  function pairCard(r, perspective) {
+    var card = el("div", "card tap");
+    var row = el("div", "row");
+    var label = perspective ? (r.a === perspective ? r.b_name : r.a_name) : (r.a_name + " & " + r.b_name);
+    var info = el("div", "grow");
+    info.appendChild(el("div", "title ellipsis", label));
+    info.appendChild(el("div", "hint", r.archetype + " · " + r.trend));
+    var bar = el("div", "bar"); var fill = el("i");
+    fill.style.width = Math.max(4, r.level / 15 * 100) + "%";
+    fill.style.background = r.tension >= 45 ? "var(--warm)" : "var(--accent)";
+    bar.appendChild(fill); info.appendChild(bar);
+    row.appendChild(info);
+    row.appendChild(el("div", "title", r.level + "/15"));
+    card.appendChild(row);
+    card.addEventListener("click", function () { haptic(); openSheet(pairSheet(r.a, r.b)); });
+    return card;
+  }
+
+  // ---------- graph ----------
+  function renderLegend() {
+    var legend = clear(document.getElementById("legend"));
+    state.data.factions.forEach(function (f) {
+      var chip = el("button", "chip" + (state.faction === f.index ? " on" : ""));
+      var dot = el("span", "dot"); dot.style.background = f.color;
+      chip.appendChild(dot); chip.appendChild(document.createTextNode(f.name));
+      chip.addEventListener("click", function () {
+        state.faction = state.faction === f.index ? null : f.index; haptic();
+        renderLegend(); applyFactionFilter();
+      });
+      legend.appendChild(chip);
+    });
+  }
+  function applyFactionFilter() {
+    if (!cy) return;
+    cy.nodes().forEach(function (node) {
+      var info = byId[Number(node.id())];
+      node.data("dim", state.faction !== null && info && info.faction !== state.faction ? 1 : 0);
+    });
+  }
+
+  function renderGraph() {
+    var data = state.data;
+    renderLegend();
+
+    var findMe = document.getElementById("find-me");
+    findMe.hidden = !(data.viewer_id && byId[data.viewer_id]);
+
+    if (!data.nodes.length) {
+      if (cy) { cy.destroy(); cy = null; }
+      clear(document.getElementById("cy")).appendChild(el("div", "empty", "За этот период связей почти нет."));
+      return;
+    }
+    if (typeof cytoscape === "undefined") {
+      clear(document.getElementById("cy")).appendChild(el("div", "empty", "Не загрузилась библиотека графа. Попробуйте открыть ещё раз."));
+      return;
+    }
+    var maxStrength = Math.max.apply(null, data.nodes.map(function (n) { return n.strength; })) || 1;
+    var maxEdge = Math.max.apply(null, data.edges.map(function (e) { return e.total; })) || 1;
+    var elements = [];
+    data.nodes.forEach(function (n) {
+      elements.push({ data: { id: String(n.id), label: n.name, color: n.color,
+        size: 26 + 34 * Math.sqrt(n.strength / maxStrength),
+        dim: state.faction !== null && n.faction !== state.faction ? 1 : 0 } });
+    });
+    data.edges.forEach(function (e) {
+      var forward = e.a_to_b, backward = e.b_to_a;
+      var source = e.a, target = e.b, arrow = "none";
+      if (forward >= 1.75 * Math.max(backward, 0.001)) { arrow = "triangle"; }
+      else if (backward >= 1.75 * Math.max(forward, 0.001)) { arrow = "triangle"; source = e.b; target = e.a; }
+      elements.push({ data: { id: "e" + e.a + "_" + e.b, source: String(source), target: String(target), a: e.a, b: e.b,
+        width: 1.5 + 7 * Math.sqrt(e.total / maxEdge), arrow: arrow } });
+    });
+    var textColor = getComputedStyle(document.body).color;
+    if (cy) cy.destroy();
+    cy = cytoscape({
+      container: document.getElementById("cy"),
+      elements: elements,
+      minZoom: 0.3, maxZoom: 3,
+      style: [
+        { selector: "node", style: { "background-color": "data(color)", width: "data(size)", height: "data(size)",
+          label: "data(label)", "font-size": 13, "font-weight": 600, color: textColor, "text-valign": "bottom", "text-margin-y": 4,
+          "text-max-width": 90, "text-wrap": "ellipsis", "border-width": 2, "border-color": "#ffffff" } },
+        { selector: "node[dim = 1]", style: { opacity: 0.18 } },
+        { selector: "edge", style: { width: "data(width)", "line-color": "#9aa0aa", opacity: 0.55,
+          "curve-style": "bezier", "target-arrow-shape": "data(arrow)", "target-arrow-color": "#9aa0aa", "arrow-scale": 0.9 } },
+        { selector: ".faded", style: { opacity: 0.08 } },
+        { selector: "node.focus", style: { "border-color": "#111", "border-width": 4 } }
+      ],
+      layout: { name: "cose", animate: false, randomize: true, nodeRepulsion: function () { return 9000; },
+        idealEdgeLength: function () { return 90; }, edgeElasticity: function () { return 120; }, padding: 30, numIter: 1500 }
+    });
+    cy.on("tap", "node", function (evt) {
+      var node = evt.target; var id = Number(node.id());
+      cy.elements().addClass("faded"); node.closedNeighborhood().removeClass("faded"); node.addClass("focus");
+      haptic(); openSheet(personSheet(id));
+    });
+    cy.on("tap", "edge", function (evt) {
+      var data = evt.target.data(); haptic(); openSheet(pairSheet(data.a, data.b));
+    });
+  }
+  document.getElementById("find-me").addEventListener("click", function () {
+    var id = state.data && state.data.viewer_id;
+    if (!cy || !id) return;
+    var node = cy.getElementById(String(id));
+    if (!node || node.empty()) return;
+    cy.animate({ center: { eles: node }, zoom: 1.6 }, { duration: 300 });
+    node.flashClass ? node.flashClass("focus", 1200) : node.addClass("focus");
+  });
+
+  // ---------- lists ----------
+  function renderPairs() {
+    var view = clear(document.getElementById("view-pairs"));
+    var search = el("input"); search.type = "search"; search.placeholder = "Найти человека"; search.value = state.query;
+    search.addEventListener("input", function () { state.query = search.value; renderPairList(); });
+    view.appendChild(search);
+    var filters = el("div", "chips");
+    [["all", "Все"], ["close", "Близкие"], ["tense", "Напряжённые"], ["onesided", "Односторонние"], ["mine", "Мои"]].forEach(function (f) {
+      var chip = el("button", "chip" + (state.pairFilter === f[0] ? " on" : ""), f[1]);
+      chip.addEventListener("click", function () { state.pairFilter = f[0]; haptic(); renderPairs(); });
+      filters.appendChild(chip);
+    });
+    view.appendChild(filters);
+    view.appendChild(el("div", null)).id = "pair-list";
+    renderPairList();
+  }
+  function renderPairList() {
+    var list = clear(document.getElementById("pair-list"));
+    var q = state.query.trim().toLowerCase();
+    var me = state.data.viewer_id;
+    var rels = state.data.relationships.filter(function (r) {
+      if (q && (r.a_name + " " + r.b_name).toLowerCase().indexOf(q) === -1) return false;
+      if (state.pairFilter === "close") return r.affinity >= 55;
+      if (state.pairFilter === "tense") return r.tension >= 25;
+      if (state.pairFilter === "onesided") return r.reciprocity < 0.4;
+      if (state.pairFilter === "mine") return r.a === me || r.b === me;
+      return true;
+    });
+    if (!rels.length) { list.appendChild(el("div", "empty", "Таких пар нет.")); return; }
+    rels.forEach(function (r) { list.appendChild(pairCard(r)); });
+  }
+
+  function renderFactions() {
+    var view = clear(document.getElementById("view-factions"));
+    var factions = state.data.factions;
+    if (!factions.length) { view.appendChild(el("div", "empty", "Фракций не видно: связей слишком мало.")); return; }
+    if (factions.length === 1) view.appendChild(el("p", "hint", "Чат слишком сплочённый, чтобы делиться на лагеря."));
+    factions.forEach(function (f) {
+      var card = el("div", "card");
+      var head = el("div", "row"); var dot = el("span", "dot"); dot.style.background = f.color;
+      head.appendChild(dot); head.appendChild(el("div", "title grow", f.name));
+      head.appendChild(el("span", "hint", f.members.length + " " + plural(f.members.length, "человек", "человека", "человек")));
+      card.appendChild(head);
+      card.appendChild(meter("Сплочённость", f.cohesion, 1, f.color, Math.round(f.cohesion * 100) + "%"));
+      card.appendChild(el("div", "hint", "Лидер по связям: " + name(f.leader)));
+      var chips = el("div", "chips");
+      f.members.forEach(function (id) {
+        var chip = el("button", "chip", name(id));
+        chip.addEventListener("click", function () { haptic(); openSheet(personSheet(id)); });
+        chips.appendChild(chip);
+      });
+      card.appendChild(chips);
+      view.appendChild(card);
+    });
+    if (state.data.liaison_id) view.appendChild(el("p", null, "🤝 Главный связной между лагерями: " + name(state.data.liaison_id)));
+  }
+
+  function renderChronicle() {
+    var view = clear(document.getElementById("view-chronicle"));
+    var events = state.data.chronicle;
+    if (!events.length) { view.appendChild(el("div", "empty", "В Летописи пока пусто.")); return; }
+    var present = {};
+    events.forEach(function (e) { present[e.category] = true; });
+    var chips = el("div", "chips");
+    var all = el("button", "chip" + (state.category === null ? " on" : ""), "Все");
+    all.addEventListener("click", function () { state.category = null; renderChronicle(); });
+    chips.appendChild(all);
+    Object.keys(present).forEach(function (key) {
+      var chip = el("button", "chip" + (state.category === key ? " on" : ""), CATEGORY[key] || key);
+      chip.addEventListener("click", function () { state.category = key; haptic(); renderChronicle(); });
+      chips.appendChild(chip);
+    });
+    view.appendChild(chips);
+    events.filter(function (e) { return state.category === null || e.category === state.category; })
+      .forEach(function (e) { view.appendChild(eventCard(e)); });
+  }
+
+  function render() {
+    byId = {};
+    state.data.nodes.forEach(function (n) { byId[n.id] = n; });
+    document.getElementById("state").style.display = "none";
+    renderPairs(); renderFactions(); renderChronicle();
+    if (cy) { cy.destroy(); cy = null; }
+    if (state.tab === "graph") renderGraph();
+  }
+
+  // ---------- navigation ----------
+  function setTab(tab) {
+    state.tab = tab;
+    Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (b) {
+      b.classList.toggle("on", b.getAttribute("data-tab") === tab);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".view"), function (v) {
+      v.classList.toggle("on", v.id === "view-" + tab);
+    });
+    if (tab === "graph" && state.data) {
+      if (cy) { cy.resize(); } else { renderGraph(); }
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (b) {
+    b.addEventListener("click", function () { haptic(); setTab(b.getAttribute("data-tab")); });
+  });
+
+  function renderPeriods(periods) {
+    var seg = clear(document.getElementById("periods"));
+    periods.forEach(function (p) {
+      var btn = el("button", state.period === p ? "on" : "", p + " дн.");
+      btn.addEventListener("click", function () { if (state.period !== p) { state.period = p; haptic(); load(); } });
+      seg.appendChild(btn);
+    });
+  }
+
+  function showState(text) {
+    var node = document.getElementById("state");
+    node.textContent = text; node.style.display = "block";
+  }
+
+  function load() {
+    renderPeriods([7, 30, 90]);
+    showState("Загружаю связи…");
+    var initData = tg ? tg.initData : "";
+    fetch("/game?view=social-api&period=" + encodeURIComponent(state.period), {
+      headers: { "X-Telegram-Init-Data": initData || "" },
+      cache: "no-store"
+    }).then(function (response) {
+      if (response.status === 401) throw new Error("Откройте карту кнопкой из чата в Telegram.");
+      if (response.status === 403) throw new Error("Карта доступна только участникам чата, где включён соцграф.");
+      if (!response.ok) throw new Error("Сервер не ответил (" + response.status + "). Попробуйте позже.");
+      return response.json();
+    }).then(function (data) {
+      state.data = data;
+      renderPeriods(data.periods || [7, 30, 90]);
+      render();
+    }).catch(function (error) {
+      showState(error && error.message ? error.message : "Не удалось загрузить данные.");
+    });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

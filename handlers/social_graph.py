@@ -48,6 +48,7 @@ from features.social_graph.relationships import (
     get_relationships,
 )
 from features.social_graph.rendering import render_cringe_graph_png_async, render_graph_png_async
+from features.social_graph.webapp import mini_app_link
 from features.social_graph.service import (
     REPLY_WEIGHT,
     capture_reaction,
@@ -76,14 +77,17 @@ _MONTHS = (
 CALLBACK_PREFIX = "sg:"
 
 
-def map_keyboard():
+def map_keyboard(chat_id: int | None = None):
     builder = InlineKeyboardBuilder()
+    link = mini_app_link(chat_id) if chat_id is not None else None
+    if link:
+        builder.button(text="🌐 Интерактивная карта", url=link)
     builder.button(text="🏴 Фракции", callback_data=f"{CALLBACK_PREFIX}fac")
     builder.button(text="🎭 Роли", callback_data=f"{CALLBACK_PREFIX}roles")
     builder.button(text="🏆 Топ пар", callback_data=f"{CALLBACK_PREFIX}top")
     builder.button(text="📜 Летопись", callback_data=f"{CALLBACK_PREFIX}chr")
     builder.button(text="🖍 Кринж-версия", callback_data=f"{CALLBACK_PREFIX}cringe")
-    builder.adjust(2, 2, 1)
+    builder.adjust(*((1,) if link else ()), 2, 2, 1)
     return builder.as_markup()
 
 
@@ -350,7 +354,7 @@ async def send_social_graph(message: types.Message, chat_id: int) -> None:
     await message.answer_photo(
         BufferedInputFile(png, filename="social_graph.png"),
         caption=caption,
-        reply_markup=map_keyboard(),
+        reply_markup=map_keyboard(chat_id),
     )
 
 

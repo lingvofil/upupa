@@ -218,12 +218,16 @@ def test_digest_is_posted_once_per_week_on_sunday_evening(monkeypatch):
     from core import state
     import features.chat_settings as chat_settings_module
 
-    monkeypatch.setattr(state, "chat_settings", {"-1": {}, "-2": {"social_digest_enabled": False}})
+    monkeypatch.setattr(
+        state,
+        "chat_settings",
+        {"-1": {"social_digest_enabled": True}, "-2": {"social_digest_enabled": False}, "-3": {}},
+    )
     monkeypatch.setattr(digest, "chat_settings", state.chat_settings)
     monkeypatch.setattr(chat_settings_module, "save_chat_settings", lambda *a, **k: None)
 
     async def active(*, days):
-        return [-1, -2]
+        return [-1, -2, -3]  # -3 never opted in: autopost is off by default
 
     async def facts(chat_id, *, today):
         rows = [_row(1, 2, d, 3) for d in range(0, 5)]

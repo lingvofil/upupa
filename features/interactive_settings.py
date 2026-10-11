@@ -87,7 +87,7 @@ async def get_main_settings_markup(chat_id: str):
     proactive_enabled = settings.get("proactive_enabled", True)
     holidays_enabled = settings.get("holidays_enabled", False)
     social_graph_enabled = settings.get("social_graph_enabled", True)
-    social_digest_enabled = settings.get("social_digest_enabled", True)
+    social_digest_enabled = settings.get("social_digest_enabled", False)
     radio_enabled = settings.get("radio_enabled", True)
     leave_notifications_enabled = settings.get("leave_notifications_enabled", False)
 
@@ -419,7 +419,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
         elif value == "social_graph":
             chat_settings[chat_id]["social_graph_enabled"] = not chat_settings[chat_id].get("social_graph_enabled", True)
         elif value == "social_digest":
-            chat_settings[chat_id]["social_digest_enabled"] = not chat_settings[chat_id].get("social_digest_enabled", True)
+            chat_settings[chat_id]["social_digest_enabled"] = not chat_settings[chat_id].get("social_digest_enabled", False)
         elif value == "radio":
             chat_settings[chat_id]["radio_enabled"] = not chat_settings[chat_id].get("radio_enabled", True)
         elif value == "leave_notifications":
