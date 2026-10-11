@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -674,7 +675,7 @@ class SQLiteSocialGraphRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT d.user_a_id,d.user_b_id,d.activity_date,d.event_count,
+                SELECT d.user_a_id,d.user_b_id,d.activity_date,d.event_count,d.xp_earned,
                        COALESCE(pa.display_name,'Участник') AS user_a_name,
                        COALESCE(pb.display_name,'Участник') AS user_b_name,
                        r.first_interaction_at
@@ -689,4 +690,109 @@ class SQLiteSocialGraphRepository:
                 (int(chat_id), str(since_date)),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def load_pair_exchanges(
+        self,
+        chat_id: int,
+        windows: Sequence[tuple[str, datetime, datetime]],
+    ) -> dict[str, dict[tuple[int, int], int]]:
+        """Direct replies/mentions between each pair inside each time window.
+
+        Used to tell who actually argued with whom during a Chronicle episode,
+        as opposed to merely being present in the same thread.
+        """
+        result: dict[str, dict[tuple[int, int], int]] = {}
+        if not windows:
+            return result
+        with self._connect() as conn:
+            for key, start, end in windows:
+                rows = conn.execute(
+                    """
+                    SELECT actor_user_id,target_user_id,COUNT(*) AS n
+                    FROM social_interactions
+                    WHERE chat_id=? AND interaction_type IN ('reply','mention')
+                      AND interaction_timestamp>=? AND interaction_timestamp<=?
+                    GROUP BY actor_user_id,target_user_id
+                    """,
+                    (int(chat_id), self._timestamp(start), self._timestamp(end)),
+                ).fetchall()
+                pairs: dict[tuple[int, int], int] = {}
+                for row in rows:
+                    pair = tuple(sorted((int(row["actor_user_id"]), int(row["target_user_id"]))))
+                    pairs[pair] = pairs.get(pair, 0) + int(row["n"])
+                result[str(key)] = pairs
+        return result
+
+    def backfill_reaction_valence(
+        self,
+        history_path: str | Path,
+        *,
+        updated_before: str,
+        classify,
+        migration: str = "reaction_valence_backfill_v1",
+    ) -> int | None:
+        """One-off: copy emoji valence of reactions captured by the Chronicle.
+
+        Chronicle stores per-reactor emoji since it was deployed; the social
+        graph only started counting valence later.  ``updated_before`` excludes
+        reactions already counted live.  Returns the number of counted
+        reactions, or None if the migration had already been applied.
+        """
+        history_path = Path(history_path)
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS social_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL, details TEXT)"
+            )
+            if conn.execute("SELECT 1 FROM social_migrations WHERE name=?", (migration,)).fetchone():
+                return None
+            counts: dict[tuple[int, int, int], list[int]] = {}
+            if history_path.exists():
+                conn.execute("ATTACH DATABASE ? AS chronicle_history", (str(history_path),))
+                try:
+                    has_table = conn.execute(
+                        "SELECT 1 FROM chronicle_history.sqlite_master WHERE type='table' AND name='chronicle_user_reactions'"
+                    ).fetchone()
+                    rows = []
+                    if has_table:
+                        rows = conn.execute(
+                            """
+                            SELECT r.chat_id,r.user_id AS reactor_id,a.user_id AS author_id,r.reactions_json
+                            FROM chronicle_history.chronicle_user_reactions r
+                            JOIN social_message_authors a ON a.chat_id=r.chat_id AND a.message_id=r.message_id
+                            WHERE r.updated_at < ? AND r.user_id <> a.user_id
+                            """,
+                            (str(updated_before),),
+                        ).fetchall()
+                finally:
+                    conn.commit()
+                    conn.execute("DETACH DATABASE chronicle_history")
+                for row in rows:
+                    try:
+                        reactions = json.loads(row["reactions_json"] or "[]")
+                    except (TypeError, ValueError):
+                        continue
+                    valence = classify(reactions if isinstance(reactions, list) else [])
+                    if not valence:
+                        continue
+                    a, b = sorted((int(row["reactor_id"]), int(row["author_id"])))
+                    bucket = counts.setdefault((int(row["chat_id"]), a, b), [0, 0])
+                    bucket[0 if valence > 0 else 1] += 1
+            counted = 0
+            for (chat_id, a, b), (positive, negative) in counts.items():
+                cursor = conn.execute(
+                    """
+                    UPDATE social_relationships
+                    SET positive_reaction_count=positive_reaction_count+?,
+                        negative_reaction_count=negative_reaction_count+?
+                    WHERE chat_id=? AND user_a_id=? AND user_b_id=?
+                    """,
+                    (positive, negative, chat_id, a, b),
+                )
+                if cursor.rowcount:
+                    counted += positive + negative
+            conn.execute(
+                "INSERT INTO social_migrations (name,applied_at,details) VALUES (?,?,?)",
+                (migration, self._timestamp(datetime.now(timezone.utc)), json.dumps({"reactions": counted})),
+            )
+        return counted
 

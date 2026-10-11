@@ -301,6 +301,10 @@
       box.appendChild(meter("Напряжение", rel.tension, 100, "var(--warm)", rel.tension + "/100"));
       box.appendChild(meter("Взаимность", rel.reciprocity, 1, "var(--blue)", Math.round(rel.reciprocity * 100) + "%"));
       box.appendChild(el("p", null, "Сейчас: " + rel.trend + ". Уровень " + rel.level + " из 15."));
+      box.appendChild(el("p", "hint",
+        "Близость — насколько активно и взаимно они общаются в последние недели. " +
+        "Напряжение — стычки именно между ними (по Летописи) и ядовитые реакции друг на друга. " +
+        "Уровень — место пары среди всех пар чата."));
       if (rel.positive_reactions || rel.negative_reactions) {
         box.appendChild(el("p", "hint", "Реакции друг на друга: тёплых " + rel.positive_reactions + ", ядовитых " + rel.negative_reactions + "."));
       }
@@ -440,6 +444,7 @@
       filters.appendChild(chip);
     });
     view.appendChild(filters);
+    view.appendChild(el("p", "hint", "Уровень — место пары среди всех пар этого чата: 15/15 достаётся только самым близким."));
     view.appendChild(el("div", null)).id = "pair-list";
     renderPairList();
   }

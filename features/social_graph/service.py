@@ -100,6 +100,12 @@ class SocialGraphRepository(Protocol):
 
     def load_chat_daily(self, chat_id: int, since_date: str) -> list[dict[str, Any]]: ...
 
+    def load_pair_exchanges(
+        self,
+        chat_id: int,
+        windows: Sequence[tuple[str, datetime, datetime]],
+    ) -> dict[str, dict[tuple[int, int], int]]: ...
+
 
 _repository_instance: SocialGraphRepository | None = None
 
@@ -301,6 +307,27 @@ async def load_relationship_daily(chat_id: int, user_a_id: int, user_b_id: int) 
 
 async def load_chat_daily(chat_id: int, since_date: str) -> list[dict[str, Any]]:
     return await asyncio.to_thread(_repository().load_chat_daily, int(chat_id), str(since_date))
+
+
+async def load_pair_exchanges(
+    chat_id: int,
+    windows: Sequence[tuple[str, datetime, datetime]],
+) -> dict[str, dict[tuple[int, int], int]]:
+    return await asyncio.to_thread(_repository().load_pair_exchanges, int(chat_id), list(windows))
+
+
+# Valence counting went live with PR #802; older reactions are recovered from Chronicle.
+REACTION_VALENCE_LIVE_SINCE = "2026-10-11T09:43:14+00:00"
+
+
+def backfill_reaction_valence(history_path) -> int | None:
+    from features.social_graph.reactions import reaction_names_valence
+
+    repository = _repository()
+    backfill = getattr(repository, "backfill_reaction_valence", None)
+    if backfill is None:
+        return None
+    return backfill(history_path, updated_before=REACTION_VALENCE_LIVE_SINCE, classify=reaction_names_valence)
 
 
 async def list_active_chats(*, days: int = 30) -> list[int]:
