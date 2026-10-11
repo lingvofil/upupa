@@ -90,7 +90,8 @@ class DigestFacts:
 
 
 def is_digest_enabled(chat_id: int | str) -> bool:
-    return bool(chat_settings.get(str(chat_id), {}).get(SETTINGS_KEY, True))
+    # Opt-in: a weekly autopost must be switched on explicitly by the chat.
+    return bool(chat_settings.get(str(chat_id), {}).get(SETTINGS_KEY, False))
 
 
 def _day(value) -> date | None:
