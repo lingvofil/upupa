@@ -300,7 +300,10 @@ def _resolve_attack_mechanics(combat, session, user_id: int, pending: dict, natu
     ability = _attack_ability(profile, stats if isinstance(stats, dict) else {})
     score = int((stats or {}).get(ability, 10)) if isinstance(stats, dict) else 10
     modifier = combat.ability_modifier(score)
-    proficiency = int(profile.get("proficiency") or 0)
+    # Proficiency grows with hero level, as in D&D (weapon training + level).
+    from AI.dnd_progression import attack_bonus as level_attack_bonus
+
+    proficiency = int(profile.get("proficiency") or 0) + level_attack_bonus(session, user_id)
     total = int(natural) + modifier + proficiency
     ac = int(enemy.get("ac", 10))
     hit = int(natural) == 20 or (int(natural) != 1 and total >= ac)

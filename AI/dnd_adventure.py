@@ -5,6 +5,7 @@ never destroys a hero, their possessions, or the final adventure report.
 """
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 
@@ -126,7 +127,24 @@ def adventure_report(session) -> str:
         loot.append(f"{name}: " + (", ".join(f"{n} ×{q}" for n, q in gained.items()) or "новых вещей не осталось"))
     lines.append("Погибли: " + (", ".join(dead) or "никто"))
     lines.append("Получено и сохранено к финалу:\n" + ("\n".join(loot) or "нет участников"))
+    for section in list(_REPORT_SECTIONS):
+        try:
+            text = str(section(session) or "").strip()
+        except Exception:
+            logging.exception("DnD adventure report section failed")
+            text = ""
+        if text:
+            lines.extend(["", text])
     return "\n".join(lines)
+
+
+_REPORT_SECTIONS: list = []
+
+
+def register_report_section(section) -> None:
+    """Append a deterministic block to the final adventure report."""
+    if section not in _REPORT_SECTIONS:
+        _REPORT_SECTIONS.append(section)
 
 
 async def handle_adventure_message(dnd, bot, event, policy) -> bool:

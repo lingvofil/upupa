@@ -206,6 +206,9 @@ async def initialize_party_combat(dnd, bot, session) -> None:
         str(user_id): _build_sheet(stats_by_user.get(str(user_id), _random_stats()))
         for user_id in user_ids
     }
+    from AI.dnd_progression import LEVEL_TITLES, hero_progress, prepare_party_levels
+
+    prepare_party_levels(session)
     owner_id = random.choice(user_ids)
     session.healing_charge = {"owner_id": owner_id, "used": False}
     dnd.persist_dnd_sessions()
@@ -213,8 +216,10 @@ async def initialize_party_combat(dnd, bot, session) -> None:
     lines = ["⚔️ Боевые параметры:"]
     for user_id in user_ids:
         sheet = session.character_sheets[str(user_id)]
+        level = int(hero_progress(session, user_id)["level"])
         lines.append(
-            f"• {_participant_name(session, user_id)} — ❤️ {sheet['hp']}/{sheet['max_hp']}, 🛡 КБ {sheet['ac']}\n"
+            f"• {_participant_name(session, user_id)} — ⭐ ур. {level} «{LEVEL_TITLES[level]}», "
+            f"❤️ {sheet['hp']}/{sheet['max_hp']}, 🛡 КБ {sheet['ac']}\n"
             f"{_stats_block(sheet['stats'])}"
         )
     lines.append(

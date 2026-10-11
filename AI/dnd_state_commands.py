@@ -200,6 +200,9 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
         items = (getattr(session, "inventories", {}) or {}).get(key) or []
         name = _player_name(session, user_id, user_name)
         lines = [f"🎭 Мой герой — {name}"]
+        from AI.dnd_progression import hero_progress, progress_lines
+
+        lines.extend(progress_lines(hero_progress(session, key, create=False)))
         profile_lines = _format_profile(profile)
         if profile_lines:
             lines.extend(profile_lines)
@@ -217,6 +220,9 @@ def render_hero(dnd, chat_id: int, user_id: int, user_name: str | None = None) -
         return "🎭 Героя пока нет: ты ещё не сохранился ни в одной завершённой егре этого чата."
 
     lines = [f"🎭 Мой герой — {history.get('name') or user_name or 'Игрок'}"]
+    from AI.dnd_progression import archived_hero_lines
+
+    lines.extend(archived_hero_lines(history))
     profile_lines = _format_profile(history.get("profile"))
     if profile_lines:
         lines.extend(profile_lines)
