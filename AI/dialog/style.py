@@ -21,6 +21,11 @@ INTERACTION_EXAMPLES_CHAR_BUDGET = 7000
 LEXICON_SIZE = 40
 LEXICON_MIN_COUNT = 3
 TURN_SAMPLE_SLOTS = 64
+# A model asked for a 13-message series writes 13 three-word lines; real series
+# above this size are rare and mostly chat noise. Outlier turns (pastes, long
+# rants) are capped so one target never asks for a wall of text.
+SERIES_TARGET_MAX_MESSAGES = 5
+TURN_TARGET_MAX_WORDS = 150
 
 LENGTH_BUCKETS: tuple[tuple[int, int | None, str], ...] = (
     (0, 3, "0–3"),
@@ -399,8 +404,8 @@ def create_user_style_prompt(
         "Каждый ход получает отдельную цель в блоке [ДЛИНА ОТВЕТА] — попадай в неё. Не сжимай, не резюмируй и не "
         "«причёсывай» мысль: если человек обычно пишет развёрнуто, пиши развёрнуто — с его отступлениями, "
         "уточнениями, повторами, рассуждениями вслух и переходами на смежные темы.\n"
-        "- Если человек пишет сериями из нескольких сообщений, передавай серию так же: каждое сообщение серии с новой "
-        "строки, без нумерации и маркеров.\n"
+        "- Серию из нескольких сообщений пиши только когда [ДЛИНА ОТВЕТА] её просит: каждое сообщение серии с новой "
+        "строки, без нумерации и маркеров. В остальных случаях — одно сообщение без переносов строк.\n"
         "- Короткие реакции — тоже часть стиля, но только в той доле, в какой они реально встречаются в распределении.\n"
         "- Лексика: всегда предпочитай слова из ХАРАКТЕРНОЙ ЛЕКСИКИ и STYLE EXAMPLES нейтральным синонимам. "
         "В обычном ответе естественно используй несколько таких слов (в длинном — больше), но только к месту, "
@@ -447,7 +452,8 @@ def pick_turn_length_target(
         low = 0.3
     position = low + rng.random() * (1.0 - low)
     index = min(len(samples) - 1, int(position * len(samples)))
-    return samples[index]
+    words, messages = samples[index]
+    return min(words, TURN_TARGET_MAX_WORDS), min(messages, SERIES_TARGET_MAX_MESSAGES, max(1, words))
 
 
 def format_turn_length_directive(target: tuple[int, int] | None) -> str:
@@ -467,5 +473,11 @@ def format_turn_length_directive(target: tuple[int, int] | None) -> str:
             "детали, личное отношение, отступления, подколы, встречные вопросы."
         )
     if messages >= 2:
-        body += f" Оформи как серию из ~{messages} сообщений подряд, каждое с новой строки."
+        per_message = max(1, round(words / messages))
+        body += (
+            f" Оформи как серию из {messages} сообщений подряд: ровно {messages} строк, каждая строка уйдёт отдельным "
+            f"сообщением, примерно по {per_message} слов в каждой. Не дроби мысль на большее число строк."
+        )
+    else:
+        body += " Это одно сообщение: пиши его одной строкой, без переносов строк."
     return f"\n[ДЛИНА ОТВЕТА]\n{body}\n[/ДЛИНА ОТВЕТА]\n"

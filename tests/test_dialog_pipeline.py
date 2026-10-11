@@ -213,11 +213,10 @@ def test_split_participant_series_caps_parts_and_keeps_code():
 
     assert split_participant_series("одно сообщение") == ["одно сообщение"]
     assert split_participant_series("раз\n\nдва\n три ") == ["раз", "два", "три"]
-    assert split_participant_series("\n".join(str(i) for i in range(10)), max_parts=3) == [
-        "0",
-        "1",
-        "2\n3\n4\n5\n6\n7\n8\n9",
-    ]
+    # Overflow lines are glued to neighbours with spaces, never as a column.
+    parts = split_participant_series("\n".join(str(i) for i in range(10)), max_parts=3)
+    assert parts == ["0 1 2 3", "4 5 6", "7 8 9"]
+    assert all("\n" not in part for part in parts)
     assert split_participant_series("```\na\nb\n```") == ["```\na\nb\n```"]
     assert split_participant_series("   ") == []
 

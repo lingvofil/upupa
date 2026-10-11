@@ -529,7 +529,9 @@ def test_turn_length_target_reproduces_long_tail_and_formats_directive():
     directive = format_turn_length_directive((90, 3))
     assert "[ДЛИНА ОТВЕТА]" in directive
     assert "около 90 слов" in directive
-    assert "~3 сообщений" in directive
+    assert "ровно 3 строк" in directive
+    assert "по 30 слов" in directive
+    assert "одной строкой" in format_turn_length_directive((40, 1))
     assert "короткая реакция" in format_turn_length_directive((2, 1))
     assert format_turn_length_directive(None) == ""
 
@@ -662,3 +664,72 @@ def test_quiz_poll_fits_telegram_limits_and_keeps_correct_answer():
     assert len(set(options)) == 3
     assert correct == 1
     assert options[2] == "коротко"
+
+
+def test_other_participants_messages_end_a_series():
+    from AI.dialog.participant_imitation import ParticipantHistory
+
+    entry = ParticipantHistory(chat_id="-1001", user_id=42, sample_size=50, recent_size=10)
+    # A lively exchange: the participant answers every few seconds, but others
+    # write in between — these are separate replies, not one 3-message series.
+    entry.add_logged_message("да", "2026-09-01T12:00:00")
+    entry.note_other_message()
+    entry.add_logged_message("что", "2026-09-01T12:00:05")
+    entry.note_other_message()
+    entry.add_logged_message("пхахах", "2026-09-01T12:00:09")
+
+    stats = entry.style_stats()
+
+    assert sorted(stats["turn_samples"]) == [[1, 1], [1, 1], [1, 1]]
+    assert stats["multi_message_turn_share"] == 0
+    assert stats["series_timing"] is None
+
+
+def test_live_message_from_someone_else_closes_cached_series(monkeypatch):
+    from AI.dialog import participant_imitation
+
+    participant_imitation.clear_participant_history_cache()
+    entry = participant_imitation.ParticipantHistory(chat_id="-5005", user_id=42, sample_size=10, recent_size=5)
+    participant_imitation._cache_put(("-5005", 42, 10, 5), entry)
+
+    def msg(user_id, text, ts):
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=-5005), from_user=SimpleNamespace(id=user_id), text=text, date=ts
+        )
+
+    participant_imitation.record_participant_message(msg(42, "раз", 1000.0))
+    participant_imitation.record_participant_message(msg(7, "чужое", 1002.0))
+    participant_imitation.record_participant_message(msg(42, "два", 1004.0))
+
+    assert sorted(entry.style_stats()["turn_samples"]) == [[1, 1], [1, 1]]
+    participant_imitation.clear_participant_history_cache()
+
+
+def test_scan_breaks_series_on_other_users_in_log(tmp_path, monkeypatch):
+    from AI.dialog import participant_imitation
+
+    log_path = tmp_path / "user_messages.log"
+    log_path.write_text(
+        "2026-09-01T12:00:00 - Chat -1001 (Чат) - User 42 (vasya) [Вася]: первое\n"
+        "2026-09-01T12:00:10 - Chat -1001 (Чат) - User 42 (vasya) [Вася]: второе подряд\n"
+        "2026-09-01T12:00:15 - Chat -1001 (Чат) - User 7 (petya) [Петя]: вклинился\n"
+        "2026-09-01T12:00:20 - Chat -1001 (Чат) - User 42 (vasya) [Вася]: отдельный ответ\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(participant_imitation, "LOG_FILE", log_path)
+
+    entry = participant_imitation._scan_participant_history_sync(42, -1001, 20, 10)
+
+    assert entry.message_count == 3
+    assert sorted(entry.style_stats()["turn_samples"]) == [[2, 1], [3, 2]]
+
+
+def test_turn_target_caps_series_size_and_outlier_length():
+    import random
+
+    from AI.dialog.style import pick_turn_length_target
+
+    words, messages = pick_turn_length_target([[607, 13]], "", random.Random(0))
+
+    assert words == 150
+    assert messages == 5

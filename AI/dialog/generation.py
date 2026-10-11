@@ -476,6 +476,21 @@ async def generate_response(
         if not response_text.strip():
             response_text = "Я пока не знаю, что ответить... 😅"
 
+        if prompt_type == "user_style":
+            length_target = _participant_length_target.get()
+            lines = [line for line in str(response_text).splitlines() if line.strip()]
+            # Bot replies are not stored in the history DB; this line is the
+            # only way to audit imitation quality afterwards.
+            logging.info(
+                "Participant reply chat=%s persona=%s target=%s words=%s lines=%s text=%r",
+                chat_id,
+                bot_name,
+                length_target,
+                word_count(str(response_text)),
+                len(lines),
+                str(response_text)[:600],
+            )
+
         update_conversation_history(chat_id, bot_name, response_text, role="assistant")
         return response_text[:4000]
     except Exception as exc:
