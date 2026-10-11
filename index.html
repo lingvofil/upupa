@@ -26,6 +26,12 @@
         target.searchParams.set("view", "tokens");
         window.location.replace(target.pathname + target.search + target.hash);
       }
+      if (startParam.indexOf("sg_") === 0) {
+        const target = new URL(window.location.href);
+        target.pathname = "/game";
+        target.searchParams.set("view", "social");
+        window.location.replace(target.pathname + target.search + target.hash);
+      }
     })();
   </script>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>

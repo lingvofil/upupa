@@ -251,12 +251,17 @@ def _message_link(chat_id: int, message_id: int | None) -> str | None:
     return f"https://t.me/c/{raw[4:]}/{int(message_id)}"
 
 
-def digest_keyboard():
+def digest_keyboard(chat_id: int | None = None):
+    from features.social_graph.webapp import mini_app_link
+
     builder = InlineKeyboardBuilder()
+    link = mini_app_link(chat_id) if chat_id is not None else None
+    if link:
+        builder.button(text="🌐 Интерактивная карта", url=link)
     builder.button(text="🕸 Карта", callback_data="sg:map")
     builder.button(text="🏴 Фракции", callback_data="sg:fac")
     builder.button(text="📜 Летопись", callback_data="sg:chr")
-    builder.adjust(3)
+    builder.adjust(*((1,) if link else ()), 3)
     return builder.as_markup()
 
 
@@ -333,7 +338,7 @@ async def run_due_digests(bot, *, now: datetime | None = None) -> int:
                 text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                reply_markup=digest_keyboard(),
+                reply_markup=digest_keyboard(chat_id),
             )
             sent += 1
         except Exception as exc:

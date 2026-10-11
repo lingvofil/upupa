@@ -26,6 +26,7 @@ from core.chronicle_sink import chronicle_participant, report_chronicle_event
 from core.loader import bot
 from core.settings import API_TOKEN
 from games.token_dashboard import serve_token_dashboard, token_dashboard_api
+from games.social_webapp import serve_social_app, social_api
 from games.webapp_auth import (
     WebAppAuthError,
     authorize_crocodile_drawer,
@@ -756,6 +757,10 @@ async def serve_index(request: web.Request):
         return await serve_token_dashboard(request)
     if view == "tokens-api":
         return await token_dashboard_api(request)
+    if view == "social":
+        return await serve_social_app(request)
+    if view == "social-api":
+        return await social_api(request, bot)
 
     resp = web.FileResponse("index.html")
     resp.headers["Cache-Control"] = "no-store"

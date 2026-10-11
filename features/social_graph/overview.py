@@ -47,8 +47,8 @@ class ChatStructure:
     factions: FactionMap
 
 
-async def load_structure(chat_id: int) -> ChatStructure:
-    data = await get_graph_data(chat_id)
+async def load_structure(chat_id: int, *, period_days: int | None = None) -> ChatStructure:
+    data = await (get_graph_data(chat_id, period_days=period_days) if period_days else get_graph_data(chat_id))
     edges = aggregate_edges(data.interactions)
     return ChatStructure(
         chat_id=int(chat_id),

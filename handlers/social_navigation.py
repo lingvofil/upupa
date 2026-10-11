@@ -185,7 +185,7 @@ async def handle_social_digest(message: types.Message):
         await write_digest_html(facts),
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=digest_keyboard(),
+        reply_markup=digest_keyboard(message.chat.id),
     )
 
 
