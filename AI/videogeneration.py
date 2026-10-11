@@ -1,7 +1,10 @@
 # === AI/videogeneration.py — генерация видео ===
 #
-# `оживи`: Hugging Face ZeroGPU (Wan I2V) -> Pollinations fallback.
-# `упупа сними`: Pollinations text/image-to-video.
+# `оживи`: Kandinsky 6.0 (HF ZeroGPU) -> Wan I2V (HF ZeroGPU) -> Pollinations.
+# `упупа сними`: Kandinsky 6.0 (T2V / I2V) -> Pollinations text/image-to-video.
+#
+# Kandinsky идёт через открытые веса на HF Spaces: у GigaChat API и FusionBrain
+# генерации видео нет (см. AI/hf_kandinsky_video.py).
 #
 # Pollinations API: GET https://gen.pollinations.ai/video/{prompt} -> video/mp4
 #   model: veo | seedance | seedance-2.0 | wan | wan-fast | ...
@@ -26,6 +29,7 @@ from aiogram import types
 from core.settings import POLLINATIONS_API_KEY
 from AI.adddescribe import download_telegram_image
 from AI.hf_zerogpu_video import generate_hf_zerogpu_video
+from AI.hf_kandinsky_video import generate_kandinsky_video
 
 BASE_URL = "https://gen.pollinations.ai"
 
@@ -225,13 +229,24 @@ async def process_video_generation(message: types.Message, bot) -> None:
         await message.reply(f"🎬 Лимит видео на сегодня исчерпан ({DAILY_LIMIT_PER_CHAT}/день на чат).")
         return
 
-    status = await message.reply("🎬 Снимаю... минуту-другую")
+    status = await message.reply("🎬 Снимаю через Кандинского... минуту-другую")
     try:
-        start_url = None
+        img = None
         if reply_photo:
             img = await download_telegram_image(bot, reply_photo[-1])
-            if img:
-                start_url = await upload_media(img)
+
+        video, k_status = await generate_kandinsky_video(img, prompt or "cinematic scene")
+        if video:
+            await message.reply_video(
+                types.BufferedInputFile(video, filename="upupa_video.mp4"),
+            )
+            await status.delete()
+            return
+
+        logging.info("Kandinsky video failed with status=%s, trying Pollinations", k_status)
+        await status.edit_text("🎬 Кандинский сейчас не снял. Пробую резерв...")
+
+        start_url = await upload_media(img) if img else None
         video, model = await generate_video(prompt or "cinematic scene", start_frame_url=start_url)
         if not video:
             if model == "no_pollen":
@@ -255,7 +270,7 @@ async def process_video_generation(message: types.Message, bot) -> None:
 
 
 async def process_animate_photo(message: types.Message, bot) -> None:
-    """Команда 'оживи [промпт]' — ZeroGPU I2V с Pollinations fallback."""
+    """Команда 'оживи [промпт]' — Kandinsky 6 -> Wan ZeroGPU -> Pollinations."""
     if message.photo:
         photo = message.photo[-1]
     elif message.reply_to_message and message.reply_to_message.photo:
@@ -269,7 +284,7 @@ async def process_animate_photo(message: types.Message, bot) -> None:
 
     prompt = _extract_prompt(message.text or message.caption or "", "оживи")
     animation_prompt = prompt or "make this image come alive, cinematic motion, smooth natural animation"
-    status = await message.reply("🧟 Оживляю через ZeroGPU...")
+    status = await message.reply("🧟 Оживляю через Кандинского...")
 
     try:
         img = await download_telegram_image(bot, photo)
@@ -277,8 +292,21 @@ async def process_animate_photo(message: types.Message, bot) -> None:
             await status.edit_text("Не смог скачать фото.")
             return
 
-        # Основной бесплатный путь: картинка идёт напрямую в Hugging Face,
-        # поэтому Pollinations и его баланс вообще не нужны при успехе ZeroGPU.
+        # Основной путь — Kandinsky 6.0 на HF ZeroGPU. Картинка идёт напрямую
+        # в Hugging Face, Pollinations и его баланс при успехе не нужны.
+        video, k_status = await generate_kandinsky_video(img, animation_prompt)
+        if video:
+            await message.reply_video(
+                types.BufferedInputFile(video, filename="upupa_alive.mp4"),
+            )
+            await status.delete()
+            return
+
+        logging.info("Kandinsky animate failed with status=%s, trying Wan ZeroGPU", k_status)
+        await status.edit_text("🧟 Кандинский сейчас не дал видео. Пробую Wan...")
+
+        # Wan короче (3.3 c) и дешевле по квоте ZeroGPU — может пройти,
+        # даже когда на Кандинского квоты уже не хватило.
         video, hf_status = await generate_hf_zerogpu_video(img, animation_prompt)
         if video:
             await message.reply_video(
@@ -296,7 +324,7 @@ async def process_animate_photo(message: types.Message, bot) -> None:
         if not start_url:
             if hf_status == "quota":
                 await status.edit_text(
-                    "У бесплатного ZeroGPU закончилась квота, а резерв Pollinations сейчас недоступен. "
+                    "У бесплатного ZeroGPU (Кандинский и Wan) закончилась квота, а резерв Pollinations сейчас недоступен. "
                     "Попробуй позже."
                 )
             else:
@@ -318,7 +346,7 @@ async def process_animate_photo(message: types.Message, bot) -> None:
                     )
                 await status.edit_text(text)
             else:
-                await status.edit_text("Оживить не вышло: ZeroGPU и резервная видео-модель отказали.")
+                await status.edit_text("Оживить не вышло: Кандинский, Wan и резервная видео-модель отказали.")
             return
 
         await message.reply_video(
