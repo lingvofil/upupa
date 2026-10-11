@@ -147,3 +147,57 @@ async def narrate_relationship_history(
     except Exception as exc:
         logging.warning("Relationship history AI narrative failed: %s", exc)
         return None
+
+
+async def name_factions(
+    factions,
+    names: dict[int, str],
+    roles: dict,
+    chat_id: str,
+    *,
+    generator: Generator | None = None,
+) -> dict[int, str]:
+    """Give each detected faction a short funny name; deterministic facts only."""
+    import json
+    import re
+
+    if not factions:
+        return {}
+    blocks = []
+    for faction in factions:
+        members = []
+        for user_id in faction.members[:8]:
+            role = roles.get(user_id)
+            suffix = f" ({role.role.title.lower()})" if role is not None else ""
+            members.append(f"{names.get(user_id, 'участник')}{suffix}")
+        blocks.append(
+            f"{faction.index}: участники — {', '.join(members)}; "
+            f"лидер по связям — {names.get(faction.leader_id, 'участник')}; "
+            f"сплочённость {round(faction.cohesion * 100)}%"
+        )
+    prompt = (
+        "Ниже группы участников Telegram-чата, найденные алгоритмом по тому, кто с кем чаще общается. "
+        "Придумай каждой группе короткое смешное название в духе партии, клана или секты (2–4 слова). "
+        "Опирайся только на имена, роли и сплочённость; не придумывай события, интересы, конфликты и факты. "
+        "Без оскорблений по внешности, национальности, полу или здоровью.\n"
+        + "\n".join(blocks)
+        + '\nВерни ТОЛЬКО JSON-объект вида {"1": "название", "2": "название"}.'
+    )
+    try:
+        raw = await (generator or _default_generator)(prompt, chat_id)
+        match = re.search(r"\{.*\}", raw or "", re.DOTALL)
+        data = json.loads(match.group(0)) if match else {}
+    except Exception as exc:
+        logging.warning("Social graph faction naming failed: %s", exc)
+        return {}
+    result: dict[int, str] = {}
+    known = {faction.index for faction in factions}
+    for key, value in (data.items() if isinstance(data, dict) else ()):
+        try:
+            index = int(key)
+        except (TypeError, ValueError):
+            continue
+        name = " ".join(str(value or "").split()).strip(" «»\"'")
+        if index in known and name and not name.lower().startswith(_FAILURE_PREFIXES):
+            result[index] = name[:60]
+    return result

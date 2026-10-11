@@ -174,11 +174,64 @@ def _draw_arrowhead(draw: ImageDraw.ImageDraw, start, end, width: int) -> None:
     draw.polygon(points, fill=(95, 100, 110, 220))
 
 
-def render_graph_png(graph: RenderGraph) -> bytes:
+DEFAULT_NODE_COLOR = (244, 177, 74)
+UNAFFILIATED_NODE_COLOR = (190, 192, 198)
+# Distinct, colour-blind-friendly-ish hues for faction colouring.
+FACTION_PALETTE = (
+    (66, 133, 244),
+    (234, 88, 82),
+    (52, 168, 103),
+    (246, 178, 46),
+    (156, 102, 214),
+    (38, 182, 196),
+    (232, 120, 186),
+    (128, 138, 52),
+)
+
+
+def faction_color(index: int) -> tuple[int, int, int]:
+    return FACTION_PALETTE[(int(index) - 1) % len(FACTION_PALETTE)]
+
+
+LEGEND_LINE_HEIGHT = 34
+LEGEND_COLUMNS = 2
+
+
+def _legend_height(legend) -> int:
+    count = min(8, len(list(legend or ())))
+    if not count:
+        return 0
+    rows = math.ceil(count / LEGEND_COLUMNS)
+    return 28 + rows * LEGEND_LINE_HEIGHT
+
+
+def _draw_legend(draw: ImageDraw.ImageDraw, legend, font, top: int) -> None:
+    """Legend lives in its own band under the graph so it never covers nodes."""
+    labels = [(color, str(label)) for color, label in legend][:8]
+    if not labels:
+        return
+    draw.line([(MARGIN // 2, top + 6), (CANVAS_WIDTH - MARGIN // 2, top + 6)], fill=(220, 220, 225, 255), width=2)
+    column_width = (CANVAS_WIDTH - MARGIN) // LEGEND_COLUMNS
+    swatch = 20
+    for position, (color, label) in enumerate(labels):
+        row, column = divmod(position, LEGEND_COLUMNS)
+        x = MARGIN // 2 + column * column_width
+        y = top + 20 + row * LEGEND_LINE_HEIGHT
+        text = _sanitize_label_for_font(label if len(label) <= 42 else label[:40] + "…", font)
+        draw.ellipse((x, y + 2, x + swatch, y + 2 + swatch), fill=(*color, 255), outline=(70, 70, 75, 255))
+        draw.text((x + swatch + 12, y), text, font=font, fill=(30, 30, 35, 255))
+
+
+def render_graph_png(
+    graph: RenderGraph,
+    *,
+    node_colors: Mapping[int, tuple[int, int, int]] | None = None,
+    legend=None,
+) -> bytes:
     if not graph.nodes or not graph.edges:
         raise ValueError("Cannot render an empty social graph")
 
-    image = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
+    image = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT + _legend_height(legend)), "white")
     draw = ImageDraw.Draw(image, "RGBA")
     positions = _force_layout(graph)
     max_edge = max(edge.total_weight for edge in graph.edges)
@@ -201,9 +254,10 @@ def render_graph_png(graph: RenderGraph) -> bytes:
     for node in graph.nodes:
         x, y = positions[node.user_id]
         radius = 20 + 15 * math.sqrt(node.strength / max_node)
+        color = (node_colors or {}).get(node.user_id, DEFAULT_NODE_COLOR if node_colors is None else UNAFFILIATED_NODE_COLOR)
         draw.ellipse(
             (x - radius, y - radius, x + radius, y + radius),
-            fill=(244, 177, 74, 245),
+            fill=(*color, 245),
             outline=(70, 70, 75, 255),
             width=2,
         )
@@ -221,6 +275,9 @@ def render_graph_png(graph: RenderGraph) -> bytes:
             fill=(255, 255, 255, 225),
         )
         draw.text((tx, ty), label, font=node_font, fill=(30, 30, 35, 255))
+
+    if legend:
+        _draw_legend(draw, legend, _load_font(20), CANVAS_HEIGHT - 20)
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -522,8 +579,13 @@ def render_cringe_graph_png(
     return output.getvalue()
 
 
-async def render_graph_png_async(graph: RenderGraph) -> bytes:
-    return await asyncio.to_thread(render_graph_png, graph)
+async def render_graph_png_async(
+    graph: RenderGraph,
+    *,
+    node_colors: Mapping[int, tuple[int, int, int]] | None = None,
+    legend=None,
+) -> bytes:
+    return await asyncio.to_thread(render_graph_png, graph, node_colors=node_colors, legend=legend)
 
 
 async def render_cringe_graph_png_async(

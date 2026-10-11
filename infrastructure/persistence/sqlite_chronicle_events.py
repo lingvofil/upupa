@@ -128,14 +128,8 @@ class SQLiteChronicleEventStore:
             ai_metadata=loads(row["ai_metadata_json"], {}), source=row["source"],
         )
 
-    def list(
-        self,
-        chat_id: int,
-        *,
-        limit: int = 8,
-        user_id: int | None = None,
-        username: str | None = None,
-    ) -> list[ChronicleEvent]:
+    @staticmethod
+    def _filter(chat_id: int, user_id: int | None, username: str | None) -> tuple[str, list[str], list]:
         clauses = ["e.chat_id=?"]
         args: list = [int(chat_id)]
         join = ""
@@ -147,15 +141,39 @@ class SQLiteChronicleEventStore:
             else:
                 clauses.append("p.username=? COLLATE NOCASE")
                 args.append((username or "").lstrip("@"))
-        args.append(max(1, int(limit)))
+        return join, clauses, args
+
+    def list(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 8,
+        user_id: int | None = None,
+        username: str | None = None,
+        offset: int = 0,
+        order: str = "recent",
+    ) -> list[ChronicleEvent]:
+        join, clauses, args = self._filter(chat_id, user_id, username)
+        order_by = (
+            "e.importance_score DESC,e.event_started_at DESC"
+            if order == "importance"
+            else "e.event_started_at DESC,e.importance_score DESC"
+        )
+        args.extend((max(1, int(limit)), max(0, int(offset))))
         sql = (
             "SELECT DISTINCT e.* FROM chronicle_events e" + join
             + " WHERE " + " AND ".join(clauses)
-            + " ORDER BY e.event_started_at DESC,e.importance_score DESC LIMIT ?"
+            + f" ORDER BY {order_by} LIMIT ? OFFSET ?"
         )
         with closing(self._connect()) as conn:
             rows = conn.execute(sql, args).fetchall()
             return [self._event(conn, row) for row in rows]
+
+    def count(self, chat_id: int, *, user_id: int | None = None, username: str | None = None) -> int:
+        join, clauses, args = self._filter(chat_id, user_id, username)
+        sql = "SELECT COUNT(DISTINCT e.id) FROM chronicle_events e" + join + " WHERE " + " AND ".join(clauses)
+        with closing(self._connect()) as conn:
+            return int(conn.execute(sql, args).fetchone()[0])
 
     def recent(self, chat_id: int, *, days: int = 30, limit: int = 50) -> list[ChronicleEvent]:
         cutoff = ts(datetime.now(timezone.utc) - timedelta(days=max(1, days)))

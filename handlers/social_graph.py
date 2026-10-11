@@ -8,6 +8,7 @@ import re
 
 from aiogram import Router, types
 from aiogram.types import BufferedInputFile
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core.settings import BLOCKED_USERS
 from infrastructure.ai.execution import ai_feature
@@ -61,10 +62,45 @@ _USERNAME_RE = re.compile(r"@([A-Za-z0-9_]{3,})")
 # Хвост парной команды: пусто, «@user» или «@user1 @user2». Любой другой текст —
 # это обычная реплика вроде «история такая, короче…», а не команда.
 _PAIR_TAIL_RE = re.compile(r"(?:@[a-z0-9_]{3,}(?:\s+@[a-z0-9_]{3,})?)?")
+_MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
 _MONTHS = (
     "январь", "февраль", "март", "апрель", "май", "июнь",
     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
 )
+
+
+CALLBACK_PREFIX = "sg:"
+
+
+def map_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏴 Фракции", callback_data=f"{CALLBACK_PREFIX}fac")
+    builder.button(text="🎭 Роли", callback_data=f"{CALLBACK_PREFIX}roles")
+    builder.button(text="🏆 Топ пар", callback_data=f"{CALLBACK_PREFIX}top")
+    builder.button(text="📜 Летопись", callback_data=f"{CALLBACK_PREFIX}chr")
+    builder.button(text="🖍 Кринж-версия", callback_data=f"{CALLBACK_PREFIX}cringe")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+
+def _button_name(name: str) -> str:
+    name = " ".join(str(name or "Участник").split())
+    return name if len(name) <= 18 else name[:17] + "…"
+
+
+def relationship_keyboard(view: RelationshipView, *, include_history: bool = True):
+    user_a_id, user_b_id = view.user_a_id, view.user_b_id
+    builder = InlineKeyboardBuilder()
+    if include_history:
+        builder.button(text="📖 История", callback_data=f"{CALLBACK_PREFIX}hist:{int(user_a_id)}:{int(user_b_id)}")
+    builder.button(text="🎬 Эпизоды", callback_data=f"{CALLBACK_PREFIX}ep:{int(user_a_id)}:{int(user_b_id)}")
+    builder.button(text=f"🗂 {_button_name(view.user_a_name)}", callback_data=f"{CALLBACK_PREFIX}dos:{int(user_a_id)}")
+    builder.button(text=f"🗂 {_button_name(view.user_b_name)}", callback_data=f"{CALLBACK_PREFIX}dos:{int(user_b_id)}")
+    builder.adjust(2 if include_history else 1, 2)
+    return builder.as_markup()
 
 
 def _is_command(message: types.Message, command: str) -> bool:
@@ -282,7 +318,11 @@ async def _ensure_available(message: types.Message) -> bool:
 async def handle_social_graph(message: types.Message):
     if not await _ensure_available(message):
         return
-    data = await get_graph_data(message.chat.id)
+    await send_social_graph(message, message.chat.id)
+
+
+async def send_social_graph(message: types.Message, chat_id: int) -> None:
+    data = await get_graph_data(chat_id)
     edges = aggregate_edges(data.interactions)
     if not edges:
         await message.reply(f"За последние {data.period_days} дней связей пока недостаточно для графа.")
@@ -306,7 +346,11 @@ async def handle_social_graph(message: types.Message):
         f"🕸 Соцграф за последние {data.period_days} дней. Толщина линии = сила связи; "
         f"стрелка появляется только при заметной асимметрии.{suffix}"
     )
-    await message.answer_photo(BufferedInputFile(png, filename="social_graph.png"), caption=caption)
+    await message.answer_photo(
+        BufferedInputFile(png, filename="social_graph.png"),
+        caption=caption,
+        reply_markup=map_keyboard(),
+    )
 
 
 @router.message(lambda message: _is_cringe_graph_command(message))
@@ -314,7 +358,12 @@ async def handle_social_graph(message: types.Message):
 async def handle_cringe_social_graph(message: types.Message):
     if not await _ensure_available(message):
         return
-    data = await get_graph_data(message.chat.id)
+    await send_cringe_graph(message, message.chat.id)
+
+
+@ai_feature("соцграф картинка", only_if_unset=True)
+async def send_cringe_graph(message: types.Message, chat_id: int) -> None:
+    data = await get_graph_data(chat_id)
     edges = aggregate_edges(data.interactions)
     if not edges:
         await message.reply(f"За последние {data.period_days} дней даже всрать пока нечего — связей мало.")
@@ -362,13 +411,18 @@ async def handle_relationship(message: types.Message):
     if pair is None:
         await message.reply("Ответь командой «отношения» на сообщение человека или напиши «отношения @user» / «отношения @user1 @user2».")
         return
-    view = await get_relationship(message.chat.id, *pair)
+    await send_relationship_card(message, message.chat.id, *pair)
+
+
+@ai_feature("отношения", only_if_unset=True)
+async def send_relationship_card(message: types.Message, chat_id: int, user_a_id: int, user_b_id: int) -> None:
+    view = await get_relationship(chat_id, user_a_id, user_b_id)
     if view is None:
         await message.reply("У этой пары пока недостаточно общей истории: ни устойчивых взаимодействий, ни общего события в Летописи.")
         return
 
-    comment = await interpret_relationship(view, str(message.chat.id)) or _relationship_description(view)
-    dynamics = await load_relationship_dynamics(message.chat.id, view.user_a_id, view.user_b_id)
+    comment = await interpret_relationship(view, str(chat_id)) or _relationship_description(view)
+    dynamics = await load_relationship_dynamics(chat_id, view.user_a_id, view.user_b_id)
     lines = [
         f"❤️ <b>{escape(_pair_name(view))}</b>",
         "",
@@ -387,21 +441,40 @@ async def handle_relationship(message: types.Message):
     main_event = _chronicle_event_html(view)
     if main_event:
         lines.extend(("", main_event))
-    await message.reply("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
+    await message.reply(
+        "\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=relationship_keyboard(view),
+    )
 
 
 @router.message(lambda message: _is_command(message, "мои отношения"))
 async def handle_my_relationships(message: types.Message):
     if not await _ensure_available(message):
         return
-    views = await get_relationships(message.chat.id, user_id=message.from_user.id)
+    await send_user_relationships(message, message.chat.id, message.from_user.id)
+
+
+async def send_user_relationships(
+    message: types.Message,
+    chat_id: int,
+    user_id: int,
+    *,
+    subject_name: str | None = None,
+) -> None:
+    views = await get_relationships(chat_id, user_id=user_id)
     if not views:
-        await message.reply("У тебя пока не накопилось отношений, которые можно уверенно показать.")
+        if subject_name:
+            await message.reply(f"У {escape(subject_name)} пока не накопилось отношений, которые можно уверенно показать.")
+        else:
+            await message.reply("У тебя пока не накопилось отношений, которые можно уверенно показать.")
         return
-    lines = ["❤️ <b>Твои главные отношения</b>", ""]
+    header = f"❤️ <b>Главные отношения: {escape(subject_name)}</b>" if subject_name else "❤️ <b>Твои главные отношения</b>"
+    lines = [header, ""]
     for index, view in enumerate(views[:6], 1):
         lines.append(
-            f"{index}. <b>{escape(_other_name(view, message.from_user.id))}</b> — "
+            f"{index}. <b>{escape(_other_name(view, user_id))}</b> — "
             f"уровень {view.level}, {escape(view.archetype)}; {escape(view.trend)}."
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
@@ -411,7 +484,11 @@ async def handle_my_relationships(message: types.Message):
 async def handle_chat_relationships(message: types.Message):
     if not await _ensure_available(message):
         return
-    views = await get_relationships(message.chat.id)
+    await send_chat_relationships(message, message.chat.id)
+
+
+async def send_chat_relationships(message: types.Message, chat_id: int) -> None:
+    views = await get_relationships(chat_id)
     if not views:
         await message.reply("У чата пока недостаточно общей истории для рейтинга отношений.")
         return
@@ -450,7 +527,12 @@ async def handle_relationship_history(message: types.Message):
         await message.reply("Ответь командой «история» на сообщение человека или напиши «история @user» / «история @user1 @user2».")
         return
 
-    history = await get_integrated_relationship_history(message.chat.id, *pair)
+    await send_relationship_history(message, message.chat.id, *pair)
+
+
+@ai_feature("история отношений", only_if_unset=True)
+async def send_relationship_history(message: types.Message, chat_id: int, user_a_id: int, user_b_id: int) -> None:
+    history = await get_integrated_relationship_history(chat_id, user_a_id, user_b_id)
     if history is None:
         await message.reply("📖 История пока короткая. Эти двое существуют в одном чате, но сериал ещё не начался.")
         return
@@ -465,7 +547,7 @@ async def handle_relationship_history(message: types.Message):
         lines.extend((dynamics_line, ""))
 
     if meaningful_timeline:
-        narrative = await narrate_relationship_history(view, meaningful_timeline, str(message.chat.id))
+        narrative = await narrate_relationship_history(view, meaningful_timeline, str(chat_id))
         if narrative:
             lines.extend((escape(narrative), ""))
         lines.extend(_timeline_html(meaningful_timeline))
@@ -480,6 +562,33 @@ async def handle_relationship_history(message: types.Message):
         "<b>Сейчас</b>",
         f"Уровень <b>{view.level}/15</b> — «<b>{escape(view.archetype)}</b>»; {escape(view.trend)}.",
     ))
+    await message.reply(
+        "\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=relationship_keyboard(view, include_history=False),
+    )
+
+
+async def send_pair_episodes(message: types.Message, chat_id: int, user_a_id: int, user_b_id: int) -> None:
+    """All shared Chronicle episodes of a pair, newest first, with links."""
+    view = await get_relationship(chat_id, user_a_id, user_b_id)
+    if view is None or not view.shared_events:
+        await message.reply("🎬 Совместных эпизодов в Летописи у этой пары пока нет.")
+        return
+    lines = [f"🎬 <b>Эпизоды: {escape(_pair_name(view))}</b>", ""]
+    events = sorted(view.shared_events, key=lambda item: item.event_started_at, reverse=True)
+    for event in events[:10]:
+        title = escape(event.title)
+        message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
+        link = _telegram_message_link(chat_id, message_id)
+        if link:
+            title = f'<a href="{link}">{title}</a>'
+        when = event.event_started_at
+        lines.append(f"• <b>{when.day} {_MONTHS_GENITIVE[when.month - 1]} {when.year}</b> — {title}")
+        lines.append(escape(event.summary))
+    if len(events) > 10:
+        lines.append(f"\n…и ещё {len(events) - 10} эпизодов.")
     await message.reply("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
 

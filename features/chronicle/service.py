@@ -347,8 +347,28 @@ async def request_backfill(chat_id: int) -> None:
         await asyncio.to_thread(_stores()[2].request, int(chat_id))
 
 
-async def list_events(chat_id: int, *, user_id: int | None = None, username: str | None = None, limit: int | None = None) -> list[ChronicleEvent]:
-    return await asyncio.to_thread(_stores()[1].list, int(chat_id), limit=limit or config.DISPLAY_EVENT_LIMIT, user_id=user_id, username=username)
+async def list_events(
+    chat_id: int,
+    *,
+    user_id: int | None = None,
+    username: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    order: str = "recent",
+) -> list[ChronicleEvent]:
+    return await asyncio.to_thread(
+        _stores()[1].list,
+        int(chat_id),
+        limit=limit or config.DISPLAY_EVENT_LIMIT,
+        user_id=user_id,
+        username=username,
+        offset=offset,
+        order=order,
+    )
+
+
+async def count_events(chat_id: int, *, user_id: int | None = None, username: str | None = None) -> int:
+    return await asyncio.to_thread(_stores()[1].count, int(chat_id), user_id=user_id, username=username)
 
 
 async def chronicle_loop() -> None:

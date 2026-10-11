@@ -7,7 +7,7 @@ from handlers import (
     world_interactions, world_expansion, world_symbols, world_hub, world_listing, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, chronicle_reactions, chronicle,
-    social_graph, radio, song, dialog,
+    social_graph, social_navigation, radio, song, dialog,
 )
 
 ROUTERS = [
@@ -43,6 +43,7 @@ ROUTERS = [
     chronicle_reactions.router, # реакции сначала идут в соцграф и Летопись одним update
     chronicle.router, # команды «летопись» / «летопись @user»
     social_graph.router, # соцграф; reaction update уже перехвачен общим Chronicle transport
+    social_navigation.router, # досье, роли, фракции и все кнопки соцграфа (sg:*)
     radio.router,   # Радио Упупы — до catch-all
     song.router,    # короткие песни YuE2 — до catch-all
     dialog.router,
