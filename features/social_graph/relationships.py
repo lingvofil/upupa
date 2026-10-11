@@ -9,12 +9,15 @@ Scoring model v2:
   on a log scale relative to the chat's most active pair, plus reciprocity
   (discounted for tiny samples), shared Chronicle history and variety.
 * Напряжение — conflicts *between the two people*: a Chronicle conflict counts
-  for a pair only if they replied to / mentioned each other during the episode
-  (episodes older than raw-data retention fall back to a 2/n share), plus
-  explicitly negative reactions (🤡, 👎, 💩 …) on each other.  Raw swearing is
-  never a signal.
-* Уровень — the pair's place among all pairs of the same chat (percentile)
-  blended with absolute closeness, so 15/15 stays rare.
+  for a pair only if they were among the main combatants of the episode — the
+  pairs with the most mutual replies/mentions in its window (an active chat
+  chats all the time, so mere presence of replies is not enough).  Episodes
+  older than raw-data retention count only for 2–3 person episodes.  Negative
+  reactions (🤡, 👎, 💩 …) add at most a third of the scale on their own.
+  Raw swearing is never a signal.
+* Уровень (0–100) — the pair's place among all pairs of the same chat
+  (percentile of an unclamped score, so pairs no longer tie at the top)
+  blended with absolute closeness; ``rank`` is the place in the chat.
 """
 
 from __future__ import annotations
@@ -42,8 +45,22 @@ from features.social_graph.service import (
 CHRONICLE_EVENT_LIMIT = 300
 SNAPSHOT_INTERVAL_SECONDS = 6 * 3600
 SNAPSHOT_ACTIVE_DAYS = 30
-# Reactions are a weaker conflict signal than a Chronicle-confirmed conflict.
-REACTION_TENSION_CAP = 60.0
+# Reactions are a weaker conflict signal than a Chronicle-confirmed conflict:
+# on their own they can never reach «заклятые друзья» (tension ≥ 50).
+REACTION_TENSION_CAP = 35.0
+REACTION_TENSION_MIN_NEGATIVE = 3
+LEVEL_MAX = 100
+# A pair is a combatant of an episode if its mutual exchanges are at least this
+# share of the busiest pair in the episode window (and at least 2).
+COMBATANT_SHARE = 0.5
+COMBATANT_MIN_EXCHANGES = 2
+# …and its share of the episode's exchanges must clearly exceed its usual share
+# of the chat's exchanges: a core pair that always talks is not «fighting».
+COMBATANT_SPIKE_RATIO = 2.0
+COMBATANT_SPIKE_MARGIN = 0.25
+BASELINE_KEY = "__baseline__"
+BASELINE_DAYS = 30
+OLD_CONFLICT_MAX_PARTICIPANTS = 3
 ACTIVITY_DECAY_DAYS = 45.0
 ACTIVITY_LOOKBACK_DAYS = 180
 ACTIVITY_SCALE_FLOOR = 30.0
@@ -84,6 +101,10 @@ class RelationshipView:
     shared_events: tuple[ChronicleEvent, ...]
     positive_reaction_count: int = 0
     negative_reaction_count: int = 0
+    score: float = 0.0
+    rank: int = 0
+    rank_total: int = 0
+    conflict_episodes: int = 0
 
     @property
     def strength(self) -> float:
@@ -191,13 +212,27 @@ def _group_share(event: ChronicleEvent) -> float:
 
 
 def _conflict_factor(event: ChronicleEvent, pair: tuple[int, int], exchanges: dict[str, dict[tuple[int, int], int]]) -> float:
+    """How much of a Chronicle conflict belongs to this particular pair."""
+    participants = set(event.participant_ids)
     evidence = exchanges.get(str(event.id))
     if evidence is None:
+        # No raw interactions left: trust only small, clearly two-sided episodes.
+        if len(participants) > OLD_CONFLICT_MAX_PARTICIPANTS:
+            return 0.0
         return _group_share(event)
     direct = int(evidence.get(pair, 0))
-    if direct <= 0:
+    in_episode = {key: value for key, value in evidence.items() if set(key).issubset(participants)} or evidence
+    busiest = max(in_episode.values(), default=0)
+    if direct < COMBATANT_MIN_EXCHANGES or busiest <= 0 or direct < COMBATANT_SHARE * busiest:
         return 0.0
-    return {1: 0.5, 2: 0.75}.get(direct, 1.0)
+    baseline = exchanges.get(BASELINE_KEY)
+    if baseline:
+        window_share = direct / max(1, sum(evidence.values()))
+        usual_share = baseline.get(pair, 0) / max(1, sum(baseline.values()))
+        needed = min(COMBATANT_SPIKE_RATIO * usual_share, usual_share + COMBATANT_SPIKE_MARGIN)
+        if window_share < needed:
+            return 0.0
+    return min(1.0, direct / busiest)
 
 
 def _calculate_view(
@@ -223,6 +258,7 @@ def _calculate_view(
 
     shared_signal = 0.0
     conflict_signal = 0.0
+    conflict_episodes = 0
     event_xp = 0.0
     for event in shared:
         decay = _event_decay(event, now)
@@ -230,7 +266,10 @@ def _calculate_view(
         shared_signal += importance * decay * min(1.0, 1.5 * _group_share(event))
         event_xp += min(15.0, 2.0 + importance * 0.8) * _group_share(event)
         if event.category == "conflict":
-            conflict_signal += importance * decay * _conflict_factor(event, pair, exchanges)
+            factor = _conflict_factor(event, pair, exchanges)
+            if factor > 0:
+                conflict_episodes += 1
+                conflict_signal += importance * decay * factor
 
     interaction_count = int(row.get("interaction_count", 0) or 0)
     reply_count = int(row.get("reply_count", 0) or 0)
@@ -242,7 +281,9 @@ def _calculate_view(
         idle_days = (now - last_interaction_at).total_seconds() / 86400.0 if last_interaction_at else ACTIVITY_LOOKBACK_DAYS
         recent_xp = max(0.0, base_xp) * math.exp(-max(0.0, idle_days) / ACTIVITY_DECAY_DAYS)
     scale = max(ACTIVITY_SCALE_FLOOR, float(xp_scale))
-    activity = 100.0 * min(1.0, math.log1p(max(0.0, recent_xp)) / math.log1p(scale))
+    # Square root keeps visible differences between busy pairs (a log curve put
+    # every active pair at ~100).
+    activity = 100.0 * math.sqrt(min(1.0, max(0.0, recent_xp) / scale))
     event_affinity = 100.0 * (1.0 - math.exp(-shared_signal / 32.0))
     variety = sum(value > 0 for value in (reply_count, mention_count, reaction_count)) / 3.0 * 100.0
     # 1:1 from two messages is not «perfect reciprocity» yet.
@@ -262,19 +303,23 @@ def _calculate_view(
     affinity += min(6.0, positive_reactions * 0.3) * (1.0 - negative_share)
 
     chronicle_tension = 1.0 - math.exp(-conflict_signal / 18.0)
-    reaction_tension = (
-        REACTION_TENSION_CAP / 100.0
-        * (1.0 - math.exp(-negative_reactions / 8.0))
-        * (0.3 + 0.7 * negative_share)
-    )
+    reaction_tension = 0.0
+    if negative_reactions >= REACTION_TENSION_MIN_NEGATIVE:
+        reaction_tension = (
+            REACTION_TENSION_CAP / 100.0
+            * (1.0 - math.exp(-negative_reactions / 10.0))
+            * negative_share
+        )
     # Independent signals combine like probabilities and never exceed 100.
     tension = 100.0 * (1.0 - (1.0 - chronicle_tension) * (1.0 - reaction_tension))
     affinity_i = int(round(_clamp(affinity)))
     tension_i = int(round(_clamp(tension)))
     total_xp = base_xp + event_xp
 
+    # Unclamped score: two pairs at «100» must still be comparable.
+    score = _level_strength(affinity, total_xp)
     # Provisional absolute level; get_relationships() re-ranks pairs within the chat.
-    level = int(round(_clamp(_level_strength(affinity_i, total_xp), 0.0, 100.0) / 100.0 * 15.0))
+    level = int(round(_clamp(score, 0.0, 100.0) / 100.0 * LEVEL_MAX))
 
     recent_7d = int(row.get("recent_7d", 0) or 0)
     previous_21d = int(row.get("previous_21d", 0) or 0)
@@ -315,10 +360,12 @@ def _calculate_view(
         shared_events=shared,
         positive_reaction_count=positive_reactions,
         negative_reaction_count=negative_reactions,
+        score=score,
+        conflict_episodes=conflict_episodes,
     )
 
 
-def _level_strength(affinity: int, total_xp: float) -> float:
+def _level_strength(affinity: float, total_xp: float) -> float:
     """Closeness plus a small bonus for a long shared history; tension is not «strength»."""
     return affinity + min(8.0, math.log1p(max(0.0, total_xp)) * 1.2)
 
@@ -343,17 +390,19 @@ def _percentiles(values: list[float]) -> list[float]:
 
 
 def assign_relative_levels(views: list[RelationshipView]) -> list[RelationshipView]:
-    """Rank pairs within the chat so that 15/15 means «the top of this chat»."""
-    strengths = [_level_strength(view.affinity, view.xp) for view in views]
-    percentiles = _percentiles(strengths)
+    """Rank pairs within the chat: 100 means «the top of this chat», rank is the place."""
+    scores = [view.score for view in views]
+    percentiles = _percentiles(scores)
+    order = sorted(range(len(views)), key=lambda index: (-scores[index], views[index].user_a_id, views[index].user_b_id))
+    ranks = {index: place for place, index in enumerate(order, 1)}
     result = []
-    for view, strength, percentile in zip(views, strengths, percentiles):
-        absolute = _clamp(strength, 0.0, 100.0) / 100.0
+    for index, (view, percentile) in enumerate(zip(views, percentiles)):
+        absolute = _clamp(view.score, 0.0, 100.0) / 100.0
         blended = LEVEL_PERCENTILE_WEIGHT * percentile + (1.0 - LEVEL_PERCENTILE_WEIGHT) * absolute
-        level = int(round(_clamp(blended * 15.0, 0.0, 15.0)))
+        level = int(round(_clamp(blended * LEVEL_MAX, 0.0, LEVEL_MAX)))
         if view.interaction_count > 0 or view.shared_event_count > 0:
             level = max(1, level)
-        result.append(replace(view, level=level))
+        result.append(replace(view, level=level, rank=ranks[index], rank_total=len(views)))
     return result
 
 
@@ -395,6 +444,7 @@ async def _load_conflict_exchanges(
     ]
     if not windows:
         return {}
+    windows.append((BASELINE_KEY, now - timedelta(days=BASELINE_DAYS), now))
     try:
         return await load_pair_exchanges(chat_id, windows)
     except Exception as exc:

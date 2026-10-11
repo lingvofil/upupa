@@ -26,6 +26,8 @@ from features.social_graph.service import load_relationship_daily
 
 
 MAX_TIMELINE_ITEMS = 10
+# Levels are 0–100 now; small day-to-day drift is not an event.
+LEVEL_CHANGE_STEP = 10
 _SNAPSHOT_CHRONICLE_WINDOW = timedelta(hours=36)
 _EVENT_MATCH_WINDOW = timedelta(hours=24)
 _WORD_RE = re.compile(r"[\wа-яё]+", re.IGNORECASE)
@@ -98,8 +100,8 @@ def _snapshot_summary(previous: RelationshipSnapshot, current: RelationshipSnaps
     if previous.archetype != current.archetype:
         changes.append(f"тип связи: «{previous.archetype}» → «{current.archetype}»")
         event_type = "archetype_change"
-    if previous.level != current.level:
-        changes.append(f"уровень: {previous.level}/15 → {current.level}/15")
+    if abs(previous.level - current.level) >= LEVEL_CHANGE_STEP:
+        changes.append(f"уровень: {previous.level} → {current.level} из 100")
         if event_type == "relationship_shift":
             event_type = "level_change"
 
@@ -136,7 +138,7 @@ def _snapshot_items(snapshots: Iterable[RelationshipSnapshot]) -> list[Relations
             timestamp=ordered[0].captured_at,
             event_type="relationship_snapshot",
             title="Первый сохранённый снимок отношений",
-            summary=f"Уровень {ordered[0].level}/15 — «{ordered[0].archetype}»; {ordered[0].trend}.",
+            summary=f"Уровень {ordered[0].level}/100 — «{ordered[0].archetype}»; {ordered[0].trend}.",
             source="relationship_snapshot",
             priority=10,
         )

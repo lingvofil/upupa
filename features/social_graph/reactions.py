@@ -19,7 +19,7 @@ POSITIVE_REACTIONS = frozenset({
 })
 
 NEGATIVE_REACTIONS = frozenset({
-    "👎", "🤬", "🤮", "💩", "🤡", "🖕", "🥱", "😡", "🤨",
+    "👎", "🤬", "🤮", "💩", "🤡", "🖕", "😡",
 })
 
 

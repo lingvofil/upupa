@@ -74,9 +74,42 @@ def test_group_conflict_raises_tension_only_for_people_who_argued(monkeypatch):
 
     views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
 
-    assert views[(1, 2)].tension > views[(1, 3)].tension > 0
+    assert views[(1, 2)].tension > 0 and views[(1, 2)].conflict_episodes == 1
+    assert views[(1, 3)].tension == 0  # a single reply in a busy thread is not a fight
     assert views[(3, 4)].tension == 0  # were in the thread, never addressed each other
     assert views[(3, 4)].archetype != "заклятые друзья"
+
+
+def test_only_main_combatants_of_a_busy_episode_get_tension(monkeypatch):
+    rows = [_row(1, 2), _row(2, 3), _row(1, 3)]
+    conflict = _event("busy", participants=(1, 2, 3))
+    # 1↔2 argued (10 exchanges); 2↔3 also talked a lot (6); 1↔3 chatted a bit (3).
+    _install(monkeypatch, rows, [conflict], exchanges={"busy": {(1, 2): 10, (2, 3): 6, (1, 3): 3}})
+
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+
+    assert views[(1, 2)].tension > views[(2, 3)].tension > 0
+    assert views[(1, 3)].tension == 0
+
+
+def test_core_pairs_chatting_as_usual_during_a_conflict_get_no_tension(monkeypatch):
+    rows = [_row(1, 2), _row(3, 4), _row(1, 3), _row(2, 4), _row(1, 4), _row(2, 3)]
+    conflict = _event("noisy", participants=(1, 2, 3, 4))
+    # Everybody replies to everybody as usual, except 1↔2 who suddenly go at each other.
+    window = {(1, 2): 12, (3, 4): 4, (1, 3): 4, (2, 4): 3, (1, 4): 3, (2, 3): 4}
+    usual = {(1, 2): 100, (3, 4): 100, (1, 3): 100, (2, 4): 100, (1, 4): 100, (2, 3): 100}
+    _install(monkeypatch, rows, [conflict], exchanges={"noisy": window, "__baseline__": usual})
+
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+
+    assert views[(1, 2)].tension > 0
+    assert all(views[pair].tension == 0 for pair in usual if pair != (1, 2))
+
+    # The same evenly spread chatter with no spike gives nobody tension.
+    flat = {pair: 5 for pair in usual}
+    _install(monkeypatch, rows, [conflict], exchanges={"noisy": flat, "__baseline__": usual})
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+    assert all(view.tension == 0 for view in views.values())
 
 
 def test_old_group_conflict_without_raw_evidence_counts_only_a_share(monkeypatch):
@@ -87,14 +120,26 @@ def test_old_group_conflict_without_raw_evidence_counts_only_a_share(monkeypatch
 
     views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
 
-    assert views[(1, 2)].tension > 2 * views[(3, 4)].tension > 0
+    assert views[(1, 2)].tension > 0
+    assert views[(3, 4)].tension == 0  # old crowded episode: impossible to tell who fought whom
 
 
-def test_missing_evidence_store_falls_back_to_group_share(monkeypatch):
+def test_missing_evidence_store_trusts_only_small_episodes(monkeypatch):
     rows = [_row(1, 2), _row(3, 4)]
-    _install(monkeypatch, rows, [_event("c", participants=(1, 2, 3, 4, 5, 6))], exchanges=None)
+    events = [_event("crowd", participants=(1, 2, 5, 6, 7, 8)), _event("trio", participants=(3, 4, 9))]
+    _install(monkeypatch, rows, events, exchanges=None)
     views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
-    assert 0 < views[(1, 2)].tension < 25
+    assert views[(1, 2)].tension == 0
+    assert 0 < views[(3, 4)].tension < 40
+
+
+def test_reactions_alone_cannot_make_sworn_friends(monkeypatch):
+    rows = [_row(1, 2, negative_reaction_count=200, positive_reaction_count=0), _row(3, 4, negative_reaction_count=2)]
+    _install(monkeypatch, rows, [], exchanges={})
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+    assert 25 <= views[(1, 2)].tension <= 35
+    assert views[(1, 2)].archetype != "заклятые друзья"
+    assert views[(3, 4)].tension == 0  # a couple of 🤡 is a joke, not tension
 
 
 def test_crowded_episodes_do_not_invent_relationships(monkeypatch):
@@ -130,8 +175,10 @@ def test_levels_are_relative_and_fifteen_is_rare(monkeypatch):
     views = asyncio.run(relationships.get_relationships(-100))
     levels = [view.level for view in views]
 
-    assert levels.count(15) <= 1
-    assert 5 <= sorted(levels)[len(levels) // 2] <= 10
+    assert levels.count(100) <= 1
+    assert len(set(levels)) >= 20  # visibly different numbers
+    assert 35 <= sorted(levels)[len(levels) // 2] <= 65
+    assert sorted(view.rank for view in views) == list(range(1, 31))
     by_pair = _by_pair(views)
     assert by_pair[(59, 60)].level > by_pair[(29, 30)].level > by_pair[(1, 2)].level
 
@@ -142,7 +189,24 @@ def test_user_view_is_ranked_against_the_whole_chat(monkeypatch):
 
     mine = asyncio.run(relationships.get_relationships(-100, user_id=1))
     assert [(v.user_a_id, v.user_b_id) for v in mine] == [(1, 2)]
-    assert mine[0].level <= 5  # weak compared with the chat, even though it is the user's only pair
+    assert mine[0].level <= 35  # weak compared with the chat, even though it is the user's only pair
+    assert (mine[0].rank, mine[0].rank_total) == (11, 11)
+
+
+def test_pairs_above_the_closeness_cap_still_differ():
+    base = relationships.RelationshipView(
+        chat_id=-1, user_a_id=1, user_b_id=2, user_a_name="A", user_b_name="B", affinity=100, tension=0, xp=500.0,
+        level=0, reciprocity=1.0, archetype="x", trend="y", interaction_count=500, reply_count=1, mention_count=1,
+        reaction_count=1, shared_event_count=0, a_to_b_count=1, b_to_a_count=1, recent_7d=1, previous_21d=1,
+        last_interaction_at=None, shared_events=(),
+    )
+    views = [
+        relationships.replace(base, user_b_id=index + 2, score=100.0 + index)
+        for index in range(10)
+    ]
+    levels = [view.level for view in relationships.assign_relative_levels(views)]
+    assert len(set(levels)) == 10
+    assert levels[-1] == 100
 
 
 def test_percentiles_handle_ties():

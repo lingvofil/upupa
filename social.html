@@ -289,7 +289,7 @@
     head.appendChild(title);
     if (rel) {
       var ring = el("div", "ring");
-      ring.style.background = "conic-gradient(var(--accent) " + (rel.level / 15 * 360) + "deg, var(--line) 0)";
+      ring.style.background = "conic-gradient(var(--accent) " + (rel.level / 100 * 360) + "deg, var(--line) 0)";
       var inner = el("div", null, rel.level); ring.appendChild(inner);
       head.appendChild(ring);
     }
@@ -300,7 +300,12 @@
       box.appendChild(meter("Близость", rel.affinity, 100, "var(--green)", rel.affinity + "/100"));
       box.appendChild(meter("Напряжение", rel.tension, 100, "var(--warm)", rel.tension + "/100"));
       box.appendChild(meter("Взаимность", rel.reciprocity, 1, "var(--blue)", Math.round(rel.reciprocity * 100) + "%"));
-      box.appendChild(el("p", null, "Сейчас: " + rel.trend + ". Уровень " + rel.level + " из 15."));
+      box.appendChild(el("p", null, "Сейчас: " + rel.trend + ". Уровень " + rel.level + " из 100" +
+        (rel.rank ? " — #" + rel.rank + " из " + rel.rank_total + " пар чата." : ".")));
+      if (rel.tension > 0) {
+        box.appendChild(el("p", "hint", "Откуда напряжение: стычек между ними в Летописи — " + (rel.conflict_episodes || 0) +
+          ", ядовитых реакций друг на друга — " + (rel.negative_reactions || 0) + "."));
+      }
       box.appendChild(el("p", "hint",
         "Близость — насколько активно и взаимно они общаются в последние недели. " +
         "Напряжение — стычки именно между ними (по Летописи) и ядовитые реакции друг на друга. " +
@@ -330,11 +335,14 @@
     info.appendChild(el("div", "title ellipsis", label));
     info.appendChild(el("div", "hint", r.archetype + " · " + r.trend));
     var bar = el("div", "bar"); var fill = el("i");
-    fill.style.width = Math.max(4, r.level / 15 * 100) + "%";
+    fill.style.width = Math.max(4, r.level) + "%";
     fill.style.background = r.tension >= 45 ? "var(--warm)" : "var(--accent)";
     bar.appendChild(fill); info.appendChild(bar);
     row.appendChild(info);
-    row.appendChild(el("div", "title", r.level + "/15"));
+    var score = el("div", "title", String(r.level));
+    if (r.rank) score.appendChild(el("div", "hint", "#" + r.rank));
+    score.style.textAlign = "right";
+    row.appendChild(score);
     card.appendChild(row);
     card.addEventListener("click", function () { haptic(); openSheet(pairSheet(r.a, r.b)); });
     return card;
@@ -528,7 +536,7 @@
       filters.appendChild(chip);
     });
     view.appendChild(filters);
-    view.appendChild(el("p", "hint", "Уровень — место пары среди всех пар этого чата: 15/15 достаётся только самым близким."));
+    view.appendChild(el("p", "hint", "Уровень 0–100 — место пары среди всех пар этого чата, #N — её позиция в рейтинге."));
     view.appendChild(el("div", null)).id = "pair-list";
     renderPairList();
   }

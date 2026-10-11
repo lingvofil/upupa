@@ -106,7 +106,7 @@ async def interpret_relationship(
         "используя ТОЛЬКО уже рассчитанные факты ниже. Не анализируй переписку заново, "
         "не придумывай мотивы, чувства, события, цитаты или причины. Допустима ирония, но фактология должна остаться точной.\n"
         f"Пара: {view.user_a_name} ↔ {view.user_b_name}. "
-        f"Уровень {view.level}/15; тип «{view.archetype}»; близость {view.affinity}/100; "
+        f"Уровень {view.level}/100 (место {view.rank} из {view.rank_total} пар чата); тип «{view.archetype}»; близость {view.affinity}/100; "
         f"напряжение {view.tension}/100; взаимность {round(view.reciprocity * 100)}%; "
         f"тренд «{view.trend}». Сохранённые совместные события: {event_titles}."
     )
@@ -138,7 +138,7 @@ async def narrate_relationship_history(
         "Это НЕ анализ переписки: используй только перечисленные сохранённые факты. "
         "Не добавляй событий, мотивов, эмоций, дат или причин, которых нет во входе. "
         "Сохраняй хронологию, пиши живо и слегка саркастично. Не используй markdown и не перечисляй метрики таблицей.\n"
-        f"Пара: {view.user_a_name} ↔ {view.user_b_name}. Сейчас: уровень {view.level}/15, "
+        f"Пара: {view.user_a_name} ↔ {view.user_b_name}. Сейчас: уровень {view.level}/100, "
         f"тип «{view.archetype}», тренд «{view.trend}».\n"
         "Сохранённые факты:\n" + "\n".join(facts)
     )

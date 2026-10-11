@@ -243,7 +243,7 @@ def format_dossier_html(dossier: Dossier, event_link: str | None = None) -> str:
         lines.extend(("", "<b>Главные отношения</b>"))
         for view in dossier.relationships:
             _other_id, other_name = _other(view, dossier.user_id)
-            lines.append(f"• {escape(other_name)} — ур. {view.level}/15, «{escape(view.archetype)}», {escape(view.trend)}")
+            lines.append(f"• {escape(other_name)} — ур. {view.level}/100, «{escape(view.archetype)}», {escape(view.trend)}")
     if dossier.antagonist is not None:
         _other_id, other_name = _other(dossier.antagonist, dossier.user_id)
         lines.append(f"⚔️ Главный оппонент: <b>{escape(other_name)}</b> — напряжение {dossier.antagonist.tension}/100")
