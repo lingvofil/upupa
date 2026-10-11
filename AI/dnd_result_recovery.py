@@ -55,6 +55,7 @@ _CORE_SNAPSHOT_FIELDS = (
     "action_deadline",
     "action_target_user_ids",
     "recent_scene_types",
+    "scene_deck",
     "backstory_prompt_message_id",
     "mode_prompt_message_id",
     "lobby_message_id",

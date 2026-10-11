@@ -193,6 +193,12 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_progression import install_dnd_progression
 
     install_dnd_progression(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    from AI.dnd_campaign_stats import install_dnd_campaign_stats
+
+    install_dnd_campaign_stats(state_policy=campaign_state_policy)
+    from AI.dnd_turn_metrics import install_dnd_turn_metrics
+
+    install_dnd_turn_metrics(state_policy=campaign_state_policy)
     install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_session_canon_archive(dnd)
     # Must be installed after every archive/finish wrapper so one completion ID

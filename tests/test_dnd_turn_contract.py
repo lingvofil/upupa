@@ -43,7 +43,7 @@ def test_critical_mechanics_survive_both_provider_budgets():
             assert request in sent
             assert "CURRENT_ACTOR_1_OPENS_GATE" in sent
             assert "CURRENT_TAIL" in sent
-            assert "Первой схватки ещё не было" in sent
+            assert "пора к схватке 1 из 1" in sent
 
 
 def test_initial_participant_prompt_includes_scene_quick_action_schema():
@@ -99,9 +99,9 @@ def test_first_combat_is_scheduled_after_opening_not_during_it():
     game.scene_count = 0
     assert "схватка" not in dnd.choose_next_scene_type(game)
     game.scene_count = 3
-    assert "первая сюжетная схватка" in dnd.choose_next_scene_type(game)
+    assert dnd.choose_next_scene_type(game) == "сюжетная схватка 1 из 1"
     game.enemy_combatants = {"враг": {"hp": 8}}
-    assert "первая сюжетная схватка" not in dnd.choose_next_scene_type(game)
+    assert "схватка" not in dnd.choose_next_scene_type(game)
 
 
 def test_ambiguous_roll_is_repaired_from_current_declaration(monkeypatch):

@@ -1,6 +1,7 @@
 # dnd_game.py
 
 import asyncio
+import copy
 import json
 import logging
 import random
@@ -224,6 +225,7 @@ class GameSession:
         self.action_deadline = None
         self.action_target_user_ids = []
         self.recent_scene_types = []
+        self.scene_deck = {}
         # Number of narrative messages dropped from the persisted transcript
         # (after the two header rows). Absolute sizes stored by durable
         # recovery are offset + len(conversation), so they stay valid.
@@ -301,6 +303,7 @@ class GameSession:
             "action_deadline": self.action_deadline,
             "action_target_user_ids": self.action_target_user_ids,
             "recent_scene_types": self.recent_scene_types,
+            "scene_deck": self.scene_deck,
         }
 
     @classmethod
@@ -378,6 +381,8 @@ class GameSession:
         session.recent_scene_types = list(record.get("recent_scene_types") or [])[ 
             -DND_RECENT_SCENE_LIMIT:
         ]
+        deck = record.get("scene_deck")
+        session.scene_deck = copy.deepcopy(deck) if isinstance(deck, dict) else {}
         return session
 
 
@@ -515,29 +520,28 @@ def persist_dnd_sessions() -> None:
 _last_persisted: dict[str, str] = {}
 
 
+def choose_next_scene_direction(session: GameSession) -> dict:
+    """Three-act scene deck (see AI/dnd_scene_deck.py); mutates the deck."""
+    from AI.dnd_scene_deck import draw
+
+    direction = draw(session)
+    if direction["kind"] in {"scene", "twist"}:
+        session.recent_scene_types.append(direction["type"])
+        session.recent_scene_types = session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:]
+    return direction
+
+
 def choose_next_scene_type(session: GameSession) -> str:
-    from AI.dnd_adventure import adventure_limit
-    if int(getattr(session, "scene_count", 0) or 0) >= adventure_limit(session) - 4:
-        return "развязка основной цели; без новых врагов и побочных задач"
-    if (_is_participant_mode(session) and int(getattr(session, "scene_count", 0) or 0) >= 3
-            and settings_for(session)["monsters"]
-            and not (getattr(session, "enemy_combatants", {}) or {})):
-        return "первая сюжетная схватка с NPC: подготовь столкновение, дай игрокам выбрать действия; атаки разрешай боевыми тегами"
-    recent = set(session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:])
-    candidates = [scene for scene in DND_SCENE_TYPES if scene not in recent]
-    if not candidates:
-        candidates = list(DND_SCENE_TYPES)
-    scene_type = random.choice(candidates)
-    session.recent_scene_types.append(scene_type)
-    session.recent_scene_types = session.recent_scene_types[-DND_RECENT_SCENE_LIMIT:]
-    return scene_type
+    return choose_next_scene_direction(session)["type"]
 
 
 def with_scene_direction(session: GameSession, prompt: str) -> str:
-    scene_type = choose_next_scene_type(session)
+    from AI.dnd_scene_deck import direction_text
+
+    direction = choose_next_scene_direction(session)
     return (
         f"{prompt}\n\n"
-        f"РЕЖИССЁР СЦЕНЫ: {scene_type}. "
+        f"{direction_text(direction)} "
         "Сделай этот тип доминирующим в ближайшем сюжетном эпизоде, "
         "не называй его игрокам и не ломай текущую причинность."
     )
@@ -1789,6 +1793,9 @@ async def handle_roll(message: Message):
     mode = roll.get("mode", "NORMAL")
     outcome = _roll_outcome(result, dc)
     natural_note = _natural_roll_note(result)
+    from AI.dnd_campaign_stats import record_d20
+
+    record_d20(session, int(message.from_user.id), result, total=result, dc=dc)
 
     session.state = "RESOLVING"
     session.pending_roll = None

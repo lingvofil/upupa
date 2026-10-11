@@ -49,11 +49,14 @@ def turn_contract(session) -> str:
     decisions = int(getattr(session, "spotlight_decisions_since_poll", 0) or 0)
     notes = [f"Сцена {scene}; зарегистрировано противников: {len(enemies)}."]
     from AI.dnd_settings import settings_for, settings_context
-    from AI.dnd_adventure import adventure_pacing, adventure_limit
+    from AI.dnd_adventure import adventure_pacing
 
     settings = settings_for(session)
-    if 3 <= scene < adventure_limit(session) - 4 and not enemies and settings["monsters"]:
-        notes.append("Первой схватки ещё не было: подведи к сюжетному противнику в ближайшем эпизоде и дай героям действовать.")
+    from AI.dnd_scene_deck import contract_note
+
+    fight_note = contract_note(session)
+    if fight_note:
+        notes.append(fight_note)
     if settings["poll"] and decisions >= settings["poll"]:
         notes.append("Давно не было голосования: следующую общую сюжетную развилку оформи POLL с 2–3 конкретными путями.")
     return TURN_CONTRACT + "\n" + " ".join(notes) + "\n" + adventure_pacing(session) + "\n" + settings_context(session)

@@ -24,8 +24,11 @@ RULES_PROTOCOL = """Для заметных взаимодействий сце�
 Это служебный JSON; художественный текст и финальный ACTION остаются отдельно.""".strip()
 _RULES_RE = re.compile(r"<DND_RULES>(.*?)</DND_RULES>", re.S | re.I)
 ENEMY_RULES_PROTOCOL = """Для УЖЕ зарегистрированного простого врага можно задать известное поведение:
-<DND_ENEMIES>{"огр":{"policy":"simple","retreat_below":0.2,"attack_text":"Огр бьёт ближайшего доступного героя"}}</DND_ENEMIES>
+<DND_ENEMIES>{"огр":{"policy":"simple","style":"brute","attack_text":"Огр бьёт ближайшего доступного героя"}}</DND_ENEMIES>
 Ключ — точный сохранённый ID врага. reachable_actor_ids необязателен: массив ID действительно доступных героев.
+style по характеру врага (разные враги — разные стили): brute — бьёт слабейшего; coward — сбегает, потеряв половину HP;
+berserker — не отступает, бьёт самого крепкого, раненым звереет; leader — пока жива свита, держится позади и
+назначает цель, которую бьёт вся свита; skirmisher — бьёт и уходит, атакует через раунд. retreat_below необязателен.
 Не включай simple для NPC со сложной мотивацией или неизвестными сюжетными последствиями. Пропуск отсутствующего героя не запускает атаку.
 """.strip()
 _ENEMIES_RE = re.compile(r"<DND_ENEMIES>(.*?)</DND_ENEMIES>", re.S | re.I)
@@ -37,6 +40,17 @@ _WAIT_RE = re.compile(r"<DND_WAIT>(.*?)</DND_WAIT>", re.S | re.I)
 
 class SceneRuleError(ValueError):
     pass
+
+
+# Deterministic behaviour templates for opted-in simple enemies (executed by
+# AI/dnd_local_engine.choose_enemy_action without any AI call).
+ENEMY_STYLES = {
+    "brute": {"label": "громила", "retreat_below": 0.2},
+    "coward": {"label": "трус", "retreat_below": 0.5},
+    "berserker": {"label": "берсерк", "retreat_below": 0.0},
+    "leader": {"label": "главарь", "retreat_below": 0.3},
+    "skirmisher": {"label": "ловкач", "retreat_below": 0.25},
+}
 
 
 def apply_wait_rule_metadata(session, original_text: str, cleaned: str, notices: list[str]):
@@ -199,12 +213,16 @@ def apply_enemy_rule_metadata(session, original_text: str, cleaned: str, notices
         for enemy_id, raw in payload.items():
             if enemy_id not in (getattr(session, "enemy_combatants", {}) or {}):
                 raise SceneRuleError("Enemy policy needs a registered enemy ID")
-            if not isinstance(raw, dict) or set(raw) - {"policy", "retreat_below", "attack_text", "reachable_actor_ids"} or raw.get("policy") != "simple":
+            if not isinstance(raw, dict) or set(raw) - {"policy", "style", "retreat_below", "attack_text", "reachable_actor_ids"} or raw.get("policy") != "simple":
                 raise SceneRuleError("Unknown enemy policy")
-            retreat = raw.get("retreat_below", 0.2)
+            style = str(raw.get("style") or "brute").strip().casefold()
+            if style not in ENEMY_STYLES:
+                raise SceneRuleError("Unknown enemy style")
+            retreat = raw.get("retreat_below", ENEMY_STYLES[style]["retreat_below"])
             if isinstance(retreat, bool) or not isinstance(retreat, (int, float)) or not 0 <= retreat <= 0.8:
                 raise SceneRuleError("Invalid retreat threshold")
-            policy = {"policy": "simple", "retreat_below": float(retreat), "attack_text": _text(raw.get("attack_text"), 240)}
+            policy = {"policy": "simple", "style": style, "retreat_below": float(retreat),
+                      "attack_text": _text(raw.get("attack_text"), 240)}
             reachable = raw.get("reachable_actor_ids")
             if reachable is not None:
                 if not isinstance(reachable, list) or len(reachable) > 24 or any(isinstance(uid, bool) or not isinstance(uid, int) or str(uid) not in (getattr(session, "participants", {}) or {}) for uid in reachable):
