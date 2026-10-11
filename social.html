@@ -110,7 +110,7 @@
     game:"🎮 игра", relationship:"❤️ отношения", other:"📌 другое"};
   var PALETTE = ["#4285f4","#ea5852","#34a867","#f6b22e","#9c66d6","#26b6c4","#e878ba","#808a34"];
 
-  var state = { data: null, period: 30, tab: "graph", faction: null, pairFilter: "all", query: "", category: null };
+  var state = { data: null, period: 30, tab: "graph", faction: null, pairFilter: "all", query: "", category: null, allEdges: false };
   var cy = null;
   var byId = {};
 
@@ -181,7 +181,7 @@
   function closeSheet() {
     sheet.classList.remove("on"); backdrop.classList.remove("on");
     if (tg && tg.BackButton) { try { tg.BackButton.hide(); } catch (e) {} }
-    if (cy) cy.elements().removeClass("faded focus");
+    clearFocus();
   }
   backdrop.addEventListener("click", closeSheet);
   document.getElementById("sheet-close").addEventListener("click", closeSheet);
@@ -343,6 +343,12 @@
   // ---------- graph ----------
   function renderLegend() {
     var legend = clear(document.getElementById("legend"));
+    var edgesChip = el("button", "chip" + (state.allEdges ? " on" : ""), state.allEdges ? "Все связи" : "Сильные связи");
+    edgesChip.addEventListener("click", function () {
+      state.allEdges = !state.allEdges; haptic(); renderLegend();
+      if (cy) cy.edges(".weak").toggleClass("shown", state.allEdges);
+    });
+    legend.appendChild(edgesChip);
     state.data.factions.forEach(function (f) {
       var chip = el("button", "chip" + (state.faction === f.index ? " on" : ""));
       var dot = el("span", "dot"); dot.style.background = f.color;
@@ -380,46 +386,122 @@
     }
     var maxStrength = Math.max.apply(null, data.nodes.map(function (n) { return n.strength; })) || 1;
     var maxEdge = Math.max.apply(null, data.edges.map(function (e) { return e.total; })) || 1;
+    var labelled = {};
+    var labelTop = Math.max(LABEL_TOP, Math.round(data.nodes.length * 0.3));
+    data.nodes.slice().sort(function (x, y) { return y.strength - x.strength; })
+      .slice(0, labelTop).forEach(function (n) { labelled[n.id] = true; });
+    var strongEdges = pickStrongEdges(data.edges);
     var elements = [];
     data.nodes.forEach(function (n) {
-      elements.push({ data: { id: String(n.id), label: n.name, color: n.color,
-        size: 26 + 34 * Math.sqrt(n.strength / maxStrength),
-        dim: state.faction !== null && n.faction !== state.faction ? 1 : 0 } });
+      var size = 16 + 30 * Math.sqrt(n.strength / maxStrength);
+      elements.push({ data: { id: String(n.id), label: n.name, color: n.color, size: size, vs: size,
+        fs: 12, tm: 3, ow: 2, tw: 110, bw: 1.5,
+        dim: state.faction !== null && n.faction !== state.faction ? 1 : 0 },
+        classes: labelled[n.id] ? "" : "minor" });
     });
     data.edges.forEach(function (e) {
       var forward = e.a_to_b, backward = e.b_to_a;
       var source = e.a, target = e.b, arrow = "none";
       if (forward >= 1.75 * Math.max(backward, 0.001)) { arrow = "triangle"; }
       else if (backward >= 1.75 * Math.max(forward, 0.001)) { arrow = "triangle"; source = e.b; target = e.a; }
-      elements.push({ data: { id: "e" + e.a + "_" + e.b, source: String(source), target: String(target), a: e.a, b: e.b,
-        width: 1.5 + 7 * Math.sqrt(e.total / maxEdge), arrow: arrow } });
+      var width = 1 + 5 * Math.sqrt(e.total / maxEdge);
+      var key = e.a + "_" + e.b;
+      elements.push({ data: { id: "e" + key, source: String(source), target: String(target), a: e.a, b: e.b,
+        width: width, vw: width, arrow: arrow }, classes: strongEdges[key] ? "" : "weak" });
     });
     var textColor = getComputedStyle(document.body).color;
+    var bgColor = getComputedStyle(document.body).backgroundColor;
+    var count = data.nodes.length;
     if (cy) cy.destroy();
     cy = cytoscape({
       container: document.getElementById("cy"),
       elements: elements,
-      minZoom: 0.3, maxZoom: 3,
+      minZoom: 0.2, maxZoom: 4,
       style: [
-        { selector: "node", style: { "background-color": "data(color)", width: "data(size)", height: "data(size)",
-          label: "data(label)", "font-size": 13, "font-weight": 600, color: textColor, "text-valign": "bottom", "text-margin-y": 4,
-          "text-max-width": 90, "text-wrap": "ellipsis", "border-width": 2, "border-color": "#ffffff" } },
-        { selector: "node[dim = 1]", style: { opacity: 0.18 } },
-        { selector: "edge", style: { width: "data(width)", "line-color": "#9aa0aa", opacity: 0.55,
-          "curve-style": "bezier", "target-arrow-shape": "data(arrow)", "target-arrow-color": "#9aa0aa", "arrow-scale": 0.9 } },
-        { selector: ".faded", style: { opacity: 0.08 } },
-        { selector: "node.focus", style: { "border-color": "#111", "border-width": 4 } }
+        { selector: "node", style: { "background-color": "data(color)", width: "data(vs)", height: "data(vs)",
+          label: "data(label)", "font-size": "data(fs)", "font-weight": 600, color: textColor,
+          "text-valign": "bottom", "text-margin-y": "data(tm)", "text-max-width": "data(tw)", "text-wrap": "ellipsis",
+          "text-outline-color": bgColor, "text-outline-width": "data(ow)", "min-zoomed-font-size": 6,
+          "border-width": "data(bw)", "border-color": bgColor } },
+        { selector: "node.minor.quiet", style: { label: "" } },
+        { selector: "node.nb", style: { label: "data(label)" } },
+        { selector: "node[dim = 1]", style: { opacity: 0.15 } },
+        { selector: "edge", style: { width: "data(vw)", "line-color": "#9aa0aa", opacity: 0.4,
+          "curve-style": "haystack", "haystack-radius": 0 } },
+        { selector: "edge[arrow = 'triangle']", style: { "curve-style": "straight", "target-arrow-shape": "triangle",
+          "target-arrow-color": "#9aa0aa", "arrow-scale": 0.7 } },
+        { selector: "edge.weak", style: { display: "none" } },
+        { selector: "edge.weak.shown", style: { display: "element" } },
+        { selector: "edge.nb", style: { display: "element", opacity: 0.9, "line-color": "#6e7686", "target-arrow-color": "#6e7686" } },
+        { selector: ".faded", style: { opacity: 0.07 } },
+        { selector: "node.focus", style: { "border-color": textColor } }
       ],
-      layout: { name: "cose", animate: false, randomize: true, nodeRepulsion: function () { return 9000; },
-        idealEdgeLength: function () { return 90; }, edgeElasticity: function () { return 120; }, padding: 30, numIter: 1500 }
+      layout: { name: "cose", animate: false, randomize: true, nodeDimensionsIncludeLabels: true,
+        nodeRepulsion: function () { return 6000 + 450 * count; },
+        idealEdgeLength: function () { return 60 + Math.min(80, count * 1.2); },
+        edgeElasticity: function () { return 80; }, nodeOverlap: 16, gravity: 0.3,
+        componentSpacing: 80, padding: 24, numIter: 2000 }
     });
+    cy.edges(".weak").toggleClass("shown", state.allEdges);
+    fitZoom = cy.zoom() || 1;
+    applyZoomStyle();
+    cy.on("zoom", scheduleZoomStyle);
     cy.on("tap", "node", function (evt) {
       var node = evt.target; var id = Number(node.id());
-      cy.elements().addClass("faded"); node.closedNeighborhood().removeClass("faded"); node.addClass("focus");
+      clearFocus();
+      cy.elements().addClass("faded");
+      var hood = node.closedNeighborhood();
+      hood.removeClass("faded"); hood.addClass("nb"); node.addClass("focus"); applyZoomStyle();
       haptic(); openSheet(personSheet(id));
     });
     cy.on("tap", "edge", function (evt) {
       var data = evt.target.data(); haptic(); openSheet(pairSheet(data.a, data.b));
+    });
+    cy.on("tap", function (evt) { if (evt.target === cy) clearFocus(); });
+  }
+
+  var LABEL_TOP = 12;
+  var LABEL_ALL_AT = 1.5; // zoom relative to the initial «fit» view at which every name appears
+  var zoomFrame = null;
+  var fitZoom = 1;
+  function pickStrongEdges(edges) {
+    // Every person keeps their 2 strongest links, plus the strongest ~35% overall:
+    // the hairball becomes readable, the full picture is one tap away.
+    var keep = {};
+    var byNode = {};
+    edges.forEach(function (e) {
+      [e.a, e.b].forEach(function (id) { (byNode[id] = byNode[id] || []).push(e); });
+    });
+    Object.keys(byNode).forEach(function (id) {
+      byNode[id].sort(function (x, y) { return y.total - x.total; }).slice(0, 2)
+        .forEach(function (e) { keep[e.a + "_" + e.b] = true; });
+    });
+    var sorted = edges.slice().sort(function (x, y) { return y.total - x.total; });
+    sorted.slice(0, Math.ceil(sorted.length * 0.35)).forEach(function (e) { keep[e.a + "_" + e.b] = true; });
+    return keep;
+  }
+  function clearFocus() {
+    if (!cy) return;
+    cy.elements().removeClass("faded focus nb");
+  }
+  function scheduleZoomStyle() {
+    if (zoomFrame !== null) return;
+    zoomFrame = window.requestAnimationFrame(function () { zoomFrame = null; applyZoomStyle(); });
+  }
+  function applyZoomStyle() {
+    // Semantic zoom: zooming in spreads people apart instead of inflating circles,
+    // labels and lines, so on-screen sizes stay close to constant.
+    if (!cy) return;
+    var z = cy.zoom();
+    var k = Math.pow(z, -0.8);
+    var font = Math.max(5, 12 * Math.pow(z, -0.85));
+    cy.batch(function () {
+      cy.nodes().forEach(function (n) {
+        n.data({ vs: n.data("size") * k, fs: font, tm: 3 * k, ow: 2 * k, tw: 110 * k,
+          bw: (n.hasClass("focus") ? 3 : 1.5) * k });
+      });
+      cy.edges().forEach(function (e) { e.data("vw", e.data("width") * k); });
+      cy.nodes(".minor").toggleClass("quiet", z / fitZoom < LABEL_ALL_AT);
     });
   }
   document.getElementById("find-me").addEventListener("click", function () {
@@ -427,6 +509,8 @@
     if (!cy || !id) return;
     var node = cy.getElementById(String(id));
     if (!node || node.empty()) return;
+    clearFocus();
+    node.closedNeighborhood().addClass("nb");
     cy.animate({ center: { eles: node }, zoom: 1.6 }, { duration: 300 });
     node.flashClass ? node.flashClass("focus", 1200) : node.addClass("focus");
   });
