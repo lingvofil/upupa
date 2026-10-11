@@ -37,6 +37,7 @@ def _clear_participant_metadata(settings: dict) -> None:
     settings.pop("style_profile_updated_at", None)
     settings.pop("style_profile_version", None)
     settings.pop("style_turn_samples", None)
+    settings.pop("style_series_timing", None)
 
 
 _POEM_ACTIVE_POOL_SIZE = 8

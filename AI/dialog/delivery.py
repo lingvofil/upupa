@@ -2,23 +2,29 @@
 
 In participant-imitation mode the model writes a «серия» (several messages in a
 row) as one text with one message per line. Real people send such a series as
-separate Telegram messages with short typing pauses, so this module splits the
-reply and sends it the same way. Every other prompt keeps the single reply.
+separate Telegram messages with typing pauses, so this module splits the reply
+and sends it the same way, at the imitated participant's own measured pace.
+Every other prompt keeps the single reply.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 
 
 SERIES_MAX_PARTS = 6
-SERIES_MIN_DELAY_SECONDS = 0.8
-SERIES_MAX_DELAY_SECONDS = 4.0
-SERIES_TOTAL_DELAY_SECONDS = 12.0
-# Rough human typing speed in a messenger, characters per second.
-SERIES_TYPING_CHARS_PER_SECOND = 25.0
+# Measured in production chats: the median pause between messages of a human
+# series is ~12 s, i.e. ~1.5–2.2 chars/s including thinking time. Used when the
+# participant has too little series history of their own.
+DEFAULT_SERIES_RATES = (0.8, 1.1, 1.4, 1.6, 1.9, 2.2, 2.7, 3.4, 4.2)
+DEFAULT_SERIES_MIN_GAP_SECONDS = 3.0
+SERIES_MAX_DELAY_SECONDS = 60.0
+SERIES_TOTAL_DELAY_SECONDS = 150.0
+# Telegram shows "typing…" for ~5 s per chat action; refresh before it fades.
+TYPING_REFRESH_SECONDS = 4.5
 
 
 def split_participant_series(text: str, *, max_parts: int = SERIES_MAX_PARTS) -> list[str]:
@@ -42,9 +48,29 @@ def split_participant_series(text: str, *, max_parts: int = SERIES_MAX_PARTS) ->
     return parts
 
 
-def typing_delay(part: str) -> float:
-    seconds = len(part) / SERIES_TYPING_CHARS_PER_SECOND
-    return max(SERIES_MIN_DELAY_SECONDS, min(SERIES_MAX_DELAY_SECONDS, seconds))
+def series_delay(part: str, timing: dict | None = None, rng: random.Random | None = None) -> float:
+    """Seconds a person would take to think and type ``part`` before sending it.
+
+    The pace is sampled from the participant's real series (chars per second
+    measured between their consecutive messages), so both fast and slow typers
+    keep their own rhythm and pauses vary naturally from message to message.
+    """
+    rng = rng or random
+    timing = timing or {}
+    rates = [float(rate) for rate in timing.get("rates") or () if float(rate) > 0] or list(DEFAULT_SERIES_RATES)
+    min_gap = float(timing.get("min_gap") or DEFAULT_SERIES_MIN_GAP_SECONDS)
+    rate = rng.choice(rates)
+    delay = len(part) / rate * rng.uniform(0.85, 1.15)
+    return max(min_gap, min(SERIES_MAX_DELAY_SECONDS, delay))
+
+
+async def _show_typing_for(bot, chat_id, seconds: float, sleep) -> None:
+    remaining = seconds
+    while remaining > 0:
+        await bot.send_chat_action(chat_id=chat_id, action="typing")
+        step = min(TYPING_REFRESH_SECONDS, remaining)
+        await sleep(step)
+        remaining -= step
 
 
 async def send_dialog_response(
@@ -54,9 +80,11 @@ async def send_dialog_response(
     settings: dict | None,
     bot,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    rng: random.Random | None = None,
 ) -> None:
     """Reply to ``message``; in participant mode send a multi-line reply as a series."""
-    if (settings or {}).get("prompt_type") != "user_style":
+    settings = settings or {}
+    if settings.get("prompt_type") != "user_style":
         await message.reply(response)
         return
 
@@ -66,15 +94,16 @@ async def send_dialog_response(
         return
 
     chat_id = message.chat.id
+    timing = settings.get("style_series_timing")
     await message.reply(parts[0])
     delay_budget = SERIES_TOTAL_DELAY_SECONDS
     for part in parts[1:]:
         try:
-            await bot.send_chat_action(chat_id=chat_id, action="typing")
-            delay = min(typing_delay(part), max(delay_budget, 0.0))
-            if delay > 0:
-                await sleep(delay)
-                delay_budget -= delay
+            delay = series_delay(part, timing, rng)
+            floor = float((timing or {}).get("min_gap") or DEFAULT_SERIES_MIN_GAP_SECONDS)
+            delay = max(min(delay, delay_budget), floor)
+            delay_budget -= delay
+            await _show_typing_for(bot, chat_id, delay, sleep)
             await bot.send_message(chat_id, part)
         except Exception as exc:  # one failed part must not crash the handler
             logging.warning("Participant series delivery failed chat=%s: %s", chat_id, exc)

@@ -222,7 +222,9 @@ def test_split_participant_series_caps_parts_and_keeps_code():
     assert split_participant_series("   ") == []
 
 
-def test_participant_reply_is_sent_as_series_with_typing():
+def test_participant_reply_is_sent_as_series_with_human_pauses():
+    import random
+
     from AI.dialog.delivery import send_dialog_response
 
     message, _, replies = _message()
@@ -235,25 +237,74 @@ def test_participant_reply_is_sent_as_series_with_typing():
         events.append(("send", chat_id, text))
 
     async def fake_sleep(seconds):
-        events.append(("sleep", round(seconds, 2)))
+        events.append(("sleep", seconds))
 
     fake_bot = SimpleNamespace(send_chat_action=send_chat_action, send_message=send_message)
+    second = "я вчера туда сходил, там вообще всё не так как обещали"
 
     asyncio.run(
         send_dialog_response(
             message,
-            "короче слушай\nя вчера туда сходил\nвообще не то",
-            settings={"prompt_type": "user_style"},
+            f"короче слушай\n{second}\nну ты понял",
+            settings={
+                "prompt_type": "user_style",
+                "style_series_timing": {"rates": [2.0], "min_gap": 3.0},
+            },
             bot=fake_bot,
             sleep=fake_sleep,
+            rng=random.Random(1),
         )
     )
 
     assert replies == ["короче слушай"]
     sends = [event[2] for event in events if event[0] == "send"]
-    assert sends == ["я вчера туда сходил", "вообще не то"]
-    assert [event[0] for event in events] == ["action", "sleep", "send", "action", "sleep", "send"]
-    assert all(0.8 <= event[1] <= 4.0 for event in events if event[0] == "sleep")
+    assert sends == [second, "ну ты понял"]
+
+    # Pause before each part ≈ its length / the participant's 2 chars/s,
+    # with "typing…" refreshed so it never fades during a long pause.
+    waits, current = [], 0.0
+    for event in events:
+        if event[0] == "sleep":
+            assert event[1] <= 4.5
+            current += event[1]
+        elif event[0] == "send":
+            waits.append(current)
+            current = 0.0
+    assert len(second) / 2.0 * 0.85 <= waits[0] <= len(second) / 2.0 * 1.15
+    assert 11 / 2.0 * 0.85 <= waits[1] <= 11 / 2.0 * 1.15
+    actions = sum(1 for event in events if event[0] == "action")
+    assert actions >= 7
+
+
+def test_series_delay_defaults_match_real_chat_pace():
+    import random
+    import statistics
+
+    from AI.dialog.delivery import series_delay
+
+    rng = random.Random(3)
+    delays = [series_delay("x" * 25, None, rng) for _ in range(400)]
+
+    # Real chats: median pause inside a series is ~12 s.
+    assert 8 <= statistics.median(delays) <= 20
+    assert min(delays) >= 3.0
+    assert max(delays) <= 60.0
+
+
+def test_history_measures_participant_series_pace():
+    from AI.dialog.participant_imitation import ParticipantHistory
+
+    entry = ParticipantHistory(chat_id="-1001", user_id=42, sample_size=50, recent_size=10)
+    for turn in range(6):
+        base = 1000 * turn
+        entry.add_logged_message("начало", base)
+        entry.add_logged_message("x" * 20, base + 10)  # 2 chars/s
+        entry.add_logged_message("y" * 300, base + 11)  # paste: ignored
+
+    timing = entry.style_stats()["series_timing"]
+
+    assert timing["rates"] == [2.0] * 6
+    assert timing["min_gap"] == 1.5
 
 
 def test_regular_prompt_multiline_reply_stays_single_message():
@@ -276,3 +327,12 @@ def test_regular_prompt_multiline_reply_stays_single_message():
     )
 
     assert replies == ["строка 1\nстрока 2"]
+
+
+def test_series_delay_never_below_participant_minimum_gap():
+    import random
+
+    from AI.dialog.delivery import series_delay
+
+    timing = {"rates": [10.0], "min_gap": 3.0}
+    assert series_delay("ору", timing, random.Random(0)) == 3.0
