@@ -800,6 +800,31 @@ def _block_attack_for_parley(response):
     return text[:match.start()] + "[ACTION:INPUT]" + text[match.end():], True
 
 
+# Kept deliberately tiny: it is part of the mandatory Gemini system block
+# (hard 8k ceiling with every mechanic active).
+GROWTH_COMPACT_RULES = (
+    "РОСТ: реально совершённый поступок героя (не голая заявка; после броска при любом исходе) "
+    "отметь, максимум один на героя за ответ: [GROWTH:ADD;PLAYER:id;PATTERN:"
+    + "/".join(PATTERNS) + ";EVIDENCE:факт сцены]. Награды выдаёт код."
+)
+PARLEY_COMPACT_RULES = (
+    "ПЕРЕГОВОРЫ ПО ДОСТИЖЕНИЮ: враг не атакует до реальной попытки поговорить; "
+    "после неё поставь [ACHIEVEMENTFACT:RESOLVE;KIND:PARLEY]."
+)
+
+
+def register_growth_prompt_sections() -> None:
+    from AI.dnd_prompt_registry import PromptSection, is_participant_session, register_prompt_section
+
+    register_prompt_section(PromptSection(
+        "growth", GROWTH_COMPACT_RULES, order=60, when=is_participant_session, tags=("GROWTH",),
+    ))
+    register_prompt_section(PromptSection(
+        "growth_parley", PARLEY_COMPACT_RULES, order=61,
+        when=lambda session, _prompt: _has_parley(session), tags=("ACHIEVEMENTFACT",),
+    ))
+
+
 def apply_achievement_fact_metadata(session, original_text, cleaned, notices):
     _ensure(session)
     for match in _ACH_FACT_RE.finditer(str(original_text or "")):
@@ -884,6 +909,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     metadata_policy.add_postprocessor(apply_growth_metadata)
     metadata_policy.add_postprocessor(apply_achievement_fact_metadata)
+    register_growth_prompt_sections()
 
     original_context = campaign._campaign_context
 

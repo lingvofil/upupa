@@ -32,7 +32,14 @@ DND_GEMINI_QUEUE_TIMEOUT_SECONDS = 5.0
 DND_GEMINI_ATTEMPTS = 2
 DND_GEMINI_CIRCUIT_SECONDS = 45.0
 DND_GEMINI_INPUT_MAX_CHARS = 20_000
-DND_GEMINI_SYSTEM_MAX_CHARS = 8_000
+# Self-imposed ceiling for the compact system block (Gemini itself accepts far
+# more). It bounds, not inflates, usage: the block is only as long as the active
+# protocol. 8k left <300 chars of headroom once every mechanic was active, so a
+# single new mandatory section turned heavy combat turns into budget refusals.
+DND_GEMINI_SYSTEM_MAX_CHARS = 9_000
+# Legacy (non-compact) sessions split the 20k input as 8k system + 4k history
+# + 8k current request; keep that arithmetic unchanged.
+DND_GEMINI_LEGACY_SYSTEM_MAX_CHARS = 8_000
 DND_GEMINI_RECENT_HISTORY_MAX_CHARS = 4_000
 DND_GEMINI_CURRENT_PROMPT_MAX_CHARS = 8_000
 DND_GEMINI_RECENT_MESSAGES = 4
@@ -103,8 +110,7 @@ _COMPACT_MECHANICS = {
 Редкий смертельный трюк только с существующим доступным OBJECT, не обычным ударом:
 [ACTION:CINEMATIC_ATTACK;TARGETS:id;ENEMY:имя;POWER:HIGH;HP:28;AC:14;ABILITY:STR;DC:16;MODE:NORMAL;OBJECT:id;METHOD:физический трюк;REASON:действие].
 Провал трюка не снимает HP. До броска не описывай попадание/победу.
-[SCENE:UPSERT;ID:объект;NAME:имя;STATE:состояние;DETAIL:возможность], [SCENE:UPDATE;ID:объект;STATE:изменение;AVAILABLE:0].
-Не добавляй удобный смертельный объект задним числом. Намерение [INTENT:SET;ENEMY:имя;ACTION:угроза;TARGETS:id;DANGER:DEADLY;DETAIL:факт].
+Изменение объекта [SCENE:UPDATE;ID:объект;STATE:изменение;AVAILABLE:0]. Намерение [INTENT:SET;ENEMY:имя;ACTION:угроза;TARGETS:id;DANGER:DEADLY;DETAIL:факт].
 Дай окно INPUT/POLL вмешательства; сначала разреши действие/бросок, потом [INTENT:CLEAR;REASON:сорвано] или последствие. Не замещай сорванное намерение бесплатной атакой.""",
     "items": """ПРЕДМЕТЫ. DESCRIPTION кратко: что это и почему принадлежит герою. QTY 1..25, уникальный artifact QTY:1; одинаковое NAME стакается.
 TRAIT/BONUS -9..9 за единицу — шуточное свойство, не бонус d20. EFFECT — короткое свойство без тегов/точек с запятой.
@@ -128,6 +134,50 @@ OBLIGATION:долг, WANTS:цель, UNRESOLVED:незакрытый вопро�
 }
 
 
+def _mentions(prompt: str, words) -> bool:
+    return any(word in prompt for word in words)
+
+
+def _register_compact_mechanics() -> None:
+    """Built-in mechanics live in the same registry as every extension section."""
+    from AI.dnd_prompt_registry import PromptSection, register_prompt_section
+
+    register_prompt_section(PromptSection(
+        "core", _COMPACT_CORE, order=0,
+        tags=("POSITION", "MISSION", "THREAT", "REP", "SCENE"),
+    ))
+    register_prompt_section(PromptSection(
+        "battle", _COMPACT_MECHANICS["battle"], order=10,
+        when=lambda s, p: bool(getattr(s, "enemy_combatants", None) or getattr(s, "scene_objects", None))
+        or _mentions(p, ("атак", "удар", "враг", "бой", "трюк", "enemy", "cinematic")),
+        tags=("ACTION:CINEMATIC_ATTACK", "SCENE", "INTENT"),
+    ))
+    register_prompt_section(PromptSection(
+        "items", _COMPACT_MECHANICS["items"], order=20,
+        when=lambda s, p: bool(getattr(s, "inventories", None))
+        or _mentions(p, ("предмет", "вещ", "беру", "взять", "куп", "артефакт", "item")),
+        tags=("ITEMFACT",),
+    ))
+    register_prompt_section(PromptSection(
+        "clocks", _COMPACT_MECHANICS["clocks"], order=30,
+        when=lambda s, p: bool(getattr(s, "scene_clocks", None))
+        or _mentions(p, ("clock", "шкала", "тревог", "погон", "прогресс")),
+        tags=("CLOCK",),
+    ))
+    register_prompt_section(PromptSection(
+        "effects", _COMPACT_MECHANICS["effects"], order=40,
+        when=lambda s, p: bool(getattr(s, "conditions", None) or getattr(s, "weakness_luck_pending", None))
+        or _mentions(p, ("condition", "weakness", "слабост", "ранен", "оглуш")),
+        tags=("CONDITION", "WEAKNESS"),
+    ))
+    register_prompt_section(PromptSection(
+        "world", _COMPACT_MECHANICS["world"], order=50, tags=("NPC",),
+    ))
+
+
+_register_compact_mechanics()
+
+
 def build_compact_system(
     session,
     prompt: str = "",
@@ -136,6 +186,7 @@ def build_compact_system(
     include_optional: bool = True,
 ) -> str:
     """Versioned protocol plus relevant mechanics; omit optional schemas rather than clip them."""
+    from AI.dnd_prompt_registry import active_sections
     from AI.dnd_turn_contract import TURN_CONTRACT, turn_contract
 
     dynamic_contract = turn_contract(session)
@@ -145,21 +196,10 @@ def build_compact_system(
         runtime_contract = dynamic_contract[len(TURN_CONTRACT):].strip()
     elif dynamic_contract and dynamic_contract != TURN_CONTRACT:
         runtime_contract = dynamic_contract.strip()
-    text = str(prompt).casefold()
-    active = {
-        "battle": bool(getattr(session, "enemy_combatants", None) or getattr(session, "scene_objects", None))
-                  or any(word in text for word in ("атак", "удар", "враг", "бой", "трюк", "enemy", "cinematic")),
-        "items": bool(getattr(session, "inventories", None))
-                 or any(word in text for word in ("предмет", "вещ", "беру", "взять", "куп", "артефакт", "item")),
-        "clocks": bool(getattr(session, "scene_clocks", None))
-                  or any(word in text for word in ("clock", "шкала", "тревог", "погон", "прогресс")),
-        "effects": bool(getattr(session, "conditions", None) or getattr(session, "weakness_luck_pending", None))
-                   or any(word in text for word in ("condition", "weakness", "слабост", "ранен", "оглуш")),
-        "world": True,
-    }
-    sections = [contract, _COMPACT_CORE]
-    sections.extend(_COMPACT_MECHANICS[name].strip() for name, enabled in active.items() if enabled)
-    optional_sections = []
+    registered = active_sections(session, str(prompt))
+    sections = [contract]
+    sections.extend(row.text for row in registered if not row.optional)
+    optional_sections = [row.text for row in registered if row.optional]
     if runtime_contract:
         # Scene pacing/settings are useful, but the durable current request also
         # carries adventure context. They must never make the non-truncatable
@@ -478,7 +518,8 @@ def _history_contents(session, prompt: str):
         opening = prefix[1][1][:256] if len(prefix) > 1 else ""
         system_ceiling = max(
             0,
-            DND_GEMINI_SYSTEM_MAX_CHARS - len(opening),
+            (DND_GEMINI_SYSTEM_MAX_CHARS if compact_protocol else DND_GEMINI_LEGACY_SYSTEM_MAX_CHARS)
+            - len(opening),
         )
         if compact_protocol:
             # First reserve the mandatory protocol. The previous implementation
