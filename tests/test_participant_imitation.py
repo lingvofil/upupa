@@ -29,9 +29,10 @@ def test_style_profile_preserves_short_reactions_and_real_length():
     assert "ору" in prompt
     assert "/служебная_команда" not in prompt
     assert "медиана" in prompt
-    assert "очень коротких" in prompt
+    assert "Очень коротких" in prompt
     assert "не более 50 слов" not in prompt
-    assert "Не навязывай универсальный лимит длины" in prompt
+    assert "реальное, а не потолок" in prompt
+    assert "[ХАРАКТЕРНАЯ ЛЕКСИКА]" in prompt
 
 
 def test_style_profile_includes_real_interaction_examples_and_behavior_rule():
@@ -66,7 +67,7 @@ def test_participant_interactions_capture_preceding_other_user(monkeypatch):
             visitor({"id": 4, "user_id": "42", "text": "не буду"})
 
         def context(self, _chat_id, row_id, radius=1):
-            assert radius == 1
+            assert radius >= 1
             rows = {
                 2: [
                     {"id": 1, "user_id": "99", "text": "что тебе подарить?"},
@@ -93,8 +94,9 @@ def test_participant_interactions_capture_preceding_other_user(monkeypatch):
         recent_size=10,
     )
 
+    # The participant's consecutive messages form one answer turn ("серия").
     assert interactions == [
-        "Реплика собеседника: что тебе подарить?\nОтвет участника: подари куклу"
+        "Реплика собеседника: что тебе подарить?\nОтвет участника: подари куклу\nещё одну"
     ]
 
 
@@ -440,3 +442,154 @@ def test_embedding_failure_circuit_breaker_fails_fast(monkeypatch):
     assert first == []
     assert second == []
     assert calls["query"] == 1
+
+
+def test_long_interaction_answers_are_not_cut_to_one_liner(monkeypatch):
+    from AI.dialog import participant_imitation
+
+    long_answer = "слушай ну тут всё сложно " * 20
+
+    class FakeRepository:
+        def scan(self, _chat_id, visitor, **_filters):
+            visitor({"id": 2, "user_id": "42", "text": long_answer})
+
+        def context(self, _chat_id, row_id, radius=1):
+            return [
+                {"id": 1, "user_id": "99", "text": "как дела?"},
+                {"id": 2, "user_id": "42", "text": long_answer},
+            ]
+
+    monkeypatch.setattr(participant_imitation, "get_history_repository", lambda _path: FakeRepository())
+
+    interactions = participant_imitation._sample_participant_interactions_sync(
+        42, -1001, sample_size=5, recent_size=5
+    )
+
+    assert len(interactions) == 1
+    assert len(interactions[0]) > 400
+
+
+def test_history_groups_bursts_into_turns_and_keeps_long_tail():
+    from AI.dialog.participant_imitation import ParticipantHistory
+
+    entry = ParticipantHistory(chat_id="-1001", user_id=42, sample_size=50, recent_size=10)
+    # Burst: three messages within a minute form one turn.
+    entry.add_logged_message("короче слушай", "2026-09-01T12:00:00")
+    entry.add_logged_message("я вчера туда сходил", "2026-09-01T12:00:20")
+    entry.add_logged_message("вообще не то что обещали", "2026-09-01T12:00:45")
+    # Separate turns later.
+    entry.add_logged_message("ага", "2026-09-01T13:00:00")
+    entry.add_logged_message(" ".join(["слово"] * 80), "2026-09-01T14:00:00")
+
+    stats = entry.style_stats()
+
+    assert sorted(stats["turn_samples"]) == [[1, 1], [11, 3], [80, 1]]
+    assert stats["multi_message_turn_share"] == 33
+    assert stats["burst_examples"] == ["короче слушай\nя вчера туда сходил\nвообще не то что обещали"]
+
+
+def test_distinctive_lexicon_prefers_personal_words_over_common_ones():
+    from collections import Counter
+
+    from AI.dialog.style import distinctive_lexicon
+
+    user = Counter({"и": 50, "не": 40, "чел": 12, "кринж": 9, "это": 30, "база": 6})
+    baseline = Counter({"и": 5000, "не": 4000, "это": 3000, "чел": 3, "база": 2, "привет": 400})
+
+    lexicon = distinctive_lexicon(user, baseline)
+
+    assert lexicon[:3] and set(lexicon[:3]) == {"чел", "кринж", "база"}
+    assert "и" not in lexicon
+    assert "это" not in lexicon
+
+
+def test_lexicon_without_baseline_drops_stopwords():
+    from collections import Counter
+
+    from AI.dialog.style import distinctive_lexicon
+
+    lexicon = distinctive_lexicon(Counter({"и": 50, "не": 40, "чел": 5, "кринж": 4}))
+
+    assert lexicon == ["чел", "кринж"]
+
+
+def test_turn_length_target_reproduces_long_tail_and_formats_directive():
+    import random
+
+    from AI.dialog.style import format_turn_length_directive, pick_turn_length_target
+
+    samples = [[2, 1]] * 6 + [[40, 1]] * 2 + [[90, 3]] * 2
+    rng = random.Random(7)
+    targets = [pick_turn_length_target(samples, "", rng) for _ in range(500)]
+
+    long_share = sum(1 for words, _messages in targets if words >= 40) / len(targets)
+    assert 0.3 < long_share < 0.5
+
+    directive = format_turn_length_directive((90, 3))
+    assert "[ДЛИНА ОТВЕТА]" in directive
+    assert "около 90 слов" in directive
+    assert "~3 сообщений" in directive
+    assert "короткая реакция" in format_turn_length_directive((2, 1))
+    assert format_turn_length_directive(None) == ""
+
+
+def test_question_nudges_length_target_upward():
+    import random
+
+    from AI.dialog.style import pick_turn_length_target
+
+    samples = [[1, 1]] * 7 + [[50, 1]] * 3
+    plain = [pick_turn_length_target(samples, "ну", random.Random(i))[0] for i in range(300)]
+    asked = [pick_turn_length_target(samples, "а ты что думаешь?", random.Random(i))[0] for i in range(300)]
+
+    assert sum(asked) > sum(plain)
+
+
+def test_style_examples_mirror_length_distribution():
+    from AI.dialog.style import _select_style_examples, word_count
+
+    long_message = " ".join(["длинно"] * 60)
+    messages = (["ага"] * 30 + [long_message] * 30) * 2
+
+    examples = _select_style_examples(messages)
+
+    assert any(word_count(example) >= 60 for example in examples)
+    assert any(word_count(example) <= 3 for example in examples)
+
+
+def test_short_participant_reply_is_regenerated_toward_target(monkeypatch):
+    from AI.dialog import generation
+
+    chat_id = "-7007"
+    generation.chat_settings[chat_id] = {"prompt_type": "user_style", "active_model": "groq"}
+    calls = []
+
+    def fake_generate_text(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        if len(calls) == 1:
+            return "ну да"
+        return " ".join(["развёрнуто"] * 45)
+
+    monkeypatch.setattr(generation, "groq_ai", SimpleNamespace(generate_text=fake_generate_text))
+    monkeypatch.setattr(generation, "save_chat_settings", lambda: None)
+
+    async def run():
+        generation._participant_length_target.set((50, 1))
+        return await generation.generate_response("prompt", chat_id, "Вася", user_input="как оно?")
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        generation.chat_settings.pop(chat_id, None)
+        generation.conversation_history.pop(chat_id, None)
+
+    assert len(calls) == 2
+    assert "[LENGTH RETRY]" in calls[1][0]
+    assert calls[0][1]["presence_penalty"] <= 0.2
+    assert word_count_of(result) == 45
+
+
+def word_count_of(text):
+    from AI.dialog.style import word_count
+
+    return word_count(text)
