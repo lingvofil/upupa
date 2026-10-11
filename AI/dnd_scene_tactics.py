@@ -299,12 +299,10 @@ def install_dnd_scene_tactics(dnd, *, state_policy, metadata_policy) -> None:
     original_context = campaign._campaign_context
     campaign._campaign_context = lambda dnd_module, session: original_context(dnd_module, session) + "\n" + _context(session)
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         if not session or not dnd._is_participant_mode(session):
-            return await original_parse(bot, chat_id, response)
+            return await call_next(bot, chat_id, response)
 
         guarded = str(response or "")
         valid_object, object_id = validate_cinematic_object(session, guarded)
@@ -330,7 +328,7 @@ def install_dnd_scene_tactics(dnd, *, state_policy, metadata_policy) -> None:
             guarded = _ACTION_RE.sub("[ACTION:INPUT]", guarded, count=1)
             action_name = "INPUT"
 
-        result = await original_parse(bot, chat_id, guarded)
+        result = await call_next(bot, chat_id, guarded)
 
         if object_id and getattr(session, "state", None) == "WAITING_ROLL":
             pending = getattr(session, "pending_roll", None)
@@ -344,7 +342,9 @@ def install_dnd_scene_tactics(dnd, *, state_policy, metadata_policy) -> None:
         dnd.persist_dnd_sessions()
         return result
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "scene_tactics", parse_turn)
 
     original_finalize = dnd.finalize_group_actions
 

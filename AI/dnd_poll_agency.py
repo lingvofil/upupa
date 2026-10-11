@@ -152,9 +152,7 @@ def install_dnd_poll_agency(dnd) -> None:
     if POLL_AGENCY_MARKER not in dnd.DND_SYSTEM_PROMPT:
         dnd.DND_SYSTEM_PROMPT = dnd.DND_SYSTEM_PROMPT.rstrip() + "\n\n" + POLL_AGENCY_RULES
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         if session:
             response = ensure_group_poll_free_choice(response)
@@ -163,9 +161,11 @@ def install_dnd_poll_agency(dnd) -> None:
                 from AI.dnd_healing import strip_healing_poll_options
 
                 response = strip_healing_poll_options(response)
-        return await original_parse(bot, chat_id, response)
+        return await call_next(bot, chat_id, response)
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "poll_agency", parse_turn)
 
     original_finalize = dnd.finalize_poll
 

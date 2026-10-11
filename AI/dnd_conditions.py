@@ -350,19 +350,20 @@ def install_dnd_conditions(dnd, *, state_policy, metadata_policy) -> None:
         return story
     campaign._record_scene = record_scene
 
-    original_parse = dnd.parse_and_execute_turn
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         consumed = []
         guarded = str(response or "")
         if session and dnd._is_participant_mode(session):
             guarded, consumed = apply_condition_penalties(session, guarded)
-        result = await original_parse(bot, chat_id, guarded)
+        result = await call_next(bot, chat_id, guarded)
         if session and consumed and getattr(session, "state", None) == "WAITING_ROLL":
             if _queue_pending_uses(session, consumed):
                 dnd.persist_dnd_sessions()
         return result
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "conditions", parse_turn)
 
     def commit_roll_condition_uses(session, pending_roll, user_id):
         del user_id

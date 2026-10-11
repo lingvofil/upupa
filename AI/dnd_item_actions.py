@@ -896,9 +896,7 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
 
     dnd.open_action_window = open_action_window
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         guarded = str(response or "")
         source = None
@@ -906,9 +904,11 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
             guarded, source = apply_item_boost(session, guarded)
             if source:
                 dnd.persist_dnd_sessions()
-        return await original_parse(bot, chat_id, guarded)
+        return await call_next(bot, chat_id, guarded)
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "item_actions", parse_turn)
 
     dnd_router.message.outer_middleware(DndItemActionMiddleware())
     dnd._upupa_dnd_item_actions_installed = True

@@ -101,15 +101,15 @@ def install_dnd_roll_ability_display(dnd) -> None:
             + ": у каждого ACTION:ROLL всегда указывай ABILITY:STR/DEX/CON/INT/WIS/CHA по смыслу действия или опасности."
         )
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         if session and dnd._is_participant_mode(session):
             response, _ability = annotate_roll_ability(response)
-        return await original_parse(bot, chat_id, response)
+        return await call_next(bot, chat_id, response)
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "roll_ability_display", parse_turn)
     dnd._upupa_dnd_roll_ability_display_installed = True
 
 

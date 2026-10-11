@@ -567,16 +567,14 @@ def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy)
 
     dnd.generate_session_response = generate_session_response
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         if not session or not dnd._is_participant_mode(session):
-            return await original_parse(bot, chat_id, response)
+            return await call_next(bot, chat_id, response)
 
         _ensure(session)
         guarded, roll_reward = _apply_roll_tag(session, response)
-        result = await original_parse(bot, chat_id, guarded)
+        result = await call_next(bot, chat_id, guarded)
 
         if roll_reward:
             pending_roll = getattr(session, "pending_roll", None)
@@ -589,7 +587,9 @@ def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy)
         dnd.persist_dnd_sessions()
         return result
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "weakness_luck", parse_turn)
 
     def commit_weakness_luck(session, pending_roll, user_id):
         reward = (

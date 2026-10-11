@@ -314,9 +314,7 @@ def install_dnd_spotlight(dnd, *, state_policy) -> None:
 
     campaign._campaign_context = campaign_context
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         if session and dnd._is_participant_mode(session):
             guarded, expected, rewritten = enforce_spotlight(session, response)
@@ -328,9 +326,11 @@ def install_dnd_spotlight(dnd, *, state_policy) -> None:
                 )
             response = guarded
             dnd.persist_dnd_sessions()
-        return await original_parse(bot, chat_id, response)
+        return await call_next(bot, chat_id, response)
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "spotlight", parse_turn)
 
     original_finalize = dnd.finalize_group_actions
 
