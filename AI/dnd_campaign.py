@@ -1235,10 +1235,9 @@ async def _finish_core(dnd, bot, session, response):
         if finalization:
             rewind_to = finalization.get("epilogue_conversation_size")
             if rewind_to is None:
-                conversation = getattr(session, "conversation", None)
-                finalization["epilogue_conversation_size"] = (
-                    len(conversation) if isinstance(conversation, list) else None
-                )
+                from AI.dnd import conversation_absolute_size
+
+                finalization["epilogue_conversation_size"] = conversation_absolute_size(session)
                 dnd.persist_dnd_sessions()
             elif hasattr(dnd, "_rewind_session_conversation"):
                 if dnd._rewind_session_conversation(session, rewind_to):

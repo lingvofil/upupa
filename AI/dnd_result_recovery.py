@@ -227,8 +227,9 @@ def _discard_stale_result(dnd, session, *, reason: str) -> None:
 def _new_generation_request(session, prompt: str) -> dict:
     payload = str(prompt or "")
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-    conversation = getattr(session, "conversation", None)
-    conversation_size = len(conversation) if isinstance(conversation, list) else None
+    from AI.dnd import conversation_absolute_size
+
+    conversation_size = conversation_absolute_size(session)
     request = {
         "id": f"gen:{int(time.time() * 1000)}:{digest}",
         "prompt": payload,
