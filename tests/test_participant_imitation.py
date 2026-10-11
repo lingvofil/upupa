@@ -370,6 +370,7 @@ def test_semantic_search_considers_historical_candidates_beyond_last_thirty(monk
     from services import smart_search
 
     smart_search.reset_embedding_runtime_state()
+    monkeypatch.setattr(smart_search, "EMBEDDING_REQUESTS_PER_MINUTE", 1000)
     document_calls = []
 
     monkeypatch.setattr(
@@ -593,3 +594,71 @@ def word_count_of(text):
     from AI.dialog.style import word_count
 
     return word_count(text)
+
+
+def test_cold_semantic_cache_stays_under_free_tier_rate_limit(monkeypatch):
+    from services import smart_search
+
+    smart_search.reset_embedding_runtime_state()
+    monkeypatch.setattr(smart_search, "EMBEDDING_REQUESTS_PER_MINUTE", 80)
+    embedded = []
+
+    monkeypatch.setattr(
+        smart_search,
+        "_embed_query_sync",
+        lambda _text: np.asarray([1.0, 0.0], dtype=np.float32),
+    )
+
+    def fake_embed_documents(messages):
+        embedded.extend(messages)
+        return [np.asarray([1.0, 0.0], dtype=np.float32) for _message in messages]
+
+    monkeypatch.setattr(smart_search, "_embed_documents_sync", fake_embed_documents)
+    candidates = [f"старое {index}" for index in range(200)] + ["пара: свежий ответ"]
+
+    first = asyncio.run(smart_search.find_relevant_context("тема", candidates, top_k=3))
+
+    # 1 query + 79 documents = the per-minute budget; no 429 and no cooldown.
+    assert len(embedded) == 79
+    assert embedded[0] == "пара: свежий ответ"
+    assert smart_search._embedding_available()
+    assert first
+
+    # A second turn in the same minute has no budget left and degrades quietly.
+    embedded.clear()
+    second = asyncio.run(smart_search.find_relevant_context("тема", candidates, top_k=3))
+    assert embedded == []
+    assert second == []
+
+
+def test_rate_limit_cooldown_follows_provider_retry_hint():
+    import time
+
+    from services import smart_search
+
+    smart_search.reset_embedding_runtime_state()
+    smart_search._disable_embeddings("429 RESOURCE_EXHAUSTED ... Please retry in 4.75s.")
+    remaining = smart_search._EMBEDDING_DISABLED_UNTIL - time.monotonic()
+    smart_search.reset_embedding_runtime_state()
+
+    assert 4.0 < remaining <= 6.0
+
+
+def test_quiz_poll_fits_telegram_limits_and_keeps_correct_answer():
+    from AI.quiz import prepare_quiz_poll
+
+    long_a = "а" * 150
+    question = {
+        "text": "вопрос " * 80,
+        "options": [long_a, long_a + "б", "коротко"],
+        "correct_answer": long_a + "б",
+    }
+
+    title, options, correct = prepare_quiz_poll(question, 0, 5)
+
+    assert len(title) <= 300
+    assert title.startswith("Вопрос 1/5\n")
+    assert all(len(option) <= 100 for option in options)
+    assert len(set(options)) == 3
+    assert correct == 1
+    assert options[2] == "коротко"

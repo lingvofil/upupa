@@ -253,6 +253,45 @@ async def schedule_daily_quiz(bot: Bot, chat_id: int):
 
         await send_daily_quiz(bot, chat_id)
 
+TELEGRAM_POLL_QUESTION_MAX = 300
+TELEGRAM_POLL_OPTION_MAX = 100
+
+
+def _fit_telegram_text(text, limit: int) -> str:
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def prepare_quiz_poll(question: dict, index: int, total: int) -> tuple[str, list[str], int]:
+    """Fit an AI-generated question into Telegram poll limits.
+
+    Telegram rejects the whole poll if the question exceeds 300 characters or
+    any option exceeds 100, and the quiz then stalls on «ошибка при создании
+    вопроса». Shorten instead, keeping options unique and the correct index."""
+    correct_index = question['options'].index(question['correct_answer'])
+    options: list[str] = []
+    for option in question['options']:
+        fitted = _fit_telegram_text(option, TELEGRAM_POLL_OPTION_MAX)
+        suffix = 2
+        base = fitted
+        while fitted in options:
+            marker = f" ({suffix})"
+            fitted = _fit_telegram_text(base, TELEGRAM_POLL_OPTION_MAX - len(marker)) + marker
+            suffix += 1
+        options.append(fitted)
+    title = _fit_telegram_text(
+        f"Вопрос {index + 1}/{total}\n{question['text']}",
+        TELEGRAM_POLL_QUESTION_MAX,
+    )
+    # _fit_telegram_text collapses whitespace; keep the header on its own line.
+    header = f"Вопрос {index + 1}/{total}"
+    if title.startswith(header + " "):
+        title = header + "\n" + title[len(header) + 1 :]
+    return title, options, correct_index
+
+
 # Обновленная функция send_question
 async def send_question(bot, chat_id, question_index, *, generation=None):
     try:
@@ -275,12 +314,15 @@ async def send_question(bot, chat_id, question_index, *, generation=None):
 
         is_anonymous_quiz = True if chat_id_str == '-1001781970364' else False
 
+        poll_question, poll_options, correct_option_id = prepare_quiz_poll(
+            question, question_index, len(questions)
+        )
         poll = await bot.send_poll(
             chat_id=chat_id,
-            question=f"Вопрос {question_index + 1}/{len(questions)}\n{question['text']}",
-            options=question['options'],
+            question=poll_question,
+            options=poll_options,
             type='quiz',
-            correct_option_id=question['options'].index(question['correct_answer']),
+            correct_option_id=correct_option_id,
             is_anonymous=is_anonymous_quiz,
             allows_multiple_answers=False
         )
