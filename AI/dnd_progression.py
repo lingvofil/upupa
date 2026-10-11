@@ -467,6 +467,15 @@ def context_bit(session, user_id) -> str:
 
 # ---------------------------------------------------------------- archive
 
+_archive_hooks: list = []
+
+
+def register_archive_hook(hook) -> None:
+    """Other hero-owned state (e.g. the portrait) archived next to progression."""
+    if hook not in _archive_hooks:
+        _archive_hooks.append(hook)
+
+
 def archive_progress(session, players: dict) -> None:
     for key in _participant_keys(session):
         row = (getattr(session, "hero_progress", {}) or {}).get(key)
@@ -514,7 +523,13 @@ def install_dnd_progression(dnd, *, state_policy, metadata_policy) -> None:
     def archive_campaign(dnd_module, session, finale, epilogue):
         original_archive(dnd_module, session, finale, epilogue)
         chat = campaign._chat_history(session.chat_id, True)
-        archive_progress(session, chat.get("players") or {})
+        players = chat.get("players") or {}
+        archive_progress(session, players)
+        for hook in list(_archive_hooks):
+            try:
+                hook(session, players)
+            except Exception:
+                logging.exception("DnD hero archive hook failed chat_id=%s", getattr(session, "chat_id", None))
         campaign._save_archive(dnd_module)
 
     campaign._archive_campaign = archive_campaign

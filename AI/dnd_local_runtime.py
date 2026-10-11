@@ -529,6 +529,11 @@ def configure_dnd_local_runtime(dnd=None, router=None):
 
     menu_service = configure_dnd_menu(dnd, router, state_policy=router._upupa_dnd_campaign_state_policy,
                                       execute_action=runtime.execute, identity_for=identity_for)
+    from AI.dnd_hero_portrait import install_dnd_hero_portrait
+
+    install_dnd_hero_portrait(state_policy=router._upupa_dnd_campaign_state_policy)
+    if menu_service is not None:
+        menu_service.portraits_enabled = True
     guard = GameUpdateMiddleware(runtime)
     # Install before collectors/consent middlewares so pause and serialization
     # guard their mutations too. Read-only cards remain available on pause.

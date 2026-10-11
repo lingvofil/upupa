@@ -358,7 +358,9 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
 def _ensure_ui(session):
     if not isinstance(getattr(session, "menu_ui_state", None), dict):
         session.menu_ui_state = {"cards": {}, "tokens": {}, "seq": {}, "windows": {}}
-    for key in ("cards", "tokens", "seq", "windows"):
+    # kinds: card -> "photo" when the card is a portrait photo message;
+    # pages: card -> last page shown on it (portrait refresh targets the hero page).
+    for key in ("cards", "tokens", "seq", "windows", "kinds", "pages"):
         if not isinstance(session.menu_ui_state.get(key), dict):
             session.menu_ui_state[key] = {}
     if not isinstance(getattr(session, "menu_info_message_ids", None), list):
@@ -375,6 +377,9 @@ class DndMenuService:
         self._locks = {}
         self._owners = {}
         self._fresh_windows = {}
+        # The hero card becomes a photo card once a portrait exists; enabled by
+        # the runtime composition (tests opt in explicitly).
+        self.portraits_enabled = False
 
     @asynccontextmanager
     async def _lock(self, chat_id, owner):
@@ -462,6 +467,12 @@ class DndMenuService:
             ability = self._ability(session, owner)
             if ability:
                 rows.append([button(f"{ability['emoji']} {ability['title']}", "ability")])
+        if owner and page == "hero" and self.portraits_enabled:
+            from AI import dnd_hero_portrait as portraits
+
+            if portraits.can_draw(session, owner) and not portraits.is_generating(session, owner):
+                has_portrait = portraits.photo_for(session, owner) is not None
+                rows.append([button("🎨 Новый портрет" if has_portrait else "🎨 Нарисовать портрет", "portrait")])
         if page == "scene":
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
@@ -547,14 +558,34 @@ class DndMenuService:
         rows.append([button("✍️ Свой ход", "compose")])
         return rows
 
-    async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):
+    async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False, photo=None):
+        """Edit the card in place when possible, otherwise send a fresh one.
+
+        A text card cannot become a photo (and back), so switching kinds sends a
+        new card and deletes the old one. ``photo`` is a file_id or an upload.
+        """
         card = "party" if not owner else str(owner)
+        kinds = session.menu_ui_state["kinds"]
         previous_id = session.menu_ui_state["cards"].get(card)
-        old_id = None if force_new else previous_id
+        previous_kind = kinds.get(card, "text")
+        wanted_kind = "photo" if photo is not None else "text"
+        old_id = None if force_new or previous_kind != wanted_kind else previous_id
         if old_id:
             try:
-                await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
-                logging.info("DnD menu card updated chat_id=%s card=%s message_id=%s", session.chat_id, card, old_id)
+                if photo is None:
+                    await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
+                elif isinstance(photo, str) and session.menu_ui_state.get("photos", {}).get(card) == photo:
+                    await bot.edit_message_caption(chat_id=session.chat_id, message_id=int(old_id), caption=text,
+                                                   reply_markup=markup, parse_mode=None)
+                else:
+                    from aiogram.types import InputMediaPhoto
+
+                    edited = await bot.edit_message_media(
+                        media=InputMediaPhoto(media=photo, caption=text, parse_mode=None),
+                        chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup)
+                    self._remember_photo(session, owner, card, photo, edited)
+                logging.info("DnD menu card updated chat_id=%s card=%s message_id=%s kind=%s",
+                             session.chat_id, card, old_id, wanted_kind)
                 return int(old_id)
             except TelegramBadRequest as error:
                 message = str(error).casefold()
@@ -564,12 +595,17 @@ class DndMenuService:
                 if "message to edit not found" not in message:
                     raise
                 # A definitive deleted-card response permits one replacement.
-        sent = await bot.send_message(session.chat_id, text, reply_markup=markup, parse_mode=None)
+        if photo is None:
+            sent = await bot.send_message(session.chat_id, text, reply_markup=markup, parse_mode=None)
+        else:
+            sent = await bot.send_photo(session.chat_id, photo, caption=text, reply_markup=markup, parse_mode=None)
+            self._remember_photo(session, owner, card, photo, sent)
         session.menu_ui_state["cards"][card] = int(sent.message_id)
+        kinds[card] = wanted_kind
         if int(sent.message_id) not in session.menu_info_message_ids:
             session.menu_info_message_ids.append(int(sent.message_id))
-        logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s",
-                     session.chat_id, card, sent.message_id, bool(force_new))
+        logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s kind=%s",
+                     session.chat_id, card, sent.message_id, bool(force_new), wanted_kind)
         if previous_id and int(previous_id) != int(sent.message_id):
             # The superseded card carries only stale buttons; drop it so the chat
             # doesn't fill with near-identical copies every window.
@@ -582,6 +618,58 @@ class DndMenuService:
                                  session.chat_id, previous_id, error)
         return int(sent.message_id)
 
+    @staticmethod
+    def _remember_photo(session, owner, card, photo, message):
+        from AI import dnd_hero_portrait as portraits
+
+        if not isinstance(photo, str):
+            portraits.remember_upload(session, owner, message)
+        row = portraits.portrait_record(session, owner) if owner else None
+        session.menu_ui_state.setdefault("photos", {})[card] = row["file_id"] if row else (photo if isinstance(photo, str) else None)
+
+    def _portrait_view(self, bot, session, owner, page, text):
+        """Photo + status line for the hero page; may start the first drawing."""
+        if not (self.portraits_enabled and owner and page == "hero"):
+            return text, None
+        from AI import dnd_hero_portrait as portraits
+
+        photo = portraits.photo_for(session, owner)
+        if photo is None and portraits.can_draw(session, owner) and not portraits.is_generating(session, owner):
+            from AI.dnd_settings import settings_for
+
+            if settings_for(session).get("images") != "off" and not portraits.auto_attempted(session, owner):
+                self.request_portrait(bot, session, owner)
+        if portraits.is_generating(session, owner):
+            text = "🎨 Портрет рисуется, карточка обновится сама.\n\n" + text
+        if photo is not None:
+            text = portraits.caption(text)
+        return text, photo
+
+    def request_portrait(self, bot, session, owner) -> bool:
+        """Start drawing in the background; the hero card refreshes when ready."""
+        from AI import dnd_hero_portrait as portraits
+
+        if not portraits.begin(session, owner):
+            return False
+
+        async def job():
+            ready = await portraits.generate(session, owner)
+            if not ready or self.dnd.dnd_sessions.get(session.chat_id) is not session:
+                return
+            async with self._lock(session.chat_id, owner):
+                if session.menu_ui_state.get("pages", {}).get(str(owner)) == "hero":
+                    await self.show(bot, session, owner, "hero")
+                else:
+                    self._save()
+
+        starter = getattr(self.dnd, "_start_background_task", None)
+        coroutine = job()
+        if starter is not None:
+            starter(coroutine, name=f"dnd-hero-portrait-{session.chat_id}-{owner}")
+        else:
+            asyncio.get_running_loop().create_task(coroutine)
+        return True
+
     async def show(self, bot, session, owner=0, page="overview", *, text=None, build_markup=None, force_new=False):
         """Caller holds the card lock; all navigation renders the newest snapshot."""
         _ensure_ui(session)
@@ -589,6 +677,7 @@ class DndMenuService:
         seq = _int(session.menu_ui_state["seq"].get(card)) + 1
         session.menu_ui_state["seq"][card] = seq
         markup = build_markup(card, seq) if build_markup else self.keyboard(session, owner, page, card=card, seq=seq)
+        photo = None
         if text is None:
             text = render_page(snapshot_session(session), page, owner)
             if self.paused(session):
@@ -597,8 +686,10 @@ class DndMenuService:
                 text += "\n\nКарточка для тебя; в группе её видят все."
             if page in {"overview", "scene"}:
                 text += "\n\nВыбери действие кнопкой или опиши свой ход свободно."
+            text, photo = self._portrait_view(bot, session, owner, page, text)
+        session.menu_ui_state["pages"][card] = page if build_markup is None else "custom"
         self._save()  # Persist nonce registration before publishing its keyboard.
-        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new)
+        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new, photo=photo)
         identity = self.identity(session)
         session.menu_ui_state["windows"][card] = (
             f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
@@ -826,6 +917,23 @@ class DndMenuService:
         await self.show(callback.bot, session, actor, text="\n".join(lines), build_markup=markup)
         await callback.answer()
 
+    async def _portrait_request(self, callback, session, actor):
+        from AI import dnd_hero_portrait as portraits
+
+        if not self.portraits_enabled or not portraits.can_draw(session, actor):
+            await callback.answer("Сначала нужен готовый образ героя.", show_alert=True)
+            return
+        if portraits.is_generating(session, actor):
+            await callback.answer("Портрет уже рисуется.")
+            return
+        left = portraits.cooldown_left(session, actor)
+        if left:
+            await callback.answer(f"Новый портрет можно заказать через {left} с.", show_alert=True)
+            return
+        self.request_portrait(callback.bot, session, actor)
+        await callback.answer("Рисую портрет, это займёт около минуты.")
+        await self.show(callback.bot, session, actor, "hero")
+
     async def _input_prompt(self, callback, session, actor, *, object_id=None, item_name=None, prefix=None, hint=None, effect=None):
         if not self._can_act(session, actor):
             await callback.answer("Сейчас не твой свободный ход или партия на паузе.", show_alert=True)
@@ -983,6 +1091,9 @@ class DndMenuService:
                 return
             if operation in {"skills", "help", "ability"}:
                 await self._action_view(callback, session, actor, operation)
+                return
+            if operation == "portrait":
+                await self._portrait_request(callback, session, actor)
                 return
             card_seq = _int(session.menu_ui_state["seq"].get(token.get("card")))
             current_message = session.menu_ui_state["cards"].get(token.get("card"))
