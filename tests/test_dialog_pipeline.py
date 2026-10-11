@@ -206,3 +206,73 @@ def test_general_dialog_stage_handles_unknown_bot_message(monkeypatch):
     assert replies == ["generated"]
     assert captured["user_first_name"] == "Детектор"
     assert captured["chat_action"] == ("77", "typing")
+
+
+def test_split_participant_series_caps_parts_and_keeps_code():
+    from AI.dialog.delivery import split_participant_series
+
+    assert split_participant_series("одно сообщение") == ["одно сообщение"]
+    assert split_participant_series("раз\n\nдва\n три ") == ["раз", "два", "три"]
+    assert split_participant_series("\n".join(str(i) for i in range(10)), max_parts=3) == [
+        "0",
+        "1",
+        "2\n3\n4\n5\n6\n7\n8\n9",
+    ]
+    assert split_participant_series("```\na\nb\n```") == ["```\na\nb\n```"]
+    assert split_participant_series("   ") == []
+
+
+def test_participant_reply_is_sent_as_series_with_typing():
+    from AI.dialog.delivery import send_dialog_response
+
+    message, _, replies = _message()
+    events = []
+
+    async def send_chat_action(chat_id, action):
+        events.append(("action", chat_id, action))
+
+    async def send_message(chat_id, text):
+        events.append(("send", chat_id, text))
+
+    async def fake_sleep(seconds):
+        events.append(("sleep", round(seconds, 2)))
+
+    fake_bot = SimpleNamespace(send_chat_action=send_chat_action, send_message=send_message)
+
+    asyncio.run(
+        send_dialog_response(
+            message,
+            "короче слушай\nя вчера туда сходил\nвообще не то",
+            settings={"prompt_type": "user_style"},
+            bot=fake_bot,
+            sleep=fake_sleep,
+        )
+    )
+
+    assert replies == ["короче слушай"]
+    sends = [event[2] for event in events if event[0] == "send"]
+    assert sends == ["я вчера туда сходил", "вообще не то"]
+    assert [event[0] for event in events] == ["action", "sleep", "send", "action", "sleep", "send"]
+    assert all(0.8 <= event[1] <= 4.0 for event in events if event[0] == "sleep")
+
+
+def test_regular_prompt_multiline_reply_stays_single_message():
+    from AI.dialog.delivery import send_dialog_response
+
+    message, _, replies = _message()
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("regular prompts must not be split")
+
+    fake_bot = SimpleNamespace(send_chat_action=forbidden, send_message=forbidden)
+    asyncio.run(
+        send_dialog_response(
+            message,
+            "строка 1\nстрока 2",
+            settings={"prompt_type": "standard"},
+            bot=fake_bot,
+            sleep=forbidden,
+        )
+    )
+
+    assert replies == ["строка 1\nстрока 2"]

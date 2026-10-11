@@ -14,6 +14,7 @@ from aiogram.types import Message
 
 import AI.random_reactions as random_reactions
 import AI.situational_summary as situational_summary
+from AI.dialog.delivery import send_dialog_response
 from AI.dialog.generation import handle_bot_conversation
 from AI.dialog.participant_imitation import record_participant_message
 from AI.dialog.serious_mode import handle_serious_mode_reply
@@ -223,7 +224,12 @@ async def process_general_dialog_message(message: Message) -> None:
         user_first_name = message.from_user.first_name or "Пользователь"
         await bot.send_chat_action(chat_id=chat_id, action="typing")
         response = await handle_bot_conversation(message, user_first_name)
-        await message.reply(response)
+        await send_dialog_response(
+            message,
+            response,
+            settings=chat_settings.get(chat_id, {}),
+            bot=bot,
+        )
         return
 
     logging.info(
