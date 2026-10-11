@@ -16,11 +16,13 @@ import logging
 import re
 
 from features.chronicle.models import ChronicleEvent
+from features.social_graph.dynamics import RelationshipDynamics, build_dynamics
 from features.social_graph.relationships import (
     RelationshipSnapshot,
     RelationshipView,
     get_relationship_history,
 )
+from features.social_graph.service import load_relationship_daily
 
 
 MAX_TIMELINE_ITEMS = 10
@@ -61,6 +63,7 @@ class RelationshipHistory:
     view: RelationshipView
     snapshots: tuple[RelationshipSnapshot, ...]
     timeline: tuple[RelationshipTimelineItem, ...]
+    dynamics: RelationshipDynamics | None = None
 
 
 def register_shared_relationship_event_provider(name: str, provider: SharedEventProvider) -> None:
@@ -195,6 +198,22 @@ def _shared_items(events: Iterable[SharedRelationshipEvent]) -> list[Relationshi
     ]
 
 
+def _dynamics_items(dynamics: RelationshipDynamics | None) -> list[RelationshipTimelineItem]:
+    if dynamics is None:
+        return []
+    return [
+        RelationshipTimelineItem(
+            timestamp=datetime(item.day.year, item.day.month, item.day.day, 12, tzinfo=timezone.utc),
+            event_type=item.kind,
+            title=item.title,
+            summary=item.summary,
+            source="relationship_dynamics",
+            priority=item.priority,
+        )
+        for item in dynamics.milestones
+    ]
+
+
 def _normalized_tokens(value: str) -> set[str]:
     return {token.casefold() for token in _WORD_RE.findall(value) if len(token) >= 3}
 
@@ -224,10 +243,14 @@ def _deduplicate(items: Iterable[RelationshipTimelineItem]) -> list[Relationship
     chronicle: list[RelationshipTimelineItem] = []
     shared: list[RelationshipTimelineItem] = []
     snapshots: list[RelationshipTimelineItem] = []
+    dynamics: list[RelationshipTimelineItem] = []
 
     for item in sorted(items, key=lambda value: (value.timestamp, -value.priority)):
         if item.source == "relationship_snapshot":
             snapshots.append(item)
+            continue
+        if item.source == "relationship_dynamics":
+            dynamics.append(item)
             continue
         target = chronicle if item.chronicle_event is not None else shared
         duplicate_index = next(
@@ -242,6 +265,19 @@ def _deduplicate(items: Iterable[RelationshipTimelineItem]) -> list[Relationship
     # Chronicle is the richest normalized record.  If a module-specific event
     # describes the same real episode, keep Chronicle only.
     shared = [item for item in shared if not any(_same_event(item, event) for event in chronicle)]
+    # A finished campaign reported to Chronicle (source «dnd») and the raw DnD
+    # archive row describe the same finale even when their wording differs.
+    shared = [
+        item
+        for item in shared
+        if not (
+            item.event_type == "game_dnd"
+            and any(
+                event.source == "chronicle:dnd" and abs(item.timestamp - event.timestamp) <= _EVENT_MATCH_WINDOW
+                for event in chronicle
+            )
+        )
+    ]
 
     # A relationship snapshot commonly reflects a Chronicle event that happened
     # just before somebody asked for the relationship card.  The Chronicle row is
@@ -252,23 +288,50 @@ def _deduplicate(items: Iterable[RelationshipTimelineItem]) -> list[Relationship
         if not any(abs(snapshot.timestamp - event.timestamp) <= _SNAPSHOT_CHRONICLE_WINDOW for event in chronicle)
     ]
 
-    result = [*chronicle, *shared, *snapshots]
+    # Activity milestones fill the story between real events, never crowd them out.
+    dynamics = [
+        item
+        for item in dynamics
+        if not any(abs(item.timestamp - event.timestamp) <= _EVENT_MATCH_WINDOW for event in chronicle)
+    ]
+
+    result = [*chronicle, *shared, *snapshots, *dynamics]
+    if len(result) > MAX_TIMELINE_ITEMS:
+        # Keep the most meaningful items (Chronicle first), but prefer recent ones on ties.
+        ranked = sorted(result, key=lambda item: (item.priority, item.timestamp), reverse=True)
+        result = ranked[:MAX_TIMELINE_ITEMS]
     result.sort(key=lambda item: item.timestamp)
-    return result[-MAX_TIMELINE_ITEMS:]
+    return result
 
 
 def assemble_relationship_history(
     view: RelationshipView,
     snapshots: Iterable[RelationshipSnapshot],
     shared_events: Iterable[SharedRelationshipEvent] = (),
+    dynamics: RelationshipDynamics | None = None,
 ) -> RelationshipHistory:
     snapshot_tuple = tuple(snapshots)
     timeline = _deduplicate([
         *_snapshot_items(snapshot_tuple),
         *_chronicle_items(view.shared_events),
         *_shared_items(shared_events),
+        *_dynamics_items(dynamics),
     ])
-    return RelationshipHistory(view=view, snapshots=snapshot_tuple, timeline=tuple(timeline))
+    return RelationshipHistory(
+        view=view,
+        snapshots=snapshot_tuple,
+        timeline=tuple(timeline),
+        dynamics=dynamics,
+    )
+
+
+async def load_relationship_dynamics(chat_id: int, user_a_id: int, user_b_id: int) -> RelationshipDynamics | None:
+    try:
+        rows = await load_relationship_daily(chat_id, user_a_id, user_b_id)
+    except Exception as exc:
+        logging.warning("Relationship dynamics load failed chat=%s: %s", chat_id, exc)
+        return None
+    return build_dynamics(rows)
 
 
 def _dnd_archive_events(chat_id: int, user_a_id: int, user_b_id: int) -> tuple[SharedRelationshipEvent, ...]:
@@ -318,4 +381,5 @@ async def get_integrated_relationship_history(
     if view is None:
         return None
     shared_events = list_shared_relationship_events(chat_id, user_a_id, user_b_id)
-    return assemble_relationship_history(view, snapshots, shared_events)
+    dynamics = await load_relationship_dynamics(chat_id, user_a_id, user_b_id)
+    return assemble_relationship_history(view, snapshots, shared_events, dynamics)

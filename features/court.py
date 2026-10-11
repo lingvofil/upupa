@@ -8,6 +8,7 @@ import re
 
 from AI.chat_recall import _build_dispute_context, _read_chat_log
 from AI.summarize import _generate_with_active_model
+from core.chronicle_sink import chronicle_participant, report_chronicle_event
 from core.json_repository import JsonFileRepository
 from core.paths import COURT_CASES_PATH
 from core.upupa_utils import normalize_upupa_command
@@ -140,7 +141,32 @@ async def adjudicate_chat_case(message) -> dict | None:
         "claim": claim,
         "verdict": verdict,
     })
+    _report_case_to_chronicle(message, saved)
     return saved
+
+
+def _report_case_to_chronicle(message, case: dict) -> None:
+    """Every verdict is a Chronicle candidate; the Chronicle AI decides if it is memorable."""
+    people = []
+    for user in (getattr(message, "from_user", None), getattr(getattr(message, "reply_to_message", None), "from_user", None)):
+        if user is not None and not getattr(user, "is_bot", False) and all(p["id"] != user.id for p in people):
+            people.append(chronicle_participant(user.id, getattr(user, "full_name", None), getattr(user, "username", None)))
+    claim = case.get("claim") or "без отдельной формулировки"
+    context = (
+        f"Суд Упупы рассмотрел дело №{case.get('case_id')}. "
+        f"Истец: {case.get('requester_name')}. Ответчик: {case.get('target_name') or 'не указан'}. "
+        f"Стороны в переписке: {', '.join(case.get('parties') or []) or 'не определены'}. "
+        f"Претензия: {claim}.\nПриговор:\n{case.get('verdict')}"
+    )
+    replied = getattr(message, "reply_to_message", None)
+    report_chronicle_event(
+        chat_id=int(message.chat.id),
+        context=context,
+        source="court",
+        participants=people,
+        source_message_ids=[item for item in (getattr(replied, "message_id", None), getattr(message, "message_id", None)) if item],
+        anchor_message_id=getattr(replied, "message_id", None) or getattr(message, "message_id", None),
+    )
 
 
 def format_judicial_practice(cases: list[dict]) -> str:

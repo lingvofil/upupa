@@ -13,6 +13,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message, MessageReactionUpdated
 
 from core.state import chat_settings
+from features.social_graph.reactions import reaction_items_valence
 
 
 REPLY_WEIGHT = 3.0
@@ -53,6 +54,7 @@ class SocialGraphRepository(Protocol):
         message_id: int,
         timestamp: datetime,
         weight: float,
+        valence: int = 0,
     ) -> bool: ...
 
     def load_graph(
@@ -86,6 +88,15 @@ class SocialGraphRepository(Protocol):
         user_b_id: int,
         limit: int,
     ) -> list[dict[str, Any]]: ...
+
+    def load_relationship_daily(
+        self,
+        chat_id: int,
+        user_a_id: int,
+        user_b_id: int,
+    ) -> list[dict[str, Any]]: ...
+
+    def list_active_chats(self, since: datetime) -> list[int]: ...
 
 
 _repository_instance: SocialGraphRepository | None = None
@@ -222,6 +233,7 @@ async def capture_reaction(update: MessageReactionUpdated) -> bool:
         update.message_id,
         update.date or datetime.now(timezone.utc),
         REACTION_WEIGHT,
+        reaction_items_valence(update.new_reaction),
     )
 
 
@@ -274,6 +286,20 @@ async def load_relationship_snapshots(
         user_b_id,
         limit,
     )
+
+
+async def load_relationship_daily(chat_id: int, user_a_id: int, user_b_id: int) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        _repository().load_relationship_daily,
+        int(chat_id),
+        int(user_a_id),
+        int(user_b_id),
+    )
+
+
+async def list_active_chats(*, days: int = 30) -> list[int]:
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return await asyncio.to_thread(_repository().list_active_chats, since)
 
 
 class SocialInteractionMiddleware(BaseMiddleware):
