@@ -150,7 +150,10 @@ CAMP_RULES = ("[Привал] — герой отдыхает; польза уж
 def install_dnd_camp(*, state_policy) -> None:
     from AI.dnd_prompt_registry import PromptSection, is_participant_session, register_prompt_section
 
-    register_prompt_section(PromptSection("camp", CAMP_RULES, order=66, when=is_participant_session, optional=True))
+    register_prompt_section(PromptSection(
+        "camp", CAMP_RULES, order=66, optional=True,
+        # Taught only when a rest is possible at all: never in a fight.
+        when=lambda session, prompt: is_participant_session(session, prompt) and not _alive_enemies(session)))
     if getattr(state_policy, "_upupa_dnd_camp", False):
         return
     state_policy.add_ensure_hook(ensure)
