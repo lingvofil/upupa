@@ -43,6 +43,18 @@ class JsonFileRepository:
             return json.load(file)
 
     def save(self, value: Any) -> None:
+        self._write(lambda file: json.dump(
+            value,
+            file,
+            ensure_ascii=self.ensure_ascii,
+            indent=self.indent,
+        ))
+
+    def save_text(self, serialized: str) -> None:
+        """Атомарно записать уже сериализованный JSON (без повторного dumps)."""
+        self._write(lambda file: file.write(serialized))
+
+    def _write(self, writer) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp_path: Path | None = None
 
@@ -56,12 +68,7 @@ class JsonFileRepository:
                 delete=False,
             ) as temp_file:
                 temp_path = Path(temp_file.name)
-                json.dump(
-                    value,
-                    temp_file,
-                    ensure_ascii=self.ensure_ascii,
-                    indent=self.indent,
-                )
+                writer(temp_file)
                 temp_file.flush()
                 os.fsync(temp_file.fileno())
 

@@ -224,6 +224,10 @@ class GameSession:
         self.action_deadline = None
         self.action_target_user_ids = []
         self.recent_scene_types = []
+        # Number of narrative messages dropped from the persisted transcript
+        # (after the two header rows). Absolute sizes stored by durable
+        # recovery are offset + len(conversation), so they stay valid.
+        self.conversation_offset = 0
 
         if conversation is None:
             self.conversation = [
@@ -278,7 +282,7 @@ class GameSession:
         return {
             "chat_id": self.chat_id,
             "active_model": self.active_model,
-            "conversation": self.conversation,
+            **_persisted_conversation(self),
             "starter_user_id": self.starter_user_id,
             "starter_name": self.starter_name,
             "mode": self.mode,
@@ -306,8 +310,12 @@ class GameSession:
             starter_name=record.get("starter_name") or "игрок",
             starter_user_id=record.get("starter_user_id"),
             active_model=record.get("active_model") or "gemini",
-            conversation=record.get("conversation") or None,
+            conversation=_restored_conversation(record.get("conversation")) or None,
         )
+        try:
+            session.conversation_offset = max(0, int(record.get("conversation_offset") or 0))
+        except (TypeError, ValueError):
+            session.conversation_offset = 0
         session.mode = record.get("mode")
         session.state = record.get("state") or "WAITING_ACTION"
         if session.mode is None and session.state not in {"WAITING_MODE", "LOBBY"}:
@@ -373,16 +381,76 @@ class GameSession:
         return session
 
 
+DND_PERSISTED_CONVERSATION_TAIL = 40
+_SYSTEM_PROMPT_MARKER = "@@DND_SYSTEM_PROMPT@@"
+_STARTER_LINE = "\n\nИнициатор игры:"
+
+
+def conversation_absolute_size(session) -> int | None:
+    """Durable transcript size that survives persisted trimming."""
+    conversation = getattr(session, "conversation", None)
+    if not isinstance(conversation, list):
+        return None
+    return int(getattr(session, "conversation_offset", 0) or 0) + len(conversation)
+
+
+def _persisted_conversation(session) -> dict:
+    """Header with the system prompt as a marker plus a bounded narrative tail.
+
+    The provider only ever receives a short recent window, and the long system
+    prompt is rebuilt from code on restore. Writing the full transcript and a
+    ~40k prompt copy on every one of the many persist calls was pure overhead.
+    The in-memory list is never trimmed mid-process, so local before/after
+    rewinds inside one call stay exact.
+    """
+    conversation = [dict(item) for item in (getattr(session, "conversation", None) or []) if isinstance(item, dict)]
+    offset = int(getattr(session, "conversation_offset", 0) or 0)
+    head, tail = conversation[:2], conversation[2:]
+    if len(tail) > DND_PERSISTED_CONVERSATION_TAIL:
+        offset += len(tail) - DND_PERSISTED_CONVERSATION_TAIL
+        tail = tail[-DND_PERSISTED_CONVERSATION_TAIL:]
+    if head and head[0].get("role") == "user":
+        content = str(head[0].get("content") or "")
+        starter_at = content.rfind(_STARTER_LINE)
+        if content.startswith(_SYSTEM_PROMPT_MARKER):
+            pass
+        elif starter_at >= 0 and "Мастер Подземелий" in content[:400]:
+            head[0]["content"] = _SYSTEM_PROMPT_MARKER + content[starter_at:]
+    return {"conversation": head + tail, "conversation_offset": offset}
+
+
+def _restored_conversation(rows):
+    if not isinstance(rows, list):
+        return rows
+    restored = [dict(item) for item in rows if isinstance(item, dict)]
+    if restored and str(restored[0].get("content") or "").startswith(_SYSTEM_PROMPT_MARKER):
+        restored[0]["content"] = DND_SYSTEM_PROMPT + restored[0]["content"][len(_SYSTEM_PROMPT_MARKER):]
+    return restored
+
+
 def _rewind_session_conversation(session: GameSession, size: int) -> bool:
-    """Restore the exact pre-generation model history before retrying a request."""
+    """Restore the exact pre-generation model history before retrying a request.
+
+    ``size`` is an absolute transcript size (see ``conversation_absolute_size``).
+    """
     try:
         size = max(0, int(size))
     except (TypeError, ValueError):
         return False
     conversation = getattr(session, "conversation", None)
-    if not isinstance(conversation, list) or len(conversation) <= size:
+    if not isinstance(conversation, list):
         return False
-    del conversation[size:]
+    offset = int(getattr(session, "conversation_offset", 0) or 0)
+    if offset and size < offset + 2:
+        logging.warning(
+            "DnD rewind target precedes persisted transcript chat_id=%s size=%s offset=%s",
+            getattr(session, "chat_id", None), size, offset,
+        )
+        return False
+    local_size = size - offset if offset else size
+    if len(conversation) <= local_size:
+        return False
+    del conversation[local_size:]
     if getattr(session, "active_model", None) == "gemini":
         history = [
             {
@@ -433,7 +501,18 @@ def persist_dnd_sessions() -> None:
         "sessions": [session.to_record() for session in sessions]
         + (_suspended_sessions if path == _suspended_state_path else []),
     }
-    JsonFileRepository(path, indent=2).save(payload)
+    # Compact JSON and no rewrite+fsync when nothing changed: persist runs at
+    # every durability boundary (well over a hundred call sites), and many of
+    # them observe an identical snapshot.
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    key = str(path)
+    if _last_persisted.get(key) == serialized and path.exists():
+        return
+    JsonFileRepository(path, indent=None).save_text(serialized)
+    _last_persisted[key] = serialized
+
+
+_last_persisted: dict[str, str] = {}
 
 
 def choose_next_scene_type(session: GameSession) -> str:
