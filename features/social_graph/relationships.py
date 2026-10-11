@@ -1,17 +1,27 @@
 """Long-lived relationship layer built on top of deterministic social interactions.
 
 The social graph records facts (reply/mention/reaction).  This module turns the
-facts plus grounded Chronicle events into a pair-level relationship view.  Raw
-swearing is deliberately *not* used as a conflict signal: tension is raised by
-Chronicle events that were classified as conflicts in context and, more weakly,
-by explicitly negative reactions (🤡, 👎, 💩 …) the pair puts on each other.
+facts plus grounded Chronicle events into a pair-level relationship view.
+
+Scoring model v2:
+
+* Близость — recent, decaying activity (daily XP with a ~45-day time constant)
+  on a log scale relative to the chat's most active pair, plus reciprocity
+  (discounted for tiny samples), shared Chronicle history and variety.
+* Напряжение — conflicts *between the two people*: a Chronicle conflict counts
+  for a pair only if they replied to / mentioned each other during the episode
+  (episodes older than raw-data retention fall back to a 2/n share), plus
+  explicitly negative reactions (🤡, 👎, 💩 …) on each other.  Raw swearing is
+  never a signal.
+* Уровень — the pair's place among all pairs of the same chat (percentile)
+  blended with absolute closeness, so 15/15 stays rare.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 import logging
 import math
 from typing import Iterable
@@ -21,6 +31,8 @@ from features.chronicle.runtime import list_events as list_chronicle_events
 from features.social_graph.service import (
     is_social_graph_enabled,
     list_active_chats,
+    load_chat_daily,
+    load_pair_exchanges,
     load_relationship_snapshots,
     load_relationship_states,
     save_relationship_snapshot,
@@ -32,6 +44,17 @@ SNAPSHOT_INTERVAL_SECONDS = 6 * 3600
 SNAPSHOT_ACTIVE_DAYS = 30
 # Reactions are a weaker conflict signal than a Chronicle-confirmed conflict.
 REACTION_TENSION_CAP = 60.0
+ACTIVITY_DECAY_DAYS = 45.0
+ACTIVITY_LOOKBACK_DAYS = 180
+ACTIVITY_SCALE_FLOOR = 30.0
+# Raw interactions are kept 90 days; older conflicts cannot be checked pair by pair.
+EXCHANGE_EVIDENCE_DAYS = 85
+EXCHANGE_PADDING_BEFORE = timedelta(minutes=10)
+EXCHANGE_PADDING_AFTER = timedelta(minutes=15)
+SYNTHETIC_PAIR_MAX_PARTICIPANTS = 3
+LEVEL_PERCENTILE_WEIGHT = 0.7
+# Snapshots captured before the v2 model are not comparable with new levels.
+SCORING_MODEL_EPOCH = datetime(2026, 10, 11, tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,10 +185,36 @@ def _archetype(
     return "периодически пересекаются"
 
 
-def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], now: datetime) -> RelationshipView:
+def _group_share(event: ChronicleEvent) -> float:
+    """A group episode says little about any single pair inside it."""
+    return min(1.0, 2.0 / max(2, len(set(event.participant_ids))))
+
+
+def _conflict_factor(event: ChronicleEvent, pair: tuple[int, int], exchanges: dict[str, dict[tuple[int, int], int]]) -> float:
+    evidence = exchanges.get(str(event.id))
+    if evidence is None:
+        return _group_share(event)
+    direct = int(evidence.get(pair, 0))
+    if direct <= 0:
+        return 0.0
+    return {1: 0.5, 2: 0.75}.get(direct, 1.0)
+
+
+def _calculate_view(
+    chat_id: int,
+    row: dict,
+    events: Iterable[ChronicleEvent],
+    now: datetime,
+    *,
+    recent_xp: float | None = None,
+    xp_scale: float = ACTIVITY_SCALE_FLOOR,
+    exchanges: dict[str, dict[tuple[int, int], int]] | None = None,
+) -> RelationshipView:
     user_a_id = int(row["user_a_id"])
     user_b_id = int(row["user_b_id"])
+    pair = (min(user_a_id, user_b_id), max(user_a_id, user_b_id))
     shared = _pair_events(events, user_a_id, user_b_id)
+    exchanges = exchanges or {}
 
     a_weight = float(row.get("a_to_b_weight", 0.0) or 0.0)
     b_weight = float(row.get("b_to_a_weight", 0.0) or 0.0)
@@ -178,10 +227,10 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
     for event in shared:
         decay = _event_decay(event, now)
         importance = max(0.0, float(event.importance_score))
-        shared_signal += importance * decay
-        event_xp += min(15.0, 2.0 + importance * 0.8)
+        shared_signal += importance * decay * min(1.0, 1.5 * _group_share(event))
+        event_xp += min(15.0, 2.0 + importance * 0.8) * _group_share(event)
         if event.category == "conflict":
-            conflict_signal += importance * decay
+            conflict_signal += importance * decay * _conflict_factor(event, pair, exchanges)
 
     interaction_count = int(row.get("interaction_count", 0) or 0)
     reply_count = int(row.get("reply_count", 0) or 0)
@@ -189,20 +238,21 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
     reaction_count = int(row.get("reaction_count", 0) or 0)
     last_interaction_at = _utc(row.get("last_interaction_at"))
 
-    activity = 100.0 * (1.0 - math.exp(-max(0.0, base_xp) / 28.0))
+    if recent_xp is None:
+        idle_days = (now - last_interaction_at).total_seconds() / 86400.0 if last_interaction_at else ACTIVITY_LOOKBACK_DAYS
+        recent_xp = max(0.0, base_xp) * math.exp(-max(0.0, idle_days) / ACTIVITY_DECAY_DAYS)
+    scale = max(ACTIVITY_SCALE_FLOOR, float(xp_scale))
+    activity = 100.0 * min(1.0, math.log1p(max(0.0, recent_xp)) / math.log1p(scale))
     event_affinity = 100.0 * (1.0 - math.exp(-shared_signal / 32.0))
     variety = sum(value > 0 for value in (reply_count, mention_count, reaction_count)) / 3.0 * 100.0
-    affinity = activity * 0.55 + reciprocity * 100.0 * 0.25 + event_affinity * 0.15 + variety * 0.05
-
-    # Recent silence weakens the present-day score but never erases history.
-    if last_interaction_at is not None:
-        idle_days = max(0.0, (now - last_interaction_at).total_seconds() / 86400.0)
-        recency_factor = 0.55 + 0.45 * math.exp(-idle_days / 75.0)
-        affinity *= recency_factor
-    elif shared:
-        latest_event = max(event.event_ended_at for event in shared)
-        idle_days = max(0.0, (now - latest_event).total_seconds() / 86400.0)
-        affinity *= 0.55 + 0.45 * math.exp(-idle_days / 90.0)
+    # 1:1 from two messages is not «perfect reciprocity» yet.
+    reciprocity_confidence = min(1.0, interaction_count / 12.0)
+    affinity = (
+        activity * 0.55
+        + reciprocity * reciprocity_confidence * 100.0 * 0.25
+        + event_affinity * 0.15
+        + variety * 0.05
+    )
 
     positive_reactions = int(row.get("positive_reaction_count", 0) or 0)
     negative_reactions = int(row.get("negative_reaction_count", 0) or 0)
@@ -223,9 +273,8 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
     tension_i = int(round(_clamp(tension)))
     total_xp = base_xp + event_xp
 
-    history_bonus = min(14.0, math.log1p(max(0.0, total_xp)) * 2.6)
-    relationship_strength = affinity_i * 0.6 + tension_i * 0.4 + history_bonus
-    level = int(round(_clamp(relationship_strength, 0.0, 100.0) / 100.0 * 15.0))
+    # Provisional absolute level; get_relationships() re-ranks pairs within the chat.
+    level = int(round(_clamp(_level_strength(affinity_i, total_xp), 0.0, 100.0) / 100.0 * 15.0))
 
     recent_7d = int(row.get("recent_7d", 0) or 0)
     previous_21d = int(row.get("previous_21d", 0) or 0)
@@ -269,11 +318,99 @@ def _calculate_view(chat_id: int, row: dict, events: Iterable[ChronicleEvent], n
     )
 
 
+def _level_strength(affinity: int, total_xp: float) -> float:
+    """Closeness plus a small bonus for a long shared history; tension is not «strength»."""
+    return affinity + min(8.0, math.log1p(max(0.0, total_xp)) * 1.2)
+
+
+def _percentiles(values: list[float]) -> list[float]:
+    """Average-rank percentile in [0, 1]; equal values share a rank."""
+    count = len(values)
+    if count <= 1:
+        return [1.0] * count
+    order = sorted(range(count), key=lambda index: values[index])
+    result = [0.0] * count
+    position = 0
+    while position < count:
+        tail = position
+        while tail + 1 < count and values[order[tail + 1]] == values[order[position]]:
+            tail += 1
+        rank = (position + tail) / 2.0
+        for index in order[position : tail + 1]:
+            result[index] = rank / (count - 1)
+        position = tail + 1
+    return result
+
+
+def assign_relative_levels(views: list[RelationshipView]) -> list[RelationshipView]:
+    """Rank pairs within the chat so that 15/15 means «the top of this chat»."""
+    strengths = [_level_strength(view.affinity, view.xp) for view in views]
+    percentiles = _percentiles(strengths)
+    result = []
+    for view, strength, percentile in zip(views, strengths, percentiles):
+        absolute = _clamp(strength, 0.0, 100.0) / 100.0
+        blended = LEVEL_PERCENTILE_WEIGHT * percentile + (1.0 - LEVEL_PERCENTILE_WEIGHT) * absolute
+        level = int(round(_clamp(blended * 15.0, 0.0, 15.0)))
+        if view.interaction_count > 0 or view.shared_event_count > 0:
+            level = max(1, level)
+        result.append(replace(view, level=level))
+    return result
+
+
+def _recent_xp_by_pair(rows: list[dict], now: datetime) -> dict[tuple[int, int], float]:
+    today = now.date()
+    result: dict[tuple[int, int], float] = {}
+    for row in rows:
+        try:
+            day = datetime.fromisoformat(str(row["activity_date"])[:10]).date()
+        except (KeyError, TypeError, ValueError):
+            continue
+        age = max(0, (today - day).days)
+        pair = (int(row["user_a_id"]), int(row["user_b_id"]))
+        xp = float(row.get("xp_earned") or 0.0)
+        result[pair] = result.get(pair, 0.0) + xp * math.exp(-age / ACTIVITY_DECAY_DAYS)
+    return result
+
+
+async def _load_recent_xp(chat_id: int, now: datetime) -> dict[tuple[int, int], float]:
+    since = (now - timedelta(days=ACTIVITY_LOOKBACK_DAYS)).date().isoformat()
+    try:
+        rows = await load_chat_daily(chat_id, since)
+    except Exception as exc:
+        logging.warning("[social_graph] daily activity unavailable chat=%s: %s", chat_id, exc)
+        return {}
+    return _recent_xp_by_pair(rows, now)
+
+
+async def _load_conflict_exchanges(
+    chat_id: int,
+    events: Iterable[ChronicleEvent],
+    now: datetime,
+) -> dict[str, dict[tuple[int, int], int]]:
+    cutoff = now - timedelta(days=EXCHANGE_EVIDENCE_DAYS)
+    windows = [
+        (str(event.id), event.event_started_at - EXCHANGE_PADDING_BEFORE, event.event_ended_at + EXCHANGE_PADDING_AFTER)
+        for event in events
+        if event.category == "conflict" and event.event_ended_at >= cutoff
+    ]
+    if not windows:
+        return {}
+    try:
+        return await load_pair_exchanges(chat_id, windows)
+    except Exception as exc:
+        # Unknown evidence falls back to the 2/n group share, never to «everyone fought».
+        logging.warning("[social_graph] conflict evidence unavailable chat=%s: %s", chat_id, exc)
+        return {}
+
+
 def _synthetic_rows_from_events(events: Iterable[ChronicleEvent], existing: set[tuple[int, int]]) -> list[dict]:
     rows: list[dict] = []
     seen = set(existing)
     for event in events:
         people = list(zip(event.participant_ids, event.participant_names))
+        if len(people) > SYNTHETIC_PAIR_MAX_PARTICIPANTS:
+            # A crowded episode is not evidence of a relationship between every pair in it.
+            continue
         for index, (left_id, left_name) in enumerate(people):
             for right_id, right_name in people[index + 1 :]:
                 user_a_id, user_b_id = sorted((int(left_id), int(right_id)))
@@ -310,18 +447,33 @@ async def get_relationships(chat_id: int, *, user_id: int | None = None, persist
     schedule by ``relationship_snapshot_loop`` so that history reflects time,
     not the moments somebody happened to call a command.
     """
-    rows, events = await asyncio.gather(
-        load_relationship_states(chat_id, user_id=user_id),
-        list_chronicle_events(chat_id, limit=CHRONICLE_EVENT_LIMIT),
-    )
-    existing = {(int(row["user_a_id"]), int(row["user_b_id"])) for row in rows}
-    synthetic = _synthetic_rows_from_events(events, existing)
-    if user_id is not None:
-        synthetic = [row for row in synthetic if int(user_id) in {row["user_a_id"], row["user_b_id"]}]
-    rows = [*rows, *synthetic]
-
+    # Levels are relative to the whole chat, so all pairs are scored even for one user.
     now = datetime.now(timezone.utc)
-    views = [_calculate_view(chat_id, row, events, now) for row in rows]
+    rows, events, recent_xp = await asyncio.gather(
+        load_relationship_states(chat_id),
+        list_chronicle_events(chat_id, limit=CHRONICLE_EVENT_LIMIT),
+        _load_recent_xp(chat_id, now),
+    )
+    exchanges = await _load_conflict_exchanges(chat_id, events, now)
+    existing = {(int(row["user_a_id"]), int(row["user_b_id"])) for row in rows}
+    rows = [*rows, *_synthetic_rows_from_events(events, existing)]
+
+    xp_scale = max([ACTIVITY_SCALE_FLOOR, *recent_xp.values()])
+    views = [
+        _calculate_view(
+            chat_id,
+            row,
+            events,
+            now,
+            recent_xp=recent_xp.get((int(row["user_a_id"]), int(row["user_b_id"]))) if recent_xp else None,
+            xp_scale=xp_scale,
+            exchanges=exchanges,
+        )
+        for row in rows
+    ]
+    views = assign_relative_levels(views)
+    if user_id is not None:
+        views = [view for view in views if int(user_id) in {view.user_a_id, view.user_b_id}]
     views.sort(key=lambda item: (item.level, item.strength, item.xp), reverse=True)
 
     if persist_snapshots and views:
@@ -353,6 +505,9 @@ async def get_relationship_history(chat_id: int, user_a_id: int, user_b_id: int)
         )
         for row in rows
     ]
+    # Levels before the v2 model were absolute and inflated; comparing them with
+    # relative levels would invent a «level drop» for every pair.
+    snapshots = [snapshot for snapshot in snapshots if snapshot.captured_at >= SCORING_MODEL_EPOCH]
     return view, snapshots
 
 
@@ -371,8 +526,24 @@ async def capture_relationship_snapshots(*, active_days: int = SNAPSHOT_ACTIVE_D
     return total
 
 
+async def run_reaction_valence_backfill() -> int | None:
+    """One-off recovery of reaction emoji captured by the Chronicle before valence counting."""
+    from core.paths import HISTORY_DB_PATH
+    from features.social_graph.service import backfill_reaction_valence
+
+    try:
+        counted = await asyncio.to_thread(backfill_reaction_valence, HISTORY_DB_PATH)
+    except Exception as exc:
+        logging.warning("[social_graph] reaction valence backfill failed: %s", exc, exc_info=True)
+        return None
+    if counted is not None:
+        logging.info("[social_graph] reaction valence backfill counted=%s", counted)
+    return counted
+
+
 async def relationship_snapshot_loop() -> None:
     """Snapshots are upserted per day, so a few runs a day are idempotent."""
+    await run_reaction_valence_backfill()
     while True:
         try:
             saved = await capture_relationship_snapshots()

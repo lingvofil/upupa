@@ -51,3 +51,14 @@ def reaction_items_valence(items: Iterable[object]) -> int:
     if any(value > 0 for value in values):
         return 1
     return 0
+
+
+def reaction_names_valence(names) -> int:
+    """Same rule as ``reaction_items_valence`` for stored emoji strings."""
+    values = [emoji_valence(str(name or "")) for name in names or ()]
+    if any(value < 0 for value in values):
+        return -1
+    if any(value > 0 for value in values):
+        return 1
+    return 0
+
