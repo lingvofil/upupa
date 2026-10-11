@@ -20,11 +20,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core.settings import BLOCKED_USERS
 from features.social_graph.analysis import select_render_graph
+from features.social_graph.digest import build_digest_facts, digest_keyboard, write_digest_html
+from features.social_graph.cards import fetch_avatar, render_dossier_card_async
 from features.social_graph.overview import (
     build_dossier,
+    dossier_card_data,
     faction_colors,
     faction_legend,
     faction_names,
+    format_dossier_caption_html,
     format_dossier_html,
     format_factions_html,
     format_roles_html,
@@ -96,6 +100,20 @@ async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallb
         event = dossier.latest_event
         message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
         link = graph_handlers._telegram_message_link(chat_id, message_id)
+    bot = getattr(message, "bot", None)
+    if bot is not None and hasattr(message, "reply_photo"):
+        try:
+            avatar = await fetch_avatar(bot, user_id)
+            png = await render_dossier_card_async(dossier_card_data(dossier, avatar))
+            await message.reply_photo(
+                BufferedInputFile(png, filename="dossier.png"),
+                caption=format_dossier_caption_html(dossier, link),
+                parse_mode="HTML",
+                reply_markup=dossier_keyboard(user_id),
+            )
+            return
+        except Exception as exc:
+            logging.warning("[social_graph] dossier card failed, falling back to text: %s", exc, exc_info=True)
     await message.reply(
         format_dossier_html(dossier, link),
         parse_mode="HTML",
@@ -155,6 +173,22 @@ async def handle_dossier(message: types.Message):
     await send_dossier(message, message.chat.id, *target)
 
 
+@router.message(lambda message: _is_exact(message, "светская хроника"))
+async def handle_social_digest(message: types.Message):
+    if not await _ensure(message):
+        return
+    facts = await build_digest_facts(message.chat.id)
+    if not facts.is_meaningful:
+        await message.reply("🥂 За неделю светской жизни не случилось: ни заметных пар, ни событий в Летописи.")
+        return
+    await message.reply(
+        await write_digest_html(facts),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=digest_keyboard(),
+    )
+
+
 @router.message(lambda message: _is_exact(message, "роли"))
 async def handle_roles(message: types.Message):
     if not await _ensure(message):
@@ -201,7 +235,10 @@ async def handle_social_button(query: types.CallbackQuery):
     action, *args = (query.data or "")[len(CALLBACK_PREFIX):].split(":")
     chat_id = message.chat.id
     try:
-        if action == "fac":
+        if action == "map":
+            await query.answer()
+            await graph_handlers.send_social_graph(message, chat_id)
+        elif action == "fac":
             await query.answer("Делю чат на лагеря…")
             await send_factions(message, chat_id)
         elif action == "roles":

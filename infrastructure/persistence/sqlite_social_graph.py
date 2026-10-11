@@ -668,3 +668,25 @@ class SQLiteSocialGraphRepository:
                 (self._timestamp(since),),
             ).fetchall()
         return [int(row[0]) for row in rows]
+
+    def load_chat_daily(self, chat_id: int, since_date: str) -> list[dict[str, Any]]:
+        """Per-pair daily activity of a whole chat since ``since_date`` (YYYY-MM-DD)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT d.user_a_id,d.user_b_id,d.activity_date,d.event_count,
+                       COALESCE(pa.display_name,'Участник') AS user_a_name,
+                       COALESCE(pb.display_name,'Участник') AS user_b_name,
+                       r.first_interaction_at
+                FROM social_relationship_daily d
+                LEFT JOIN social_participants pa ON pa.chat_id=d.chat_id AND pa.user_id=d.user_a_id
+                LEFT JOIN social_participants pb ON pb.chat_id=d.chat_id AND pb.user_id=d.user_b_id
+                LEFT JOIN social_relationships r
+                       ON r.chat_id=d.chat_id AND r.user_a_id=d.user_a_id AND r.user_b_id=d.user_b_id
+                WHERE d.chat_id=? AND d.activity_date>=?
+                ORDER BY d.activity_date ASC
+                """,
+                (int(chat_id), str(since_date)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
