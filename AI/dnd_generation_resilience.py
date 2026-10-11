@@ -199,12 +199,10 @@ def build_compact_system(
     registered = active_sections(session, str(prompt))
     sections = [contract]
     sections.extend(row.text for row in registered if not row.optional)
-    optional_sections = [row.text for row in registered if row.optional]
-    if runtime_contract:
-        # Scene pacing/settings are useful, but the durable current request also
-        # carries adventure context. They must never make the non-truncatable
-        # action/mechanics protocol exceed the provider's system budget.
-        optional_sections.append(runtime_contract)
+    # Priority: tag schemas first (the only place the model learns formats the
+    # code parses), then registered extras, then the runtime contract, which
+    # degrades instead of disappearing (see _runtime_contract_variants).
+    optional_sections = []
     objects = getattr(session, "scene_objects", None) or {}
     needs_scene_rules = getattr(session, "mode", None) == "participants" and (
         not objects or any(
@@ -226,6 +224,7 @@ def build_compact_system(
         optional_sections.append(WAIT_RULES_PROTOCOL)
     if getattr(session, "mode", None) != "participants":
         optional_sections.append("АБСТРАКТНЫЙ РЕЖИМ: если участников с ID нет, не выдумывай ID; TARGETS можно опустить.")
+    optional_sections.extend(row.text for row in registered if row.optional)
 
     limit = max(0, int(max_chars))
     if getattr(session, "mode", None) == "participants" and not objects:
@@ -240,7 +239,30 @@ def build_compact_system(
             candidate = result + "\n\n" + section
             if len(candidate) <= limit:
                 result = candidate
+        # Scene pacing/settings are useful, but the durable current request also
+        # carries adventure context. They must never push out a tag schema or the
+        # non-truncatable protocol; a shorter variant beats none.
+        for variant in _runtime_contract_variants(runtime_contract):
+            candidate = result + "\n\n" + variant
+            if len(candidate) <= limit:
+                result = candidate
+                break
     return result
+
+
+def _runtime_contract_variants(runtime_contract: str) -> list[str]:
+    """Full runtime contract, then without the pacing line (the current request
+    already carries adventure_context), then only the turn notes."""
+    if not runtime_contract:
+        return []
+    lines = [line for line in runtime_contract.splitlines() if line.strip()]
+    without_pacing = "\n".join(line for line in lines if not line.startswith("ДЛИНА:"))
+    notes_only = lines[0] if lines else ""
+    variants = []
+    for variant in (runtime_contract, without_pacing, notes_only):
+        if variant and variant not in variants:
+            variants.append(variant)
+    return variants
 
 
 async def _bounded_worker(func, *args, timeout_seconds: float, **kwargs):
