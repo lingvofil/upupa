@@ -678,6 +678,14 @@ def execute_enemy_action(session, enemy_id: str, *, operation_id: str, backend: 
     draft_row["operation_results"] = {key: draft_row["operation_results"][key] for key in draft_row["operation_order"]}
     setattr(draft, STATE_FIELD, draft_row)
     draft.action_records = draft_row["action_records"]
+    # Like execute_action: fields the reducer created (e.g. a dying hero's
+    # pending heal decision) must be committed too.
+    for name in set(vars(draft)) - set(vars(session)):
+        try:
+            json.dumps(getattr(draft, name), ensure_ascii=False)
+        except (TypeError, ValueError):
+            continue
+        names.add(name)
     committed = {name: copy.deepcopy(getattr(draft, name)) for name in names}
     json.dumps(committed, ensure_ascii=False)
     for name, value in committed.items():

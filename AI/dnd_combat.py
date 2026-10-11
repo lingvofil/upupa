@@ -68,8 +68,8 @@ COMBAT_RULES = f"""{COMBAT_MARKER}.
 TARGETS — ровно один живой герой. POWER: LOW для мелкой угрозы, MEDIUM для обычного противника, HIGH для опасного, DEADLY только для редкой боссовой атаки.
 Код сам бросит d20 против КБ, посчитает урон и HP. Никогда не сообщай заранее, попала атака или нет — это решит код.
 Натуральная 1 у врага всегда промах, натуральная 20 — попадание и критический урон.
-При 0 HP герой погибает и больше не участвует в ходах. В партии ровно одна одноразовая аварийная лечилка: она заранее случайно лежит у одного героя и автоматически спасает первого героя, который упал бы до 0 HP, после чего исчезает.
-Не создавай вторую лечилку и не лечи HP повествовательно без явной игровой причины.
+При 0 HP герой при смерти: владельцы аварийных лечилок по очереди решают, спасать ли его; без лечилки он погибает.
+Лечилками (одна на трёх героев) распоряжаются только их владельцы и код. Не создавай новые и не лечи HP повествовательно без явной игровой причины.
 """.strip()
 
 
@@ -189,6 +189,7 @@ async def initialize_party_combat(dnd, bot, session) -> None:
     user_ids = [int(item["user_id"]) for item in participants if item.get("user_id") is not None]
     if not user_ids:
         session.character_sheets = {}
+        session.healing_charges = []
         session.healing_charge = {"owner_id": None, "used": True}
         return
 
@@ -209,8 +210,9 @@ async def initialize_party_combat(dnd, bot, session) -> None:
     from AI.dnd_progression import LEVEL_TITLES, hero_progress, prepare_party_levels
 
     prepare_party_levels(session)
-    owner_id = random.choice(user_ids)
-    session.healing_charge = {"owner_id": owner_id, "used": False}
+    from AI.dnd_healing import deal_charges
+
+    heal_announcement = deal_charges(session)
     dnd.persist_dnd_sessions()
 
     lines = ["⚔️ Боевые параметры:"]
@@ -222,10 +224,8 @@ async def initialize_party_combat(dnd, bot, session) -> None:
             f"❤️ {sheet['hp']}/{sheet['max_hp']}, 🛡 КБ {sheet['ac']}\n"
             f"{_stats_block(sheet['stats'])}"
         )
-    lines.append(
-        f"🧪 Одноразовая аварийная лечилка случайно досталась {_participant_name(session, owner_id)}. "
-        "Она автоматически спасёт первого героя, который свалится до 0 HP."
-    )
+    if heal_announcement:
+        lines.append(heal_announcement)
     await bot.send_message(session.chat_id, "\n".join(lines))
 
 
@@ -238,17 +238,14 @@ def _combat_context(session) -> str:
         if not isinstance(sheet, dict) or not isinstance(sheet.get("stats"), dict):
             continue
         name = _participant_name(session, int(key))
-        status = "жив" if _alive(sheet) else "погиб"
+        status = "жив" if _alive(sheet) else ("при смерти" if sheet.get("status") == "dying" else "погиб")
         lines.append(
             f"- ID {key} {name}: HP {sheet.get('hp', 0)}/{sheet.get('max_hp', 0)}, КБ {sheet.get('ac')}, "
             f"{_stats_line(sheet['stats'])}; статус={status}"
         )
-    charge = getattr(session, "healing_charge", {}) or {}
-    owner_id = charge.get("owner_id")
-    heal_text = "использована" if charge.get("used") else (
-        f"у ID {owner_id} ({_participant_name(session, int(owner_id))})" if owner_id is not None else "нет"
-    )
-    return COMBAT_RULES + "\nБОЕВОЕ СОСТОЯНИЕ:\n" + ("\n".join(lines) or "- нет") + f"\nЛЕЧИЛКА: {heal_text}."
+    from AI.dnd_healing import charges_text
+
+    return COMBAT_RULES + "\nБОЕВОЕ СОСТОЯНИЕ:\n" + ("\n".join(lines) or "- нет") + f"\nЛЕЧИЛКИ: {charges_text(session)}."
 
 
 def _extract_roll_ability(text: str) -> str | None:
@@ -339,27 +336,6 @@ def _parse_attack(text: str) -> dict | None:
     }
 
 
-def _consume_heal(session, target_id: int) -> str | None:
-    charge = getattr(session, "healing_charge", {}) or {}
-    if charge.get("used") or charge.get("owner_id") is None:
-        return None
-    sheets = getattr(session, "character_sheets", {}) or {}
-    sheet = sheets.get(str(int(target_id)))
-    if not isinstance(sheet, dict):
-        return None
-    heal = random.randint(1, 8) + 2
-    restored = max(1, min(int(sheet.get("max_hp", heal)), heal))
-    sheet["hp"] = restored
-    sheet["status"] = "alive"
-    charge["used"] = True
-    session.healing_charge = charge
-    owner_id = int(charge["owner_id"])
-    return (
-        f"🧪 {_participant_name(session, owner_id)} оказался тем самым типом с одноразовой лечилкой: "
-        f"{_participant_name(session, target_id)} возвращается с {restored} HP. Лечилка всё, пиздец ей."
-    )
-
-
 def _commit_enemy_attack_continuation(
     dnd,
     session,
@@ -434,12 +410,16 @@ def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
         f"👹 {reason}. Бросок врага: {natural} + {bonus} = {total} против КБ {ac} — попал.{crit}\n"
         f"💥 Урон: {damage}. ❤️ {name}: {sheet['hp']}/{sheet['max_hp']}."
     )
-    heal_note = None
+    dying_note = None
     died = False
     if int(sheet["hp"]) <= 0:
-        heal_note = _consume_heal(session, target_id)
-        if heal_note:
-            summary += "\n" + heal_note
+        # Every lethal hit, from the master or the local engine, goes through
+        # the owners' decision when a charge can still save the hero.
+        from AI.dnd_healing import begin_dying
+
+        dying_note = begin_dying(session, target_id, reason=reason)
+        if dying_note:
+            summary += "\n" + dying_note
         else:
             sheet["hp"] = 0
             sheet["status"] = "dead"
@@ -450,16 +430,18 @@ def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
         f"Враг атаковал {name}: {reason}. Бросок {natural}+{bonus}={total} против КБ {ac}: попадание. "
         f"Урон {damage}; HP было {old_hp}, стало {final_hp}. "
     )
-    if heal_note:
-        prompt += "Одноразовая аварийная лечилка автоматически сработала и теперь израсходована. "
+    if dying_note:
+        prompt += f"{name} при смерти; владельцы аварийных лечилок решают, спасать ли его. "
     elif died:
         prompt += f"{name} погиб и больше не должен получать игровые ходы. "
     if natural == 20:
         prompt += "Это была натуральная 20 и критический урон. "
     prompt += "Продолжай сюжет с этим точным исходом."
-    all_dead = not _living_ids(session)
+    all_dead = not _living_ids(session) and not dying_note
     if all_dead:
         prompt += " Вся партия погибла: дай короткий финал и закончи [ACTION:END]."
+    if dying_note:
+        session.pending_heal_decision["attack_prompt"] = prompt
     return summary, prompt, all_dead
 
 
@@ -618,15 +600,18 @@ def _hero_combat_lines(session, user_id: int) -> list[str]:
     sheet = _active_sheet(session, user_id)
     if not isinstance(sheet, dict) or not _valid_stats(sheet.get("stats")):
         return []
-    status = "жив" if _alive(sheet) else "погиб"
+    status = "жив" if _alive(sheet) else ("при смерти" if sheet.get("status") == "dying" else "погиб")
     lines = [
         f"❤️ Здоровье: {sheet.get('hp', 0)}/{sheet.get('max_hp', 0)} ({status})",
         f"🛡 Класс брони: {sheet.get('ac')}",
         "📊 Характеристики:\n" + _stats_block(sheet["stats"]),
     ]
-    charge = getattr(session, "healing_charge", {}) or {}
-    if not charge.get("used") and charge.get("owner_id") is not None and int(charge["owner_id"]) == int(user_id):
-        lines.append("🧪 Одноразовая аварийная лечилка: при тебе, ещё целая.")
+    from AI.dnd_healing import ensure_charges
+
+    owned = [charge for charge in ensure_charges(session)
+             if not charge["used"] and not charge["lost"] and charge["owner_id"] == int(user_id)]
+    if owned:
+        lines.append(f"🧪 Аварийные лечилки при тебе: {len(owned)} шт., ещё целые.")
     return lines
 
 
@@ -738,6 +723,23 @@ def install_dnd_combat(dnd_router, *, completion_policy=None, state_policy=None)
                 body += "\n\n" + "\n".join(notices)
 
             summary, continuation_prompt, _all_dead = _resolve_enemy_attack(session, attack)
+
+            if getattr(session, "pending_heal_decision", None):
+                # Lethal hit with a charge left: the owners decide before any
+                # continuation. Inside the durable parse ``bot`` records each
+                # send, so a replay never repeats the attack or the question.
+                from AI.dnd_healing import enter_decision
+
+                # The final prompt (after every attack-prompt decorator) is what
+                # the master continues from once the owners decide.
+                session.pending_heal_decision["attack_prompt"] = continuation_prompt
+                if body:
+                    await bot.send_message(chat_id, body)
+                await bot.send_message(chat_id, summary)
+                await enter_decision(dnd, bot, session)
+                if story:
+                    campaign._maybe_image(dnd, getattr(bot, "_transport", bot), session, story)
+                return None
 
             from AI.dnd_result_recovery import continue_pending_generation
 

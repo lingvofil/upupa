@@ -122,7 +122,7 @@ def test_enemy_attack_misses_against_armor_class(monkeypatch):
     assert all_dead is False
 
 
-def test_first_lethal_hit_consumes_party_heal_and_revives_target(monkeypatch):
+def test_first_lethal_hit_waits_for_the_heal_owner_instead_of_auto_healing(monkeypatch):
     session = _session(hp=2, max_hp=14, ac=13, heal_owner=2, heal_used=False)
     values = iter([15, 6, 5])
     monkeypatch.setattr(combat.random, "randint", lambda _a, _b: next(values))
@@ -132,11 +132,11 @@ def test_first_lethal_hit_consumes_party_heal_and_revives_target(monkeypatch):
         {"target_user_id": 1, "power": "HIGH", "reason": "орк рубит тесаком"},
     )
 
-    assert session.healing_charge["used"] is True
-    assert session.character_sheets["1"]["hp"] == 7
-    assert session.character_sheets["1"]["status"] == "alive"
-    assert "одноразовой лечилкой" in summary
-    assert "автоматически сработала" in prompt
+    # No silent save: the owner decides (see tests/test_dnd_healing.py).
+    assert session.character_sheets["1"]["status"] == "dying"
+    assert session.pending_heal_decision["owner_id"] == 2
+    assert session.healing_charges[0]["used"] is False
+    assert "при смерти" in summary and "решают" in prompt
     assert all_dead is False
 
 

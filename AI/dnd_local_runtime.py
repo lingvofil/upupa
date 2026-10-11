@@ -271,6 +271,22 @@ class LocalRuntime:
                 session.local_round_transition = {"round_id": lifecycle.ensure(session).get("round_id"), "operation_id": result.operation_id}
                 for npc_result in self._resolve_simple_enemies(session, result.operation_id):
                     session.local_delivery_outbox.append({"operation_id": npc_result.operation_id, "text": npc_result.text})
+            if getattr(session, "pending_heal_decision", None):
+                # A simple enemy dropped a hero to 0 HP and a charge can save
+                # them: the owners decide first; the master narrates the round
+                # (local results included) after the decision.
+                from AI.dnd_healing import enter_decision
+
+                summaries = "\n".join((row.get("result") or {}).get("text", "") for row in
+                    getattr(session, "dnd_local_engine_v1", {}).get("action_records", [])[-8:])
+                local_prompt = result.continuation_prompt or (
+                    "Локальный движок уже применил последствия. Не повторяй кубики, урон или расход:\n" + summaries)
+                decision = session.pending_heal_decision
+                decision["attack_prompt"] = (local_prompt + "\n" + str(decision.get("attack_prompt") or "")).strip()
+                self.dnd.persist_dnd_sessions()
+                await flush_local_outbox(self.dnd, bot, session)
+                await enter_decision(self.dnd, bot, session)
+                return
             if result.needs_narrator:
                 from AI.dnd_result_recovery import reserve_generation_request
                 summaries = "\n".join((row.get("result") or {}).get("text", "") for row in

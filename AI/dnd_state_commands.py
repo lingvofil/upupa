@@ -439,6 +439,11 @@ def render_status(dnd, chat_id: int) -> str:
         threat = _threat_line(getattr(session, "threat", None))
         if threat:
             blocks.append(threat)
+        from AI.dnd_healing import status_line
+
+        heal = status_line(session)
+        if heal:
+            blocks.append(heal)
         return "\n\n".join(blocks)
 
     latest = campaign._latest_campaign(chat_id)

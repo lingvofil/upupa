@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from AI.dnd_manual_healing import _apply_manual_heal, strip_healing_poll_options
+from AI.dnd_healing import apply_manual_heal, strip_healing_poll_options
 from AI.dnd_pacing import guard_enemy_attack_chain
 from AI.dnd_profile_ownership import profile_owner_id
 
@@ -58,33 +58,7 @@ def test_manual_heal_consumes_owner_charge_and_caps_hp():
         },
     )
 
-    class FakeTwoHeals:
-        @staticmethod
-        def _charge_by_id(current, charge_id):
-            return current.healing_charges[0] if charge_id == 1 else None
-
-        @staticmethod
-        def _owner_can_use(current, owner_id, _target):
-            return owner_id == 10
-
-        @staticmethod
-        def _sync_legacy_charge(current):
-            current.healing_charge["used"] = current.healing_charges[0]["used"]
-
-    class FakeCombat:
-        @staticmethod
-        def _participant_name(current, user_id):
-            return current.participants[str(user_id)]["name"]
-
-    ok, text = _apply_manual_heal(
-        FakeTwoHeals,
-        FakeCombat,
-        session,
-        owner_id=10,
-        charge_id=1,
-        target_id=20,
-        roll=10,
-    )
+    ok, text = apply_manual_heal(session, owner_id=10, charge_id=1, target_id=20, roll=10)
     assert ok is True
     assert session.character_sheets["20"]["hp"] == 14
     assert session.healing_charges[0]["used"] is True
