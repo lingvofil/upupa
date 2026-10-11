@@ -15,6 +15,7 @@ _STATE_ALIASES = {
     "status": {"днд сюжет"},
     "party": {"днд партия"},
     "canon": {"днд канон"},
+    "quests": {"днд квесты", "днд поручения", "днд казна"},
 }
 _START_ALIASES = {"упупа днд"}
 _END_ALIASES = {"днд конец"}
@@ -532,6 +533,11 @@ def render_state_command(
             from AI.dnd_session_canon import render_session_canon
 
             return render_session_canon(dnd, chat_id)
+        if kind == "quests":
+            from AI.dnd_quests import render as render_quests
+
+            session = dnd.dnd_sessions.get(chat_id)
+            return render_quests(session) if session is not None else "📜 Поручения видны во время партии."
         raise ValueError(f"Unknown DnD state command: {kind}")
     finally:
         _ACTIVE_STATE_VIEW_POLICY.reset(token)
