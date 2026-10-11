@@ -198,6 +198,18 @@ class LocalRuntime:
                 except ValueError as error:
                     await bot.send_message(chat_id, str(error))
                 return
+            if kind == "ASI":
+                from AI.dnd_progression import choose_ability_increase
+
+                if session.paused:
+                    return
+                try:
+                    text = choose_ability_increase(session, actor_id, payload.get("choice"))
+                    self.dnd.persist_dnd_sessions()
+                    await bot.send_message(chat_id, text)
+                except ValueError as error:
+                    await bot.send_message(chat_id, str(error))
+                return
             if kind in {"PAUSE", "RESUME", "RETRY"}:
                 if not self.dnd._user_is_host(session, actor_id):
                     return

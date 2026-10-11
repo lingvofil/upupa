@@ -167,6 +167,10 @@ def _player_lines(session) -> list[str]:
             except (TypeError, ValueError):
                 bits.append(f"статус: {status}")
 
+        level = (getattr(session, "hero_progress", {}) or {}).get(player_id)
+        if isinstance(level, dict) and level.get("level"):
+            bits.append(f"уровень {int(level['level'])}")
+
         cond = _conditions_text(conditions.get(player_id))
         if cond != "нет":
             bits.append("состояния: " + cond)

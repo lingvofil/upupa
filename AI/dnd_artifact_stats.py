@@ -74,18 +74,45 @@ def artifact_bonuses(session, user_id: int) -> dict[str, int]:
     return {key: value for key, value in totals.items() if value > 0}
 
 
+_STAT_BONUS_SOURCES: list = []
+
+
+def register_stat_bonus_source(source) -> None:
+    """Non-artifact permanent bonuses (e.g. level ability increases).
+
+    ``source(session, user_id) -> {ABILITY: bonus}``; applied before artifacts,
+    so ``artifact_stat_bonuses`` keeps showing only what artifacts add.
+    """
+    if source not in _STAT_BONUS_SOURCES:
+        _STAT_BONUS_SOURCES.append(source)
+
+
+def _extra_bonuses(session, user_id: int) -> dict[str, int]:
+    totals = {key: 0 for key in ABILITY_KEYS}
+    for source in list(_STAT_BONUS_SOURCES):
+        try:
+            for key, value in (source(session, user_id) or {}).items():
+                if key in totals:
+                    totals[key] += int(value)
+        except Exception:
+            logging.exception("DnD stat bonus source failed user_id=%s", user_id)
+    return totals
+
+
 def sync_character_sheet(session, user_id: int) -> bool:
     sheets = getattr(session, "character_sheets", {}) or {}
     sheet = sheets.get(str(int(user_id)))
     base = _base_stats(sheet)
     if base is None:
         return False
+    extra = _extra_bonuses(session, user_id)
+    grown = {key: min(20, int(base[key]) + max(0, int(extra.get(key, 0)))) for key in ABILITY_KEYS}
     bonuses = artifact_bonuses(session, user_id)
     effective = {
-        key: min(20, int(base[key]) + int(bonuses.get(key, 0)))
+        key: min(20, int(grown[key]) + int(bonuses.get(key, 0)))
         for key in ABILITY_KEYS
     }
-    effective_bonuses = {key: effective[key] - base[key] for key in ABILITY_KEYS if effective[key] > base[key]}
+    effective_bonuses = {key: effective[key] - grown[key] for key in ABILITY_KEYS if effective[key] > grown[key]}
     changed = sheet.get("stats") != effective or sheet.get("artifact_stat_bonuses") != effective_bonuses
     sheet["stats"] = effective
     sheet["artifact_stat_bonuses"] = effective_bonuses

@@ -31,6 +31,7 @@ _FIELDS = (
     "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
     "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
+    "hero_progress",
 )
 _PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
@@ -246,6 +247,9 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         sheet = _mapping(_mapping(snapshot.get("character_sheets")).get(str(user_id)))
         stats = _mapping(sheet.get("stats"))
         lines = [f"👤 {_name(snapshot, user_id)}", _hp(snapshot, user_id)]
+        from AI.dnd_progression import progress_lines
+
+        lines.extend(progress_lines(_mapping(snapshot.get("hero_progress")).get(str(user_id))))
         if sheet.get("ac") is not None:
             lines.append(f"🛡 КБ {sheet['ac']}")
         if stats:
@@ -429,6 +433,11 @@ class DndMenuService:
             choices = list(ARCHETYPES)
             rows.extend([[button("🎯 " + choice.capitalize(), "confirm", kind="CHOOSE_ARCHETYPE", choice=choice)
                           for choice in choices[index:index + 2]] for index in range(0, len(choices), 2)])
+        progress = _mapping(_mapping(snapshot.get("hero_progress")).get(str(owner)))
+        if owner and page == "hero" and _int(progress.get("asi_pending")) > 0:
+            abilities = list(_ABILITY_LABELS.items())
+            rows.extend([[button(f"⬆️ {label} +2", "confirm", kind="ASI", choice=ability)
+                          for ability, label in abilities[index:index + 2]] for index in range(0, len(abilities), 2)])
         if page == "overview":
             for object_id, rule_id, rule in _quick_interactions(snapshot):
                 rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
@@ -601,6 +610,10 @@ class DndMenuService:
             return self.dnd._user_is_host(session, actor) and (kind in {"RESUME", "PAUSE"} or not self.paused(session))
         if kind == "ROLL":
             return self._can_act(session, actor, state="WAITING_ROLL")
+        if kind == "ASI":
+            progress = _mapping(_mapping(getattr(session, "hero_progress", None)).get(str(actor)))
+            return (str(actor) in _mapping(getattr(session, "participants", None)) and not self.paused(session)
+                    and _int(progress.get("asi_pending")) > 0 and payload.get("choice") in _ABILITY_LABELS)
         if kind == "CHOOSE_ARCHETYPE":
             from AI.dnd_character_templates import ARCHETYPES
 
@@ -677,12 +690,14 @@ class DndMenuService:
         if not self._valid_payload(session, actor, payload):
             await callback.answer("Действие сейчас недоступно. Обнови меню.", show_alert=True)
             return
-        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
+        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "ASI": "Повысить характеристику", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
         description = labels.get(payload.get("kind"), "Действие")
         snapshot = snapshot_session(session)
         if payload.get("kind") == "WAIT":
             rule = _wait_rule(snapshot)
             description += ": " + _text(rule["label"], 100) + "\n" + _outcome_preview(snapshot, rule["success"])
+        if payload.get("kind") == "ASI":
+            description += ": " + _ABILITY_LABELS.get(payload.get("choice"), "?") + " +2 (до максимума 20). Выбор постоянный."
         if payload.get("kind") == "CHOOSE_ARCHETYPE":
             from AI.dnd_character_templates import stats_for_profile
 
@@ -853,7 +868,7 @@ class DndMenuService:
                 request = {**payload, **self.identity(session), "actor_id": actor}
                 await self.execute_action(callback.bot, session.chat_id, actor, request)
                 if self.dnd.dnd_sessions.get(session.chat_id) is session:
-                    await self.show(callback.bot, session, actor, "overview")
+                    await self.show(callback.bot, session, actor, "hero" if payload.get("kind") == "ASI" else "overview")
 
     async def handle_message(self, event):
         text = " ".join(str(getattr(event, "text", None) or "").strip().casefold().split())
