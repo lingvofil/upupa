@@ -33,7 +33,7 @@ _FIELDS = (
     "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
     "hero_progress", "archetype_ability_uses", "dodge_flags",
 )
-_PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
+_PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage", "more"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
 _ABILITY_LABELS = {"STR": "Сила", "DEX": "Ловкость", "CON": "Телосложение", "INT": "Интеллект", "WIS": "Мудрость", "CHA": "Харизма"}
 _STATES = {"LOBBY": "Собираем участников", "WAITING_MODE": "Выбираем режим", "WAITING_PLOT": "Выбираем сюжет",
@@ -315,16 +315,22 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         return "\n".join(lines)
     if page == "manage":
         return "⚙️ Управление партией\n\nНастройки: «днд настройки».\nПауза и восстановление продолжения доступны ведущему."
+    if page == "more":
+        return "☰ Разделы партии\nГерой, вещи, сцена, враги, партия, журнал и управление."
     scene = _text((snapshot.get("scene_log") or [""])[-1], 850)
     lines = [f"{'📍 Сцена' if page == 'scene' else '🎭 Партия'} {_int(snapshot.get('scene_count'))}"]
     if snapshot.get("mission_goal"):
         lines.append("🎯 " + _text(snapshot["mission_goal"], 240))
     lines.append(_STATES.get(snapshot.get("state"), "Игра идёт"))
     targets = snapshot.get("action_target_user_ids") or _mapping(snapshot.get("pending_roll")).get("target_user_ids") or []
-    lines.append("Ход: " + (", ".join(_name(snapshot, value) for value in targets) if targets else "партии"))
-    if snapshot.get("pending_actions"):
-        active = sum(1 for row in participants.values() if isinstance(row, dict) and row.get("active", True))
-        lines.append(f"Ответили: {len(snapshot['pending_actions'])}/{len(targets) or active}")
+    lines.append("Ход: " + (", ".join(_name(snapshot, value) for value in targets) if targets else "вся партия, каждый выбирает своё"))
+    if snapshot.get("state") == "WAITING_ACTION" and len(targets) != 1:
+        expected = [str(value) for value in targets] or [
+            str(key) for key, row in participants.items() if isinstance(row, dict) and _public(row) and row.get("active", True)]
+        done = {str(key) for key in _mapping(snapshot.get("pending_actions"))}
+        if expected:
+            lines.append("Походили: " + ", ".join(
+                ("✅ " if key in done else "⏳ ") + _name(snapshot, key) for key in expected))
     deadline = snapshot.get("action_deadline")
     if snapshot.get("state") == "WAITING_ACTION" and deadline and len(targets) == 1:
         try:
@@ -433,10 +439,12 @@ class DndMenuService:
         button = lambda text, operation, **payload: self._button(session, owner, text, operation, card=card, seq=seq, **payload)
         state = snapshot.get("state")
         rows = []
+        action_block = False
         if owner and state == "WAITING_ROLL":
             rows.append([button("🎲 Бросить", "confirm", kind="ROLL")])
         if page == "overview" and state == "WAITING_ACTION" and (not owner or self._can_act(session, owner)):
             rows.extend(self._action_rows(session, snapshot, owner, button))
+            action_block = True
         elif state == "WAITING_ACTION":
             rows.append([button("✍️ Свой ход", "compose")])
         if owner and page == "hero" and state == "LOBBY" and str(owner) in _mapping(snapshot.get("participants")):
@@ -469,11 +477,7 @@ class DndMenuService:
             for enemy_id, row in list(_mapping(snapshot.get("enemy_combatants")).items())[:6]:
                 if _active_enemy(snapshot, enemy_id, row):
                     rows.append([button("⚔️ " + _text(row.get("name"), 40), "weapons", kind="ATTACK", target_id=str(enemy_id))])
-        labels = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
-                  ("👥 Партия", "party"), ("📖 Журнал", "journal"), ("⚙️ Управление", "manage"), ("🔄 Обновить", page)]
-        rows.extend([[button(text, "nav", page=target) for text, target in labels[index:index + 3]] for index in range(0, len(labels), 3)])
-        if page != "overview":
-            rows.append([button("← К ходу", "nav", page="overview")])
+        rows.extend(self._nav_rows(page, button, action_block=action_block))
         if owner and page == "manage" and self.dnd._user_is_host(session, owner):
             rows.append([button("▶️ Продолжить" if self.paused(session) else "⏸ Пауза", "confirm", kind="RESUME" if self.paused(session) else "PAUSE")])
             rows.append([button("↻ Повторить продолжение", "confirm", kind="RETRY")])
@@ -487,8 +491,33 @@ class DndMenuService:
 
         return ability_for(session, owner)
 
+    @staticmethod
+    def _nav_rows(page, button, *, action_block=False):
+        """One compact navigation row instead of three; the rest lives under «Ещё».
+
+        On the turn card the action block already reaches items («Предмет») and
+        enemies («Атака»), so the row offers only pages the actions don't reach.
+        """
+        if page == "more":
+            pages = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
+                     ("👥 Партия", "party"), ("📖 Журнал", "journal"), ("⚙️ Управление", "manage"), ("🔄 Обновить", "overview")]
+            rows = [[button(text, "nav", page=target) for text, target in pages[index:index + 2]]
+                    for index in range(0, len(pages), 2)]
+            return rows + [[button("← К ходу", "nav", page="overview")]]
+        if page == "overview":
+            third = ("📍 Сцена", "scene") if action_block else ("🎒 Вещи", "items")
+            return [[button("👤 Герой", "nav", page="hero"), button("📖 Журнал", "nav", page="journal"),
+                     button(third[0], "nav", page=third[1]), button("☰ Ещё", "nav", page="more")]]
+        quick = [button(text, "nav", page=target) for text, target in
+                 (("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene")) if target != page]
+        return [quick + [button("☰ Ещё", "nav", page="more")], [button("← К ходу", "nav", page="overview")]]
+
     def _action_rows(self, session, snapshot, owner, button):
-        """DnD-style action block: what a hero can do with their turn."""
+        """A DnD turn: action, bonus/reaction, quick ideas, then free text.
+
+        Buttons on the shared card act for whoever presses them: every choice
+        and confirmation then continues on the presser's own card.
+        """
         from AI.dnd_archetype_abilities import charges
 
         enemies = any(_active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
@@ -496,36 +525,26 @@ class DndMenuService:
                   if isinstance(row, dict) and row.get("active", True) and _int(_mapping(_mapping(snapshot.get("character_sheets")).get(str(key))).get("hp"), 1) > 0]
         rows = []
         first = [button("⚔️ Атака", "nav", page="enemies")] if enemies else []
-        first.append(button("🎯 Навык", "skills"))
+        first.extend([button("🎯 Навык", "skills"), button("🎒 Предмет", "nav", page="items")])
         rows.append(first)
         second = []
         if len(living) > 1:
             second.append(button("🤝 Помочь", "help"))
+        if enemies:
+            second.append(button("🛡 Уклонение", "confirm", kind="DODGE"))
         ability = self._ability(session, owner)
         if ability:
             remaining, maximum = charges(session, owner)
             second.append(button(f"{ability['emoji']} {ability['title']} {remaining}/{maximum}", "ability"))
         elif not owner:
             second.append(button("✨ Умение", "ability"))
-        if second:
-            rows.append(second)
-        third = [button("🎒 Предмет", "nav", page="items")]
-        # The shared card only navigates; direct confirmable actions live on
-        # the actor's own card.
-        if owner and enemies:
-            third.append(button("🛡 Уклонение", "confirm", kind="DODGE"))
-        if owner and _wait_rule(snapshot):
-            third.append(button("⏳ Подождать", "confirm", kind="WAIT"))
-        rows.append(third)
-        rows.append([button("✍️ Свой ход", "compose")])
-        for object_id, rule_id, rule in _quick_interactions(snapshot):
+        if _wait_rule(snapshot):
+            second.append(button("⏳ Подождать", "confirm", kind="WAIT"))
+        rows.extend(second[index:index + 3] for index in range(0, len(second), 3))
+        for object_id, rule_id, rule in _quick_interactions(snapshot, limit=2):
             rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
                                 kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
-        objects = [button("🔎 " + _text(row.get("name") or object_id, 28), "object", object_id=str(object_id))
-                   for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())
-                   if isinstance(row, dict) and _public(row) and row.get("available", True)][:3]
-        if objects:
-            rows.append(objects)
+        rows.append([button("✍️ Свой ход", "compose")])
         return rows
 
     async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):

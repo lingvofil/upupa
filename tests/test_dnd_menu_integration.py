@@ -107,7 +107,7 @@ def world(current):
 
 async def items_card(current, bot, service):
     await service.command(Message(bot, current))
-    await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи")))
+    await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Предмет")))
     return current.menu_ui_state["cards"]["1"]
 
 
@@ -124,6 +124,9 @@ def test_real_lifecycle_identity_navigation_is_pure_and_uses_no_ai(monkeypatch):
         await service.command(Message(bot, current))
         for page in ("👤 Герой", "🎒 Вещи", "📍 Сцена", "👹 Враги", "👥 Партия", "📖 Журнал"):
             card_id = current.menu_ui_state["cards"].get("1", current.menu_ui_state["cards"]["party"])
+            # Every section is reachable from any page, at worst through «Ещё».
+            if all(item.text != page for row in latest_markup(bot).inline_keyboard for item in row):
+                await service.callback(Callback(bot, current, button(latest_markup(bot), "☰ Ещё"), message_id=card_id))
             await service.callback(Callback(bot, current, button(latest_markup(bot), page), message_id=card_id))
         assert world(current) == before
         assert offline.ai_calls == 0
@@ -164,7 +167,7 @@ def test_weapon_selection_reaches_real_attack_without_ai_and_replays_once(monkey
         runtime.backend.rng = Dice(18)
         monkeypatch.setattr("AI.dnd_player_combat.random.randint", lambda lo, hi: 4)
         await service.command(Message(bot, current))
-        await service.callback(Callback(bot, current, button(latest_markup(bot), "👹 Враги")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Атака")))
         card_id = current.menu_ui_state["cards"]["1"]
         await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж"), message_id=card_id))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ меч"), message_id=card_id))

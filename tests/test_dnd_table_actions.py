@@ -89,13 +89,14 @@ def test_dodge_imposes_disadvantage_on_one_enemy_attack(monkeypatch):
 
 # ----------------------------------------------------------------- menu
 
-def test_personal_overview_has_table_actions_and_shared_card_only_navigates():
+def test_turn_cards_show_table_actions_and_one_navigation_row():
     async def run():
         current, _dnd, bot, service = make_service()
         await service.command(Message(bot, current))
         shared = labels(latest_markup(bot))
-        assert {"⚔️ Атака", "🎯 Навык", "🤝 Помочь", "✨ Умение", "🎒 Предмет", "✍️ Свой ход"} <= set(shared)
-        assert "🛡 Уклонение" not in shared
+        assert {"⚔️ Атака", "🎯 Навык", "🤝 Помочь", "🛡 Уклонение", "✨ Умение", "🎒 Предмет", "✍️ Свой ход"} <= set(shared)
+        # One navigation row; the remaining sections live under «Ещё».
+        assert {"👤 Герой", "📍 Сцена", "☰ Ещё"} <= set(shared) and "👹 Враги" not in shared
         await service.show(bot, current, 1, "overview")
         personal = labels(latest_markup(bot))
         assert "🛡 Уклонение" in personal
