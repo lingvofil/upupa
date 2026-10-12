@@ -191,8 +191,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     from AI.dnd_progression import install_dnd_progression
+    from AI.dnd_archetype_abilities import install_dnd_archetype_abilities
 
     install_dnd_progression(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_archetype_abilities(state_policy=campaign_state_policy)
     install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_session_canon_archive(dnd)
     from AI.dnd_campaign_stats import install_dnd_campaign_stats

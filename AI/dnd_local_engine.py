@@ -37,6 +37,7 @@ _PRESTATE_FIELDS = {
     "healing_charges", "special_move_charges", "special_move_pending_user_id", "special_move_offer_user_id",
     "luck_tokens", "weakness_luck_earned", "weakness_luck_spent", "item_boosts", "item_world_facts",
     "local_object_uses", "local_world_facts", "local_enemy_rules", "local_wait_rule", lifecycle.STATE_FIELD,
+    "dodge_flags", "archetype_ability_uses",
 }
 
 
