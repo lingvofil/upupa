@@ -271,12 +271,10 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
 
     dnd.register_roll_commit_hook(commit_special_move)
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         eligible = special_eligible_user(response) if session and dnd._is_participant_mode(session) else None
-        result = await original_parse(bot, chat_id, response)
+        result = await call_next(bot, chat_id, response)
         if session and eligible is not None and getattr(session, "state", None) == "WAITING_ROLL" and _available(session, eligible):
             pending = getattr(session, "pending_roll", None) or {}
             targets = [int(value) for value in (pending.get("target_user_ids") or [])]
@@ -286,7 +284,9 @@ def install_dnd_special_moves(dnd, dnd_router, *, state_policy) -> None:
                 await bot.send_message(chat_id, _offer_text(session, eligible), reply_markup=_keyboard(eligible))
         return result
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "special_moves", parse_turn)
 
     dnd_router.message.outer_middleware(SpecialMoveMessageMiddleware())
     dnd_router.callback_query.outer_middleware(SpecialMoveCallbackMiddleware())

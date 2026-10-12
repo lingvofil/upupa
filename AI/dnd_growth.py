@@ -953,9 +953,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     campaign._finish = finish
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
+    async def generate_session_response(session, prompt, call_next):
         _ensure(session)
         text = str(prompt or "")
         if "Игроки заявили действия одновременно:" in text:
@@ -972,7 +970,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
         if session.pending_achievement_uses and "Игроки заявили действия одновременно:" in text:
             text += "\n\n" + _achievement_prompt(session)
 
-        result = await original_generate(session, text)
+        result = await call_next(session, text)
         if is_epilogue:
             result = _ACH_FACT_RE.sub("", _GROWTH_RE.sub("", str(result or ""))).strip()
 
@@ -983,7 +981,9 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
                 result = "\n".join(notices) + "\n\n" + str(result or "")
         return result
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "growth", generate_session_response)
 
     original_open = dnd.open_action_window
 
@@ -998,9 +998,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     dnd.open_action_window = open_action_window
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         guarded = str(response or "")
         consume_parley_after = False
@@ -1023,7 +1021,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
                         + guarded
                     )
 
-        result = await original_parse(bot, chat_id, guarded)
+        result = await call_next(bot, chat_id, guarded)
 
         if session and dnd._is_participant_mode(session):
             if consume_parley_after:
@@ -1034,7 +1032,9 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
             dnd.persist_dnd_sessions()
         return result
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "growth", parse_turn)
 
     original_render_hero = state_commands.render_hero
 

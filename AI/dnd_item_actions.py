@@ -867,15 +867,13 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
 
     campaign._apply_heritage = apply_heritage
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
+    async def generate_session_response(session, prompt, call_next):
         _ensure(session)
         pending = bool(session.pending_item_uses)
         enriched_prompt = str(prompt or "")
         if pending and "Игроки заявили действия одновременно:" in enriched_prompt:
             enriched_prompt += _mechanics_prompt(session)
-        result = await original_generate(session, enriched_prompt)
+        result = await call_next(session, enriched_prompt)
         if pending and "Игроки заявили действия одновременно:" in enriched_prompt:
             notices = commit_pending_item_uses(session)
             dnd.persist_dnd_sessions()
@@ -883,7 +881,9 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
                 result = "\n".join(notices) + "\n\n" + str(result or "")
         return result
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "item_actions", generate_session_response)
 
     original_open_action = dnd.open_action_window
 
@@ -896,9 +896,7 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
 
     dnd.open_action_window = open_action_window
 
-    original_parse = dnd.parse_and_execute_turn
-
-    async def parse_turn(bot, chat_id, response):
+    async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         guarded = str(response or "")
         source = None
@@ -906,9 +904,11 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
             guarded, source = apply_item_boost(session, guarded)
             if source:
                 dnd.persist_dnd_sessions()
-        return await original_parse(bot, chat_id, guarded)
+        return await call_next(bot, chat_id, guarded)
 
-    dnd.parse_and_execute_turn = parse_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "item_actions", parse_turn)
 
     dnd_router.message.outer_middleware(DndItemActionMiddleware())
     dnd._upupa_dnd_item_actions_installed = True

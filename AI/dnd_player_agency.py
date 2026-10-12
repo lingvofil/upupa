@@ -42,13 +42,13 @@ def configure_dnd_player_agency(dnd_module=None) -> None:
     if getattr(dnd, "_upupa_dnd_player_agency_configured", False):
         return
 
-    original_generate_session_response = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt: str):
-        return await original_generate_session_response(
+    async def generate_session_response(session, prompt: str, call_next):
+        return await call_next(
             session,
             _with_player_agency(dnd, session, prompt),
         )
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "player_agency", generate_session_response)
     dnd._upupa_dnd_player_agency_configured = True

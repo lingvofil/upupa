@@ -129,10 +129,9 @@ def align_roll_question(session, response: str) -> str:
 def install_turn_contract_guard(dnd) -> None:
     if getattr(dnd, "_turn_contract_guard_installed", False):
         return
-    original = dnd.generate_session_response
 
-    async def generate(session, prompt):
-        response = await original(session, prompt)
+    async def generate(session, prompt, call_next):
+        response = await call_next(session, prompt)
         if (getattr(session, "mode", None) != "participants"
                 or getattr(session, "_upupa_ephemeral_generation_depth", 0)):
             return response
@@ -176,5 +175,7 @@ def install_turn_contract_guard(dnd) -> None:
                 )
         return align_roll_question(session, response)
 
-    dnd.generate_session_response = generate
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "turn_contract", generate)
     dnd._turn_contract_guard_installed = True

@@ -190,15 +190,15 @@ def install_dnd_pacing(dnd) -> None:
 
     campaign._campaign_context = campaign_context
 
-    original_generate = dnd.generate_session_response
-
-    async def generate(session, prompt):
+    async def generate(session, prompt, call_next):
         value = str(prompt or "")
         if "Результат:" in value and ("Выбор сделан:" in value or "Тишина" in value):
             value += "\n\n" + POLL_DECISION_GUARD
-        return await original_generate(session, value)
+        return await call_next(session, value)
 
-    dnd.generate_session_response = generate
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "pacing", generate)
 
     original_parse = dnd.parse_and_execute_turn
 

@@ -99,9 +99,7 @@ def configure_dnd_target_mentions(dnd_module=None) -> None:
 
     dnd.open_action_window = open_action_window
 
-    original_parse_and_execute_turn = dnd.parse_and_execute_turn
-
-    async def parse_and_execute_turn(bot, chat_id: int, text_response: str):
+    async def parse_and_execute_turn(bot, chat_id: int, text_response: str, call_next):
         session = dnd.dnd_sessions.get(chat_id)
         match = _ACTION_TAG_RE.search(str(text_response or ""))
         if session is not None and match:
@@ -130,7 +128,9 @@ def configure_dnd_target_mentions(dnd_module=None) -> None:
                         plural="ваш выбор",
                     )
 
-        return await original_parse_and_execute_turn(bot, chat_id, text_response)
+        return await call_next(bot, chat_id, text_response)
 
-    dnd.parse_and_execute_turn = parse_and_execute_turn
+    from AI.dnd_turn_pipeline import register_turn_step
+
+    register_turn_step(dnd, "target_mentions", parse_and_execute_turn)
     dnd._upupa_dnd_target_mentions_configured = True
