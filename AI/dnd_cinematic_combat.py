@@ -145,9 +145,13 @@ def _resolve_cinematic_mechanics(combat, player_combat, session, user_id: int, p
     )
     check_line = f"🎯 Проверка: {natural} {modifier:+d} = {total} против сложности {dc}{natural_note}."
 
+    from AI.dnd_campaign_stats import record, record_d20
+
+    record_d20(session, user_id, natural, success=success)
     if success:
         enemy["hp"] = 0
         enemy["status"] = "dead"
+        record(session, user_id, damage=old_hp, kills=1, stunts=1)
         summary = (
             f"🎬 {actor} → {enemy['name']}: {method}.\n"
             f"{check_line}\n"

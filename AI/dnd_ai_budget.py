@@ -197,9 +197,22 @@ def dnd_turn_budget(session=None, *, turn_id=None, mode=None, timeout_seconds=No
     if timeout_seconds is not None:
         budget.deadline = min(budget.deadline, time.monotonic() + max(0.0, float(timeout_seconds)))
     token = _CURRENT_BUDGET.set(budget)
+    started = time.monotonic()
+    outcome = "ok"
     try:
         yield budget
+    except DndAIBudgetExhausted:
+        outcome = "exhausted"
+        raise
+    except Exception:
+        outcome = "failed"
+        raise
     finally:
         budget.expired = True
-        logging.info("DnD AI turn budget turn_id=%s usage=%s", budget.turn_id, budget.snapshot())
+        usage = budget.snapshot()
+        logging.info("DnD AI turn budget turn_id=%s usage=%s outcome=%s", budget.turn_id, usage, outcome)
+        if session is not None:
+            from AI.dnd_turn_metrics import note_ai_step
+
+            note_ai_step(session, usage, seconds=time.monotonic() - started, outcome=outcome)
         _CURRENT_BUDGET.reset(token)

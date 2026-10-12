@@ -282,6 +282,11 @@ def _clone(session):
             continue
         setattr(draft, name, copy.deepcopy(value))
         names.add(name)
+    if "campaign_stats" not in names:
+        # Per-hero statistics are recorded on the draft; registering the field
+        # here lets a successful commit (and only that) carry it back.
+        draft.campaign_stats = {}
+        names.add("campaign_stats")
     return draft, names
 
 
@@ -394,6 +399,9 @@ def _resolve(draft, action, backend):
         modifier = (int(stats.get(ability, 10)) - 10) // 2
         total = natural + modifier
         success = total >= dc
+        from AI.dnd_campaign_stats import record_d20
+
+        record_d20(draft, action.actor_id, natural, success=success)
         dice.append({"kind": "d20", "values": values, "selected": natural})
         events.append({"type": "RollResolved", "actor_id": action.actor_id, "ability": ability, "dc": dc, "total": total, "success": success})
         notices = _roll_commit(backend, draft, pending, action.actor_id)
@@ -561,6 +569,9 @@ def execute_action(session, action: Action, *, backend: EngineBackend | None = N
         draft_row["operation_results"] = {key: draft_row["operation_results"][key] for key in draft_row["operation_order"]}
         setattr(draft, STATE_FIELD, draft_row)
         draft.action_records = draft_row["action_records"]
+        from AI.dnd_turn_metrics import note_local_op
+
+        note_local_op(draft, action.kind, needs_master=needs_narrator)
         for name in set(vars(draft)) - set(vars(session)):
             value = getattr(draft, name)
             try:
@@ -609,16 +620,57 @@ def choose_enemy_action(session, enemy_id: str) -> dict | None:
     if not actors:
         return None
     hp_fraction = int(enemy["hp"]) / max(1, int(enemy.get("max_hp", enemy["hp"])))
+    style = str(strategy.get("style") or "brute")
     if hp_fraction <= float(strategy.get("retreat_below", 0.2)):
-        return {"kind": "retreat", "enemy_id": str(enemy_id)}
+        return {"kind": "retreat", "enemy_id": str(enemy_id), "style": style}
     allowed = strategy.get("reachable_actor_ids")
     targets = [uid for uid in actors if allowed is None or uid in allowed]
     if not targets:
-        return {"kind": "seek_cover", "enemy_id": str(enemy_id)}
-    # Deterministic target selection: most vulnerable reachable present hero.
-    target = min(targets, key=lambda uid: (int(((getattr(session, "character_sheets", {}) or {}).get(str(uid)) or {}).get("hp", 1)), uid))
-    return {"kind": "attack", "enemy_id": str(enemy_id), "target_user_id": target,
-            "power": str(enemy.get("power") or "MEDIUM"), "reason": str(strategy.get("attack_text") or f"{enemy.get('name', enemy_id)} атакует")}
+        return {"kind": "seek_cover", "enemy_id": str(enemy_id), "style": style}
+    sheets = getattr(session, "character_sheets", {}) or {}
+    hp_of = lambda uid: int((sheets.get(str(uid)) or {}).get("hp", 1))
+    power = str(enemy.get("power") or "MEDIUM")
+    if style == "skirmisher" and strategy.get("skip_next"):
+        return {"kind": "reposition", "enemy_id": str(enemy_id), "style": style}
+    if style == "leader" and _escort_alive(session, enemy_id):
+        mark = max(targets, key=lambda uid: (hp_of(uid), -uid))
+        return {"kind": "command", "enemy_id": str(enemy_id), "style": style, "mark_user_id": mark}
+    mark = _leader_mark(session, enemy_id)
+    if mark in targets:
+        target = mark
+    elif style == "berserker":
+        target = max(targets, key=lambda uid: (hp_of(uid), -uid))
+    else:
+        # Deterministic target selection: most vulnerable reachable present hero.
+        target = min(targets, key=lambda uid: (hp_of(uid), uid))
+    if style == "berserker" and hp_fraction <= 0.5:
+        power = _POWER_STEPS[min(len(_POWER_STEPS) - 1, _POWER_STEPS.index(power) + 1)] if power in _POWER_STEPS else power
+    return {"kind": "attack", "enemy_id": str(enemy_id), "target_user_id": target, "style": style,
+            "power": power, "reason": str(strategy.get("attack_text") or f"{enemy.get('name', enemy_id)} атакует")}
+
+
+_POWER_STEPS = ("LOW", "MEDIUM", "HIGH", "DEADLY")
+
+
+def _enemy_active(session, enemy_id) -> bool:
+    row = (getattr(session, "enemy_combatants", {}) or {}).get(str(enemy_id))
+    policy = (getattr(session, "local_enemy_rules", {}) or {}).get(str(enemy_id)) or {}
+    return (isinstance(row, dict) and row.get("status") != "dead" and int(row.get("hp", 0)) > 0
+            and not policy.get("retreated"))
+
+
+def _escort_alive(session, leader_id) -> bool:
+    return any(str(key) != str(leader_id) and _enemy_active(session, key)
+               for key in (getattr(session, "enemy_combatants", {}) or {}))
+
+
+def _leader_mark(session, enemy_id):
+    """Target named by a still-active leader; allies focus it."""
+    for key, policy in (getattr(session, "local_enemy_rules", {}) or {}).items():
+        if (str(key) != str(enemy_id) and isinstance(policy, dict) and policy.get("style") == "leader"
+                and policy.get("mark") is not None and _enemy_active(session, key)):
+            return int(policy["mark"])
+    return None
 
 
 def execute_enemy_action(session, enemy_id: str, *, operation_id: str, backend: EngineBackend) -> ActionResult:
@@ -661,10 +713,25 @@ def execute_enemy_action(session, enemy_id: str, *, operation_id: str, backend: 
         event = {"type": "EnemyActionResolved", "enemy_id": str(enemy_id), "kind": "attack", "target_id": decision["target_user_id"], "before": before, "after": after, "meaningful": meaningful, "result_text": text}
         if not meaningful:
             prompt = ""
+        if decision.get("style") == "skirmisher":
+            draft.local_enemy_rules[str(enemy_id)]["skip_next"] = True
+        if decision.get("style") == "berserker" and decision["power"] != str(enemy.get("power") or "MEDIUM"):
+            text = f"🩸 {enemy['name']} в ярости: удары тяжелее.\n" + text
     elif decision["kind"] == "retreat":
         draft.local_enemy_rules[str(enemy_id)]["retreated"] = True
-        text = f"👹 {enemy['name']} отступает по известному правилу поведения."
+        text = (f"🏃 {enemy['name']} в панике бросается наутёк." if decision.get("style") == "coward"
+                else f"👹 {enemy['name']} отступает по известному правилу поведения.")
         event = {"type": "EnemyActionResolved", "enemy_id": str(enemy_id), "kind": "retreat", "meaningful": True, "text": text}
+    elif decision["kind"] == "command":
+        draft.local_enemy_rules[str(enemy_id)]["mark"] = int(decision["mark_user_id"])
+        target_name = backend.combat._participant_name(draft, decision["mark_user_id"])
+        text = f"👑 {enemy['name']} держится позади свиты и указывает на {target_name}: «Этого — первым!»"
+        event = {"type": "EnemyActionResolved", "enemy_id": str(enemy_id), "kind": "command",
+                 "target_id": decision["mark_user_id"], "meaningful": False, "text": text}
+    elif decision["kind"] == "reposition":
+        draft.local_enemy_rules[str(enemy_id)]["skip_next"] = False
+        text = f"💨 {enemy['name']} отскакивает в тень и выжидает момент для нового удара."
+        event = {"type": "EnemyActionResolved", "enemy_id": str(enemy_id), "kind": "reposition", "meaningful": False, "text": text}
     else:
         text = f"👹 {enemy['name']} ищет укрытие: доступной цели для атаки нет."
         event = {"type": "EnemyActionResolved", "enemy_id": str(enemy_id), "kind": "seek_cover", "meaningful": False, "text": text}
