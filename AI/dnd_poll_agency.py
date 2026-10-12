@@ -158,6 +158,11 @@ def install_dnd_poll_agency(dnd) -> None:
         session = dnd.dnd_sessions.get(chat_id)
         if session:
             response = ensure_group_poll_free_choice(response)
+            if dnd._is_participant_mode(session):
+                # Healing has its own command/UI; never a model poll option.
+                from AI.dnd_healing import strip_healing_poll_options
+
+                response = strip_healing_poll_options(response)
         return await original_parse(bot, chat_id, response)
 
     dnd.parse_and_execute_turn = parse_turn

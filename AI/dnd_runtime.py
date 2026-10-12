@@ -37,7 +37,6 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_group_action_resilience import install_dnd_group_action_resilience
     from AI.dnd_group_progress import install_dnd_group_progress
     from AI.dnd_growth import install_dnd_growth
-    from AI.dnd_healing_choice import install_dnd_healing_choice
     from AI.dnd_image_quality import install_dnd_image_quality
     from AI.dnd_inventory_context import DndInventoryContextPolicy, configure_dnd_inventory_context
     from AI.dnd_inventory_descriptions import (
@@ -63,7 +62,6 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_inventory_reliability import install_dnd_inventory_reliability
     from AI.dnd_item_actions import install_dnd_item_actions
     from AI.dnd_lobby_controls import install_dnd_lobby_controls
-    from AI.dnd_manual_healing import install_dnd_manual_healing
     from AI.dnd_metadata import DndMetadataPolicy, configure_dnd_metadata
     from AI.dnd_pacing import install_dnd_pacing
     from AI.dnd_party_history import install_dnd_party_history
@@ -75,7 +73,6 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_profile_ownership import install_dnd_profile_ownership
     from AI.dnd_roll_ability_display import install_dnd_roll_ability_display
     from AI.dnd_roll_feedback import install_dnd_roll_feedback
-    from AI.dnd_scaled_heals import install_dnd_scaled_heals
     from AI.dnd_scene_clocks import install_dnd_scene_clocks
     from AI.dnd_scene_tactics import install_dnd_scene_tactics
     from AI.dnd_session_canon import install_dnd_session_canon_archive
@@ -84,8 +81,6 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     from AI.dnd_state_commands import configure_dnd_state_commands
     from AI.dnd_target_mentions import configure_dnd_target_mentions
     from AI.dnd_turn_control import install_dnd_turn_control
-    from AI.dnd_two_heals import install_dnd_two_heals
-    from AI.dnd_two_heals_compat import install_dnd_two_heals_compat
     from AI.dnd_unknown_action_recovery import install_dnd_unknown_action_recovery
     from AI.dnd_world_memory import install_dnd_world_memory
     from AI.dnd_weakness_luck import install_dnd_weakness_luck
@@ -157,11 +152,10 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_special_moves(dnd, router, state_policy=campaign_state_policy)
     install_dnd_weakness_luck(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_roll_ability_display(dnd)
-    install_dnd_healing_choice(router, state_policy=campaign_state_policy)
-    install_dnd_two_heals(router, state_policy=campaign_state_policy)
-    install_dnd_two_heals_compat()
-    install_dnd_scaled_heals(router)
-    install_dnd_manual_healing(router)
+    # Emergency heals: one explicit module (was five layered versions).
+    from AI.dnd_healing import install_dnd_healing
+
+    install_dnd_healing(router, state_policy=campaign_state_policy)
     install_dnd_death_legacy(router)
     install_dnd_image_quality(dnd)
     install_dnd_epilogue_image(dnd)
