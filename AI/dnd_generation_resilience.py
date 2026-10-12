@@ -199,10 +199,12 @@ def build_compact_system(
     registered = active_sections(session, str(prompt))
     sections = [contract]
     sections.extend(row.text for row in registered if not row.optional)
-    # Priority: tag schemas first (the only place the model learns formats the
-    # code parses), then the runtime contract, which degrades instead of
-    # disappearing (see _runtime_contract_variants), then registered extras.
-    optional_sections = []
+    # Priority: the one-line turn notes (cheap and decisive: due fight, poll),
+    # then tag schemas (the only place the model learns formats the code
+    # parses), then the rest of the runtime contract, which degrades instead of
+    # disappearing (see _runtime_contract_parts), then registered extras.
+    turn_notes, runtime_tail = _runtime_contract_parts(runtime_contract)
+    optional_sections = [turn_notes] if turn_notes else []
     objects = getattr(session, "scene_objects", None) or {}
     needs_scene_rules = getattr(session, "mode", None) == "participants" and (
         not objects or any(
@@ -242,8 +244,8 @@ def build_compact_system(
         # Scene pacing/settings are useful, but the durable current request also
         # carries adventure context. They must never push out a tag schema or the
         # non-truncatable protocol; a shorter variant beats none.
-        for variant in _runtime_contract_variants(runtime_contract):
-            candidate = result + "\n\n" + variant
+        for variant in runtime_tail:
+            candidate = result + "\n" + variant
             if len(candidate) <= limit:
                 result = candidate
                 break
@@ -254,19 +256,19 @@ def build_compact_system(
     return result
 
 
-def _runtime_contract_variants(runtime_contract: str) -> list[str]:
-    """Full runtime contract, then without the pacing line (the current request
-    already carries adventure_context), then only the turn notes."""
-    if not runtime_contract:
-        return []
-    lines = [line for line in runtime_contract.splitlines() if line.strip()]
-    without_pacing = "\n".join(line for line in lines if not line.startswith("ДЛИНА:"))
-    notes_only = lines[0] if lines else ""
+def _runtime_contract_parts(runtime_contract: str) -> tuple[str, list[str]]:
+    """Split the runtime contract into its first line (turn notes) and the
+    remaining lines as degrading variants: everything, then without the pacing
+    line (the current request already carries adventure_context)."""
+    lines = [line for line in str(runtime_contract or "").splitlines() if line.strip()]
+    if not lines:
+        return "", []
+    rest = lines[1:]
     variants = []
-    for variant in (runtime_contract, without_pacing, notes_only):
+    for variant in ("\n".join(rest), "\n".join(line for line in rest if not line.startswith("ДЛИНА:"))):
         if variant and variant not in variants:
             variants.append(variant)
-    return variants
+    return lines[0], variants
 
 
 async def _bounded_worker(func, *args, timeout_seconds: float, **kwargs):
