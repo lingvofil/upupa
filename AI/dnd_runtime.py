@@ -184,11 +184,27 @@ def configure_dnd_runtime(dnd_router=None) -> None:
     install_dnd_artifact_guard(dnd, metadata_policy=metadata_policy)
     install_dnd_item_actions(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_growth(dnd, router, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    # Quests settle before progression so a completed quest levels up heroes
+    # in the same response.
+    from AI.dnd_quests import install_dnd_quests
+
+    install_dnd_quests(state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    from AI.dnd_camp import install_dnd_camp
+
+    install_dnd_camp(state_policy=campaign_state_policy)
     from AI.dnd_progression import install_dnd_progression
+    from AI.dnd_archetype_abilities import install_dnd_archetype_abilities
 
     install_dnd_progression(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
+    install_dnd_archetype_abilities(state_policy=campaign_state_policy)
     install_dnd_world_memory(dnd, state_policy=campaign_state_policy, metadata_policy=metadata_policy)
     install_dnd_session_canon_archive(dnd)
+    from AI.dnd_campaign_stats import install_dnd_campaign_stats
+
+    install_dnd_campaign_stats(state_policy=campaign_state_policy)
+    from AI.dnd_turn_metrics import install_dnd_turn_metrics
+
+    install_dnd_turn_metrics(state_policy=campaign_state_policy)
     # Must be installed after every archive/finish wrapper so one completion ID
     # guards the complete campaign archive and all post-finish effects.
     install_dnd_finalization_recovery(dnd)

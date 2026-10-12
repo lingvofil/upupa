@@ -414,7 +414,7 @@ def apply_item_boost(session, response: str) -> tuple[str, str | None]:
     boost = session.item_boosts.get(player)
     if not isinstance(boost, dict):
         return str(response or ""), None
-    if str(boost.get("domain") or "").upper() != _domain(action, suffix):
+    if str(boost.get("domain") or "").upper() not in {"ANY", _domain(action, suffix)}:
         return str(response or ""), None
     current_mode = _mode(suffix)
     if current_mode == "ADVANTAGE":

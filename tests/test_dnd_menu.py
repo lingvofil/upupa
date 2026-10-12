@@ -203,6 +203,7 @@ def test_navigation_reuses_shared_and_one_player_card_without_ai_or_world_change
         assert len(bot.sent) == 3
         player_card = current.menu_ui_state["cards"]["1"]
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи"), message_id=player_card))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "☰ Ещё"), message_id=player_card))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "📖 Журнал"), message_id=player_card))
         assert len(bot.sent) == 3
         assert menu.snapshot_session(current) == world_before
@@ -267,7 +268,7 @@ def test_confirmation_validates_immutable_selector_and_dispatches_only_once():
             calls.append(args)
         current, _dnd, bot, service = make_service(execute=execute)
         await service.command(Message(bot, current))
-        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Предмет")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🧰 Зелье"), message_id=102))
         confirm = button(latest_markup(bot), "✅ Подтвердить")
         callback = Callback(bot, current, confirm, message_id=102)
@@ -289,7 +290,7 @@ def test_changed_turn_phase_resource_and_paused_state_reject_effects():
             calls.append(args)
         current, _dnd, bot, service = make_service(execute=execute)
         await service.command(Message(bot, current))
-        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Предмет")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🧰 Зелье"), message_id=102))
         data = button(latest_markup(bot), "✅ Подтвердить")
         change(current)
@@ -339,6 +340,7 @@ def test_known_scene_rule_has_explicit_confirmation_and_hidden_rule_stays_hidden
         current, _dnd, bot, service = make_service()
         current.scene_objects["cart"]["interactions"]["secret"] = {"label": "Скрытая ловушка", "hidden": True}
         await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "📍 Сцена")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
         labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
         assert "Спрятаться" in labels and "Скрытая ловушка" not in labels
@@ -365,6 +367,7 @@ def test_object_confirmation_previews_known_check_outcomes_without_applying_them
         current.scene_objects["cart"]["interactions"] = {"push": rule}
         before = menu.snapshot_session(current)
         await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "📍 Сцена")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "Толкнуть телегу"), message_id=102))
         preview = bot.edited[-1].text
@@ -394,6 +397,7 @@ def test_invalid_or_hidden_object_outcomes_never_become_action_previews():
         current.scene_objects["cart"]["interactions"] = {
             "valid": valid, "secret": nested_secret, "private_effect": private_effect, "invalid": invalid}
         await service.command(Message(bot, current))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "📍 Сцена")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
         labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
         assert "Публичное действие" in labels
@@ -415,7 +419,7 @@ def test_menu_attack_confirmation_explicitly_shows_unarmed_weapon_choice():
             calls.append(args)
         current, _dnd, bot, service = make_service(execute=execute)
         await service.command(Message(bot, current))
-        await service.callback(Callback(bot, current, button(latest_markup(bot), "👹 Враги")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Атака")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "⚔️ Страж"), message_id=102))
         assert "Чем атакуешь?" in bot.edited[-1].text
         await service.callback(Callback(bot, current, button(latest_markup(bot), "👊 Без оружия"), message_id=102))
@@ -473,16 +477,18 @@ def test_fallback_rejects_information_and_registered_input_including_old_turns(m
         current.state = "WAITING_ACTION"
 
 
-def test_shared_card_only_navigates_and_public_wait_requires_a_saved_rule():
+def test_shared_card_acts_for_presser_and_public_wait_requires_a_saved_rule():
     async def run():
         current, _dnd, bot, service = make_service()
         current.local_wait_rule = {"label": "Переждать патруль", "uncertain": False,
                                   "success": {"text": "Патруль прошёл мимо.", "effects": []}}
         await service.command(Message(bot, current))
         shared = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
-        assert "✍️ Свой ход" in shared and "⏳ Подождать" not in shared
-        assert "⚡ Спрятаться" in shared
+        # Shared-card actions act for the presser; confirmation continues on
+        # the presser's own card, so the saved wait rule is offered here too.
+        assert {"✍️ Свой ход", "⏳ Подождать", "⚡ Спрятаться"} <= set(shared)
         await service.callback(Callback(bot, current, button(latest_markup(bot), "👤 Герой")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "☰ Ещё"), message_id=102))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🔄 Обновить"), message_id=102))
         await service.show(bot, current, 1, "overview")
         assert button(latest_markup(bot), "⏳ Подождать")
@@ -560,7 +566,7 @@ def test_same_actor_next_window_from_confirm_callback_does_not_deadlock():
         current, _dnd, bot, service = make_service(execute=execute)
         holder.update(session=current, service=service)
         await service.command(Message(bot, current))
-        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Вещи")))
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎒 Предмет")))
         await service.callback(Callback(bot, current, button(latest_markup(bot), "🧰 Зелье"), message_id=102))
         confirm = button(latest_markup(bot), "✅ Подтвердить")
         await asyncio.wait_for(service.callback(Callback(bot, current, confirm, message_id=102)), timeout=2)

@@ -216,6 +216,8 @@ _ADDITIONAL_CANONICAL_FIELDS = (
     "world_callback_candidate",
     "world_inherited_npc_keys",
     "world_callback_used",
+    "quests",
+    "party_gold",
 )
 
 
