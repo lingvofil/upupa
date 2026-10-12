@@ -44,6 +44,10 @@ channel_mood.json
 channel_polls.json
 channel_external_mentions.json
 dnd_sessions.json
+# DnD hero/campaign archive: production state, never commit (a committed copy
+# overwrote production on every `git reset --hard` deploy).
+dnd_sessions_campaigns.json
+*_campaigns.json
 dnd_settings.json
 .local-audit-dnd/
 blocked_users.json
