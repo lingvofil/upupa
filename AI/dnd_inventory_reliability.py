@@ -260,10 +260,8 @@ def install_dnd_inventory_reliability(dnd, *, metadata_policy=None) -> None:
         )
     metadata_policy.add_preprocessor(_expand_quantity_tags)
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_with_inventory_audit(session, prompt: str) -> str:
-        response = await original_generate(session, prompt)
+    async def generate_with_inventory_audit(session, prompt: str, call_next) -> str:
+        response = await call_next(session, prompt)
         return await _audit_missing_inventory_tags(
             dnd,
             campaign,
@@ -272,5 +270,7 @@ def install_dnd_inventory_reliability(dnd, *, metadata_policy=None) -> None:
             response,
         )
 
-    dnd.generate_session_response = generate_with_inventory_audit
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "inventory_reliability", generate_with_inventory_audit)
     campaign._upupa_dnd_inventory_reliability_installed = True

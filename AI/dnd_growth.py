@@ -953,9 +953,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
 
     campaign._finish = finish
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
+    async def generate_session_response(session, prompt, call_next):
         _ensure(session)
         text = str(prompt or "")
         if "Игроки заявили действия одновременно:" in text:
@@ -972,7 +970,7 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
         if session.pending_achievement_uses and "Игроки заявили действия одновременно:" in text:
             text += "\n\n" + _achievement_prompt(session)
 
-        result = await original_generate(session, text)
+        result = await call_next(session, text)
         if is_epilogue:
             result = _ACH_FACT_RE.sub("", _GROWTH_RE.sub("", str(result or ""))).strip()
 
@@ -983,7 +981,9 @@ def install_dnd_growth(dnd, dnd_router, *, state_policy, metadata_policy):
                 result = "\n".join(notices) + "\n\n" + str(result or "")
         return result
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "growth", generate_session_response)
 
     original_open = dnd.open_action_window
 

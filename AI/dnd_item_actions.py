@@ -867,15 +867,13 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
 
     campaign._apply_heritage = apply_heritage
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
+    async def generate_session_response(session, prompt, call_next):
         _ensure(session)
         pending = bool(session.pending_item_uses)
         enriched_prompt = str(prompt or "")
         if pending and "Игроки заявили действия одновременно:" in enriched_prompt:
             enriched_prompt += _mechanics_prompt(session)
-        result = await original_generate(session, enriched_prompt)
+        result = await call_next(session, enriched_prompt)
         if pending and "Игроки заявили действия одновременно:" in enriched_prompt:
             notices = commit_pending_item_uses(session)
             dnd.persist_dnd_sessions()
@@ -883,7 +881,9 @@ def install_dnd_item_actions(dnd, dnd_router, *, state_policy, metadata_policy) 
                 result = "\n".join(notices) + "\n\n" + str(result or "")
         return result
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "item_actions", generate_session_response)
 
     original_open_action = dnd.open_action_window
 

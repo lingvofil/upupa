@@ -71,19 +71,24 @@ _SCRIPT = textwrap.dedent(r'''
     from AI.dnd_local_runtime import configure_dnd_local_runtime; configure_dnd_local_runtime()
     from AI import dnd_turn_pipeline as pipeline
 
-    # Walk the remaining wrapper chain from the outside in via closures.
-    chain, fn, seen = [], dnd.parse_and_execute_turn, set()
-    while fn is not None and id(fn) not in seen:
-        seen.add(id(fn))
-        module = getattr(fn, "__module__", "?").rsplit(".", 1)[-1]
-        chain.append("PIPELINE" if getattr(fn, "_upupa_turn_pipeline", False) else module)
-        names = getattr(getattr(fn, "__code__", None), "co_freevars", ())
-        candidates = list(zip(names, [cell.cell_contents for cell in (getattr(fn, "__closure__", None) or ())]))
-        candidates += list((getattr(fn, "__kwdefaults__", None) or {}).items())  # dnd_style: __original=...
-        fn = next((value for name, value in candidates
-                   if name.lstrip("_").startswith(("original", "inner")) and callable(value)
-                   and getattr(value, "__module__", "").startswith("AI.")), None)
-    print(json.dumps({"steps": pipeline.describe(dnd), "chain": chain}))
+    def walk(fn):
+        chain, seen = [], set()
+        while fn is not None and id(fn) not in seen:
+            seen.add(id(fn))
+            module = getattr(fn, "__module__", "?").rsplit(".", 1)[-1]
+            chain.append("PIPELINE" if getattr(fn, "_upupa_turn_pipeline", False) else module)
+            names = getattr(getattr(fn, "__code__", None), "co_freevars", ())
+            candidates = list(zip(names, [cell.cell_contents for cell in (getattr(fn, "__closure__", None) or ())]))
+            candidates += list((getattr(fn, "__kwdefaults__", None) or {}).items())  # dnd_style: __original=...
+            fn = next((value for name, value in candidates
+                       if name.lstrip("_").startswith(("original", "inner", "campaign_generate")) and callable(value)
+                       and getattr(value, "__module__", "").startswith("AI.")), None)
+        return chain
+
+    chain = walk(dnd.parse_and_execute_turn)
+    generate_chain = walk(dnd.generate_session_response)
+    print(json.dumps({"steps": pipeline.describe(dnd), "chain": chain,
+                      "generate_steps": pipeline.describe(dnd, pipeline.GENERATE), "generate_chain": generate_chain}))
 ''')
 
 
@@ -110,3 +115,22 @@ def test_production_composition_pins_the_pipeline_order_and_position(tmp_path):
     assert chain == ["dnd_local_runtime", "dnd_result_recovery", "dnd_style", "dnd_settings", "dnd_group_progress",
                      "dnd_pacing", "PIPELINE", "dnd_cinematic_combat", "dnd_player_combat",
                      "dnd_unknown_action_recovery", "dnd_combat", "dnd_profile_gender_grounding", "dnd_campaign", "dnd"]
+
+
+def test_production_composition_pins_the_generation_pipeline(tmp_path):
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    result = subprocess.run([sys.executable, "-c", _SCRIPT, str(tmp_path)], cwd=ROOT, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-3000:]
+    data = json.loads(result.stdout.strip().splitlines()[-1])
+    assert data["generate_steps"] == ["turn_contract", "pacing", "growth", "item_actions",
+                                      "inventory_reliability", "weakness_luck", "player_agency"]
+    chain = data["generate_chain"]
+    assert chain.count("PIPELINE") == 1, chain
+    for module in ("dnd_turn_contract", "dnd_pacing", "dnd_growth", "dnd_item_actions",
+                   "dnd_inventory_reliability", "dnd_weakness_luck", "dnd_player_agency"):
+        assert module not in chain, chain
+    position = chain.index("PIPELINE")
+    # Same place the seven decorators held: inside the campaign-compat layer,
+    # outside the campaign/context layer.
+    assert chain[position - 1] == "dnd_completion" and chain[position + 1] == "dnd_campaign", chain

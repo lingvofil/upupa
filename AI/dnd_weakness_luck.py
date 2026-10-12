@@ -555,17 +555,17 @@ def install_dnd_weakness_luck(dnd, dnd_router, *, state_policy, metadata_policy)
 
     campaign._start_story = start_story
 
-    original_generate = dnd.generate_session_response
-
-    async def generate_session_response(session, prompt):
+    async def generate_session_response(session, prompt, call_next):
         _ensure(session)
         enriched = str(prompt or "")
         context = _pending_context(session)
         if context and getattr(session, "state", None) == "RESOLVING":
             enriched += context
-        return await original_generate(session, enriched)
+        return await call_next(session, enriched)
 
-    dnd.generate_session_response = generate_session_response
+    from AI.dnd_turn_pipeline import register_generation_step
+
+    register_generation_step(dnd, "weakness_luck", generate_session_response)
 
     async def parse_turn(bot, chat_id, response, call_next):
         session = dnd.dnd_sessions.get(chat_id)
