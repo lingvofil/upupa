@@ -857,6 +857,9 @@ async def _start_story(dnd, bot, session, plot, continuation=False, message=None
     session.profile_options = {}
     from copy import deepcopy
     session.initial_inventories = deepcopy(session.inventories)
+    from AI.dnd_campaign_stats import start_campaign
+
+    start_campaign(session)
     if continuation:
         old_campaign = _latest_campaign(session.chat_id) or {}; session.npc_memory = dict(old_campaign.get("npc_memory") or {})
         old_threat = old_campaign.get("threat") or {}; session.threat = {"name": old_threat.get("name"), "level": min(2, int(old_threat.get("level", 0))), "max": THREAT_MAX, "history": []}

@@ -438,6 +438,9 @@ def _resolve_enemy_attack(session, attack: dict) -> tuple[str, str, bool]:
     damage = sum(damage_rolls)
     old_hp = int(sheet.get("hp", 0))
     sheet["hp"] = max(0, old_hp - damage)
+    from AI.dnd_campaign_stats import record
+
+    record(session, target_id, damage_taken=old_hp - int(sheet["hp"]))
     crit = " КРИТ." if natural == 20 else ""
     summary = (
         f"👹 {reason}. Бросок врага: {natural} + {bonus} = {total} против КБ {ac} — попал.{crit}\n"
@@ -500,6 +503,9 @@ async def _resolve_player_roll(dnd, message, session) -> None:
     result = natural_result + modifier
     outcome = dnd._roll_outcome(result, dc)
     natural_note = dnd._natural_roll_note(natural_result)
+    from AI.dnd_campaign_stats import record_d20
+
+    record_d20(session, user_id, natural_result, total=result, dc=dc)
 
     session.state = "RESOLVING"
     session.pending_roll = None
