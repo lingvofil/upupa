@@ -248,7 +248,7 @@ class LocalRuntime:
                 self.dnd.persist_dnd_sessions()
                 await bot.send_message(chat_id, text, parse_mode=None)
                 return
-            if kind in {"FREE_TEXT", "DODGE"}:
+            if kind in {"FREE_TEXT", "DODGE", "CAMP"}:
                 current = identity_for(session)
                 if any(payload.get(key) != current[key] for key in ("campaign_id", "turn_id", "phase")):
                     await bot.send_message(chat_id, "Этот ход уже изменился. Открой меню заново.")
@@ -262,6 +262,7 @@ class LocalRuntime:
                 text = str(payload.get("text") or "")
                 effect = payload.get("effect") if isinstance(payload.get("effect"), dict) else {}
                 from AI.dnd_archetype_abilities import AbilityError, prepare_dodge, prepare_help
+                from AI.dnd_camp import CampError, apply_camp
 
                 try:
                     # Applied before submission: a single-actor window generates
@@ -270,11 +271,15 @@ class LocalRuntime:
                     if kind == "DODGE":
                         notice = prepare_dodge(session, actor_id)
                         text = "[Оборона] Герой уходит в глухую оборону: уклоняется и прикрывается от ударов."
+                    elif kind == "CAMP":
+                        notice, text = apply_camp(session, actor_id, str(payload.get("activity") or ""))
                     elif effect.get("type") == "help":
                         notice = prepare_help(session, actor_id, effect.get("target_id"))
+                    elif effect.get("type") == "camp":
+                        notice, _ = apply_camp(session, actor_id, "story")
                     else:
                         notice = ""
-                except AbilityError as error:
+                except (AbilityError, CampError) as error:
                     await bot.send_message(chat_id, str(error), parse_mode=None)
                     return
                 if notice:

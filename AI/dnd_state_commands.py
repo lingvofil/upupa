@@ -14,6 +14,7 @@ _STATE_ALIASES = {
     "npcs": {"днд связи"},
     "status": {"днд сюжет"},
     "party": {"днд партия"},
+    "quests": {"днд квесты", "днд поручения", "днд казна"},
     "canon": {"днд канон"},
     "metrics": {"днд метрики"},
 }
@@ -529,6 +530,11 @@ def render_state_command(
             return render_status(dnd, chat_id)
         if kind == "party":
             return render_party(dnd, chat_id)
+        if kind == "quests":
+            from AI.dnd_quests import render as render_quests
+
+            session = dnd.dnd_sessions.get(chat_id)
+            return render_quests(session) if session is not None else "📜 Поручения видны во время партии."
         if kind == "canon":
             from AI.dnd_session_canon import render_session_canon
 
