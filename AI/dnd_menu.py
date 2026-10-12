@@ -31,9 +31,9 @@ _FIELDS = (
     "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
     "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
-    "hero_progress",
+    "hero_progress", "archetype_ability_uses", "dodge_flags",
 )
-_PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage"}
+_PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage", "more", "quests"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
 _ABILITY_LABELS = {"STR": "Сила", "DEX": "Ловкость", "CON": "Телосложение", "INT": "Интеллект", "WIS": "Мудрость", "CHA": "Харизма"}
 _STATES = {"LOBBY": "Собираем участников", "WAITING_MODE": "Выбираем режим", "WAITING_PLOT": "Выбираем сюжет",
@@ -250,6 +250,15 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         from AI.dnd_progression import progress_lines
 
         lines.extend(progress_lines(_mapping(snapshot.get("hero_progress")).get(str(user_id))))
+        from AI.dnd_archetype_abilities import ability_for, charges
+
+        view = SimpleNamespace(**copy.deepcopy(snapshot))
+        ability = ability_for(view, user_id) if user_id else None
+        if ability:
+            remaining, maximum = charges(view, user_id)
+            lines.append(f"{ability['emoji']} Умение «{ability['title']}» ({remaining}/{maximum}): {ability['text']}")
+        if _mapping(snapshot.get("dodge_flags")).get(str(user_id)):
+            lines.append("🛡 В обороне: следующая атака по герою с помехой")
         if sheet.get("ac") is not None:
             lines.append(f"🛡 КБ {sheet['ac']}")
         if stats:
@@ -266,7 +275,7 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
                     lines.append("  Снять: " + _text(condition["clear"], 160))
         boost = _mapping(_mapping(snapshot.get("item_boosts")).get(str(user_id)))
         if boost and _public(boost):
-            domains = {"MOVE": "движение", "SOCIAL": "общение", "PERCEPTION": "наблюдение", "COMBAT": "бой"}
+            domains = {"MOVE": "движение", "SOCIAL": "общение", "PERCEPTION": "наблюдение", "COMBAT": "бой", "ANY": "любой следующий бросок"}
             lines.append("✨ Преимущество: " + domains.get(boost.get("domain"), "следующая подходящая проверка")
                          + " · " + _text(boost.get("source"), 80))
         position = _mapping(_mapping(snapshot.get("player_positions")).get(str(user_id)))
@@ -303,19 +312,34 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
             position = _mapping(_mapping(snapshot.get("player_positions")).get(str(key)))
             location = " · " + _text(position.get("location"), 70) if _public(position) and position.get("location") else ""
             lines.append(f"{'•' if row.get('active', True) else '○'} {_name(snapshot, key)} · {_hp(snapshot, key)}{location}")
+        if isinstance(snapshot.get("party_gold"), int):
+            lines.append(f"💰 Казна партии: {snapshot['party_gold']}")
+        open_count = sum(1 for row in _mapping(snapshot.get("quests")).values() if isinstance(row, dict) and row.get("status") == "open")
+        if open_count:
+            lines.append(f"📜 Открытых поручений: {open_count}")
         return "\n".join(lines)
     if page == "manage":
         return "⚙️ Управление партией\n\nНастройки: «днд настройки».\nПауза и восстановление продолжения доступны ведущему."
+    if page == "more":
+        return "☰ Разделы партии\nГерой, вещи, сцена, враги, партия, поручения, журнал и управление."
+    if page == "quests":
+        from AI.dnd_quests import render as render_quests
+
+        return render_quests(SimpleNamespace(**copy.deepcopy(snapshot)))
     scene = _text((snapshot.get("scene_log") or [""])[-1], 850)
     lines = [f"{'📍 Сцена' if page == 'scene' else '🎭 Партия'} {_int(snapshot.get('scene_count'))}"]
     if snapshot.get("mission_goal"):
         lines.append("🎯 " + _text(snapshot["mission_goal"], 240))
     lines.append(_STATES.get(snapshot.get("state"), "Игра идёт"))
     targets = snapshot.get("action_target_user_ids") or _mapping(snapshot.get("pending_roll")).get("target_user_ids") or []
-    lines.append("Ход: " + (", ".join(_name(snapshot, value) for value in targets) if targets else "партии"))
-    if snapshot.get("pending_actions"):
-        active = sum(1 for row in participants.values() if isinstance(row, dict) and row.get("active", True))
-        lines.append(f"Ответили: {len(snapshot['pending_actions'])}/{len(targets) or active}")
+    lines.append("Ход: " + (", ".join(_name(snapshot, value) for value in targets) if targets else "вся партия, каждый выбирает своё"))
+    if snapshot.get("state") == "WAITING_ACTION" and len(targets) != 1:
+        expected = [str(value) for value in targets] or [
+            str(key) for key, row in participants.items() if isinstance(row, dict) and _public(row) and row.get("active", True)]
+        done = {str(key) for key in _mapping(snapshot.get("pending_actions"))}
+        if expected:
+            lines.append("Походили: " + ", ".join(
+                ("✅ " if key in done else "⏳ ") + _name(snapshot, key) for key in expected))
     deadline = snapshot.get("action_deadline")
     if snapshot.get("state") == "WAITING_ACTION" and deadline and len(targets) == 1:
         try:
@@ -343,7 +367,9 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
 def _ensure_ui(session):
     if not isinstance(getattr(session, "menu_ui_state", None), dict):
         session.menu_ui_state = {"cards": {}, "tokens": {}, "seq": {}, "windows": {}}
-    for key in ("cards", "tokens", "seq", "windows"):
+    # kinds: card -> "photo" when the card is a portrait photo message;
+    # pages: card -> last page shown on it (portrait refresh targets the hero page).
+    for key in ("cards", "tokens", "seq", "windows", "kinds", "pages"):
         if not isinstance(session.menu_ui_state.get(key), dict):
             session.menu_ui_state[key] = {}
     if not isinstance(getattr(session, "menu_info_message_ids", None), list):
@@ -360,6 +386,9 @@ class DndMenuService:
         self._locks = {}
         self._owners = {}
         self._fresh_windows = {}
+        # The hero card becomes a photo card once a portrait exists; enabled by
+        # the runtime composition (tests opt in explicitly).
+        self.portraits_enabled = False
 
     @asynccontextmanager
     async def _lock(self, chat_id, owner):
@@ -422,12 +451,17 @@ class DndMenuService:
     def keyboard(self, session, owner, page, *, card, seq):
         snapshot = snapshot_session(session)
         button = lambda text, operation, **payload: self._button(session, owner, text, operation, card=card, seq=seq, **payload)
-        rows = [[button("✍️ Свой ход", "compose")]] if snapshot.get("state") == "WAITING_ACTION" else []
-        if owner and snapshot.get("state") == "WAITING_ROLL":
+        state = snapshot.get("state")
+        rows = []
+        action_block = False
+        if owner and state == "WAITING_ROLL":
             rows.append([button("🎲 Бросить", "confirm", kind="ROLL")])
-        if owner and page == "overview" and _wait_rule(snapshot):
-            rows.append([button("⏳ Подождать", "confirm", kind="WAIT")])
-        if owner and page == "hero" and snapshot.get("state") == "LOBBY" and str(owner) in _mapping(snapshot.get("participants")):
+        if page == "overview" and state == "WAITING_ACTION" and (not owner or self._can_act(session, owner)):
+            rows.extend(self._action_rows(session, snapshot, owner, button))
+            action_block = True
+        elif state == "WAITING_ACTION":
+            rows.append([button("✍️ Свой ход", "compose")])
+        if owner and page == "hero" and state == "LOBBY" and str(owner) in _mapping(snapshot.get("participants")):
             from AI.dnd_character_templates import ARCHETYPES
 
             choices = list(ARCHETYPES)
@@ -438,13 +472,16 @@ class DndMenuService:
             abilities = list(_ABILITY_LABELS.items())
             rows.extend([[button(f"⬆️ {label} +2", "confirm", kind="ASI", choice=ability)
                           for ability, label in abilities[index:index + 2]] for index in range(0, len(abilities), 2)])
-        if page == "overview":
-            for object_id, rule_id, rule in _quick_interactions(snapshot):
-                rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
-                                    kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
-            for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:3]:
-                if isinstance(row, dict) and _public(row) and row.get("available", True):
-                    rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
+        if owner and page == "hero" and state in {"WAITING_ACTION", "WAITING_ROLL"}:
+            ability = self._ability(session, owner)
+            if ability:
+                rows.append([button(f"{ability['emoji']} {ability['title']}", "ability")])
+        if owner and page == "hero" and self.portraits_enabled:
+            from AI import dnd_hero_portrait as portraits
+
+            if portraits.can_draw(session, owner) and not portraits.is_generating(session, owner):
+                has_portrait = portraits.photo_for(session, owner) is not None
+                rows.append([button("🎨 Новый портрет" if has_portrait else "🎨 Нарисовать портрет", "portrait")])
         if page == "scene":
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
@@ -460,24 +497,109 @@ class DndMenuService:
             for enemy_id, row in list(_mapping(snapshot.get("enemy_combatants")).items())[:6]:
                 if _active_enemy(snapshot, enemy_id, row):
                     rows.append([button("⚔️ " + _text(row.get("name"), 40), "weapons", kind="ATTACK", target_id=str(enemy_id))])
-        labels = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
-                  ("👥 Партия", "party"), ("📖 Журнал", "journal"), ("⚙️ Управление", "manage"), ("🔄 Обновить", page)]
-        rows.extend([[button(text, "nav", page=target) for text, target in labels[index:index + 2]] for index in range(0, len(labels), 2)])
-        if page != "overview":
-            rows.append([button("← К ходу", "nav", page="overview")])
+        rows.extend(self._nav_rows(page, button, action_block=action_block))
         if owner and page == "manage" and self.dnd._user_is_host(session, owner):
             rows.append([button("▶️ Продолжить" if self.paused(session) else "⏸ Пауза", "confirm", kind="RESUME" if self.paused(session) else "PAUSE")])
             rows.append([button("↻ Повторить продолжение", "confirm", kind="RETRY")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False):
+    @staticmethod
+    def _ability(session, owner):
+        if not owner:
+            return None
+        from AI.dnd_archetype_abilities import ability_for
+
+        return ability_for(session, owner)
+
+    @staticmethod
+    def _nav_rows(page, button, *, action_block=False):
+        """One compact navigation row instead of three; the rest lives under «Ещё».
+
+        On the turn card the action block already reaches items («Предмет») and
+        enemies («Атака»), so the row offers only pages the actions don't reach.
+        """
+        if page == "more":
+            pages = [("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene"), ("👹 Враги", "enemies"),
+                     ("👥 Партия", "party"), ("📜 Поручения", "quests"), ("📖 Журнал", "journal"),
+                     ("⚙️ Управление", "manage"), ("🔄 Обновить", "overview")]
+            rows = [[button(text, "nav", page=target) for text, target in pages[index:index + 2]]
+                    for index in range(0, len(pages), 2)]
+            return rows + [[button("← К ходу", "nav", page="overview")]]
+        if page == "overview":
+            third = ("📍 Сцена", "scene") if action_block else ("🎒 Вещи", "items")
+            return [[button("👤 Герой", "nav", page="hero"), button("📖 Журнал", "nav", page="journal"),
+                     button(third[0], "nav", page=third[1]), button("☰ Ещё", "nav", page="more")]]
+        quick = [button(text, "nav", page=target) for text, target in
+                 (("👤 Герой", "hero"), ("🎒 Вещи", "items"), ("📍 Сцена", "scene")) if target != page]
+        return [quick + [button("☰ Ещё", "nav", page="more")], [button("← К ходу", "nav", page="overview")]]
+
+    def _action_rows(self, session, snapshot, owner, button):
+        """A DnD turn: action, bonus/reaction, quick ideas, then free text.
+
+        Buttons on the shared card act for whoever presses them: every choice
+        and confirmation then continues on the presser's own card.
+        """
+        from AI.dnd_archetype_abilities import charges
+
+        enemies = any(_active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
+        living = [key for key, row in _mapping(snapshot.get("participants")).items()
+                  if isinstance(row, dict) and row.get("active", True) and _int(_mapping(_mapping(snapshot.get("character_sheets")).get(str(key))).get("hp"), 1) > 0]
+        rows = []
+        first = [button("⚔️ Атака", "nav", page="enemies")] if enemies else []
+        first.extend([button("🎯 Навык", "skills"), button("🎒 Предмет", "nav", page="items")])
+        rows.append(first)
+        second = []
+        if len(living) > 1:
+            second.append(button("🤝 Помочь", "help"))
+        if enemies:
+            second.append(button("🛡 Уклонение", "confirm", kind="DODGE"))
+        ability = self._ability(session, owner)
+        if ability:
+            remaining, maximum = charges(session, owner)
+            second.append(button(f"{ability['emoji']} {ability['title']} {remaining}/{maximum}", "ability"))
+        elif not owner:
+            second.append(button("✨ Умение", "ability"))
+        if _wait_rule(snapshot):
+            second.append(button("⏳ Подождать", "confirm", kind="WAIT"))
+        from AI.dnd_camp import camp_possible, can_camp
+
+        if camp_possible(session) and (not owner or can_camp(session, owner)):
+            second.append(button("⛺ Привал", "camp"))
+        rows.extend(second[index:index + 3] for index in range(0, len(second), 3))
+        for object_id, rule_id, rule in _quick_interactions(snapshot, limit=2):
+            rows.append([button("⚡ " + _text(rule.get("label") or rule_id, 48), "confirm",
+                                kind="OBJECT", object_id=object_id, inputs={"rule_id": rule_id})])
+        rows.append([button("✍️ Свой ход", "compose")])
+        return rows
+
+    async def _deliver_card(self, bot, session, owner, text, markup, *, force_new=False, photo=None):
+        """Edit the card in place when possible, otherwise send a fresh one.
+
+        A text card cannot become a photo (and back), so switching kinds sends a
+        new card and deletes the old one. ``photo`` is a file_id or an upload.
+        """
         card = "party" if not owner else str(owner)
+        kinds = session.menu_ui_state["kinds"]
         previous_id = session.menu_ui_state["cards"].get(card)
-        old_id = None if force_new else previous_id
+        previous_kind = kinds.get(card, "text")
+        wanted_kind = "photo" if photo is not None else "text"
+        old_id = None if force_new or previous_kind != wanted_kind else previous_id
         if old_id:
             try:
-                await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
-                logging.info("DnD menu card updated chat_id=%s card=%s message_id=%s", session.chat_id, card, old_id)
+                if photo is None:
+                    await bot.edit_message_text(text, chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup, parse_mode=None)
+                elif isinstance(photo, str) and session.menu_ui_state.get("photos", {}).get(card) == photo:
+                    await bot.edit_message_caption(chat_id=session.chat_id, message_id=int(old_id), caption=text,
+                                                   reply_markup=markup, parse_mode=None)
+                else:
+                    from aiogram.types import InputMediaPhoto
+
+                    edited = await bot.edit_message_media(
+                        media=InputMediaPhoto(media=photo, caption=text, parse_mode=None),
+                        chat_id=session.chat_id, message_id=int(old_id), reply_markup=markup)
+                    self._remember_photo(session, owner, card, photo, edited)
+                logging.info("DnD menu card updated chat_id=%s card=%s message_id=%s kind=%s",
+                             session.chat_id, card, old_id, wanted_kind)
                 return int(old_id)
             except TelegramBadRequest as error:
                 message = str(error).casefold()
@@ -487,12 +609,17 @@ class DndMenuService:
                 if "message to edit not found" not in message:
                     raise
                 # A definitive deleted-card response permits one replacement.
-        sent = await bot.send_message(session.chat_id, text, reply_markup=markup, parse_mode=None)
+        if photo is None:
+            sent = await bot.send_message(session.chat_id, text, reply_markup=markup, parse_mode=None)
+        else:
+            sent = await bot.send_photo(session.chat_id, photo, caption=text, reply_markup=markup, parse_mode=None)
+            self._remember_photo(session, owner, card, photo, sent)
         session.menu_ui_state["cards"][card] = int(sent.message_id)
+        kinds[card] = wanted_kind
         if int(sent.message_id) not in session.menu_info_message_ids:
             session.menu_info_message_ids.append(int(sent.message_id))
-        logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s",
-                     session.chat_id, card, sent.message_id, bool(force_new))
+        logging.info("DnD menu card sent chat_id=%s card=%s message_id=%s fresh=%s kind=%s",
+                     session.chat_id, card, sent.message_id, bool(force_new), wanted_kind)
         if previous_id and int(previous_id) != int(sent.message_id):
             # The superseded card carries only stale buttons; drop it so the chat
             # doesn't fill with near-identical copies every window.
@@ -505,6 +632,58 @@ class DndMenuService:
                                  session.chat_id, previous_id, error)
         return int(sent.message_id)
 
+    @staticmethod
+    def _remember_photo(session, owner, card, photo, message):
+        from AI import dnd_hero_portrait as portraits
+
+        if not isinstance(photo, str):
+            portraits.remember_upload(session, owner, message)
+        row = portraits.portrait_record(session, owner) if owner else None
+        session.menu_ui_state.setdefault("photos", {})[card] = row["file_id"] if row else (photo if isinstance(photo, str) else None)
+
+    def _portrait_view(self, bot, session, owner, page, text):
+        """Photo + status line for the hero page; may start the first drawing."""
+        if not (self.portraits_enabled and owner and page == "hero"):
+            return text, None
+        from AI import dnd_hero_portrait as portraits
+
+        photo = portraits.photo_for(session, owner)
+        if photo is None and portraits.can_draw(session, owner) and not portraits.is_generating(session, owner):
+            from AI.dnd_settings import settings_for
+
+            if settings_for(session).get("images") != "off" and not portraits.auto_attempted(session, owner):
+                self.request_portrait(bot, session, owner)
+        if portraits.is_generating(session, owner):
+            text = "🎨 Портрет рисуется, карточка обновится сама.\n\n" + text
+        if photo is not None:
+            text = portraits.caption(text)
+        return text, photo
+
+    def request_portrait(self, bot, session, owner) -> bool:
+        """Start drawing in the background; the hero card refreshes when ready."""
+        from AI import dnd_hero_portrait as portraits
+
+        if not portraits.begin(session, owner):
+            return False
+
+        async def job():
+            ready = await portraits.generate(session, owner)
+            if not ready or self.dnd.dnd_sessions.get(session.chat_id) is not session:
+                return
+            async with self._lock(session.chat_id, owner):
+                if session.menu_ui_state.get("pages", {}).get(str(owner)) == "hero":
+                    await self.show(bot, session, owner, "hero")
+                else:
+                    self._save()
+
+        starter = getattr(self.dnd, "_start_background_task", None)
+        coroutine = job()
+        if starter is not None:
+            starter(coroutine, name=f"dnd-hero-portrait-{session.chat_id}-{owner}")
+        else:
+            asyncio.get_running_loop().create_task(coroutine)
+        return True
+
     async def show(self, bot, session, owner=0, page="overview", *, text=None, build_markup=None, force_new=False):
         """Caller holds the card lock; all navigation renders the newest snapshot."""
         _ensure_ui(session)
@@ -512,6 +691,7 @@ class DndMenuService:
         seq = _int(session.menu_ui_state["seq"].get(card)) + 1
         session.menu_ui_state["seq"][card] = seq
         markup = build_markup(card, seq) if build_markup else self.keyboard(session, owner, page, card=card, seq=seq)
+        photo = None
         if text is None:
             text = render_page(snapshot_session(session), page, owner)
             if self.paused(session):
@@ -519,9 +699,11 @@ class DndMenuService:
             if owner:
                 text += "\n\nКарточка для тебя; в группе её видят все."
             if page in {"overview", "scene"}:
-                text += "\n\nБыстрые идеи — подсказки. Свой ход можно описать свободно."
+                text += "\n\nВыбери действие кнопкой или опиши свой ход свободно."
+            text, photo = self._portrait_view(bot, session, owner, page, text)
+        session.menu_ui_state["pages"][card] = page if build_markup is None else "custom"
         self._save()  # Persist nonce registration before publishing its keyboard.
-        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new)
+        message_id = await self._deliver_card(bot, session, owner, text[:3900], markup, force_new=force_new, photo=photo)
         identity = self.identity(session)
         session.menu_ui_state["windows"][card] = (
             f"{identity.get('campaign_id', '')}:{identity.get('turn_id', '')}:{identity.get('phase', '')}"
@@ -610,6 +792,26 @@ class DndMenuService:
             return self.dnd._user_is_host(session, actor) and (kind in {"RESUME", "PAUSE"} or not self.paused(session))
         if kind == "ROLL":
             return self._can_act(session, actor, state="WAITING_ROLL")
+        if kind == "ABILITY":
+            from AI.dnd_archetype_abilities import ability_for, charges, valid_targets
+
+            ability = ability_for(session, actor)
+            state = getattr(session, "state", None)
+            if ability is None or self.paused(session) or state not in {"WAITING_ACTION", "WAITING_ROLL"}:
+                return False
+            if ability["effect"] == "boost" and state != "WAITING_ACTION":
+                return False
+            return charges(session, actor)[0] > 0 and _int(payload.get("target_id"), -1) in valid_targets(session, actor, ability)
+        if kind == "CAMP":
+            from AI.dnd_camp import ACTIVITIES, can_camp, options
+
+            activity = payload.get("activity")
+            return (self._can_act(session, actor) and activity in ACTIVITIES and activity != "story"
+                    and can_camp(session, actor) and not options(session, actor).get(activity))
+        if kind == "DODGE":
+            snapshot = snapshot_session(session)
+            return self._can_act(session, actor) and any(
+                _active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
         if kind == "ASI":
             progress = _mapping(_mapping(getattr(session, "hero_progress", None)).get(str(actor)))
             return (str(actor) in _mapping(getattr(session, "participants", None)) and not self.paused(session)
@@ -662,7 +864,135 @@ class DndMenuService:
             return True
         return True
 
-    async def _input_prompt(self, callback, session, actor, *, object_id=None, item_name=None):
+    @staticmethod
+    def _modifier(session, actor, ability) -> int:
+        stats = _mapping(_mapping(_mapping(getattr(session, "character_sheets", None)).get(str(actor))).get("stats"))
+        return _ability_modifier(_int(stats.get(ability), 10))
+
+    async def _action_view(self, callback, session, actor, operation):
+        """Actor-specific choice screens; final actions are re-validated on execute."""
+        from AI.dnd_archetype_abilities import DOMAIN_LABELS, ability_for, allies, charges, valid_targets
+
+        snapshot = snapshot_session(session)
+        if operation == "camp":
+            await self._camp_view(callback, session, actor)
+            return
+        if operation in {"skills", "help"} and not self._can_act(session, actor):
+            await callback.answer("Сейчас не твой ход или партия на паузе.", show_alert=True)
+            return
+        back = lambda card, seq: [self._button(session, actor, "← К ходу", "nav", card=card, seq=seq, page="overview")]
+        if operation == "skills":
+            from AI.dnd_combat import SKILL_ABILITIES
+
+            skills = sorted(SKILL_ABILITIES, key=lambda name: (list(_ABILITY_LABELS).index(SKILL_ABILITIES[name]), name))
+
+            def markup(card, seq):
+                buttons = [self._button(session, actor, f"{name} {self._modifier(session, actor, SKILL_ABILITIES[name]):+d}",
+                                        "skill_input", card=card, seq=seq, skill=name) for name in skills]
+                rows = [buttons[index:index + 3] for index in range(0, len(buttons), 3)]
+                return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+            text = ("🎯 Навык\nВыбери, чем действует герой, и коротко опиши действие. "
+                    "Мастер решит, нужна ли проверка; число — модификатор характеристики.")
+            await self.show(callback.bot, session, actor, text=text, build_markup=markup)
+            await callback.answer()
+            return
+        if operation == "help":
+            targets = allies(session, actor)
+            if not targets:
+                await callback.answer("Рядом нет союзника, которому можно помочь.", show_alert=True)
+                return
+
+            def markup(card, seq):
+                rows = [[self._button(session, actor, "🤝 " + _name(snapshot, target), "help_input", card=card, seq=seq, target_id=target)]
+                        for target in targets]
+                return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+            text = ("🤝 Помощь\nТы тратишь свой ход, а союзник получает преимущество на следующий бросок "
+                    "(один раз, не суммируется с другим подготовленным преимуществом).")
+            await self.show(callback.bot, session, actor, text=text, build_markup=markup)
+            await callback.answer()
+            return
+        ability = ability_for(session, actor)
+        if ability is None:
+            await callback.answer("Умение появится, когда у героя будут характеристики.", show_alert=True)
+            return
+        remaining, maximum = charges(session, actor)
+        boost_only_in_action = ability["effect"] == "boost" and getattr(session, "state", None) != "WAITING_ACTION"
+        usable = (remaining > 0 and not self.paused(session) and not boost_only_in_action
+                  and getattr(session, "state", None) in {"WAITING_ACTION", "WAITING_ROLL"})
+        targets = valid_targets(session, actor, ability) if usable else []
+
+        def markup(card, seq):
+            rows = []
+            for target in targets:
+                label = "✅ Применить" if ability["target"] == "self" else ("→ себе" if target == actor else "→ " + _name(snapshot, target))
+                rows.append([self._button(session, actor, label, "confirm", card=card, seq=seq, kind="ABILITY", target_id=target)])
+            return InlineKeyboardMarkup(inline_keyboard=rows + [back(card, seq)])
+
+        lines = [f"{ability['emoji']} {ability['title']} — умение роли «{ability['archetype']}»",
+                 ability["text"] + ".", f"Заряды на приключение: {remaining}/{maximum} (растут на 5 и 9 уровне).",
+                 "Бонусное действие: ход не тратит."]
+        if ability["effect"] == "boost":
+            lines.append("Преимущество: " + DOMAIN_LABELS[ability["domain"]] + "; не суммируется с другим подготовленным.")
+        if boost_only_in_action:
+            lines.append("Подготовить преимущество можно во время своего хода, до назначенного броска.")
+        await self.show(callback.bot, session, actor, text="\n".join(lines), build_markup=markup)
+        await callback.answer()
+
+    async def _camp_view(self, callback, session, actor):
+        from AI.dnd_camp import ACTIVITIES, CAMP_COOLDOWN_SCENES, can_camp, options, scenes_until_camp
+
+        if not self._can_act(session, actor):
+            await callback.answer("Сейчас не твой ход или партия на паузе.", show_alert=True)
+            return
+        if not can_camp(session, actor):
+            wait = scenes_until_camp(session, actor)
+            await callback.answer(f"Следующий привал через сцен: {wait}." if wait else "Сейчас не до привала.", show_alert=True)
+            return
+        reasons = options(session, actor)
+
+        def markup(card, seq):
+            rows = []
+            for key, row in ACTIVITIES.items():
+                if reasons.get(key):
+                    continue
+                label = f"{row['emoji']} {row['title']}"
+                if key == "story":
+                    rows.append([self._button(session, actor, label, "camp_story", card=card, seq=seq)])
+                else:
+                    rows.append([self._button(session, actor, label, "confirm", card=card, seq=seq, kind="CAMP", activity=key)])
+            rows.append([self._button(session, actor, "← К ходу", "nav", card=card, seq=seq, page="overview")])
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+
+        lines = ["⛺ Привал — это твой ход. Польза применяется сразу, мастер опишет передышку.",
+                 "🩹 Перевязать раны: 1d6 + Телосложение HP.", "🔄 Восстановить силы: вернуть заряд умения роли.",
+                 "🛠 Подготовиться: преимущество на следующий бросок.", "🔥 Байка у костра: расскажи историю своими словами.",
+                 f"Следующий привал — не раньше чем через {CAMP_COOLDOWN_SCENES} сцены."]
+        unavailable = [f"{ACTIVITIES[key]['title']}: {why}" for key, why in reasons.items() if why]
+        if unavailable:
+            lines.append("Сейчас без толку — " + "; ".join(unavailable) + ".")
+        await self.show(callback.bot, session, actor, text="\n".join(lines), build_markup=markup)
+        await callback.answer()
+
+    async def _portrait_request(self, callback, session, actor):
+        from AI import dnd_hero_portrait as portraits
+
+        if not self.portraits_enabled or not portraits.can_draw(session, actor):
+            await callback.answer("Сначала нужен готовый образ героя.", show_alert=True)
+            return
+        if portraits.is_generating(session, actor):
+            await callback.answer("Портрет уже рисуется.")
+            return
+        left = portraits.cooldown_left(session, actor)
+        if left:
+            await callback.answer(f"Новый портрет можно заказать через {left} с.", show_alert=True)
+            return
+        self.request_portrait(callback.bot, session, actor)
+        await callback.answer("Рисую портрет, это займёт около минуты.")
+        await self.show(callback.bot, session, actor, "hero")
+
+    async def _input_prompt(self, callback, session, actor, *, object_id=None, item_name=None, prefix=None, hint=None, effect=None):
         if not self._can_act(session, actor):
             await callback.answer("Сейчас не твой свободный ход или партия на паузе.", show_alert=True)
             return
@@ -681,8 +1011,15 @@ class DndMenuService:
             text += f"\nБыстрая идея: взаимодействовать с {_text(row.get('name') or object_id, 90)}. Любая другая идея тоже допустима."
         if item_name:
             text += f"\nПредмет: {_text(item_name, 100)}. Опиши, как применяешь его, и выполни указанные условия предмета."
+            prefix = prefix or f"[Предмет: {_text(item_name, 80)}] "
+        if object_id and not prefix:
+            row = _mapping(getattr(session, "scene_objects", None)).get(str(object_id)) or {}
+            prefix = f"[Объект: {_text(row.get('name') or object_id, 80)}] "
+        if hint:
+            text += "\n" + hint
         sent = await callback.bot.send_message(session.chat_id, text, reply_markup=ForceReply(selective=True, input_field_placeholder="Действие твоего героя"), parse_mode=None)
-        session.menu_action_prompts[str(sent.message_id)] = {**identity, "actor_id": actor, "object_id": object_id, "operation_id": secrets.token_hex(16), "closed": False}
+        session.menu_action_prompts[str(sent.message_id)] = {**identity, "actor_id": actor, "object_id": object_id, "operation_id": secrets.token_hex(16), "closed": False,
+                                                             "prefix": prefix or "", "effect": effect}
         self._save()
         await callback.answer()
 
@@ -690,12 +1027,23 @@ class DndMenuService:
         if not self._valid_payload(session, actor, payload):
             await callback.answer("Действие сейчас недоступно. Обнови меню.", show_alert=True)
             return
-        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "ASI": "Повысить характеристику", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
+        labels = {"ROLL": "Бросить кубик", "ATTACK": "Атаковать", "USE_ITEM": "Использовать предмет", "TRANSFER_ITEM": "Передать предмет", "OBJECT": "Взаимодействовать с объектом", "WAIT": "Осознанно подождать", "CHOOSE_ARCHETYPE": "Выбрать роль", "ASI": "Повысить характеристику", "ABILITY": "Применить умение", "DODGE": "Уйти в оборону (это твой ход)", "CAMP": "Привал", "PAUSE": "Пауза", "RESUME": "Продолжить", "RETRY": "Повторить сохранённое продолжение"}
         description = labels.get(payload.get("kind"), "Действие")
         snapshot = snapshot_session(session)
         if payload.get("kind") == "WAIT":
             rule = _wait_rule(snapshot)
             description += ": " + _text(rule["label"], 100) + "\n" + _outcome_preview(snapshot, rule["success"])
+        if payload.get("kind") == "ABILITY":
+            from AI.dnd_archetype_abilities import ability_for
+
+            ability = ability_for(session, actor) or {}
+            description += f": {ability.get('title', '?')} → {_name(snapshot, payload.get('target_id'))}\n{ability.get('text', '')}."
+        if payload.get("kind") == "DODGE":
+            description += "\nСледующая атака по тебе будет с помехой."
+        if payload.get("kind") == "CAMP":
+            from AI.dnd_camp import ACTIVITIES
+
+            description += ": " + ACTIVITIES[payload["activity"]]["title"] + ". Это твой ход."
         if payload.get("kind") == "ASI":
             description += ": " + _ABILITY_LABELS.get(payload.get("choice"), "?") + " +2 (до максимума 20). Выбор постоянный."
         if payload.get("kind") == "CHOOSE_ARCHETYPE":
@@ -803,6 +1151,12 @@ class DndMenuService:
                 await self.show(callback.bot, session, actor, text=object_text, build_markup=object_markup)
                 await callback.answer()
                 return
+            if operation in {"skills", "help", "ability", "camp"}:
+                await self._action_view(callback, session, actor, operation)
+                return
+            if operation == "portrait":
+                await self._portrait_request(callback, session, actor)
+                return
             card_seq = _int(session.menu_ui_state["seq"].get(token.get("card")))
             current_message = session.menu_ui_state["cards"].get(token.get("card"))
             if (not self._current(session, token) or card_seq != token.get("ui_seq")
@@ -817,6 +1171,39 @@ class DndMenuService:
                     await callback.answer("Предмет сейчас недоступен.", show_alert=True)
                     return
                 await self._input_prompt(callback, session, actor, object_id=payload.get("object_id"), item_name=payload.get("item_name"))
+            elif operation == "skill_input":
+                skill = str(payload.get("skill") or "")
+                from AI.dnd_combat import SKILL_ABILITIES
+
+                if skill not in SKILL_ABILITIES:
+                    await callback.answer("Навык не найден.", show_alert=True)
+                    return
+                ability = SKILL_ABILITIES[skill]
+                await self._input_prompt(callback, session, actor,
+                                         prefix=f"[Навык: {skill} ({_ABILITY_LABELS[ability]})] ",
+                                         hint=f"🎯 Навык: {skill} ({_ABILITY_LABELS[ability]} {self._modifier(session, actor, ability):+d}). "
+                                              "Коротко опиши, что именно делаешь.")
+            elif operation == "help_input":
+                from AI.dnd_archetype_abilities import allies
+
+                target = _int(payload.get("target_id"), -1)
+                if target not in allies(session, actor):
+                    await callback.answer("Этому союзнику сейчас не помочь.", show_alert=True)
+                    return
+                name = _name(snapshot_session(session), target)
+                await self._input_prompt(callback, session, actor, prefix=f"[Помощь: {name}] ",
+                                         hint=f"🤝 Помощь: {name} получит преимущество на следующий бросок. "
+                                              "Коротко опиши, как помогаешь. Это твой ход.",
+                                         effect={"type": "help", "target_id": target})
+            elif operation == "camp_story":
+                from AI.dnd_camp import can_camp
+
+                if not can_camp(session, actor):
+                    await callback.answer("Привал сейчас невозможен.", show_alert=True)
+                    return
+                await self._input_prompt(callback, session, actor, prefix="[Привал: байка у костра] ",
+                                         hint="🔥 Байка у костра: коротко расскажи историю своего героя. Это твой ход.",
+                                         effect={"type": "camp", "activity": "story"})
             elif operation == "confirm":
                 await self._confirm(callback, session, actor, payload)
             elif operation == "weapons":
@@ -896,7 +1283,10 @@ class DndMenuService:
                     return True
                 message_id = getattr(event, "message_id", None)
                 operation_id = hashlib.sha256(f"{prompt['operation_id']}:{message_id}:{action}".encode("utf-8")).hexdigest()[:32]
-                request = {**self.identity(session), "kind": "FREE_TEXT", "actor_id": int(user.id), "text": action, "operation_id": operation_id}
+                request = {**self.identity(session), "kind": "FREE_TEXT", "actor_id": int(user.id),
+                           "text": str(prompt.get("prefix") or "") + action, "operation_id": operation_id}
+                if isinstance(prompt.get("effect"), dict):
+                    request["effect"] = dict(prompt["effect"])
                 if self.execute_action:
                     await self.execute_action(event.bot, chat.id, int(user.id), request)
                 else:

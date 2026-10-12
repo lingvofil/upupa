@@ -314,7 +314,11 @@ def _resolve_attack_mechanics(combat, session, user_id: int, pending: dict, natu
         + ("попадание." if hit else "промах.")
         + natural_note
     )
+    from AI.dnd_campaign_stats import record, record_d20
+
+    record_d20(session, user_id, natural, success=hit)
     if not hit:
+        record(session, user_id, misses=1)
         summary = (
             f"⚔️ {attacker} → {enemy['name']} ({weapon}; {_damage_notation(profile)}).\n"
             f"{attack_line}\n👹 {enemy['name']} — ❤️ {enemy['hp']}/{enemy['max_hp']} · 🛡 КБ {enemy['ac']}"
@@ -332,6 +336,7 @@ def _resolve_attack_mechanics(combat, session, user_id: int, pending: dict, natu
     if enemy["hp"] <= 0:
         enemy["hp"] = 0
         enemy["status"] = "dead"
+    record(session, user_id, hits=1, damage=old_hp - int(enemy["hp"]), kills=enemy["status"] == "dead")
     dice_text = "+".join(str(value) for value in rolls) if rolls else str(int(profile.get("base") or 1))
     rolled_notation = _damage_notation(profile)
     if int(natural) == 20 and int(profile.get("dice_count") or 0) > 0:

@@ -423,6 +423,11 @@ def build_memory_context(dnd, campaign, session, prompt: str = "") -> str:
         "РЕСУРСЫ И АКТИВНЫЕ ФАКТЫ:\n"
         + _clip("\n".join(_resource_lines(session)), 260),
     ]
+    from AI.dnd_quests import context_lines as quest_lines
+
+    quests = quest_lines(session)
+    if quests:
+        state_parts.append("ОТКРЫТЫЕ ПОРУЧЕНИЯ И КАЗНА:\n" + _clip("\n".join(quests), 420))
     state_text = _clip("\n\n".join(state_parts), STATE_MAX_CHARS)
     npc_text = _clip(
         "\n".join(_npc_lines(session, prompt, recent_scenes)),
