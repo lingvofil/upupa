@@ -394,3 +394,25 @@ def test_random_voice_avoids_immediate_repeat_when_possible():
             assert len(calls) == 1
 
     asyncio.run(scenario())
+
+
+def test_available_voices_only_personal_and_skip_premade():
+    import httpx
+
+    seen_params = []
+
+    def handler(request):
+        seen_params.append(dict(request.url.params))
+        return httpx.Response(200, json={"has_more": False, "voices": [
+            {"voice_id": "mine", "name": "Шиз", "category": "generated"},
+            {"voice_id": "stock", "name": "Bella", "category": "premade"},
+        ]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = ElevenLabsClient("key", http_client=http)
+            return await client.get_available_voices()
+
+    voices = asyncio.run(run())
+    assert [v.voice_id for v in voices] == ["mine"]
+    assert seen_params[0]["voice_type"] == "personal"

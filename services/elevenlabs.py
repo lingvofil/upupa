@@ -19,6 +19,9 @@ VOICE_CACHE_TTL_SECONDS = 10 * 60
 VOICE_PAGE_SIZE = 100
 MAX_VOICE_PAGES = 10
 TEMP_VOICE_PREFIX = "upupa_tmp_"
+# Only voices created on the account (Voice Design / clones), not ElevenLabs stock ones.
+VOICE_LIST_TYPE = "personal"
+STOCK_VOICE_CATEGORIES = frozenset({"premade"})
 VOICE_CHANGER_MODEL = "eleven_multilingual_sts_v2"
 VOICE_DESIGN_MODEL = "eleven_multilingual_ttv_v2"
 VOICE_OUTPUT_FORMAT = "mp3_44100_128"
@@ -279,6 +282,7 @@ class ElevenLabsClient:
             params: dict[str, str | int] = {
                 "page_size": VOICE_PAGE_SIZE,
                 "include_total_count": "false",
+                "voice_type": VOICE_LIST_TYPE,
             }
             if next_page_token:
                 params["next_page_token"] = next_page_token
@@ -297,6 +301,9 @@ class ElevenLabsClient:
                 voice_id = str(item.get("voice_id") or "").strip()
                 name = str(item.get("name") or "").strip()
                 if not voice_id or name.startswith(TEMP_VOICE_PREFIX):
+                    continue
+                category = str(item.get("category") or "").strip().lower()
+                if category in STOCK_VOICE_CATEGORIES:
                     continue
                 voices.append(ElevenLabsVoice(voice_id=voice_id, name=name))
 
