@@ -17,7 +17,7 @@ from typing import Any
 from features.chronicle.runtime import list_events
 from features.social_graph.interaction_analysis import build_edge_interaction_profiles
 from features.social_graph.overview import cached_faction_names, load_structure
-from features.social_graph.relationships import get_relationships
+from features.social_graph.relationships import conflict_pairs, get_relationships
 from features.social_graph.rendering import UNAFFILIATED_NODE_COLOR, faction_color
 from features.social_graph.service import _without_username_tag
 from features.social_graph.structure import fallback_faction_name
@@ -83,7 +83,7 @@ def _iso(value: datetime | None) -> str | None:
 
 def _event_payload(chat_id: int, event) -> dict[str, Any]:
     message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
-    return {
+    payload = {
         "id": str(event.id),
         "title": str(event.title),
         "summary": str(event.summary),
@@ -93,6 +93,11 @@ def _event_payload(chat_id: int, event) -> dict[str, Any]:
         "participants": [int(item) for item in event.participant_ids],
         "link": _message_link(chat_id, message_id),
     }
+    if event.category == "conflict":
+        pairs = conflict_pairs(event)
+        if pairs is not None:
+            payload["opponents"] = [list(pair) for pair in sorted(pairs)]
+    return payload
 
 
 async def build_social_payload(chat_id: int, *, period_days: int = 30, viewer_id: int | None = None) -> dict[str, Any]:

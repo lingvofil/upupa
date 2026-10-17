@@ -376,3 +376,49 @@ def test_backfill_phrase_extraction_finds_repeatable_memes():
 
     phrases = _phrases("главное чайник сначала включи а потом обвиняй производителя")
     assert any("чайник" in phrase and "включи" in phrase for phrase in phrases)
+
+
+def test_conflict_pairs_are_validated_against_participants():
+    from features.chronicle.ai import _pair_list
+
+    assert _pair_list([[3, 1], [1, 3], [1, 99], [2, 2], ["x", 1], [1, 2, 3]], {1, 2, 3}) == [[1, 3]]
+    assert _pair_list(None, {1, 2}) == []
+
+
+def test_relabel_saves_pairs_and_counts_failures(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from features.chronicle import service
+    from infrastructure.persistence.sqlite_chronicle_events import SQLiteChronicleEventStore
+
+    store = SQLiteChronicleEventStore(tmp_path / "history.db")
+    store.init_schema()
+    now = datetime.now(timezone.utc)
+    common = dict(
+        chat_id=-100, started_at=now - timedelta(minutes=30), ended_at=now, summary="срач",
+        importance_score=9.0, anchor_message_id=1, reaction_count=0, unique_reactors=0, reply_count=3,
+        keywords=[], entities=[], related_event_ids=[], source="live", source_message_ids=[1],
+        participants=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}, {"id": 3, "name": "C"}],
+    )
+    old = store.save(title="старый", category="conflict", ai_metadata={}, **common)
+    store.save(title="новый", category="conflict", ai_metadata={"conflict_pairs": [[1, 2]]}, **common)
+    store.save(title="смешное", category="funny", ai_metadata={}, **common)
+    assert [event.id for event in store.conflicts_without_pairs(limit=10)] == [old]
+
+    monkeypatch.setattr(service, "_stores", lambda: (None, store, None))
+    monkeypatch.setattr(service, "_load_event_context", lambda event: [])
+
+    async def fail(event, context):
+        return None
+
+    monkeypatch.setattr(service, "extract_conflict_pairs", fail)
+    asyncio.run(service.label_conflict_pairs())
+    assert store.conflicts_without_pairs(limit=10)[0].ai_metadata["conflict_pairs_attempts"] == 1
+
+    async def ok(event, context):
+        return [[2, 3]]
+
+    monkeypatch.setattr(service, "extract_conflict_pairs", ok)
+    assert asyncio.run(service.label_conflict_pairs()) == 1
+    assert store.conflicts_without_pairs(limit=10) == []
+    relabelled = [event for event in store.list(-100, limit=10) if event.id == old][0]
+    assert relabelled.ai_metadata["conflict_pairs"] == [[2, 3]]

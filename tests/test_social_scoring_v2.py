@@ -293,3 +293,41 @@ def test_backfill_without_history_db_just_marks_done(tmp_path):
     repo.init_schema()
     assert repo.backfill_reaction_valence(tmp_path / "missing.db", updated_before="x", classify=reaction_names_valence) == 0
     assert repo.backfill_reaction_valence(tmp_path / "missing.db", updated_before="x", classify=reaction_names_valence) is None
+
+
+# --- labelled opponents --------------------------------------------------------
+
+def _labelled(event, pairs):
+    event.ai_metadata = {"conflict_pairs": [list(pair) for pair in pairs]}
+    return event
+
+
+def test_thread_about_one_person_does_not_blame_everyone_who_replied_to_him(monkeypatch):
+    # «Света-солнышко жалеет мудилу»: 6 человек, все отвечают пострадавшему (10),
+    # а спорят на самом деле 20 и 30 против 40.  Эвристика по репликам видит
+    # «бойцов» в каждой спице к 10 — включая 50, который просто спросил про сигарету.
+    rows = [_row(10, 20), _row(10, 30), _row(10, 40), _row(10, 50), _row(20, 40), _row(30, 40)]
+    exchanges = {"c1": {(10, 40): 4, (10, 20): 3, (10, 30): 2, (10, 50): 2, (20, 40): 1}}
+    event = _event("c1", participants=(10, 20, 30, 40, 50, 60))
+
+    _install(monkeypatch, rows, [event], exchanges=exchanges)
+    guessed = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+    assert guessed[(10, 50)].tension > 0  # the bug: a bystander gets a «стычку»
+
+    _install(monkeypatch, rows, [_labelled(event, [(20, 40), (30, 40)])], exchanges=exchanges)
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+    assert views[(20, 40)].tension > 0 and views[(20, 40)].conflict_episodes == 1
+    assert views[(30, 40)].tension > 0
+    for bystander in [(10, 20), (10, 30), (10, 40), (10, 50)]:
+        assert views[bystander].tension == 0
+        assert views[bystander].conflict_episodes == 0
+
+
+def test_empty_opponent_list_means_nobody_is_blamed(monkeypatch):
+    rows = [_row(1, 2)]
+    event = _labelled(_event("c1", participants=(1, 2)), [])
+    _install(monkeypatch, rows, [event], exchanges={"c1": {(1, 2): 9}})
+
+    views = _by_pair(asyncio.run(relationships.get_relationships(-100)))
+
+    assert views[(1, 2)].tension == 0

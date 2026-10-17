@@ -209,9 +209,15 @@
       return ids.every(function (id) { return event.participants.indexOf(id) !== -1; });
     });
   }
-  function eventCard(event) {
+  function opponentsLabel(event, pair) {
+    if (!pair || event.category !== "conflict" || !event.opponents) return "";
+    var a = Math.min(pair[0], pair[1]), b = Math.max(pair[0], pair[1]);
+    var fought = event.opponents.some(function (p) { return p[0] === a && p[1] === b; });
+    return fought ? " · между ними" : " · они не участвовали в стычке";
+  }
+  function eventCard(event, pair) {
     var card = el("div", "card");
-    card.appendChild(el("div", "event-date", fmtDate(event.date) + " · " + (CATEGORY[event.category] || event.category)));
+    card.appendChild(el("div", "event-date", fmtDate(event.date) + " · " + (CATEGORY[event.category] || event.category) + opponentsLabel(event, pair)));
     card.appendChild(el("div", "title", event.title));
     card.appendChild(el("div", null, event.summary));
     var people = event.participants.map(name).join(", ");
@@ -322,7 +328,7 @@
     }
     var events = eventsWith([a, b]);
     box.appendChild(el("h3", null, "Общие эпизоды"));
-    if (events.length) events.forEach(function (event) { box.appendChild(eventCard(event)); });
+    if (events.length) events.forEach(function (event) { box.appendChild(eventCard(event, [a, b])); });
     else box.appendChild(el("div", "hint", "В Летописи вместе пока не попадали."));
     return box;
   }

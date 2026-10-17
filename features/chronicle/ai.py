@@ -8,7 +8,7 @@ import logging
 import re
 
 from AI.summarize import _generate_with_active_model
-from features.chronicle.models import ChronicleCandidate, ChronicleEventDraft
+from features.chronicle.models import ChronicleCandidate, ChronicleEvent, ChronicleEventDraft
 from infrastructure.ai.execution import ai_feature
 
 
@@ -42,6 +42,34 @@ def _clean_list(value, *, limit: int = 12) -> list[str]:
         if text and text not in result:
             result.append(text[:120])
     return result
+
+
+CONFLICT_PAIRS_RULES = """conflict_pairs заполняй ТОЛЬКО для category=conflict (иначе []).
+Это пары оппонентов: кто с кем НАПРЯМУЮ спорил, ругался или наезжал — люди
+по разные стороны конфликта. Не включай союзников одной стороны друг с другом,
+тех, кто просто присутствовал, шутил, задавал вопросы или комментировал со
+стороны, и обсуждаемого человека, если он сам не вступил в перепалку.
+Если не уверен в паре — не включай её; лучше [] чем выдуманный конфликт.""".strip()
+
+
+def _pair_list(value, allowed: set[int]) -> list[list[int]]:
+    """Validated, deduplicated [[a, b], ...] with a < b, both in ``allowed``."""
+    if not isinstance(value, list):
+        return []
+    pairs: list[list[int]] = []
+    for item in value[:30]:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        try:
+            left, right = int(item[0]), int(item[1])
+        except (TypeError, ValueError):
+            continue
+        if left == right or left not in allowed or right not in allowed:
+            continue
+        pair = sorted((left, right))
+        if pair not in pairs:
+            pairs.append(pair)
+    return pairs
 
 
 def build_prompt(candidate: ChronicleCandidate, context: list[dict]) -> str:
@@ -104,9 +132,12 @@ allowed_participant_ids={allowed_ids}
   "summary": "1-4 конкретных предложения в живом саркастичном стиле Упупы; мат допустим",
   "category": "funny|absurd|conflict|fail|local_meme|confession|decision|promise|bet|record|game|relationship|other",
   "participant_ids": [только ID из allowed_participant_ids],
+  "conflict_pairs": [[ID, ID]],
   "keywords": ["ключевые слова"],
   "entities": ["имена/предметы/темы, явно присутствующие в контексте"]
 }}
+
+{CONFLICT_PAIRS_RULES}
 
 Для backfill требование ещё строже: обычный смешной разговор без признаков
 закрепившейся истории не сохраняй.
@@ -143,14 +174,63 @@ async def classify_candidate(candidate: ChronicleCandidate, context: list[dict])
     if not title or not summary:
         return ChronicleDecision(False, None, "ai_missing_text", confidence)
 
+    category = str(data.get("category") or "other").strip().lower()[:40]
+    ai_metadata: dict = {"reason": str(data.get("reason") or "")[:300]}
+    if category == "conflict":
+        # Who fought whom: a conflict raises tension only for these pairs, not
+        # for everyone who happened to be in the thread.
+        ai_metadata["conflict_pairs"] = _pair_list(data.get("conflict_pairs"), set(selected))
     draft = ChronicleEventDraft(
         title=title,
         summary=summary,
-        category=str(data.get("category") or "other").strip().lower()[:40],
+        category=category,
         confidence=confidence,
         participant_ids=selected,
         keywords=_clean_list(data.get("keywords")),
         entities=_clean_list(data.get("entities")),
-        ai_metadata={"reason": str(data.get("reason") or "")[:300]},
+        ai_metadata=ai_metadata,
     )
     return ChronicleDecision(True, draft, "accepted", confidence)
+
+
+def build_conflict_pairs_prompt(event: ChronicleEvent, context: list[dict]) -> str:
+    people = "\n".join(
+        f"- user_id={user_id} {name}" for user_id, name in zip(event.participant_ids, event.participant_names)
+    )
+    lines = []
+    for row in context:
+        text = (row.get("text") or "").replace("\x00", " ").strip()
+        if len(text) > 500:
+            text = text[:497] + "..."
+        name = row.get("full_name") or row.get("username") or "Участник"
+        lines.append(f"[{str(row.get('timestamp', ''))[:19]}] user_id={row.get('user_id')} {name}: {text}")
+    transcript = "\n".join(lines) if lines else "(исходные сообщения недоступны — опирайся на описание)"
+    return f"""
+Эпизод из «Летописи» Telegram-чата уже классифицирован как конфликт.
+Определи, кто в нём с кем на самом деле конфликтовал.
+
+Заголовок: {event.title}
+Описание: {event.summary}
+
+Участники эпизода:
+{people}
+
+Переписка:
+{transcript}
+
+{CONFLICT_PAIRS_RULES}
+
+Верни ТОЛЬКО JSON: {{"conflict_pairs": [[ID, ID]]}}
+""".strip()
+
+
+@ai_feature("летопись")
+async def extract_conflict_pairs(event: ChronicleEvent, context: list[dict]) -> list[list[int]] | None:
+    """Combatant pairs of an already saved conflict; None on AI failure."""
+    try:
+        raw = await _generate_with_active_model(build_conflict_pairs_prompt(event, context), str(event.chat_id))
+        data = _json_object(raw or "")
+    except Exception as exc:
+        logging.warning("[chronicle] conflict pairs failed event=%s chat=%s: %s", event.id, event.chat_id, exc)
+        return None
+    return _pair_list(data.get("conflict_pairs"), {int(item) for item in event.participant_ids})

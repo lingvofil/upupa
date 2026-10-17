@@ -14,7 +14,7 @@ from aiogram.types import Message
 from core.history_store import get_history_repository
 from core.paths import USER_MESSAGES_LOG_PATH
 from features.chronicle import config
-from features.chronicle.ai import classify_candidate
+from features.chronicle.ai import classify_candidate, extract_conflict_pairs
 from features.chronicle.backfill import process_backfill_batch
 from features.chronicle.models import ChronicleCandidate, ChronicleEvent
 from features.chronicle.scoring import activity_signal, find_duplicate_or_related, participant_bonus, reaction_score, text_signal
@@ -342,6 +342,48 @@ async def finalize_candidate(candidate: ChronicleCandidate) -> str | None:
     return event_id
 
 
+CONFLICT_LABEL_BATCH = 2
+CONFLICT_LABEL_MAX_ATTEMPTS = 3
+
+
+async def label_conflict_pairs(limit: int = CONFLICT_LABEL_BATCH) -> int:
+    """Backfill combatant pairs for conflicts saved before the AI returned them.
+
+    Without them the social graph has to guess who fought from reply volume,
+    which blames whoever the thread was about and everyone who talked to them.
+    """
+    _candidate_store, event_store, _backfill_store = _stores()
+    events = await asyncio.to_thread(
+        event_store.conflicts_without_pairs, limit=limit, max_attempts=CONFLICT_LABEL_MAX_ATTEMPTS
+    )
+    labeled = 0
+    for event in events:
+        context = await asyncio.to_thread(_load_event_context, event)
+        pairs = await extract_conflict_pairs(event, context)
+        if pairs is None:
+            attempts = int(event.ai_metadata.get("conflict_pairs_attempts", 0) or 0) + 1
+            await asyncio.to_thread(event_store.update_ai_metadata, event.id, {"conflict_pairs_attempts": attempts})
+            continue
+        await asyncio.to_thread(
+            event_store.update_ai_metadata, event.id, {"conflict_pairs": pairs, "conflict_pairs_source": "relabel"}
+        )
+        labeled += 1
+        logging.info("[chronicle] conflict pairs event=%s chat=%s pairs=%s", event.id, event.chat_id, pairs)
+    return labeled
+
+
+def _load_event_context(event: ChronicleEvent) -> list[dict]:
+    history = get_history_repository(USER_MESSAGES_LOG_PATH)
+    if history is None:
+        return []
+    padding = timedelta(minutes=config.CONTEXT_PADDING_MINUTES)
+    try:
+        return history.select(event.chat_id, start=event.event_started_at - padding, end=event.event_ended_at + padding, nonempty=True, limit=config.MAX_CONTEXT_MESSAGES)
+    except Exception as exc:
+        logging.warning("[chronicle] context unavailable for event=%s: %s", event.id, exc)
+        return []
+
+
 async def request_backfill(chat_id: int) -> None:
     if config.CHRONICLE_BACKFILL_ENABLED:
         await asyncio.to_thread(_stores()[2].request, int(chat_id))
@@ -385,6 +427,8 @@ async def chronicle_loop() -> None:
                 due = await asyncio.to_thread(candidate_store.due_candidates, datetime.now(timezone.utc), 3)
                 for candidate in due:
                     await finalize_candidate(candidate)
+                if not due:
+                    await label_conflict_pairs()
                 if config.CHRONICLE_BACKFILL_ENABLED:
                     await process_backfill_batch(candidate_store=candidate_store, backfill_store=backfill_store)
         except asyncio.CancelledError:

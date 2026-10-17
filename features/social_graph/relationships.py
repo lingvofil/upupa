@@ -9,9 +9,10 @@ Scoring model v2:
   on a log scale relative to the chat's most active pair, plus reciprocity
   (discounted for tiny samples), shared Chronicle history and variety.
 * Напряжение — conflicts *between the two people*: a Chronicle conflict counts
-  for a pair only if they were among the main combatants of the episode — the
-  pairs with the most mutual replies/mentions in its window (an active chat
-  chats all the time, so mere presence of replies is not enough).  Episodes
+  for a pair only if they were opponents in it.  The Chronicle AI names the
+  opponent pairs (``ai_metadata["conflict_pairs"]``); that list is final.  Only
+  for older, not yet labelled episodes we fall back to guessing combatants from
+  the pairs with the most mutual replies/mentions in its window.  Episodes
   older than raw-data retention count only for 2–3 person episodes.  Negative
   reactions (🤡, 👎, 💩 …) add at most a third of the scale on their own.
   Raw swearing is never a signal.
@@ -211,8 +212,30 @@ def _group_share(event: ChronicleEvent) -> float:
     return min(1.0, 2.0 / max(2, len(set(event.participant_ids))))
 
 
+def conflict_pairs(event: ChronicleEvent) -> set[tuple[int, int]] | None:
+    """Opponent pairs named by the Chronicle AI; None if the episode is unlabelled."""
+    raw = (event.ai_metadata or {}).get("conflict_pairs") if isinstance(event.ai_metadata, dict) else None
+    if not isinstance(raw, list):
+        return None
+    pairs: set[tuple[int, int]] = set()
+    for item in raw:
+        try:
+            left, right = int(item[0]), int(item[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if left != right:
+            pairs.add((min(left, right), max(left, right)))
+    return pairs
+
+
 def _conflict_factor(event: ChronicleEvent, pair: tuple[int, int], exchanges: dict[str, dict[tuple[int, int], int]]) -> float:
     """How much of a Chronicle conflict belongs to this particular pair."""
+    labelled = conflict_pairs(event)
+    if labelled is not None:
+        # Reply volume says who the thread was *about*, not who fought: a
+        # thread around one person makes every spoke to them look like a
+        # «combatant».  An explicit opponent list wins.
+        return 1.0 if pair in labelled else 0.0
     participants = set(event.participant_ids)
     evidence = exchanges.get(str(event.id))
     if evidence is None:
@@ -440,7 +463,7 @@ async def _load_conflict_exchanges(
     windows = [
         (str(event.id), event.event_started_at - EXCHANGE_PADDING_BEFORE, event.event_ended_at + EXCHANGE_PADDING_AFTER)
         for event in events
-        if event.category == "conflict" and event.event_ended_at >= cutoff
+        if event.category == "conflict" and event.event_ended_at >= cutoff and conflict_pairs(event) is None
     ]
     if not windows:
         return {}

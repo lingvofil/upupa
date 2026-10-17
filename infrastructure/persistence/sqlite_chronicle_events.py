@@ -128,6 +128,33 @@ class SQLiteChronicleEventStore:
             ai_metadata=loads(row["ai_metadata_json"], {}), source=row["source"],
         )
 
+    def conflicts_without_pairs(self, *, limit: int = 3, max_attempts: int = 3) -> list[ChronicleEvent]:
+        """Conflict events saved before combatant pairs were extracted, newest first."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """SELECT * FROM chronicle_events
+                   WHERE category='conflict'
+                     AND json_extract(ai_metadata_json,'$.conflict_pairs') IS NULL
+                     AND COALESCE(json_extract(ai_metadata_json,'$.conflict_pairs_attempts'),0) < ?
+                   ORDER BY event_started_at DESC LIMIT ?""",
+                (int(max_attempts), max(1, int(limit))),
+            ).fetchall()
+            return [self._event(conn, row) for row in rows]
+
+    def update_ai_metadata(self, event_id: str, changes: dict) -> None:
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute("SELECT ai_metadata_json FROM chronicle_events WHERE id=?", (event_id,)).fetchone()
+            if row is None:
+                return
+            metadata = loads(row["ai_metadata_json"], {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.update(changes)
+            conn.execute(
+                "UPDATE chronicle_events SET ai_metadata_json=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), event_id),
+            )
+
     @staticmethod
     def _filter(chat_id: int, user_id: int | None, username: str | None) -> tuple[str, list[str], list]:
         clauses = ["e.chat_id=?"]
