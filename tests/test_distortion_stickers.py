@@ -197,7 +197,7 @@ class _FakeBot:
     async def send_sticker(self, chat_id, sticker):
         self.calls.append(("sticker", chat_id, str(sticker)))
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, **kwargs):
         self.calls.append(("message", chat_id, text))
 
 

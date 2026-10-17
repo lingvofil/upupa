@@ -3,7 +3,8 @@ from datetime import datetime
 
 from features.world.activity import get_top_active_citizen
 from features.world.rendering import render_world_map_png
-from features.world.service import WorldService, calculate_authority
+from features.world.authority import calculate_authority
+from features.world.service import WorldService
 from infrastructure.persistence.sqlite_world import SQLiteWorldRepository
 
 

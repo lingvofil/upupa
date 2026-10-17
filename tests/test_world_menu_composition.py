@@ -1,15 +1,12 @@
 from pathlib import Path
+import re
 
 from features.world.hub_ui import build_world_main_markup
 from handlers import world_expansion, world_hub, world_interactions
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORLD_HANDLER_PATHS = (
-    ROOT / "handlers" / "world_interactions.py",
-    ROOT / "handlers" / "world_expansion.py",
-    ROOT / "handlers" / "world_hub.py",
-)
+WORLD_HANDLER_PATHS = sorted((ROOT / "handlers").glob("world*.py"))
 
 
 def _signature(markup):
@@ -27,10 +24,10 @@ def test_all_world_hub_paths_use_the_same_canonical_main_menu():
         ("🏳 Моё государство", "worldhub:mine"),
         ("🌐 Государства", "worldhub:states"),
         ("🤝 Дипломатия", "worldhub:diplomacy"),
-        ("🎩 Назначить посла", "worldx:ambassador"),
-        ("🏴 Флаг / герб", "worldsymbol:menu"),
+        ("🏆 Рейтинг", "worldhub:rating"),
         ("🚫 Санкции", "worldhub:sanctions"),
         ("⚖️ Международный суд", "worldhub:court"),
+        ("🧱 Блоки", "worldhub:blocs"),
         ("🗺 Карта мира", "worldhub:map"),
         ("📰 Мировые новости", "worldhub:news"),
         ("📜 Хроника", "worldhub:chronicle"),
@@ -40,21 +37,23 @@ def test_all_world_hub_paths_use_the_same_canonical_main_menu():
     assert _signature(world_hub._main_markup()) == expected
 
 
-def test_world_handlers_use_canonical_menu_without_package_monkeypatches():
-    package_source = (ROOT / "handlers" / "__init__.py").read_text(encoding="utf-8")
-
-    assert "._main_markup =" not in package_source
-    assert "build_world_main_markup" not in package_source
-
+def test_each_world_command_and_callback_prefix_has_exactly_one_router():
+    """Duplicate filters across routers made whole handlers silently dead before."""
+    owners: dict[str, set[str]] = {}
     for path in WORLD_HANDLER_PATHS:
         source = path.read_text(encoding="utf-8")
-        assert "from features.world.hub_ui import build_world_main_markup" in source
-        assert "return build_world_main_markup()" in source
+        for literal in re.findall(r'"(упупа миры|государство|государства|дипломатия)"', source):
+            owners.setdefault(f"text:{literal}", set()).add(path.name)
+        for prefix in re.findall(r'F\.data\.startswith\("([a-z:]+)"\)', source):
+            owners.setdefault(f"callback:{prefix}", set()).add(path.name)
+    duplicated = {key: names for key, names in owners.items() if len(names) > 1}
+    assert duplicated == {}
 
 
-def test_world_router_precedence_is_unchanged():
-    source = (ROOT / "handlers" / "__init__.py").read_text(encoding="utf-8")
-
-    assert source.index("world_interactions.router") < source.index("world_expansion.router")
-    assert source.index("world_expansion.router") < source.index("world_symbols.router")
-    assert source.index("world_symbols.router") < source.index("world_hub.router")
+def test_hub_screens_are_rendered_only_by_world_hub():
+    for path in WORLD_HANDLER_PATHS:
+        source = path.read_text(encoding="utf-8")
+        if path.name == "world_hub.py":
+            assert 'F.data.startswith("worldhub:")' in source
+        else:
+            assert 'F.data.startswith("worldhub:")' not in source

@@ -224,7 +224,7 @@ def test_publish_image_uses_send_photo_and_stores_metadata(monkeypatch):
             self.photo_calls.append((chat_id, photo, caption))
             return SimpleNamespace(message_id=777)
 
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             self.message_calls.append((chat_id, text))
             return SimpleNamespace(message_id=778)
 

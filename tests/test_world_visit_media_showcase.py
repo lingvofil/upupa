@@ -25,8 +25,13 @@ def _message(**overrides):
     return SimpleNamespace(**values)
 
 
+BOT = SimpleNamespace(id=1, is_bot=True)
+
+
 def test_media_without_caption_is_valid_showcase():
-    replied = SimpleNamespace(text="🛬 Государственный визит\n\nГости: государство №2 — Guest.", caption=None)
+    replied = SimpleNamespace(
+        text="🛬 Государственный визит\n\nГости: государство №2 — Guest.", caption=None, from_user=BOT
+    )
     message = _message(
         photo=[SimpleNamespace(file_id="photo")],
         reply_to_message=replied,
@@ -52,9 +57,26 @@ def test_media_summary_keeps_caption_sticker_emoji_and_document_name():
 
 
 def test_plain_text_is_not_intercepted_by_media_router():
-    replied = SimpleNamespace(text="🛬 Государственный визит\n\nГости: государство №2 — Guest.", caption=None)
+    replied = SimpleNamespace(
+        text="🛬 Государственный визит\n\nГости: государство №2 — Guest.", caption=None, from_user=BOT
+    )
     message = _message(
         text="главный гараж",
+        reply_to_message=replied,
+        from_user=SimpleNamespace(id=10),
+    )
+
+    assert not media_handler._is_visit_media_showcase_reply(message)
+
+
+def test_spoofed_prompt_from_a_human_is_ignored():
+    replied = SimpleNamespace(
+        text="🛬 Государственный визит\n\nГости: государство №2 — Guest.",
+        caption=None,
+        from_user=SimpleNamespace(id=55, is_bot=False),
+    )
+    message = _message(
+        photo=[SimpleNamespace(file_id="photo")],
         reply_to_message=replied,
         from_user=SimpleNamespace(id=10),
     )
@@ -78,11 +100,12 @@ def test_media_showcase_is_copied_to_guest_and_journaled(monkeypatch):
             self.sent = []
             self.copied = []
 
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             self.sent.append((chat_id, text))
 
         async def copy_message(self, **kwargs):
             self.copied.append(kwargs)
+            return SimpleNamespace(message_id=1)
 
     replies = []
 
@@ -95,6 +118,7 @@ def test_media_showcase_is_copied_to_guest_and_journaled(monkeypatch):
         reply_to_message=SimpleNamespace(
             text="🛬 Государственный визит\n\nГости: государство №2 — Guest.",
             caption=None,
+            from_user=BOT,
         ),
         from_user=SimpleNamespace(id=10, full_name="Вася", username="vasya"),
         chat=SimpleNamespace(id=host.chat_id, title=host.title),
@@ -103,7 +127,7 @@ def test_media_showcase_is_copied_to_guest_and_journaled(monkeypatch):
     )
 
     async def fake_require_world(_message):
-        return Service()
+        return Service(), host
 
     async def fake_get_open_visit(*args, **kwargs):
         return SimpleNamespace()
@@ -116,11 +140,10 @@ def test_media_showcase_is_copied_to_guest_and_journaled(monkeypatch):
 
     fake_bot = FakeBot()
     monkeypatch.setattr(media_handler, "bot", fake_bot)
-    monkeypatch.setattr(media_handler, "_require_world", fake_require_world)
+    monkeypatch.setattr(media_handler, "require_world", fake_require_world)
     monkeypatch.setattr(media_handler, "get_open_visit", fake_get_open_visit)
     monkeypatch.setattr(media_handler, "visit_is_active", lambda visit: True)
     monkeypatch.setattr(media_handler, "record_interaction_event", fake_record)
-    monkeypatch.setattr(media_handler, "_title", lambda _message: host.title)
 
     asyncio.run(media_handler.visit_media_showcase(message))
 

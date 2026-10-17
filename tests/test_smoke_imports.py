@@ -61,7 +61,7 @@ SERVICE_MODULES = [
 ]
 GAME_MODULES = ["games.crocodile", "games.egra", "games.reverse_crocodile"]
 HANDLER_MODULES = [
-    "handlers", "handlers.basic", "handlers.sms", "handlers.world", "handlers.world_listing",
+    "handlers", "handlers.basic", "handlers.sms", "handlers.world_common", "handlers.world_hub",
     "handlers.stats_lexicon", "handlers.media_search", "handlers.games", "handlers.media_tools",
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",

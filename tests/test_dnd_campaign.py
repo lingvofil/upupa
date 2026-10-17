@@ -561,7 +561,7 @@ def test_finish_archives_and_defers_cleanup_to_outer_finalizer(monkeypatch):
     )
 
     class Bot:
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             events.append(("message", chat_id, text))
 
     asyncio.run(campaign._finish_core(dnd, Bot(), session, "Финальная сцена. [ACTION:END]"))

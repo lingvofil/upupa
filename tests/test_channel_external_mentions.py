@@ -207,7 +207,7 @@ def test_direct_mention_consumes_next_channel_slot_before_other_modes(tmp_path, 
     monkeypatch.setattr(cringedep_service.mood_service, "publish_channel_post", fail_normal)
 
     class FakeBot:
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             assert chat_id == cringedep_service.CHANNEL_TARGET
             return SimpleNamespace(message_id=999, text=text)
 

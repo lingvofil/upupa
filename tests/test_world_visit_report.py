@@ -108,7 +108,7 @@ def test_finished_visit_sends_factual_report_and_opens_feedback_window(tmp_path)
             self.sent = []
             self.next_message_id = 100
 
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             self.sent.append((chat_id, text))
             self.next_message_id += 1
             return SimpleNamespace(message_id=self.next_message_id)
