@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import json
 import logging
-from pathlib import Path
-import sqlite3
 
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from features.world.delivery import deliver_text
+from features.world.ledger import FeedbackWindowRecord
 from features.world.service import WorldService, get_world_service
 
 
@@ -99,76 +99,23 @@ async def _record_event(
     )
 
 
-def _parse_payload(raw: object) -> dict[str, object]:
-    try:
-        value = json.loads(str(raw or "{}"))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _window_from_row(row: sqlite3.Row, closed_ids: set[int]) -> FeedbackWindow | None:
-    payload = _parse_payload(row["payload_json"])
-    try:
-        accepted_event_id = int(payload["accepted_event_id"])
-        prompt_message_id = int(payload["prompt_message_id"])
-        closes_at = _utc(datetime.fromisoformat(str(payload["closes_at"])))
-        opened_at = _utc(datetime.fromisoformat(str(row["created_at"])))
-        host_state = int(row["target_state"])
-        guest_state = int(row["actor_state"])
-    except (KeyError, TypeError, ValueError):
-        return None
+def _window(record: FeedbackWindowRecord) -> FeedbackWindow:
     return FeedbackWindow(
-        host_state=host_state,
-        guest_state=guest_state,
-        accepted_event_id=accepted_event_id,
-        prompt_message_id=prompt_message_id,
-        opened_at=opened_at,
-        closes_at=closes_at,
-        closed=accepted_event_id in closed_ids,
+        host_state=record.host_state,
+        guest_state=record.guest_state,
+        accepted_event_id=record.accepted_event_id,
+        prompt_message_id=record.prompt_message_id,
+        opened_at=record.opened_at,
+        closes_at=record.closes_at,
+        closed=record.closed_at is not None,
     )
-
-
-def _load_windows_sync(db_path: str | Path) -> tuple[FeedbackWindow, ...]:
-    with closing(sqlite3.connect(Path(db_path), timeout=30)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT event_type, actor_state, target_state, payload_json, created_at
-            FROM world_events
-            WHERE event_type IN (?, ?)
-            ORDER BY created_at DESC, id DESC
-            """,
-            (_OPENED, _CLOSED),
-        ).fetchall()
-
-    closed_ids: set[int] = set()
-    opened_rows: list[sqlite3.Row] = []
-    for row in rows:
-        payload = _parse_payload(row["payload_json"])
-        if row["event_type"] == _CLOSED:
-            try:
-                closed_ids.add(int(payload["accepted_event_id"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-        else:
-            opened_rows.append(row)
-
-    windows: list[FeedbackWindow] = []
-    seen: set[int] = set()
-    for row in opened_rows:
-        window = _window_from_row(row, closed_ids)
-        if window is None or window.accepted_event_id in seen:
-            continue
-        seen.add(window.accepted_event_id)
-        windows.append(window)
-    return tuple(windows)
 
 
 async def list_feedback_windows(service: WorldService) -> tuple[FeedbackWindow, ...]:
     if service.ledger is None:
         return ()
-    return await asyncio.to_thread(_load_windows_sync, service.ledger.path)
+    records = await asyncio.to_thread(service.ledger.list_feedback_windows)
+    return tuple(_window(record) for record in records)
 
 
 async def get_feedback_window_for_prompt(
@@ -177,65 +124,42 @@ async def get_feedback_window_for_prompt(
     guest_state: int,
     prompt_message_id: int,
 ) -> FeedbackWindow | None:
-    windows = await list_feedback_windows(service)
-    return next(
-        (
-            window
-            for window in windows
-            if window.guest_state == guest_state
-            and window.prompt_message_id == int(prompt_message_id)
-        ),
-        None,
+    if service.ledger is None:
+        return None
+    record = await asyncio.to_thread(
+        service.ledger.get_feedback_window_for_prompt, guest_state, prompt_message_id
     )
+    return _window(record) if record is not None else None
 
 
 async def get_feedback_window_for_visit(
     service: WorldService,
     accepted_event_id: int,
 ) -> FeedbackWindow | None:
-    windows = await list_feedback_windows(service)
-    return next(
-        (window for window in windows if window.accepted_event_id == int(accepted_event_id)),
-        None,
-    )
+    if service.ledger is None:
+        return None
+    record = await asyncio.to_thread(service.ledger.get_feedback_window, accepted_event_id)
+    return _window(record) if record is not None else None
 
 
-def _load_feedback_sync(
-    db_path: str | Path,
-    *,
-    host_state: int,
-    guest_state: int,
-    accepted_event_id: int,
+async def collect_visit_feedback(
+    service: WorldService,
+    window: FeedbackWindow,
 ) -> tuple[VisitFeedback, ...]:
-    with closing(sqlite3.connect(Path(db_path), timeout=30)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT payload_json, created_at
-            FROM world_events
-            WHERE event_type = ?
-              AND actor_state = ?
-              AND target_state = ?
-            ORDER BY created_at ASC, id ASC
-            """,
-            (_FEEDBACK, int(guest_state), int(host_state)),
-        ).fetchall()
-
+    if service.ledger is None:
+        return ()
+    events = await asyncio.to_thread(
+        service.ledger.list_feedback_events,
+        window.guest_state,
+        window.host_state,
+        window.accepted_event_id,
+    )
     result: list[VisitFeedback] = []
-    for row in rows:
-        payload = _parse_payload(row["payload_json"])
-        try:
-            if int(payload.get("accepted_event_id", -1)) != int(accepted_event_id):
-                continue
-        except (TypeError, ValueError):
-            continue
+    for event in events:
+        payload = event.payload
         text = " ".join(str(payload.get("text") or "").split()).strip()
         name = " ".join(str(payload.get("user_name") or "неизвестный гражданин").split()).strip()
         if not text:
-            continue
-        try:
-            created_at = _utc(datetime.fromisoformat(str(row["created_at"])))
-        except ValueError:
             continue
         user_id_raw = payload.get("user_id")
         try:
@@ -247,25 +171,18 @@ def _load_feedback_sync(
                 user_id=user_id,
                 user_name=name or "неизвестный гражданин",
                 text=text,
-                created_at=created_at,
+                created_at=_utc(event.created_at),
             )
         )
     return tuple(result)
 
 
-async def collect_visit_feedback(
-    service: WorldService,
-    window: FeedbackWindow,
-) -> tuple[VisitFeedback, ...]:
-    if service.ledger is None:
-        return ()
-    return await asyncio.to_thread(
-        _load_feedback_sync,
-        service.ledger.path,
-        host_state=window.host_state,
-        guest_state=window.guest_state,
-        accepted_event_id=window.accepted_event_id,
-    )
+def rating_markup(accepted_event_id: int):
+    builder = InlineKeyboardBuilder()
+    for stars in range(1, 6):
+        builder.button(text=f"{stars}⭐", callback_data=f"worldrate:{accepted_event_id}:{stars}")
+    builder.adjust(5)
+    return builder.as_markup()
 
 
 def _exact_feedback_details(feedback: tuple[VisitFeedback, ...]) -> str:
@@ -400,17 +317,23 @@ async def open_feedback_window(
 
     opened_at = _utc(now or datetime.now(timezone.utc))
     closes_at = opened_at + FEEDBACK_DURATION
-    try:
-        sent = await bot.send_message(
-            guest_chat_id,
-            "📝 Отзывы об екскурсии\n\n"
-            f"Екскурсия по государству №{host_state} — {host_title} закончилась. "
-            "В течение часа любой участник вашего чата может оставить отзыв.\n\n"
-            "Ответьте реплаем на это сообщение. Можно хвалить, ругать и фиксировать дипломатические травмы. "
-            "Через час Упупа соберёт отзывы и отправит их принимающей стороне.",
-        )
-    except Exception:
-        logging.exception(
+    guest = await service.get_state_by_world_id(guest_state)
+    if guest is None or not guest.enabled:
+        return None
+    sent = await deliver_text(
+        bot,
+        service,
+        guest,
+        "📝 Отзывы об екскурсии\n\n"
+        f"Екскурсия по государству №{host_state} — {host_title} закончилась. "
+        "В течение часа любой участник вашего чата может оставить отзыв.\n\n"
+        "Ответьте реплаем на это сообщение. Можно хвалить, ругать и фиксировать дипломатические травмы. "
+        "Ещё можно поставить звёзды кнопками — от них зависит туристический рейтинг хозяев. "
+        "Через час Упупа соберёт отзывы и отправит их принимающей стороне.",
+        reply_markup=rating_markup(accepted_event_id),
+    )
+    if sent is None:
+        logging.warning(
             "World visit feedback prompt delivery failed host=%s guest=%s visit=%s",
             host_state,
             guest_state,
@@ -482,25 +405,20 @@ async def record_visit_feedback(
 
 
 async def _load_cached_report(service: WorldService, accepted_event_id: int) -> FeedbackReport | None:
-    events = await service.list_events(
-        limit=50,
-        days=7,
-        event_types={_REPORT},
+    if service.ledger is None:
+        return None
+    event = await asyncio.to_thread(
+        service.ledger.get_event_by_dedupe_key, f"visit_feedback_report:{accepted_event_id}"
     )
-    for event in events:
-        payload = event.payload
-        try:
-            if int(payload.get("accepted_event_id", -1)) != int(accepted_event_id):
-                continue
-        except (TypeError, ValueError):
-            continue
-        return FeedbackReport(
-            summary=str(payload.get("summary") or ""),
-            details=str(payload.get("details") or ""),
-            feedback_count=int(payload.get("feedback_count") or 0),
-            contributor_count=int(payload.get("contributor_count") or 0),
-        )
-    return None
+    if event is None:
+        return None
+    payload = event.payload
+    return FeedbackReport(
+        summary=str(payload.get("summary") or ""),
+        details=str(payload.get("details") or ""),
+        feedback_count=int(payload.get("feedback_count") or 0),
+        contributor_count=int(payload.get("contributor_count") or 0),
+    )
 
 
 async def close_feedback_window(
@@ -547,11 +465,18 @@ async def close_feedback_window(
             dedupe_key=f"visit_feedback_report:{window.accepted_event_id}",
         )
 
+    rating_line = ""
+    if service.ledger is not None:
+        average, votes = await asyncio.to_thread(service.ledger.visit_rating, window.accepted_event_id)
+        if average is not None and votes:
+            rating_line = f"\n⭐ Оценка гостей: {average:.1f} из 5 ({votes} гол.)"
+
     if report.feedback_count == 0:
         outgoing = (
             "📝 Отзывы об екскурсии\n\n"
             f"Государство №{guest.world_id} — {guest.title} получило час на отзывы после екскурсии.\n\n"
             "Никто не аставил отзывав. Всем кристаллически похуй."
+            f"{rating_line}"
         )
         chunks = (outgoing,)
     else:
@@ -559,22 +484,25 @@ async def close_feedback_window(
             "📝 Отзывы об екскурсии\n\n"
             f"Государство №{guest.world_id} — {guest.title} закончило собирать впечатления.\n"
             f"Отзывов: {report.feedback_count} · авторов: {report.contributor_count}"
+            f"{rating_line}"
         )
         summary = f"\n\nОбработанный итог:\n{report.summary}" if report.summary else ""
         details = f"\n\nКто что писал:\n{report.details}"
         chunks = _split_text(header + summary + details)
 
-    try:
-        for chunk in chunks:
-            await bot.send_message(host.chat_id, chunk)
-    except Exception:
-        logging.exception(
-            "World visit feedback report delivery failed host=%s guest=%s visit=%s",
-            window.host_state,
-            window.guest_state,
-            window.accepted_event_id,
-        )
-        return False
+    for chunk in chunks:
+        if await deliver_text(bot, service, host, chunk) is None:
+            refreshed = await service.get_state_by_world_id(window.host_state)
+            if refreshed is not None and refreshed.enabled:
+                logging.warning(
+                    "World visit feedback report delivery failed host=%s guest=%s visit=%s",
+                    window.host_state,
+                    window.guest_state,
+                    window.accepted_event_id,
+                )
+                return False
+            # The host left the World: close the window instead of retrying forever.
+            break
 
     await _record_event(
         service,
@@ -598,11 +526,12 @@ async def expire_due_feedback_windows(
     now: datetime | None = None,
 ) -> int:
     service = service or get_world_service()
+    if service.ledger is None:
+        return 0
     current = _utc(now or datetime.now(timezone.utc))
-    windows = await list_feedback_windows(service)
-    due = [window for window in windows if not window.closed and current >= window.closes_at]
+    records = await asyncio.to_thread(service.ledger.list_due_feedback_windows, current)
     closed = 0
-    for window in due:
-        if await close_feedback_window(bot, service, window, now=current):
+    for record in records:
+        if await close_feedback_window(bot, service, _window(record), now=current):
             closed += 1
     return closed

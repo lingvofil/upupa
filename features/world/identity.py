@@ -1,8 +1,10 @@
 """Chat-derived identity traits for World of Upupa states.
 
-The old world_details identity fields are retained for backwards-compatible
-storage of ambassadors, but visible state identity is derived from recent chat
-history and cached in the world event ledger.
+Visible identity (government form, climate, main threat) is derived from the
+state's own recent chat history and cached in ``world_details``.  Only the
+state itself triggers a (re)analysis — when its citizens open their own card
+or draw a symbol.  Other states see the cached result, and only if the state
+allows sharing it.
 """
 
 from __future__ import annotations
@@ -16,7 +18,13 @@ from pathlib import Path
 import re
 
 from core.paths import USER_MESSAGES_LOG_PATH
-from features.world.ledger import WorldDetails, WorldEvent
+from features.world.ledger import (
+    PLACEHOLDER_CLIMATE,
+    PLACEHOLDER_GOVERNMENT,
+    PLACEHOLDER_THREAT,
+    IdentityCache,
+    WorldDetails,
+)
 from features.world.models import WorldState
 from features.world.service import WorldService
 
@@ -28,10 +36,9 @@ FAILED_REFRESH = timedelta(hours=6)
 MIN_MESSAGES = 25
 MAX_MESSAGES = 160
 MAX_SAMPLE_CHARS = 22_000
-_IDENTITY_EVENTS = {"state_identity_analyzed", "state_identity_analysis_failed"}
-_PLACEHOLDER_GOVERNMENT = "ещё не сформировался"
-_PLACEHOLDER_CLIMATE = "недостаточно наблюдений"
-_PLACEHOLDER_THREAT = "статистическая неопределённость"
+_PLACEHOLDER_GOVERNMENT = PLACEHOLDER_GOVERNMENT
+_PLACEHOLDER_CLIMATE = PLACEHOLDER_CLIMATE
+_PLACEHOLDER_THREAT = PLACEHOLDER_THREAT
 _LOCKS: dict[int, asyncio.Lock] = {}
 
 
@@ -59,6 +66,9 @@ def _placeholder(base: WorldDetails, *, source: str, analyzed_at: datetime | Non
             main_threat=_PLACEHOLDER_THREAT,
             ambassador_user_id=base.ambassador_user_id,
             ambassador_name=base.ambassador_name,
+            share_identity=base.share_identity,
+            share_activity=base.share_activity,
+            newspaper=base.newspaper,
         ),
         analyzed_at=analyzed_at,
         source=source,
@@ -70,10 +80,10 @@ def _clean_trait(value: object, *, limit: int = 100) -> str:
     return text[:limit].rstrip()
 
 
-def _identity_from_event(event: WorldEvent, base: WorldDetails) -> StateIdentity | None:
-    if event.event_type != "state_identity_analyzed":
+def _identity_from_cache(cache: IdentityCache, base: WorldDetails) -> StateIdentity | None:
+    if cache.source == "analysis_failed":
         return None
-    payload = event.payload
+    payload = cache.payload
     government = _clean_trait(payload.get("government_form"), limit=90)
     climate = _clean_trait(payload.get("climate"), limit=110)
     threat = _clean_trait(payload.get("main_threat"), limit=110)
@@ -87,30 +97,37 @@ def _identity_from_event(event: WorldEvent, base: WorldDetails) -> StateIdentity
             main_threat=threat,
             ambassador_user_id=base.ambassador_user_id,
             ambassador_name=base.ambassador_name,
+            share_identity=base.share_identity,
+            share_activity=base.share_activity,
+            newspaper=base.newspaper,
         ),
         rationale=_clean_trait(payload.get("rationale"), limit=280) or None,
         message_count=int(payload.get("message_count") or 0),
-        analyzed_at=_utc(event.created_at),
-        source=str(payload.get("source") or "analysis"),
+        analyzed_at=_utc(cache.analyzed_at),
+        source=cache.source,
     )
 
 
-def _event_is_fresh(event: WorldEvent, now: datetime) -> bool:
-    age = _utc(now) - _utc(event.created_at)
-    if event.event_type == "state_identity_analysis_failed":
+def _cache_is_fresh(cache: IdentityCache, now: datetime) -> bool:
+    age = _utc(now) - _utc(cache.analyzed_at)
+    if cache.source == "analysis_failed":
         return age < FAILED_REFRESH
-    source = str(event.payload.get("source") or "analysis")
-    return age < (INSUFFICIENT_REFRESH if source == "insufficient_data" else IDENTITY_REFRESH)
+    return age < (INSUFFICIENT_REFRESH if cache.source == "insufficient_data" else IDENTITY_REFRESH)
 
 
-async def _latest_identity_event(service: WorldService, world_id: int) -> WorldEvent | None:
-    events = await service.list_events(
-        limit=10,
-        days=30,
-        world_id=world_id,
-        event_types=_IDENTITY_EVENTS,
-    )
-    return next((event for event in events if event.actor_state == world_id), None)
+async def _cached(service: WorldService, world_id: int) -> IdentityCache | None:
+    if service.ledger is None:
+        return None
+    return await asyncio.to_thread(service.ledger.get_identity_cache, world_id)
+
+
+def _from_cache_or_placeholder(cache: IdentityCache | None, base: WorldDetails) -> StateIdentity:
+    if cache is not None:
+        identity = _identity_from_cache(cache, base)
+        if identity is not None:
+            return identity
+        return _placeholder(base, source=cache.source, analyzed_at=_utc(cache.analyzed_at))
+    return _placeholder(base, source="not_analyzed")
 
 
 def _message_sample(messages: list[dict]) -> tuple[str, int]:
@@ -201,14 +218,25 @@ def _build_prompt(state: WorldState, sample: str, message_count: int) -> str:
 """
 
 
-async def _record_event(
+async def _store(
     service: WorldService,
-    event_type: str,
     state: WorldState,
     payload: dict[str, object],
+    *,
+    source: str,
+    analyzed_at: datetime,
+    event_type: str = "state_identity_analyzed",
 ) -> None:
     if service.ledger is None:
         return
+    await asyncio.to_thread(
+        service.ledger.store_identity,
+        state.world_id,
+        payload,
+        analyzed_at=analyzed_at,
+        source=source,
+    )
+    # The journal keeps the history of analyses (internal, not in the chronicle).
     await asyncio.to_thread(
         service.ledger.record_event,
         event_type,
@@ -224,32 +252,31 @@ async def ensure_state_identity(
     log_file_path: str | Path = USER_MESSAGES_LOG_PATH,
     now: datetime | None = None,
     force: bool = False,
+    allow_analysis: bool = True,
 ) -> StateIdentity | None:
-    """Return a fresh chat-derived identity, reanalyzing stale states when needed."""
+    """Return the state's identity, reanalyzing it when stale and allowed.
+
+    ``allow_analysis=False`` never calls the model: it returns the cached traits
+    (even stale ones) or an explicit placeholder.  Screens about *other* states
+    use that mode so one chat never triggers an analysis of another chat.
+    """
     base = await service.get_details(state.world_id)
     if base is None:
         return None
     current = _utc(now or datetime.now(timezone.utc))
 
-    if not force:
-        latest = await _latest_identity_event(service, state.world_id)
-        if latest is not None and _event_is_fresh(latest, current):
-            cached = _identity_from_event(latest, base)
-            if cached is not None:
-                return cached
-            if latest.event_type == "state_identity_analysis_failed":
-                return _placeholder(base, source="analysis_failed", analyzed_at=_utc(latest.created_at))
+    cache = await _cached(service, state.world_id)
+    if not allow_analysis:
+        return _from_cache_or_placeholder(cache, base)
+    if not force and cache is not None and _cache_is_fresh(cache, current):
+        return _from_cache_or_placeholder(cache, base)
 
     lock = _LOCKS.setdefault(state.world_id, asyncio.Lock())
     async with lock:
         if not force:
-            latest = await _latest_identity_event(service, state.world_id)
-            if latest is not None and _event_is_fresh(latest, current):
-                cached = _identity_from_event(latest, base)
-                if cached is not None:
-                    return cached
-                if latest.event_type == "state_identity_analysis_failed":
-                    return _placeholder(base, source="analysis_failed", analyzed_at=_utc(latest.created_at))
+            cache = await _cached(service, state.world_id)
+            if cache is not None and _cache_is_fresh(cache, current):
+                return _from_cache_or_placeholder(cache, base)
 
         messages = await _collect_messages(state, log_file_path=log_file_path, now=current)
         if len(messages) < MIN_MESSAGES:
@@ -262,16 +289,10 @@ async def ensure_state_identity(
                 "window_days": IDENTITY_WINDOW_DAYS,
                 "source": "insufficient_data",
             }
-            await _record_event(service, "state_identity_analyzed", state, payload)
-            event = WorldEvent(
-                event_id=0,
-                event_type="state_identity_analyzed",
-                actor_state=state.world_id,
-                target_state=None,
-                payload=payload,
-                created_at=current,
+            await _store(service, state, payload, source="insufficient_data", analyzed_at=current)
+            return _from_cache_or_placeholder(
+                IdentityCache(payload=payload, analyzed_at=current, source="insufficient_data"), base
             )
-            return _identity_from_event(event, base)
 
         sample, used = _message_sample(messages)
         prompt = _build_prompt(state, sample, used)
@@ -282,61 +303,53 @@ async def ensure_state_identity(
             logging.exception("World identity analysis failed state=%s", state.world_id)
             payload = None
 
-        if payload is None:
-            await _record_event(
+        government = _clean_trait((payload or {}).get("government_form"), limit=90)
+        climate = _clean_trait((payload or {}).get("climate"), limit=110)
+        threat = _clean_trait((payload or {}).get("main_threat"), limit=110)
+        if payload is None or not government or not climate or not threat:
+            failure = {"message_count": len(messages), "window_days": IDENTITY_WINDOW_DAYS, "source": "analysis_failed"}
+            await _store(
                 service,
-                "state_identity_analysis_failed",
                 state,
-                {"message_count": len(messages), "window_days": IDENTITY_WINDOW_DAYS},
+                failure,
+                source="analysis_failed",
+                analyzed_at=current,
+                event_type="state_identity_analysis_failed",
             )
-            return _placeholder(base, source="analysis_failed", analyzed_at=current)
-
-        government = _clean_trait(payload.get("government_form"), limit=90)
-        climate = _clean_trait(payload.get("climate"), limit=110)
-        threat = _clean_trait(payload.get("main_threat"), limit=110)
-        rationale = _clean_trait(payload.get("rationale"), limit=280)
-        if not government or not climate or not threat:
-            await _record_event(
-                service,
-                "state_identity_analysis_failed",
-                state,
-                {"message_count": len(messages), "window_days": IDENTITY_WINDOW_DAYS},
-            )
-            return _placeholder(base, source="analysis_failed", analyzed_at=current)
+            # Keep showing the previous successful traits instead of a placeholder.
+            previous = _identity_from_cache(cache, base) if cache is not None else None
+            return previous or _placeholder(base, source="analysis_failed", analyzed_at=current)
 
         stored = {
             "government_form": government,
             "climate": climate,
             "main_threat": threat,
-            "rationale": rationale,
+            "rationale": _clean_trait(payload.get("rationale"), limit=280),
             "message_count": len(messages),
             "sampled_messages": used,
             "window_days": IDENTITY_WINDOW_DAYS,
             "source": "analysis",
         }
-        await _record_event(service, "state_identity_analyzed", state, stored)
-        event = WorldEvent(
-            event_id=0,
-            event_type="state_identity_analyzed",
-            actor_state=state.world_id,
-            target_state=None,
-            payload=stored,
-            created_at=current,
+        await _store(service, state, stored, source="analysis", analyzed_at=current)
+        return _from_cache_or_placeholder(
+            IdentityCache(payload=stored, analyzed_at=current, source="analysis"), base
         )
-        return _identity_from_event(event, base)
 
 
-async def ensure_state_identities(
+async def cached_state_identities(
     service: WorldService,
     states: tuple[WorldState, ...],
-    *,
-    concurrency: int = 2,
 ) -> tuple[StateIdentity | None, ...]:
-    """Refresh a state list without bursting AI requests for many chats at once."""
-    semaphore = asyncio.Semaphore(max(1, concurrency))
-
-    async def one(state: WorldState) -> StateIdentity | None:
-        async with semaphore:
-            return await ensure_state_identity(service, state)
-
-    return tuple(await asyncio.gather(*(one(state) for state in states)))
+    """Identities for a list screen without a single model call."""
+    if service.ledger is None:
+        return tuple(None for _ in states)
+    details = await service.list_details()
+    result: list[StateIdentity | None] = []
+    for state in states:
+        base = details.get(state.world_id)
+        if base is None:
+            result.append(None)
+            continue
+        cache = await _cached(service, state.world_id)
+        result.append(_from_cache_or_placeholder(cache, base))
+    return tuple(result)
