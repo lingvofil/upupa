@@ -1,4 +1,4 @@
-"""Lightweight interaction helpers for diplomatic visits and insults."""
+"""Diplomatic visits, cooldowns and the World maintenance loop."""
 
 from __future__ import annotations
 
@@ -7,16 +7,36 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 
+from features.world.delivery import deliver_text
+from features.world.ledger import VISIT_DURATION, VisitRecord
 from features.world.service import WorldService, get_world_service
 from features.world.visit_feedback import expire_due_feedback_windows, open_feedback_window
 from features.world.visit_report import VisitReport, build_visit_report
 
 
 INSULT_COOLDOWN = timedelta(minutes=30)
-VISIT_DURATION = timedelta(hours=24)
+INVITE_COOLDOWN = timedelta(hours=1)
 VISIT_EXPIRATION_POLL_SECONDS = 60
 _visit_delivery_lock = asyncio.Lock()
-_VISIT_EVENT_TYPES = {"state_visit_accepted", "state_visit_finished"}
+
+__all__ = [
+    "INSULT_COOLDOWN",
+    "INVITE_COOLDOWN",
+    "VISIT_DURATION",
+    "StateVisit",
+    "cooldown_remaining",
+    "expire_due_visits",
+    "finish_visit",
+    "get_open_visit",
+    "insult_cooldown_remaining",
+    "list_expired_open_visits",
+    "notify_visit_finished",
+    "record_interaction_event",
+    "retry_visit_deliveries",
+    "visit_expiration_loop",
+    "visit_is_active",
+    "world_maintenance_loop",
+]
 
 
 @dataclass(frozen=True)
@@ -32,6 +52,16 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _visit(record: VisitRecord) -> StateVisit:
+    return StateVisit(
+        host_state=record.host_state,
+        guest_state=record.guest_state,
+        accepted_event_id=record.accepted_event_id,
+        accepted_at=record.accepted_at,
+        expires_at=record.expires_at,
+    )
 
 
 def visit_is_active(visit: StateVisit, *, now: datetime | None = None) -> bool:
@@ -61,6 +91,24 @@ async def record_interaction_event(
     )
 
 
+async def cooldown_remaining(
+    service: WorldService,
+    event_types: set[str],
+    *,
+    actor_state: int,
+    cooldown: timedelta,
+    target_state: int | None = None,
+    now: datetime | None = None,
+) -> timedelta | None:
+    """Time left until ``actor_state`` may repeat an action, or None when ready."""
+    latest = await service.latest_event(event_types, actor_state=actor_state, target_state=target_state)
+    if latest is None:
+        return None
+    current = _utc(now or datetime.now(timezone.utc))
+    remaining = cooldown - (current - _utc(latest.created_at))
+    return remaining if remaining.total_seconds() > 0 else None
+
+
 async def insult_cooldown_remaining(
     service: WorldService,
     world_id: int,
@@ -68,21 +116,13 @@ async def insult_cooldown_remaining(
     now: datetime | None = None,
 ) -> timedelta | None:
     """Return remaining state-wide insult cooldown, or None when ready."""
-    current = now or datetime.now(timezone.utc)
-    events = await service.list_events(
-        limit=50,
-        days=1,
-        world_id=world_id,
-        event_types={"state_insult"},
+    return await cooldown_remaining(
+        service,
+        {"state_insult"},
+        actor_state=world_id,
+        cooldown=INSULT_COOLDOWN,
+        now=now,
     )
-    latest = next((event for event in events if event.actor_state == world_id), None)
-    if latest is None:
-        return None
-    created_at = latest.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    remaining = INSULT_COOLDOWN - (current - created_at)
-    return remaining if remaining.total_seconds() > 0 else None
 
 
 async def get_open_visit(
@@ -91,33 +131,10 @@ async def get_open_visit(
     guest_state: int,
 ) -> StateVisit | None:
     """Return the latest accepted visit between this host/guest pair if not finished yet."""
-    events = await service.list_events(
-        limit=200,
-        days=7,
-        world_id=host_state,
-        event_types=_VISIT_EVENT_TYPES,
-    )
-    for event in events:
-        if (
-            event.event_type == "state_visit_finished"
-            and event.actor_state == host_state
-            and event.target_state == guest_state
-        ):
-            return None
-        if (
-            event.event_type == "state_visit_accepted"
-            and event.actor_state == guest_state
-            and event.target_state == host_state
-        ):
-            accepted_at = _utc(event.created_at)
-            return StateVisit(
-                host_state=host_state,
-                guest_state=guest_state,
-                accepted_event_id=event.event_id,
-                accepted_at=accepted_at,
-                expires_at=accepted_at + VISIT_DURATION,
-            )
-    return None
+    if service.ledger is None:
+        return None
+    record = await asyncio.to_thread(service.ledger.get_open_visit, host_state, guest_state)
+    return _visit(record) if record is not None else None
 
 
 async def finish_visit(
@@ -156,37 +173,11 @@ async def list_expired_open_visits(
     now: datetime | None = None,
 ) -> tuple[StateVisit, ...]:
     """Return visits whose 24-hour window elapsed and which have no finish event."""
+    if service.ledger is None:
+        return ()
     current = _utc(now or datetime.now(timezone.utc))
-    events = await service.list_events(
-        limit=500,
-        days=7,
-        event_types=_VISIT_EVENT_TYPES,
-    )
-    latest_by_pair = {}
-    for event in events:
-        if event.actor_state is None or event.target_state is None:
-            continue
-        if event.event_type == "state_visit_accepted":
-            key = (event.target_state, event.actor_state)
-        else:
-            key = (event.actor_state, event.target_state)
-        latest_by_pair.setdefault(key, event)
-
-    expired = []
-    for (host_state, guest_state), event in latest_by_pair.items():
-        if event.event_type != "state_visit_accepted":
-            continue
-        accepted_at = _utc(event.created_at)
-        visit = StateVisit(
-            host_state=host_state,
-            guest_state=guest_state,
-            accepted_event_id=event.event_id,
-            accepted_at=accepted_at,
-            expires_at=accepted_at + VISIT_DURATION,
-        )
-        if current >= visit.expires_at:
-            expired.append(visit)
-    return tuple(expired)
+    records = await asyncio.to_thread(service.ledger.list_expired_open_visits, current)
+    return tuple(_visit(record) for record in records)
 
 
 async def _delivery_event(service: WorldService, key: str):
@@ -264,28 +255,20 @@ async def _deliver_visit_finished(bot, service: WorldService, visit: StateVisit,
         f"{report_text}"
     )
     delivered = True
-    for chat_id, text, label in (
-        (host.chat_id, host_text, "host"),
-        (guest.chat_id, guest_text, "guest"),
-    ):
+    for state, text, label in ((host, host_text, "host"), (guest, guest_text, "guest")):
         delivery_key = f"visit_delivery:{visit.accepted_event_id}:{label}"
         if await _delivery_event(service, delivery_key):
             continue
-        try:
-            await bot.send_message(chat_id, text)
-            await record_interaction_event(
-                service, "state_visit_notification_delivered",
-                payload={"accepted_event_id": visit.accepted_event_id, "side": label},
-                dedupe_key=delivery_key,
-            )
-        except Exception:
+        sent = await deliver_text(bot, service, state, text)
+        if sent is None:
             delivered = False
-            logging.exception(
-                "World visit finish notification failed side=%s host=%s guest=%s",
-                label,
-                visit.host_state,
-                visit.guest_state,
-            )
+            continue
+        await record_interaction_event(
+            service,
+            "state_visit_notification_delivered",
+            payload={"accepted_event_id": visit.accepted_event_id, "side": label},
+            dedupe_key=delivery_key,
+        )
 
     window = await open_feedback_window(
         bot,
@@ -297,9 +280,16 @@ async def _deliver_visit_finished(bot, service: WorldService, visit: StateVisit,
         guest_chat_id=guest.chat_id,
     )
 
-    if delivered and window is not None:
+    # A side that left the World can never receive the report; don't retry forever.
+    host_now, guest_now = await asyncio.gather(
+        service.get_state_by_world_id(visit.host_state),
+        service.get_state_by_world_id(visit.guest_state),
+    )
+    gone = (host_now is None or not host_now.enabled) or (guest_now is None or not guest_now.enabled)
+    if (delivered and window is not None) or gone:
         await record_interaction_event(
-            service, "state_visit_delivery_completed",
+            service,
+            "state_visit_delivery_completed",
             payload={"accepted_event_id": visit.accepted_event_id},
             dedupe_key=f"visit_delivery_done:{visit.accepted_event_id}",
         )
@@ -308,19 +298,17 @@ async def _deliver_visit_finished(bot, service: WorldService, visit: StateVisit,
 async def retry_visit_deliveries(bot, service: WorldService) -> None:
     if service.ledger is None:
         return
-    pending = await asyncio.to_thread(service.ledger.pending_visit_deliveries)
-    for event in pending:
+    pending = await asyncio.to_thread(service.ledger.list_undelivered_finished_visits)
+    for record in pending:
         try:
-            visit = StateVisit(
-                host_state=int(event.actor_state),
-                guest_state=int(event.target_state),
-                accepted_event_id=int(event.payload["accepted_event_id"]),
-                accepted_at=_utc(datetime.fromisoformat(str(event.payload["accepted_at"]))),
-                expires_at=_utc(datetime.fromisoformat(str(event.payload["expires_at"]))),
+            await notify_visit_finished(
+                bot,
+                service,
+                _visit(record),
+                reason=record.finish_reason or "manual",
             )
-            await notify_visit_finished(bot, service, visit, reason=str(event.payload["reason"]))
         except Exception:
-            logging.exception("World visit delivery retry failed event_id=%s", event.event_id)
+            logging.exception("World visit delivery retry failed visit=%s", record.accepted_event_id)
 
 
 async def expire_due_visits(bot, service: WorldService | None = None) -> int:
@@ -346,19 +334,49 @@ async def expire_due_visits(bot, service: WorldService | None = None) -> int:
     return closed
 
 
-async def visit_expiration_loop(bot) -> None:
-    """Periodically close state visits and expired one-hour feedback windows."""
+async def run_world_maintenance(bot, service: WorldService | None = None) -> None:
+    """One pass over every timed World process; each step is isolated."""
+    from features.world.battles import finish_due_battles
+    from features.world.blocs import expire_bloc_applications
+    from features.world.expansion import decide_due_cases, expire_due_sanctions
+    from features.world.newspaper import issue_weekly_newspaper_if_due
+
+    service = service or get_world_service()
+    steps = (
+        ("visits", expire_due_visits),
+        ("feedback", expire_due_feedback_windows),
+        ("battles", finish_due_battles),
+        ("court", decide_due_cases),
+        ("sanctions", expire_due_sanctions),
+        ("blocs", expire_bloc_applications),
+        ("newspaper", issue_weekly_newspaper_if_due),
+    )
+    for name, step in steps:
+        try:
+            await step(bot, service)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("World maintenance step failed: %s", name)
+
+
+async def world_maintenance_loop(bot) -> None:
+    """Periodically close visits, feedback windows, battles, court cases and more."""
+    try:
+        from features.world.expansion import reset_stuck_deliberations
+
+        await reset_stuck_deliberations()
+    except Exception:
+        logging.exception("World court recovery failed")
     while True:
         try:
-            await expire_due_visits(bot)
+            await run_world_maintenance(bot)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.exception("World visit expiration loop failed")
-        try:
-            await expire_due_feedback_windows(bot)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logging.exception("World visit feedback expiration loop failed")
+            logging.exception("World maintenance loop failed")
         await asyncio.sleep(VISIT_EXPIRATION_POLL_SECONDS)
+
+
+# Historical name wired in the composition root.
+visit_expiration_loop = world_maintenance_loop

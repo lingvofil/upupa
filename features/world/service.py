@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 import logging
 from typing import Protocol
 
+from features.world.authority import (
+    AuthorityBreakdown,
+    AuthorityInputs,
+    build_breakdown,
+    load_authority_inputs,
+)
 from features.world.ledger import WorldDetails, WorldEvent, WorldLedger, WorldRelation
 from features.world.models import (
     BreakAllianceResult,
@@ -33,11 +40,13 @@ class WorldRepository(Protocol):
         active_only: bool,
     ) -> list[WorldState]: ...
     def has_alliance(self, state_a: int, state_b: int) -> bool: ...
+    def get_relation(self, state_a: int, state_b: int) -> str | None: ...
     def get_pending_request_between(self, state_a: int, state_b: int) -> DiplomaticRequest | None: ...
     def create_request(
         self,
         source_state: int,
         target_state: int,
+        kind: str = "alliance",
     ) -> tuple[str, DiplomaticRequest | None]: ...
     def cancel_request(self, request_id: int) -> bool: ...
     def resolve_request(
@@ -54,52 +63,97 @@ class WorldRepository(Protocol):
 class WorldService:
     def __init__(self, repository: WorldRepository, ledger: WorldLedger | None = None) -> None:
         self.repository = repository
-        if ledger is None:
-            path = getattr(repository, "path", None)
-            ledger = WorldLedger(path) if path is not None else None
+        path = getattr(repository, "path", None)
+        if ledger is None and path is not None:
+            ledger = WorldLedger(path)
         self.ledger = ledger
+        self.expansion = None
+        self.battles = None
+        self.blocs = None
         if self.ledger is not None:
             self.ledger.init_schema()
+            self._init_extensions(self.ledger.path)
+            self._bootstrap_ledger()
+
+    def _init_extensions(self, path) -> None:
+        """Every World table lives in one file; create them all at startup."""
+        from infrastructure.persistence.sqlite_world_battles import SQLiteWorldBattleRepository
+        from infrastructure.persistence.sqlite_world_blocs import SQLiteWorldBlocRepository
+        from infrastructure.persistence.sqlite_world_expansion import SQLiteWorldExpansionRepository
+
+        self.expansion = SQLiteWorldExpansionRepository(path)
+        self.battles = SQLiteWorldBattleRepository(path)
+        self.blocs = SQLiteWorldBlocRepository(path)
+        for repository in (self.expansion, self.battles, self.blocs):
+            repository.init_schema()
+
+    def _bootstrap_ledger(self) -> None:
+        """One pass at startup instead of re-checking ledger rows on every read."""
+        try:
+            for state in self.repository.list_enabled_states(None):
+                self.ledger.ensure_details(state)
+                self.ledger.ensure_foundation_event(state)
+        except Exception:
+            logging.exception("World ledger bootstrap failed")
 
     async def _ensure_ledger_state(self, state: WorldState | None) -> None:
         if state is None or self.ledger is None:
             return
         try:
-            await asyncio.gather(
-                asyncio.to_thread(self.ledger.ensure_details, state),
-                asyncio.to_thread(self.ledger.ensure_foundation_event, state),
-            )
+            await asyncio.to_thread(self.ledger.ensure_details, state)
+            await asyncio.to_thread(self.ledger.ensure_foundation_event, state)
         except Exception:
             logging.exception("World ledger bootstrap failed state=%s", state.world_id)
 
-    async def _record_event(self, event_type: str, **kwargs) -> None:
+    async def record_event(self, event_type: str, **kwargs) -> bool:
         if self.ledger is None:
-            return
+            return False
         try:
-            await asyncio.to_thread(self.ledger.record_event, event_type, **kwargs)
+            return await asyncio.to_thread(self.ledger.record_event, event_type, **kwargs)
         except Exception:
             logging.exception("World ledger event failed type=%s", event_type)
+            return False
+
+    # Historical name used by extension modules.
+    _record_event = record_event
+
+    # ------------------------------------------------------------ states
 
     async def enable_state(self, chat_id: int, title: str) -> WorldState:
         previous = await asyncio.to_thread(self.repository.get_state_by_chat_id, chat_id)
         state = await asyncio.to_thread(self.repository.enable_state, chat_id, title)
         await self._ensure_ledger_state(state)
         if previous is not None and not previous.enabled:
-            await self._record_event(
+            await self.record_event(
                 "state_reenabled",
                 actor_state=state.world_id,
                 payload={"title": state.title},
             )
         return state
 
-    async def disable_state(self, chat_id: int) -> WorldState | None:
+    async def disable_state(self, chat_id: int, *, reason: str | None = None) -> WorldState | None:
         previous = await asyncio.to_thread(self.repository.get_state_by_chat_id, chat_id)
         state = await asyncio.to_thread(self.repository.disable_state, chat_id)
         if state is not None and previous is not None and previous.enabled:
-            await self._record_event(
-                "state_disabled",
-                actor_state=state.world_id,
-                payload={"title": state.title},
+            payload = {"title": state.title}
+            if reason:
+                payload["reason"] = reason
+            await self.record_event("state_disabled", actor_state=state.world_id, payload=payload)
+            if self.blocs is not None:
+                try:
+                    await asyncio.to_thread(self.blocs.remove_state_everywhere, state.world_id)
+                except Exception:
+                    logging.exception("World bloc cleanup failed state=%s", state.world_id)
+        return state
+
+    async def migrate_chat(self, old_chat_id: int, new_chat_id: int) -> WorldState | None:
+        migrate = getattr(self.repository, "migrate_chat", None)
+        if migrate is None:
+            return None
+        state = await asyncio.to_thread(migrate, old_chat_id, new_chat_id)
+        if state is not None:
+            logging.info(
+                "World state %s migrated chat %s -> %s", state.world_id, old_chat_id, new_chat_id
             )
         return state
 
@@ -108,16 +162,14 @@ class WorldService:
         chat_id: int,
         current_title: str | None = None,
     ) -> WorldState | None:
-        if current_title:
-            await asyncio.to_thread(self.repository.update_title, chat_id, current_title)
         state = await asyncio.to_thread(self.repository.get_state_by_chat_id, chat_id)
-        await self._ensure_ledger_state(state)
+        if state is not None and current_title and state.title != current_title:
+            await asyncio.to_thread(self.repository.update_title, chat_id, current_title)
+            state = await asyncio.to_thread(self.repository.get_state_by_chat_id, chat_id)
         return state
 
     async def get_state_by_world_id(self, world_id: int) -> WorldState | None:
-        state = await asyncio.to_thread(self.repository.get_state_by_world_id, world_id)
-        await self._ensure_ledger_state(state)
-        return state
+        return await asyncio.to_thread(self.repository.get_state_by_world_id, world_id)
 
     async def is_enabled(self, chat_id: int) -> bool:
         state = await self.get_state(chat_id)
@@ -132,55 +184,31 @@ class WorldService:
         if state is None or not state.enabled:
             return None
         states = await asyncio.to_thread(self.repository.list_enabled_states, state.world_id)
-        await asyncio.gather(*(self._ensure_ledger_state(item) for item in states))
         return tuple(states)
 
     async def list_all_states(self) -> tuple[WorldState, ...]:
         states = await asyncio.to_thread(self.repository.list_enabled_states, None)
-        await asyncio.gather(*(self._ensure_ledger_state(item) for item in states))
         return tuple(states)
 
     async def _build_profile(self, state: WorldState) -> WorldProfile:
         enabled_states, active_allies, all_allies, active_wars, all_wars = await asyncio.gather(
             asyncio.to_thread(self.repository.list_enabled_states, state.world_id),
-            asyncio.to_thread(
-                self.repository.list_relation_states,
-                state.world_id,
-                "allied",
-                active_only=True,
-            ),
-            asyncio.to_thread(
-                self.repository.list_relation_states,
-                state.world_id,
-                "allied",
-                active_only=False,
-            ),
-            asyncio.to_thread(
-                self.repository.list_relation_states,
-                state.world_id,
-                "war",
-                active_only=True,
-            ),
-            asyncio.to_thread(
-                self.repository.list_relation_states,
-                state.world_id,
-                "war",
-                active_only=False,
-            ),
+            asyncio.to_thread(self.repository.list_relation_states, state.world_id, "allied", active_only=True),
+            asyncio.to_thread(self.repository.list_relation_states, state.world_id, "allied", active_only=False),
+            asyncio.to_thread(self.repository.list_relation_states, state.world_id, "war", active_only=True),
+            asyncio.to_thread(self.repository.list_relation_states, state.world_id, "war", active_only=False),
         )
         non_neutral_ids = {item.world_id for item in (*active_allies, *active_wars)}
         neutral = tuple(
             candidate for candidate in enabled_states if candidate.world_id not in non_neutral_ids
         )
-        inactive_allies = tuple(item for item in all_allies if not item.enabled)
-        inactive_wars = tuple(item for item in all_wars if not item.enabled)
         return WorldProfile(
             state=state,
             allies=tuple(active_allies),
             wars=tuple(active_wars),
             neutral=neutral,
-            inactive_allies=inactive_allies,
-            inactive_wars=inactive_wars,
+            inactive_allies=tuple(item for item in all_allies if not item.enabled),
+            inactive_wars=tuple(item for item in all_wars if not item.enabled),
         )
 
     async def get_profile(
@@ -199,11 +227,26 @@ class WorldService:
             return None
         return await self._build_profile(state)
 
+    async def get_relation(self, state_a: int, state_b: int) -> str | None:
+        return await asyncio.to_thread(self.repository.get_relation, state_a, state_b)
+
+    # ------------------------------------------------------------ details
+
     async def get_details(self, world_id: int) -> WorldDetails | None:
+        if self.ledger is None:
+            return None
+        details = await asyncio.to_thread(self.ledger.get_details, world_id)
+        if details is not None:
+            return details
         state = await self.get_state_by_world_id(world_id)
-        if state is None or self.ledger is None:
+        if state is None:
             return None
         return await asyncio.to_thread(self.ledger.ensure_details, state)
+
+    async def list_details(self) -> dict[int, WorldDetails]:
+        if self.ledger is None:
+            return {}
+        return await asyncio.to_thread(self.ledger.list_details)
 
     async def set_ambassador(
         self,
@@ -211,24 +254,29 @@ class WorldService:
         user_id: int | None,
         name: str | None,
     ) -> WorldDetails | None:
-        state = await self.get_state_by_world_id(world_id)
-        if state is None or self.ledger is None:
+        if await self.get_details(world_id) is None:
             return None
-        await asyncio.to_thread(self.ledger.ensure_details, state)
         details = await asyncio.to_thread(self.ledger.set_ambassador, world_id, user_id, name)
-        await self._record_event(
+        await self.record_event(
             "ambassador_set" if user_id is not None else "ambassador_removed",
             actor_state=world_id,
             payload={"name": name or ""},
         )
         return details
 
+    async def set_setting(self, world_id: int, key: str, value: bool) -> WorldDetails | None:
+        if await self.get_details(world_id) is None:
+            return None
+        return await asyncio.to_thread(self.ledger.set_setting, world_id, key, value)
+
     async def is_ambassador(self, chat_id: int, user_id: int) -> bool:
         state = await self.get_state(chat_id)
-        if state is None or not state.enabled:
+        if state is None or not state.enabled or self.ledger is None:
             return False
-        details = await self.get_details(state.world_id)
+        details = await asyncio.to_thread(self.ledger.get_details, state.world_id)
         return bool(details and details.ambassador_user_id == int(user_id))
+
+    # ---------------------------------------------------------- alliances
 
     async def name_alliance(
         self,
@@ -245,11 +293,7 @@ class WorldService:
             return "unknown_target", source, None, None
         if source.world_id == target.world_id:
             return "self", source, target, None
-        allied = await asyncio.to_thread(
-            self.repository.has_alliance,
-            source.world_id,
-            target.world_id,
-        )
+        allied = await asyncio.to_thread(self.repository.has_alliance, source.world_id, target.world_id)
         if not allied:
             return "not_allied", source, target, None
         clean = " ".join(name.split()).strip()[:80]
@@ -257,13 +301,8 @@ class WorldService:
             return "empty", source, target, None
         if self.ledger is None:
             return "unavailable", source, target, None
-        await asyncio.to_thread(
-            self.ledger.set_alliance_name,
-            source.world_id,
-            target.world_id,
-            clean,
-        )
-        await self._record_event(
+        await asyncio.to_thread(self.ledger.set_alliance_name, source.world_id, target.world_id, clean)
+        await self.record_event(
             "alliance_named",
             actor_state=source.world_id,
             target_state=target.world_id,
@@ -276,11 +315,15 @@ class WorldService:
             return None
         return await asyncio.to_thread(self.ledger.get_alliance_name, state_a, state_b)
 
+    async def get_alliance_names(self, world_id: int) -> dict[int, str]:
+        if self.ledger is None:
+            return {}
+        return await asyncio.to_thread(self.ledger.get_alliance_names, world_id)
+
     async def list_relations(self, *, active_only: bool = True) -> tuple[WorldRelation, ...]:
         if self.ledger is None:
             return ()
-        relations = await asyncio.to_thread(self.ledger.list_relations, active_only=active_only)
-        return tuple(relations)
+        return tuple(await asyncio.to_thread(self.ledger.list_relations, active_only=active_only))
 
     async def list_events(
         self,
@@ -289,6 +332,7 @@ class WorldService:
         days: int | None = None,
         world_id: int | None = None,
         event_types: set[str] | None = None,
+        actor_only: bool = False,
     ) -> tuple[WorldEvent, ...]:
         if self.ledger is None:
             return ()
@@ -298,19 +342,38 @@ class WorldService:
             days=days,
             world_id=world_id,
             event_types=event_types,
+            actor_only=actor_only,
         )
         return tuple(events)
 
-    async def propose_alliance(
+    async def latest_event(
+        self,
+        event_types: set[str],
+        *,
+        actor_state: int | None = None,
+        target_state: int | None = None,
+    ) -> WorldEvent | None:
+        if self.ledger is None:
+            return None
+        return await asyncio.to_thread(
+            self.ledger.latest_event,
+            event_types,
+            actor_state=actor_state,
+            target_state=target_state,
+        )
+
+    # ------------------------------------------------------- diplomacy core
+
+    async def _propose(
         self,
         source_chat_id: int,
         source_title: str,
         target_world_id: int,
+        kind: str,
     ) -> ProposalResult:
         source = await self.get_state(source_chat_id, source_title)
         if source is None or not source.enabled:
             return ProposalResult("source_disabled", source=source)
-
         target = await self.get_state_by_world_id(target_world_id)
         if target is None:
             return ProposalResult("unknown_target", source=source)
@@ -318,25 +381,26 @@ class WorldService:
             return ProposalResult("target_disabled", source=source, target=target)
         if source.world_id == target.world_id:
             return ProposalResult("self", source=source, target=target)
-
         creation_status, request = await asyncio.to_thread(
             self.repository.create_request,
             source.world_id,
             target.world_id,
+            kind,
         )
         if creation_status == "created" and request is not None:
-            await self._record_event(
-                "alliance_proposed",
+            await self.record_event(
+                "alliance_proposed" if kind == "alliance" else "peace_proposed",
                 actor_state=source.world_id,
                 target_state=target.world_id,
-                dedupe_key=f"alliance_proposed:{request.request_id}",
+                dedupe_key=f"{kind}_proposed:{request.request_id}",
             )
-        return ProposalResult(
-            creation_status,
-            source=source,
-            target=target,
-            request=request,
-        )
+        return ProposalResult(creation_status, source=source, target=target, request=request)
+
+    async def propose_alliance(self, source_chat_id: int, source_title: str, target_world_id: int) -> ProposalResult:
+        return await self._propose(source_chat_id, source_title, target_world_id, "alliance")
+
+    async def propose_peace(self, source_chat_id: int, source_title: str, target_world_id: int) -> ProposalResult:
+        return await self._propose(source_chat_id, source_title, target_world_id, "peace")
 
     async def cancel_request(self, request_id: int) -> bool:
         return await asyncio.to_thread(self.repository.cancel_request, request_id)
@@ -354,19 +418,29 @@ class WorldService:
             decision,
         )
         if request is not None and source is not None and target is not None:
-            if status == "accepted":
-                await self._record_event(
+            kind = request.kind
+            if status == "accepted" and kind == "alliance":
+                await self.record_event(
                     "alliance_formed",
                     actor_state=source.world_id,
                     target_state=target.world_id,
                     dedupe_key=f"alliance_formed:{request.request_id}",
                 )
+            elif status == "accepted" and kind == "peace":
+                await self._stop_battles(source.world_id, target.world_id, "peace")
+                await self.record_event(
+                    "war_ended",
+                    actor_state=source.world_id,
+                    target_state=target.world_id,
+                    payload={"by": "peace"},
+                    dedupe_key=f"peace_concluded:{request.request_id}",
+                )
             elif status == "rejected":
-                await self._record_event(
-                    "alliance_rejected",
+                await self.record_event(
+                    "alliance_rejected" if kind == "alliance" else "peace_rejected",
                     actor_state=target.world_id,
                     target_state=source.world_id,
-                    dedupe_key=f"alliance_rejected:{request.request_id}",
+                    dedupe_key=f"{kind}_rejected:{request.request_id}",
                 )
         return ResolutionResult(status, request, source, target)
 
@@ -379,35 +453,21 @@ class WorldService:
         source = await self.get_state(source_chat_id, source_title)
         if source is None or not source.enabled:
             return BreakAllianceResult("source_disabled", source=source)
-
         target = await self.get_state_by_world_id(target_world_id)
         if target is None:
             return BreakAllianceResult("unknown_target", source=source)
         if source.world_id == target.world_id:
             return BreakAllianceResult("self", source=source, target=target)
-
-        removed = await asyncio.to_thread(
-            self.repository.break_alliance,
-            source.world_id,
-            target.world_id,
-        )
+        removed = await asyncio.to_thread(self.repository.break_alliance, source.world_id, target.world_id)
         if removed:
             if self.ledger is not None:
-                await asyncio.to_thread(
-                    self.ledger.clear_alliance_name,
-                    source.world_id,
-                    target.world_id,
-                )
-            await self._record_event(
+                await asyncio.to_thread(self.ledger.clear_alliance_name, source.world_id, target.world_id)
+            await self.record_event(
                 "alliance_broken",
                 actor_state=source.world_id,
                 target_state=target.world_id,
             )
-        return BreakAllianceResult(
-            "broken" if removed else "not_allied",
-            source=source,
-            target=target,
-        )
+        return BreakAllianceResult("broken" if removed else "not_allied", source=source, target=target)
 
     async def declare_war(
         self,
@@ -418,7 +478,6 @@ class WorldService:
         source = await self.get_state(source_chat_id, source_title)
         if source is None or not source.enabled:
             return WarResult("source_disabled", source=source)
-
         target = await self.get_state_by_world_id(target_world_id)
         if target is None:
             return WarResult("unknown_target", source=source)
@@ -426,7 +485,6 @@ class WorldService:
             return WarResult("self", source=source, target=target)
         if not target.enabled:
             return WarResult("target_disabled", source=source, target=target)
-
         status, previous_relation = await asyncio.to_thread(
             self.repository.declare_war,
             source.world_id,
@@ -434,23 +492,22 @@ class WorldService:
         )
         if status == "declared":
             if previous_relation == "allied" and self.ledger is not None:
-                await asyncio.to_thread(
-                    self.ledger.clear_alliance_name,
-                    source.world_id,
-                    target.world_id,
-                )
-            await self._record_event(
+                await asyncio.to_thread(self.ledger.clear_alliance_name, source.world_id, target.world_id)
+            await self.record_event(
                 "war_declared",
                 actor_state=source.world_id,
                 target_state=target.world_id,
                 payload={"previous_relation": previous_relation or "neutral"},
             )
-        return WarResult(
-            status,
-            source=source,
-            target=target,
-            previous_relation=previous_relation,
-        )
+        return WarResult(status, source=source, target=target, previous_relation=previous_relation)
+
+    async def _stop_battles(self, state_a: int, state_b: int, reason: str) -> None:
+        if self.battles is None:
+            return
+        try:
+            await asyncio.to_thread(self.battles.cancel_active_battles, state_a, state_b, reason=reason)
+        except Exception:
+            logging.exception("World battle cancel failed %s-%s", state_a, state_b)
 
     async def end_war(
         self,
@@ -458,33 +515,85 @@ class WorldService:
         source_title: str,
         target_world_id: int,
     ) -> WarResult:
+        """Low-level peace without consent; UI uses mutual peace or capitulation."""
         source = await self.get_state(source_chat_id, source_title)
         if source is None or not source.enabled:
             return WarResult("source_disabled", source=source)
-
         target = await self.get_state_by_world_id(target_world_id)
         if target is None:
             return WarResult("unknown_target", source=source)
         if source.world_id == target.world_id:
             return WarResult("self", source=source, target=target)
-
-        ended = await asyncio.to_thread(
-            self.repository.end_war,
-            source.world_id,
-            target.world_id,
-        )
+        ended = await asyncio.to_thread(self.repository.end_war, source.world_id, target.world_id)
         if ended:
-            await self._record_event(
-                "war_ended",
-                actor_state=source.world_id,
-                target_state=target.world_id,
-            )
+            await self._stop_battles(source.world_id, target.world_id, "peace")
+            await self.record_event("war_ended", actor_state=source.world_id, target_state=target.world_id)
         return WarResult(
             "ended" if ended else "not_at_war",
             source=source,
             target=target,
             previous_relation="war" if ended else None,
         )
+
+    async def capitulate(
+        self,
+        source_chat_id: int,
+        source_title: str,
+        target_world_id: int,
+    ) -> WarResult:
+        """Unilateral exit from a war at the price of authority."""
+        source = await self.get_state(source_chat_id, source_title)
+        if source is None or not source.enabled:
+            return WarResult("source_disabled", source=source)
+        target = await self.get_state_by_world_id(target_world_id)
+        if target is None:
+            return WarResult("unknown_target", source=source)
+        if source.world_id == target.world_id:
+            return WarResult("self", source=source, target=target)
+        ended = await asyncio.to_thread(self.repository.end_war, source.world_id, target.world_id)
+        if not ended:
+            return WarResult("not_at_war", source=source, target=target)
+        await self._stop_battles(source.world_id, target.world_id, "capitulation")
+        await self.record_event(
+            "war_capitulated",
+            actor_state=source.world_id,
+            target_state=target.world_id,
+        )
+        return WarResult("capitulated", source=source, target=target, previous_relation="war")
+
+    # ----------------------------------------------------------- authority
+
+    async def get_authority_map(self) -> dict[int, AuthorityBreakdown]:
+        states, relations = await asyncio.gather(self.list_all_states(), self.list_relations(active_only=True))
+        if self.ledger is not None:
+            inputs = await asyncio.to_thread(load_authority_inputs, self.ledger.path)
+        else:
+            inputs = AuthorityInputs()
+        allies: dict[int, int] = defaultdict(int)
+        wars: dict[int, int] = defaultdict(int)
+        since: dict[int, list] = defaultdict(list)
+        for relation in relations:
+            if relation.relation == "allied":
+                for side in (relation.state_a, relation.state_b):
+                    allies[side] += 1
+                    since[side].append(relation.since)
+            elif relation.relation == "war":
+                wars[relation.state_a] += 1
+                wars[relation.state_b] += 1
+        return {
+            state.world_id: build_breakdown(
+                state.world_id,
+                allies=allies[state.world_id],
+                wars=wars[state.world_id],
+                alliance_since=since[state.world_id],
+                inputs=inputs,
+            )
+            for state in states
+        }
+
+    async def get_authority(self, world_id: int) -> AuthorityBreakdown:
+        authority = (await self.get_authority_map()).get(int(world_id))
+        return authority or AuthorityBreakdown(base=50)
 
 
 _world_service: WorldService | None = None
@@ -506,106 +615,3 @@ async def is_world_enabled(chat_id: int | str) -> bool:
     if _world_service is None:
         return False
     return await _world_service.is_enabled(int(chat_id))
-
-
-def calculate_authority(profile: WorldProfile) -> int:
-    """V1 authority: diplomatic reach without introducing a separate reputation economy."""
-    return max(0, min(100, 50 + 8 * len(profile.allies) - 5 * len(profile.wars)))
-
-
-def _ids(states: tuple[WorldState, ...]) -> str:
-    return ", ".join(f"№{state.world_id}" for state in states) or "—"
-
-
-def format_world_profile(
-    profile: WorldProfile,
-    population: int | None = None,
-    *,
-    details: WorldDetails | None = None,
-    authority: int | None = None,
-    most_active: str | None = None,
-    alliance_names: dict[int, str] | None = None,
-) -> str:
-    population_text = str(population) if population is not None else "неизвестно"
-    lines = [
-        f"🏳 Государство №{profile.state.world_id}",
-        profile.state.title,
-        f"👥 Долбоебов: {population_text}",
-        f"🏛 Основано: {profile.state.created_at.strftime('%d.%m.%Y')}",
-    ]
-    if details is not None:
-        lines.extend(
-            [
-                f"🏛 Государственный строй: {details.government_form}",
-                f"🌦 Климат: {details.climate}",
-                f"☠️ Главная угроза: {details.main_threat}",
-            ]
-        )
-        if details.ambassador_name:
-            lines.append(f"🎩 Посол: {details.ambassador_name}")
-    if most_active:
-        lines.append(f"🗣 Самый активный долбоеб за 7 дней: {most_active}")
-    if authority is not None:
-        lines.append(f"🌐 Международный авторитет: {authority}/100")
-
-    lines.extend(["", "Дипломатические отношения:"])
-    if profile.allies:
-        names = alliance_names or {}
-        allies = []
-        for state in profile.allies:
-            suffix = f" «{names[state.world_id]}»" if state.world_id in names else ""
-            allies.append(f"№{state.world_id}{suffix}")
-        lines.append(f"🤝 Союзники: {', '.join(allies)}")
-    else:
-        lines.append("🤝 Союзники: —")
-    lines.extend(
-        [
-            f"⚔️ Война: {_ids(profile.wars)}",
-            f"😐 Нейтральные: {_ids(profile.neutral)}",
-        ]
-    )
-    if profile.inactive_allies:
-        lines.append(f"⏸ Союзы вне мира: {_ids(profile.inactive_allies)}")
-    if profile.inactive_wars:
-        lines.append(f"⏸ Войны вне мира: {_ids(profile.inactive_wars)}")
-    return "\n".join(lines)
-
-
-def format_states(states: tuple[WorldState, ...]) -> str:
-    if not states:
-        return "🌍 Других активных государств пока нет."
-    lines = ["🌍 Государства Мира Упупы:"]
-    lines.extend(f"№{state.world_id} — {state.title}" for state in states)
-    return "\n".join(lines)
-
-
-def format_diplomacy(
-    profile: WorldProfile,
-    alliance_names: dict[int, str] | None = None,
-) -> str:
-    lines = [f"🌍 Дипломатия государства №{profile.state.world_id}"]
-    names = alliance_names or {}
-    if profile.allies:
-        lines.append("\n🤝 Союзники:")
-        for state in profile.allies:
-            suffix = f" — союз «{names[state.world_id]}»" if state.world_id in names else ""
-            lines.append(f"№{state.world_id} — {state.title}{suffix}")
-    else:
-        lines.append("\n🤝 Союзников пока нет.")
-
-    if profile.wars:
-        lines.append("\n⚔️ Война:")
-        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.wars)
-    else:
-        lines.append("\n⚔️ Ни с кем не воюем.")
-
-    if profile.neutral:
-        lines.append("\n😐 Нейтральные:")
-        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.neutral)
-    if profile.inactive_allies:
-        lines.append("\n⏸ Сохранённые союзы с выключенными государствами:")
-        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.inactive_allies)
-    if profile.inactive_wars:
-        lines.append("\n⏸ Сохранённые войны с выключенными государствами:")
-        lines.extend(f"№{state.world_id} — {state.title}" for state in profile.inactive_wars)
-    return "\n".join(lines)

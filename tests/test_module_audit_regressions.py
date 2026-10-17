@@ -108,16 +108,20 @@ def test_world_visit_feedback_prompt_is_retried(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("reader", ["windows", "feedback", "showcases"])
+@pytest.mark.parametrize("reader", ["windows", "feedback", "visits", "showcases"])
 @pytest.mark.parametrize("missing_table", [False, True])
 def test_visit_sqlite_connections_are_closed(tmp_path, monkeypatch, reader, missing_table):
-    from features.world import visit_feedback, visit_report
+    from features.world import visit_report
+    from features.world.ledger import WorldLedger
     path = tmp_path / 'world.db'
-    conn = sqlite3.connect(path)
     if not missing_table:
-        conn.execute('CREATE TABLE world_events(id INTEGER, event_type TEXT, actor_state INTEGER, target_state INTEGER, payload_json TEXT, created_at TEXT)')
+        conn = sqlite3.connect(path)
+        conn.execute('CREATE TABLE world_states (world_id INTEGER PRIMARY KEY, chat_id BIGINT, chat_title TEXT, created_at TEXT, updated_at TEXT, enabled INTEGER)')
         conn.commit()
-    conn.close()
+        conn.close()
+        WorldLedger(path).init_schema()
+    else:
+        sqlite3.connect(path).close()
     opened = []
     class Tracked(sqlite3.Connection):
         closed = False
@@ -131,9 +135,11 @@ def test_visit_sqlite_connections_are_closed(tmp_path, monkeypatch, reader, miss
         return result
     monkeypatch.setattr(sqlite3, 'connect', connect)
     now = datetime.now(timezone.utc)
+    ledger = WorldLedger(path)
     readers = {
-        'windows': lambda: visit_feedback._load_windows_sync(path),
-        'feedback': lambda: visit_feedback._load_feedback_sync(path, host_state=1, guest_state=2, accepted_event_id=3),
+        'windows': lambda: ledger.list_due_feedback_windows(now),
+        'feedback': lambda: ledger.list_feedback_events(2, 1, 3),
+        'visits': lambda: ledger.list_expired_open_visits(now),
         'showcases': lambda: visit_report._load_showcases_sync(path, 1, 2, now-timedelta(days=1), now),
     }
     try:
@@ -368,7 +374,7 @@ def test_visit_retry_keeps_successful_deliveries_and_cached_report(tmp_path, mon
         delivered = []
         attempts = 0
 
-        async def send(chat_id, text):
+        async def send(chat_id, text, **kwargs):
             nonlocal attempts
             attempts += 1
             if attempts == failed_send:

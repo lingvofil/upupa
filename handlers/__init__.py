@@ -3,8 +3,8 @@
 aiogram матчит сообщение по роутерам последовательно, catch-all (dialog) — последний.
 """
 from handlers import (
-    crocodile_guesses, basic, sms, world, world_visit_media, world_visit_lifecycle, world_visit_decisions,
-    world_interactions, world_expansion, world_symbols, world_hub, world_listing, stats_lexicon,
+    crocodile_guesses, basic, sms, world_visit_media, world_visit_lifecycle,
+    world_interactions, world_expansion, world_symbols, world_hub, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, chronicle_reactions, chronicle,
     social_graph, social_navigation, radio, song, dialog,
@@ -17,15 +17,13 @@ ROUTERS = [
     crocodile_guesses.router,
     basic.router,
     sms.router,
-    world_visit_media.router,  # медиа-показы во время екскурсии должны перехватываться до текстового lifecycle
-    world_visit_lifecycle.router,  # 24-часовой жизненный цикл визита, екскурсия, отзывы и ручное завершение
-    world_visit_decisions.router,  # legacy guard входящих приглашений; lifecycle перехватывает новые решения первым
-    world_interactions.router,  # дипломатические действия перехватывают main/diplomacy callbacks хаба
-    world_expansion.router,  # характеристики, санкции и международный суд — до старого hub
-    world_symbols.router,  # государственные флаги/гербы и их callbacks
-    world_hub.router,  # интерактивный Мир Упупы
-    world_listing.router,
-    world.router,
+    # Мир Упупы: у каждой команды и каждого callback-префикса ровно один роутер.
+    world_visit_media.router,  # медиа-показы во время екскурсии — до текстового lifecycle
+    world_visit_lifecycle.router,  # приглашения, 24-часовой визит, екскурсия, отзывы
+    world_interactions.router,  # дипломатические действия worldx:*, ответы на ноты, блоки, дары, звёзды
+    world_expansion.router,  # санкции и Международный суд (текст, повестки, защита)
+    world_symbols.router,  # государственные флаги/гербы
+    world_hub.router,  # экраны хаба worldhub:* и команды чтения
     stats_lexicon.router,
     media_search.router,
     games.router,

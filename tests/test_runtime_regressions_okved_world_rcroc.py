@@ -48,7 +48,8 @@ def test_every_world_main_menu_exposes_sanctions_and_court():
 
     assert '🚫 Санкции' in texts
     assert '⚖️ Международный суд' in texts
-    assert '🎩 Назначить посла' in texts
+    assert '🏆 Рейтинг' in texts
+    assert '🧱 Блоки' in texts
     assert 'worldhub:sanctions' in callbacks
     assert 'worldhub:court' in callbacks
     assert handlers.ROUTERS.index(world_interactions.router) < handlers.ROUTERS.index(world_expansion.router)

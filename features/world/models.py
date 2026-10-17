@@ -23,6 +23,7 @@ class DiplomaticRequest:
     status: str
     created_at: datetime
     resolved_at: datetime | None = None
+    kind: str = "alliance"
 
 
 @dataclass(frozen=True)

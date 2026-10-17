@@ -22,7 +22,7 @@ class FakeBot:
         self.sent = []
         self.next_message_id = 500
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text))
         self.next_message_id += 1
         return SimpleNamespace(message_id=self.next_message_id)

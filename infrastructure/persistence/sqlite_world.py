@@ -57,6 +57,7 @@ class SQLiteWorldRepository:
             status=str(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             resolved_at=(datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None),
+            kind=(str(row["kind"]) if "kind" in row.keys() and row["kind"] else "alliance"),
         )
 
     @staticmethod
@@ -139,6 +140,14 @@ class SQLiteWorldRepository:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS ix_world_states_enabled ON world_states(enabled, world_id)"
             )
+            request_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(diplomatic_requests)")
+            }
+            if "kind" not in request_columns:
+                # alliance — предложение союза, peace — предложение мира во время войны.
+                conn.execute(
+                    "ALTER TABLE diplomatic_requests ADD COLUMN kind TEXT NOT NULL DEFAULT 'alliance'"
+                )
 
     def enable_state(self, chat_id: int, title: str) -> WorldState:
         now = self._now()
@@ -282,8 +291,15 @@ class SQLiteWorldRepository:
         self,
         source_state: int,
         target_state: int,
+        kind: str = "alliance",
     ) -> tuple[str, DiplomaticRequest | None]:
-        """Atomically validate both states/relation and create at most one pending request."""
+        """Atomically validate both states/relation and create at most one pending request.
+
+        ``kind`` is ``alliance`` (proposal of an alliance between neutral states)
+        or ``peace`` (mutual peace proposal while the states are at war).
+        """
+        if kind not in {"alliance", "peace"}:
+            raise ValueError(f"Unsupported diplomatic request kind: {kind}")
         now = self._now()
         first, second = sorted((source_state, target_state))
         with self._connect() as conn:
@@ -303,12 +319,14 @@ class SQLiteWorldRepository:
                 "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
                 (first, second),
             ).fetchone()
-            if relation_row is not None:
-                relation = str(relation_row["relation"])
+            relation = str(relation_row["relation"]) if relation_row is not None else None
+            if kind == "alliance":
                 if relation == "allied":
                     return "already_allied", None
                 if relation == "war":
                     return "at_war", None
+            elif relation != "war":
+                return "not_at_war", None
 
             existing_row = conn.execute(
                 """
@@ -325,10 +343,10 @@ class SQLiteWorldRepository:
 
             cursor = conn.execute(
                 """
-                INSERT INTO diplomatic_requests(source_state, target_state, status, created_at)
-                VALUES (?, ?, 'pending', ?)
+                INSERT INTO diplomatic_requests(source_state, target_state, status, created_at, kind)
+                VALUES (?, ?, 'pending', ?, ?)
                 """,
-                (source_state, target_state, now),
+                (source_state, target_state, now, kind),
             )
             request_id = int(cursor.lastrowid)
             row = conn.execute("SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)).fetchone()
@@ -394,7 +412,14 @@ class SQLiteWorldRepository:
                 "SELECT relation FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
                 (first, second),
             ).fetchone()
-            if decision == "accepted" and relation_row is not None and relation_row["relation"] == "war":
+            relation = str(relation_row["relation"]) if relation_row is not None else None
+            stale_status = None
+            if decision == "accepted":
+                if request.kind == "alliance" and relation == "war":
+                    stale_status = "at_war"
+                elif request.kind == "peace" and relation != "war":
+                    stale_status = "not_at_war"
+            if stale_status is not None:
                 conn.execute(
                     """
                     UPDATE diplomatic_requests SET status = 'cancelled', resolved_at = ?
@@ -405,7 +430,7 @@ class SQLiteWorldRepository:
                 cancelled = conn.execute(
                     "SELECT * FROM diplomatic_requests WHERE id = ?", (request_id,)
                 ).fetchone()
-                return "at_war", self._request(cancelled), source, target
+                return stale_status, self._request(cancelled), source, target
 
             cursor = conn.execute(
                 """
@@ -420,7 +445,7 @@ class SQLiteWorldRepository:
                 ).fetchone()
                 return "already_resolved", self._request(latest), source, target
 
-            if decision == "accepted":
+            if decision == "accepted" and request.kind == "alliance":
                 conn.execute(
                     """
                     INSERT INTO diplomatic_relations(state_a, state_b, relation, updated_at)
@@ -429,6 +454,11 @@ class SQLiteWorldRepository:
                     DO UPDATE SET relation = 'allied', updated_at = excluded.updated_at
                     """,
                     (first, second, now),
+                )
+            elif decision == "accepted" and request.kind == "peace":
+                conn.execute(
+                    "DELETE FROM diplomatic_relations WHERE state_a = ? AND state_b = ? AND relation = 'war'",
+                    (first, second),
                 )
 
             resolved = conn.execute(
@@ -509,3 +539,39 @@ class SQLiteWorldRepository:
                 (first, second),
             )
         return cursor.rowcount > 0
+
+    def get_relation_since(self, state_a: int, state_b: int) -> datetime | None:
+        first, second = sorted((state_a, state_b))
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT updated_at FROM diplomatic_relations WHERE state_a = ? AND state_b = ?",
+                (first, second),
+            ).fetchone()
+        return datetime.fromisoformat(str(row["updated_at"])) if row is not None else None
+
+    def migrate_chat(self, old_chat_id: int, new_chat_id: int) -> WorldState | None:
+        """Move a state to the supergroup id Telegram assigned after a chat upgrade."""
+        if int(old_chat_id) == int(new_chat_id):
+            return self.get_state_by_chat_id(new_chat_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute("SELECT * FROM world_states WHERE chat_id = ?", (old_chat_id,)).fetchone()
+            if old is None:
+                return None
+            clash = conn.execute("SELECT * FROM world_states WHERE chat_id = ?", (new_chat_id,)).fetchone()
+            if clash is not None:
+                # The new supergroup already enabled the World on its own: keep that
+                # state and retire the stale one so nothing is delivered twice.
+                conn.execute(
+                    "UPDATE world_states SET enabled = 0, updated_at = ? WHERE world_id = ?",
+                    (self._now(), int(old["world_id"])),
+                )
+                return self._state(clash)
+            conn.execute(
+                "UPDATE world_states SET chat_id = ?, updated_at = ? WHERE world_id = ?",
+                (new_chat_id, self._now(), int(old["world_id"])),
+            )
+            row = conn.execute(
+                "SELECT * FROM world_states WHERE world_id = ?", (int(old["world_id"]),)
+            ).fetchone()
+        return self._state(row)

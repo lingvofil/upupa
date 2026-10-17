@@ -77,7 +77,7 @@ def test_mood_service_can_publish_bawdy_verse(monkeypatch):
     monkeypatch.setattr(mood_service, "_consume_after_publish", fake_consume)
 
     class FakeBot:
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, **kwargs):
             assert chat_id == mood_service.CHANNEL_TARGET
             return SimpleNamespace(message_id=501, text=text)
 

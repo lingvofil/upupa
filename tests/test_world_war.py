@@ -1,7 +1,8 @@
 import asyncio
 import sqlite3
 
-from features.world.service import WorldService, format_world_profile
+from features.world.presentation import format_world_profile
+from features.world.service import WorldService
 from infrastructure.persistence.sqlite_world import SQLiteWorldRepository
 
 
