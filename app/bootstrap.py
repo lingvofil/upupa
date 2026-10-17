@@ -238,6 +238,12 @@ class UpupaApplication:
         # model usage работает и для DnD, и для обычных команд.
         self.dispatcher.update.outer_middleware(AIUsageContextMiddleware())
 
+        # Сообщения чата транслируются художнику «Крокодила» до любых
+        # фильтров/handlers, чтобы он видел все попытки отгадать.
+        from features.crocodile_chat_relay import CrocodileChatRelayMiddleware
+
+        self.dispatcher.message.outer_middleware(CrocodileChatRelayMiddleware())
+
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
         main_router = get_main_router()

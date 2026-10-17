@@ -117,6 +117,7 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
         def __init__(self):
             self.sub_routers = []
             self.update = RecordingObserver()
+            self.message = RecordingObserver()
 
         def include_router(self, router):
             self.sub_routers.append(router)
@@ -136,6 +137,9 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
     assert [type(middleware).__name__ for middleware in dispatcher.update.outer_middlewares] == [
         "BlockedUserMiddleware",
         "AIUsageContextMiddleware",
+    ]
+    assert [type(middleware).__name__ for middleware in dispatcher.message.outer_middlewares] == [
+        "CrocodileChatRelayMiddleware",
     ]
 
 
