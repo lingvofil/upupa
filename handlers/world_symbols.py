@@ -12,16 +12,15 @@ from aiogram.types import BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from AI.gigachat_image import generate_gigachat_image
-from core.loader import bot
+from features.world.cards import symbol_store
 from features.world.identity import ensure_state_identity
-from features.world.permissions import is_strict_chat_admin
 from features.world.service import get_world_service
 from features.world.symbols import (
     WorldSymbolStore,
     build_state_symbol_prompt,
     symbol_kind_label,
 )
-from handlers.world import _require_world, _title
+from handlers.world_common import callback_state, is_admin, require_world, safe_edit, single_flight
 
 
 router = Router(name="world_symbols")
@@ -49,9 +48,7 @@ def _is_show_command(message: types.Message) -> bool:
 
 
 def _store_for_service(service) -> WorldSymbolStore | None:
-    ledger = getattr(service, "ledger", None)
-    path = getattr(ledger, "path", None)
-    return WorldSymbolStore(path) if path is not None else None
+    return symbol_store(service)
 
 
 def _symbol_menu_markup(*, has_symbol: bool) -> types.InlineKeyboardMarkup:
@@ -60,7 +57,7 @@ def _symbol_menu_markup(*, has_symbol: bool) -> types.InlineKeyboardMarkup:
     builder.button(text="🛡 Сгенерировать герб", callback_data="worldsymbol:emblem")
     if has_symbol:
         builder.button(text="👁 Показать текущий", callback_data="worldsymbol:show")
-    builder.button(text="⬅️ В Мир Упупы", callback_data="worldhub:main")
+    builder.button(text="⬅️ К государству", callback_data="worldhub:mine")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -71,12 +68,12 @@ async def _symbol_menu_text(chat_id: int, title: str) -> tuple[str, types.Inline
     if state is None or not state.enabled:
         return None
     store = _store_for_service(service)
-    symbol = await asyncio.to_thread(store.get_symbol, state.world_id) if store else None
-    current = (
-        f"Сейчас официальный символ — {symbol_kind_label(symbol.kind)}."
-        if symbol
-        else "Официального флага или герба пока нет."
-    )
+    symbols = await asyncio.to_thread(store.get_symbols, state.world_id) if store else {}
+    if symbols:
+        kinds = ", ".join(symbol_kind_label(kind) for kind in ("flag", "emblem") if kind in symbols)
+        current = f"Утверждено: {kinds}. Флаг и герб хранятся отдельно, флаг рисуется на карте мира."
+    else:
+        current = "Официального флага или герба пока нет."
     text = (
         "🏴 Государственная символика\n\n"
         f"{current}\n\n"
@@ -84,9 +81,9 @@ async def _symbol_menu_text(chat_id: int, title: str) -> tuple[str, types.Inline
         "Если хочешь подкинуть конкретную дурь, напиши:\n"
         "<code>упупа флаг пьяный опоссум и три молнии</code>\n"
         "или <code>упупа герб кот на офисном кресле</code>.\n\n"
-        "Новый результат сразу становится официальным. Менять символ могут только администраторы чата."
+        "Новый флаг заменяет только флаг, новый герб — только герб. Менять символику могут только администраторы чата."
     )
-    return text, _symbol_menu_markup(has_symbol=bool(symbol))
+    return text, _symbol_menu_markup(has_symbol=bool(symbols))
 
 
 async def _generate_and_install(
@@ -96,21 +93,25 @@ async def _generate_and_install(
     kind: str,
     idea: str | None,
 ) -> bool:
-    service = await _require_world(message)
-    if service is None:
+    resolved = await require_world(message)
+    if resolved is None:
         return False
-    if not await is_strict_chat_admin(bot, message.chat.id, requester_id):
+    service, state = resolved
+    if not await is_admin(message.chat.id, requester_id):
         await message.reply("🏴 Государственную символику могут менять только администраторы государства.")
-        return False
-
-    state = await service.get_state(message.chat.id, _title(message))
-    if state is None:
         return False
     store = _store_for_service(service)
     if store is None:
         await message.reply("🏴 Министерство символики потеряло архив. Попробуй позже.")
         return False
+    async with single_flight(f"symbol:{state.world_id}") as acquired:
+        if not acquired:
+            await message.reply("🎨 Геральдисты уже рисуют. Дождитесь результата.")
+            return False
+        return await _draw(message, service, state, store, kind=kind, idea=idea)
 
+
+async def _draw(message: types.Message, service, state, store, *, kind: str, idea: str | None) -> bool:
     identity = await ensure_state_identity(service, state)
     details = identity.details if identity is not None else await service.get_details(state.world_id)
     prompt = build_state_symbol_prompt(state, details, kind, idea=idea)
@@ -176,40 +177,35 @@ async def generate_state_symbol_command(message: types.Message):
 
 @router.message(_is_show_command)
 async def show_state_symbol_command(message: types.Message):
-    service = await _require_world(message)
-    if service is None:
+    resolved = await require_world(message)
+    if resolved is None:
         return
-    state = await service.get_state(message.chat.id, _title(message))
-    if state is None:
-        return
+    service, state = resolved
     store = _store_for_service(service)
-    symbol = await asyncio.to_thread(store.get_symbol, state.world_id) if store else None
-    if symbol is None:
+    symbols = await asyncio.to_thread(store.get_symbols, state.world_id) if store else {}
+    if not symbols:
         await message.reply("🏴 У государства пока нет официального символа. Открой «упупа миры» и нарисуй его.")
         return
-    await message.reply_photo(
-        symbol.telegram_file_id,
-        caption=(
-            f"{'🏳' if symbol.kind == 'flag' else '🛡'} Официальный {symbol_kind_label(symbol.kind)} "
-            f"государства №{state.world_id} «{state.title}»."
-        ),
-    )
+    for kind in ("flag", "emblem"):
+        symbol = symbols.get(kind)
+        if symbol is None:
+            continue
+        await message.reply_photo(
+            symbol.telegram_file_id,
+            caption=(
+                f"{'🏳' if kind == 'flag' else '🛡'} Официальный {symbol_kind_label(kind)} "
+                f"государства №{state.world_id} «{state.title}»."
+            ),
+        )
 
 
 @router.callback_query(F.data.startswith("worldsymbol:"))
 async def world_symbol_callback(query: types.CallbackQuery):
-    if query.message is None or query.from_user is None:
+    resolved = await callback_state(query)
+    if resolved is None:
         return
-
+    service, state = resolved
     action = (query.data or "").split(":", 1)[-1]
-    service = get_world_service()
-    state = await service.get_state(
-        query.message.chat.id,
-        query.message.chat.title or "Безымянное государство",
-    )
-    if state is None or not state.enabled:
-        await query.answer("Этот чат сейчас вне Мира Упупы.", show_alert=True)
-        return
 
     if action == "menu":
         payload = await _symbol_menu_text(query.message.chat.id, state.title)
@@ -217,30 +213,34 @@ async def world_symbol_callback(query: types.CallbackQuery):
             await query.answer("Символика недоступна.", show_alert=True)
             return
         text, markup = payload
-        await query.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+        await safe_edit(query.message, text, markup, parse_mode="HTML")
         await query.answer()
         return
 
     if action == "show":
         store = _store_for_service(service)
-        symbol = await asyncio.to_thread(store.get_symbol, state.world_id) if store else None
-        if symbol is None:
+        symbols = await asyncio.to_thread(store.get_symbols, state.world_id) if store else {}
+        if not symbols:
             await query.answer("Официального символа пока нет.", show_alert=True)
             return
         await query.answer()
-        await query.message.answer_photo(
-            symbol.telegram_file_id,
-            caption=(
-                f"{'🏳' if symbol.kind == 'flag' else '🛡'} Официальный {symbol_kind_label(symbol.kind)} "
-                f"государства №{state.world_id} «{state.title}»."
-            ),
-        )
+        for kind in ("flag", "emblem"):
+            symbol = symbols.get(kind)
+            if symbol is None:
+                continue
+            await query.message.answer_photo(
+                symbol.telegram_file_id,
+                caption=(
+                    f"{'🏳' if kind == 'flag' else '🛡'} Официальный {symbol_kind_label(kind)} "
+                    f"государства №{state.world_id} «{state.title}»."
+                ),
+            )
         return
 
     if action not in {"flag", "emblem"}:
         await query.answer("Неизвестный символ.", show_alert=True)
         return
-    if not await is_strict_chat_admin(bot, query.message.chat.id, query.from_user.id):
+    if not await is_admin(query.message.chat.id, query.from_user.id):
         await query.answer("Менять государственный символ могут только администраторы.", show_alert=True)
         return
 

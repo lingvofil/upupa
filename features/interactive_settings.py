@@ -17,7 +17,7 @@ from features.revoice_settings import (
     get_revoice_settings_markup,
     set_revoice_voice,
 )
-from features.world.permissions import is_chat_admin
+from features.world.permissions import is_strict_chat_admin
 from features.world.service import get_world_service, is_world_enabled
 
 
@@ -386,7 +386,8 @@ async def handle_settings_callback(query: types.CallbackQuery):
             if getattr(query.message.chat, "type", None) not in {"group", "supergroup"}:
                 await query.answer("Мир Упупы работает только в групповых чатах.", show_alert=True)
                 return
-            if not await is_chat_admin(bot, query.message.chat.id, query.from_user.id):
+            # Посол ведёт дипломатию, но включать и выключать Мир могут только настоящие админы.
+            if not await is_strict_chat_admin(bot, query.message.chat.id, query.from_user.id):
                 await query.answer("Мир Упупы могут включать и выключать только админы этого чата.", show_alert=True)
                 return
             service = get_world_service()
@@ -394,11 +395,19 @@ async def handle_settings_callback(query: types.CallbackQuery):
                 await service.disable_state(query.message.chat.id)
                 answer_text = "Мир Упупы выключен"
             else:
+                previous = await service.get_state(query.message.chat.id)
                 state = await service.enable_state(
                     query.message.chat.id,
                     query.message.chat.title or "Безымянное государство",
                 )
                 answer_text = f"Государство №{state.world_id} включено"
+                try:
+                    from features.world.onboarding import build_welcome_text
+
+                    welcome = await build_welcome_text(service, state, returning=previous is not None)
+                    await bot.send_message(query.message.chat.id, welcome)
+                except Exception:
+                    logging.exception("World welcome message failed chat_id=%s", query.message.chat.id)
         elif value == "antispam":
             cid = int(chat_id)
             if cid in ANTISPAM_ENABLED_CHATS:
