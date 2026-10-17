@@ -100,6 +100,23 @@
     }
     .btn-red { background: #ff3b30; }
     .btn-gray { background: #555; }
+    /* Кнопка завершения специально отделена от остальных и подписана,
+       чтобы её не нажимали случайно вместо 🧹/↷. */
+    .btn-finish {
+      margin-left: 14px;
+      padding: 10px 14px;
+      box-shadow: 0 0 0 2px #fff, 0 0 0 4px #ff3b30;
+      position: relative;
+    }
+    .btn-finish::before {
+      content: "";
+      position: absolute;
+      left: -15px;
+      top: 6px;
+      bottom: 6px;
+      width: 1px;
+      background: rgba(255, 255, 255, 0.35);
+    }
     .btn.active {
       background: #fff;
       color: #222;
@@ -184,6 +201,11 @@
       }
       .actions {
         margin-left: 0;
+        flex-basis: 100%;
+      }
+      /* На телефоне уводим «Закончить» в правый край, подальше от 🧹. */
+      .btn-finish {
+        margin-left: auto;
       }
     }
     #guessFeed {
@@ -287,7 +309,7 @@
     <button id="undoButton" class="btn btn-gray" type="button" onclick="undo()" aria-label="Отменить последнее действие" disabled>↶</button>
     <button id="redoButton" class="btn btn-gray" type="button" onclick="redo()" aria-label="Повторить отменённое действие" disabled>↷</button>
     <button class="btn btn-gray" type="button" onclick="clearC()" aria-label="Очистить холст">🧹</button>
-    <button class="btn btn-red" type="button" onclick="finish()" aria-label="Завершить рисунок">🏁</button>
+    <button class="btn btn-red btn-finish" type="button" onclick="finish()" aria-label="Завершить рисунок">🏁 Закончить</button>
   </div>
 </div>
 
@@ -673,6 +695,7 @@
     finishButton.textContent = "✅ Завершить ход";
     finishButton.setAttribute("aria-label", "Завершить свой ход");
     finishButton.classList.remove("btn-red");
+    finishButton.classList.remove("btn-finish");
     finishButton.style.background = "#34c759";
     finishButton.style.color = "#fff";
   }
@@ -1427,14 +1450,41 @@
     clearCanvas(true);
   };
 
+  function confirmAction(message, onConfirm) {
+    if (tg && typeof tg.showConfirm === "function") {
+      try {
+        tg.showConfirm(message, (ok) => { if (ok) onConfirm(); });
+        return;
+      } catch (e) {
+        // Старые клиенты Telegram без showConfirm — падаем в window.confirm.
+      }
+    }
+    if (window.confirm(message)) onConfirm();
+  }
+
+  let finishConfirmOpen = false;
+  let finishSent = false;
+
   window.finish = () => {
     if (!roomReady || activeUiMode !== "draw") {
       showTelegramAlert("Рисунок ещё восстанавливается.");
       return;
     }
-    const img = canvas.toDataURL("image/jpeg", 0.85);
-    socket.emit("final_frame", { room: roomId, image: img });
-    setTimeout(closeWebApp, 500);
+    if (finishConfirmOpen || finishSent) return;
+    finishConfirmOpen = true;
+    const question = isTelephoneRoom()
+      ? "Завершить ход и передать рисунок дальше?"
+      : "Точно закончить игру? Слово покажут всем, раунд завершится.";
+    confirmAction(question, () => {
+      if (finishSent) return;
+      finishSent = true;
+      const img = canvas.toDataURL("image/jpeg", 0.85);
+      socket.emit("final_frame", { room: roomId, image: img });
+      setTimeout(closeWebApp, 500);
+    });
+    // showConfirm асинхронный: снимаем блокировку чуть позже, чтобы двойной
+    // тап не открыл два диалога, но отмена позволяла нажать снова.
+    setTimeout(() => { finishConfirmOpen = false; }, 400);
   };
 
   updateHistoryButtons();
