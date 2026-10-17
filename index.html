@@ -396,6 +396,12 @@
   const MIN_CANVAS_ZOOM = 1;
   const MAX_CANVAS_ZOOM = 4;
   const FILL_PROTOCOL_PREFIX = "__fill__:";
+  // Реальное разрешение холста: CSS-пиксели × devicePixelRatio (до 2x),
+  // но не больше MAX_CANVAS_SIDE по длинной стороне — иначе история undo
+  // (getImageData на каждое состояние) съест память слабых телефонов.
+  const MAX_PIXEL_RATIO = 2;
+  const MAX_CANVAS_SIDE = 1600;
+  let pixelRatio = 1;
   let undoStack = [];
   let redoStack = [];
   let isDirty = false;
@@ -412,7 +418,7 @@
   function applyStrokeStyle(width = brushSize) {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.lineWidth = width;
+    ctx.lineWidth = width * pixelRatio;
   }
 
   function clampCanvasPan(x, y, scale = canvasZoom) {
@@ -554,10 +560,17 @@
       tmpCtx.drawImage(canvas, 0, 0);
     }
 
-    canvas.width = window.innerWidth;
-    const targetH = Math.floor(canvas.width * 1.25);
+    const cssW = Math.max(1, window.innerWidth);
+    const targetH = Math.floor(cssW * 1.25);
     const maxH = window.innerHeight - toolbarH;
-    canvas.height = Math.max(1, Math.min(targetH, maxH));
+    const cssH = Math.max(1, Math.min(targetH, maxH));
+    pixelRatio = Math.max(1, Math.min(
+      window.devicePixelRatio || 1,
+      MAX_PIXEL_RATIO,
+      MAX_CANVAS_SIDE / Math.max(cssW, cssH)
+    ));
+    canvas.width = Math.round(cssW * pixelRatio);
+    canvas.height = Math.round(cssH * pixelRatio);
 
     applyStrokeStyle();
     ctx.fillStyle = "#fff";
@@ -579,8 +592,9 @@
   const pCtx = pCanvas.getContext("2d", { alpha: false });
 
   function getCompressedJpeg() {
-    const TARGET_W = 420;
-    const scale = Math.min(1, TARGET_W / canvas.width);
+    // Telegram всё равно ужимает фото до 1280 по длинной стороне.
+    const TARGET_SIDE = 1280;
+    const scale = Math.min(1, TARGET_SIDE / Math.max(canvas.width, canvas.height));
 
     pCanvas.width = Math.max(1, Math.floor(canvas.width * scale));
     pCanvas.height = Math.max(1, Math.floor(canvas.height * scale));
@@ -589,7 +603,7 @@
     pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
     pCtx.drawImage(canvas, 0, 0, pCanvas.width, pCanvas.height);
 
-    return pCanvas.toDataURL("image/jpeg", 0.65);
+    return pCanvas.toDataURL("image/jpeg", 0.8);
   }
 
   function isTelephoneRoom() {
@@ -938,9 +952,10 @@
       return;
     }
 
+    // Координаты штрихов ходят по сокету в CSS-пикселях.
     drawLine(
-      { x: d.px, y: d.py },
-      { x: d.x, y: d.y },
+      { x: d.px * pixelRatio, y: d.py * pixelRatio },
+      { x: d.x * pixelRatio, y: d.y * pixelRatio },
       d.color || "#000000",
       Number(d.width) || 6,
       normalizeOpacity(d.opacity)
@@ -1067,10 +1082,10 @@
   function emitDrawStep(from, to, color, width, opacity) {
     socket.emit("draw_step", {
       room: roomId,
-      px: from.x,
-      py: from.y,
-      x: to.x,
-      y: to.y,
+      px: from.x / pixelRatio,
+      py: from.y / pixelRatio,
+      x: to.x / pixelRatio,
+      y: to.y / pixelRatio,
       color: color,
       width: width,
       opacity: opacity
