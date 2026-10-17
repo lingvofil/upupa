@@ -16,6 +16,7 @@ from features.radio.voices import (
     synthesize_single_voice_radio,
     synthesize_two_voice_radio,
 )
+from features.social_graph.radio_structure import build_radio_structure_context
 from features.social_graph.summary_context import build_radio_social_context
 from services.speech import SpeechAudio, SpeechSynthesisError
 
@@ -110,6 +111,15 @@ async def _social_radio_context(chat_id: str, period_hours: int, now: datetime |
         return None
 
 
+async def _structure_radio_context(chat_id: str, period_hours: int, now: datetime | None) -> str | None:
+    try:
+        context = await build_radio_structure_context(chat_id, period_hours, now=now)
+        return context or None
+    except Exception:
+        logging.exception("[radio][social] failed to build structure context chat=%s", chat_id)
+        return None
+
+
 async def _synthesize_radio_script(script: str) -> SpeechAudio:
     """Prefer one multi-speaker request, then fall back to pooled single voice."""
     try:
@@ -137,7 +147,10 @@ async def build_radio_episode(
         log_file_path=log_file_path,
         now=now,
     )
-    social_context = await _social_radio_context(chat_id, period_hours, now)
+    social_context, structure_context = await asyncio.gather(
+        _social_radio_context(chat_id, period_hours, now),
+        _structure_radio_context(chat_id, period_hours, now),
+    )
 
     try:
         script_result: RadioScript = await generate_radio_script(
@@ -146,6 +159,7 @@ async def build_radio_episode(
             messages,
             period_hours,
             social_context=social_context,
+            structure_context=structure_context,
             duration_minutes=duration_minutes,
         )
     except Exception:

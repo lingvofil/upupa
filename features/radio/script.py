@@ -140,6 +140,7 @@ def _source_size(messages: list[dict]) -> int:
 def _choose_rubrics(
     *,
     social_context: str | None = None,
+    structure_context: str | None = None,
     rng=random,
 ) -> tuple[tuple[str, str], ...]:
     """Pick varied editorial rubrics; data-gated rubrics are always included."""
@@ -150,6 +151,13 @@ def _choose_rubrics(
         picked.append((
             "кто с кем",
             "естественно отметь хотя бы один реальный паттерн общения из социальных наблюдений, без технических метрик",
+        ))
+    if structure_context:
+        picked.append((
+            "политическая хроника",
+            "подай события выпуска через политическую карту чата: лагеря, их лидеров, связных, роли и отношения пар. "
+            "Если в эпизоде сошлись люди из разных лагерей — это межфракционная новость; "
+            "если пара из досье снова отметилась — свяжи это с её ярлыком",
         ))
     return tuple(picked)
 
@@ -213,6 +221,7 @@ async def generate_radio_script(
     period_hours: int,
     *,
     social_context: str | None = None,
+    structure_context: str | None = None,
     duration_minutes: int = RADIO_DEFAULT_DURATION_MINUTES,
 ) -> RadioScript:
     target_min_words, target_max_words, hard_max_words = get_radio_word_targets(duration_minutes)
@@ -242,7 +251,18 @@ async def generate_radio_script(
         social_rule = ""
         social_block = ""
 
-    rubrics = _choose_rubrics(social_context=social_context)
+    if structure_context:
+        structure_rule = (
+            "- Блок «Политическая карта» — закреплённый канон Упупы о лагерях чата, ролях участников и ярлыках пар. "
+            "Обязательно используй хотя бы один его элемент: называй лагеря по их названиям, а людей — с их ролями или ярлыками отношений, "
+            "когда они реально появляются в событиях выпуска. Не выдумывай действий лагерей и пар сверх материала чата.\n"
+        )
+        structure_block = f"\nПолитическая карта:\n{structure_context}\n"
+    else:
+        structure_rule = ""
+        structure_block = ""
+
+    rubrics = _choose_rubrics(social_context=social_context, structure_context=structure_context)
     task_prompt = f"""Ты — ведущий «Радио Упупы». Сделай голосовой выпуск о реальной недавней жизни Telegram-чата «{title}» за последние {period_hours} часов.
 
 Критические правила:
@@ -256,7 +276,7 @@ async def generate_radio_script(
 - В середине выпуска один раз пригласи «эксперта». Эксперт — отдельный комический персонаж текущего выпуска, но он НЕ имеет дополнительных знаний. Он может интерпретировать, спорить с ведущим или нелепо оценивать только уже приведённые факты. Эксперт не должен придумывать новые события, цитаты или свойства участников.
 - После реплики эксперта ведущий обязательно возвращается и продолжает/заканчивает выпуск.
 - Для технического разделения голосов каждую реплику начинай строго с метки «{SPEAKER_HOST}:» или «{SPEAKER_EXPERT}:». Метки не проговариваются. Других меток и заголовков не используй.
-{social_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Цель — {target_min_words}–{target_max_words} русских слов.
+{social_rule}{structure_rule}- Целевая длительность выпуска — примерно {duration_minutes} мин. Цель — {target_min_words}–{target_max_words} русских слов.
 - Не опускайся ниже {target_min_words} слов. Если фактов немного, не выдумывай новые: подробнее и живее раскрывай существующие темы, используй естественные переходы, подводки, реакции ведущего и эксперта.
 - Никогда не превышай {hard_max_words} слов вместе с метками.
 
@@ -267,14 +287,14 @@ async def generate_radio_script(
 
 Материал чата:
 {source_block}
-{social_block}
+{social_block}{structure_block}
 Перед ответом проверь стиль: если убрать факты чата, манера речи всё равно должна явно соответствовать текущему промпту. Если текст звучит как нейтральный радиоведущий, перепиши его в стиле текущего промпта, не меняя факты и технический формат.
 
 Верни только сценарий с метками {SPEAKER_HOST}: / {SPEAKER_EXPERT}:.
 """
 
     logging.info(
-        "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s rubrics=%s current_prompt=true",
+        "[radio][script] messages=%s requested_minutes=%s target_words=%s-%s max_words=%s source_chars=%s prompt_context_chars=%s structured_summary=%s social_context=%s structure_context=%s rubrics=%s current_prompt=true",
         len(messages),
         duration_minutes,
         target_min_words,
@@ -284,6 +304,7 @@ async def generate_radio_script(
         len(source_block),
         use_summary,
         bool(social_context),
+        bool(structure_context),
         ",".join(name for name, _instruction in rubrics),
     )
 
