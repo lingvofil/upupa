@@ -43,14 +43,16 @@ def _no_archive(monkeypatch):
 
 def test_level_table_and_bonuses():
     assert progression.level_for_xp(0) == 1
-    assert progression.level_for_xp(149) == 1
-    assert progression.level_for_xp(150) == 2
+    assert progression.level_for_xp(progression.LEVEL_THRESHOLDS[1] - 1) == 1
+    assert progression.level_for_xp(progression.LEVEL_THRESHOLDS[1]) == 2
     assert progression.level_for_xp(10**6) == progression.MAX_LEVEL
     assert progression.next_threshold(progression.MAX_LEVEL) is None
     assert [progression.attack_bonus_for_level(level) for level in (1, 4, 5, 8, 9)] == [0, 0, 1, 1, 2]
-    assert progression.hp_bonus_for_level(3, 14) == 2 * (4 + 2)
-    assert progression.hp_bonus_for_level(2, 6) == 2  # CON -2 still grows: max(1, 4 - 2)
+    assert progression.hp_bonus_for_level(3, 14) == 2 * 3  # CON +2 → +3 per level
+    assert progression.hp_bonus_for_level(3, 13) == 2 * 2  # CON +1 → +2 per level
+    assert progression.hp_bonus_for_level(2, 8) == 1  # CON -1 → +1
     assert progression.hp_bonus_for_level(2, 1) == 1  # never below +1 per level
+    assert progression.hp_bonus_for_level(10, 20) == 9 * 4  # capped CON → +4
 
 
 def test_first_observation_is_baseline_and_awards_nothing():
@@ -157,7 +159,7 @@ def test_archive_round_trip_respects_death_and_new_profile(monkeypatch):
     from AI import dnd_campaign as campaign
     from AI import dnd_death_legacy
 
-    history = {"profile": {"style": "a"}, "progress": {"xp": 500, "level": 3, "ability_increases": {}}}
+    history = {"profile": {"style": "a"}, "progress": {"xp": 800, "level": 3, "ability_increases": {}}}
     monkeypatch.setattr(campaign, "_player_history", lambda chat_id, user_id: history)
     monkeypatch.setattr(dnd_death_legacy, "history_is_dead", lambda *_args: False)
     session = _session()
@@ -191,10 +193,10 @@ def test_level_attack_bonus_is_added_to_proficiency(monkeypatch):
 
 def test_report_and_hero_lines():
     session = _session()
-    session.hero_progress = {"1": {"xp": 420, "level": 3, "campaign_xp": 300, "start_level": 2}}
+    session.hero_progress = {"1": {"xp": 900, "level": 3, "campaign_xp": 300, "start_level": 2}}
     assert "Алина: +300 опыта (ур. 2 → 3)" in progression.report_section(session)
     lines = progression.progress_lines(session.hero_progress["1"])
-    assert lines[0].startswith("⭐ Уровень 3") and "420/750" in lines[1]
+    assert lines[0].startswith("⭐ Уровень 3") and "900/1350" in lines[1]
 
 
 def test_composed_runtime_awards_xp_and_announces_level_through_metadata(tmp_path):
@@ -219,7 +221,8 @@ def test_composed_runtime_awards_xp_and_announces_level_through_metadata(tmp_pat
         dnd.dnd_sessions[-9001] = session
         story = "Алина вышибает дверь плечом, хватает фонарь и вытаскивает Чудо из горящей комнаты."
         campaign._apply_metadata(session, story + " [ACTION:INPUT]")  # baseline
-        session.hero_progress["1"]["xp"] = 145
+        from AI import dnd_progression as progression
+        session.hero_progress["1"]["xp"] = progression.LEVEL_THRESHOLDS[1] - progression.SCENE_XP
         clean, notices = campaign._apply_metadata(session, story + " [ACTION:INPUT]")
         print(json.dumps({"notices": notices, "xp": session.hero_progress["1"]["xp"],
                           "level": session.hero_progress["1"]["level"],
@@ -230,7 +233,7 @@ def test_composed_runtime_awards_xp_and_announces_level_through_metadata(tmp_pat
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr[-4000:]
     data = json.loads(result.stdout.strip().splitlines()[-1])
-    assert data["xp"] == 145 + progression.SCENE_XP
+    assert data["xp"] == progression.LEVEL_THRESHOLDS[1]
     assert data["level"] == 2
     assert data["max_hp"] == 12 + progression.hp_bonus_for_level(2, 13)
     assert any("2 уровня" in notice for notice in data["notices"])

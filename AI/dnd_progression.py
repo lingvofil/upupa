@@ -18,7 +18,10 @@ import logging
 ABILITY_KEYS = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
 ABILITY_LABELS = {"STR": "Сила", "DEX": "Ловкость", "CON": "Телосложение",
                   "INT": "Интеллект", "WIS": "Мудрость", "CHA": "Харизма"}
-LEVEL_THRESHOLDS = (0, 150, 400, 750, 1200, 1800, 2500, 3300, 4200, 5200)
+# Calibrated pace (typical party mix): ~1 short adventure (12 scenes, ~290 XP)
+# to reach level 2, ~8 short / ~3 long adventures to level 5, ~33 short / ~12
+# long to level 10. Step to the next level grows by ~200 XP each time.
+LEVEL_THRESHOLDS = (0, 250, 700, 1350, 2200, 3250, 4500, 6000, 7700, 9600)
 MAX_LEVEL = len(LEVEL_THRESHOLDS)
 LEVEL_TITLES = {
     1: "Новичок", 2: "Бывалый", 3: "Закалённый", 4: "Ветеран", 5: "Гроза таверн",
@@ -28,11 +31,11 @@ ASI_LEVELS = (4, 8)
 ASI_AMOUNT = 2
 ABILITY_CAP = 20
 
-SCENE_XP = 10
-CLOCK_XP = 20
-GROWTH_XP = 15
-MISSION_XP = {"success": 120, "failure": 50}
-ENEMY_XP = {"LOW": 15, "MEDIUM": 30, "HIGH": 60, "DEADLY": 100}
+SCENE_XP = 5
+CLOCK_XP = 15
+GROWTH_XP = 10
+MISSION_XP = {"success": 80, "failure": 30}
+ENEMY_XP = {"LOW": 10, "MEDIUM": 20, "HIGH": 40, "DEADLY": 70}
 MIN_SCENE_STORY_CHARS = 40
 
 
@@ -63,9 +66,15 @@ def ability_charges_for_level(level) -> int:
     return 1 + (level >= 5) + (level >= 9)
 
 
-def hp_bonus_for_level(level, con_score) -> int:
+def hp_per_level(con_score) -> int:
+    """Max HP per level above 1. Enemy damage does not scale with level, so
+    growth stays modest: CON 8-9 → +1, 10-13 → +2, 14-17 → +3, 18-20 → +4."""
     con_mod = (int(con_score or 10) - 10) // 2
-    return max(1, 4 + con_mod) * (max(1, int(level or 1)) - 1)
+    return max(1, 2 + con_mod // 2)
+
+
+def hp_bonus_for_level(level, con_score) -> int:
+    return hp_per_level(con_score) * (max(1, int(level or 1)) - 1)
 
 
 def asi_count_for_level(level) -> int:
