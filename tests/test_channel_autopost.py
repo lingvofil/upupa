@@ -126,14 +126,24 @@ def test_repeated_long_opening_and_near_duplicate_are_blocked():
 
 
 
-def test_channel_length_distribution_is_50_40_10():
+def test_channel_length_distribution_is_40_50_10():
     from prompts.channel import POST_LENGTH_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_LENGTH_MODES}
-    assert weights == {"micro": 50, "short": 40, "medium": 10}
+    assert weights == {"micro": 40, "short": 50, "medium": 10}
     micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
     assert micro["min_words"] == 2
     assert micro["max_words"] == 3
+
+
+def test_micro_mode_discourages_cryptic_poetic_images():
+    from prompts.channel import POST_LENGTH_MODES
+
+    micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
+    instruction = micro["instruction"].casefold()
+
+    assert "загадочный поэтический образ" in instruction
+    assert "редкое исключение" in instruction
 
 
 def test_micro_length_mode_is_enforced_not_just_prompted():
@@ -280,16 +290,19 @@ def test_recent_batya_posts_are_hidden_from_normal_prompt_memory():
     assert "мне похуй" in formatted.casefold()
 
 
-def test_external_sources_include_batya_muhtar_and_kapibara_channels():
+def test_external_sources_are_batya_muhtar_and_two_neural_channels():
     from features.channel.service import EXTERNAL_COMMENT_SOURCES
 
     by_channel = {source["channel"]: source for source in EXTERNAL_COMMENT_SOURCES}
-    assert "lukeimyourmouth" in by_channel
+    assert set(by_channel) == {"lukeimyourmouth", "muhtarboodka", "neuralmachine", "neuralmeduza"}
     assert by_channel["lukeimyourmouth"]["allow_batya_reference"] is True
     assert "батя" in by_channel["lukeimyourmouth"]["description"]
     assert by_channel["muhtarboodka"]["owner"] == "Мухтар"
     assert "Мухтар" in by_channel["muhtarboodka"]["description"]
-    assert "kapibara_fen" in by_channel
+    assert by_channel["neuralmachine"]["allow_batya_reference"] is False
+    assert "Google Translate" in by_channel["neuralmachine"]["description"]
+    assert by_channel["neuralmeduza"]["allow_batya_reference"] is False
+    assert "не настоящие новости" in by_channel["neuralmeduza"]["description"]
 
 
 def test_public_feed_parser_keeps_text_and_photo_posts():
@@ -373,6 +386,20 @@ def test_external_prompt_knows_muhtar_owns_muhtarboodka():
     assert "Мухтар" in prompt
     assert "тест" in prompt
     assert "5–10 слов" in prompt
+
+
+def test_external_prompt_explains_neuralmachine_posts_are_translator_glitches():
+    from features.channel.service import EXTERNAL_COMMENT_SOURCES, _build_external_prompt
+
+    source = next(source for source in EXTERNAL_COMMENT_SOURCES if source["channel"] == "neuralmachine")
+    prompt = _build_external_prompt(
+        source,
+        {"text": "Всё во Вселенной нереально, кроме тебя и пива.", "url": "https://t.me/neuralmachine/8189"},
+    )
+
+    assert "@neuralmachine" in prompt
+    assert "глюки нейросети Google Translate" in prompt
+    assert "кроме тебя и пива" in prompt
 
 
 def test_batya_external_prompt_can_address_him_and_include_photo_description():

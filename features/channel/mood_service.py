@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 
-from features.channel import chat_context, polls, verses, voice_posts
+from features.channel import chat_context, polls, screams, verses, voice_posts
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -480,6 +480,14 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                 )
                 await _consume_after_publish(mood, getattr(sent, "message_id", None))
                 return sent, spoken_text
+
+            scream_post = screams.prepare_scream(published_posts, mood)
+            if scream_post is not None:
+                scream_text, metadata = scream_post
+                sent = await bot.send_message(CHANNEL_TARGET, scream_text)
+                await base._store_published_post(sent, source=source, text=scream_text, metadata=metadata)
+                await _consume_after_publish(mood, getattr(sent, "message_id", None))
+                return sent, scream_text
 
             if _should_try_image_post(published_posts, mood):
                 try:

@@ -108,6 +108,29 @@ def test_already_published_external_url_is_not_queued(tmp_path, monkeypatch):
     assert external_mentions._read_state()["pending"] == []
 
 
+def test_pending_mentions_from_removed_sources_are_dropped(tmp_path, monkeypatch):
+    from features.channel import external_mentions
+
+    monkeypatch.setattr(external_mentions, "MENTION_STATE_FILE", tmp_path / "mentions.json")
+    monkeypatch.setattr(
+        external_mentions.base,
+        "EXTERNAL_COMMENT_SOURCES",
+        ({"channel": "known", "description": "@known", "owner": None, "allow_batya_reference": False},),
+    )
+    external_mentions._write_state({
+        "sources": {"known": {"last_seen_message_id": 5}, "removed": {"last_seen_message_id": 9}},
+        "pending": [
+            {"channel": "removed", "message_id": 9, "url": "https://t.me/removed/9", "text": "упупа", "attempts": 0},
+            {"channel": "known", "message_id": 5, "url": "https://t.me/known/5", "text": "упупа", "attempts": 0},
+        ],
+    })
+
+    pending = asyncio.run(external_mentions.peek_pending())
+
+    assert pending["url"] == "https://t.me/known/5"
+    assert [item["url"] for item in external_mentions._read_state()["pending"]] == ["https://t.me/known/5"]
+
+
 def test_prepare_reply_is_grounded_in_mention_and_keeps_source_metadata(monkeypatch):
     from AI import summarize
     from features.channel import external_mentions
@@ -156,6 +179,11 @@ def test_direct_mention_consumes_next_channel_slot_before_other_modes(tmp_path, 
     from features.channel import cringedep_service, external_mentions
 
     monkeypatch.setattr(external_mentions, "MENTION_STATE_FILE", tmp_path / "mentions.json")
+    monkeypatch.setattr(
+        external_mentions.base,
+        "EXTERNAL_COMMENT_SOURCES",
+        ({"channel": "known", "description": "@known", "owner": None, "allow_batya_reference": False},),
+    )
     external_mentions._write_state({
         "sources": {},
         "pending": [

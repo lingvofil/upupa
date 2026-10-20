@@ -38,6 +38,95 @@ def test_bawdy_verse_and_voice_have_long_cooldowns():
     assert voice_posts.should_try_voice(voice_history, rng=AlwaysRng()) is False
 
 
+def test_scream_is_an_inarticulate_capslock_howl():
+    import random
+    import re
+
+    from features.channel.screams import generate_scream
+
+    rng = random.Random(7)
+    for _ in range(200):
+        scream = generate_scream(rng=rng)
+        assert re.fullmatch(r"[АЫУОЭЯИ]+(?: [АЫУОЭЯИ]+){0,2}!{0,4}", scream), scream
+        for burst in scream.rstrip("!").split():
+            assert re.search(r"(.)\1{3,}$", burst), burst
+            assert not re.search(r"(.)\1{2}(?!\1)(?=.)", burst), burst
+
+
+def test_scream_has_cooldown_and_breaks_out_more_in_chaos():
+    from features.channel import screams
+
+    assert screams.should_try_scream([], {"name": "neutral"}, rng=AlwaysRng()) is True
+
+    history = [{"post_kind": "normal"} for _ in range(screams.SCREAM_COOLDOWN_POSTS - 1)]
+    history.append({"post_kind": "scream"})
+    assert screams.should_try_scream(history, {"name": "neutral"}, rng=AlwaysRng()) is False
+
+    neutral = screams.scream_probability({"name": "neutral"})
+    assert neutral == screams.SCREAM_PROBABILITY
+    assert screams.scream_probability({"name": "chaotic"}) > neutral
+    assert screams.scream_probability({"name": "irritated"}) > neutral
+    assert screams.scream_probability({"name": "sleepy"}) < neutral
+
+
+def test_prepare_scream_marks_post_kind_and_mood(monkeypatch):
+    import random
+
+    from features.channel import screams
+
+    monkeypatch.setattr(screams, "SCREAM_PROBABILITY", 1.0)
+    text, metadata = screams.prepare_scream([], {"name": "chaotic", "posts_left": 2}, rng=random.Random(1))
+
+    assert text.isupper()
+    assert metadata["post_kind"] == "scream"
+    assert metadata["mood"] == "chaotic"
+    assert metadata["chat_context_used"] is False
+
+
+def test_mood_service_can_publish_scream(monkeypatch):
+    from features.channel import mood_service
+
+    monkeypatch.setattr(mood_service.base, "load_posts", lambda: [])
+    monkeypatch.setattr(mood_service, "get_current_mood", lambda: {"name": "chaotic", "posts_left": 3})
+    monkeypatch.setattr(mood_service.chat_context, "should_force_chat_post", lambda _posts: False)
+
+    async def nothing(*_args, **_kwargs):
+        return None
+
+    def forbidden_image(*_args, **_kwargs):
+        raise AssertionError("image should not be tried after a scream was selected")
+
+    stored = []
+
+    async def fake_store(sent, **kwargs):
+        stored.append((sent, kwargs))
+
+    async def fake_consume(_mood, _message_id):
+        return None
+
+    monkeypatch.setattr(mood_service.polls, "prepare_poll", nothing)
+    monkeypatch.setattr(mood_service.verses, "prepare_bawdy_verse", nothing)
+    monkeypatch.setattr(mood_service.voice_posts, "prepare_voice_post", nothing)
+    monkeypatch.setattr(
+        mood_service.screams,
+        "prepare_scream",
+        lambda _posts, _mood: ("ЫАУАЫАААА", {"post_kind": "scream"}),
+    )
+    monkeypatch.setattr(mood_service, "_should_try_image_post", forbidden_image)
+    monkeypatch.setattr(mood_service.base, "_store_published_post", fake_store)
+    monkeypatch.setattr(mood_service, "_consume_after_publish", fake_consume)
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, **kwargs):
+            assert chat_id == mood_service.CHANNEL_TARGET
+            return SimpleNamespace(message_id=503, text=text)
+
+    sent, text = asyncio.run(mood_service.publish_channel_post(FakeBot(), source="scheduled"))
+    assert sent.message_id == 503
+    assert text == "ЫАУАЫАААА"
+    assert stored[0][1]["metadata"]["post_kind"] == "scream"
+
+
 def test_voice_text_is_short_spoken_prose():
     from features.channel.voice_posts import _validate_voice_text
 
