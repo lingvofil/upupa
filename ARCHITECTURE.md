@@ -116,6 +116,7 @@ message/rank counters и rank-notification settings; SQLite schema также и
 - На R6 запись operational statistics в SQLite и async-чтение статистических отчётов offload'ятся через `asyncio.to_thread`; JSON-сохранение настроек и SMS-disable из async handlers также не блокирует event loop.
 - Синхронный provider routing в `AI.dialog.generation` сохраняет `asyncio.to_thread` boundary для Gemini/GigaChat/Groq/OpenRouter/SiliconFlow.
 - На R12 создание DnD-сессии и все её синхронные provider-вызовы вынесены через `asyncio.to_thread` и ограничены timeout; Telegram event loop больше не ждёт SDK синхронно.
+- Внешние процессы (ffmpeg, ffprobe, lottie_convert, sherlock) запускаются только через `infrastructure.subprocess_runner.run_subprocess`: таймаут обязателен, при таймауте и отмене задачи процесс (на POSIX — его группа) убивается с ожиданием выхода, захват stdout/stderr ограничен. Regression-тест запрещает `asyncio.create_subprocess_*` в остальном production-коде. Скрипты venv вроде `lottie_convert.py` ищутся рядом с `sys.executable` или в `PATH`, а не по пути деплоя.
 
 ## Security и deploy
 
