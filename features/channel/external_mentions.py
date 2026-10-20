@@ -221,7 +221,20 @@ async def peek_pending() -> dict | None:
     async with _state_lock:
         state = await asyncio.to_thread(_read_state)
         pending = state.get("pending", [])
-        return dict(pending[0]) if pending else None
+        # A source removed from EXTERNAL_COMMENT_SOURCES can no longer be answered;
+        # without this its queued mention would fail the next publication slots.
+        tracked = [
+            item for item in pending
+            if _source_by_channel(str(item.get("channel") or "")) is not None
+        ]
+        if len(tracked) != len(pending):
+            logging.info(
+                "[channel] dropping external mentions from untracked sources urls=%s",
+                [item.get("url") for item in pending if item not in tracked],
+            )
+            state["pending"] = tracked
+            await asyncio.to_thread(_write_state, state)
+        return dict(tracked[0]) if tracked else None
 
 
 async def mark_answered(url: str) -> None:

@@ -66,8 +66,20 @@ EXTERNAL_COMMENT_SOURCES = (
         "allow_batya_reference": False,
     },
     {
-        "channel": "kapibara_fen",
-        "description": "@kapibara_fen",
+        "channel": "neuralmachine",
+        "description": (
+            "@neuralmachine; посты там — глюки нейросети Google Translate: бессмысленные наборы букв, "
+            "которые переводчик превратил в странные фразы"
+        ),
+        "owner": None,
+        "allow_batya_reference": False,
+    },
+    {
+        "channel": "neuralmeduza",
+        "description": (
+            "@neuralmeduza; нейроновости: все заголовки там выдуманы русскоязычной GPT-3, "
+            "это не настоящие новости"
+        ),
         "owner": None,
         "allow_batya_reference": False,
     },
