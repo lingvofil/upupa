@@ -12,6 +12,7 @@ from moviepy.editor import AudioFileClip, VideoFileClip, concatenate_audioclips,
 import moviepy.video.fx.all as vfx
 import moviepy.audio.fx.all as afx
 from core.state import chat_settings
+from infrastructure.subprocess_runner import find_venv_executable, run_subprocess
 from services.video_note_branding import prepare_video_note_for_processing
 
 
@@ -383,24 +384,15 @@ def _should_normalize_video(file_obj) -> bool:
 
 
 async def run_command(command: list[str], timeout: float = COMMAND_TIMEOUT_SEC) -> tuple[bool, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        stdout, stderr = await proc.communicate()
-        output = (stderr or stdout).decode(errors="ignore").strip()
+    result = await run_subprocess(command, timeout=timeout)
+    if result.timed_out:
+        output = (result.stderr or result.stdout).decode(errors="ignore").strip()
         details = f": {output}" if output else ""
         return False, f"Command timed out after {timeout}s ({command[0]}){details}"
 
-    if proc.returncode != 0:
-        return False, stderr.decode(errors="ignore")
-    return True, stdout.decode(errors="ignore")
+    if result.returncode != 0:
+        return False, result.stderr.decode(errors="ignore")
+    return True, result.stdout.decode(errors="ignore")
 
 
 async def normalize_video_for_ytp(input_video: str, output_mp4: str) -> bool:
@@ -490,8 +482,12 @@ async def _run_blocking_ytp(func_name: str, *args, timeout: int = YTP_RENDER_TIM
 
 
 async def convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
+    lottie_convert = find_venv_executable("lottie_convert.py")
+    if not lottie_convert:
+        logging.error("[ytp] lottie_convert.py не найден ни рядом с интерпретатором, ни в PATH")
+        return False
     cmd = [
-        "/root/upupa/venv/bin/lottie_convert.py",
+        lottie_convert,
         input_tgs,
         output_webm,
         "-of",

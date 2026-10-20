@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -106,7 +107,7 @@ async def analyze_tickets_with_ai(tickets: List[Dict], params: Dict) -> List[Dic
 
     try:
         if groq_ai:
-            response = groq_ai.generate_text(prompt)
+            response = await asyncio.to_thread(groq_ai.generate_text, prompt)
             json_match = re.search(r"\[.*\]", response, re.DOTALL)
             if json_match:
                 ai_results = json.loads(json_match.group(0))

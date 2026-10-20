@@ -3,9 +3,12 @@ import os
 import random
 import logging
 import asyncio
+from functools import partial
 from aiogram.types import FSInputFile, Message, ReactionTypeEmoji
 
+from core.paths import PROJECT_ROOT
 from core.state import chat_settings, conversation_history
+from core.telegram_markup import send_markdown_or_plain
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 from infrastructure.ai.execution import ai_feature
 
@@ -419,11 +422,14 @@ def is_laughter(text):
     laughter_patterns = ['ха', 'ах', 'хх']
     return any(pattern * 2 in text for pattern in laughter_patterns)
 
+VOICE_DIR = PROJECT_ROOT / "voice"
+
+
 async def send_random_laughter_voice(message):
     try:
         laughter_files = ["smeh_bomzha.ogg", "smeh_pydorskii.ogg", "smeh_nikity.ogg"]
         selected_file = random.choice(laughter_files)
-        voice_path = f"/root/upupa/voice/{selected_file}"
+        voice_path = str(VOICE_DIR / selected_file)
         if os.path.exists(voice_path):
             await message.reply_voice(FSInputFile(voice_path))
             return True
@@ -438,7 +444,7 @@ async def send_random_common_voice_reaction(message):
     try:
         voice_files = ["cho_derzysh.ogg", "poidu_primu_vannu.ogg", "razbei_vitrinu.ogg", "sidi_ne_otsvechivai.ogg", "so_slezami_lutogo_ugara.ogg", "ty_cho_komediyu.ogg"]
         selected_file = random.choice(voice_files)
-        voice_path = f"/root/upupa/voice/{selected_file}"
+        voice_path = str(VOICE_DIR / selected_file)
         if os.path.exists(voice_path):
             await message.reply_voice(FSInputFile(voice_path))
             return True
@@ -451,7 +457,7 @@ async def send_random_common_voice_reaction(message):
 
 async def send_yaytsa_voice_reaction(message):
     try:
-        voice_path = "/root/upupa/voice/yaytsa_prishemili.ogg"
+        voice_path = str(VOICE_DIR / "yaytsa_prishemili.ogg")
         if os.path.exists(voice_path):
             await message.reply_voice(FSInputFile(voice_path))
             return True
@@ -464,7 +470,7 @@ async def send_yaytsa_voice_reaction(message):
         
 async def send_para_voice_reaction(message):
     try:
-        voice_path = "/root/upupa/voice/muzhik_molodetc.ogg"
+        voice_path = str(VOICE_DIR / "muzhik_molodetc.ogg")
         if os.path.exists(voice_path):
             await message.reply_voice(FSInputFile(voice_path))
             return True
@@ -480,7 +486,7 @@ async def send_random_voice_reaction(message: Message):
     try:
         voice_reactions = ["sexy_golos.ogg", "istorii_doebali.ogg", "normik_golos.ogg", "la_golosochek.ogg"]
         selected_file = random.choice(voice_reactions)
-        voice_path = f"/root/upupa/voice/{selected_file}"
+        voice_path = str(VOICE_DIR / selected_file)
         if os.path.exists(voice_path):
             await message.reply_voice(FSInputFile(voice_path))
             return True
@@ -699,10 +705,9 @@ async def process_random_reactions(
     if random.random() < ai_prob:
         situational = await generate_situational_reaction(message.chat.id)
         if situational:
-            await message.bot.send_message(
-                message.chat.id,
+            await send_markdown_or_plain(
+                partial(message.bot.send_message, message.chat.id),
                 situational,
-                parse_mode="Markdown",
             )
             return True
 

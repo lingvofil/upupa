@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -9,7 +10,12 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ContentType
 from aiogram.types import Message
 
-from core.settings import BLOCKED_USERS, BLOCKED_USERNAMES, BLOCKED_USERS_PATH
+from core.settings import (
+    BLOCKED_USERS,
+    BLOCKED_USERNAMES,
+    BLOCKED_USERS_PATH,
+    MAX_UPDATE_AGE_SECONDS,
+)
 from infrastructure.ai.execution import ai_request_context
 
 
@@ -139,6 +145,68 @@ class BlockedUserMiddleware(BaseMiddleware):
                 getattr(user, "username", None),
             )
             return None
+
+        return await handler(event, data)
+
+
+# Только сообщения и реакции: на них бот отвечает, и поздний ответ хуже, чем никакого.
+# Изменения членства (my_chat_member, chat_member) синхронизируют состояние и
+# обрабатываются в любом возрасте; у callback_query даты нет.
+_AGE_CHECKED_UPDATE_FIELDS = (
+    "message",
+    "edited_message",
+    "channel_post",
+    "edited_channel_post",
+    "business_message",
+    "edited_business_message",
+    "message_reaction",
+    "message_reaction_count",
+)
+
+
+def _update_timestamp(update: Any) -> datetime | None:
+    for field in _AGE_CHECKED_UPDATE_FIELDS:
+        event = getattr(update, field, None)
+        if event is None:
+            continue
+        value = getattr(event, "edit_date", None) or getattr(event, "date", None)
+        if not isinstance(value, datetime):
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return None
+
+
+class StaleUpdateMiddleware(BaseMiddleware):
+    """Skip messages that waited in Telegram's queue longer than max_age_seconds.
+
+    Pending updates are kept across restarts, so messages sent during a deploy
+    are answered; after a long outage the bot does not reply hours late.
+    """
+
+    def __init__(self, max_age_seconds: int = MAX_UPDATE_AGE_SECONDS, *, now=None) -> None:
+        self.max_age_seconds = max_age_seconds
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self.skipped = 0
+
+    async def __call__(
+        self,
+        handler: Callable[..., Awaitable[Any]],
+        event: Any,
+        data: Dict[str, Any],
+    ) -> Any:
+        timestamp = _update_timestamp(event)
+        if timestamp is not None and self.max_age_seconds > 0:
+            age = (self._now() - timestamp).total_seconds()
+            if age > self.max_age_seconds:
+                self.skipped += 1
+                if self.skipped == 1 or self.skipped % 100 == 0:
+                    logging.info(
+                        "Skipped stale update id=%s age_s=%d (total skipped=%d)",
+                        getattr(event, "update_id", None),
+                        age,
+                        self.skipped,
+                    )
+                return None
 
         return await handler(event, data)
 

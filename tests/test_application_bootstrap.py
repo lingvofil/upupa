@@ -135,6 +135,7 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
 
     assert dispatcher.sub_routers == [dnd_router, fake_main_router]
     assert [type(middleware).__name__ for middleware in dispatcher.update.outer_middlewares] == [
+        "StaleUpdateMiddleware",
         "BlockedUserMiddleware",
         "AIUsageContextMiddleware",
     ]
@@ -174,9 +175,9 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
             events.append(("delete_webhook", drop_pending_updates))
 
     class FakeDispatcher:
-        async def start_polling(self, bot, *, skip_updates, close_bot_session):
+        async def start_polling(self, bot, *, close_bot_session):
             assert close_bot_session is False
-            events.append(("start_polling", bot, skip_updates))
+            events.append(("start_polling", bot))
 
     class FakeSupervisor:
         async def stop(self):
@@ -211,12 +212,13 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
 
     assert events == [
         ("middleware",),
+        ("middleware",),
         ("state",),
         ("background",),
         ("dispatcher",),
-        ("delete_webhook", True),
+        ("delete_webhook", False),
         ("ready-start",),
-        ("start_polling", bot, True),
+        ("start_polling", bot),
         ("ready-stop",),
         ("stop",),
         ("close-session",),

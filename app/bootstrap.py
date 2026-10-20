@@ -13,6 +13,7 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 
 from app.diagnostics import build_runtime_diagnostics, resource_snapshot_loop
+from app.flood_control import RetryAfterMiddleware
 from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
@@ -236,7 +237,15 @@ class UpupaApplication:
             return
 
         from AI.dnd import dnd_router
-        from core.middlewares import AIUsageContextMiddleware, BlockedUserMiddleware
+        from core.middlewares import (
+            AIUsageContextMiddleware,
+            BlockedUserMiddleware,
+            StaleUpdateMiddleware,
+        )
+
+        # Очередь Telegram не сбрасывается при рестарте; сообщения, ждавшие
+        # дольше лимита, пропускаются до любой обработки.
+        self.dispatcher.update.outer_middleware(StaleUpdateMiddleware())
 
         # Глобальный бан должен срабатывать до любого router, включая DnD.
         self.dispatcher.update.outer_middleware(BlockedUserMiddleware())
@@ -279,17 +288,18 @@ class UpupaApplication:
     async def run(self) -> None:
         readiness = self.create_readiness_server()
         self.bot.session.middleware(self.polling_health.observe)
+        self.bot.session.middleware(RetryAfterMiddleware())
         try:
             self.initialize_state()
             self.start_background_tasks()
             self.configure_dispatcher()
 
-            await self.bot.delete_webhook(drop_pending_updates=True)
+            # Сообщения, пришедшие во время деплоя, не выбрасываем: слишком
+            # старые отсекает StaleUpdateMiddleware.
+            await self.bot.delete_webhook(drop_pending_updates=False)
             await readiness.start()
             logger.info("Starting polling bot_id=%s", id(self.bot))
-            await self.dispatcher.start_polling(
-                self.bot, skip_updates=True, close_bot_session=False,
-            )
+            await self.dispatcher.start_polling(self.bot, close_bot_session=False)
         finally:
             try:
                 await readiness.stop()

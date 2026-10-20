@@ -16,8 +16,9 @@ from googleapiclient.discovery import build
 from PIL import Image, ImageDraw, ImageFont
 
 from core.loader import bot
-from core.settings import API_TOKEN, GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
+from core.settings import GOOGLE_API_KEY, SEARCH_ENGINE_ID, giphy_api_key
 from infrastructure.ai.clients import model
+from infrastructure.media_io import download_telegram_bytes
 from prompts import PROMPT_DESCRIBE, SPECIAL_PROMPT, actions
 
 # Кэш последних показанных картинок (храним хеши URL)
@@ -259,8 +260,12 @@ async def search_gifs(
         data = response.json()
         gifs = data.get("data", [])
         return [gif["images"]["original"]["url"] for gif in gifs]
+    except httpx.HTTPStatusError as e:
+        # Текст исключения содержит URL запроса вместе с api_key.
+        logging.error(f"Giphy API вернул HTTP {e.response.status_code}")
+        return []
     except httpx.HTTPError as e:
-        logging.error(f"Ошибка при обращении к Giphy API: {e}")
+        logging.error(f"Ошибка при обращении к Giphy API: {type(e).__name__}")
         return []
     finally:
         if owns_client:
@@ -360,17 +365,9 @@ async def process_image_description(bot, message: types.Message) -> tuple[bool, 
         return False, "Произошла ошибка при обработке изображения."
 
 
-async def _download_telegram_file(bot, file_id: str) -> bytes | None:
-    file = await bot.get_file(file_id)
-    file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
-
-    async with httpx.AsyncClient(
-        timeout=HTTP_TIMEOUT_SECONDS,
-        follow_redirects=True,
-    ) as client:
-        response = await client.get(file_url)
-
-    return response.content if response.status_code == 200 else None
+async def _download_telegram_file(bot, file_id: str) -> bytes:
+    """Скачивает Telegram-файл через Bot API без ручной сборки URL с токеном."""
+    return await download_telegram_bytes(bot, file_id)
 
 
 async def download_image(bot, file_id: str) -> bytes | None:
@@ -424,10 +421,7 @@ async def get_photo_from_message(message: types.Message):
 
 
 async def download_telegram_image(bot, photo):
-    image_data = await _download_telegram_file(bot, photo.file_id)
-    if image_data is None:
-        raise RuntimeError("Не удалось загрузить изображение.")
-    return image_data
+    return await _download_telegram_file(bot, photo.file_id)
 
 
 async def process_image(image_bytes: bytes) -> str:

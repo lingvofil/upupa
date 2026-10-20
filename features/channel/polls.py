@@ -8,14 +8,14 @@ import logging
 import os
 import random
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
+from core.paths import DATA_DIR
 from core.settings import SPECIAL_CHAT_ID
 from features.channel.mood import mood_prompt
 from features.channel.storage import append_post
 from prompts.channel import CHANNEL_PERSONA
 
-POLL_STATE_FILE = Path("channel_polls.json")
+POLL_STATE_FILE = DATA_DIR / "channel_polls.json"
 POLL_PROBABILITY = 0.06
 POLL_COOLDOWN_MIN_POSTS = 15
 POLL_COOLDOWN_MAX_POSTS = 25

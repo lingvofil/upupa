@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-POSTS_FILE = Path("channel_posts.json")
-SCHEDULE_FILE = Path("channel_schedule.json")
-MOOD_FILE = Path("channel_mood.json")
+from core.paths import DATA_DIR
+
+POSTS_FILE = DATA_DIR / "channel_posts.json"
+SCHEDULE_FILE = DATA_DIR / "channel_schedule.json"
+MOOD_FILE = DATA_DIR / "channel_mood.json"
 
 
 def _read_json(path: Path, default: Any) -> Any:

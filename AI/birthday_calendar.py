@@ -1,41 +1,74 @@
 #birthday_calendar.py
 
-import json
+import html
 import re
 import asyncio
 import random
+import threading
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from functools import partial
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 import logging
 import traceback
-from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
+from core.json_repository import JsonFileRepository
+from core.paths import BIRTHDAYS_PATH, USER_MESSAGES_LOG_PATH as LOG_FILE
 from core.history_store import get_history_repository
 from core.settings import ADMIN_ID
 from core.state import chat_settings
+from core.telegram_markup import is_entity_parse_error
 from infrastructure.ai.clients import gigachat_model, groq_ai, model
 
 # Файл для хранения дней рождения
-BIRTHDAY_FILE = "birthdays.json"
+BIRTHDAY_FILE = str(BIRTHDAYS_PATH)
 
-def load_birthdays() -> Dict:
-    """Загрузка дней рождения из файла"""
+# Все изменения файла идут через update_birthdays: чтение свежей версии,
+# правка и атомарная запись под одной блокировкой, без устаревших снимков.
+_birthdays_lock = threading.Lock()
+
+
+class BirthdayStorageError(RuntimeError):
+    """Файл дней рождения повреждён — перезаписывать его нельзя."""
+
+
+def _read_birthdays() -> Dict:
     try:
-        with open(BIRTHDAY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        data = JsonFileRepository(BIRTHDAY_FILE).load()
     except FileNotFoundError:
         return {}
-    except json.JSONDecodeError:
-        logging.error(f"Ошибка чтения файла {BIRTHDAY_FILE}")
+    except (OSError, ValueError) as exc:
+        raise BirthdayStorageError(f"Не удалось прочитать {BIRTHDAY_FILE}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise BirthdayStorageError(
+            f"{BIRTHDAY_FILE}: ожидался JSON-объект, получен {type(data).__name__}"
+        )
+    return data
+
+
+def load_birthdays() -> Dict:
+    """Загрузка дней рождения для чтения (повреждённый файл не трогаем)."""
+    try:
+        return _read_birthdays()
+    except BirthdayStorageError as exc:
+        logging.error("%s", exc)
         return {}
 
 def save_birthdays(birthdays: Dict) -> None:
-    """Сохранение дней рождения в файл"""
-    try:
-        with open(BIRTHDAY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(birthdays, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logging.error(f"Ошибка сохранения файла {BIRTHDAY_FILE}: {e}")
+    """Атомарное сохранение дней рождения в файл"""
+    JsonFileRepository(BIRTHDAY_FILE, indent=2).save(birthdays)
+
+
+def update_birthdays(mutator: Callable[[Dict], Any]) -> Any:
+    """Изменить актуальное содержимое файла и атомарно сохранить его.
+
+    Повреждённый файл не заменяется пустым: BirthdayStorageError уходит вызывающему.
+    """
+    with _birthdays_lock:
+        birthdays = _read_birthdays()
+        result = mutator(birthdays)
+        save_birthdays(birthdays)
+        return result
 
 def get_chat_birthdays(chat_id: int) -> Dict:
     """Получение дней рождения для конкретного чата"""
@@ -45,15 +78,45 @@ def get_chat_birthdays(chat_id: int) -> Dict:
 
 def save_chat_birthday(chat_id: int, user_id: int, birthday_data: Dict) -> None:
     """Сохранение дня рождения пользователя в конкретном чате"""
-    all_birthdays = load_birthdays()
-    chat_key = str(chat_id)
-    user_key = str(user_id)
+    def apply(all_birthdays: Dict) -> None:
+        all_birthdays.setdefault(str(chat_id), {})[str(user_id)] = birthday_data
 
-    if chat_key not in all_birthdays:
-        all_birthdays[chat_key] = {}
+    update_birthdays(apply)
 
-    all_birthdays[chat_key][user_key] = birthday_data
-    save_birthdays(all_birthdays)
+
+def _mark_greeted(chat_id: str, user_id: str, greeting_key: str) -> None:
+    """Отметить отправленное поздравление в свежей версии файла."""
+    def apply(all_birthdays: Dict) -> None:
+        user_data = all_birthdays.get(chat_id, {}).get(user_id)
+        # Запись могли удалить или перезаписать, пока шла генерация.
+        if isinstance(user_data, dict):
+            user_data[greeting_key] = True
+
+    update_birthdays(apply)
+
+
+def _greeting_texts(user_id, user_name: str, greeting: str, *, test: bool = False) -> tuple[str, str]:
+    """Вернуть Markdown-вариант поздравления и HTML-вариант на случай ошибки разметки."""
+    markdown_header = "🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n" if test else ""
+    html_header = "🧪 <b>ПОЗДРАВЛЕНИЕ</b> 🧪\n\n" if test else ""
+    markdown_text = f"{markdown_header}[{user_name}](tg://user?id={user_id})\n\n{greeting}"
+    html_text = (
+        f'{html_header}<a href="tg://user?id={int(user_id)}">{html.escape(user_name or "именинник")}</a>'
+        f"\n\n{html.escape(greeting)}"
+    )
+    return markdown_text, html_text
+
+
+async def _send_greeting(send, user_id, user_name: str, greeting: str, *, test: bool = False):
+    """Отправить поздравление; имя или ответ модели не должны ломать доставку."""
+    markdown_text, html_text = _greeting_texts(user_id, user_name, greeting, test=test)
+    try:
+        return await send(markdown_text, parse_mode="Markdown")
+    except TelegramBadRequest as exc:
+        if not is_entity_parse_error(exc):
+            raise
+        logging.warning("Поздравление не прошло разметку Markdown, отправляю HTML: %s", exc)
+    return await send(html_text, parse_mode="HTML")
 
 def parse_birthday_date(text: str) -> Optional[Tuple[int, int]]:
     """Парсинг даты дня рождения из текста"""
@@ -161,14 +224,15 @@ async def generate_birthday_greeting(user_name: str, user_messages: List[str], c
 
         logging.info(f"Генерация поздравления для {user_name} с моделью {active_model}")
 
-        # Генерируем через выбранную модель
+        # Генерируем через выбранную модель. Провайдеры синхронные: вне потока
+        # они остановили бы event loop на всё время генерации.
         if active_model == "gigachat":
-            response = gigachat_model.generate_content(prompt, chat_id=chat_id)
+            response = await asyncio.to_thread(gigachat_model.generate_content, prompt, chat_id=chat_id)
             return response.text.strip()
         elif active_model == "groq":
-            return groq_ai.generate_text(prompt)
+            return await asyncio.to_thread(groq_ai.generate_text, prompt)
         else:  # gemini
-            response = model.generate_content(prompt, chat_id=chat_id)
+            response = await asyncio.to_thread(model.generate_content, prompt, chat_id=chat_id)
             return response.text.strip()
 
     except Exception as e:
@@ -192,7 +256,7 @@ async def handle_birthday_command(message: Message):
             "username": message.from_user.username or "",
         }
 
-        save_chat_birthday(message.chat.id, message.from_user.id, birthday_data)
+        await asyncio.to_thread(save_chat_birthday, message.chat.id, message.from_user.id, birthday_data)
 
         await message.reply("Записал в календарике этого чата 📅")
 
@@ -210,7 +274,9 @@ async def check_birthdays_and_send_greetings(bot):
 
         logging.info(f"Проверка дней рождения на {today_str}")
 
-        all_birthdays = load_birthdays()
+        # Снимок нужен только для поиска именинников. Отметки о поздравлении
+        # пишутся в свежую версию файла: ДР, добавленные во время генерации, не теряются.
+        all_birthdays = await asyncio.to_thread(load_birthdays)
 
         if not all_birthdays:
             logging.info("Нет записанных дней рождения")
@@ -262,16 +328,22 @@ async def check_birthdays_and_send_greetings(bot):
                                     chat_id=chat_id_int
                                 )
 
-                            user_tag = f"[{user_name}](tg://user?id={user_id})"
-                            final_greeting = f"{user_tag}\n\n{greeting}"
-
                             try:
-                                await bot.send_message(chat_id_int, final_greeting, parse_mode="Markdown")
+                                await _send_greeting(
+                                    partial(bot.send_message, chat_id_int),
+                                    user_id,
+                                    user_name,
+                                    greeting,
+                                )
                                 logging.info(f"Поздравление отправлено в чат {chat_id} для пользователя {user_id}")
-                                user_data[last_greeting_key] = True
-
                             except Exception as e:
                                 logging.error(f"Ошибка отправки поздравления в чат {chat_id}: {e}")
+                                continue
+
+                            try:
+                                await asyncio.to_thread(_mark_greeted, chat_id, user_id, last_greeting_key)
+                            except Exception as e:
+                                logging.error(f"Не удалось отметить поздравление {user_id} в чате {chat_id}: {e}")
 
                     except Exception as e:
                         logging.error(f"Ошибка обработки пользователя {user_id} в чате {chat_id}: {e}")
@@ -280,8 +352,6 @@ async def check_birthdays_and_send_greetings(bot):
             except Exception as e:
                 logging.error(f"Ошибка обработки чата {chat_id}: {e}")
                 continue
-
-        save_birthdays(all_birthdays)
 
     except Exception as e:
         logging.error(f"Ошибка в check_birthdays_and_send_greetings: {e}")
@@ -432,15 +502,7 @@ async def handle_test_greeting_command(message: Message):
                 chat_id=message.chat.id
             )
 
-        user_tag = f"[{user_data['name']}](tg://user?id={user_id})"
-
-        test_message = (
-            "🧪 **ПОЗДРАВЛЕНИЕ** 🧪\n\n"
-            f"{user_tag}\n\n"
-            f"{greeting}"
-        )
-
-        await message.reply(test_message, parse_mode="Markdown")
+        await _send_greeting(message.reply, user_id, user_data["name"], greeting, test=True)
 
     except Exception:
         logging.exception("Ошибка в handle_test_greeting_command")

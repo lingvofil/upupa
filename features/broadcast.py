@@ -1,22 +1,21 @@
 import asyncio
 import logging
-from datetime import datetime
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from core.paths import USER_MESSAGES_LOG_PATH
 from core.history_store import get_history_repository
 from core.settings import ADMIN_ID
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def log_message(message: str):
-    """Логирование сообщений рассылки"""
-    timestamp = datetime.now().isoformat()
-    # Используем 'a' для добавления записи, encoding='utf-8' для корректной работы с кириллицей
-    with open(USER_MESSAGES_LOG_PATH, 'a', encoding='utf-8') as f:
-        f.write(f"{timestamp} - BROADCAST - {message}\n")
+    """Логирование сообщений рассылки в общий лог бота.
+
+    В журнал истории (USER_MESSAGES_LOG_PATH) пишет только репозиторий истории:
+    посторонняя строка между записью pending-сообщения и его проверкой ломает
+    индекс истории (HistorySourceChanged).
+    """
+    logger.info("BROADCAST - %s", message)
 
 async def get_all_chats_from_log():
     """

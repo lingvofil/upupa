@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -179,7 +180,7 @@ async def analyze_tours_with_ai(
 
     try:
         if groq_ai:
-            response = groq_ai.generate_text(prompt)
+            response = await asyncio.to_thread(groq_ai.generate_text, prompt)
 
             json_match = re.search(r"\[.*\]", response, re.DOTALL)
             if json_match:

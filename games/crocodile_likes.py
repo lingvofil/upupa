@@ -6,11 +6,13 @@ import asyncio
 import json
 import logging
 import re
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from core.json_repository import JsonFileRepository
 from core.loader import bot
+from core.telegram_markup import escape_markdown, send_markdown_or_plain
 from core.paths import CROCODILE_STATE_PATH
 
 
@@ -158,10 +160,9 @@ async def handle_like_callback(callback) -> None:
         _save_registry(registry)
 
     try:
-        await bot.send_message(
-            chat_id,
-            f"❤️ **{callback.from_user.full_name}** поставил лайк хуйдожнику!",
-            parse_mode="Markdown",
+        await send_markdown_or_plain(
+            partial(bot.send_message, chat_id),
+            f"❤️ **{escape_markdown(callback.from_user.full_name)}** поставил лайк хуйдожнику!",
         )
     except Exception as exc:
         logging.warning("[crocodile] like announcement failed: %s", exc)

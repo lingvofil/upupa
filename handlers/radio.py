@@ -8,6 +8,7 @@ import re
 from aiogram import Router, types
 from aiogram.types import BufferedInputFile
 
+from core.inflight import single_flight
 from core.settings import BLOCKED_USERS
 from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
@@ -85,6 +86,7 @@ async def _deliver_radio(
     and message.from_user.id not in BLOCKED_USERS
 )
 @ai_feature("упупа радио")
+@single_flight("radio", per="chat", busy_text="📻 Выпуск уже готовится, дождитесь его.")
 async def handle_radio_command(message: types.Message):
     chat_id = str(message.chat.id)
     if not is_radio_enabled(chat_id):
