@@ -11,7 +11,12 @@ from tests import test_smoke_imports  # noqa: F401
 import AI.whatisthere as whatisthere
 
 
-def test_download_url_bytes_uses_async_http_and_enforces_limit():
+def test_download_url_bytes_uses_async_http_and_enforces_limit(monkeypatch):
+    async def public_resolve(host, port):
+        return ["93.184.215.14"]
+
+    monkeypatch.setattr(whatisthere, "_resolve_host_addresses", public_resolve)
+
     async def scenario():
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.headers["user-agent"] == "test-agent"
