@@ -12,6 +12,7 @@ from nltk.util import ngrams
 
 from core.paths import USER_MESSAGES_LOG_PATH as LOG_FILE
 from core.history_store import get_history_repository
+from infrastructure.persistence.sqlite_history import format_journal_line
 from prompts import STOPWORDS
 
 
@@ -70,7 +71,10 @@ async def save_user_message(message: types.Message):
     username = message.from_user.username or "NoUsername"
     full_name = message.from_user.full_name or "NoName"
     text = message.text or ""
-    log_line = f"{timestamp} - Chat {chat_id} ({chat_title}) - User {user_id} ({username}) [{full_name}]: {text}\n"
+    log_line = format_journal_line({
+        "timestamp": timestamp, "chat_id": chat_id, "chat_title": chat_title,
+        "user_id": user_id, "username": username, "full_name": full_name, "text": text,
+    })
 
     try:
         async with aiofiles.open(LOG_FILE, mode="a", encoding="utf-8") as f:

@@ -6,6 +6,7 @@
 from aiogram import Router
 
 from aiogram import types
+from core.inflight import single_flight
 from core.settings import BLOCKED_USERS
 from infrastructure.ai.execution import ai_feature
 from AI.adddescribe import (
@@ -41,6 +42,8 @@ from AI.picgeneration import (
 
 router = Router(name="ai_generation")
 
+IMAGE_BUSY_TEXT = "Твою прошлую картинку ещё рисую, дождись её."
+
 
 @router.message(
     lambda message: (
@@ -53,6 +56,7 @@ router = Router(name="ai_generation")
     )
 )
 @ai_feature("редактировать картинку")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def edit_image(message: types.Message):
     await handle_edit_command(message)
 
@@ -66,6 +70,7 @@ async def edit_image(message: types.Message):
     )
 )
 @ai_feature("нарисуй")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def generate_image(message: types.Message):
     await handle_image_generation_command(message)
     
@@ -79,6 +84,7 @@ async def generate_image(message: types.Message):
     )
 )
 @ai_feature("нарисуй: GigaChat")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def generate_image_gigachat(message: types.Message):
     await handle_kandinsky_generation_command(message)
 
@@ -93,6 +99,7 @@ async def generate_image_gigachat(message: types.Message):
     )
 )
 @ai_feature("перерисуй")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def redraw_image(message: types.Message):
     await handle_redraw_command(message)
 
@@ -118,6 +125,7 @@ async def redraw_image(message: types.Message):
     )
 )
 @ai_feature("магшот")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def mugshot_image(message: types.Message):
     await handle_mugshot_command(message)
 
@@ -138,6 +146,7 @@ async def mugshot_image(message: types.Message):
     )
 )
 @ai_feature("нарисуй: NVIDIA")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def nvidia_image(message: types.Message):
     await handle_nvidia_command(message)
 
@@ -147,6 +156,7 @@ async def nvidia_image(message: types.Message):
     message.from_user.id not in BLOCKED_USERS
 )
 @ai_feature("скаламбурь")
+@single_flight("image", per="user", busy_text=IMAGE_BUSY_TEXT)
 async def generate_pun_with_image(message: types.Message):
     await handle_pun_image_command(message)
     

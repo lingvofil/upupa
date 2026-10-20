@@ -9,6 +9,7 @@ import time
 import json
 import html
 import re
+from functools import partial
 from typing import Dict, Optional
 
 from aiohttp import web
@@ -24,6 +25,8 @@ from thefuzz import fuzz
 
 from core.chronicle_sink import chronicle_participant, report_chronicle_event
 from core.loader import bot
+from core.paths import PROJECT_ROOT
+from core.telegram_markup import escape_markdown, send_markdown_or_plain
 from core.settings import API_TOKEN
 from games.token_dashboard import serve_token_dashboard, token_dashboard_api
 from games.social_webapp import serve_social_app, social_api
@@ -104,6 +107,11 @@ def get_chat_id_from_room(room: str) -> str:
     if room.startswith("m"):
         return str(int(room.replace("m", "-")))
     return room
+
+
+def drawer_preview_caption(session: dict) -> str:
+    """Подпись превью холста; имя экранировано для legacy Markdown."""
+    return f"🎨 *Рисует:* {escape_markdown(session.get('drawer_name') or 'Player')}"
 
 
 def _load_words() -> list[str]:
@@ -415,7 +423,7 @@ async def _bump_preview_once(chat_id: str, session: dict) -> bool:
         msg = await bot.send_photo(
             int(cid),
             BufferedInputFile(img, "preview.jpg"),
-            caption=f"🎨 *Рисует:* {session.get('drawer_name','Player')}",
+            caption=drawer_preview_caption(session),
             parse_mode="Markdown",
         )
         session["preview_message_id"] = msg.message_id
@@ -478,7 +486,7 @@ async def _process_snapshot(room: str, image_data: str, source: str) -> str:
             chat_id=int(chat_id),
             message_id=int(msg_id),
             image_bytes=image_bytes,
-            caption=f"🎨 *Рисует:* {session.get('drawer_name', 'Player')}",
+            caption=drawer_preview_caption(session),
         )
         session["last_preview_time"] = now
         return "OK"
@@ -733,12 +741,17 @@ async def final_frame(sid, data):
         # Останавливаем сессию перед отправкой финала
         await _stop_session(chat_id, reason="final_frame")
 
-        await bot.send_photo(
-            chat_id=int(chat_id),
-            photo=BufferedInputFile(image_bytes, filename="result.jpg"),
-            caption=f"🏁 **{drawer_name}** завершил рисование!\nСлово было: **{word}**",
-            parse_mode="Markdown",
-            reply_markup=get_end_game_keyboard(0)
+        # Сессия уже остановлена: итог нельзя потерять из-за разметки в имени.
+        await send_markdown_or_plain(
+            partial(
+                bot.send_photo,
+                chat_id=int(chat_id),
+                photo=BufferedInputFile(image_bytes, filename="result.jpg"),
+            ),
+            f"🏁 **{escape_markdown(drawer_name)}** завершил рисование!\n"
+            f"Слово было: **{escape_markdown(word)}**",
+            text_field="caption",
+            reply_markup=get_end_game_keyboard(0),
         )
         await bot.send_message(
             int(chat_id),
@@ -762,7 +775,7 @@ async def serve_index(request: web.Request):
     if view == "social-api":
         return await social_api(request, bot)
 
-    resp = web.FileResponse("index.html")
+    resp = web.FileResponse(PROJECT_ROOT / "index.html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -788,11 +801,10 @@ async def _default_start_new_game(chat_id: int, user_id: int, user_full_name: st
         await _stop_session(str(chat_id), reason="restart")
 
     word = _pick_word()
-    await bot.send_message(
-        chat_id,
-        f"🎮 **КРАКАДИЛ**\nХуйдожник: {user_full_name}",
+    await send_markdown_or_plain(
+        partial(bot.send_message, chat_id),
+        f"🎮 **КРАКАДИЛ**\nХуйдожник: {escape_markdown(user_full_name)}",
         reply_markup=get_game_keyboard(chat_id),
-        parse_mode="Markdown",
     )
 
     blank = base64.b64decode(BLANK_PNG_B64)
@@ -879,10 +891,9 @@ async def _default_handle_callback(cb: types.CallbackQuery):
             new_count = count + 1
             
             user_name = cb.from_user.full_name
-            await bot.send_message(
-                cb.message.chat.id,
-                f"❤️ **{user_name}** поставил лайк хуйдожнику!",
-                parse_mode="Markdown"
+            await send_markdown_or_plain(
+                partial(bot.send_message, cb.message.chat.id),
+                f"❤️ **{escape_markdown(user_name)}** поставил лайк хуйдожнику!",
             )
             
             await cb.message.edit_reply_markup(reply_markup=get_end_game_keyboard(new_count))
@@ -978,20 +989,24 @@ async def _default_check_answer(msg: types.Message) -> bool:
             add_point(cid, msg.from_user.id, msg.from_user.full_name)
         final_img = sess.get("last_preview_bytes")
         await _stop_session(cid, reason="guessed")
-        caption_text = f"🎉 **{msg.from_user.full_name}** пабедил!\nСлово: **{sess['word']}**"
+        caption_text = (
+            f"🎉 **{escape_markdown(msg.from_user.full_name)}** пабедил!\n"
+            f"Слово: **{escape_markdown(sess['word'])}**"
+        )
 
+        # Сессия уже остановлена: итог нельзя потерять из-за разметки в имени.
         if final_img:
-            await msg.answer_photo(
-                BufferedInputFile(final_img, "final.jpg"),
-                caption=caption_text,
-                parse_mode="Markdown",
-                reply_markup=get_end_game_keyboard(0)
+            await send_markdown_or_plain(
+                partial(msg.answer_photo, BufferedInputFile(final_img, "final.jpg")),
+                caption_text,
+                text_field="caption",
+                reply_markup=get_end_game_keyboard(0),
             )
         else:
-            await msg.answer(
+            await send_markdown_or_plain(
+                msg.answer,
                 caption_text,
-                parse_mode="Markdown",
-                reply_markup=get_end_game_keyboard(0)
+                reply_markup=get_end_game_keyboard(0),
             )
 
         await bot.send_message(

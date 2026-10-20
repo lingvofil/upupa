@@ -4,6 +4,7 @@
 """
 from aiogram import Router, types
 
+from core.inflight import single_flight
 from core.loader import bot
 import AI.videogeneration as videogeneration
 from AI.media_execution import install_into_videogeneration
@@ -14,6 +15,8 @@ from AI.videogeneration import process_video_generation, process_animate_photo
 
 router = Router(name="video")
 
+VIDEO_BUSY_TEXT = "В этом чате уже снимается видео, дождитесь его."
+
 
 @router.message(
     lambda message: message.text and (
@@ -21,6 +24,7 @@ router = Router(name="video")
         or message.text.lower().startswith("упупа, сними")
     )
 )
+@single_flight("video", per="chat", busy_text=VIDEO_BUSY_TEXT)
 async def generate_video_command(message: types.Message):
     await process_video_generation(message, bot)
 
@@ -36,5 +40,6 @@ async def generate_video_command(message: types.Message):
         and message.caption.lower().startswith("оживи")
     )
 )
+@single_flight("video", per="chat", busy_text=VIDEO_BUSY_TEXT)
 async def animate_photo_command(message: types.Message):
     await process_animate_photo(message, bot)

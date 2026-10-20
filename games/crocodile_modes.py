@@ -237,7 +237,7 @@ async def snapshot_with_modes(sid, data, next_handler, callback=None):
             if preview_id and not session.get("suppress_chat_preview"):
                 await crocodile._safe_edit_media(
                     int(session["chat_id"]), int(preview_id), image,
-                    f"🎨 *Рисует:* {session.get('drawer_name', 'Player')}",
+                    crocodile.drawer_preview_caption(session),
                 )
             result = "OK"
     except Exception as exc:
