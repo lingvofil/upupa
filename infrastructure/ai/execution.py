@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
-from functools import wraps
+from functools import partial, wraps
 import inspect
 import logging
 import threading
@@ -18,12 +19,16 @@ from typing import Any, Callable, Iterator, Literal
 from core.settings import (
     AI_BACKGROUND_MAX_CONCURRENCY,
     AI_MAX_CONCURRENCY,
+    AI_MEDIA_MAX_CONCURRENCY,
     AI_QUEUE_TIMEOUT_SECONDS,
     AI_REQUEST_TIMEOUT_SECONDS,
 )
 
 
 AILane = Literal["interactive", "background"]
+# Capacity pools: "text" covers dialogue/DnD/background text, "media" covers
+# image and video generation, which runs for minutes and must not hold text slots.
+AIPool = Literal["text", "media"]
 _CURRENT_AI_LANE: contextvars.ContextVar[AILane] = contextvars.ContextVar(
     "upupa_ai_lane",
     default="interactive",
@@ -235,6 +240,7 @@ def _record_ai_usage(
     success: bool,
     duration_ms: int,
     lane: AILane,
+    feature: str | None,
     context: AIRequestContext,
     explicit_chat_id: Any = None,
     requested_model: str | None = None,
@@ -259,7 +265,7 @@ def _record_ai_usage(
             _extract_model_name(result) or requested_model or "unknown",
             operation,
             provider=_provider_from_operation(operation),
-            feature=_CURRENT_AI_FEATURE.get(),
+            feature=feature,
             input_tokens=usage["input_tokens"],
             output_tokens=usage["output_tokens"],
             cached_tokens=usage["cached_tokens"],
@@ -290,6 +296,12 @@ class AIRequestTimeoutError(AIExecutionError):
 
 @dataclass(frozen=True)
 class AIExecutionSnapshot:
+    """Process-local governor state.
+
+    Unprefixed fields describe the text pool (dialogue, DnD, background text);
+    ``media_*`` fields describe the separate image/video lane.
+    """
+
     waiting: int
     waiting_background: int
     in_flight: int
@@ -307,6 +319,22 @@ class AIExecutionSnapshot:
     provider_samples: int
     provider_latency_avg_ms: int
     provider_latency_p95_ms: int
+    media_max_concurrency: int
+    media_waiting: int
+    media_in_flight: int
+    media_completed: int
+    media_errors: int
+    media_queue_timeouts: int
+    media_request_timeouts: int
+    media_queue_samples: int
+    media_queue_wait_avg_ms: int
+    media_queue_wait_p95_ms: int
+    media_request_samples: int
+    media_request_latency_avg_ms: int
+    media_request_latency_p95_ms: int
+    media_provider_samples: int
+    media_provider_latency_avg_ms: int
+    media_provider_latency_p95_ms: int
 
 
 @contextmanager
@@ -335,15 +363,202 @@ def _p95_ms(samples: list[float]) -> int:
     return round(ordered[index])
 
 
+class _SlotWaiter:
+    """One queued acquirer: either a blocked thread or a suspended coroutine."""
+
+    __slots__ = ("event", "loop", "future", "granted")
+
+    def __init__(
+        self,
+        *,
+        event: threading.Event | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+        future: asyncio.Future[None] | None = None,
+    ) -> None:
+        self.event = event
+        self.loop = loop
+        self.future = future
+        self.granted = False
+
+    def grant(self) -> bool:
+        """Hand a released slot to this waiter; called with the pool lock held."""
+        if self.event is not None:
+            self.granted = True
+            self.event.set()
+            return True
+        try:
+            self.loop.call_soon_threadsafe(_resolve_waiter_future, self.future)
+        except RuntimeError:
+            # The waiter's event loop is closed, so it can never take the slot.
+            return False
+        self.granted = True
+        return True
+
+
+def _resolve_waiter_future(future: asyncio.Future[None]) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
+class SlotPool:
+    """FIFO counting semaphore shared by threads and coroutines.
+
+    Synchronous SDK callers block in ``acquire``. Event-loop callers await
+    ``acquire_async``, which parks only a future, so a queued request does not
+    pin a thread. A released slot goes straight to the oldest waiter, so
+    neither kind of waiter can overtake the other.
+    """
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("capacity must be >= 1")
+        self.capacity = capacity
+        self._available = capacity
+        self._lock = threading.Lock()
+        self._waiters: deque[_SlotWaiter] = deque()
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        with self._lock:
+            if self._available:
+                self._available -= 1
+                return True
+            if timeout is not None and timeout <= 0:
+                return False
+            waiter = _SlotWaiter(event=threading.Event())
+            self._waiters.append(waiter)
+        try:
+            waiter.event.wait(timeout)
+        except BaseException:
+            if self._settle(waiter):
+                self.release()
+            raise
+        return self._settle(waiter)
+
+    async def acquire_async(self, timeout: float | None = None) -> bool:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._available:
+                self._available -= 1
+                return True
+            if timeout is not None and timeout <= 0:
+                return False
+            waiter = _SlotWaiter(loop=loop, future=loop.create_future())
+            self._waiters.append(waiter)
+        try:
+            await asyncio.wait((waiter.future,), timeout=timeout)
+        except BaseException:
+            # Cancelled while queued: a slot granted meanwhile must not leak.
+            if self._settle(waiter):
+                self.release()
+            raise
+        return self._settle(waiter)
+
+    def _settle(self, waiter: _SlotWaiter) -> bool:
+        """Return True if the waiter owns a slot, otherwise drop it from the queue."""
+        with self._lock:
+            if waiter.granted:
+                return True
+            try:
+                self._waiters.remove(waiter)
+            except ValueError:
+                pass
+            return False
+
+    def release(self) -> None:
+        with self._lock:
+            while self._waiters:
+                if self._waiters.popleft().grant():
+                    return
+            if self._available >= self.capacity:
+                raise ValueError("SlotPool released more times than acquired")
+            self._available += 1
+
+    def __enter__(self) -> SlotPool:
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.release()
+
+    async def __aenter__(self) -> SlotPool:
+        await self.acquire_async()
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        self.release()
+
+
+class _PoolMetrics:
+    """Counters and rolling latency windows of one capacity pool."""
+
+    def __init__(self, window_size: int) -> None:
+        self.waiting = 0
+        self.in_flight = 0
+        self.completed = 0
+        self.errors = 0
+        self.queue_timeouts = 0
+        self.request_timeouts = 0
+        self.queue_wait_ms: deque[float] = deque(maxlen=window_size)
+        self.request_latency_ms: deque[float] = deque(maxlen=window_size)
+        self.provider_latency_ms: deque[float] = deque(maxlen=window_size)
+
+    def summary(self, prefix: str = "") -> dict[str, int]:
+        queue_samples = list(self.queue_wait_ms)
+        request_samples = list(self.request_latency_ms)
+        provider_samples = list(self.provider_latency_ms)
+        values = {
+            "waiting": self.waiting,
+            "in_flight": self.in_flight,
+            "completed": self.completed,
+            "errors": self.errors,
+            "queue_timeouts": self.queue_timeouts,
+            "request_timeouts": self.request_timeouts,
+            "queue_samples": len(queue_samples),
+            "queue_wait_avg_ms": _average_ms(queue_samples),
+            "queue_wait_p95_ms": _p95_ms(queue_samples),
+            "request_samples": len(request_samples),
+            "request_latency_avg_ms": _average_ms(request_samples),
+            "request_latency_p95_ms": _p95_ms(request_samples),
+            "provider_samples": len(provider_samples),
+            "provider_latency_avg_ms": _average_ms(provider_samples),
+            "provider_latency_p95_ms": _p95_ms(provider_samples),
+        }
+        return {f"{prefix}{name}": value for name, value in values.items()}
+
+
+@dataclass(frozen=True)
+class _CallPlan:
+    """Deadlines and usage attribution of one governed provider call."""
+
+    pool: AIPool
+    operation: str
+    lane: AILane
+    feature: str | None
+    request_context: AIRequestContext
+    explicit_chat_id: Any
+    requested_model: str | None
+    started: float
+    total_timeout: float
+    queue_timeout: float
+    deadline: float
+    queue_deadline: float
+
+
 class AIExecutionGovernor:
     """Bound provider concurrency and keep timed-out SDK calls from multiplying.
 
     Provider SDKs are synchronous in the current architecture. The caller can
-    already live in ``asyncio.to_thread``; this governor adds one dedicated,
-    bounded provider executor behind that boundary. A timed-out SDK call may
+    already live in ``asyncio.to_thread``; this governor adds dedicated,
+    bounded provider executors behind that boundary. A timed-out SDK call may
     keep its worker thread until the underlying library returns, but its slot
     is not released early, so repeated timeouts cannot create an unbounded
     pile of provider threads.
+
+    Text and media work use separate pools. Image/video jobs run for minutes,
+    so they get their own slots and executor: a burst of generations queues
+    only behind other generations and never starves dialogue or DnD replies.
+    Event-loop media callers use ``run_media_async``, which waits for a slot
+    and for the provider without holding a default-executor thread.
 
     Latency metrics are intentionally process-local and bounded. They retain a
     rolling window only, so diagnostics cannot grow memory usage over time.
@@ -356,6 +571,7 @@ class AIExecutionGovernor:
         background_max_concurrency: int,
         queue_timeout_seconds: float,
         request_timeout_seconds: float,
+        media_max_concurrency: int = 1,
         latency_window_size: int = 256,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -365,6 +581,8 @@ class AIExecutionGovernor:
             raise ValueError("background_max_concurrency must be >= 1")
         if background_max_concurrency > max_concurrency:
             raise ValueError("background_max_concurrency cannot exceed max_concurrency")
+        if media_max_concurrency < 1:
+            raise ValueError("media_max_concurrency must be >= 1")
         if queue_timeout_seconds <= 0 or request_timeout_seconds <= 0:
             raise ValueError("AI timeouts must be positive")
         if latency_window_size < 1:
@@ -372,133 +590,426 @@ class AIExecutionGovernor:
 
         self.max_concurrency = max_concurrency
         self.background_max_concurrency = background_max_concurrency
+        self.media_max_concurrency = media_max_concurrency
         self.queue_timeout_seconds = float(queue_timeout_seconds)
         self.request_timeout_seconds = float(request_timeout_seconds)
         self.latency_window_size = latency_window_size
         self._logger = logger or logging.getLogger(__name__)
 
-        self._global_slots = threading.BoundedSemaphore(max_concurrency)
-        self._background_slots = threading.BoundedSemaphore(background_max_concurrency)
+        self._global_slots = SlotPool(max_concurrency)
+        self._background_slots = SlotPool(background_max_concurrency)
+        self._media_slots = SlotPool(media_max_concurrency)
         self._executor_lock = threading.Lock()
-        self._executor: ThreadPoolExecutor | None = None
+        self._executors: dict[AIPool, ThreadPoolExecutor] = {}
 
         self._state_lock = threading.Lock()
-        self._waiting = 0
+        self._metrics: dict[AIPool, _PoolMetrics] = {
+            "text": _PoolMetrics(latency_window_size),
+            "media": _PoolMetrics(latency_window_size),
+        }
         self._waiting_background = 0
-        self._in_flight = 0
         self._in_flight_background = 0
-        self._completed = 0
-        self._errors = 0
-        self._queue_timeouts = 0
-        self._request_timeouts = 0
-        self._queue_wait_ms: deque[float] = deque(maxlen=latency_window_size)
-        self._request_latency_ms: deque[float] = deque(maxlen=latency_window_size)
-        self._provider_latency_ms: deque[float] = deque(maxlen=latency_window_size)
 
-    def _get_executor(self) -> ThreadPoolExecutor:
-        executor = self._executor
-        if executor is not None:
-            return executor
+    def _get_executor(self, pool: AIPool) -> ThreadPoolExecutor:
+        # One worker per slot: an admitted call never queues inside the executor.
         with self._executor_lock:
-            executor = self._executor
+            executor = self._executors.get(pool)
             if executor is None:
+                media = pool == "media"
                 executor = ThreadPoolExecutor(
-                    max_workers=self.max_concurrency,
-                    thread_name_prefix="upupa-ai",
+                    max_workers=self.media_max_concurrency if media else self.max_concurrency,
+                    thread_name_prefix="upupa-ai-media" if media else "upupa-ai",
                 )
-                self._executor = executor
+                self._executors[pool] = executor
             return executor
 
     def snapshot(self) -> AIExecutionSnapshot:
         with self._state_lock:
-            queue_samples = list(self._queue_wait_ms)
-            request_samples = list(self._request_latency_ms)
-            provider_samples = list(self._provider_latency_ms)
             return AIExecutionSnapshot(
-                waiting=self._waiting,
                 waiting_background=self._waiting_background,
-                in_flight=self._in_flight,
                 in_flight_background=self._in_flight_background,
-                completed=self._completed,
-                errors=self._errors,
-                queue_timeouts=self._queue_timeouts,
-                request_timeouts=self._request_timeouts,
-                queue_samples=len(queue_samples),
-                queue_wait_avg_ms=_average_ms(queue_samples),
-                queue_wait_p95_ms=_p95_ms(queue_samples),
-                request_samples=len(request_samples),
-                request_latency_avg_ms=_average_ms(request_samples),
-                request_latency_p95_ms=_p95_ms(request_samples),
-                provider_samples=len(provider_samples),
-                provider_latency_avg_ms=_average_ms(provider_samples),
-                provider_latency_p95_ms=_p95_ms(provider_samples),
+                media_max_concurrency=self.media_max_concurrency,
+                **self._metrics["text"].summary(),
+                **self._metrics["media"].summary("media_"),
             )
 
-    def _change_waiting(self, lane: AILane, delta: int) -> None:
+    def _change_waiting(self, plan: _CallPlan, delta: int) -> None:
         with self._state_lock:
-            self._waiting += delta
-            if lane == "background":
+            self._metrics[plan.pool].waiting += delta
+            if plan.pool == "text" and plan.lane == "background":
                 self._waiting_background += delta
 
-    def _change_in_flight(self, lane: AILane, delta: int) -> None:
+    def _change_in_flight(self, plan: _CallPlan, delta: int) -> None:
         with self._state_lock:
-            self._in_flight += delta
-            if lane == "background":
+            self._metrics[plan.pool].in_flight += delta
+            if plan.pool == "text" and plan.lane == "background":
                 self._in_flight_background += delta
 
-    def _record_completion(self, *, error: bool) -> None:
+    def _record_completion(self, plan: _CallPlan, *, error: bool) -> None:
         with self._state_lock:
-            self._completed += 1
+            metrics = self._metrics[plan.pool]
+            metrics.completed += 1
             if error:
-                self._errors += 1
+                metrics.errors += 1
 
-    def _record_queue_timeout(self) -> None:
+    def _record_queue_timeout(self, plan: _CallPlan) -> None:
         with self._state_lock:
-            self._queue_timeouts += 1
+            self._metrics[plan.pool].queue_timeouts += 1
 
-    def _record_request_timeout(self) -> None:
+    def _record_request_timeout(self, plan: _CallPlan) -> None:
         with self._state_lock:
-            self._request_timeouts += 1
+            self._metrics[plan.pool].request_timeouts += 1
 
-    def _record_queue_wait(self, elapsed_seconds: float) -> None:
+    def _record_queue_wait(self, plan: _CallPlan, elapsed_seconds: float) -> None:
         with self._state_lock:
-            self._queue_wait_ms.append(max(0.0, elapsed_seconds * 1000))
+            self._metrics[plan.pool].queue_wait_ms.append(max(0.0, elapsed_seconds * 1000))
 
-    def _record_request_latency(self, elapsed_seconds: float) -> None:
+    def _record_request_latency(self, plan: _CallPlan, elapsed_seconds: float) -> None:
         with self._state_lock:
-            self._request_latency_ms.append(max(0.0, elapsed_seconds * 1000))
+            self._metrics[plan.pool].request_latency_ms.append(max(0.0, elapsed_seconds * 1000))
 
-    def _record_provider_latency(self, elapsed_seconds: float) -> None:
+    def _record_provider_latency(self, plan: _CallPlan, elapsed_seconds: float) -> None:
         with self._state_lock:
-            self._provider_latency_ms.append(max(0.0, elapsed_seconds * 1000))
+            self._metrics[plan.pool].provider_latency_ms.append(max(0.0, elapsed_seconds * 1000))
+
+    def _record_usage(
+        self,
+        plan: _CallPlan,
+        *,
+        success: bool,
+        elapsed_seconds: float,
+        result: Any = None,
+    ) -> None:
+        _record_ai_usage(
+            operation=plan.operation,
+            result=result,
+            success=success,
+            duration_ms=round(elapsed_seconds * 1000),
+            lane=plan.lane,
+            feature=plan.feature,
+            context=plan.request_context,
+            explicit_chat_id=plan.explicit_chat_id,
+            requested_model=plan.requested_model,
+        )
 
     @staticmethod
     def _remaining(deadline: float) -> float:
         return max(0.0, deadline - time.monotonic())
 
-    def _acquire_slots(self, lane: AILane, deadline: float, queue_deadline: float) -> tuple[bool, bool]:
-        background_acquired = False
-        global_acquired = False
-        self._change_waiting(lane, 1)
-        try:
-            if lane == "background":
-                remaining = min(self._remaining(deadline), self._remaining(queue_deadline))
-                if remaining <= 0 or not self._background_slots.acquire(timeout=remaining):
-                    raise AIQueueTimeoutError("AI background queue timeout")
-                background_acquired = True
+    def _queue_remaining(self, plan: _CallPlan) -> float:
+        return min(self._remaining(plan.deadline), self._remaining(plan.queue_deadline))
 
-            remaining = min(self._remaining(deadline), self._remaining(queue_deadline))
-            if remaining <= 0 or not self._global_slots.acquire(timeout=remaining):
-                raise AIQueueTimeoutError("AI provider queue timeout")
-            global_acquired = True
-            return global_acquired, background_acquired
-        except AIQueueTimeoutError:
-            if background_acquired:
-                self._background_slots.release()
-            self._record_queue_timeout()
+    def _plan(
+        self,
+        pool: AIPool,
+        operation: str,
+        kwargs: dict[str, Any],
+        *,
+        timeout_seconds: float | None,
+        queue_timeout_seconds: float | None,
+        provider_deadline: float | None,
+        requested_model: str | None,
+    ) -> _CallPlan:
+        started = time.monotonic()
+        total_timeout = float(timeout_seconds or self.request_timeout_seconds)
+        queue_timeout = min(float(queue_timeout_seconds or self.queue_timeout_seconds), total_timeout)
+        deadline = started + total_timeout
+        if provider_deadline is not None:
+            deadline = min(deadline, float(provider_deadline))
+        return _CallPlan(
+            pool=pool,
+            operation=operation,
+            lane=_CURRENT_AI_LANE.get(),
+            feature=_CURRENT_AI_FEATURE.get(),
+            request_context=_CURRENT_AI_REQUEST_CONTEXT.get(),
+            explicit_chat_id=kwargs.get("chat_id"),
+            requested_model=requested_model or (
+                str(kwargs["model"]).removeprefix("models/") if kwargs.get("model") else None
+            ),
+            started=started,
+            total_timeout=total_timeout,
+            queue_timeout=queue_timeout,
+            deadline=deadline,
+            queue_deadline=started + queue_timeout,
+        )
+
+    def _slot_gates(self, plan: _CallPlan) -> tuple[tuple[SlotPool, str], ...]:
+        if plan.pool == "media":
+            return ((self._media_slots, "media"),)
+        if plan.lane == "background":
+            return ((self._background_slots, "background"), (self._global_slots, "provider"))
+        return ((self._global_slots, "provider"),)
+
+    @staticmethod
+    def _release_slots(acquired: list[SlotPool]) -> None:
+        for slots in reversed(acquired):
+            slots.release()
+
+    def _acquire_slots(self, plan: _CallPlan) -> list[SlotPool]:
+        acquired: list[SlotPool] = []
+        self._change_waiting(plan, 1)
+        try:
+            for slots, label in self._slot_gates(plan):
+                remaining = self._queue_remaining(plan)
+                if remaining <= 0 or not slots.acquire(timeout=remaining):
+                    raise AIQueueTimeoutError(f"AI {label} queue timeout")
+                acquired.append(slots)
+            return acquired
+        except BaseException:
+            self._release_slots(acquired)
             raise
         finally:
-            self._change_waiting(lane, -1)
+            self._change_waiting(plan, -1)
+
+    async def _acquire_slots_async(self, plan: _CallPlan) -> list[SlotPool]:
+        acquired: list[SlotPool] = []
+        self._change_waiting(plan, 1)
+        try:
+            for slots, label in self._slot_gates(plan):
+                remaining = self._queue_remaining(plan)
+                if remaining <= 0 or not await slots.acquire_async(timeout=remaining):
+                    raise AIQueueTimeoutError(f"AI {label} queue timeout")
+                acquired.append(slots)
+            return acquired
+        except BaseException:
+            self._release_slots(acquired)
+            raise
+        finally:
+            self._change_waiting(plan, -1)
+
+    def _dispatch(
+        self,
+        plan: _CallPlan,
+        acquired: list[SlotPool],
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        provider_start_guard: Callable[[], None] | None,
+    ) -> tuple[Future[Any], float]:
+        """Submit an admitted call; its slots are freed when the worker really ends."""
+        queue_wait = time.monotonic() - plan.started
+        self._record_queue_wait(plan, queue_wait)
+        self._change_in_flight(plan, 1)
+        provider_started = time.monotonic()
+        deadline = plan.deadline
+
+        try:
+            call_context = contextvars.copy_context()
+
+            def guarded_provider_call():
+                if self._remaining(deadline) <= 0:
+                    raise AIRequestTimeoutError("AI request expired before provider dispatch")
+                if provider_start_guard is not None:
+                    provider_start_guard()
+                return func(*args, **kwargs)
+
+            future: Future[Any] = self._get_executor(plan.pool).submit(
+                call_context.run,
+                guarded_provider_call,
+            )
+        except Exception:
+            self._change_in_flight(plan, -1)
+            self._release_slots(acquired)
+            self._record_completion(plan, error=True)
+            raise
+
+        released = False
+        release_lock = threading.Lock()
+
+        def release_slots(done: Future[Any]) -> None:
+            nonlocal released
+            with release_lock:
+                if released:
+                    return
+                released = True
+            self._record_provider_latency(plan, time.monotonic() - provider_started)
+            self._change_in_flight(plan, -1)
+            self._release_slots(acquired)
+            try:
+                error = done.exception() is not None
+            except BaseException:
+                error = True
+            self._record_completion(plan, error=error)
+
+        future.add_done_callback(release_slots)
+        return future, queue_wait
+
+    # The _finish_* helpers may write usage telemetry to SQLite, so the async
+    # path runs them in a worker thread rather than on the event loop.
+
+    def _finish_queue_timeout(self, plan: _CallPlan) -> None:
+        elapsed = time.monotonic() - plan.started
+        self._record_queue_timeout(plan)
+        self._record_queue_wait(plan, elapsed)
+        self._record_request_latency(plan, elapsed)
+        self._logger.warning(
+            "AI queue timeout operation=%s lane=%s pool=%s wait_ms=%d timeout_s=%.1f",
+            plan.operation,
+            plan.lane,
+            plan.pool,
+            round(elapsed * 1000),
+            plan.queue_timeout,
+        )
+        self._record_usage(plan, success=False, elapsed_seconds=elapsed)
+
+    def _finish_dispatch_failure(self, plan: _CallPlan) -> None:
+        elapsed = time.monotonic() - plan.started
+        self._record_request_latency(plan, elapsed)
+        self._record_usage(plan, success=False, elapsed_seconds=elapsed)
+
+    def _finish_request_timeout(
+        self,
+        plan: _CallPlan,
+        queue_wait: float,
+        *,
+        before_dispatch: bool = False,
+    ) -> AIRequestTimeoutError:
+        elapsed = time.monotonic() - plan.started
+        self._record_request_timeout(plan)
+        self._record_request_latency(plan, elapsed)
+        self._record_usage(plan, success=False, elapsed_seconds=elapsed)
+        if before_dispatch:
+            return AIRequestTimeoutError(
+                f"AI request timeout before provider execution: {plan.operation}"
+            )
+        self._logger.warning(
+            "AI request timeout operation=%s lane=%s pool=%s queue_wait_ms=%d timeout_s=%.1f",
+            plan.operation,
+            plan.lane,
+            plan.pool,
+            round(queue_wait * 1000),
+            plan.total_timeout,
+        )
+        return AIRequestTimeoutError(
+            f"AI request timed out after {plan.total_timeout:.1f}s: {plan.operation}"
+        )
+
+    def _finish_provider_error(
+        self,
+        plan: _CallPlan,
+        queue_wait: float,
+        error: BaseException,
+    ) -> None:
+        elapsed = time.monotonic() - plan.started
+        self._record_request_latency(plan, elapsed)
+        self._record_usage(plan, success=False, elapsed_seconds=elapsed)
+        self._logger.error(
+            "AI provider error operation=%s lane=%s pool=%s queue_wait_ms=%d",
+            plan.operation,
+            plan.lane,
+            plan.pool,
+            round(queue_wait * 1000),
+            exc_info=error,
+        )
+
+    def _finish_success(self, plan: _CallPlan, queue_wait: float, result: Any) -> None:
+        elapsed = time.monotonic() - plan.started
+        self._record_request_latency(plan, elapsed)
+        self._logger.info(
+            "AI provider success operation=%s lane=%s pool=%s queue_wait_ms=%d duration_ms=%d",
+            plan.operation,
+            plan.lane,
+            plan.pool,
+            round(queue_wait * 1000),
+            round(elapsed * 1000),
+        )
+        self._record_usage(plan, success=True, elapsed_seconds=elapsed, result=result)
+
+    def _finish_detached(self, plan: _CallPlan, queue_wait: float, done: Future[Any]) -> None:
+        """Record a call whose async caller was cancelled once its worker ends."""
+        try:
+            error = done.exception()
+        except BaseException as cancelled:
+            error = cancelled
+        if error is None:
+            self._finish_success(plan, queue_wait, done.result())
+        else:
+            self._finish_provider_error(plan, queue_wait, error)
+
+    def _run_blocking(
+        self,
+        plan: _CallPlan,
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        provider_start_guard: Callable[[], None] | None,
+    ) -> Any:
+        try:
+            acquired = self._acquire_slots(plan)
+        except AIQueueTimeoutError:
+            self._finish_queue_timeout(plan)
+            raise
+
+        try:
+            future, queue_wait = self._dispatch(
+                plan, acquired, func, args, kwargs, provider_start_guard,
+            )
+        except Exception:
+            self._finish_dispatch_failure(plan)
+            raise
+
+        remaining = self._remaining(plan.deadline)
+        if remaining <= 0:
+            raise self._finish_request_timeout(plan, queue_wait, before_dispatch=True)
+
+        try:
+            result = future.result(timeout=remaining)
+        except FutureTimeoutError as exc:
+            raise self._finish_request_timeout(plan, queue_wait) from exc
+        except Exception as exc:
+            self._finish_provider_error(plan, queue_wait, exc)
+            raise
+
+        self._finish_success(plan, queue_wait, result)
+        return result
+
+    async def _run_async(
+        self,
+        plan: _CallPlan,
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        provider_start_guard: Callable[[], None] | None,
+    ) -> Any:
+        try:
+            acquired = await self._acquire_slots_async(plan)
+        except AIQueueTimeoutError:
+            await asyncio.to_thread(self._finish_queue_timeout, plan)
+            raise
+
+        try:
+            future, queue_wait = self._dispatch(
+                plan, acquired, func, args, kwargs, provider_start_guard,
+            )
+        except Exception:
+            await asyncio.to_thread(self._finish_dispatch_failure, plan)
+            raise
+
+        provider_result = asyncio.wrap_future(future)
+        try:
+            done, _pending = await asyncio.wait(
+                (provider_result,),
+                timeout=self._remaining(plan.deadline),
+            )
+        except asyncio.CancelledError:
+            # Like a timed-out call, the worker keeps its slot until it ends;
+            # its outcome is recorded from the worker thread at that point.
+            provider_result.cancel()
+            future.add_done_callback(partial(self._finish_detached, plan, queue_wait))
+            raise
+
+        if not done:
+            provider_result.cancel()
+            raise await asyncio.to_thread(self._finish_request_timeout, plan, queue_wait)
+
+        try:
+            result = provider_result.result()
+        except Exception as exc:
+            await asyncio.to_thread(self._finish_provider_error, plan, queue_wait, exc)
+            raise
+
+        await asyncio.to_thread(self._finish_success, plan, queue_wait, result)
+        return result
 
     def run(
         self,
@@ -513,203 +1024,80 @@ class AIExecutionGovernor:
         requested_model: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        lane = _CURRENT_AI_LANE.get()
-        request_context = _CURRENT_AI_REQUEST_CONTEXT.get()
-        explicit_chat_id = kwargs.get("chat_id")
-        started = time.monotonic()
-        total_timeout = float(timeout_seconds or self.request_timeout_seconds)
-        queue_timeout = float(queue_timeout_seconds or self.queue_timeout_seconds)
-        deadline = started + total_timeout
-        if provider_deadline is not None:
-            deadline = min(deadline, float(provider_deadline))
-        queue_deadline = started + min(queue_timeout, total_timeout)
-        requested_model = requested_model or (
-            str(kwargs["model"]).removeprefix("models/") if kwargs.get("model") else None
-        )
-
-        try:
-            global_acquired, background_acquired = self._acquire_slots(
-                lane,
-                deadline,
-                queue_deadline,
-            )
-        except AIQueueTimeoutError:
-            elapsed = time.monotonic() - started
-            self._record_queue_wait(elapsed)
-            self._record_request_latency(elapsed)
-            self._logger.warning(
-                "AI queue timeout operation=%s lane=%s wait_ms=%d timeout_s=%.1f",
-                operation,
-                lane,
-                round(elapsed * 1000),
-                min(queue_timeout, total_timeout),
-            )
-            _record_ai_usage(
-                operation=operation,
-                success=False,
-                duration_ms=round(elapsed * 1000),
-                lane=lane,
-                context=request_context,
-                explicit_chat_id=explicit_chat_id,
-                requested_model=requested_model,
-            )
-            raise
-
-        queue_wait = time.monotonic() - started
-        self._record_queue_wait(queue_wait)
-        self._change_in_flight(lane, 1)
-        provider_started = time.monotonic()
-
-        try:
-            call_context = contextvars.copy_context()
-
-            def guarded_provider_call():
-                if self._remaining(deadline) <= 0:
-                    raise AIRequestTimeoutError("AI request expired before provider dispatch")
-                if provider_start_guard is not None:
-                    provider_start_guard()
-                return func(*args, **kwargs)
-
-            future: Future[Any] = self._get_executor().submit(call_context.run, guarded_provider_call)
-        except Exception:
-            self._change_in_flight(lane, -1)
-            if global_acquired:
-                self._global_slots.release()
-            if background_acquired:
-                self._background_slots.release()
-            self._record_completion(error=True)
-            elapsed = time.monotonic() - started
-            self._record_request_latency(elapsed)
-            _record_ai_usage(
-                operation=operation,
-                success=False,
-                duration_ms=round(elapsed * 1000),
-                lane=lane,
-                context=request_context,
-                explicit_chat_id=explicit_chat_id,
-                requested_model=requested_model,
-            )
-            raise
-
-        released = False
-        release_lock = threading.Lock()
-
-        def release_slots(done: Future[Any]) -> None:
-            nonlocal released
-            with release_lock:
-                if released:
-                    return
-                released = True
-            self._record_provider_latency(time.monotonic() - provider_started)
-            self._change_in_flight(lane, -1)
-            if global_acquired:
-                self._global_slots.release()
-            if background_acquired:
-                self._background_slots.release()
-            try:
-                error = done.exception() is not None
-            except BaseException:
-                error = True
-            self._record_completion(error=error)
-
-        future.add_done_callback(release_slots)
-
-        remaining = self._remaining(deadline)
-        if remaining <= 0:
-            self._record_request_timeout()
-            elapsed = time.monotonic() - started
-            self._record_request_latency(elapsed)
-            _record_ai_usage(
-                operation=operation,
-                success=False,
-                duration_ms=round(elapsed * 1000),
-                lane=lane,
-                context=request_context,
-                explicit_chat_id=explicit_chat_id,
-                requested_model=requested_model,
-            )
-            raise AIRequestTimeoutError(
-                f"AI request timeout before provider execution: {operation}"
-            )
-
-        try:
-            result = future.result(timeout=remaining)
-        except FutureTimeoutError as exc:
-            self._record_request_timeout()
-            elapsed = time.monotonic() - started
-            self._record_request_latency(elapsed)
-            _record_ai_usage(
-                operation=operation,
-                success=False,
-                duration_ms=round(elapsed * 1000),
-                lane=lane,
-                context=request_context,
-                explicit_chat_id=explicit_chat_id,
-                requested_model=requested_model,
-            )
-            self._logger.warning(
-                "AI request timeout operation=%s lane=%s queue_wait_ms=%d timeout_s=%.1f",
-                operation,
-                lane,
-                round(queue_wait * 1000),
-                total_timeout,
-            )
-            raise AIRequestTimeoutError(
-                f"AI request timed out after {total_timeout:.1f}s: {operation}"
-            ) from exc
-        except Exception:
-            elapsed = time.monotonic() - started
-            self._record_request_latency(elapsed)
-            _record_ai_usage(
-                operation=operation,
-                success=False,
-                duration_ms=round(elapsed * 1000),
-                lane=lane,
-                context=request_context,
-                explicit_chat_id=explicit_chat_id,
-                requested_model=requested_model,
-            )
-            self._logger.exception(
-                "AI provider error operation=%s lane=%s queue_wait_ms=%d",
-                operation,
-                lane,
-                round(queue_wait * 1000),
-            )
-            raise
-
-        request_latency = time.monotonic() - started
-        self._record_request_latency(request_latency)
-        duration_ms = round(request_latency * 1000)
-        self._logger.info(
-            "AI provider success operation=%s lane=%s queue_wait_ms=%d duration_ms=%d",
+        """Run a text provider call, blocking the calling thread."""
+        plan = self._plan(
+            "text",
             operation,
-            lane,
-            round(queue_wait * 1000),
-            duration_ms,
-        )
-        _record_ai_usage(
-            operation=operation,
-            result=result,
-            success=True,
-            duration_ms=duration_ms,
-            lane=lane,
-            context=request_context,
-            explicit_chat_id=explicit_chat_id,
+            kwargs,
+            timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=queue_timeout_seconds,
+            provider_deadline=provider_deadline,
             requested_model=requested_model,
         )
-        return result
+        return self._run_blocking(plan, func, args, kwargs, provider_start_guard)
+
+    def run_media(
+        self,
+        operation: str,
+        func: Callable[..., Any],
+        /,
+        *args: Any,
+        timeout_seconds: float | None = None,
+        queue_timeout_seconds: float | None = None,
+        provider_deadline: float | None = None,
+        provider_start_guard: Callable[[], None] | None = None,
+        requested_model: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run an image/video call in the media lane, blocking the calling thread."""
+        plan = self._plan(
+            "media",
+            operation,
+            kwargs,
+            timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=queue_timeout_seconds,
+            provider_deadline=provider_deadline,
+            requested_model=requested_model,
+        )
+        return self._run_blocking(plan, func, args, kwargs, provider_start_guard)
+
+    async def run_media_async(
+        self,
+        operation: str,
+        func: Callable[..., Any],
+        /,
+        *args: Any,
+        timeout_seconds: float | None = None,
+        queue_timeout_seconds: float | None = None,
+        provider_deadline: float | None = None,
+        provider_start_guard: Callable[[], None] | None = None,
+        requested_model: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run an image/video call in the media lane from the event loop."""
+        plan = self._plan(
+            "media",
+            operation,
+            kwargs,
+            timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=queue_timeout_seconds,
+            provider_deadline=provider_deadline,
+            requested_model=requested_model,
+        )
+        return await self._run_async(plan, func, args, kwargs, provider_start_guard)
 
     def shutdown(self, *, wait: bool = True) -> None:
         with self._executor_lock:
-            executor = self._executor
-            self._executor = None
-        if executor is not None:
+            executors = list(self._executors.values())
+            self._executors.clear()
+        for executor in executors:
             executor.shutdown(wait=wait, cancel_futures=False)
 
 
 _default_governor = AIExecutionGovernor(
     max_concurrency=AI_MAX_CONCURRENCY,
     background_max_concurrency=AI_BACKGROUND_MAX_CONCURRENCY,
+    media_max_concurrency=AI_MEDIA_MAX_CONCURRENCY,
     queue_timeout_seconds=AI_QUEUE_TIMEOUT_SECONDS,
     request_timeout_seconds=AI_REQUEST_TIMEOUT_SECONDS,
 )
@@ -726,6 +1114,28 @@ def run_ai_provider_call(
     return _default_governor.run(operation, func, *args, **kwargs)
 
 
+def run_ai_media_call_sync(
+    operation: str,
+    func: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run one image/video operation in the media lane from a worker thread."""
+    return _default_governor.run_media(operation, func, *args, **kwargs)
+
+
+async def run_ai_media_call(
+    operation: str,
+    func: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run one image/video operation in the media lane from the event loop."""
+    return await _default_governor.run_media_async(operation, func, *args, **kwargs)
+
+
 def get_ai_execution_snapshot() -> AIExecutionSnapshot:
     return _default_governor.snapshot()
 
@@ -738,10 +1148,13 @@ __all__ = [
     "AILane",
     "AIQueueTimeoutError",
     "AIRequestTimeoutError",
+    "SlotPool",
     "TokenTrackedText",
     "configure_ai_usage_recorder",
     "ai_execution_lane",
     "ai_request_context",
     "get_ai_execution_snapshot",
+    "run_ai_media_call",
+    "run_ai_media_call_sync",
     "run_ai_provider_call",
 ]

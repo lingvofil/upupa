@@ -7,7 +7,6 @@ before Pollinations/Hugging Face/Cloudflare.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
 import time
@@ -16,7 +15,7 @@ from typing import Callable, Optional
 import requests
 
 from core.settings import AIHORDE_API_KEY
-from infrastructure.ai.execution import run_ai_provider_call
+from infrastructure.ai.execution import run_ai_media_call
 
 
 AIHORDE_API_URL = "https://aihorde.net/api/v2"
@@ -156,30 +155,19 @@ def _generate_aihorde_image_sync(
         return None
 
 
-def _generate_aihorde_image_governed(
-    prompt: str,
-    should_continue: Callable[[], bool] | None = None,
-) -> Optional[bytes]:
-    return run_ai_provider_call(
-        "aihorde.image.generate",
-        _generate_aihorde_image_sync,
-        prompt,
-        should_continue,
-        timeout_seconds=AIHORDE_REQUEST_TIMEOUT_SECONDS,
-    )
-
-
 async def generate_aihorde_image(
     prompt: str,
     *,
     should_continue: Callable[[], bool] | None = None,
 ) -> Optional[bytes]:
-    """Run the blocking Horde workflow under the process-wide AI governor."""
+    """Run the blocking Horde workflow in the AI governor's media lane."""
     try:
-        return await asyncio.to_thread(
-            _generate_aihorde_image_governed,
+        return await run_ai_media_call(
+            "aihorde.image.generate",
+            _generate_aihorde_image_sync,
             prompt,
             should_continue,
+            timeout_seconds=AIHORDE_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         logging.warning("AI Horde governed request failed: %s", exc)

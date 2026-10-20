@@ -1,6 +1,5 @@
 """GigaChat text2image provider for the image generation pipeline."""
 
-import asyncio
 import base64
 import logging
 import re
@@ -11,13 +10,14 @@ from uuid import uuid4
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 
-from infrastructure.ai.execution import run_ai_provider_call
+from infrastructure.ai.execution import SlotPool, run_ai_media_call, run_ai_media_call_sync
 from infrastructure.ai.gigachat import GIGACHAT_BASE_URL
 from core.settings import GIGACHAT_API_KEY
 
 
 _IMAGE_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
-_SYNC_LOCK = threading.Lock()
+# Serializes the shared SDK client for both thread and event-loop callers.
+_CLIENT_LOCK = SlotPool(1)
 GIGACHAT_IMAGE_TRANSPORT_TIMEOUT_SECONDS = 120
 GIGACHAT_IMAGE_REQUEST_TIMEOUT_SECONDS = 145
 
@@ -100,10 +100,10 @@ def _generate_gigachat_image_sync(prompt: str) -> Optional[bytes]:
 
 
 def _generate_gigachat_image_governed(prompt: str) -> Optional[bytes]:
-    # Keep the SDK client serialized without consuming an AI governor slot while
+    # Keep the SDK client serialized without consuming a media slot while
     # another GigaChat image request is merely waiting on this client lock.
-    with _SYNC_LOCK:
-        return run_ai_provider_call(
+    with _CLIENT_LOCK:
+        return run_ai_media_call_sync(
             "gigachat-image.generate",
             _generate_gigachat_image_sync,
             prompt,
@@ -113,7 +113,14 @@ def _generate_gigachat_image_governed(prompt: str) -> Optional[bytes]:
 
 async def generate_gigachat_image(prompt: str) -> Optional[bytes]:
     try:
-        return await asyncio.to_thread(_generate_gigachat_image_governed, prompt)
+        # Same lock as above, but awaited: queued requests hold no thread.
+        async with _CLIENT_LOCK:
+            return await run_ai_media_call(
+                "gigachat-image.generate",
+                _generate_gigachat_image_sync,
+                prompt,
+                timeout_seconds=GIGACHAT_IMAGE_REQUEST_TIMEOUT_SECONDS,
+            )
     except Exception as exc:
         logging.warning("GigaChat image generation failed: %s", exc)
         return None
