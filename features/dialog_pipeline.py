@@ -7,10 +7,13 @@ for compatibility but production composes the reaction flow explicitly here.
 """
 
 from collections import deque
+from functools import partial
 import logging
 
 from aiogram.enums import ContentType
 from aiogram.types import Message
+
+from core.telegram_markup import send_markdown_or_plain
 
 import AI.random_reactions as random_reactions
 import AI.situational_summary as situational_summary
@@ -118,10 +121,9 @@ async def process_random_reactions_once(message: Message) -> bool:
     if random_reactions.random.random() < ai_prob:
         situational = await _generate_live_situational_reaction(message.chat.id)
         if situational:
-            await message.bot.send_message(
-                message.chat.id,
+            await send_markdown_or_plain(
+                partial(message.bot.send_message, message.chat.id),
                 situational,
-                parse_mode="Markdown",
             )
             return True
 

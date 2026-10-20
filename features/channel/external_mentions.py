@@ -7,13 +7,13 @@ import json
 import logging
 import os
 import re
-from pathlib import Path
 
+from core.paths import DATA_DIR
 from features.channel import service as base
 from features.channel.mood import mood_prompt
 from prompts.channel import CHANNEL_PERSONA
 
-MENTION_STATE_FILE = Path("channel_external_mentions.json")
+MENTION_STATE_FILE = DATA_DIR / "channel_external_mentions.json"
 MENTION_POSTS_LIMIT = 40
 MAX_PENDING_MENTIONS = 20
 MAX_REPLY_ATTEMPTS = 3

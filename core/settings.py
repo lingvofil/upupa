@@ -7,6 +7,10 @@ import os
 # Loopback only; use the same value for the service and the healthcheck CLI.
 HEALTHCHECK_PORT = int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766"))
 
+# Updates queued while the bot was down are processed after restart, but
+# messages older than this are skipped instead of being answered hours late.
+MAX_UPDATE_AGE_SECONDS = max(0, int(os.getenv("UPUPA_MAX_UPDATE_AGE_SECONDS", "600")))
+
 # Historical Upupa scheduling/user-facing time is Moscow time. Keep one
 # explicit application timezone instead of depending on the VPS local timezone.
 APP_TIMEZONE_NAME = os.getenv("UPUPA_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"

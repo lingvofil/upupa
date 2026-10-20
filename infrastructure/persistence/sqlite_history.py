@@ -23,6 +23,25 @@ RECORD = re.compile(
 )
 
 
+# Строка внутри многострочного сообщения, похожая на заголовок записи, при
+# переиндексации журнала стала бы отдельным сообщением от чужого имени. Перед
+# такой строкой пишется невидимый WORD JOINER; импорт его снимает.
+HEADER_GUARD = "⁠"
+_HEADER_LIKE_LINE = re.compile(r"\n(?=\d{4}-\d{2}-\d{2}T[^ \n]+ - )", re.ASCII)
+_GUARDED_HEADER_LINE = re.compile("\n" + HEADER_GUARD + r"(?=\d{4}-\d{2}-\d{2}T[^ \n]+ - )", re.ASCII)
+
+
+def format_journal_line(record: dict) -> str:
+    """Одна запись журнала; продолжения строк не могут сойти за новую запись."""
+    line = (f"{record['timestamp']} - Chat {record['chat_id']} ({record['chat_title']}) "
+            f"- User {record['user_id']} ({record['username']}) [{record['full_name']}]: {record['text']}")
+    return _HEADER_LIKE_LINE.sub("\n" + HEADER_GUARD, line) + "\n"
+
+
+def _unguard(value: str) -> str:
+    return _GUARDED_HEADER_LINE.sub("\n", value)
+
+
 class HistorySourceChanged(RuntimeError):
     """The indexed journal was replaced/truncated; keep the index for recovery."""
 
@@ -130,7 +149,7 @@ class SQLiteHistoryRepository:
             match = RECORD.match(raw.decode("utf-8").rstrip("\r\n"))
             if not match:
                 raise ValueError("unrecognized record header")
-            record = match.groupdict()
+            record = {key: _unguard(value) for key, value in match.groupdict().items()}
             record["timestamp"] = local_timestamp(datetime.fromisoformat(record["timestamp"]))
         except (UnicodeDecodeError, ValueError):
             conn.execute("INSERT INTO history_rejected VALUES (?, ?, ?)",
@@ -227,8 +246,7 @@ class SQLiteHistoryRepository:
                     file.seek(0, os.SEEK_END)
                     if offset != file.tell():
                         raise HistorySourceChanged("History journal has an incomplete or concurrently appended record")
-                    line = (f"{record['timestamp']} - Chat {record['chat_id']} ({record['chat_title']}) "
-                            f"- User {record['user_id']} ({record['username']}) [{record['full_name']}]: {record['text']}\n")
+                    line = format_journal_line(record)
                     conn.execute("INSERT INTO history_pending VALUES (1, ?, ?, ?, ?)",
                                  (offset, json.dumps(record, ensure_ascii=False), line.encode("utf-8"), message_id))
                 self._flush_pending(conn)

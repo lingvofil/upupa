@@ -6,7 +6,7 @@ import asyncio
 
 from aiohttp import web
 
-from core.paths import STATISTICS_DB_PATH
+from core.paths import PROJECT_ROOT, STATISTICS_DB_PATH
 from core.settings import ADMIN_ID, API_TOKEN
 import features.statistics as bot_statistics
 from games.webapp_auth import WebAppAuthError, validate_telegram_init_data
@@ -38,7 +38,7 @@ def _authorize_dashboard_request(request: web.Request) -> int:
 
 
 async def serve_token_dashboard(_request: web.Request) -> web.FileResponse:
-    response = web.FileResponse("tokens.html")
+    response = web.FileResponse(PROJECT_ROOT / "tokens.html")
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"

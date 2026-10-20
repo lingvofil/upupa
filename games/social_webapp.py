@@ -7,6 +7,7 @@ import time
 
 from aiohttp import web
 
+from core.paths import PROJECT_ROOT
 from core.settings import API_TOKEN
 from features.social_graph.service import is_social_graph_enabled
 from features.social_graph.webapp import ALLOWED_PERIODS, build_social_payload, chat_from_start_param
@@ -63,7 +64,7 @@ async def authorize_social_request(request: web.Request, bot) -> tuple[int, int]
 
 
 async def serve_social_app(_request: web.Request) -> web.FileResponse:
-    return _security_headers(web.FileResponse("social.html"))
+    return _security_headers(web.FileResponse(PROJECT_ROOT / "social.html"))
 
 
 async def social_api(request: web.Request, bot) -> web.Response:
