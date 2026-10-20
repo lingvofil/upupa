@@ -21,7 +21,8 @@ async def generate_image_bytes(
     Normal image flows preserve their existing provider order. DnD uses a
     latency-aware order: GigaChat first, then quick reserves
     Pollinations/Hugging Face, with slow public AI Horde last.
-    DnD provider work runs in the background AI lane and can stop between
+    DnD provider work runs in the background AI lane (image providers take
+    media-lane slots, prompt translation takes text slots) and can stop between
     providers when the scene that requested the image is no longer current.
     """
     from AI import picgeneration as pg

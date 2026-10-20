@@ -23,6 +23,22 @@ def test_runtime_diagnostics_combines_resources_ai_and_supervisor_metrics(monkey
         provider_samples=9,
         provider_latency_avg_ms=400,
         provider_latency_p95_ms=1000,
+        media_max_concurrency=2,
+        media_waiting=1,
+        media_in_flight=2,
+        media_completed=7,
+        media_errors=1,
+        media_queue_timeouts=1,
+        media_request_timeouts=0,
+        media_queue_samples=7,
+        media_queue_wait_avg_ms=300,
+        media_queue_wait_p95_ms=900,
+        media_request_samples=8,
+        media_request_latency_avg_ms=45000,
+        media_request_latency_p95_ms=140000,
+        media_provider_samples=7,
+        media_provider_latency_avg_ms=44000,
+        media_provider_latency_p95_ms=139000,
     )
     monkeypatch.setattr(diagnostics, "get_ai_execution_snapshot", lambda: snapshot)
     monkeypatch.setattr(
@@ -42,6 +58,9 @@ def test_runtime_diagnostics_combines_resources_ai_and_supervisor_metrics(monkey
     assert payload["resources"]["process"]["rss_bytes"] == 123
     assert payload["ai"]["waiting"] == 2
     assert payload["ai"]["request_latency_p95_ms"] == 1200
+    assert payload["ai"]["media_in_flight"] == 2
+    assert payload["ai"]["media_max_concurrency"] == 2
+    assert payload["ai"]["media_request_latency_p95_ms"] == 140000
     assert payload["background_tasks"] == {
         "active": ["alpha", "beta"],
         "recovering": ["beta"],

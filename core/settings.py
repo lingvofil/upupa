@@ -16,7 +16,7 @@ MAX_UPDATE_AGE_SECONDS = max(0, int(os.getenv("UPUPA_MAX_UPDATE_AGE_SECONDS", "6
 APP_TIMEZONE_NAME = os.getenv("UPUPA_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
 
 # Shared guard for synchronous AI SDK calls. Background work gets its own
-# smaller lane while all provider calls share the same process-wide ceiling.
+# smaller lane while all text provider calls share the same process-wide ceiling.
 AI_MAX_CONCURRENCY = max(1, int(os.getenv("UPUPA_AI_MAX_CONCURRENCY", "3")))
 AI_BACKGROUND_MAX_CONCURRENCY = max(
     1,
@@ -32,6 +32,17 @@ AI_QUEUE_TIMEOUT_SECONDS = max(
 AI_REQUEST_TIMEOUT_SECONDS = max(
     AI_QUEUE_TIMEOUT_SECONDS,
     float(os.getenv("UPUPA_AI_REQUEST_TIMEOUT_SECONDS", "120")),
+)
+# Image/video generation runs for minutes, so it has its own lane and never
+# occupies the text slots above.
+AI_MEDIA_MAX_CONCURRENCY = max(1, int(os.getenv("UPUPA_AI_MEDIA_MAX_CONCURRENCY", "2")))
+
+# asyncio.to_thread pool. SQLite writes for every message and synchronous AI
+# SDK calls share it; the implicit min(32, cpu + 4) is only 5-6 threads on a
+# 1-2 vCPU VPS.
+DEFAULT_EXECUTOR_MAX_WORKERS = max(
+    4,
+    int(os.getenv("UPUPA_DEFAULT_EXECUTOR_MAX_WORKERS", "32")),
 )
 
 # =========================

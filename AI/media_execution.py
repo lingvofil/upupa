@@ -1,7 +1,8 @@
 """Admission control for media providers that bypass LazyResource.
 
 These adapters keep legacy image/video modules intact while routing expensive
-provider work through the same process-wide AI governor as text generation.
+provider work through the AI governor's media lane: generations are bounded by
+their own slots and never occupy the text slots used by dialogue and DnD.
 Every wrapped provider also keeps (or gains) its own transport/job timeout so a
 caller deadline cannot leave an unbounded remote wait behind it.
 """
@@ -24,7 +25,7 @@ from core.settings import (
     CLOUDFLARE_API_TOKEN,
     HUGGINGFACE_TOKEN,
 )
-from infrastructure.ai.execution import run_ai_provider_call
+from infrastructure.ai.execution import run_ai_media_call
 
 
 POLLINATIONS_IMAGE_TIMEOUT_SECONDS = 120
@@ -46,12 +47,12 @@ async def _run_governed_sync(
     *,
     timeout_seconds: float,
 ) -> Any:
-    return await asyncio.to_thread(
-        lambda: run_ai_provider_call(
-            operation,
-            func,
-            timeout_seconds=timeout_seconds,
-        )
+    # Waits for a media slot on the event loop, so a queued generation does
+    # not pin a default-executor thread.
+    return await run_ai_media_call(
+        operation,
+        func,
+        timeout_seconds=timeout_seconds,
     )
 
 

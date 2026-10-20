@@ -11,14 +11,14 @@ from infrastructure.ai import clients
 from infrastructure.ai import gemini
 
 
-def test_gigachat_image_routes_through_shared_governor(monkeypatch):
+def test_gigachat_image_routes_through_media_lane(monkeypatch):
     calls = []
 
-    def fake_governor(operation, func, *args, **kwargs):
+    async def fake_governor(operation, func, *args, **kwargs):
         calls.append((operation, kwargs.get("timeout_seconds")))
         return func(*args)
 
-    monkeypatch.setattr(gigachat_image, "run_ai_provider_call", fake_governor)
+    monkeypatch.setattr(gigachat_image, "run_ai_media_call", fake_governor)
     monkeypatch.setattr(
         gigachat_image,
         "_generate_gigachat_image_sync",
@@ -33,14 +33,14 @@ def test_gigachat_image_routes_through_shared_governor(monkeypatch):
     ]
 
 
-def test_gigachat_compat_adapter_uses_same_governor(monkeypatch):
+def test_gigachat_compat_adapter_uses_media_lane(monkeypatch):
     calls = []
 
     def fake_governor(operation, func, *args, **kwargs):
         calls.append(operation)
         return func(*args)
 
-    monkeypatch.setattr(gigachat_image, "run_ai_provider_call", fake_governor)
+    monkeypatch.setattr(gigachat_image, "run_ai_media_call_sync", fake_governor)
     monkeypatch.setattr(
         gigachat_image,
         "_generate_gigachat_image_sync",
@@ -55,14 +55,14 @@ def test_gigachat_compat_adapter_uses_same_governor(monkeypatch):
     assert calls == ["gigachat-image.generate"]
 
 
-def test_picgeneration_media_wrappers_use_shared_governor(monkeypatch):
+def test_picgeneration_media_wrappers_use_media_lane(monkeypatch):
     calls = []
 
-    def fake_governor(operation, func, *args, **kwargs):
+    async def fake_governor(operation, func, *args, **kwargs):
         calls.append((operation, kwargs.get("timeout_seconds")))
-        return func(*args)
+        return await asyncio.to_thread(func, *args)
 
-    monkeypatch.setattr(media_execution, "run_ai_provider_call", fake_governor)
+    monkeypatch.setattr(media_execution, "run_ai_media_call", fake_governor)
 
     async def pollinations(prompt):
         return b"pollinations"
@@ -97,11 +97,11 @@ def test_picgeneration_media_wrappers_use_shared_governor(monkeypatch):
 def test_videogeneration_media_wrappers_bound_entire_waterfall(monkeypatch):
     calls = []
 
-    def fake_governor(operation, func, *args, **kwargs):
+    async def fake_governor(operation, func, *args, **kwargs):
         calls.append((operation, kwargs.get("timeout_seconds")))
-        return func(*args)
+        return await asyncio.to_thread(func, *args)
 
-    monkeypatch.setattr(media_execution, "run_ai_provider_call", fake_governor)
+    monkeypatch.setattr(media_execution, "run_ai_media_call", fake_governor)
 
     async def kandinsky_video(image, prompt):
         return b"k-video", "ok"

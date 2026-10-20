@@ -4,6 +4,8 @@ Bot и Dispatcher создаются только в composition root. Прик�
 загружаются на startup, чтобы импорт bootstrap не запускал их side effects.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -16,7 +18,12 @@ from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
 from core.loader import configure_aiogram_components
 from core.logging_setup import logger
-from core.settings import API_TOKEN, HEALTHCHECK_PORT, validate_required_settings
+from core.settings import (
+    API_TOKEN,
+    DEFAULT_EXECUTOR_MAX_WORKERS,
+    HEALTHCHECK_PORT,
+    validate_required_settings,
+)
 from infrastructure.ai.execution import ai_execution_lane, configure_ai_usage_recorder
 
 
@@ -331,6 +338,24 @@ def create_application(
     )
 
 
+def configure_default_executor(
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> ThreadPoolExecutor:
+    """Задать размер пула asyncio.to_thread явно, а не min(32, cpu + 4).
+
+    Через этот пул идут записи SQLite на каждое сообщение и синхронные
+    AI SDK; на VPS с 1–2 vCPU пул по умолчанию — всего 5–6 потоков.
+    asyncio.run закрывает его сам через shutdown_default_executor.
+    """
+    executor = ThreadPoolExecutor(
+        max_workers=DEFAULT_EXECUTOR_MAX_WORKERS,
+        thread_name_prefix="upupa-default",
+    )
+    (loop or asyncio.get_running_loop()).set_default_executor(executor)
+    return executor
+
+
 async def run_application() -> None:
+    configure_default_executor()
     application = create_application()
     await application.run()
