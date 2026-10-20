@@ -1,8 +1,10 @@
 import asyncio
+import ipaddress
 import logging
 import os
 import random
 import re
+import socket
 
 import aiofiles
 import httpx
@@ -10,17 +12,20 @@ from aiogram import types
 from bs4 import BeautifulSoup
 
 from core.loader import bot
-from core.settings import API_TOKEN, ROBOTICS_MODEL
+from core.settings import ROBOTICS_MODEL
 from core.state import chat_settings
 from infrastructure.ai.clients import gemini_client, gigachat_model, groq_ai, model
 from infrastructure.ai.gemini import GeminiModel
 from infrastructure.ai.execution import ai_feature
+from infrastructure.media_io import download_telegram_bytes
 from prompts import PROMPTS_MEDIA
 
 
 HTTP_TIMEOUT_SECONDS = 10.0
 MAX_URL_BYTES = 50 * 1024 * 1024
+MAX_URL_REDIRECTS = 5
 URL_HEADERS = {"User-Agent": "Mozilla/5.0"}
+ALLOWED_URL_SCHEMES = {"http", "https"}
 
 
 def get_active_model(chat_id: str) -> str:
@@ -42,6 +47,57 @@ def get_custom_prompt(message: types.Message) -> str | None:
     return None
 
 
+class UnsafeURLError(ValueError):
+    """URL ведёт во внутреннюю сеть или использует запрещённую схему."""
+
+
+def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return not (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+        or not address.is_global
+    )
+
+
+async def _resolve_host_addresses(host: str, port: int) -> list[str]:
+    """Возвращает все адреса, в которые резолвится хост."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [info[4][0] for info in infos]
+
+
+async def _validate_public_url(url: httpx.URL) -> None:
+    """Пропускает только http(s)-URL, все адреса которых публичные."""
+    if url.scheme not in ALLOWED_URL_SCHEMES:
+        raise UnsafeURLError(f"Схема {url.scheme!r} не поддерживается")
+    host = url.host
+    if not host:
+        raise UnsafeURLError("В ссылке нет хоста")
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        port = url.port or (443 if url.scheme == "https" else 80)
+        try:
+            resolved = await _resolve_host_addresses(host, port)
+        except OSError as exc:
+            raise UnsafeURLError(f"Не удалось резолвить хост {host!r}") from exc
+        # Отбрасываем scope id у IPv6 (fe80::1%eth0).
+        addresses = [ipaddress.ip_address(value.split("%", 1)[0]) for value in resolved]
+
+    if not addresses:
+        raise UnsafeURLError(f"Хост {host!r} не резолвится")
+    for address in addresses:
+        if not _is_public_address(address):
+            raise UnsafeURLError(f"Хост {host!r} указывает на непубличный адрес {address}")
+
+
 async def _download_url_bytes(
     url: str,
     *,
@@ -49,40 +105,54 @@ async def _download_url_bytes(
     max_bytes: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[bytes, str]:
-    """Скачивает URL асинхронно и при необходимости ограничивает размер ответа."""
+    """Скачивает пользовательский URL, не пуская запрос во внутреннюю сеть.
+
+    Редиректы проходятся вручную, и каждый следующий адрес проверяется заново.
+    """
     owns_client = client is None
     http_client = client or httpx.AsyncClient(
         timeout=HTTP_TIMEOUT_SECONDS,
-        follow_redirects=True,
+        follow_redirects=False,
     )
+    current_url = httpx.URL(url)
     try:
-        async with http_client.stream("GET", url, headers=headers) as response:
-            response.raise_for_status()
-            content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-            content_length = response.headers.get("Content-Length")
-            if max_bytes is not None and content_length and int(content_length) > max_bytes:
-                raise ValueError(
-                    f"Ответ превышает лимит {max_bytes} байт: Content-Length={content_length}"
-                )
+        for _ in range(MAX_URL_REDIRECTS + 1):
+            await _validate_public_url(current_url)
+            async with http_client.stream(
+                "GET",
+                current_url,
+                headers=headers,
+                follow_redirects=False,
+            ) as response:
+                if response.is_redirect:
+                    location = response.headers.get("Location", "")
+                    current_url = response.url.join(location)
+                    continue
 
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in response.aiter_bytes():
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise ValueError(f"Ответ превышает лимит {max_bytes} байт")
-                chunks.append(chunk)
-            return b"".join(chunks), content_type
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+                content_length = response.headers.get("Content-Length")
+                if max_bytes is not None and content_length and int(content_length) > max_bytes:
+                    raise ValueError(
+                        f"Ответ превышает лимит {max_bytes} байт: Content-Length={content_length}"
+                    )
+
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if max_bytes is not None and total > max_bytes:
+                        raise ValueError(f"Ответ превышает лимит {max_bytes} байт")
+                    chunks.append(chunk)
+                return b"".join(chunks), content_type
+        raise UnsafeURLError(f"Слишком много редиректов (больше {MAX_URL_REDIRECTS})")
     finally:
         if owns_client:
             await http_client.aclose()
 
 
 async def _download_telegram_bytes(file_id: str) -> bytes:
-    file_info = await bot.get_file(file_id)
-    file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_info.file_path}"
-    data, _ = await _download_url_bytes(file_url)
-    return data
+    return await download_telegram_bytes(bot, file_id)
 
 
 # Compatibility-функция: используется не только "чотам", но и distortion.
@@ -522,6 +592,9 @@ async def process_url_whatisthere(message: types.Message, url: str) -> tuple[boo
             return True, response
 
         return False, f"Неподдерживаемый тип: {content_type}"
+    except UnsafeURLError as e:
+        logging.warning(f"Отклонён URL 'чотам' {url}: {e}")
+        return False, "По этой ссылке не полезу."
     except Exception as e:
         logging.error(f"Ошибка при обработке URL 'чотам': {e}")
         return False, "Ошибка при анализе ссылки."
