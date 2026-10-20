@@ -15,6 +15,7 @@ from aiogram.types import BufferedInputFile
 from core.settings import ELEVENLABS_API_KEY
 from core.state import chat_settings
 from infrastructure.media_io import download_telegram_bytes
+from infrastructure.subprocess_runner import run_subprocess
 from services.elevenlabs import (
     ElevenLabsAuthenticationError,
     ElevenLabsAuthorizationError,
@@ -61,23 +62,11 @@ def parse_revoice_command(text: str | None) -> str | None:
 
 
 async def _run_ffmpeg(command: list[str]) -> tuple[bool, str]:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        _stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.communicate()
+    result = await run_subprocess(command, timeout=FFMPEG_TIMEOUT_SECONDS)
+    if result.timed_out:
         return False, "ffmpeg timeout"
-
-    if process.returncode != 0:
-        return False, stderr.decode(errors="ignore")
+    if result.returncode != 0:
+        return False, result.stderr.decode(errors="ignore")
     return True, ""
 
 

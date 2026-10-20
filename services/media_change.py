@@ -1,11 +1,11 @@
 import asyncio
 import logging
 import os
-import signal
 import tempfile
 from aiogram import Bot, types
 from aiogram.types import FSInputFile
 
+from infrastructure.subprocess_runner import find_venv_executable, run_subprocess
 from services.video_note_branding import prepare_video_note_for_processing
 
 MAX_FILE_SIZE_MB = 50
@@ -120,62 +120,21 @@ def _extract_reversible_media_source(message: types.Message) -> types.Message | 
     return None
 
 
-def _kill_process(proc) -> None:
-    try:
-        if os.name == "posix":
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except ProcessLookupError:
-        pass
-    except OSError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-
-
 async def _run_command(
     command: list[str],
     *,
     timeout_seconds: float = FFMPEG_TIMEOUT_SECONDS,
 ) -> tuple[bool, str]:
-    process_kwargs = {
-        "stdout": asyncio.subprocess.PIPE,
-        "stderr": asyncio.subprocess.PIPE,
-    }
-    if os.name == "posix":
-        process_kwargs["start_new_session"] = True
-
-    proc = await asyncio.create_subprocess_exec(
-        *command,
-        **process_kwargs,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=timeout_seconds,
-        )
-    except asyncio.CancelledError:
-        _kill_process(proc)
-        await proc.communicate()
-        raise
-    except asyncio.TimeoutError:
-        _kill_process(proc)
-        stdout, stderr = await proc.communicate()
-        detail = stderr.decode(errors="ignore").strip()
-        logging.warning(
-            "[media_change] process timeout after %.1fs: %s",
-            timeout_seconds,
-            " ".join(command[:4]),
-        )
+    result = await run_subprocess(command, timeout=timeout_seconds)
+    if result.timed_out:
+        detail = result.stderr_text.strip()
         return False, (
             f"process timed out after {timeout_seconds:.1f}s"
             + (f": {detail}" if detail else "")
         )
-    if proc.returncode != 0:
-        return False, stderr.decode(errors="ignore")
-    return True, stdout.decode(errors="ignore")
+    if result.returncode != 0:
+        return False, result.stderr_text
+    return True, result.stdout_text
 
 
 async def _probe_duration_seconds(input_path: str) -> float | None:
@@ -202,8 +161,12 @@ async def _probe_duration_seconds(input_path: str) -> float | None:
 
 
 async def _convert_tgs_to_webm(input_tgs: str, output_webm: str) -> bool:
+    lottie_convert = find_venv_executable("lottie_convert.py")
+    if not lottie_convert:
+        logging.error("[media_change] lottie_convert.py not found next to interpreter or in PATH")
+        return False
     cmd = [
-        "/root/upupa/venv/bin/lottie_convert.py",
+        lottie_convert,
         input_tgs,
         output_webm,
         "-of",

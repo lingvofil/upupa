@@ -6,10 +6,8 @@ import math
 import random
 import logging
 import re
-import subprocess
 import shutil
 import tempfile
-import time
 import concurrent.futures
 import numpy as np
 from aiogram import types, Bot
@@ -28,6 +26,7 @@ except ImportError:
 from core.loader import bot as main_bot_instance
 from core.settings import BLOCKED_USERS
 from AI.whatisthere import download_file
+from infrastructure.subprocess_runner import find_venv_executable, run_subprocess
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,6 +37,12 @@ MAX_VIDEO_DISTORTION_SECONDS = 15  # покадровый seam carving доро�
 VIDEO_DISTORTION_FPS = 8  # ниже, чем было в старом фильтре — компромисс скорость/плавность
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif"}
 processing_semaphore = asyncio.Semaphore(1)
+
+# Таймауты внешних процессов: зависший ffmpeg не должен держать processing_semaphore.
+FFPROBE_TIMEOUT_SECONDS = 30.0
+FFMPEG_TIMEOUT_SECONDS = 120.0
+FFMPEG_VIDEO_DISTORTION_TIMEOUT_SECONDS = 180.0
+LOTTIE_CONVERT_TIMEOUT_SECONDS = 120.0
 
 # Пул процессов для покадрового seam carving (CPU-bound, поэтому процессы, а не потоки)
 _frame_distortion_pool = concurrent.futures.ProcessPoolExecutor(
@@ -55,34 +60,32 @@ def parse_intensity_from_text(text: str | None) -> int:
     if match: return max(0, min(100, int(match.group(1))))
     return 45
 
-async def run_ffmpeg_command(command: list[str]) -> tuple[bool, str]:
-    start_time = time.perf_counter()
+async def run_ffmpeg_command(
+    command: list[str],
+    *,
+    timeout: float = FFMPEG_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
     logging.info(f"Запуск FFmpeg: {' '.join(command)}")
-    process = await asyncio.create_subprocess_exec(
-        *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    _, stderr = await process.communicate()
-    duration = time.perf_counter() - start_time
-    if process.returncode != 0:
-        error_message = stderr.decode(errors='ignore').strip()
+    result = await run_subprocess(command, timeout=timeout)
+    duration = result.duration_seconds
+    if result.timed_out:
+        logging.error(f"FFmpeg не уложился в {timeout:.0f}с и был остановлен")
+        return False, f"FFmpeg timed out after {timeout:.0f}s"
+    if result.returncode != 0:
+        error_message = result.stderr_text.strip()
         logging.error(f"FFmpeg завершился с ошибкой за {duration:.2f}с: {error_message}")
         return False, error_message
     logging.info(f"FFmpeg успешно завершен за {duration:.2f}с")
     return True, "Success"
 
-async def run_command(command: list[str]) -> tuple[bool, str]:
-    process = await asyncio.create_subprocess_exec(
-        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
-        return False, stderr.decode(errors="ignore")
-    return True, stdout.decode(errors="ignore")
-
 
 async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
+    lottie_convert = find_venv_executable("lottie_convert.py")
+    if not lottie_convert:
+        logging.error("lottie_convert.py не найден ни рядом с интерпретатором, ни в PATH")
+        return False
     cmd = [
-        "/root/upupa/venv/bin/lottie_convert.py",
+        lottie_convert,
         input_path,
         output_path,
         "-of",
@@ -93,22 +96,20 @@ async def convert_tgs_to_webm(input_path: str, output_path: str) -> bool:
         "15",
         "--sanitize",
     ]
-    start_time = time.perf_counter()
     logging.info(f"Запуск lottie_convert: {' '.join(cmd)}")
-    success, _ = await run_command(cmd)
-    duration = time.perf_counter() - start_time
-    if success:
+    result = await run_subprocess(cmd, timeout=LOTTIE_CONVERT_TIMEOUT_SECONDS)
+    duration = result.duration_seconds
+    if result.ok:
         logging.info(f"lottie_convert успешно завершен за {duration:.2f}с")
     else:
         logging.error(f"lottie_convert завершился с ошибкой за {duration:.2f}с")
-    return success
+    return result.ok
 
 async def get_media_info(file_path: str) -> dict | None:
     command = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', '-i', file_path]
-    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, _ = await process.communicate()
-    if process.returncode != 0: return None
-    try: return json.loads(stdout.decode(errors='ignore'))
+    result = await run_subprocess(command, timeout=FFPROBE_TIMEOUT_SECONDS)
+    if not result.ok: return None
+    try: return json.loads(result.stdout.decode(errors='ignore'))
     except json.JSONDecodeError: return None
 
 def is_video_document(document: types.Document | None) -> bool:
@@ -189,7 +190,9 @@ async def apply_ffmpeg_video_distortion(input_path: str, output_path: str, inten
         output_path
     ]
     async with processing_semaphore:
-        success, err_msg = await run_ffmpeg_command(cmd)
+        success, err_msg = await run_ffmpeg_command(
+            cmd, timeout=FFMPEG_VIDEO_DISTORTION_TIMEOUT_SECONDS
+        )
         if not success:
             logging.error(f"FFmpeg Error: {err_msg}")
         return success

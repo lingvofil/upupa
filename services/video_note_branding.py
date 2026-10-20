@@ -8,13 +8,14 @@ area with Upupa branding, leaving every pixel inside the video circle intact.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+from infrastructure.subprocess_runner import run_subprocess
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,8 @@ FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "Impact.ttf"
 BRAND_TEXT = "@expertyebaniebot"
 PLATE_SIZE = 512
 MASK_SUPERSAMPLE = 4
+FFPROBE_TIMEOUT_SECONDS = 30.0
+FFMPEG_TIMEOUT_SECONDS = 120.0
 
 # Keep the actual video-note circle completely untouched. Telegram's service
 # marks live in the square area around that circle, so the branding layer only
@@ -130,26 +133,28 @@ def build_branding_plate(
 
 
 async def _probe_video_size(input_path: str) -> tuple[int, int]:
-    process = await asyncio.create_subprocess_exec(
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "csv=p=0:s=x",
-        input_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    result = await run_subprocess(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+            input_path,
+        ],
+        timeout=FFPROBE_TIMEOUT_SECONDS,
     )
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
-        details = (stderr or stdout).decode(errors="ignore").strip()
+    if result.timed_out:
+        raise RuntimeError("FFprobe не успел определить размер видеокружка.")
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout).decode(errors="ignore").strip()
         raise RuntimeError(f"Не удалось определить размер видеокружка: {details}")
 
-    first_line = stdout.decode(errors="ignore").strip().splitlines()
+    first_line = result.stdout.decode(errors="ignore").strip().splitlines()
     if not first_line or "x" not in first_line[0]:
         raise RuntimeError("FFprobe не вернул размер видеокружка.")
 
@@ -161,14 +166,11 @@ async def _probe_video_size(input_path: str) -> tuple[int, int]:
 
 
 async def _run_ffmpeg(command: list[str]) -> tuple[bool, str]:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await process.communicate()
-    output = (stderr or stdout).decode(errors="ignore").strip()
-    return process.returncode == 0, output
+    result = await run_subprocess(command, timeout=FFMPEG_TIMEOUT_SECONDS)
+    if result.timed_out:
+        return False, f"ffmpeg timed out after {FFMPEG_TIMEOUT_SECONDS:.0f}s"
+    output = (result.stderr or result.stdout).decode(errors="ignore").strip()
+    return result.returncode == 0, output
 
 
 async def prepare_video_note_for_processing(

@@ -1,11 +1,20 @@
 import asyncio
 import re
 import sys
+import time
 from typing import Any
 
 from aiogram.types import Message
 
 from core.upupa_utils import normalize_upupa_command
+from infrastructure.subprocess_runner import run_subprocess
+
+
+# Sherlock опрашивает сотни сайтов несколько минут, поэтому одновременно
+# идёт только один поиск, а каждый пользователь ждёт кулдаун между запусками.
+SHERLOCK_USER_COOLDOWN_SECONDS = 600
+_sherlock_semaphore = asyncio.Semaphore(1)
+_last_search_started: dict[int, float] = {}
 
 
 class SherlockSearch:
@@ -24,23 +33,13 @@ class SherlockSearch:
                 "error": "Не указан username для поиска.",
             }
 
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "sherlock_project",
-            username,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # "--" не даёт значению вроде "--output=/path" разобраться как опция.
+        result = await run_subprocess(
+            [sys.executable, "-m", "sherlock_project", "--", username],
+            timeout=self.TIMEOUT_SECONDS,
         )
 
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=self.TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
+        if result.timed_out:
             return {
                 "username": username,
                 "found": [],
@@ -48,15 +47,15 @@ class SherlockSearch:
                 "error": f"❌ Превышено время ожидания ({self.TIMEOUT_SECONDS} сек)",
             }
 
-        stdout_text = stdout.decode("utf-8", errors="replace")
-        stderr_text = stderr.decode("utf-8", errors="replace")
+        stdout_text = result.stdout_text
+        stderr_text = result.stderr_text
         raw_output = "\n".join(part for part in [stdout_text, stderr_text] if part).strip()
         found_urls = self._parse_found_urls(stdout_text)
 
         error_text = None
-        if process.returncode != 0:
+        if result.returncode != 0:
             details = stderr_text.strip() or stdout_text.strip() or "Неизвестная ошибка Sherlock."
-            error_text = f"Ошибка запуска Sherlock (code={process.returncode}):\n{details}"
+            error_text = f"Ошибка запуска Sherlock (code={result.returncode}):\n{details}"
 
         return {
             "username": username,
@@ -94,10 +93,27 @@ async def process_sherlock_command(message: Message) -> None:
         await message.reply("Укажи username после команды: упупа ищи <username>")
         return
 
-    await message.reply(f"🔎 Ищу аккаунты этого пидораса: {username}")
+    requester_id = message.from_user.id if message.from_user else message.chat.id
+    now = time.monotonic()
+    for stale_id, started in list(_last_search_started.items()):
+        if now - started >= SHERLOCK_USER_COOLDOWN_SECONDS:
+            del _last_search_started[stale_id]
+    last_started = _last_search_started.get(requester_id)
+    if last_started is not None:
+        wait_minutes = max(1, round((SHERLOCK_USER_COOLDOWN_SECONDS - (now - last_started)) / 60))
+        await message.reply(f"⏳ Ты недавно уже искал. Попробуй снова через {wait_minutes} мин.")
+        return
 
-    sherlock_search = SherlockSearch()
-    result = await sherlock_search.search(username)
+    if _sherlock_semaphore.locked():
+        await message.reply("⏳ Я уже ищу чьи-то аккаунты. Подожди, пока закончу, и попробуй снова.")
+        return
+
+    async with _sherlock_semaphore:
+        _last_search_started[requester_id] = now
+        await message.reply(f"🔎 Ищу аккаунты этого пидораса: {username}")
+
+        sherlock_search = SherlockSearch()
+        result = await sherlock_search.search(username)
 
     if result["error"]:
         await message.reply(result["error"])
