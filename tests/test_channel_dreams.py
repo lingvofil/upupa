@@ -7,11 +7,16 @@ from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
 VALID_DREAM = (
     "Мне снилось, что я веду урок физкультуры у пингвинов, а они сдают норматив по прыжкам "
-    "через мой собственный код. Директор школы — огромный голубь в галстуке.\n\n"
-    "🔮 Сонник Упупы:\n"
-    "▪️ Пингвины — по соннику бабы Зины, к коллегам, которые ходят вразвалку и нихуя не делают.\n"
-    "▪️ Голубь в галстуке — Фрейд после литра говорит: ты боишься начальства, которое на тебя срёт.\n"
-    "Итог: ты бот с комплексом физрука, поздравляю, блядь."
+    "через мой собственный код. Директор школы — огромный голубь в галстуке, который нихуя "
+    "не понимал в прыжках, но поставил мне двойку. Проснулся с чувством, что даже во сне меня "
+    "отчитывает птица, блядь."
+)
+
+INTERPRETED_DREAM = (
+    VALID_DREAM
+    + "\n\n🔮 Сонник Упупы:\n"
+    "▪️ Пингвины — к коллегам, которые ходят вразвалку.\n"
+    "Итог: ты бот с комплексом физрука."
 )
 
 
@@ -39,35 +44,36 @@ def test_valid_dream_post_passes_validation():
     assert _validate_dream_post(VALID_DREAM, []) is None
 
 
-def test_dream_post_requires_dream_story_interpretation_and_profanity():
+def test_dream_post_requires_dream_story_and_profanity():
     from features.channel.dreams import _validate_dream_post
 
-    no_header = VALID_DREAM.replace("🔮 Сонник Упупы:\n", "")
-    assert "Сонник" in _validate_dream_post(no_header, [])
-
-    not_a_dream = VALID_DREAM.replace("Мне снилось, что я веду", "Я веду")
+    not_a_dream = VALID_DREAM.replace("Мне снилось, что я веду", "Я веду").replace(
+        "Проснулся с чувством, что даже во сне меня", "Ушёл с чувством, что даже на работе меня"
+    )
     assert "снилось" in _validate_dream_post(not_a_dream, [])
 
-    one_symbol = "\n".join(
-        line for line in VALID_DREAM.splitlines() if not line.startswith("▪️ Голубь")
-    )
-    assert "два образа" in _validate_dream_post(one_symbol, [])
-
-    no_verdict = VALID_DREAM.replace("Итог: ", "")
-    assert "Итог" in _validate_dream_post(no_verdict, [])
-
-    clean_mouth = VALID_DREAM.replace("нихуя", "ничего").replace(", блядь", "").replace("срёт", "смотрит")
+    clean_mouth = VALID_DREAM.replace("нихуя", "ничего").replace(", блядь", "")
     assert "матер" in _validate_dream_post(clean_mouth, [])
 
-    too_long = VALID_DREAM + " бля" * 300
+    too_long = VALID_DREAM + " бля" * 200
     assert "длиннее" in _validate_dream_post(too_long, [])
+
+
+def test_dream_post_rejects_any_interpretation():
+    from features.channel.dreams import _validate_dream_post
+
+    assert "толкование не нужно" in _validate_dream_post(INTERPRETED_DREAM, [])
+    assert "толкование не нужно" in _validate_dream_post(VALID_DREAM + "\nИтог: я долбоёб.", [])
+    assert "толкование не нужно" in _validate_dream_post(
+        VALID_DREAM + " По соннику Миллера это к деньгам.", []
+    )
 
 
 def test_dream_post_rejects_repeating_previous_dream_plot():
     from features.channel.dreams import _validate_dream_post
 
     previous = {"post_kind": "dream", "text": VALID_DREAM}
-    retold = VALID_DREAM.replace("Итог: ты бот с комплексом физрука", "Итог: ты бот с комплексом завуча")
+    retold = VALID_DREAM.replace("поставил мне двойку", "поставил мне тройку")
 
     assert "похож на прошлый сон" in _validate_dream_post(retold, [previous])
 
@@ -89,26 +95,26 @@ def test_dream_post_has_cooldown_and_prefers_sleepy_mornings():
     assert dreams.should_try_dream_post(history, {"name": "neutral"}, rng=AlwaysRng()) is False
 
 
-def test_dream_prompt_asks_for_story_self_interpretation_and_avoids_old_dreams():
+def test_dream_prompt_asks_for_mocking_story_without_interpretation():
     from features.channel.dreams import _build_prompt
 
     previous = {"post_kind": "dream", "text": VALID_DREAM}
-    prompt = _build_prompt({"name": "sleepy"}, [previous], retry_note="нет строки «Итог: ...»")
+    prompt = _build_prompt({"name": "sleepy"}, [previous], retry_note="толкование не нужно")
 
-    assert "Сонника Упупы" in prompt
-    assert "▪️ <образ из сна> — <толкование>" in prompt
-    assert "Итог:" in prompt
+    assert "мне снилось" in prompt
+    assert "саркастично, иронично и издевательски" in prompt
     assert "мат" in prompt
+    assert "НЕ толкуй сон" in prompt
     assert "Прошлые сны" in prompt
     assert "урок физкультуры у пингвинов" in prompt
-    assert "Предыдущая попытка не прошла проверку: нет строки" in prompt
+    assert "Предыдущая попытка не прошла проверку: толкование не нужно" in prompt
 
 
 def test_prepare_dream_post_retries_invalid_generation_and_marks_kind(monkeypatch):
     import AI.summarize as summarize
     from features.channel import dreams
 
-    answers = iter(["Я просто лёг спать, и всё.", "**" + VALID_DREAM + "**"])
+    answers = iter([INTERPRETED_DREAM, "**" + VALID_DREAM + "**"])
     prompts = []
 
     async def fake_generate(prompt, chat_id):
@@ -126,7 +132,7 @@ def test_prepare_dream_post_retries_invalid_generation_and_marks_kind(monkeypatc
     assert metadata["mood"] == "sleepy"
     assert metadata["chat_context_used"] is False
     assert len(prompts) == 2
-    assert "Предыдущая попытка не прошла проверку" in prompts[1]
+    assert "Предыдущая попытка не прошла проверку: толкование не нужно" in prompts[1]
 
 
 def test_prepare_dream_post_gives_up_after_bad_attempts(monkeypatch):

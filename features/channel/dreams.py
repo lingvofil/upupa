@@ -1,4 +1,4 @@
-"""Rare dream posts: Upupa tells his own dream and mocks it like the chat dream book."""
+"""Rare dream posts: Upupa tells his own dream in the mocking manner of the chat dream book."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from prompts.channel import CHANNEL_PERSONA
 
 DREAM_POST_PROBABILITY = 0.04
 DREAM_POST_COOLDOWN_POSTS = 15
-MAX_DREAM_POST_LENGTH = 900
+MAX_DREAM_POST_LENGTH = 600
 MAX_GENERATION_ATTEMPTS = 3
 RECENT_DREAMS_IN_PROMPT = 3
 
@@ -33,8 +33,8 @@ DREAM_DAYPART_MULTIPLIERS = {
     "evening": 0.6,
 }
 
-_SYMBOL_LINE_RE = re.compile(r"(?m)^[ \t]*(?:▪️?|•|-|\*)?[ \t]*\S[^\n]*?\s[—–-][ \t]+\S")
-_VERDICT_LINE_RE = re.compile(r"(?mi)^[ \t]*итог[ \t]*:[ \t]*\S")
+# Пост — только сам сон: блок сонника, буллеты образов и «Итог:» означают толкование.
+_INTERPRETATION_RE = re.compile(r"(?mi)^[ \t]*(?:▪|•|итог[ \t]*:)|сонник|толкован")
 
 
 def dream_post_probability(mood: dict | None, *, now: datetime | None = None) -> float:
@@ -59,10 +59,6 @@ def should_try_dream_post(
     return rng.random() < dream_post_probability(mood, now=now)
 
 
-def _story_part(text: str) -> str:
-    return text.split(DREAM_HEADER, 1)[0].strip()
-
-
 def _validate_dream_post(text: str, recent_posts: list[dict]) -> str | None:
     clean = (text or "").strip()
     if not clean:
@@ -72,35 +68,28 @@ def _validate_dream_post(text: str, recent_posts: list[dict]) -> str | None:
     lowered = clean.casefold()
     if any(marker in lowered for marker in base._PROVIDER_ERROR_MARKERS):
         return "похоже на служебную ошибку AI-провайдера"
-    if DREAM_HEADER not in clean:
-        return f"нет блока «{DREAM_HEADER}» с толкованием"
-    story = _story_part(clean)
-    if not story:
-        return "нет самого сна перед толкованием"
-    if not is_dream_mention(story):
+    if DREAM_HEADER in clean or _INTERPRETATION_RE.search(clean):
+        return "толкование не нужно: расскажи только сам сон"
+    if not is_dream_mention(clean):
         return "рассказ должен прямо говорить, что это тебе снилось"
-    if len(_SYMBOL_LINE_RE.findall(clean.split(DREAM_HEADER, 1)[1])) < 2:
-        return "в толковании нужно хотя бы два образа в формате «▪️ образ — толкование»"
-    if not _VERDICT_LINE_RE.search(clean):
-        return "нет строки «Итог: ...»"
     if not _PROFANITY_RE.search(clean):
         return "в этом формате нужен хотя бы один живой матерный акцент"
 
     normalized = base._normalize_for_duplicate_check(clean)
     if any(base._normalize_for_duplicate_check(str(post.get("text") or "")) == normalized for post in recent_posts):
         return "точный дубль недавнего поста"
-    repeated_motif = base._shared_household_motif(story, recent_posts)
+    repeated_motif = base._shared_household_motif(clean, recent_posts)
     if repeated_motif:
         return f"бытовой мотив «{repeated_motif}» уже недавно использовался; нужен другой материал"
     previous_dreams = [post for post in recent_posts if post.get("post_kind") == "dream"]
-    if base._too_similar_to_recent(story, [{"text": _story_part(str(post.get("text") or ""))} for post in previous_dreams]):
+    if base._too_similar_to_recent(clean, previous_dreams):
         return "сюжет слишком похож на прошлый сон; нужен совсем другой сон"
     return None
 
 
 def _recent_dream_block(published_posts: list[dict]) -> str:
     dreams = [
-        _story_part(str(post.get("text") or ""))
+        str(post.get("text") or "").strip()
         for post in published_posts
         if post.get("post_kind") == "dream" and post.get("text")
     ][-RECENT_DREAMS_IN_PROMPT:]
@@ -118,24 +107,18 @@ def _build_prompt(mood: dict, published_posts: list[dict], retry_note: str = "")
     )
     return f"""{CHANNEL_PERSONA}
 
-Сейчас отдельный редкий формат канала: ты рассказываешь, что тебе снилось, и тут же сам толкуешь
-свой сон голосом «Сонника Упупы» — злого, циничного, матерящегося толкователя снов с дипломом
-из подземного перехода. Издеваешься над собой так же, как сонник издевается над участниками чатов.
+Сейчас отдельный редкий формат канала: ты рассказываешь, что тебе снилось.
+Это правило сильнее общего правила о размере постов: 2–5 предложений от первого лица, не длиннее
+500 символов. Начни с живой вариации «мне снилось», «приснилось» или «видел во сне».
 
-Это правило сильнее общего правила о размере постов. Структура поста строго такая:
-1. Сам сон: 2–4 предложения от первого лица, начни с живой вариации «мне снилось», «приснилось»
-   или «видел во сне». Сон абсурдный, конкретный и с действием: люди, места, предметы, существа,
-   нелепые события. Не «странный сон», а что именно происходило.
-2. Пустая строка и отдельная строка «{DREAM_HEADER}».
-3. 2–4 строки «▪️ <образ из сна> — <толкование>»: псевдомистика с отсылками к выдуманным авторитетам
-   (сонник Миллера, сонник бабы Зины из третьего подъезда, Фрейд после литра, Ванга по телефону)
-   и издёвкой над тем, что этот образ говорит о тебе самом, твоей жизни бота, чатах и твоих привычках.
-4. Строка «Итог: ...» — один издевательский диагноз себе.
+Сон абсурдный, конкретный и с действием: люди, места, предметы, существа, нелепые события.
+Не «странный сон», а что именно происходило. Рассказывай саркастично, иронично и издевательски —
+и над сюжетом, и над самим собой, щедро с русским матом: хотя бы одно матерное слово без звёздочек,
+но мат должен быть смешным, а не через каждое слово. Можно закончить коротким ехидным комментарием
+от себя, но НЕ толкуй сон: не объясняй, что он значит или к чему снится, без сонников и «итогов».
 
-Тон: сарказм, ирония, самоиздёвка, щедрый русский мат — хотя бы одно матерное слово без звёздочек,
-но мат должен быть смешным, а не через каждое слово. Не используй реальных людей, usernames,
-конкретные чаты и любые темы с несовершеннолетними. Без Markdown: никаких звёздочек, решёток,
-жирного шрифта и заголовков, кроме строки «{DREAM_HEADER}». Весь пост — не длиннее 700 символов.
+Не используй реальных людей, usernames, конкретные чаты и любые темы с несовершеннолетними.
+Без Markdown, списков, заголовков и кавычек вокруг поста.
 Не делай героями сна чайник, холодильник, тостер, вилки, табуретки, роутер и розетки.
 
 ТВОЁ ТЕКУЩЕЕ ВНУТРЕННЕЕ СОСТОЯНИЕ:
