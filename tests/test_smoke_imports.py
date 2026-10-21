@@ -48,6 +48,7 @@ FEATURE_MODULES = [
     "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
     "features.statistics", "features.proactive", "features.channel", "features.channel.storage",
     "features.channel.batya_source", "features.channel.service", "features.channel.scheduler",
+    "features.channel.dreams",
     "features.social_graph", "features.social_graph.analysis", "features.social_graph.ai",
     "features.social_graph.rendering", "features.social_graph.service",
     "features.world", "features.world.models", "features.world.permissions", "features.world.service",

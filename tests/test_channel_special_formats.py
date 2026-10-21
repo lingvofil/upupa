@@ -106,6 +106,7 @@ def test_mood_service_can_publish_scream(monkeypatch):
 
     monkeypatch.setattr(mood_service.polls, "prepare_poll", nothing)
     monkeypatch.setattr(mood_service.verses, "prepare_bawdy_verse", nothing)
+    monkeypatch.setattr(mood_service.dreams, "prepare_dream_post", nothing)
     monkeypatch.setattr(mood_service.voice_posts, "prepare_voice_post", nothing)
     monkeypatch.setattr(
         mood_service.screams,
@@ -206,6 +207,7 @@ def test_mood_service_can_publish_voice_note(monkeypatch):
 
     monkeypatch.setattr(mood_service.polls, "prepare_poll", no_poll)
     monkeypatch.setattr(mood_service.verses, "prepare_bawdy_verse", no_verse)
+    monkeypatch.setattr(mood_service.dreams, "prepare_dream_post", no_verse)
     monkeypatch.setattr(mood_service.voice_posts, "prepare_voice_post", fake_voice)
     monkeypatch.setattr(mood_service.base, "_store_published_post", fake_store)
     monkeypatch.setattr(mood_service, "_consume_after_publish", fake_consume)
