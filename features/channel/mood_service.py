@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 
-from features.channel import chat_context, polls, screams, verses, voice_posts
+from features.channel import chat_context, dreams, polls, screams, verses, voice_posts
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -459,6 +459,19 @@ async def publish_channel_post(bot, *, source: str) -> tuple[object, str]:
                 await base._store_published_post(sent, source=source, text=verse_text, metadata=metadata)
                 await _consume_after_publish(mood, getattr(sent, "message_id", None))
                 return sent, verse_text
+
+            try:
+                dream_post = await dreams.prepare_dream_post(published_posts, mood)
+            except Exception as exc:
+                logging.warning("[channel] dream mode failed, fallback to other formats: %s", exc, exc_info=True)
+                dream_post = None
+
+            if dream_post is not None:
+                dream_text, metadata = dream_post
+                sent = await bot.send_message(CHANNEL_TARGET, dream_text)
+                await base._store_published_post(sent, source=source, text=dream_text, metadata=metadata)
+                await _consume_after_publish(mood, getattr(sent, "message_id", None))
+                return sent, dream_text
 
             try:
                 voice_post = await voice_posts.prepare_voice_post(published_posts, mood)

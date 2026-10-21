@@ -48,6 +48,7 @@ FEATURE_MODULES = [
     "features.lexicon_settings", "features.sms_settings", "features.stat_rank_settings",
     "features.statistics", "features.proactive", "features.channel", "features.channel.storage",
     "features.channel.batya_source", "features.channel.service", "features.channel.scheduler",
+    "features.channel.dreams",
     "features.social_graph", "features.social_graph.analysis", "features.social_graph.ai",
     "features.social_graph.rendering", "features.social_graph.service",
     "features.world", "features.world.models", "features.world.permissions", "features.world.service",
@@ -75,7 +76,7 @@ AI_MODULES = [
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
     "AI.random_reactions", "AI.summarize", "AI.translate",
     "AI.tutu", "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
-    "AI.chat_recall", "AI.comic",
+    "AI.chat_recall", "AI.comic", "AI.dream_book",
 ]
 INFRASTRUCTURE_MODULES = [
     "infrastructure.ai.clients", "infrastructure.ai.gemini", "infrastructure.ai.gigachat",

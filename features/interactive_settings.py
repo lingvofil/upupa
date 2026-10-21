@@ -35,7 +35,8 @@ REACTION_TYPES = {
     "meme_prob": "🖼 Случайные мемы",
     "voice_prob": "🗣 Голосовые",
     "regular_prob": "👖 Штаны",
-    "rhyme_prob": "📝 Рифмы"
+    "rhyme_prob": "📝 Рифмы",
+    "dream_prob": "🔮 Сонник"
 }
 
 DEFAULT_PROBS = {
@@ -45,7 +46,8 @@ DEFAULT_PROBS = {
     "meme_prob": 0.01,
     "voice_prob": 0.0001,
     "regular_prob": 0.008,
-    "rhyme_prob": 0.008
+    "rhyme_prob": 0.008,
+    "dream_prob": 1.0
 }
 
 YTP_PRESETS = {
