@@ -15,6 +15,7 @@ from aiogram.types import Message
 
 from core.telegram_markup import send_markdown_or_plain
 
+import AI.dream_book as dream_book
 import AI.random_reactions as random_reactions
 import AI.situational_summary as situational_summary
 from AI.dialog.delivery import send_dialog_response
@@ -116,6 +117,14 @@ async def process_random_reactions_once(message: Message) -> bool:
 
     if not chat_cfg.get("reactions_enabled", True):
         return False
+
+    # Сонник реагирует на рассказ о сне, поэтому идёт раньше случайных реакций.
+    dream_prob = chat_cfg.get("dream_prob", 1.0)
+    try:
+        if await dream_book.maybe_interpret_dream(message, probability=dream_prob):
+            return True
+    except Exception as exc:
+        logging.error("Dream interpretation failed: %s", exc, exc_info=True)
 
     ai_prob = chat_cfg.get("ai_prob", 0.01)
     if random_reactions.random.random() < ai_prob:

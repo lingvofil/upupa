@@ -75,7 +75,7 @@ AI_MODULES = [
     "AI.leveltravel", "AI.picgeneration", "AI.profession", "AI.quiz",
     "AI.random_reactions", "AI.summarize", "AI.translate",
     "AI.tutu", "AI.videogeneration", "AI.voice", "AI.whatisthere", "AI.whoparody",
-    "AI.chat_recall", "AI.comic",
+    "AI.chat_recall", "AI.comic", "AI.dream_book",
 ]
 INFRASTRUCTURE_MODULES = [
     "infrastructure.ai.clients", "infrastructure.ai.gemini", "infrastructure.ai.gigachat",
