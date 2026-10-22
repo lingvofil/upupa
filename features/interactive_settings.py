@@ -478,7 +478,8 @@ async def send_help_menu(message: types.Message):
         await message.answer(
             text=HELP_DICT["main"],
             reply_markup=get_help_keyboard("main"),
-            parse_mode="HTML"
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
     except Exception as e:
         await message.reply("Справка недоступна (ошибка словаря).")
@@ -500,7 +501,8 @@ async def handle_help_callback(query: types.CallbackQuery):
             await query.message.edit_text(
                 text=text,
                 reply_markup=keyboard,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                disable_web_page_preview=True,
             )
     except Exception:
         pass

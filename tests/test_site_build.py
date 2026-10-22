@@ -113,6 +113,11 @@ def test_build_site_writes_page_with_embedded_help(tmp_path):
         assert (out_dir / asset).is_file()
 
 
+def test_site_does_not_link_to_source_repository():
+    for path in (ROOT / "site").iterdir():
+        assert "github.com" not in path.read_text(encoding="utf-8"), path.name
+
+
 def test_build_site_refuses_to_wipe_repository():
     with pytest.raises(ValueError):
         build_site.build_site(ROOT, HELP_DICT)
