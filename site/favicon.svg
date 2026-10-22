@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <g id="f">
+      <path d="M-5 2C-6-12-5.5-22 0-31C5.5-22 6-12 5 2Z" fill="#e3842f"/>
+      <path d="M-3.7-19.5C-2.9-24.5-1.5-28 0-31C1.5-28 2.9-24.5 3.7-19.5Z" fill="#1b1510"/>
+      <path d="M-4.5-14.5L-3.7-19.5H3.7L4.5-14.5Z" fill="#fff8ee"/>
+      <path d="M-5 2C-6-12-5.5-22 0-31C5.5-22 6-12 5 2Z" fill="none" stroke="#1b1510" stroke-width="2.4" stroke-linejoin="round"/>
+    </g>
+  </defs>
+  <circle cx="32" cy="34" r="29" fill="#a6d4ff" stroke="#1b1510" stroke-width="2.5"/>
+  <use href="#f" transform="translate(24 36) rotate(-50) scale(.9)"/>
+  <use href="#f" transform="translate(27 32) rotate(-28)"/>
+  <use href="#f" transform="translate(31 30) rotate(-6) scale(.96)"/>
+  <use href="#f" transform="translate(36 31) rotate(16) scale(.95)"/>
+  <use href="#f" transform="translate(40 34) rotate(38) scale(.85)"/>
+  <circle cx="30" cy="44" r="14" fill="#e3842f" stroke="#1b1510" stroke-width="2.8"/>
+  <path d="M42 40C52 42 59 50 63 61C56 53 50 49 42 47Z" fill="#1b1510" stroke="#1b1510" stroke-width="1.6" stroke-linejoin="round"/>
+  <circle cx="36" cy="40" r="3" fill="#1b1510"/>
+  <circle cx="37" cy="39" r="1" fill="#fff8ee"/>
+</svg>

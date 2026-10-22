@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/lingvofil/upupa/actions/workflows/tests.yml/badge.svg)](https://github.com/lingvofil/upupa/actions/workflows/tests.yml)
 [![Deploy](https://github.com/lingvofil/upupa/actions/workflows/deploy.yml/badge.svg)](https://github.com/lingvofil/upupa/actions/workflows/deploy.yml)
+[![Site](https://github.com/lingvofil/upupa/actions/workflows/pages.yml/badge.svg)](https://lingvofil.github.io/upupa/)
 
 Telegram-бот на **aiogram 3**, который когда-то был просто большим комком функций, а теперь является большим комком функций с архитектурными границами.
 
@@ -118,6 +119,17 @@ Push/merge в `main` запускает GitHub Actions:
 Оба режима обновляют персональную отметку только после полной отправки ответа. Это отметка сводки, а не прочтения сообщений в Telegram. Ошибка AI/отправки не сдвигает её; сообщения, пришедшие во время генерации, остаются для следующего запроса. Если новых сообщений нет, AI не вызывается. В группе ответ виден всем, но отметка меняется только у инициатора. Для анонимного отправителя доступно только `чобыло`. Отметки хранятся в `history.db` и переживают перезапуск. Большой период, как и в `чобыло`, суммируется по ограниченной выборке до 5000 сообщений, включая последние 1000; размер выборки показан перед ответом.
 
 Параметры VPS можно задать secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_APP_DIR` и `DEPLOY_SERVICE`. Если настроен `SSH_KNOWN_HOSTS`, host key проверяется строго. До ручного provisioning сохраняются совместимые legacy defaults; безопасный переход на отдельного deploy-user описан в [docs/DEPLOY_HARDENING.md](docs/DEPLOY_HARDENING.md).
+
+## Сайт
+
+Визитка Упупы живёт на [lingvofil.github.io/upupa](https://lingvofil.github.io/upupa/). Исходники лежат в `site/`, а справочник команд при сборке берётся из `prompts/help_texts.py` — правка справки бота обновляет и сайт. Workflow `pages.yml` пересобирает и публикует сайт при push в `main`, если менялись `site/`, `prompts/` или сам сборщик.
+
+Посмотреть локально:
+
+```bash
+python scripts/build_site.py
+python -m http.server 8000 --directory _site
+```
 
 ## Как вносить изменения
 

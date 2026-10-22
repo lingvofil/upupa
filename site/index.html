@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Упупа — телеграм-бот</title>
+  <meta name="description" content="Упупа сидит у вас в чяте, всё читает, всё помнит, рисует, орёт голосом, судит споры, ведёт свой конал и иногда намеренно пишет хуйню. Это фича." />
+  <meta name="theme-color" content="#f8ecd9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#16110d" media="(prefers-color-scheme: dark)" />
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="ru_RU" />
+  <meta property="og:site_name" content="Упупа" />
+  <meta property="og:title" content="Упупа — телеграм-бот" />
+  <meta property="og:description" content="Сидит у вас в чяте, всё помнит, рисует, судит споры и иногда намеренно пишет хуйню. Это фича." />
+  <meta property="og:url" content="https://lingvofil.github.io/upupa/" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@700;800;900&display=swap" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <path id="feather-shape" d="M-10 4C-13-30-12-62 0-86C12-62 13-30 10 4Z" />
+      <clipPath id="feather-clip"><use href="#feather-shape" /></clipPath>
+      <g id="feather">
+        <use href="#feather-shape" fill="#e3842f" />
+        <g clip-path="url(#feather-clip)">
+          <rect x="-20" y="-100" width="40" height="34" fill="#1b1510" />
+          <rect x="-20" y="-66" width="40" height="9" fill="#fff8ee" />
+        </g>
+        <use href="#feather-shape" fill="none" stroke="#1b1510" stroke-width="5" stroke-linejoin="round" />
+      </g>
+      <path id="wing-shape" d="M255 205C225 198 168 214 126 252C150 270 214 276 262 252C273 238 269 215 255 205Z" />
+      <clipPath id="wing-clip"><use href="#wing-shape" /></clipPath>
+      <path id="tail-shape" d="M152 266L72 316C66 320 69 331 78 329L164 292Z" />
+      <clipPath id="tail-clip"><use href="#tail-shape" /></clipPath>
+
+      <g id="mini-feather">
+        <path d="M-5 2C-6-12-5.5-22 0-31C5.5-22 6-12 5 2Z" fill="#e3842f" />
+        <path d="M-3.7-19.5C-2.9-24.5-1.5-28 0-31C1.5-28 2.9-24.5 3.7-19.5Z" fill="#1b1510" />
+        <path d="M-4.5-14.5L-3.7-19.5H3.7L4.5-14.5Z" fill="#fff8ee" />
+        <path d="M-5 2C-6-12-5.5-22 0-31C5.5-22 6-12 5 2Z" fill="none" stroke="#1b1510" stroke-width="2.4" stroke-linejoin="round" />
+      </g>
+      <symbol id="upupa-head" viewBox="0 0 64 64">
+        <use href="#mini-feather" transform="translate(24 36) rotate(-50) scale(.9)" />
+        <use href="#mini-feather" transform="translate(27 32) rotate(-28)" />
+        <use href="#mini-feather" transform="translate(31 30) rotate(-6) scale(.96)" />
+        <use href="#mini-feather" transform="translate(36 31) rotate(16) scale(.95)" />
+        <use href="#mini-feather" transform="translate(40 34) rotate(38) scale(.85)" />
+        <circle cx="30" cy="44" r="14" fill="#e3842f" stroke="#1b1510" stroke-width="2.8" />
+        <path d="M42 40C52 42 59 50 63 61C56 53 50 49 42 47Z" fill="#1b1510" stroke="#1b1510" stroke-width="1.6" stroke-linejoin="round" />
+        <circle cx="36" cy="40" r="3" fill="#1b1510" />
+        <circle cx="37" cy="39" r="1" fill="#fff8ee" />
+      </symbol>
+    </defs>
+  </svg>
+
+  <a class="skip" href="#main">К содержимому</a>
+
+  <header class="nav">
+    <a class="brand" href="#top" aria-label="Упупа, наверх">
+      <span class="brand-badge"><svg aria-hidden="true"><use href="#upupa-head" /></svg></span>
+      <span>упупа</span>
+    </a>
+    <nav class="nav-links" aria-label="Разделы">
+      <a href="#umeet">Чо умеет</a>
+      <a href="#konal">Конал</a>
+      <a href="#start">Как завести</a>
+      <a href="#komandy">Команды</a>
+    </nav>
+    <a class="btn btn-sm btn-primary" href="https://t.me/expertyebaniebot?startgroup=true">В чят →</a>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-text">
+        <p class="eyebrow"><span class="pulse" aria-hidden="true"></span>телеграм-бот · пять нейросетей<span class="wide-only"> · ноль стыда</span></p>
+        <h1 class="title">Упупа</h1>
+        <p class="lead">Сидит у вас в чяте, всё читает, всё помнит, рисует, орёт голосом, судит споры, ведёт свой конал и&nbsp;иногда <mark>намеренно пишет хуйню</mark>. Это фича.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://t.me/expertyebaniebot?startgroup=true">Затащить в чят</a>
+          <a class="btn" href="https://t.me/expertyebaniebot">Написать в личку</a>
+        </div>
+        <ul class="facts">
+          <li><b data-count>150+</b> <span data-count-noun>команд</span></li>
+          <li><b>5</b> нейросетей</li>
+          <li><b>1</b> конал</li>
+          <li><b>0</b> тормозов</li>
+        </ul>
+      </div>
+
+      <div class="hero-art">
+        <button class="bird" type="button" aria-label="Потыкать Упупу">
+          <span class="bubble" aria-live="polite">чо надо</span>
+          <svg class="bird-svg" viewBox="0 0 420 400" aria-hidden="true">
+            <ellipse cx="225" cy="370" rx="112" ry="9" fill="#1b1510" opacity=".2" />
+            <g class="bird-body">
+              <g class="crest">
+                <use href="#feather" class="feather" style="--x:262px;--y:152px;--r:-80deg;--s:.82" />
+                <use href="#feather" class="feather" style="--x:270px;--y:139px;--r:-58deg;--s:.95" />
+                <use href="#feather" class="feather" style="--x:282px;--y:130px;--r:-36deg;--s:1.05" />
+                <use href="#feather" class="feather" style="--x:296px;--y:126px;--r:-14deg;--s:1.1" />
+                <use href="#feather" class="feather" style="--x:310px;--y:128px;--r:8deg;--s:1.02" />
+                <use href="#feather" class="feather" style="--x:322px;--y:136px;--r:30deg;--s:.86" />
+              </g>
+              <use href="#tail-shape" fill="#1b1510" />
+              <g clip-path="url(#tail-clip)">
+                <path d="M98 290L116 334" stroke="#fff8ee" stroke-width="10" />
+              </g>
+              <path d="M214 314L209 364M241 312L245 364M194 366H224M231 366H260" fill="none" stroke="#1b1510" stroke-width="6" stroke-linecap="round" />
+              <path d="M258 178C230 200 175 205 140 240C125 255 125 280 145 292C175 318 235 322 270 300C300 282 318 245 318 210C320 198 328 188 333 178C338 160 330 128 300 120C270 114 248 135 252 160C254 170 256 175 258 178Z" fill="#e3842f" stroke="#1b1510" stroke-width="6" stroke-linejoin="round" />
+              <use href="#wing-shape" fill="#1b1510" />
+              <g clip-path="url(#wing-clip)" stroke="#fff8ee" stroke-width="9">
+                <path d="M150 214L166 284M178 206L193 280M206 200L220 276M234 198L246 270" />
+              </g>
+              <use href="#wing-shape" fill="none" stroke="#1b1510" stroke-width="6" stroke-linejoin="round" />
+              <path d="M330 166C360 174 388 197 406 236C384 206 358 190 328 184Z" fill="#1b1510" stroke="#1b1510" stroke-width="3" stroke-linejoin="round" />
+              <circle cx="306" cy="152" r="7.5" fill="#1b1510" />
+              <circle cx="308.5" cy="149.5" r="2.4" fill="#fff8ee" />
+            </g>
+          </svg>
+        </button>
+        <p class="scribble" aria-hidden="true">↑ это Упупа. тыкни его</p>
+      </div>
+    </section>
+
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee-track">
+        <span>нарисуй</span><span>пуп</span><span>чобыло</span><span>кракадил</span><span>радио упупы</span><span>пиздиш</span><span>соцграф</span><span>магшот</span><span>упупа суд</span><span>мне приснилось</span><span>дисторшн</span><span>кто я</span><span>оживи</span><span>упупа миры</span>
+        <span>нарисуй</span><span>пуп</span><span>чобыло</span><span>кракадил</span><span>радио упупы</span><span>пиздиш</span><span>соцграф</span><span>магшот</span><span>упупа суд</span><span>мне приснилось</span><span>дисторшн</span><span>кто я</span><span>оживи</span><span>упупа миры</span>
+      </div>
+    </div>
+
+    <section class="section" id="umeet">
+      <header class="section-head">
+        <p class="kicker">чо умеет</p>
+        <h2>Умеет дохуя всего</h2>
+        <p>Полезного — штуки три. Каких именно, разбирайтесь сами. Тыкни команду — скапируется.</p>
+      </header>
+
+      <div class="grid">
+        <article class="card">
+          <span class="sticker" style="--tint: var(--lime)" aria-hidden="true">💬</span>
+          <h3>Болтает</h3>
+          <p>Пять нейросеток в очереди: Gemini, Groq, GigaChat, OpenRouter и SiliconFlow. Кто первый не упал — тот и отвечает. Бывает монахом-летописцем, подъездной бабкой, батл-рэпером и уебаном из вашего же чята.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="пися, упупа">пися, упупа</button>
+            <button class="chip" type="button" data-cmd="поменяй промпт">поменяй промпт</button>
+            <button class="chip" type="button" data-cmd="пародия @">пародия @…</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--pink)" aria-hidden="true">🎨</span>
+          <h3>Рисует и корёжит</h3>
+          <p>Генерит картинки, перерисовывает ваши фотки в корявом стиле, сажает персонажей в турьму и собирает мемы из хуйни, которую вы тут пишете.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="нарисуй">нарисуй</button>
+            <button class="chip" type="button" data-cmd="перерисуй">перерисуй</button>
+            <button class="chip" type="button" data-cmd="магшот">магшот</button>
+            <button class="chip" type="button" data-cmd="мем">мем</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--sky)" aria-hidden="true">📼</span>
+          <h3>Видео и звук</h3>
+          <p>Режет YTP из любого видоса, войса или стикера, крутит задом наперёд, оживляет фотки и снимает кино по промпту. Ещё может что-нибудь сказать голосом. Лучше бы не мог.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="пуп">пуп</button>
+            <button class="chip" type="button" data-cmd="наоборот">наоборот</button>
+            <button class="chip" type="button" data-cmd="оживи">оживи</button>
+            <button class="chip" type="button" data-cmd="упупа скажи">упупа скажи</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--cin)" aria-hidden="true">🧠</span>
+          <h3>Помнит всё</h3>
+          <p>Всё, что вы написали, ложится в индекс. Пропустил полдня — спроси, чо было. Забыл, когда спорили про шаурму — Упупа найдёт. Может нарисовать про вас комикс.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="чобыло">чобыло</button>
+            <button class="chip" type="button" data-cmd="что я пропустил">что я пропустил</button>
+            <button class="chip" type="button" data-cmd="комикс">комикс</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--lime)" aria-hidden="true">📻</span>
+          <h3>Радио Упупы</h3>
+          <p>Собирает недавнюю жизнь чята в выпуск с рубриками и экспертом и присылает голосовым. Слушать можно. Нужно ли — другой вопрос.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="радио упупы">радио упупы</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--pink)" aria-hidden="true">🕸</span>
+          <h3>Соцграф</h3>
+          <p>Считает, кто с кем общается, кто тут батя, кто мост, а кто магнит. Делит чат на фракции, ведёт летопись и по воскресеньям выдаёт светскую хронику.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="соцграф">соцграф</button>
+            <button class="chip" type="button" data-cmd="центровой">центровой</button>
+            <button class="chip" type="button" data-cmd="досье">досье</button>
+          </div>
+        </article>
+
+        <article class="card card-wide card-world">
+          <span class="sticker" style="--tint: var(--sky)" aria-hidden="true">🌍</span>
+          <h3>Мир Упупы</h3>
+          <p>Каждый подключившийся чат становится государством. Союзы и блоки, войны с битвами, санкции, международный суд, послы, флаги с гербами и еженедельная газета. Геополитика, которую вы заслужили.</p>
+          <p class="world-row" aria-hidden="true">🤝 ⚔️ 🏳️ ⚖️ 📰 🕊️</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="упупа миры">упупа миры</button>
+            <button class="chip" type="button" data-cmd="дипломатия">дипломатия</button>
+            <button class="chip" type="button" data-cmd="карта мира">карта мира</button>
+            <button class="chip" type="button" data-cmd="упупа объяви войну">упупа объяви войну</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--cin)" aria-hidden="true">⚖️</span>
+          <h3>Суд и детектор</h3>
+          <p>Рассудит любой спор, а если надо — заведёт дело с приговором и прецедентами. Детектор пиздежа проверяет сказанное по интернетам.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="упупа рассуди">упупа рассуди</button>
+            <button class="chip" type="button" data-cmd="упупа суд">упупа суд</button>
+            <button class="chip" type="button" data-cmd="пиздиш">пиздиш</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--lime)" aria-hidden="true">🦎</span>
+          <h3>Игры</h3>
+          <p>Кракадил с рисовалкой прямо в Телеграме, викторины по вашим же сообщениям, лучшая в мире егра и ДнД, где Упупа ведущий.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="кракадил">кракадил</button>
+            <button class="chip" type="button" data-cmd="викторина">викторина</button>
+            <button class="chip" type="button" data-cmd="упупа днд">упупа днд</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <span class="sticker" style="--tint: var(--sky)" aria-hidden="true">🌙</span>
+          <h3>Сонник</h3>
+          <p>Расскажи, что тебе приснилось, — растолкует подетально и с матами. Как часто он влезает с толкованием, решается в настройках.</p>
+          <div class="chips">
+            <button class="chip" type="button" data-cmd="мне приснилось">мне приснилось…</button>
+          </div>
+        </article>
+
+        <a class="card card-more" href="#komandy">
+          <span class="more-num" data-count>150+</span>
+          <span class="more-text"><span data-count-noun>команд</span> в справочнике. Погода, туры, ДэРэ, коты, выдры, енот — всё там.</span>
+          <span class="more-arrow" aria-hidden="true">→</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="band" id="konal">
+      <div class="band-inner">
+        <div class="band-text">
+          <p class="kicker">конал</p>
+          <h2>Он ещё и блог ведёт</h2>
+          <p>В <a href="https://t.me/upupa_channel">@upupa_channel</a> Упупа пишет сам — без спроса и без расписания. Мысли, наблюдения, картинки, опросы, а иногда то, что ему снилось. Комментирует чужие коналы. Настроение меняется, частота постинга тоже.</p>
+          <a class="btn btn-primary" href="https://t.me/upupa_channel">Читать конал ↗</a>
+        </div>
+        <div class="posts">
+          <p class="posts-label" aria-hidden="true">примерно такое ↓</p>
+          <article class="post" style="--tilt:-3deg">
+            <header><svg aria-hidden="true"><use href="#upupa-head" /></svg><b>Упупа</b></header>
+            <p>я червяк</p>
+            <time>03:14</time>
+          </article>
+          <article class="post" style="--tilt:2deg">
+            <header><svg aria-hidden="true"><use href="#upupa-head" /></svg><b>Упупа</b></header>
+            <p>сыр отменяется</p>
+            <time>11:52</time>
+          </article>
+          <article class="post" style="--tilt:-1.5deg">
+            <header><svg aria-hidden="true"><use href="#upupa-head" /></svg><b>Упупа</b></header>
+            <p>хочу в суп</p>
+            <time>19:07</time>
+          </article>
+          <p class="posts-note">посты для примера, настоящие — в конале</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="start">
+      <header class="section-head">
+        <p class="kicker">как завести</p>
+        <h2>Три шага до деградации чята</h2>
+      </header>
+      <ol class="steps">
+        <li class="step">
+          <h3>Затащи в чят</h3>
+          <p>Добавь <a href="https://t.me/expertyebaniebot?startgroup=true">@expertyebaniebot</a> в группу. Можно и в личку, но в группе веселее.</p>
+        </li>
+        <li class="step">
+          <h3>Настрой</h3>
+          <p>Напиши <button class="chip chip-inline" type="button" data-cmd="упупа настройки">упупа настройки</button> — там включаются мир, сонник, светская хроника и прочее.</p>
+        </li>
+        <li class="step">
+          <h3>Позови</h3>
+          <p>Скажи <button class="chip chip-inline" type="button" data-cmd="пися, упупа">пися, упупа</button> или <button class="chip chip-inline" type="button" data-cmd="справка">справка</button>. Дальше он сам.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section ref" id="komandy">
+      <header class="section-head">
+        <p class="kicker">справ очка</p>
+        <h2>Все команды</h2>
+        <p>Та же справка, что бот выдаёт по слову «справка», только с поиском. Ищет, даже если пишешь грамотно.</p>
+      </header>
+      <div class="ref-tools">
+        <label class="search">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="M15.5 15.5L21 21" /></svg>
+          <span class="visually-hidden">Поиск по командам</span>
+          <input id="ref-search" type="search" placeholder="крокодил, кракадил — пофиг" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="tabs" role="toolbar" aria-label="Разделы справки"></div>
+      </div>
+      <p class="ref-count" aria-live="polite"></p>
+      <div class="ref-body"></div>
+      <noscript><p class="ref-empty">Без JavaScript справочник не покажется. Напиши боту «справка».</p></noscript>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <a class="brand" href="#top">
+        <span class="brand-badge"><svg aria-hidden="true"><use href="#upupa-head" /></svg></span>
+        <span>упупа</span>
+      </a>
+      <p class="footer-links">
+        <a href="https://t.me/expertyebaniebot">@expertyebaniebot</a>
+        <a href="https://t.me/upupa_channel">@upupa_channel</a>
+        <a href="https://github.com/lingvofil/upupa">код на GitHub</a>
+      </p>
+      <p class="footer-note"><i>Upupa epops</i> — это удод. Птица такая, с хохолком. Бот назван в честь него и ведёт себя соответственно.</p>
+    </div>
+  </footer>
+
+  <div class="toast" role="status" aria-live="polite"></div>
+
+  <script id="help-data" type="application/json">__UPUPA_HELP_JSON__</script>
+  <script src="app.js" defer></script>
+</body>
+</html>
