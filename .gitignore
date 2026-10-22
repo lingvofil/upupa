@@ -57,3 +57,6 @@ crocodile_party_state.json
 crocodile_scores.json
 crocodile_word_history.json
 games/crocodile_scores*.json
+
+# Static site build output (scripts/build_site.py)
+_site/
