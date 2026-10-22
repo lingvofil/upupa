@@ -95,7 +95,7 @@ def test_prompt_truncates_very_long_dreams():
     assert len(prompt) < _MAX_DREAM_CHARS + 3000
 
 
-def _message(text, *, user_id=123, chat_id=77, forwarded=False):
+def _message(text, *, user_id=123, chat_id=77, forward_origin=None, automatic_forward=None):
     replies = []
     actions = []
 
@@ -111,7 +111,8 @@ def _message(text, *, user_id=123, chat_id=77, forwarded=False):
         caption=None,
         chat=SimpleNamespace(id=chat_id, type="group"),
         from_user=SimpleNamespace(id=user_id, is_bot=False, first_name="Детектор"),
-        forward_origin=object() if forwarded else None,
+        forward_origin=forward_origin,
+        is_automatic_forward=automatic_forward,
         bot=SimpleNamespace(send_chat_action=send_chat_action),
         reply=reply,
     )
@@ -157,15 +158,73 @@ def test_ordinary_message_is_not_interpreted(dream_book):
     assert replies == []
 
 
-def test_forwarded_and_bot_dreams_are_ignored(dream_book):
-    forwarded, forwarded_replies = _message("мне снилось, что я кит", forwarded=True)
+def test_bot_messages_and_automatic_channel_forwards_are_ignored(dream_book):
     bot_message, bot_replies = _message("мне снилось, что я кит")
     bot_message.from_user.is_bot = True
+    channel_post, channel_replies = _message(
+        "Мне снилось, что я кит, блядь",
+        user_id=777000,
+        automatic_forward=True,
+        forward_origin=SimpleNamespace(type="channel", chat=SimpleNamespace(title="Упупа"), author_signature=None),
+    )
+    forwarded_bot, forwarded_bot_replies = _message(
+        "мне снилось, что я кит",
+        forward_origin=SimpleNamespace(
+            type="user",
+            sender_user=SimpleNamespace(id=999, is_bot=True, first_name="Упупа"),
+        ),
+    )
 
-    assert asyncio.run(dream_book.maybe_interpret_dream(forwarded)) is False
-    assert asyncio.run(dream_book.maybe_interpret_dream(bot_message)) is False
+    for message in (bot_message, channel_post, forwarded_bot):
+        assert asyncio.run(dream_book.maybe_interpret_dream(message)) is False
     assert dream_book.calls == []
-    assert forwarded_replies == bot_replies == []
+    assert bot_replies == channel_replies == forwarded_bot_replies == []
+
+
+def test_forwarded_dream_is_interpreted_as_original_authors_dream(dream_book):
+    message, replies = _message(
+        "Вот например мне снился сегодня сон. На велосипеде у меня был гудок.",
+        forward_origin=SimpleNamespace(
+            type="user",
+            sender_user=SimpleNamespace(id=456, is_bot=False, first_name="Тукан"),
+        ),
+    )
+
+    assert asyncio.run(dream_book.maybe_interpret_dream(message)) is True
+
+    prompt = dream_book.calls[0]
+    assert "по имени Тукан рассказал свой сон" in prompt
+    assert "Этот сон переслал в чат Детектор" in prompt
+    assert "толкуй сон Тукан" in prompt
+    assert "На велосипеде у меня был гудок" in prompt
+    assert len(replies) == 1
+
+
+def test_forwarded_own_message_has_no_forward_note(dream_book):
+    message, _ = _message(
+        "мне снилось, что я кит",
+        forward_origin=SimpleNamespace(
+            type="user",
+            sender_user=SimpleNamespace(id=123, is_bot=False, first_name="Детектор"),
+        ),
+    )
+
+    assert asyncio.run(dream_book.maybe_interpret_dream(message)) is True
+    assert "по имени Детектор рассказал свой сон" in dream_book.calls[0]
+    assert "переслал" not in dream_book.calls[0]
+
+
+def test_forwarded_author_name_for_hidden_users_chats_and_channels():
+    from AI.dream_book import _forwarded_author
+
+    forwarder = SimpleNamespace(id=123)
+    hidden = SimpleNamespace(type="hidden_user", sender_user_name="Скрытный Кот")
+    chat = SimpleNamespace(type="chat", sender_chat=SimpleNamespace(title="Группа"), author_signature=None)
+    channel = SimpleNamespace(type="channel", chat=SimpleNamespace(title="Канал"), author_signature="Админ")
+
+    assert _forwarded_author(hidden, forwarder) == "Скрытный Кот"
+    assert _forwarded_author(chat, forwarder) == "Группа"
+    assert _forwarded_author(channel, forwarder) == "Админ"
 
 
 def test_probability_controls_interpretation(dream_book):

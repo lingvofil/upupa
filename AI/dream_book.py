@@ -5,7 +5,9 @@
 Чужие сны ("тебе снилось"), отрицания и идиомы ("мне такое и не снилось"),
 пожелания ("пусть мне приснится") отсеиваются. Если сообщение — только
 анонс ("мне такая дичь приснилась"), Упупа ждёт следующие сообщения того же
-автора и толкует их вместе с анонсом.
+автора и толкует их вместе с анонсом. Пересланный сон толкуется от имени
+автора оригинала; автопересылки постов канала и пересланные сообщения ботов
+пропускаются.
 """
 
 from __future__ import annotations
@@ -201,7 +203,7 @@ def is_dream_teaser(text: str | None) -> bool:
 
 
 DREAM_PROMPT = """Ты — «Сонник Упупы»: потомственный толкователь снов с дипломом из подземного перехода,
-циничный, злой, саркастичный и матерящийся. Участник Telegram-чата по имени {name} рассказал свой сон.
+циничный, злой, саркастичный и матерящийся. Участник Telegram-чата по имени {name} рассказал свой сон.{forward_note}
 
 Твоя задача — растолковать этот сон ПОДЕТАЛЬНО и максимально издевательски:
 1. Вытащи из рассказа от 2 до 6 конкретных образов, людей, мест, предметов и действий — только тех,
@@ -228,11 +230,24 @@ DREAM_PROMPT = """Ты — «Сонник Упупы»: потомственны
 """
 
 
-def build_dream_prompt(dream_text: str, author_name: str | None) -> str:
+_FORWARD_NOTE = (
+    "\nЭтот сон переслал в чат {forwarded_by} — сон не его, толкуй сон {name}. "
+    "Над {forwarded_by} можешь мимоходом поиздеваться за то, что таскает в чат чужие сны."
+)
+
+
+def build_dream_prompt(
+    dream_text: str,
+    author_name: str | None,
+    *,
+    forwarded_by: str | None = None,
+) -> str:
     dream = (dream_text or "").strip()
     if len(dream) > _MAX_DREAM_CHARS:
         dream = dream[:_MAX_DREAM_CHARS].rstrip() + "…"
-    return DREAM_PROMPT.format(name=(author_name or "аноним").strip() or "аноним", dream=dream)
+    name = (author_name or "аноним").strip() or "аноним"
+    forward_note = _FORWARD_NOTE.format(forwarded_by=forwarded_by, name=name) if forwarded_by else ""
+    return DREAM_PROMPT.format(name=name, dream=dream, forward_note=forward_note)
 
 
 _MARKDOWN_HEADING_RE = re.compile(r"(?m)^[ \t]*#{1,6}[ \t]*")
@@ -246,9 +261,15 @@ def _clean_interpretation(text: str) -> str:
 
 
 @ai_feature("сонник")
-async def interpret_dream(dream_text: str, chat_id: int, author_name: str | None) -> str | None:
+async def interpret_dream(
+    dream_text: str,
+    chat_id: int,
+    author_name: str | None,
+    *,
+    forwarded_by: str | None = None,
+) -> str | None:
     """Генерирует толкование сна; None, если модель промолчала или упала."""
-    prompt = build_dream_prompt(dream_text, author_name)
+    prompt = build_dream_prompt(dream_text, author_name, forwarded_by=forwarded_by)
     try:
         response = await generate_with_active_model(prompt, chat_id)
     except Exception as exc:
@@ -262,8 +283,27 @@ def _message_text(message) -> str:
     return (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
 
 
-def _is_forwarded(message) -> bool:
-    return bool(getattr(message, "forward_origin", None) or getattr(message, "forward_date", None))
+_SKIP = object()
+
+
+def _forwarded_author(origin, forwarder) -> str | None | object:
+    """Автор пересланного сна: имя, None для собственного сообщения, _SKIP для бота."""
+    sender_user = getattr(origin, "sender_user", None)
+    if sender_user is not None:
+        if getattr(sender_user, "is_bot", False):
+            return _SKIP
+        if getattr(sender_user, "id", None) == getattr(forwarder, "id", None):
+            return None
+        return getattr(sender_user, "first_name", None) or getattr(sender_user, "full_name", None) or "аноним"
+    for name in (
+        getattr(origin, "author_signature", None),
+        getattr(origin, "sender_user_name", None),
+        getattr(getattr(origin, "sender_chat", None), "title", None),
+        getattr(getattr(origin, "chat", None), "title", None),
+    ):
+        if name:
+            return name
+    return "аноним"
 
 
 _STATE_PRUNE_THRESHOLD = 2000
@@ -309,11 +349,22 @@ def _take_pending_followup(key: tuple[int, int], text: str, now: float) -> str |
 async def maybe_interpret_dream(message, *, probability: float = 1.0, rng=random.random) -> bool:
     """Толкует сон из сообщения; True, если толкование отправлено."""
     user = getattr(message, "from_user", None)
-    if user is None or getattr(user, "is_bot", False) or _is_forwarded(message):
+    # Автопересылка поста канала в группу обсуждения — не рассказ участника.
+    if user is None or getattr(user, "is_bot", False) or getattr(message, "is_automatic_forward", False):
         return False
     text = _message_text(message)
     if not text:
         return False
+
+    author_name = getattr(user, "first_name", None)
+    forwarded_by = None
+    origin = getattr(message, "forward_origin", None)
+    if origin is not None:
+        original_author = _forwarded_author(origin, user)
+        if original_author is _SKIP:
+            return False
+        if original_author is not None:
+            author_name, forwarded_by = original_author, author_name
 
     key = (int(message.chat.id), int(user.id))
     now = time.monotonic()
@@ -340,7 +391,7 @@ async def maybe_interpret_dream(message, *, probability: float = 1.0, rng=random
     except Exception:
         logging.debug("[dream_book] send_chat_action failed", exc_info=True)
 
-    interpretation = await interpret_dream(dream, message.chat.id, getattr(user, "first_name", None))
+    interpretation = await interpret_dream(dream, message.chat.id, author_name, forwarded_by=forwarded_by)
     if not interpretation:
         _last_interpretation.pop(key, None)
         return False
