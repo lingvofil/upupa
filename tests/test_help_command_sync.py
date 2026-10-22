@@ -26,6 +26,12 @@ def test_help_main_page_advertises_upupa_channel():
     assert "@upupa_channel - мой конал" in HELP_DICT["main"]
 
 
+def test_help_main_page_links_to_site():
+    from prompts.help_texts import HELP_DICT
+
+    assert '<a href="https://lingvofil.github.io/upupa/">' in HELP_DICT["main"]
+
+
 def test_help_uses_short_birthday_example_without_placeholder_brackets():
     from prompts.help_texts import HELP_DICT, HELP_TEXT
 
@@ -77,12 +83,21 @@ def test_help_covers_current_public_command_families():
         "найди [запрос]",
         # utilities
         "упупа погода", "погода неделя", "мой др 1 апреля",
-        "упупа дни рождения", "туры [запрос]", "отели [запрос]",
-        "билеты [запрос]", "упупа ищи", "имя [имя]", "кем стать",
+        "упупа дни рождения", "имя [имя]", "кем стать",
     )
 
     missing = [command for command in expected if command not in HELP_TEXT]
     assert missing == [], f"Справка потеряла публичные команды: {missing}"
+
+
+def test_help_does_not_advertise_owner_only_commands():
+    from prompts.help_texts import HELP_TEXT
+
+    # Туры, отели, билеты и поиск аккаунтов владелец делал для себя: команды
+    # работают, но в справке и на сайте их нет.
+    for command in ("туры [запрос]", "отели [запрос]", "билеты [запрос]", "упупа ищи"):
+        assert command not in HELP_TEXT
+    assert "ПОЕЗДОЧКИ" not in HELP_TEXT
 
 
 def test_help_does_not_advertise_disabled_chogovoryat_handler():
