@@ -82,9 +82,38 @@ def test_prompt_contains_dream_author_and_detailed_mocking_contract():
 
     assert "мне снилось, что я ем кактус в метро" in prompt
     assert "Детектор" in prompt
-    assert "ПОДЕТАЛЬНО" in prompt
+    assert "2–4 САМЫХ ярких образа" in prompt
+    assert "Местоимения (я, меня, мне" in prompt
+    assert "40–110 слов" in prompt
+    assert "Прогноз:" not in prompt
     assert "мат" in prompt
     assert "без Markdown" in prompt
+
+
+def test_pronoun_images_and_extra_symbols_are_dropped():
+    from AI.dream_book import _clean_interpretation
+
+    raw = (
+        "▪️ Меня — значит, ты эгоцентричный долбоёб.\n"
+        "▪️ «Я» (сновидец) — тоже к нарциссизму.\n"
+        "▪️ Велосипед — к тому, что ты всю жизнь крутишь педали вхолостую.\n"
+        "▪️ Гудок — Фрейд после литра говорит: хочешь, чтобы тебя наконец услышали.\n"
+        "- Колесо - к сдутым амбициям.\n"
+        "▪️ Сжатый воздух — у тебя в голове его дохуя.\n"
+        "▪️ Бог — даже он с тебя охуел.\n"
+        "Итог: ты сам себе гудок, прогноз — проколешься к пятнице."
+    )
+
+    cleaned = _clean_interpretation(raw)
+
+    assert "Меня —" not in cleaned
+    assert "«Я»" not in cleaned
+    assert "▪️ Велосипед" in cleaned
+    assert "▪️ Гудок" in cleaned
+    assert "- Колесо" in cleaned
+    assert "▪️ Сжатый воздух" in cleaned
+    assert "Бог —" not in cleaned
+    assert cleaned.endswith("Итог: ты сам себе гудок, прогноз — проколешься к пятнице.")
 
 
 def test_prompt_truncates_very_long_dreams():
