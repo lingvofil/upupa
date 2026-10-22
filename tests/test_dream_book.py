@@ -86,6 +86,10 @@ def test_prompt_contains_dream_author_and_detailed_mocking_contract():
     assert "Местоимения (я, меня, мне" in prompt
     assert "40–110 слов" in prompt
     assert "Прогноз:" not in prompt
+    # Конкретные примеры авторитетов модель тащила в каждый ответ.
+    for stock_character in ("Зин", "Фрейд", "Ванг", "Миллер"):
+        assert stock_character not in prompt
+    assert "без постоянных персонажей" in prompt
     assert "мат" in prompt
     assert "без Markdown" in prompt
 
