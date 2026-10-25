@@ -27,6 +27,9 @@ from infrastructure.ai.execution import ai_feature_context
 RHYTHM_PERIOD_DAYS = 90
 UPUPA_PERIOD_DAYS = 90
 RHYTHM_MIN_MESSAGES = 20
+VERBOSITY_MIN_MESSAGES = 20
+# Average words per message → manner of writing; the last matching bound wins.
+VERBOSITY_STYLES = ((0, "односложно"), (3, "коротко"), (7, "развёрнуто"), (15, "простынями"))
 PEAK_WEEKDAY_MIN_SHARE = 0.2
 SILENCE_MIN_DAYS = 3
 TOP_ITEMS = 3
@@ -53,20 +56,21 @@ CHRONOTYPES = {
     "day": ("☀️", "дневной"),
     "evening": ("🌆", "вечерний"),
 }
-# The card font has no emoji, so the picture names reactions in words.
+# The card font has no emoji, so the picture names reactions in words.  Forms are
+# accusative: they always follow «ставит …» / «получает …».
 REACTION_WORDS = {
     "👍": "лайк", "👎": "дизлайк", "❤": "сердечко", "🔥": "огонь", "🥰": "умиление", "👏": "аплодисменты",
-    "😁": "ухмылка", "🤔": "задумчивость", "🤯": "взрыв мозга", "😱": "ужас", "🤬": "мат", "😢": "слёзы",
-    "🎉": "праздник", "🤩": "восторг", "🤮": "рвота", "💩": "какашка", "🙏": "мольба", "👌": "окей",
-    "🕊": "голубь", "🤡": "клоун", "🥱": "зевок", "🥴": "угар", "😍": "влюблённость", "🐳": "кит",
-    "❤‍🔥": "горящее сердце", "🌚": "луна", "🌭": "хот-дог", "💯": "сотка", "🤣": "ржач", "⚡": "молния",
+    "😁": "лыбу", "🤔": "задумчивость", "🤯": "взрыв мозга", "😱": "ужас", "🤬": "мат", "😢": "слёзы",
+    "🎉": "праздник", "🤩": "восторг", "🤮": "рвоту", "💩": "какашку", "🙏": "мольбу", "👌": "окей",
+    "🕊": "голубя", "🤡": "клоуна", "🥱": "зевок", "🥴": "угар", "😍": "влюблённость", "🐳": "кита",
+    "❤‍🔥": "горящее сердце", "🌚": "луну", "🌭": "хот-дог", "💯": "сотку", "🤣": "ржач", "⚡": "молнию",
     "🍌": "банан", "🏆": "кубок", "💔": "разбитое сердце", "🤨": "подозрение", "😐": "покерфейс",
-    "🍓": "клубничка", "🍾": "шампанское", "💋": "поцелуй", "🖕": "фак", "😈": "чертёнок", "😴": "сон",
-    "😭": "рыдание", "🤓": "ботан", "👻": "призрак", "👀": "глаза", "🎃": "тыква", "🙈": "стыд",
-    "😇": "ангел", "😨": "испуг", "🤝": "рукопожатие", "✍": "конспект", "🤗": "обнимашки", "🫡": "честь",
-    "🎅": "Санта", "🎄": "ёлка", "☃": "снеговик", "💅": "маникюр", "🤪": "придурь", "🗿": "моаи",
-    "🆒": "кул", "💘": "купидон", "🙉": "не слышу", "🦄": "единорог", "😘": "воздушный поцелуй",
-    "💊": "таблетка", "🙊": "молчок", "😎": "очки", "👾": "пришелец", "🤷": "пофиг", "😡": "злость",
+    "🍓": "клубничку", "🍾": "шампанское", "💋": "поцелуй", "🖕": "фак", "😈": "чертёнка", "😴": "сон",
+    "😭": "рыдание", "🤓": "ботана", "👻": "призрака", "👀": "глаза", "🎃": "тыкву", "🙈": "стыд",
+    "😇": "ангела", "😨": "испуг", "🤝": "рукопожатие", "✍": "конспект", "🤗": "обнимашки", "🫡": "честь",
+    "🎅": "Санту", "🎄": "ёлку", "☃": "снеговика", "💅": "маникюр", "🤪": "придурь", "🗿": "моаи",
+    "🆒": "кул", "💘": "купидона", "🙉": "«не слышу»", "🦄": "единорога", "😘": "воздушный поцелуй",
+    "💊": "таблетку", "🙊": "молчок", "😎": "крутые очки", "👾": "пришельца", "🤷": "пофиг", "😡": "злость",
 }
 
 
@@ -75,7 +79,6 @@ class ActivityFacts:
     total: int = 0
     weekly: int = 0
     rank: str | None = None
-    first_seen: datetime | None = None
     last_seen: datetime | None = None
 
 
@@ -135,6 +138,7 @@ class PersonalFacts:
     birthday: BirthdayFacts | None = None
     upupa: UpupaFacts | None = None
     words: tuple[tuple[str, int], ...] = ()
+    average_words: float | None = None
 
 
 # --- pure analysis ------------------------------------------------------------
@@ -232,12 +236,11 @@ async def _load_activity(chat_id: int, user_id: int) -> tuple[ActivityFacts | No
     rhythm = rhythm or {}
     total = int((counters or {}).get("total", 0) or 0)
     activity = None
-    if counters or rhythm.get("first_message"):
+    if counters or rhythm.get("last_message"):
         activity = ActivityFacts(
             total=total,
             weekly=int((counters or {}).get("weekly", 0) or 0),
             rank=stat_rank_settings.rank_for_total(total) if total else None,
-            first_seen=rhythm.get("first_message"),
             last_seen=rhythm.get("last_message"),
         )
     return activity, build_rhythm(rhythm.get("hours") or (), rhythm.get("weekdays") or ())
@@ -313,10 +316,13 @@ async def _load_upupa(chat_id: int, user_id: int) -> UpupaFacts | None:
     return build_upupa_usage(await get_user_ai_usage(chat_id, user_id, period_days=UPUPA_PERIOD_DAYS))
 
 
-async def _load_words(chat_id: int, user_id: int) -> tuple[tuple[str, int], ...]:
-    from features.lexicon_settings import favorite_words
+async def _load_writing(chat_id: int, user_id: int) -> tuple[tuple[tuple[str, int], ...], float | None]:
+    """Favourite words and the average message length (only once there are enough messages)."""
+    from features.lexicon_settings import writing_profile
 
-    return tuple(await favorite_words(user_id, chat_id, top_n=TOP_ITEMS))
+    profile = await writing_profile(user_id, chat_id, top_n=TOP_ITEMS)
+    average = profile.get("average_words") if profile.get("messages", 0) >= VERBOSITY_MIN_MESSAGES else None
+    return tuple(profile.get("favorite_words") or ()), average
 
 
 _facts_cache: OrderedDict[tuple[int, int], tuple[float, PersonalFacts]] = OrderedDict()
@@ -329,16 +335,17 @@ async def load_personal_facts(chat_id: int, user_id: int) -> PersonalFacts:
     if cached is not None and time.monotonic() - cached[0] < FACTS_TTL_SECONDS:
         return cached[1]
     today = app_now_naive().date()
-    activity_rhythm, reactions, crocodile, dnd, birthday, upupa, words = await asyncio.gather(
+    activity_rhythm, reactions, crocodile, dnd, birthday, upupa, writing = await asyncio.gather(
         _safe("activity", _load_activity(*key)),
         _safe("reactions", _load_reactions(*key)),
         _safe("crocodile", asyncio.to_thread(_crocodile_sync, *key)),
         _safe("dnd", asyncio.to_thread(_dnd_sync, *key)),
         _safe("birthday", asyncio.to_thread(_birthday_sync, *key, today)),
         _safe("upupa", _load_upupa(*key)),
-        _safe("words", _load_words(*key)),
+        _safe("writing", _load_writing(*key)),
     )
     activity, rhythm = activity_rhythm or (None, None)
+    words, average_words = writing or ((), None)
     facts = PersonalFacts(
         activity=activity,
         rhythm=rhythm,
@@ -347,7 +354,8 @@ async def load_personal_facts(chat_id: int, user_id: int) -> PersonalFacts:
         dnd=dnd,
         birthday=birthday,
         upupa=upupa,
-        words=words or (),
+        words=words,
+        average_words=average_words,
     )
     _facts_cache[key] = (time.monotonic(), facts)
     _facts_cache.move_to_end(key)
@@ -385,12 +393,6 @@ def number(value: int) -> str:
 
 def messages_phrase(value: int) -> str:
     return f"{number(value)} {_plural(int(value), 'сообщение', 'сообщения', 'сообщений')}"
-
-
-def since_phrase(first_seen: datetime | None) -> str | None:
-    if first_seen is None:
-        return None
-    return f"в чате с {MONTHS_GENITIVE[first_seen.month - 1]} {first_seen.year}"
 
 
 def silence_days(last_seen: datetime | None, today: date) -> int:
@@ -444,6 +446,16 @@ def reactions_card_phrase(reactions: ReactionFacts) -> str | None:
 
 def reactions_emoji_phrase(items: Sequence[tuple[str, int]]) -> str:
     return " ".join(emoji for emoji, _count in items)
+
+
+def verbosity_style(average_words: float) -> str:
+    return next(style for bound, style in reversed(VERBOSITY_STYLES) if average_words >= bound)
+
+
+def verbosity_phrase(average_words: float) -> str:
+    """«пишет коротко, ~5 слов» — manner plus the rounded average."""
+    words = max(1, round(average_words))
+    return f"пишет {verbosity_style(average_words)}, ~{words} {_plural(words, 'слово', 'слова', 'слов')}"
 
 
 def words_phrase(words: Sequence[tuple[str, int]], limit: int = 2) -> str | None:

@@ -893,12 +893,12 @@ class SQLiteStatisticsRepository:
         return data
 
     def get_user_chat_rhythm(self, chat_id: int, user_id: int, period_days: int = 90) -> dict[str, Any]:
-        """One participant's group-chat rhythm: hour/weekday histograms plus first and last message."""
+        """One participant's group-chat rhythm: hour/weekday histograms plus the last message time."""
         since = datetime.now() - timedelta(days=max(1, int(period_days)))
         with closing(self._connect()) as conn:
-            bounds = conn.execute(
+            last = conn.execute(
                 """
-                SELECT MIN(message_timestamp), MAX(message_timestamp)
+                SELECT MAX(message_timestamp)
                 FROM message_stats
                 WHERE user_id = ? AND chat_id = ? AND is_private = 0
                 """,
@@ -931,8 +931,7 @@ class SQLiteStatisticsRepository:
                 return None
 
         return {
-            "first_message": parse(bounds[0]) if bounds else None,
-            "last_message": parse(bounds[1]) if bounds else None,
+            "last_message": parse(last[0]) if last else None,
             "hours": hours,
             "weekdays": weekdays,
         }

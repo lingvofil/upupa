@@ -11,6 +11,7 @@ All ``sg:`` inline buttons (map, relationship card, dossier) are dispatched here
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 
@@ -39,6 +40,7 @@ from features.social_graph.service import get_graph_data, is_social_graph_enable
 from handlers import social_graph as graph_handlers
 from handlers.chronicle import MODE_RECENT, send_chronicle_page
 from infrastructure.ai.execution import ai_feature
+from prompts import actions
 
 
 router = Router(name="social_navigation")
@@ -111,13 +113,20 @@ def _dossier_links(dossier, chat_id: int) -> tuple[str | None, str | None]:
     return event_link, hit_link
 
 
-async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallback_name: str) -> None:
+async def _random_chat_action(message: types.Message, chat_id: int) -> None:
+    """The usual Upupa «печатает / записывает войс …» while the dossier is being assembled."""
     bot = getattr(message, "bot", None)
-    if bot is not None:
-        try:
-            await bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-        except Exception:
-            pass
+    if bot is None:
+        return
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
+    except Exception:
+        pass
+
+
+async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallback_name: str) -> None:
+    await _random_chat_action(message, chat_id)
+    bot = getattr(message, "bot", None)
     dossier = await build_dossier(chat_id, user_id, fallback_name)
     event_link, hit_link = _dossier_links(dossier, chat_id)
     if bot is not None and hasattr(message, "reply_photo"):
@@ -138,7 +147,9 @@ async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallb
 
 async def send_dossier_details(message: types.Message, chat_id: int, user_id: int, fallback_name: str, *, dossier=None) -> None:
     """The whole dossier as text: the «Подробнее» page and the fallback when the card fails."""
-    dossier = dossier or await build_dossier(chat_id, user_id, fallback_name)
+    if dossier is None:
+        await _random_chat_action(message, chat_id)
+        dossier = await build_dossier(chat_id, user_id, fallback_name)
     event_link, hit_link = _dossier_links(dossier, chat_id)
     await message.reply(
         format_dossier_html(dossier, event_link, hit_link),

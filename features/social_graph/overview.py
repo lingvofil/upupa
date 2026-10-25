@@ -36,8 +36,8 @@ from features.social_graph.dossier_facts import (
     reactions_emoji_phrase,
     rhythm_phrase,
     silence_days,
-    since_phrase,
     upupa_phrase,
+    verbosity_phrase,
     words_phrase,
 )
 from features.social_graph.dynamics import _plural
@@ -292,6 +292,8 @@ def nickname_facts(dossier: Dossier) -> list[str]:
         lines.append(f"на сообщения чаще всего ставят {facts.reactions.received[0][0]}")
     if facts.words:
         lines.append("любимые слова: " + ", ".join(word for word, _count in facts.words))
+    if facts.average_words is not None:
+        lines.append(verbosity_phrase(facts.average_words) + " на сообщение")
     if facts.crocodile is not None and facts.crocodile.draws:
         lines.append(f"в «Крокодиле» угадали рисунков: {facts.crocodile.draws}")
     if facts.dnd is not None:
@@ -390,14 +392,8 @@ def format_dossier_html(
         if activity.total:
             parts.append(f"{messages_phrase(activity.total)}, {number(activity.weekly)} за неделю")
         block.append("🏅 " + " · ".join(parts))
-    if activity is not None:
-        since = since_phrase(activity.first_seen)
-        quiet = silence_days(activity.last_seen, today)
-        parts = [since[0].upper() + since[1:]] if since else []
-        if quiet:
-            parts.append(f"молчит {quiet} {_plural(quiet, 'день', 'дня', 'дней')}")
-        if parts:
-            block.append("📅 " + ", ".join(parts))
+    if activity is not None and (quiet := silence_days(activity.last_seen, today)):
+        block.append(f"💤 Молчит {quiet} {_plural(quiet, 'день', 'дня', 'дней')}")
     if facts.rhythm is not None:
         phrase = rhythm_phrase(facts.rhythm)
         block.append(f"{chronotype_emoji(facts.rhythm)} {phrase[0].upper()}{phrase[1:]}")
@@ -417,9 +413,12 @@ def format_dossier_html(
         block.append(f"🎯 {text[0].upper()}{text[1:]}")
     if hit := _hit_html(dossier, hit_link, limit=DETAILS_QUOTE_CHARS):
         block.append(hit)
+    if facts.average_words is not None:
+        phrase = verbosity_phrase(facts.average_words)
+        block.append(f"✍️ {phrase[0].upper()}{phrase[1:]} на сообщение")
     if facts.words:
         block.append(f"🗣 Словечки: {_quoted(facts.words)}")
-    _section(lines, "Реакции", block)
+    _section(lines, "Реакции и слог", block)
 
     block = []
     crocodile = facts.crocodile
@@ -480,8 +479,8 @@ def dossier_card_data(dossier: Dossier, avatar: bytes | None = None, *, today: d
         side_lines.append(f"ранг: {activity.rank}")
     if facts.birthday is not None:
         side_lines.append(f"ДР {birthday_date(facts.birthday)}, {birthday_countdown(facts.birthday)}")
-    if activity is not None and (since := since_phrase(activity.first_seen)):
-        side_lines.append(since)
+    if facts.average_words is not None:
+        side_lines.append(verbosity_phrase(facts.average_words))
 
     rows = []
     if activity is not None and (phrase := activity_phrase(activity, today)):
