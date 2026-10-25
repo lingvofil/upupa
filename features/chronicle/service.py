@@ -417,6 +417,10 @@ async def count_events(chat_id: int, *, user_id: int | None = None, username: st
     return await asyncio.to_thread(_stores()[1].count, int(chat_id), user_id=user_id, username=username)
 
 
+async def user_reaction_profile(chat_id: int, user_id: int) -> dict:
+    return await asyncio.to_thread(_stores()[0].user_reaction_profile, int(chat_id), int(user_id))
+
+
 async def chronicle_loop() -> None:
     while True:
         try:

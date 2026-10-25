@@ -108,6 +108,11 @@ def credit_like(token: str) -> bool:
     return True
 
 
+def artist_likes(chat_id: int | str, user_id: int) -> int:
+    row = _load_state().get("scores", {}).get(str(chat_id), {}).get(str(int(user_id)))
+    return max(0, int(row.get("likes", 0) or 0)) if isinstance(row, dict) else 0
+
+
 def format_like_leaderboard(chat_id: int | str) -> str:
     table = _load_state().get("scores", {}).get(str(chat_id), {})
     if not isinstance(table, dict) or not table:

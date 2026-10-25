@@ -123,6 +123,12 @@ async def record_artist_success(
         )
 
 
+def artist_stats(chat_id: int | str, user_id: int) -> dict | None:
+    """One artist's row: successful draws and guess timings, or None if never guessed."""
+    row = _load_artist_scores_sync().get(str(chat_id), {}).get(str(int(user_id)))
+    return dict(row) if row and row.get("successful_draws") else None
+
+
 def format_artist_leaderboard(chat_id: int | str) -> str:
     table = _load_artist_scores_sync().get(str(chat_id), {})
     if not table:

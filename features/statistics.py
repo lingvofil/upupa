@@ -73,6 +73,10 @@ class StatisticsRepository(Protocol):
         limit: int = 50,
     ) -> list[dict]: ...
 
+    def get_user_chat_rhythm(self, chat_id: int, user_id: int, period_days: int = 90) -> dict: ...
+
+    def get_user_ai_usage(self, chat_id: int, user_id: int, period_days: int = 90) -> list[tuple[str, int]]: ...
+
 
 _statistics_repository: StatisticsRepository | None = None
 
@@ -207,4 +211,22 @@ async def get_chat_participant_activity(
         chat_id,
         datetime.now() - timedelta(hours=period_hours),
         limit,
+    )
+
+
+async def get_user_chat_rhythm(chat_id: int, user_id: int, *, period_days: int = 90) -> dict:
+    return await asyncio.to_thread(
+        _repository().get_user_chat_rhythm,
+        int(chat_id),
+        int(user_id),
+        period_days,
+    )
+
+
+async def get_user_ai_usage(chat_id: int, user_id: int, *, period_days: int = 90) -> list[tuple[str, int]]:
+    return await asyncio.to_thread(
+        _repository().get_user_ai_usage,
+        int(chat_id),
+        int(user_id),
+        period_days,
     )

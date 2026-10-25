@@ -406,6 +406,44 @@ async def _user_lexicon_stats(user_id: int, chat_id: int):
                                        index_filters={"user_id": user_id})
 
 
+FAVORITE_WORD_MIN_LENGTH = 3
+FAVORITE_WORD_SCAN_LIMIT = 5000
+
+
+def _is_favorite_word_candidate(word: str) -> bool:
+    # «упупа …» — это обращения к боту, а не словарь человека.
+    return (
+        len(word) >= FAVORITE_WORD_MIN_LENGTH
+        and not word.isdigit()
+        and not word.startswith(("упуп", "http", "www"))
+        and "_" not in word
+    )
+
+
+async def favorite_words(user_id: int, chat_id: int, *, top_n: int = 3, scan_limit: int = FAVORITE_WORD_SCAN_LIMIT):
+    """Самые частые слова участника за его последние ``scan_limit`` сообщений в чате."""
+    repository = get_history_repository(LOG_FILE)
+    if repository is None:
+        counters, _matched = await _user_lexicon_stats(user_id, chat_id)
+        counter = counters[1]
+    else:
+        counter = collections.Counter()
+
+        def collect():
+            seen = 0
+
+            def visit(row):
+                nonlocal seen
+                seen += 1
+                counter.update(clean_text(row["text"]))
+                return seen < scan_limit
+
+            repository.scan(chat_id, visit, descending=True, user_id=user_id)
+
+        await asyncio.to_thread(collect)
+    return [(word, count) for word, count in counter.most_common() if _is_favorite_word_candidate(word)][:top_n]
+
+
 async def _named_user_lexicon_stats(username_or_name: str, chat_id: int):
     username_pattern = re.compile(
         rf".* - Chat {chat_id}\b.*User \d+ \(({re.escape(username_or_name)})\) \[.*?\]: (.*)"

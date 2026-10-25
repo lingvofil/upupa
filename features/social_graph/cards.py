@@ -167,10 +167,9 @@ def _meter(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, label: str, va
         draw.rounded_rectangle((x, bar_y, x + max(14, int(width * filled)), bar_y + 14), radius=7, fill=color)
 
 
-def _weekly_bars(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int, values: Sequence[int], color) -> None:
+def _weekly_bars(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int, values: Sequence[int], color, gap: int = 8) -> None:
     values = list(values) or [0]
     peak = max(values) or 1
-    gap = 8
     bar_width = (width - gap * (len(values) - 1)) / len(values)
     for index, value in enumerate(values):
         left = x + index * (bar_width + gap)
@@ -267,6 +266,12 @@ async def render_pair_card_async(data: PairCardData) -> bytes:
 
 # --- dossier card -------------------------------------------------------------
 
+DOSSIER_LABEL_WIDTH = 150
+DOSSIER_ROW_HEIGHT = 44
+DOSSIER_WRAP_HEIGHT = 32
+DOSSIER_HOUR_TICKS = (0, 6, 12, 18, 23)
+
+
 @dataclass(frozen=True, slots=True)
 class DossierRelation:
     name: str
@@ -276,72 +281,119 @@ class DossierRelation:
 
 @dataclass(frozen=True, slots=True)
 class DossierCardData:
+    """Plain lines for the dossier card; wording is done by the caller."""
+
     user_id: int
     name: str
-    role_title: str | None
-    role_blurb: str | None
-    faction_name: str | None
-    faction_color: tuple[int, int, int] | None
-    connections: int
-    period_days: int
-    relations: tuple[DossierRelation, ...] = ()
+    role_title: str | None = None
+    role_blurb: str | None = None
+    faction_name: str | None = None
+    faction_color: tuple[int, int, int] | None = None
+    nickname: str | None = None
+    closest: DossierRelation | None = None
     antagonist: DossierRelation | None = None
     antagonist_tension: int = 0
-    chronicle_count: int = 0
-    latest_event: str | None = None
+    side_lines: tuple[str, ...] = ()
+    rhythm_hours: tuple[int, ...] = ()
+    rhythm_label: str | None = None
+    rows: tuple[tuple[str, str], ...] = ()
     avatar: bytes | None = None
+
+
+def _shade(color: tuple[int, int, int], factor: float = 0.68) -> tuple[int, int, int]:
+    return tuple(int(channel * factor) for channel in color)
 
 
 def render_dossier_card(data: DossierCardData) -> bytes:
     tint = data.faction_color or GOLD
     image = _background(tint)
     draw = ImageDraw.Draw(image, "RGBA")
-    name_font, title_font, label_font, small_font = _load_font(44), _load_font(30), _load_font(26), _load_font(24)
+    name_font, title_font, label_font, small_font, tiny_font = (
+        _load_font(40), _load_font(28), _load_font(26), _load_font(22), _load_font(18)
+    )
 
-    left_center = 250
-    avatar_size = 250
+    # Left column: who this is.
+    left_center, column = 250, 420
+    avatar_size = 200
     tile = _avatar_image(data.avatar, data.name, data.user_id, avatar_size)
-    image.paste(tile, (int(left_center - avatar_size / 2), 60), tile)
-    draw.ellipse((left_center - avatar_size / 2 - 5, 55, left_center + avatar_size / 2 + 5, 65 + avatar_size), outline=(*tint, 255), width=7)
-    _centered(draw, left_center, 340, data.name, name_font, max_width=420)
+    image.paste(tile, (int(left_center - avatar_size / 2), 40), tile)
+    draw.ellipse((left_center - avatar_size / 2 - 5, 35, left_center + avatar_size / 2 + 5, 45 + avatar_size), outline=(*tint, 255), width=7)
+    y = 258
+    _centered(draw, left_center, y, data.name, name_font, max_width=column)
+    y += 52
+    if data.nickname:
+        _centered(draw, left_center, y, f"«{data.nickname}»", label_font, fill=_shade(tint), max_width=column)
+        y += 40
+    y += 4
     if data.role_title:
-        _badge(draw, left_center, 404, data.role_title, tint, title_font)
+        _badge(draw, left_center, y, data.role_title, tint, title_font)
+        y += 58
     if data.role_blurb:
-        for line_index, line in enumerate(_wrap(draw, data.role_blurb, small_font, 420)):
-            _centered(draw, left_center, 464 + line_index * 30, line, small_font, fill=MUTED, max_width=420)
+        for line in _wrap(draw, data.role_blurb, small_font, column):
+            _centered(draw, left_center, y, line, small_font, fill=MUTED, max_width=column)
+            y += 28
+        y += 8
     if data.faction_name:
-        _centered(draw, left_center, 540, "фракция", small_font, fill=MUTED)
-        _centered(draw, left_center, 570, data.faction_name, label_font, max_width=420)
-    _centered(draw, left_center, 640, f"связей за {data.period_days} дней: {data.connections}", small_font, fill=MUTED)
+        _centered(draw, left_center, y, f"фракция: {data.faction_name}", small_font, max_width=column)
+        y += 36
+    for line in data.side_lines:
+        if y > CARD_HEIGHT - 60:
+            break
+        _centered(draw, left_center, y, line, small_font, fill=MUTED, max_width=column)
+        y += 32
 
-    x = 540
-    width = CARD_WIDTH - x - 70
-    draw.line((x - 40, 60, x - 40, CARD_HEIGHT - 60), fill=TRACK, width=3)
-    y = 66
-    draw.text((x, y), "Главные отношения", font=title_font, fill=INK)
-    y += 56
-    if not data.relations:
-        draw.text((x, y), "пока не накопились", font=label_font, fill=MUTED)
-        y += 60
-    for relation in data.relations[:3]:
-        draw.text((x, y), _fit(draw, relation.name, label_font, width - 140), font=label_font, fill=INK)
-        level_text = f"{relation.level}/100"
-        draw.text((x + width - draw.textlength(level_text, font=label_font), y), level_text, font=label_font, fill=INK)
-        draw.rounded_rectangle((x, y + 38, x + width, y + 50), radius=6, fill=TRACK)
-        draw.rounded_rectangle((x, y + 38, x + max(12, int(width * relation.level / 100)), y + 50), radius=6, fill=tint)
-        draw.text((x, y + 58), _fit(draw, relation.archetype, small_font, width), font=small_font, fill=MUTED)
-        y += 108
+    # Right column: one line per fact; long values take a second line while space lasts.
+    x = 520
+    width = CARD_WIDTH - x - 60
+    value_x, value_width = x + DOSSIER_LABEL_WIDTH, width - DOSSIER_LABEL_WIDTH
+    draw.line((x - 30, 50, x - 30, CARD_HEIGHT - 50), fill=TRACK, width=3)
 
+    relations = []
+    if data.closest is not None:
+        relations.append(("Ближе всех", f"{data.closest.name} · {data.closest.level}/100 · {data.closest.archetype}", INK))
     if data.antagonist is not None:
-        y += 6
-        draw.text((x, y), "Главный оппонент", font=small_font, fill=MUTED)
-        draw.text((x, y + 32), _fit(draw, f"{data.antagonist.name} · напряжение {data.antagonist_tension}/100", label_font, width), font=label_font, fill=WARM)
-        y += 82
+        relations.append(("Оппонент", f"{data.antagonist.name} · напряжение {data.antagonist_tension}/100", WARM))
+    if not relations:
+        relations.append(("Отношения", "пока не накопились", MUTED))
+    has_rhythm = bool(data.rhythm_hours and sum(data.rhythm_hours))
+    bars_height = 52
+    y = 46
+    bottom = CARD_HEIGHT - 40
+    used = len(relations) * DOSSIER_ROW_HEIGHT + 10 + len(data.rows) * DOSSIER_ROW_HEIGHT
+    if has_rhythm:
+        used += DOSSIER_ROW_HEIGHT + bars_height + 38
+    spare = bottom - y - used
 
-    chronicle_y = max(y + 10, CARD_HEIGHT - 150)
-    draw.text((x, chronicle_y), f"В Летописи: {data.chronicle_count}", font=title_font, fill=INK)
-    if data.latest_event:
-        draw.text((x, chronicle_y + 46), _fit(draw, f"последнее: «{data.latest_event}»", small_font, width), font=small_font, fill=MUTED)
+    def row(label: str, value: str, fill=INK) -> None:
+        nonlocal y, spare
+        draw.text((x, y + 4), _fit(draw, label, small_font, DOSSIER_LABEL_WIDTH - 14), font=small_font, fill=MUTED)
+        lines = [_fit(draw, value, label_font, value_width)]
+        if lines[0].endswith("…") and spare >= DOSSIER_WRAP_HEIGHT:
+            lines = _wrap(draw, value, label_font, value_width, max_lines=2)
+            spare -= DOSSIER_WRAP_HEIGHT * (len(lines) - 1)
+        for index, line in enumerate(lines):
+            draw.text((value_x, y + index * DOSSIER_WRAP_HEIGHT), line, font=label_font, fill=fill)
+        y += DOSSIER_ROW_HEIGHT + DOSSIER_WRAP_HEIGHT * (len(lines) - 1)
+
+    for label, value, fill in relations:
+        row(label, value, fill)
+    y += 10
+
+    if has_rhythm:
+        row("Ритм", data.rhythm_label or "")
+        hours = list(data.rhythm_hours)[:24]
+        gap = 4
+        _weekly_bars(draw, x, y, width, bars_height, hours, tint, gap=gap)
+        bar_width = (width - gap * (len(hours) - 1)) / len(hours)
+        for hour in DOSSIER_HOUR_TICKS:
+            if hour < len(hours):
+                _centered(draw, x + hour * (bar_width + gap) + bar_width / 2, y + bars_height + 4, f"{hour:02d}", tiny_font, fill=MUTED, max_width=40)
+        y += bars_height + 38
+
+    for label, value in data.rows:
+        if y > bottom - DOSSIER_ROW_HEIGHT:
+            break
+        row(label, value)
     return _to_png(image)
 
 

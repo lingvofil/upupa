@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
+import re
 from types import SimpleNamespace
 
 from PIL import Image
 
 from tests import test_smoke_imports  # noqa: F401
 
-from features.social_graph import overview
+from features.social_graph import dossier_facts, overview
 from features.social_graph.ai import name_factions
 from features.social_graph.analysis import GraphEdge, aggregate_edges, select_render_graph
 from features.social_graph.rendering import CANVAS_HEIGHT, render_graph_png
@@ -147,20 +148,86 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
     async def fake_list(_chat_id, *, user_id, limit):
         return [SimpleNamespace(title="Война за кондиционер")]
 
+    hours = [0] * 24
+    hours[1], hours[2], hours[14] = 15, 10, 20
+    facts = dossier_facts.PersonalFacts(
+        activity=dossier_facts.ActivityFacts(
+            total=1234, weekly=56, rank="хуятор 🔨",
+            first_seen=datetime(2025, 3, 2), last_seen=datetime(2026, 10, 24),
+        ),
+        rhythm=dossier_facts.build_rhythm(hours, [1, 1, 1, 1, 1, 40, 1]),
+        reactions=dossier_facts.ReactionFacts(
+            given=(("🔥", 12),), received=(("🤣", 30),),
+            best_message_id=77, best_message_reactions=9, best_message_text="кондиционер — зло",
+        ),
+        words=(("кондей", 40),),
+        upupa=dossier_facts.UpupaFacts(requests=12, favorites=(("нарисуй", 8), ("поболтать", 4))),
+    )
+    hints = []
+
+    async def fake_facts(_chat_id, _user_id):
+        return facts
+
+    async def fake_nickname(_chat_id, _user_id, _name, lines):
+        hints.extend(lines)
+        return "Повелитель кондея"
+
     monkeypatch.setattr(overview, "load_structure", fake_structure)
     monkeypatch.setattr(overview, "get_relationships", fake_relationships)
     monkeypatch.setattr(overview, "count_events", fake_count)
     monkeypatch.setattr(overview, "list_events", fake_list)
+    monkeypatch.setattr(overview, "load_personal_facts", fake_facts)
+    monkeypatch.setattr(overview, "dossier_nickname", fake_nickname)
 
     dossier = asyncio.run(overview.build_dossier(-100, 1, "Fallback"))
-    html = overview.format_dossier_html(dossier, "https://t.me/c/1/2")
+    today = date(2026, 10, 25)
+    html = overview.format_dossier_html(dossier, "https://t.me/c/1/2", "https://t.me/c/1/77", today=today)
 
     assert dossier.name == "User 1"
     assert dossier.antagonist is hostile
+    assert dossier.nickname == "Повелитель кондея"
+    assert "любимые слова: кондей" in hints
     assert "Партия имени" in html
-    assert "Главный оппонент" in html and "User 3" in html
+    assert "Оппонент: <b>User 3</b>" in html
     assert "Bob" in html  # friendly pair is listed among main relationships
-    assert 'href="https://t.me/c/1/2"' in html and "Летописи: <b>2</b>" in html
+    assert 'Последнее в Летописи: <a href="https://t.me/c/1/2">' in html
+    assert "«Повелитель кондея»" in html and "хуятор" in html and "1 234 сообщения" in html
+    assert "сова" in html.lower() and "по пятницам" in html
+    assert "Ставит 🔥 · получает 🤣" in html and 'href="https://t.me/c/1/77"' in html and "«кондей»" in html
+    assert "чаще всего «нарисуй», «поболтать»" in html
+
+    caption = overview.format_dossier_caption_html(dossier, "https://t.me/c/1/2", "https://t.me/c/1/77")
+    assert "Хит" in caption and 'href="https://t.me/c/1/2"' in caption
+    assert "🔥" not in caption and "нарисуй" not in caption  # card and «Подробнее» cover these
+
+    card = overview.dossier_card_data(dossier, today=today)
+    assert card.nickname == "Повелитель кондея" and card.closest.name == "Bob"
+    assert [label for label, _value in card.rows] == ["Активность", "Реакции", "Словечки", "Упупа", "Летопись"]
+    assert dict(card.rows)["Реакции"] == "ставит огонь · получает ржач"
+    assert "ранг: хуятор 🔨" in card.side_lines and "в чате с марта 2025" in card.side_lines
+
+
+def test_dossier_caption_is_a_few_short_lines():
+    long_text = "очень " * 400
+    dossier = overview.Dossier(
+        user_id=1, name="User 1", period_days=30,
+        role=SimpleNamespace(role=SimpleNamespace(emoji="🌉", title="Мост", blurb="связывает"), reason=long_text),
+        faction_name=None, connections=0, relationships=(), antagonist=None, asymmetry=None,
+        graph_names={}, chronicle_count=1, latest_event=SimpleNamespace(title=long_text), nickname="Кличка",
+        facts=dossier_facts.PersonalFacts(
+            reactions=dossier_facts.ReactionFacts(
+                given=(("🔥", 3),), best_message_id=7, best_message_reactions=5, best_message_text=long_text,
+            ),
+            upupa=dossier_facts.UpupaFacts(requests=9, favorites=(("нарисуй", 5), ("поболтать", 4))),
+        ),
+    )
+    caption = overview.format_dossier_caption_html(dossier, "https://t.me/c/1/2", "https://t.me/c/1/7")
+    lines = caption.split("\n")
+
+    assert lines[0] == "🗂 <b>Досье: User 1</b> — «Кличка»"
+    assert len(lines) == 4
+    assert all(len(re.sub(r"<[^>]+>", "", line)) <= 90 for line in lines)
+    assert all("…" in line for line in lines[1:])
 
 
 # --- handlers -----------------------------------------------------------------
@@ -208,6 +275,7 @@ def test_social_buttons_dispatch_and_cringe_cooldown(monkeypatch):
     monkeypatch.setattr(nav, "is_social_graph_enabled", lambda _chat_id: True)
     monkeypatch.setattr(nav, "send_factions", recorder("factions"))
     monkeypatch.setattr(nav, "send_dossier", recorder("dossier"))
+    monkeypatch.setattr(nav, "send_dossier_details", recorder("details"))
     monkeypatch.setattr(nav.graph_handlers, "send_relationship_history", recorder("history"))
     monkeypatch.setattr(nav.graph_handlers, "send_cringe_graph", recorder("cringe"))
     nav._cringe_button_used_at.clear()
@@ -224,11 +292,17 @@ def test_social_buttons_dispatch_and_cringe_cooldown(monkeypatch):
             answer=answer,
         )
 
-    for data in ("sg:fac", "sg:hist:1:2", "sg:dos:5", "sg:cringe", "sg:cringe", "sg:hist:x:y"):
+    async def known_name(_chat_id, user_id):
+        return f"User {user_id}"
+
+    monkeypatch.setattr(nav, "_known_name", known_name)
+
+    for data in ("sg:fac", "sg:hist:1:2", "sg:dos:5", "sg:dosx:5", "sg:cringe", "sg:cringe", "sg:hist:x:y"):
         asyncio.run(nav.handle_social_button(query(data)))
 
-    assert [call[0] for call in calls] == ["factions", "history", "dossier", "cringe"]
+    assert [call[0] for call in calls] == ["factions", "history", "dossier", "details", "cringe"]
     assert calls[1][2] == (1, 2)
+    assert calls[3][2] == (5, "User 5")
     assert any(text and "Paint ещё не остыл" in text for text in answers)
 
 

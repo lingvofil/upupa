@@ -91,6 +91,11 @@ async def count_events(chat_id: int, **kwargs):
     return await service.count_events(chat_id, **kwargs)
 
 
+async def user_reaction_profile(chat_id: int, user_id: int):
+    ensure_initialized()
+    return await service.user_reaction_profile(chat_id, user_id)
+
+
 async def register_external_candidate(**kwargs):
     ensure_background_loop()
     return await service.register_external_candidate(**kwargs)
