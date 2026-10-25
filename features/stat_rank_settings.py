@@ -98,17 +98,25 @@ async def track_message_statistics(message: types.Message):
             logging.exception("Failed to send rank notification")
 
 
+def rank_for_total(total: int) -> str | None:
+    for count, rank in sorted(RANKS.items(), reverse=True):
+        if total >= count:
+            return rank
+    return None
+
+
+async def get_user_counters(chat_id: int | str, user_id: int | str) -> dict | None:
+    """Сырые счётчики сообщений участника: total/daily/weekly."""
+    return await asyncio.to_thread(_counters().get_user, str(chat_id), str(user_id), date.today())
+
+
 async def get_user_statistics(chat_id: str, user_id: str) -> tuple[str, bool]:
     """Получает статистику пользователя."""
-    user_stats = await asyncio.to_thread(_counters().get_user, chat_id, user_id, date.today())
+    user_stats = await get_user_counters(chat_id, user_id)
     if user_stats is None:
         return "Ты пока ничего не написал, иди пиши.", False
 
-    user_rank = "без ранга"
-    for count, rank in sorted(RANKS.items(), reverse=True):
-        if user_stats.get("total", 0) >= count:
-            user_rank = rank
-            break
+    user_rank = rank_for_total(user_stats.get("total", 0)) or "без ранга"
 
     response = (
         f"📊 **Твоя статистика:**\n"

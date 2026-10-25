@@ -48,17 +48,28 @@ def test_pair_card_renders_with_and_without_avatars():
 
 
 def test_dossier_card_handles_empty_and_full_data():
-    empty = DossierCardData(
-        user_id=5, name="Кто-то", role_title=None, role_blurb=None, faction_name=None,
-        faction_color=None, connections=0, period_days=30,
-    )
+    empty = DossierCardData(user_id=5, name="Кто-то")
+    hours = tuple((index * 7) % 13 for index in range(24))
     full = DossierCardData(
         user_id=5, name="Евгений", role_title="Мост",
         role_blurb="связывает компании, которые без него почти не пересекаются",
-        faction_name="Клан ночного треда", faction_color=(66, 133, 244), connections=7, period_days=30,
-        relations=(DossierRelation("Саня", 9, "заклятые друзья"), DossierRelation("Маша", 6, "мемный дуэт")),
-        antagonist=DossierRelation("Олег", 3, "спорщики"), antagonist_tension=48,
-        chronicle_count=5, latest_event="Великая война за кондиционер", avatar=_avatar_bytes(),
+        faction_name="Клан ночного треда", faction_color=(66, 133, 244),
+        nickname="Повелитель ночного треда и всех кондиционеров",
+        closest=DossierRelation("Саня", 87, "заклятые друзья"),
+        antagonist=DossierRelation("Олег", 30, "спорщики"), antagonist_tension=48,
+        side_lines=("ранг: хуятор 🔨", "ДР 1 апреля, через 23 дня", "в чате с марта 2025"),
+        rhythm_hours=hours, rhythm_label="сова · пик в 01:00 · чаще по пятницам",
+        rows=(
+            ("Активность", "12 345 сообщений · 210 за неделю"),
+            ("Реакции", "ставит огонь · получает ржач"),
+            ("Словечки", "«кондей» · «короче»"),
+            ("Кракадил", "угадали 14 рисунков · 37 лайков"),
+            ("ДнД", "4 приключения · последний герой погиб"),
+            ("Упупа", "312 просьб · чаще «нарисуй»"),
+            ("Летопись", "«Великая война за кондиционер, которая длилась три дня и три ночи»"),
+            ("Лишнее", "строка, которая уже не влезает и должна молча отброситься"),
+        ),
+        avatar=_avatar_bytes(),
     )
     assert _png_size(render_dossier_card(empty)) == (CARD_WIDTH, CARD_HEIGHT)
     assert _png_size(render_dossier_card(full)) == (CARD_WIDTH, CARD_HEIGHT)

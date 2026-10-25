@@ -1,7 +1,7 @@
 """Readable entry points over the social graph: dossier, roles, factions and buttons.
 
 Commands:
-    «досье» / «досье @user» / «досье» реплаем — карточка человека
+    «досье» / «досье @user» / «досье» реплаем — карточка человека (+ «Подробнее» текстом)
     «роли»     — роли участников чата
     «фракции»  — лагеря чата с раскрашенным графом
 
@@ -68,11 +68,16 @@ def _is_group_chat(chat) -> bool:
     return getattr(chat.type, "value", chat.type) in {"group", "supergroup"}
 
 
-def dossier_keyboard(user_id: int):
+def dossier_keyboard(user_id: int, *, details: bool = True):
     builder = InlineKeyboardBuilder()
+    if details:
+        builder.button(text="📊 Подробнее", callback_data=f"{CALLBACK_PREFIX}dosx:{int(user_id)}")
     builder.button(text="❤️ Все отношения", callback_data=f"{CALLBACK_PREFIX}rels:{int(user_id)}")
     builder.button(text="📜 Летопись", callback_data=f"{CALLBACK_PREFIX}uchr:{int(user_id)}")
-    builder.adjust(2)
+    if details:
+        builder.adjust(1, 2)
+    else:
+        builder.adjust(2)
     return builder.as_markup()
 
 
@@ -93,32 +98,53 @@ async def _resolve_dossier_target(message: types.Message) -> tuple[int, str] | N
     return int(user.id), user.full_name or user.first_name or "Участник"
 
 
-async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallback_name: str) -> None:
-    dossier = await build_dossier(chat_id, user_id, fallback_name)
-    link = None
+def _dossier_links(dossier, chat_id: int) -> tuple[str | None, str | None]:
+    """Telegram links to the latest Chronicle event and to the person's most reacted message."""
+    event_link = hit_link = None
     if dossier.latest_event is not None:
         event = dossier.latest_event
         message_id = event.anchor_message_id or (event.source_message_ids[0] if event.source_message_ids else None)
-        link = graph_handlers._telegram_message_link(chat_id, message_id)
+        event_link = graph_handlers._telegram_message_link(chat_id, message_id)
+    reactions = dossier.facts.reactions
+    if reactions is not None and reactions.best_message_id is not None:
+        hit_link = graph_handlers._telegram_message_link(chat_id, reactions.best_message_id)
+    return event_link, hit_link
+
+
+async def send_dossier(message: types.Message, chat_id: int, user_id: int, fallback_name: str) -> None:
     bot = getattr(message, "bot", None)
+    if bot is not None:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        except Exception:
+            pass
+    dossier = await build_dossier(chat_id, user_id, fallback_name)
+    event_link, hit_link = _dossier_links(dossier, chat_id)
     if bot is not None and hasattr(message, "reply_photo"):
         try:
             avatar = await fetch_avatar(bot, user_id)
             png = await render_dossier_card_async(dossier_card_data(dossier, avatar))
             await message.reply_photo(
                 BufferedInputFile(png, filename="dossier.png"),
-                caption=format_dossier_caption_html(dossier, link),
+                caption=format_dossier_caption_html(dossier, event_link, hit_link),
                 parse_mode="HTML",
                 reply_markup=dossier_keyboard(user_id),
             )
             return
         except Exception as exc:
             logging.warning("[social_graph] dossier card failed, falling back to text: %s", exc, exc_info=True)
+    await send_dossier_details(message, chat_id, user_id, fallback_name, dossier=dossier)
+
+
+async def send_dossier_details(message: types.Message, chat_id: int, user_id: int, fallback_name: str, *, dossier=None) -> None:
+    """The whole dossier as text: the «Подробнее» page and the fallback when the card fails."""
+    dossier = dossier or await build_dossier(chat_id, user_id, fallback_name)
+    event_link, hit_link = _dossier_links(dossier, chat_id)
     await message.reply(
-        format_dossier_html(dossier, link),
+        format_dossier_html(dossier, event_link, hit_link),
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=dossier_keyboard(user_id),
+        reply_markup=dossier_keyboard(user_id, details=False),
     )
 
 
@@ -267,6 +293,9 @@ async def handle_social_button(query: types.CallbackQuery):
         elif action == "dos" and (user := _ints(args, 1)):
             await query.answer()
             await send_dossier(message, chat_id, user[0], "Участник")
+        elif action == "dosx" and (user := _ints(args, 1)):
+            await query.answer()
+            await send_dossier_details(message, chat_id, user[0], await _known_name(chat_id, user[0]))
         elif action == "rels" and (user := _ints(args, 1)):
             await query.answer()
             dossier_name = await _known_name(chat_id, user[0])

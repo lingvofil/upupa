@@ -201,3 +201,34 @@ async def name_factions(
         if index in known and name and not name.lower().startswith(_FAILURE_PREFIXES):
             result[index] = name[:60]
     return result
+
+
+async def invent_nickname(
+    name: str,
+    facts: list[str],
+    chat_id: str,
+    *,
+    generator: Generator | None = None,
+) -> str | None:
+    """A short chat nickname for the dossier, built only from already computed facts."""
+    if not facts:
+        return None
+    prompt = (
+        f"Ниже факты об участнике Telegram-чата по имени {name}: что о нём посчитал бот. "
+        "Придумай ему одну короткую смешную кличку в духе чата (2–4 слова, можно грубовато). "
+        "Опирайся только на эти факты; не придумывай события, внешность и биографию. "
+        "Без оскорблений по внешности, национальности, полу или здоровью. "
+        "Не повторяй имя и не пересказывай факты.\n"
+        + "\n".join(f"- {fact}" for fact in facts)
+        + "\nВерни ТОЛЬКО кличку, без кавычек и пояснений."
+    )
+    try:
+        raw = await (generator or _default_generator)(prompt, chat_id)
+    except Exception as exc:
+        logging.warning("Social graph nickname failed: %s", exc)
+        return None
+    line = next((item for item in str(raw or "").splitlines() if item.strip()), "")
+    nickname = " ".join(line.split()).strip(" «»\"'.!*—-:")
+    if not nickname or nickname.lower().startswith(_FAILURE_PREFIXES) or len(nickname.split()) > 6:
+        return None
+    return nickname[:48]

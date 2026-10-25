@@ -891,3 +891,65 @@ class SQLiteStatisticsRepository:
         for hour, count in rows:
             data[int(hour)] = count
         return data
+
+    def get_user_chat_rhythm(self, chat_id: int, user_id: int, period_days: int = 90) -> dict[str, Any]:
+        """One participant's group-chat rhythm: hour/weekday histograms plus first and last message."""
+        since = datetime.now() - timedelta(days=max(1, int(period_days)))
+        with closing(self._connect()) as conn:
+            bounds = conn.execute(
+                """
+                SELECT MIN(message_timestamp), MAX(message_timestamp)
+                FROM message_stats
+                WHERE user_id = ? AND chat_id = ? AND is_private = 0
+                """,
+                (user_id, chat_id),
+            ).fetchone()
+            rows = conn.execute(
+                """
+                SELECT strftime('%H', message_timestamp), strftime('%w', message_timestamp), COUNT(*)
+                FROM message_stats
+                WHERE user_id = ? AND chat_id = ? AND is_private = 0 AND message_timestamp >= ?
+                GROUP BY 1, 2
+                """,
+                (user_id, chat_id, since),
+            ).fetchall()
+
+        hours = [0] * 24
+        weekdays = [0] * 7
+        for hour, weekday, count in rows:
+            if hour is None or weekday is None:
+                continue
+            hours[int(hour)] += int(count)
+            weekdays[int(weekday)] += int(count)
+
+        def parse(value):
+            if not value:
+                return None
+            try:
+                return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "first_message": parse(bounds[0]) if bounds else None,
+            "last_message": parse(bounds[1]) if bounds else None,
+            "hours": hours,
+            "weekdays": weekdays,
+        }
+
+    def get_user_ai_usage(self, chat_id: int, user_id: int, period_days: int = 90) -> list[tuple[str, int]]:
+        """Features a participant asked Upupa for, counting calls within one minute as one request."""
+        since = _utc_now_naive() - timedelta(days=max(1, int(period_days)))
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT feature, COUNT(DISTINCT strftime('%Y-%m-%d %H:%M', timestamp)) AS requests
+                FROM model_stats
+                WHERE timestamp >= ? AND user_id = ? AND chat_id = ?
+                    AND feature IS NOT NULL AND feature != '' AND COALESCE(success, 1) != 0
+                GROUP BY feature
+                ORDER BY requests DESC, feature
+                """,
+                (since, user_id, chat_id),
+            ).fetchall()
+        return [(str(feature), int(requests)) for feature, requests in rows]

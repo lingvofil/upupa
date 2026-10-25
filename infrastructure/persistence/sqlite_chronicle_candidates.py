@@ -264,6 +264,63 @@ class SQLiteChronicleCandidateStore:
         user_total = sum(len(loads(row["reactions_json"], [])) for row in rows)
         return max(user_total, int(aggregate["total_count"]) if aggregate else 0), unique
 
+    def user_reaction_profile(self, chat_id: int, user_id: int) -> dict:
+        """Emoji a participant gives and receives, plus their most reacted message.
+
+        Authorship comes from the shared ``history_messages`` table in the same
+        database; self-reactions are not counted as received.
+        """
+        given: dict[str, int] = {}
+        received: dict[str, int] = {}
+        per_message: dict[int, int] = {}
+        best_text = ""
+        with closing(self._connect()) as conn:
+            for row in conn.execute(
+                "SELECT reactions_json FROM chronicle_user_reactions WHERE chat_id=? AND user_id=?",
+                (int(chat_id), int(user_id)),
+            ):
+                for emoji in loads(row["reactions_json"], []):
+                    given[str(emoji)] = given.get(str(emoji), 0) + 1
+            try:
+                rows = conn.execute(
+                    """SELECT r.message_id, r.reactions_json FROM chronicle_user_reactions r
+                       JOIN history_messages h ON h.chat_id=? AND h.message_id=r.message_id
+                       WHERE r.chat_id=? AND h.user_id=? AND h.message_id IS NOT NULL AND r.user_id!=?""",
+                    (str(int(chat_id)), int(chat_id), str(int(user_id)), int(user_id)),
+                ).fetchall()
+                aggregates = conn.execute(
+                    """SELECT g.message_id, g.total_count FROM chronicle_reaction_aggregate g
+                       JOIN history_messages h ON h.chat_id=? AND h.message_id=g.message_id
+                       WHERE g.chat_id=? AND h.user_id=? AND h.message_id IS NOT NULL""",
+                    (str(int(chat_id)), int(chat_id), str(int(user_id))),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows, aggregates = [], []
+            for row in rows:
+                emojis = [str(emoji) for emoji in loads(row["reactions_json"], [])]
+                for emoji in emojis:
+                    received[emoji] = received.get(emoji, 0) + 1
+                per_message[int(row["message_id"])] = per_message.get(int(row["message_id"]), 0) + len(emojis)
+            for row in aggregates:
+                message_id = int(row["message_id"])
+                per_message[message_id] = max(per_message.get(message_id, 0), int(row["total_count"]))
+            best_id = max(per_message, key=lambda key: (per_message[key], key)) if per_message else None
+            if best_id is not None and per_message[best_id] > 0:
+                text_row = conn.execute(
+                    "SELECT text FROM history_messages WHERE chat_id=? AND message_id=?",
+                    (str(int(chat_id)), best_id),
+                ).fetchone()
+                best_text = str(text_row["text"] or "") if text_row else ""
+            else:
+                best_id = None
+        return {
+            "given": given,
+            "received": received,
+            "best_message_id": best_id,
+            "best_message_reactions": per_message.get(best_id, 0) if best_id is not None else 0,
+            "best_message_text": best_text,
+        }
+
     def reaction_baseline(self, chat_id: int) -> tuple[float, float]:
         if self.statistics_path is None or not self.statistics_path.exists():
             return 0.0, 0.0
