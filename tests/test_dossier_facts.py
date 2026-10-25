@@ -62,12 +62,15 @@ def test_reactions_are_normalized_and_named_for_the_card():
     facts = dossier_facts.ReactionFacts(given=top, received=(("🤣", 7),))
     # 🫥 has no word on the card, so the next known reaction is shown.
     assert dossier_facts.reactions_card_phrase(facts) == "ставит сердечко · получает ржач"
+    # Words are accusative, and 😁 is a grin, not a smirk.
+    facts = dossier_facts.ReactionFacts(given=(("💩", 2),), received=(("😁", 5),))
+    assert dossier_facts.reactions_card_phrase(facts) == "ставит какашку · получает лыбу"
 
 
 def test_activity_phrase_reports_silence():
     activity = dossier_facts.ActivityFacts(total=21, weekly=0, last_seen=datetime(2026, 10, 13, 12))
     assert dossier_facts.activity_phrase(activity, date(2026, 10, 25)) == "21 сообщение · молчит 12 дней"
-    assert dossier_facts.since_phrase(datetime(2025, 3, 2)) == "в чате с марта 2025"
+    assert dossier_facts.silence_days(datetime(2026, 10, 23), date(2026, 10, 25)) == 0  # пара дней — не молчание
 
 
 # --- repositories -------------------------------------------------------------
@@ -80,7 +83,7 @@ def test_statistics_rhythm_and_ai_usage_are_scoped_to_chat_and_user(tmp_path):
         (-100, 1, base, 0),
         (-100, 1, base + timedelta(hours=13), 0),
         (-100, 1, base + timedelta(hours=13, minutes=5), 0),
-        (-100, 1, base - timedelta(days=400), 0),  # старше окна ритма, но задаёт «в чате с»
+        (-100, 1, base - timedelta(days=400), 0),  # старше окна ритма
         (-100, 2, base, 0),
         (-200, 1, base, 0),
         (-100, 1, base, 1),
@@ -92,7 +95,8 @@ def test_statistics_rhythm_and_ai_usage_are_scoped_to_chat_and_user(tmp_path):
         )
     rhythm = repository.get_user_chat_rhythm(-100, 1, period_days=90)
     assert sum(rhythm["hours"]) == 3 and rhythm["hours"][1] == 1 and rhythm["hours"][14] == 2
-    assert rhythm["first_message"].date() == (base - timedelta(days=400)).date()
+    assert rhythm["last_message"] == base + timedelta(hours=13, minutes=5)
+    assert "first_message" not in rhythm
     assert sum(rhythm["weekdays"]) == 3
 
     minute = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
@@ -138,19 +142,31 @@ def test_reaction_profile_counts_given_received_and_best_message(tmp_path):
     assert candidates.user_reaction_profile(-100, 9)["best_message_id"] is None
 
 
-def test_favorite_words_skip_bot_calls_and_stop_at_scan_limit(monkeypatch):
+def test_writing_profile_skips_bot_calls_commands_and_stops_at_scan_limit(monkeypatch):
     from features import lexicon_settings
 
     class Repository:
         def scan(self, chat_id, visitor, *, descending=False, **filters):
             assert (chat_id, descending, filters) == (-100, True, {"user_id": 1})
-            for text in ["упупа кондей", "кондей кондей ну", "42 42 42", "короче кондей", "сцена"] * 3:
+            rows = ["упупа кондей", "", "кондей кондей ну", "/start кондей", "короче кондей", "сцена"]
+            for text in rows * 3:
                 if visitor({"text": text}) is False:
                     break
 
     monkeypatch.setattr(lexicon_settings, "get_history_repository", lambda _path: Repository())
-    words = asyncio.run(lexicon_settings.favorite_words(1, -100, top_n=3, scan_limit=4))
-    assert words == [("кондей", 4), ("короче", 1)]
+    profile = asyncio.run(lexicon_settings.writing_profile(1, -100, top_n=3, scan_limit=5))
+
+    # «сцена» is the sixth row and lies beyond the scan limit; empty text and /commands do not count.
+    assert profile["favorite_words"] == [("кондей", 4), ("короче", 1)]
+    assert profile["messages"] == 3 and profile["average_words"] == 7 / 3
+
+
+def test_verbosity_styles_and_phrase():
+    assert [dossier_facts.verbosity_style(value) for value in (1.2, 3, 6.9, 7, 25)] == [
+        "односложно", "коротко", "коротко", "развёрнуто", "простынями",
+    ]
+    assert dossier_facts.verbosity_phrase(24.6) == "пишет простынями, ~25 слов"
+    assert dossier_facts.verbosity_phrase(1.2) == "пишет односложно, ~1 слово"
 
 
 # --- composition and AI -------------------------------------------------------
@@ -164,8 +180,8 @@ def test_personal_facts_survive_a_broken_source(monkeypatch):
     async def broken(_chat_id, _user_id):
         raise RuntimeError("chronicle is down")
 
-    async def words(_chat_id, _user_id):
-        return (("кондей", 3),)
+    async def writing(_chat_id, _user_id):
+        return (("кондей", 3),), 5.0
 
     async def nothing(_chat_id, _user_id):
         return None
@@ -173,7 +189,7 @@ def test_personal_facts_survive_a_broken_source(monkeypatch):
     monkeypatch.setattr(dossier_facts, "_load_activity", activity)
     monkeypatch.setattr(dossier_facts, "_load_reactions", broken)
     monkeypatch.setattr(dossier_facts, "_load_upupa", nothing)
-    monkeypatch.setattr(dossier_facts, "_load_words", words)
+    monkeypatch.setattr(dossier_facts, "_load_writing", writing)
     monkeypatch.setattr(dossier_facts, "_crocodile_sync", lambda *_args: dossier_facts.CrocodileFacts(draws=2))
     monkeypatch.setattr(dossier_facts, "_dnd_sync", lambda *_args: None)
     monkeypatch.setattr(dossier_facts, "_birthday_sync", lambda *_args: None)
@@ -181,7 +197,7 @@ def test_personal_facts_survive_a_broken_source(monkeypatch):
     facts = asyncio.run(dossier_facts.load_personal_facts(-100, 1))
 
     assert facts.activity.total == 10 and facts.reactions is None
-    assert facts.crocodile.draws == 2 and facts.words == (("кондей", 3),)
+    assert facts.crocodile.draws == 2 and facts.words == (("кондей", 3),) and facts.average_words == 5.0
     assert asyncio.run(dossier_facts.load_personal_facts(-100, 1)) is facts  # cached for the details button
     dossier_facts._facts_cache.clear()
 

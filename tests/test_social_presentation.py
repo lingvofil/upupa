@@ -57,7 +57,7 @@ def test_dossier_card_handles_empty_and_full_data():
         nickname="Повелитель ночного треда и всех кондиционеров",
         closest=DossierRelation("Саня", 87, "заклятые друзья"),
         antagonist=DossierRelation("Олег", 30, "спорщики"), antagonist_tension=48,
-        side_lines=("ранг: хуятор 🔨", "ДР 1 апреля, через 23 дня", "в чате с марта 2025"),
+        side_lines=("ранг: хуятор 🔨", "ДР 1 апреля, через 23 дня"),
         rhythm_hours=hours, rhythm_label="сова · пик в 01:00 · чаще по пятницам",
         rows=(
             ("Активность", "12 345 сообщений · 210 за неделю"),

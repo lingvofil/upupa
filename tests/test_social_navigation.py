@@ -152,8 +152,7 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
     hours[1], hours[2], hours[14] = 15, 10, 20
     facts = dossier_facts.PersonalFacts(
         activity=dossier_facts.ActivityFacts(
-            total=1234, weekly=56, rank="хуятор 🔨",
-            first_seen=datetime(2025, 3, 2), last_seen=datetime(2026, 10, 24),
+            total=1234, weekly=56, rank="хуятор 🔨", last_seen=datetime(2026, 10, 24),
         ),
         rhythm=dossier_facts.build_rhythm(hours, [1, 1, 1, 1, 1, 40, 1]),
         reactions=dossier_facts.ReactionFacts(
@@ -161,6 +160,7 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
             best_message_id=77, best_message_reactions=9, best_message_text="кондиционер — зло",
         ),
         words=(("кондей", 40),),
+        average_words=24.6,
         upupa=dossier_facts.UpupaFacts(requests=12, favorites=(("нарисуй", 8), ("поболтать", 4))),
     )
     hints = []
@@ -186,7 +186,7 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
     assert dossier.name == "User 1"
     assert dossier.antagonist is hostile
     assert dossier.nickname == "Повелитель кондея"
-    assert "любимые слова: кондей" in hints
+    assert "любимые слова: кондей" in hints and "пишет простынями, ~25 слов на сообщение" in hints
     assert "Партия имени" in html
     assert "Оппонент: <b>User 3</b>" in html
     assert "Bob" in html  # friendly pair is listed among main relationships
@@ -195,6 +195,7 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
     assert "сова" in html.lower() and "по пятницам" in html
     assert "Ставит 🔥 · получает 🤣" in html and 'href="https://t.me/c/1/77"' in html and "«кондей»" in html
     assert "чаще всего «нарисуй», «поболтать»" in html
+    assert "✍️ Пишет простынями, ~25 слов на сообщение" in html
 
     caption = overview.format_dossier_caption_html(dossier, "https://t.me/c/1/2", "https://t.me/c/1/77")
     assert "Хит" in caption and 'href="https://t.me/c/1/2"' in caption
@@ -204,7 +205,8 @@ def test_dossier_combines_role_faction_relationships_and_chronicle(monkeypatch):
     assert card.nickname == "Повелитель кондея" and card.closest.name == "Bob"
     assert [label for label, _value in card.rows] == ["Активность", "Реакции", "Словечки", "Упупа", "Летопись"]
     assert dict(card.rows)["Реакции"] == "ставит огонь · получает ржач"
-    assert "ранг: хуятор 🔨" in card.side_lines and "в чате с марта 2025" in card.side_lines
+    assert card.side_lines == ("ранг: хуятор 🔨", "пишет простынями, ~25 слов")
+    assert "в чате с" not in html and "Молчит" not in html
 
 
 def test_dossier_caption_is_a_few_short_lines():
@@ -259,6 +261,23 @@ def test_dossier_command_and_target_resolution(monkeypatch):
     carol = SimpleNamespace(id=3, is_bot=False, full_name="Carol", first_name="Carol")
     assert asyncio.run(nav._resolve_dossier_target(_message("досье", reply_user=carol))) == (3, "Carol")
     assert asyncio.run(nav._resolve_dossier_target(_message("досье"))) == (1, "Alice")
+
+
+def test_dossier_shows_a_random_upupa_chat_action():
+    import handlers.social_navigation as nav
+
+    sent = []
+
+    async def send_chat_action(*, chat_id, action):
+        sent.append((chat_id, action))
+
+    message = SimpleNamespace(bot=SimpleNamespace(send_chat_action=send_chat_action))
+    for _ in range(5):
+        asyncio.run(nav._random_chat_action(message, -100))
+
+    assert [chat_id for chat_id, _action in sent] == [-100] * 5
+    assert all(action in nav.actions for _chat_id, action in sent)
+    asyncio.run(nav._random_chat_action(SimpleNamespace(bot=None), -100))  # no bot — silently nothing
 
 
 def test_social_buttons_dispatch_and_cringe_cooldown(monkeypatch):

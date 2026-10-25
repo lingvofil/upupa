@@ -420,9 +420,15 @@ def _is_favorite_word_candidate(word: str) -> bool:
     )
 
 
-async def favorite_words(user_id: int, chat_id: int, *, top_n: int = 3, scan_limit: int = FAVORITE_WORD_SCAN_LIMIT):
-    """Самые частые слова участника за его последние ``scan_limit`` сообщений в чате."""
+async def writing_profile(user_id: int, chat_id: int, *, top_n: int = 3, scan_limit: int = FAVORITE_WORD_SCAN_LIMIT) -> dict:
+    """Любимые слова и средняя длина сообщения за последние ``scan_limit`` сообщений участника в чате.
+
+    Длина считается по всем словам, включая стоп-слова: это манера письма, а не
+    лексикон. /команды не учитываются вовсе, медиа без подписи — только в счётчике
+    просмотренных. Без индекса истории доступны только слова, длина не считается.
+    """
     repository = get_history_repository(LOG_FILE)
+    totals = {"messages": 0, "words": 0}
     if repository is None:
         counters, _matched = await _user_lexicon_stats(user_id, chat_id)
         counter = counters[1]
@@ -435,13 +441,24 @@ async def favorite_words(user_id: int, chat_id: int, *, top_n: int = 3, scan_lim
             def visit(row):
                 nonlocal seen
                 seen += 1
-                counter.update(clean_text(row["text"]))
+                text = row["text"] or ""
+                if not text.lstrip().startswith("/"):
+                    length = len(re.findall(r"\w+", text))
+                    if length:
+                        totals["messages"] += 1
+                        totals["words"] += length
+                    counter.update(clean_text(text))
                 return seen < scan_limit
 
             repository.scan(chat_id, visit, descending=True, user_id=user_id)
 
         await asyncio.to_thread(collect)
-    return [(word, count) for word, count in counter.most_common() if _is_favorite_word_candidate(word)][:top_n]
+    favorites = [(word, count) for word, count in counter.most_common() if _is_favorite_word_candidate(word)][:top_n]
+    return {
+        "favorite_words": favorites,
+        "messages": totals["messages"],
+        "average_words": totals["words"] / totals["messages"] if totals["messages"] else None,
+    }
 
 
 async def _named_user_lexicon_stats(username_or_name: str, chat_id: int):
