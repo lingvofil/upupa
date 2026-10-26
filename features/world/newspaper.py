@@ -1,8 +1,9 @@
 """Weekly «Газета Мира»: one issue every Monday for every subscribed state.
 
-The issue is generated once per week (a single model call, neutral house
-style) and delivered to each state that kept the newspaper setting on.  The
-ISO-week dedupe key is claimed before sending, so restarts never resend it.
+The newspaper is opt-in.  The issue is generated once per week (a single model
+call, neutral house style) only when at least one state subscribed, and is
+delivered to subscribers only.  The ISO-week dedupe key is claimed before
+sending, so restarts never resend it.
 """
 
 from __future__ import annotations
@@ -74,6 +75,13 @@ async def issue_weekly_newspaper_if_due(bot, service: WorldService | None = None
     states = await service.list_all_states()
     if len(states) < 2:
         return 0
+    details = await service.list_details()
+    subscribers = [
+        state for state in states
+        if state.world_id in details and details[state.world_id].newspaper
+    ]
+    if not subscribers:
+        return 0
     text = await build_newspaper_text(service)
     if not text:
         return 0
@@ -84,12 +92,8 @@ async def issue_weekly_newspaper_if_due(bot, service: WorldService | None = None
     )
     if not claimed:
         return 0
-    details = await service.list_details()
     delivered = 0
-    for state in states:
-        settings = details.get(state.world_id)
-        if settings is not None and not settings.newspaper:
-            continue
+    for state in subscribers:
         message = (
             f"🗞 Газета Мира Упупы\n\n{text}\n\n"
             "Отписаться: «упупа миры» → «Моё государство» → «Настройки»."

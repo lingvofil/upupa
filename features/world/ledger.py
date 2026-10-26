@@ -79,7 +79,7 @@ class WorldDetails:
     ambassador_name: str | None = None
     share_identity: bool = True
     share_activity: bool = False
-    newspaper: bool = True
+    newspaper: bool = False
 
 
 @dataclass(frozen=True)
@@ -211,7 +211,7 @@ class WorldLedger:
                 ("identity_source", "TEXT"),
                 ("share_identity", "INTEGER NOT NULL DEFAULT 1"),
                 ("share_activity", "INTEGER NOT NULL DEFAULT 0"),
-                ("newspaper", "INTEGER NOT NULL DEFAULT 1"),
+                ("newspaper", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in columns:
                     conn.execute(f"ALTER TABLE world_details ADD COLUMN {name} {ddl}")
@@ -342,6 +342,10 @@ class WorldLedger:
             self._backfill_visits(conn, now)
             self._backfill_feedback_windows(conn, now)
             self._mark_migration(conn, "visit_projections_v1")
+        if not self._migration_done(conn, "newspaper_opt_in_v1"):
+            # The newspaper became opt-in; everyone subscribed by the old default is unsubscribed once.
+            conn.execute("UPDATE world_details SET newspaper = 0")
+            self._mark_migration(conn, "newspaper_opt_in_v1")
 
     def _backfill_identity(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -522,7 +526,7 @@ class WorldLedger:
             ambassador_name=(str(row["ambassador_name"]) if row["ambassador_name"] else None),
             share_identity=bool(row["share_identity"]) if "share_identity" in keys else True,
             share_activity=bool(row["share_activity"]) if "share_activity" in keys else False,
-            newspaper=bool(row["newspaper"]) if "newspaper" in keys else True,
+            newspaper=bool(row["newspaper"]) if "newspaper" in keys else False,
         )
 
     def ensure_details(self, state: WorldState) -> WorldDetails:
@@ -531,11 +535,12 @@ class WorldLedger:
                 "SELECT * FROM world_details WHERE world_id = ?", (state.world_id,)
             ).fetchone()
             if row is None:
+                # newspaper is explicit: databases created before the opt-in switch keep DEFAULT 1.
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO world_details(
-                        world_id, government_form, climate, main_threat, updated_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        world_id, government_form, climate, main_threat, newspaper, updated_at
+                    ) VALUES (?, ?, ?, ?, 0, ?)
                     """,
                     (
                         state.world_id,

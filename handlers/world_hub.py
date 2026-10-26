@@ -192,7 +192,7 @@ async def _settings_screen(service, state) -> tuple[str, types.InlineKeyboardMar
     details = await service.get_details(state.world_id)
     share_identity = bool(details and details.share_identity)
     share_activity = bool(details and details.share_activity)
-    newspaper = bool(details is None or details.newspaper)
+    newspaper = bool(details and details.newspaper)
     text = (
         "⚙️ Настройки государства\n\n"
         "Характеристика — строй, климат и угроза, которые Упупа выводит из жизни чата.\n"
