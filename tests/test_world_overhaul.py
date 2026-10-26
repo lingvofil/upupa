@@ -338,12 +338,14 @@ def test_delivery_follows_chat_migration_and_disables_dead_chats(tmp_path):
 # ------------------------------------------------------------------- newspaper
 
 
-def test_newspaper_is_issued_once_per_week_respecting_opt_out(tmp_path, monkeypatch):
+def test_newspaper_is_issued_once_per_week_to_subscribers_only(tmp_path, monkeypatch):
     from core.time_utils import APP_TIMEZONE
 
     service = _service(tmp_path)
     alpha, beta, gamma = _three(service)
-    _run(service.set_setting(gamma.world_id, "newspaper", False))
+    assert not _run(service.get_details(gamma.world_id)).newspaper
+    _run(service.set_setting(alpha.world_id, "newspaper", True))
+    _run(service.set_setting(beta.world_id, "newspaper", True))
 
     async def fake_issue(_service):
         return "ГЛАВНОЕ ЗА НЕДЕЛЮ\nничего"
@@ -356,6 +358,37 @@ def test_newspaper_is_issued_once_per_week_respecting_opt_out(tmp_path, monkeypa
     assert _run(newspaper.issue_weekly_newspaper_if_due(bot, service, now=monday)) == 2
     assert {chat for chat, _text, _kw in bot.sent} == {alpha.chat_id, beta.chat_id}
     assert _run(newspaper.issue_weekly_newspaper_if_due(bot, service, now=monday + timedelta(hours=3))) == 0
+
+
+def test_newspaper_is_not_generated_without_subscribers(tmp_path, monkeypatch):
+    from core.time_utils import APP_TIMEZONE
+
+    service = _service(tmp_path)
+    _three(service)
+
+    async def must_not_generate(_service):
+        raise AssertionError("no subscribers, no issue")
+
+    monkeypatch.setattr(newspaper, "build_newspaper_text", must_not_generate)
+    monday = APP_TIMEZONE.localize(datetime(2026, 10, 19, 12, 30))
+    bot = FakeBot()
+    assert _run(newspaper.issue_weekly_newspaper_if_due(bot, service, now=monday)) == 0
+    assert bot.sent == []
+
+
+def test_newspaper_opt_in_migration_unsubscribes_existing_states_once(tmp_path):
+    service = _service(tmp_path)
+    alpha, beta, _gamma = _three(service)
+    with sqlite3.connect(tmp_path / "world.db") as conn:
+        conn.execute("UPDATE world_details SET newspaper = 1")
+        conn.execute("DELETE FROM world_meta WHERE key = 'newspaper_opt_in_v1'")
+    service.ledger.init_schema()
+    assert not any(item.newspaper for item in _run(service.list_details()).values())
+
+    _run(service.set_setting(alpha.world_id, "newspaper", True))
+    service.ledger.init_schema()
+    assert _run(service.get_details(alpha.world_id)).newspaper
+    assert not _run(service.get_details(beta.world_id)).newspaper
 
 
 # --------------------------------------------------------------------- privacy
