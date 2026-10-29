@@ -486,7 +486,9 @@ class DndMenuService:
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
                     rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
-        if owner and page == "items":
+        if owner and page == "items" and self._can_act(session, owner):
+            # Item actions exist only on the owner's free turn; during a roll
+            # they could only answer «Предмет сейчас недоступен».
             for index, item in _visible_items(snapshot, owner)[:8]:
                 ref = _item_ref(index, item)
                 row = _mapping(item)
@@ -1137,8 +1139,9 @@ class DndMenuService:
                     return
 
                 def object_markup(card, seq):
-                    rows = [[self._button(session, actor, "✍️ Своя идея", "idea", card=card, seq=seq, object_id=str(payload.get("object_id")))]]
-                    if row.get("available", True):
+                    rows = []
+                    if self._can_act(session, actor) and row.get("available", True):
+                        rows.append([self._button(session, actor, "✍️ Своя идея", "idea", card=card, seq=seq, object_id=str(payload.get("object_id")))])
                         for rule_id, rule in list(_mapping(row.get("interactions")).items())[:5]:
                             rule = _available_interaction(snapshot_session(session), payload.get("object_id"), rule_id, rule)
                             if rule is not None:

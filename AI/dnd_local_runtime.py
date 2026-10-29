@@ -299,6 +299,8 @@ class LocalRuntime:
                     target_id=payload.get("target_id"), item_id=payload.get("item_id"), object_id=payload.get("object_id"), inputs=inputs)
                 result = execute_action(session, action, backend=self.backend, ai_mode=settings_for(session)["ai_mode"])
             except (LocalActionError, KeyError, TypeError, ValueError) as error:
+                logging.warning("DnD local action rejected chat_id=%s actor=%s kind=%s phase=%s error=%s",
+                                chat_id, actor_id, kind, payload.get("phase"), error)
                 await bot.send_message(chat_id, f"Действие не выполнено: {error}", parse_mode=None)
                 return
             if result.replayed:

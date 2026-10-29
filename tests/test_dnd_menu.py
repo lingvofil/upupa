@@ -632,6 +632,26 @@ def test_unreachable_and_missing_required_item_rules_cannot_be_confirmed():
     assert service._valid_payload(current, 1, payload)
 
 
+def test_roll_window_offers_no_item_or_object_actions_that_would_be_refused():
+    # Live regression: during someone's saved roll every «🧰 вещь», «Передать» and
+    # «✍️ Своя идея» answered «недоступно»; the cards now show only what works.
+    async def run():
+        current, _, bot, service = make_service(session(
+            state="WAITING_ROLL", action_target_user_ids=[],
+            pending_roll={"type": "ATTACK", "target_user_ids": [1], "dc": 12,
+                          "attack": {"enemy_key": "guard", "weapon": "меч", "style": "MELEE"}}))
+        await service.show(bot, current, 1, "items")
+        labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
+        assert not any(label.startswith("🧰") or label == "Передать" for label in labels)
+        assert "Зелье" in bot.sent[-1].text
+        assert "🎲 Бросить" in labels
+        await service.show(bot, current, 1, "scene")
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🔎 Телега")))
+        labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
+        assert labels == ["← Сцена"]
+    asyncio.run(run())
+
+
 def test_weapon_picker_pages_and_revalidates_selected_inventory():
     async def run():
         current, _, bot, service = make_service()

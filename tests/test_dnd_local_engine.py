@@ -148,6 +148,38 @@ def test_attack_miss_is_journaled_commits_conditions_and_special_and_replays():
     assert be.rng.calls == 1
 
 
+@pytest.mark.parametrize("inventory", [[], [{"name": "меч", "quantity": 1}, {"name": "меч", "quantity": 1}]])
+def test_saved_attack_roll_resolves_when_hero_lacks_or_doubles_the_narrated_weapon(inventory):
+    # Live regression: the narrator saved WEAPON:меч for a hero without one, and
+    # every «Бросить» answered «Этого предмета нет в твоём инвентаре» until timeout.
+    sess = session()
+    sess.inventories["1"] = inventory
+    sess.state = "WAITING_ROLL"
+    sess.pending_roll = {"type": "ATTACK", "mode": "NORMAL", "target_user_ids": [1], "dc": 14,
+                         "attack": {"enemy_key": "огр", "weapon": "меч", "style": "MELEE"}}
+    lifecycle.sync_window(sess)
+    be, calls = backend(15, 3)
+    result = engine.execute_action(sess, action(sess), backend=be)
+    assert calls == [("ATTACK", 1)]
+    assert "Огр (меч)" in result.text and "1d8" in result.text
+    assert sess.enemy_combatants["огр"]["hp"] < 28 and sess.pending_roll is None
+    assert sess.inventories["1"] == inventory
+
+
+def test_saved_attack_roll_still_rejects_swapping_in_another_owned_item():
+    sess = session()
+    sess.state = "WAITING_ROLL"
+    sess.pending_roll = {"type": "ATTACK", "mode": "NORMAL", "target_user_ids": [1], "dc": 14,
+                         "attack": {"enemy_key": "огр", "weapon": "меч", "style": "MELEE"}}
+    lifecycle.sync_window(sess)
+    be, calls = backend(15, 3)
+    with pytest.raises(engine.LocalActionError, match="нельзя заменить"):
+        engine.execute_action(sess, action(sess, item_id="ключ"), backend=be)
+    with pytest.raises(engine.LocalActionError, match="нет в твоём инвентаре"):
+        engine.execute_action(sess, action(sess, operation="operation-2", item_id="кинжал"), backend=be)
+    assert calls == [] and sess.pending_roll["attack"]["weapon"] == "меч"
+
+
 def test_operation_token_cannot_be_reused_with_new_input():
     sess = session()
     be, _ = backend(7)

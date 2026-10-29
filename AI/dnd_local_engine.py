@@ -327,13 +327,22 @@ def _attack_pending(session, action):
         raise LocalActionError("Противник отступил. Для преследования опиши новый ход мастеру.")
     weapon = str(attack.get("weapon") or "без оружия")
     if action.kind != "CINEMATIC_ATTACK" and weapon.casefold() not in {"без оружия", "unarmed", "кулак", "голыми руками", "пинок"}:
-        _, owned = _owned_item(session, action.actor_id, action.item_id or weapon, action.inputs)
-        # Caller may select only inventory ID; mechanics uses the saved name.
-        owned_name = str(owned.get("name") if isinstance(owned, dict) else owned)
-        if action.phase == "roll" and owned_name != weapon:
-            raise LocalActionError("Оружие сохранённой атаки нельзя заменить старой кнопкой.")
-        attack["weapon"] = owned_name
-        attack["style"] = str(owned.get("attack_style") or attack.get("style") or "MELEE") if isinstance(owned, dict) else str(attack.get("style") or "MELEE")
+        try:
+            _, owned = _owned_item(session, action.actor_id, action.item_id or weapon, action.inputs)
+        except LocalActionError:
+            # The narrator's saved attack may name a weapon the hero doesn't
+            # carry (or two identical ones). Its plain roll still resolves with
+            # the saved weapon; otherwise «Бросить»/«кидаю» dead-end until timeout.
+            if action.phase != "roll" or action.item_id:
+                raise
+            owned = None
+        if owned is not None:
+            # Caller may select only inventory ID; mechanics uses the saved name.
+            owned_name = str(owned.get("name") if isinstance(owned, dict) else owned)
+            if action.phase == "roll" and owned_name != weapon:
+                raise LocalActionError("Оружие сохранённой атаки нельзя заменить старой кнопкой.")
+            attack["weapon"] = owned_name
+            attack["style"] = str(owned.get("attack_style") or attack.get("style") or "MELEE") if isinstance(owned, dict) else str(attack.get("style") or "MELEE")
     location = ((getattr(session, "player_positions", {}) or {}).get(str(action.actor_id)) or {}).get("location")
     allowed = enemy.get("reachable_from")
     if allowed and location not in allowed:
