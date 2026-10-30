@@ -194,8 +194,8 @@ def test_group_window_stays_open_for_other_actor_and_round_is_optional():
     sess = session()
     sess.action_target_user_ids = []
     lifecycle.sync_window(sess)
-    be, _ = backend()
-    first = engine.execute_action(sess, action(sess, "TRANSFER_ITEM", target_id=2, item_id="ключ", inputs={"quantity": 1}), backend=be)
+    be, _ = backend(3)
+    first = engine.execute_action(sess, action(sess, target_id="огр", item_id="меч"), backend=be)
     assert not first.window_closed and not first.round_complete
     assert lifecycle.current_window(sess)["kind"] == "group"
     assert sess.state == "WAITING_ACTION"
@@ -203,6 +203,30 @@ def test_group_window_stays_open_for_other_actor_and_round_is_optional():
         engine.execute_action(sess, action(sess, "WAIT", operation="extra"), backend=be)
     second = engine.execute_action(sess, action(sess, "WAIT", actor=2, operation="second"), backend=be)
     assert second.window_closed and not second.round_complete
+
+
+def test_item_transfer_is_free_out_of_turn_and_during_someone_elses_roll():
+    # Wish from the 2026-10-29 game: Алина could not pass Чудо a weapon outside
+    # her own turn. Handing an item over now spends nobody's turn.
+    sess = session()
+    sess.action_target_user_ids = [2]
+    lifecycle.sync_window(sess)
+    be, _ = backend()
+    given = engine.execute_action(sess, action(sess, "TRANSFER_ITEM", target_id=2, item_id="ключ", inputs={"quantity": 1}), backend=be)
+    assert not given.window_closed and given.next_actor_id is None and not given.needs_narrator
+    assert sess.state == "WAITING_ACTION"
+    window = lifecycle.current_window(sess)
+    assert window["actors"] == [2] and window.get("resolved_actors", []) == []
+    assert any(item.get("name") == "ключ" for item in sess.inventories["2"])
+
+    sess.state = "WAITING_ROLL"
+    sess.pending_roll = {"type": "CHECK", "target_user_ids": [2], "ability": "DEX", "dc": 12}
+    lifecycle.sync_window(sess)
+    engine.execute_action(sess, action(sess, "TRANSFER_ITEM", operation="give-2", target_id=2, item_id="меч", inputs={"quantity": 1}), backend=be)
+    assert sess.state == "WAITING_ROLL" and sess.pending_roll["target_user_ids"] == [2]
+    assert lifecycle.current_window(sess)["phase"] == "roll"
+    with pytest.raises(engine.LocalActionError, match="ход другого игрока"):
+        engine.execute_action(sess, action(sess, "ROLL", operation="roll-1"), backend=be)
 
 
 def test_explicit_round_completion_only_after_real_actions():

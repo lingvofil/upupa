@@ -14,7 +14,7 @@ from aiogram import BaseMiddleware
 
 from AI import dnd_turn_lifecycle as lifecycle
 from AI.dnd_ai_budget import dnd_turn_budget
-from AI.dnd_local_engine import Action, EngineBackend, LocalActionError, execute_action
+from AI.dnd_local_engine import FREE_KINDS, Action, EngineBackend, LocalActionError, execute_action
 from AI.dnd_settings import can_edit, schedule_personal_turn, settings_for
 
 _LOCKS = {}
@@ -178,6 +178,7 @@ class LocalRuntime:
     def __init__(self, dnd):
         self.dnd = dnd
         self.backend = EngineBackend.from_runtime(dnd)
+        self.menu = None
 
     async def execute(self, bot, chat_id, actor_id, payload):
         async with game_lock(chat_id):
@@ -350,8 +351,22 @@ class LocalRuntime:
                     name=f"dnd-local-narration:{chat_id}:{result.operation_id}")
             elif result.window_closed:
                 await self.complete_transition(bot, session)
-            else:
-                await self.maybe_finalize(bot, session)
+            elif action.kind in FREE_KINDS:
+                return  # Spent nobody's turn: the window and its timer stay as they were.
+            elif session.state == "WAITING_ACTION" and not getattr(session, "action_prompt_message_id", None):
+                # A narrator roll inside a group window cleared its prompt: the
+                # window reopened for the others with no prompt, card or timer.
+                window = lifecycle.current_window(session) or {}
+                resolved = set(window.get("resolved_actors") or [])
+                remaining = [uid for uid in window.get("actors") or []
+                             if uid in lifecycle.active_actor_ids(session) and uid not in resolved]
+                await self.dnd.open_action_window(bot, chat_id, target_user_ids=remaining)
+            elif not await self.maybe_finalize(bot, session) and self.menu is not None:
+                # The shared card's «Походили» now marks this menu move.
+                try:
+                    await self.menu.show_turn_cards(bot, session)
+                except Exception:
+                    logging.exception("DnD turn card refresh failed chat_id=%s", chat_id)
 
     async def complete_transition(self, bot, session):
         transition = getattr(session, "local_pending_transition", {}) or {}
@@ -385,7 +400,10 @@ class LocalRuntime:
         router = getattr(self.dnd, "dnd_router", None)
         policy = getattr(router, "_upupa_dnd_completion_policy", None)
         completion = DndParticipantCompletionMiddleware(policy)
-        await completion._maybe_finalize_action(self.dnd, bot, session.chat_id)
+        if await completion._maybe_finalize_action(self.dnd, bot, session.chat_id):
+            return True
+        await completion._ensure_action_timer(self.dnd, bot, session.chat_id)
+        return False
 
     def restart_narration(self, bot, session):
         request = getattr(session, "pending_generation_request", {}) or {}
@@ -555,6 +573,7 @@ def configure_dnd_local_runtime(dnd=None, router=None):
     from AI.dnd_hero_portrait import install_dnd_hero_portrait
 
     install_dnd_hero_portrait(state_policy=router._upupa_dnd_campaign_state_policy)
+    runtime.menu = menu_service
     if menu_service is not None:
         menu_service.portraits_enabled = True
     guard = GameUpdateMiddleware(runtime)

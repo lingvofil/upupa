@@ -176,6 +176,29 @@ def test_configured_generator_appends_one_canonical_exchange(monkeypatch):
     assert persisted == [True]
 
 
+def test_model_that_keeps_timing_out_moves_to_the_end_of_the_queue(monkeypatch):
+    # Live log 2026-10-29: the primary model failed 49 of 50 calls and every
+    # turn waited ~10 s for it before the next model answered.
+    monkeypatch.setattr(resilience, "GEMINI_KEYS_POOL", ["k0", "k1"])
+    monkeypatch.setattr(resilience, "_model_queue", lambda _chat: ["m-new", "m-old"])
+    clock = [100.0]
+    monkeypatch.setattr(resilience.time, "monotonic", lambda: clock[0])
+
+    resilience._note_model_outcome("m-new", ok=False, transient=True)
+    assert [model for _key, model in resilience._attempt_pairs(1, 2)] == ["m-new", "m-old"]
+    resilience._note_model_outcome("m-new", ok=False, transient=True)
+    assert [model for _key, model in resilience._attempt_pairs(1, 2)] == ["m-old", "m-new"]
+
+    clock[0] += resilience.DND_MODEL_DEMOTE_SECONDS + 1
+    assert [model for _key, model in resilience._attempt_pairs(1, 2)] == ["m-new", "m-old"]
+
+    resilience._note_model_outcome("m-new", ok=False, transient=True)
+    resilience._note_model_outcome("m-new", ok=False, transient=False)  # A bad request is not an outage.
+    resilience._note_model_outcome("m-new", ok=True)
+    resilience._note_model_outcome("m-new", ok=False, transient=True)
+    assert [model for _key, model in resilience._attempt_pairs(1, 2)] == ["m-new", "m-old"]
+
+
 def test_gemini_circuit_is_isolated_per_chat(monkeypatch):
     monkeypatch.setattr(resilience, "_gemini_circuit_until", {})
     monkeypatch.setattr(resilience.time, "monotonic", lambda: 100.0)

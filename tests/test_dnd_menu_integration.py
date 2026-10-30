@@ -77,6 +77,9 @@ class OfflineDnd:
         self.tasks.append(name)
         coroutine.close()
 
+    async def wait_for_action_timeout(self, bot, chat_id, prompt_message_id):
+        await self.finalize_group_actions(bot, chat_id, prompt_message_id)
+
     async def open_action_window(self, bot, chat_id, *, target_user_ids=None):
         current = self.dnd_sessions[chat_id]
         current.state = "WAITING_ACTION"
@@ -147,7 +150,7 @@ def test_confirmed_item_reaches_real_engine_and_duplicate_consumes_once(monkeypa
         assert len(current.action_records) == 1
         assert current.dnd_lifecycle_v1["window"]["resolved_actors"] == [1]
         assert offline.ai_calls == 0
-        assert offline.tasks == []
+        assert offline.tasks == [f"dnd-actions:{current.chat_id}:{current.action_prompt_message_id}:completion-fallback"]  # A menu move starts the group deadline.
         assert current.local_delivery_outbox == []
         assert any("следующий подходящий бросок" in row.text for row in bot.sent)
         # Public journal must include the actual canonical effect, not only a label.
@@ -181,7 +184,7 @@ def test_weapon_selection_reaches_real_attack_without_ai_and_replays_once(monkey
         assert len(current.action_records) == 1
         assert runtime.backend.rng.calls == 1
         assert offline.ai_calls == 0
-        assert offline.tasks == []
+        assert offline.tasks == [f"dnd-actions:{current.chat_id}:{current.action_prompt_message_id}:completion-fallback"]  # A menu move starts the group deadline.
     asyncio.run(run())
 
 
@@ -298,7 +301,8 @@ def test_explicit_wait_button_applies_saved_clock_effect_once_without_ai(monkeyp
         assert len(current.action_records) == 1
         assert current.action_records[0]["kind"] == "WAIT"
         assert "Стражи приблизились." in current.action_records[0]["public_summary"]
-        assert offline.ai_calls == 0 and offline.tasks == []
+        assert offline.ai_calls == 0
+        assert offline.tasks == [f"dnd-actions:{current.chat_id}:{current.action_prompt_message_id}:completion-fallback"]  # A menu move starts the group deadline.
     asyncio.run(run())
 
 

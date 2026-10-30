@@ -77,7 +77,7 @@ def fake_dnd(sess):
     async def open_window(bot, chat_id, *, target_user_ids):
         prompts.append((chat_id, target_user_ids))
         sess.state = "WAITING_ACTION"
-        sess.action_prompt_message_id += 1
+        sess.action_prompt_message_id = (sess.action_prompt_message_id or 10) + 1
         sess.action_target_user_ids = target_user_ids
         lifecycle.sync_window(sess)
 
@@ -87,7 +87,7 @@ def fake_dnd(sess):
         open_action_window=open_window, _user_is_host=lambda s, uid: uid == s.starter_user_id,
         _can_user_act=lambda s, uid, targets: uid in lifecycle.active_actor_ids(s) and (not targets or uid in targets),
         _is_participant_mode=lambda s: True, _participant_ids=lambda s: set(lifecycle.active_actor_ids(s)),
-        with_scene_direction=lambda s, text: text)
+        with_scene_direction=lambda s, text: text, wait_for_action_timeout=lambda bot, chat_id, prompt_id: asyncio.sleep(0))
     return module, saved, tasks, prompts
 
 
@@ -191,6 +191,32 @@ def test_failed_local_delivery_is_durable_retry_does_not_reroll_and_opens_next_w
     assert len(bot.messages) == 1
     assert sess.local_delivery_outbox == []
     assert sess.state == "WAITING_ACTION" and len(prompts) == 1
+
+
+def test_menu_move_starts_the_group_deadline_and_says_so():
+    # Live regression 2026-10-29: Детектор attacked by button at 21:50 and the
+    # party waited 16 minutes with no timer until somebody typed prose.
+    sess = session(group=True)
+    local, _module, _saved, tasks, _prompts, _commits = runner(sess)
+    bot = Bot()
+    asyncio.run(local.execute(bot, sess.chat_id, 1, payload(sess, "WAIT")))
+    assert sess.action_deadline is not None
+    assert tasks == [f"dnd-actions:{sess.chat_id}:{sess.action_prompt_message_id}:completion-fallback"]
+    assert any("Первый ход принят" in text for _chat, text, _kwargs in bot.messages)
+
+
+def test_roll_that_leaves_the_group_window_open_reopens_input_for_the_others():
+    # Live regression 2026-10-29 22:17: the master asked Детектор to roll inside a
+    # group turn; afterwards the window stayed open with no prompt, card or timer.
+    sess = session(group=True)
+    sess.state = "WAITING_ROLL"
+    sess.action_prompt_message_id = None
+    sess.pending_roll = {"type": "CHECK", "ability": "STR", "dc": 12, "target_user_ids": [1], "local_rule": rule()}
+    lifecycle.sync_window(sess)
+    local, _module, _saved, _tasks, prompts, _commits = runner(sess, 4)
+    asyncio.run(local.execute(Bot(), sess.chat_id, 1, payload(sess, "ROLL")))
+    assert prompts == [(sess.chat_id, [2])]
+    assert sess.state == "WAITING_ACTION" and sess.action_prompt_message_id
 
 
 def test_completed_local_actor_counts_towards_group_free_action_completion():

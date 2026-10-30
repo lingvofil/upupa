@@ -291,13 +291,16 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
 
     async def _ensure_action_timer(self, dnd, bot, chat_id: int) -> None:
         session = dnd.dnd_sessions.get(chat_id)
+        window = (getattr(session, "dnd_lifecycle_v1", {}) or {}).get("window") or {}
+        menu_moves = list(window.get("resolved_actors") or []) if window.get("status") == "open" else []
+        prose = getattr(session, "pending_actions", {}) or {}
         if (
             not session
             or session.state != "WAITING_ACTION"
             or getattr(session, "paused", False)
             or not dnd._is_participant_mode(session)
             or getattr(session, "action_deadline", None) is not None
-            or not (getattr(session, "pending_actions", {}) or {})
+            or not (prose or menu_moves)
         ):
             return
         prompt_message_id = int(getattr(session, "action_prompt_message_id", 0) or 0)
@@ -306,17 +309,25 @@ class DndParticipantCompletionMiddleware(BaseMiddleware):
 
         from AI.dnd_settings import settings_for
 
-        session.action_deadline = time.time() + settings_for(session)["turn_seconds"]
+        seconds = settings_for(session)["turn_seconds"]
+        session.action_deadline = time.time() + seconds
         dnd.persist_dnd_sessions()
         dnd._start_background_task(
             dnd.wait_for_action_timeout(bot, chat_id, prompt_message_id),
             name=f"dnd-actions:{chat_id}:{prompt_message_id}:completion-fallback",
         )
-        logging.warning(
-            "DnD participant action timer recovered chat_id=%s prompt_message_id=%s",
-            chat_id,
-            prompt_message_id,
-        )
+        if prose:
+            logging.warning(
+                "DnD participant action timer recovered chat_id=%s prompt_message_id=%s",
+                chat_id,
+                prompt_message_id,
+            )
+            return
+        # A move confirmed from the menu is this window's first move: the group
+        # waited for everyone with no timer at all until somebody typed prose.
+        logging.info("DnD participant action timer started by menu move chat_id=%s prompt_message_id=%s",
+                     chat_id, prompt_message_id)
+        await bot.send_message(chat_id, f"✅ Первый ход принят. Остальным — {seconds} сек. на свои действия.")
 
     async def _maybe_finalize_poll(self, dnd, bot, poll_id: str) -> None:
         chat_id = dnd.poll_map.get(poll_id)
