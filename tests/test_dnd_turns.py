@@ -111,6 +111,35 @@ def test_roll_prompt_uses_human_difficulty_label(monkeypatch):
     assert "DC 12" not in prompt
 
 
+def test_waiting_poll_is_saved_only_together_with_its_poll(monkeypatch):
+    # Live log 2026-10-29: «WAITING_POLL has no pending_poll» on every poll — a
+    # persist from another task landed while send_poll was still in flight.
+    chat_id = -1004992
+    session = SimpleNamespace(
+        chat_id=chat_id, mode="abstract", state="RESOLVING", pending_roll=None, last_roll_stat=None,
+        action_prompt_message_id=None, pending_actions={}, action_deadline=None, action_target_user_ids=[],
+        current_poll_id=None, pending_poll=None,
+    )
+    dnd.dnd_sessions[chat_id] = session
+    monkeypatch.setattr(dnd, "persist_dnd_sessions", lambda: None)
+    monkeypatch.setattr(dnd, "_start_background_task", lambda coroutine, *, name: coroutine.close())
+    states_during_send = []
+
+    class PollBot(FakeBot):
+        async def send_poll(self, *, chat_id, **_kwargs):
+            states_during_send.append(session.state)
+            return SimpleNamespace(message_id=300, chat=SimpleNamespace(id=chat_id), poll=SimpleNamespace(id="p1"))
+
+    try:
+        asyncio.run(dnd.parse_and_execute_turn(PollBot(), chat_id, "Куда дальше? [ACTION:POLL;OPTIONS:На север;На юг]"))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+        dnd.poll_map.pop("p1", None)
+
+    assert states_during_send == ["RESOLVING"]
+    assert session.state == "WAITING_POLL" and session.current_poll_id == "p1" and session.pending_poll
+
+
 def test_markdown_wrapped_action_tags_are_hidden_and_first_action_executes(monkeypatch):
     chat_id = -1004991
     session = SimpleNamespace(
@@ -454,6 +483,34 @@ def test_only_host_can_finish_action_window_early(monkeypatch):
 
     assert calls == [(bot, chat_id, 222)]
     assert non_host.answers[0][0] == "«Дальше» может сказать только ведущий."
+
+
+def test_host_can_finish_window_where_heroes_only_moved_by_menu(monkeypatch):
+    # Live regression 2026-10-29 22:00: Детектор attacked by button, then «днд
+    # дальше» answered «никто ещё не заявил действие».
+    chat_id = -100506
+    session = SimpleNamespace(
+        starter_user_id=1,
+        state="WAITING_ACTION",
+        action_prompt_message_id=222,
+        pending_actions={},
+        dnd_lifecycle_v1={"window": {"status": "open", "resolved_actors": [2]}},
+    )
+    dnd.dnd_sessions[chat_id] = session
+    calls = []
+
+    async def fake_finalize(bot, resolved_chat_id, prompt_id):
+        calls.append((resolved_chat_id, prompt_id))
+
+    monkeypatch.setattr(dnd, "finalize_group_actions", fake_finalize)
+    host = FakeMessage(chat_id=chat_id, user_id=1, user_name="Алиса", text="дальше", bot=object())
+    try:
+        asyncio.run(dnd.handle_dnd_next(host))
+    finally:
+        dnd.dnd_sessions.pop(chat_id, None)
+
+    assert calls == [(chat_id, 222)]
+    assert host.answers == []
 
 
 

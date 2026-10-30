@@ -31,7 +31,7 @@ _FIELDS = (
     "pending_roll", "pending_poll", "action_target_user_ids", "action_prompt_message_id", "action_deadline",
     "action_records", "event_journal", "paused", "dnd_paused", "local_engine_state",
     "local_wait_rule", "local_object_uses", "local_enemy_rules", "conditions", "item_boosts",
-    "hero_progress", "archetype_ability_uses", "dodge_flags",
+    "hero_progress", "archetype_ability_uses", "dodge_flags", "dnd_lifecycle_v1",
 )
 _PAGES = {"overview", "hero", "items", "scene", "enemies", "party", "journal", "manage", "more", "quests"}
 _PROFILE_LABELS = {"style": "Образ", "strength": "Сильная сторона", "weakness": "Слабость", "special": "Особый приём"}
@@ -119,6 +119,12 @@ def _clock_lines(snapshot):
 def _hp(snapshot, user_id):
     sheet = _mapping(_mapping(snapshot.get("character_sheets")).get(str(user_id)))
     return f"❤️ {sheet.get('hp', 0)}/{sheet.get('max_hp', 0)} HP" if sheet else ""
+
+
+def _living(snapshot) -> list[int]:
+    return [_int(key) for key, row in _mapping(snapshot.get("participants")).items()
+            if isinstance(row, dict) and row.get("active", True)
+            and _int(_mapping(_mapping(snapshot.get("character_sheets")).get(str(key))).get("hp"), 1) > 0]
 
 
 def _ability_modifier(value) -> int:
@@ -337,18 +343,24 @@ def render_page(snapshot, page="overview", user_id=0) -> str:
         expected = [str(value) for value in targets] or [
             str(key) for key, row in participants.items() if isinstance(row, dict) and _public(row) and row.get("active", True)]
         done = {str(key) for key in _mapping(snapshot.get("pending_actions"))}
+        # Moves confirmed from the menu resolve locally and never become prose;
+        # without them a hero who attacked by button still showed as ⏳.
+        window = _mapping(_mapping(snapshot.get("dnd_lifecycle_v1")).get("window"))
+        if window.get("status") == "open":
+            done.update(str(key) for key in window.get("resolved_actors") or [])
         if expected:
             lines.append("Походили: " + ", ".join(
                 ("✅ " if key in done else "⏳ ") + _name(snapshot, key) for key in expected))
     deadline = snapshot.get("action_deadline")
-    if snapshot.get("state") == "WAITING_ACTION" and deadline and len(targets) == 1:
+    if snapshot.get("state") == "WAITING_ACTION" and deadline:
         try:
             remaining = max(0, int(float(deadline) - time.time()))
         except (TypeError, ValueError):
             remaining = None
         if remaining is not None:
             minutes, seconds = divmod(remaining, 60)
-            lines.append(f"⏱ Автопропуск через ~{minutes}:{seconds:02d}")
+            label = "Автопропуск" if len(targets) == 1 else "Мастер продолжит без остальных"
+            lines.append(f"⏱ {label} через ~{minutes}:{seconds:02d}")
     # The narration is already its own chat message; the overview card repeated
     # it verbatim right under it. Full text stays on the explicit scene page.
     if scene and page == "scene":
@@ -486,15 +498,20 @@ class DndMenuService:
             for object_id, row in list(_mapping(snapshot.get("scene_objects")).items())[:6]:
                 if isinstance(row, dict) and _public(row) and row.get("available", True):
                     rows.append([button("🔎 " + _text(row.get("name") or object_id, 42), "object", object_id=str(object_id))])
-        if owner and page == "items" and self._can_act(session, owner):
-            # Item actions exist only on the owner's free turn; during a roll
-            # they could only answer «Предмет сейчас недоступен».
+        if owner and page == "items":
+            # Using an item is the owner's turn; handing it over is free and
+            # works out of turn too. Buttons that could only answer «недоступно»
+            # are not shown.
+            can_use, can_give = self._can_act(session, owner), self._can_transfer(session, owner)
             for index, item in _visible_items(snapshot, owner)[:8]:
                 ref = _item_ref(index, item)
                 row = _mapping(item)
-                operation = "confirm" if str(row.get("mechanic") or "").upper() in _ITEM_MECHANICS and str(row.get("requirement") or "NONE").upper() == "NONE" else "item_idea"
-                rows.append([button("🧰 " + _item_name(item)[:32], operation, kind="USE_ITEM", **ref),
-                             button("Передать", "recipients", **ref)])
+                if can_use:
+                    operation = "confirm" if str(row.get("mechanic") or "").upper() in _ITEM_MECHANICS and str(row.get("requirement") or "NONE").upper() == "NONE" else "item_idea"
+                    rows.append([button("🧰 " + _item_name(item)[:32], operation, kind="USE_ITEM", **ref)]
+                                + ([button("Передать", "recipients", **ref)] if can_give else []))
+                elif can_give:
+                    rows.append([button("🎁 Передать: " + _item_name(item)[:32], "recipients", **ref)])
         if owner and page == "enemies" and self._can_act(session, owner):
             for enemy_id, row in list(_mapping(snapshot.get("enemy_combatants")).items())[:6]:
                 if _active_enemy(snapshot, enemy_id, row):
@@ -544,8 +561,7 @@ class DndMenuService:
         from AI.dnd_archetype_abilities import charges
 
         enemies = any(_active_enemy(snapshot, key, row) for key, row in _mapping(snapshot.get("enemy_combatants")).items())
-        living = [key for key, row in _mapping(snapshot.get("participants")).items()
-                  if isinstance(row, dict) and row.get("active", True) and _int(_mapping(_mapping(snapshot.get("character_sheets")).get(str(key))).get("hp"), 1) > 0]
+        living = _living(snapshot)
         rows = []
         first = [button("⚔️ Атака", "nav", page="enemies")] if enemies else []
         first.extend([button("🎯 Навык", "skills"), button("🎒 Предмет", "nav", page="items")])
@@ -788,6 +804,22 @@ class DndMenuService:
         targets = (getattr(session, "pending_roll", None) or {}).get("target_user_ids", []) if state == "WAITING_ROLL" else getattr(session, "action_target_user_ids", [])
         return bool(self.dnd._can_user_act(session, actor, targets))
 
+    def _can_transfer(self, session, actor):
+        """Handing an item over is free: any living hero while the party acts or rolls."""
+        if self.paused(session) or getattr(session, "state", None) not in {"WAITING_ACTION", "WAITING_ROLL"}:
+            return False
+        if getattr(session, "pending_generation_request", None) or getattr(session, "pending_generated_result", None):
+            return False
+        return int(actor) in _living(snapshot_session(session))
+
+    @staticmethod
+    def _owned_item(snapshot, actor, payload):
+        index = _int(payload.get("item_index"), -1)
+        match = next((row for row_index, row in _visible_items(snapshot, actor) if row_index == index), None)
+        if match is None or _item_ref(index, match).get("item_fingerprint") != payload.get("item_fingerprint"):
+            return None
+        return match if _int(_mapping(match).get("quantity"), 1) >= 1 else None
+
     def _valid_payload(self, session, actor, payload):
         kind = payload.get("kind")
         if kind in {"PAUSE", "RESUME", "RETRY"}:
@@ -823,21 +855,19 @@ class DndMenuService:
 
             return (getattr(session, "state", "") == "LOBBY" and str(actor) in _mapping(getattr(session, "participants", None))
                     and payload.get("choice") in ARCHETYPES and not self.paused(session))
+        if kind == "TRANSFER_ITEM":
+            snapshot = snapshot_session(session)
+            target = _mapping(snapshot.get("participants")).get(str(payload.get("target_id")))
+            return (self._can_transfer(session, actor) and self._owned_item(snapshot, actor, payload) is not None
+                    and isinstance(target, dict) and _public(target) and _int(payload.get("target_id"), -1) in _living(snapshot)
+                    and str(payload.get("target_id")) != str(actor))
         if not self._can_act(session, actor):
             return False
         snapshot = snapshot_session(session)
         if kind == "WAIT":
             return _wait_rule(snapshot) is not None
-        if kind in {"USE_ITEM", "TRANSFER_ITEM"}:
-            index = _int(payload.get("item_index"), -1)
-            match = next((row for row_index, row in _visible_items(snapshot, actor) if row_index == index), None)
-            if match is None or _item_ref(index, match).get("item_fingerprint") != payload.get("item_fingerprint"):
-                return False
-            if _int(_mapping(match).get("quantity"), 1) < 1:
-                return False
-            if kind == "TRANSFER_ITEM":
-                target = _mapping(snapshot.get("participants")).get(str(payload.get("target_id")))
-                return isinstance(target, dict) and _public(target) and target.get("active", True) and str(payload.get("target_id")) != str(actor)
+        if kind == "USE_ITEM" and self._owned_item(snapshot, actor, payload) is None:
+            return False
         if kind == "ATTACK":
             target = _mapping(snapshot.get("enemy_combatants")).get(str(payload.get("target_id")))
             if not _active_enemy(snapshot, payload.get("target_id"), target):
@@ -1069,7 +1099,7 @@ class DndMenuService:
             if item.get("cost") in cost_labels:
                 description += "\nЦена: " + cost_labels[item["cost"]]
         if payload.get("kind") == "TRANSFER_ITEM":
-            description += " → " + _name(snapshot, payload.get("target_id"))
+            description += " → " + _name(snapshot, payload.get("target_id")) + "\nСвободное действие: ход не тратит."
         if payload.get("kind") == "ATTACK":
             description += " → " + _text(_mapping(_mapping(snapshot.get("enemy_combatants")).get(str(payload.get("target_id")))).get("name"), 90)
             description += "\nОружие: " + _text(payload.get("item_name") or "без оружия", 100)
@@ -1234,19 +1264,21 @@ class DndMenuService:
                                 build_markup=weapon_markup)
                 await callback.answer()
             elif operation == "recipients":
-                if not self._valid_payload(session, actor, {**payload, "kind": "USE_ITEM"}):
+                snapshot = snapshot_session(session)
+                if not self._can_transfer(session, actor) or self._owned_item(snapshot, actor, payload) is None:
                     await callback.answer("Предмет сейчас недоступен.", show_alert=True)
                     return
 
                 def markup(card, seq):
                     rows = []
                     for key, row in _mapping(getattr(session, "participants", None)).items():
-                        if isinstance(row, dict) and _public(row) and row.get("active", True) and str(key) != str(actor):
-                            rows.append([self._button(session, actor, _name(snapshot_session(session), key), "confirm", card=card, seq=seq, **{**payload, "kind": "TRANSFER_ITEM", "target_id": int(key), "quantity": 1})])
+                        if isinstance(row, dict) and _public(row) and _int(key) in _living(snapshot) and str(key) != str(actor):
+                            rows.append([self._button(session, actor, _name(snapshot, key), "confirm", card=card, seq=seq, **{**payload, "kind": "TRANSFER_ITEM", "target_id": int(key), "quantity": 1})])
                     rows.append([self._button(session, actor, "Отмена", "nav", card=card, seq=seq, page="items")])
                     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-                await self.show(callback.bot, session, actor, text="Кому передать одну вещь?", build_markup=markup)
+                await self.show(callback.bot, session, actor,
+                                text="Кому передать одну вещь? Это свободное действие: ход не тратит.", build_markup=markup)
                 await callback.answer()
             elif operation == "execute":
                 if not self.execute_action or not self._valid_payload(session, actor, payload):

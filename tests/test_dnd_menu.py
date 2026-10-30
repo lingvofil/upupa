@@ -642,7 +642,8 @@ def test_roll_window_offers_no_item_or_object_actions_that_would_be_refused():
                           "attack": {"enemy_key": "guard", "weapon": "меч", "style": "MELEE"}}))
         await service.show(bot, current, 1, "items")
         labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
-        assert not any(label.startswith("🧰") or label == "Передать" for label in labels)
+        assert not any(label.startswith("🧰") for label in labels)
+        assert "🎁 Передать: Зелье" in labels  # Handing over is free even during a roll.
         assert "Зелье" in bot.sent[-1].text
         assert "🎲 Бросить" in labels
         await service.show(bot, current, 1, "scene")
@@ -650,6 +651,37 @@ def test_roll_window_offers_no_item_or_object_actions_that_would_be_refused():
         labels = [item.text for row in latest_markup(bot).inline_keyboard for item in row]
         assert labels == ["← Сцена"]
     asyncio.run(run())
+
+
+def test_item_can_be_handed_over_out_of_turn_as_a_free_action():
+    # Wish from the 2026-10-29 game: Алина wanted to pass Чудо a weapon, but
+    # «Передать» only worked on her own turn.
+    async def run():
+        calls = []
+
+        async def execute(*args):
+            calls.append(args)
+
+        current, _, bot, service = make_service(session(action_target_user_ids=[2]), execute=execute)
+        await service.show(bot, current, 1, "items")
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "🎁 Передать: Зелье")))
+        assert "ход не тратит" in bot.edited[-1].text
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "Денис")))
+        assert "Свободное действие" in bot.edited[-1].text
+        await service.callback(Callback(bot, current, button(latest_markup(bot), "✅ Подтвердить")))
+        assert len(calls) == 1
+        assert calls[0][3]["kind"] == "TRANSFER_ITEM" and calls[0][3]["target_id"] == 2
+    asyncio.run(run())
+
+
+def test_group_card_marks_menu_moves_and_shows_the_group_deadline():
+    # Live regression 2026-10-29: Детектор attacked by button and the shared
+    # card still showed «⏳ Детектор» — «я типа сходил, но за ход это не считается».
+    current = session(action_target_user_ids=[], action_deadline=menu.time.time() + 125,
+                      dnd_lifecycle_v1={"window": {"status": "open", "resolved_actors": [1]}})
+    text = menu.render_page(menu.snapshot_session(current), "overview")
+    assert "✅ Маша" in text and "⏳ Денис" in text
+    assert "⏱ Мастер продолжит без остальных через ~2:0" in text
 
 
 def test_weapon_picker_pages_and_revalidates_selected_inventory():

@@ -31,6 +31,10 @@ DND_GEMINI_GOVERNOR_TIMEOUT_SECONDS = 15.0
 DND_GEMINI_QUEUE_TIMEOUT_SECONDS = 5.0
 DND_GEMINI_ATTEMPTS = 2
 DND_GEMINI_CIRCUIT_SECONDS = 45.0
+# A model that keeps answering 503/504 moves to the end of the queue for a while:
+# on 2026-10-29 the primary failed 49 of 50 calls, ~10 s lost on every turn.
+DND_MODEL_DEMOTE_AFTER_FAILURES = 2
+DND_MODEL_DEMOTE_SECONDS = 600.0
 DND_GEMINI_INPUT_MAX_CHARS = 20_000
 # Self-imposed ceiling for the compact system block (Gemini itself accepts far
 # more). It bounds, not inflates, usage: the block is only as long as the active
@@ -83,6 +87,8 @@ DND_DIRECT_CONTINUITY_GUARD = (
 _state_lock = threading.Lock()
 _key_cursor = 0
 _gemini_circuit_until: dict[int | None, float] = {}
+_model_failure_streak: dict[str, int] = {}
+_model_demoted_until: dict[str, float] = {}
 _client_cache: dict[tuple[str, int], genai.Client] = {}
 
 
@@ -313,6 +319,31 @@ def _model_queue(chat_id: int | None) -> list[str]:
     return [str(name).removeprefix("models/") for name in DND_MODEL_QUEUE if name]
 
 
+def _note_model_outcome(model_name: str, *, ok: bool, transient: bool = False) -> None:
+    with _state_lock:
+        if ok:
+            _model_failure_streak.pop(model_name, None)
+            _model_demoted_until.pop(model_name, None)
+            return
+        if not transient:
+            return
+        streak = _model_failure_streak.get(model_name, 0) + 1
+        _model_failure_streak[model_name] = streak
+        if streak < DND_MODEL_DEMOTE_AFTER_FAILURES:
+            return
+        _model_failure_streak[model_name] = 0
+        _model_demoted_until[model_name] = time.monotonic() + DND_MODEL_DEMOTE_SECONDS
+    logging.warning("DnD Gemini model demoted model=%s seconds=%s", model_name, int(DND_MODEL_DEMOTE_SECONDS))
+
+
+def _healthy_first(models: list[str]) -> list[str]:
+    """Demoted models keep their place among themselves but go last."""
+    now = time.monotonic()
+    with _state_lock:
+        demoted = {name for name, until in _model_demoted_until.items() if until > now}
+    return [name for name in models if name not in demoted] + [name for name in models if name in demoted]
+
+
 def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:
     """One key per attempt, each attempt on a different model of the queue.
 
@@ -322,7 +353,7 @@ def _attempt_pairs(chat_id: int | None, attempts: int) -> list[tuple[str, str]]:
     turn never wastes its primary attempt on a known 429.
     """
     keys = list(GEMINI_KEYS_POOL)
-    models = _model_queue(chat_id)
+    models = _healthy_first(_model_queue(chat_id))
     if not keys or not models or attempts <= 0:
         return []
 
@@ -746,6 +777,7 @@ def _run_gemini_sync(
                 raise RuntimeError("DnD Gemini returned empty text")
             if update_circuit:
                 _close_circuit(chat_id)
+            _note_model_outcome(model_name, ok=True)
             logging.info(
                 "DnD Gemini success chat_id=%s model=%s",
                 chat_id,
@@ -764,6 +796,7 @@ def _run_gemini_sync(
                 continue
             transient = _is_transient(exc)
             saw_transient = saw_transient or transient
+            _note_model_outcome(model_name, ok=False, transient=transient)
             logging.warning(
                 "DnD Gemini fast attempt failed chat_id=%s model=%s transient=%s error=%s",
                 getattr(session, "chat_id", None),

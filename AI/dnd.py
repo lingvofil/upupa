@@ -613,6 +613,17 @@ def _can_user_act(session, user_id: int, target_user_ids=None) -> bool:
     return not targets or user_id in targets
 
 
+def _menu_resolved_actors(session) -> list[int]:
+    """Heroes whose move in the open window was confirmed from the menu.
+
+    Such moves resolve locally and never reach pending_actions as prose.
+    """
+    window = (getattr(session, "dnd_lifecycle_v1", {}) or {}).get("window") or {}
+    if window.get("status") != "open":
+        return []
+    return [int(value) for value in window.get("resolved_actors") or []]
+
+
 def _parse_targets(command_str: str) -> list[int]:
     match = re.search(r"(?:^|;)TARGETS:([0-9,\s]+)(?:;|$)", command_str, flags=re.IGNORECASE)
     if not match:
@@ -1074,7 +1085,6 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             if len(options) < 2:
                 raise ValueError("DnD poll needs at least two options")
             targets = _resolve_targets(session, _parse_targets(command_str))
-            session.state = "WAITING_POLL"
             session.pending_roll = None
             session.action_prompt_message_id = None
             session.pending_actions = {}
@@ -1088,6 +1098,9 @@ async def parse_and_execute_turn(bot: Bot, chat_id: int, text_response: str):
             )
             poll_id = str(poll_msg.poll.id)
             deadline = time.time() + settings_for(session)["turn_seconds"]
+            # WAITING_POLL only together with its poll: a persist from another
+            # task during send_poll saved WAITING_POLL without one.
+            session.state = "WAITING_POLL"
             session.current_poll_id = poll_id
             session.pending_poll = {
                 "poll_id": poll_id,
@@ -2047,7 +2060,7 @@ async def handle_dnd_next(message: Message):
                     "Не смог восстановить окно хода. Напиши «дальше» ещё раз."
                 )
             return
-        if not session.pending_actions:
+        if not session.pending_actions and not _menu_resolved_actors(session):
             await message.answer("Пока нечего завершать: никто ещё не заявил действие.")
             return
         await finalize_group_actions(

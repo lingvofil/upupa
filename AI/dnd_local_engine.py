@@ -29,6 +29,9 @@ from AI import dnd_turn_lifecycle as lifecycle
 STATE_FIELD = "dnd_local_engine_v1"
 RECORD_LIMIT = 100
 KNOWN_KINDS = {"ROLL", "ATTACK", "CINEMATIC_ATTACK", "USE_ITEM", "TRANSFER_ITEM", "OBJECT", "WAIT"}
+# Free actions spend nobody's turn: they are allowed out of turn and during a
+# saved roll, and leave the window, phase and roll untouched.
+FREE_KINDS = {"TRANSFER_ITEM"}
 _TRANSIENT_ATTRIBUTES = {"chat_session", "conversation", "pending_generated_result", "pending_generation_request", "event_journal"}
 _PRESTATE_FIELDS = {
     "state", "state_revision", "campaign_id", "participants", "character_sheets", "inventories", "conditions",
@@ -229,12 +232,15 @@ def validate_action(session, action: Action) -> None:
         raise LocalActionError("Сейчас нельзя выполнить это действие.")
     if int(action.actor_id) not in lifecycle.active_actor_ids(session):
         raise LocalActionError("Выполнить действие может живой участник сцены.")
-    if window.get("actors") and int(action.actor_id) not in window["actors"]:
+    free = action.kind in FREE_KINDS
+    if not free and window.get("actors") and int(action.actor_id) not in window["actors"]:
         raise LocalActionError("Сейчас ход другого игрока.")
     answered = window.get("resolved_actors") or []
-    if int(action.actor_id) in answered:
+    if not free and int(action.actor_id) in answered:
         raise LocalActionError("Твоё действие в этом окне уже разрешено.")
-    if action.phase == "roll":
+    if free:
+        pass
+    elif action.phase == "roll":
         pending = getattr(session, "pending_roll", None) or {}
         targets = [int(uid) for uid in pending.get("target_user_ids", [])]
         if targets and action.actor_id not in targets:
@@ -537,36 +543,40 @@ def execute_action(session, action: Action, *, backend: EngineBackend | None = N
         for sequence, event in enumerate(events):
             event["event_id"] = f"{action.operation_id}:{sequence}"
             event.setdefault("operation_id", action.operation_id)
-        lifecycle.tick_event(draft, "action", action.operation_id, actor_id=action.actor_id)
-        window = lifecycle.ensure(draft)["window"]
-        resolved = window.setdefault("resolved_actors", [])
-        if action.actor_id not in resolved:
-            resolved.append(action.actor_id)
-        # A confirmed local move replaces this actor's still unprocessed prose
-        # declaration; the narrator must not execute it a second time.
-        if isinstance(getattr(draft, "pending_actions", None), dict):
-            draft.pending_actions.pop(str(action.actor_id), None)
-        expected = [uid for uid in window["actors"] if uid in lifecycle.active_actor_ids(draft)]
-        window_closed = set(expected).issubset(resolved)
-        if window_closed:
-            lifecycle.close_window(draft, turn_id=action.turn_id)
-            lifecycle.tick_event(draft, "window", action.turn_id)
+        if action.kind in FREE_KINDS:
+            window_closed = round_complete = needs_narrator = False
+            next_actor = None
         else:
-            # One addressed roll is done, but other declarations in a group
-            # retain the same logical window and become actionable again.
-            lifecycle.ensure(draft)["window"]["phase"] = "input"
-        round_complete = lifecycle.note_actor_resolved(draft, action.actor_id)
-        if round_complete:
-            lifecycle.tick_event(draft, "round", lifecycle.ensure(draft)["round_id"])
-        draft.state = "RESOLVING" if window_closed else "WAITING_ACTION"
-        draft.pending_roll = None
-        meaningful = any(event.get("meaningful") for event in events)
-        needs_narrator = bool(prompt) or meaningful or round_complete
-        # economy postpones decorative summaries, never unknown consequences or
-        # critical NPC/world content. Known mechanics always deliver immediately.
-        if ai_mode == "economy" and not prompt and not meaningful and not round_complete:
-            needs_narrator = False
-        next_actor = next_actor_id(draft, action.actor_id) if window_closed else next((uid for uid in expected if uid not in resolved), None)
+            lifecycle.tick_event(draft, "action", action.operation_id, actor_id=action.actor_id)
+            window = lifecycle.ensure(draft)["window"]
+            resolved = window.setdefault("resolved_actors", [])
+            if action.actor_id not in resolved:
+                resolved.append(action.actor_id)
+            # A confirmed local move replaces this actor's still unprocessed prose
+            # declaration; the narrator must not execute it a second time.
+            if isinstance(getattr(draft, "pending_actions", None), dict):
+                draft.pending_actions.pop(str(action.actor_id), None)
+            expected = [uid for uid in window["actors"] if uid in lifecycle.active_actor_ids(draft)]
+            window_closed = set(expected).issubset(resolved)
+            if window_closed:
+                lifecycle.close_window(draft, turn_id=action.turn_id)
+                lifecycle.tick_event(draft, "window", action.turn_id)
+            else:
+                # One addressed roll is done, but other declarations in a group
+                # retain the same logical window and become actionable again.
+                lifecycle.ensure(draft)["window"]["phase"] = "input"
+            round_complete = lifecycle.note_actor_resolved(draft, action.actor_id)
+            if round_complete:
+                lifecycle.tick_event(draft, "round", lifecycle.ensure(draft)["round_id"])
+            draft.state = "RESOLVING" if window_closed else "WAITING_ACTION"
+            draft.pending_roll = None
+            meaningful = any(event.get("meaningful") for event in events)
+            needs_narrator = bool(prompt) or meaningful or round_complete
+            # economy postpones decorative summaries, never unknown consequences or
+            # critical NPC/world content. Known mechanics always deliver immediately.
+            if ai_mode == "economy" and not prompt and not meaningful and not round_complete:
+                needs_narrator = False
+            next_actor = next_actor_id(draft, action.actor_id) if window_closed else next((uid for uid in expected if uid not in resolved), None)
         result = ActionResult(action.operation_id, text, events, dice, prompt, needs_narrator, round_complete, window_closed, next_actor)
         draft_row = ensure(draft)
         record = {"operation_id": action.operation_id, "campaign_id": action.campaign_id, "turn_id": action.turn_id,

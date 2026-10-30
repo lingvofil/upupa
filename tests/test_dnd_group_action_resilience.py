@@ -110,6 +110,34 @@ def test_group_turn_is_durable_before_provider_call(monkeypatch):
     assert bot.messages == []
 
 
+def test_group_turn_with_only_menu_moves_continues_the_scene(monkeypatch):
+    # Live regression 2026-10-29: a window where heroes only attacked by button
+    # had nothing in pending_actions, so the timeout/«дальше» silently did nothing.
+    session = _session()
+    session.pending_actions = {}
+    session.dnd_lifecycle_v1 = {"window": {"status": "open", "resolved_actors": [1]}}
+    seen = []
+
+    async def fake_continue(dnd, bot, current):
+        seen.append((current.state, current.pending_generation_request.get("prompt"),
+                     current.pending_generation_request.get("telegram_effects")[0]["text"]))
+        return True
+
+    monkeypatch.setattr(recovery, "continue_pending_generation", fake_continue)
+    dnd, _persisted = _fake_dnd(session, None)
+    dnd._menu_resolved_actors = lambda current: [1]
+    dnd._participant_name = lambda current, user_id: {1: "Алиса"}[user_id]
+    install_dnd_group_action_resilience(dnd)
+
+    asyncio.run(dnd.finalize_group_actions(FakeBot(), session.chat_id, 77))
+
+    state, prompt, announcement = seen[0]
+    assert state == "RESOLVING"
+    assert "кнопками меню" in prompt and "не повторяя кубики" in prompt
+    assert announcement == "🎭 Ход партии: Алиса — кнопками меню. Остальные промолчали."
+    assert session.action_prompt_message_id is None
+
+
 def test_failed_group_generation_keeps_exact_request_for_next_command(monkeypatch):
     session = _session()
 
