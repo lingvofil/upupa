@@ -25,6 +25,11 @@ YTP_NORMALIZE_TIMEOUT_SEC = 90
 YTP_NORMALIZE_MIN_FILE_SIZE_MB = 12
 YTP_NORMALIZE_MIN_DURATION_SEC = 30
 YTP_NORMALIZE_MAX_EDGE = 1280
+# Заголовок видео часто обещает на кадр-другой больше, чем реально декодируется
+# (звук чуть длиннее картинки). moviepy 1.0.3 падает с «failed to read the first
+# frame», если перематывает ffmpeg за последний живой кадр — так делает reverse/
+# ping_pong на куске у самого конца. Поэтому хвост ролика в нарезку не берём.
+YTP_TAIL_MARGIN_SEC = 0.25
 TELEGRAM_FILE_TIMEOUT_SEC = 90
 TELEGRAM_UPLOAD_TIMEOUT_SEC = 120
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".gif", ".ogg"}
@@ -75,6 +80,7 @@ def _make_ytp_sync(
         if duration < 3:
             raise ValueError("Видео слишком короткое (как и твой хуй).")
 
+        usable_duration = duration - YTP_TAIL_MARGIN_SEC
         current_time = 0.0
 
         pool_cfg = YTP_PRESET_POOLS.get(preset, YTP_PRESET_POOLS["normal"])
@@ -87,9 +93,9 @@ def _make_ytp_sync(
 
         while current_time < target_duration:
             chunk_len = random.uniform(chunk_min, chunk_max)
-            max_start = max(0.0, duration - chunk_len)
+            max_start = max(0.0, usable_duration - chunk_len)
             start = random.uniform(0.0, max_start)
-            end = min(duration, start + chunk_len)
+            end = min(usable_duration, start + chunk_len)
 
             if end - start < 0.1:
                 continue
