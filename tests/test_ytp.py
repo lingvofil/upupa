@@ -148,6 +148,49 @@ def test_video_render_uses_h264_mp4_profile(monkeypatch):
     assert kwargs["ffmpeg_params"] == ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
 
+def test_video_render_never_cuts_from_video_tail(monkeypatch):
+    subclip_ranges = []
+
+    class FakeSnippet:
+        def __init__(self, duration):
+            self.duration = duration
+
+        def fx(self, *_args, **_kwargs):
+            return self
+
+        def close(self):
+            pass
+
+    class FakeSource:
+        duration = 5.06
+
+        def subclip(self, start, end):
+            subclip_ranges.append((start, end))
+            return FakeSnippet(end - start)
+
+        def close(self):
+            pass
+
+    class FakeFinal:
+        def write_videofile(self, output_path, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ytp, "VideoFileClip", lambda _path: FakeSource())
+    monkeypatch.setattr(ytp, "concatenate_videoclips", lambda _clips: FakeFinal())
+    # Самый поздний возможный кусок, который потом ещё и разворачивают.
+    monkeypatch.setattr(ytp.random, "uniform", lambda _low, high: high)
+    monkeypatch.setattr(ytp.random, "choices", lambda *_args, **_kwargs: ["reverse"])
+
+    ytp._make_ytp_sync("input.mp4", "output.mp4", target_duration=3, preset="normal")
+
+    assert subclip_ranges
+    last_safe_time = FakeSource.duration - ytp.YTP_TAIL_MARGIN_SEC
+    assert all(end <= last_safe_time + 1e-9 for _start, end in subclip_ranges)
+
+
 def test_ytp_timeout_releases_semaphore(monkeypatch):
     async def timeout_render(*args, **kwargs):
         raise asyncio.TimeoutError
