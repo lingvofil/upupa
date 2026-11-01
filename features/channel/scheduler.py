@@ -6,10 +6,11 @@ import asyncio
 import logging
 import random
 from datetime import date, datetime, time, timedelta
+from time import monotonic
 
 import pytz
 
-from features.channel import external_mentions
+from features.channel import external_mentions, reposts
 from features.channel.cringedep_service import CHANNEL_TARGET, publish_channel_post
 from features.channel.mood import burst_probability, daily_post_target, get_current_mood
 from features.channel.polls import process_due_polls
@@ -21,7 +22,7 @@ DAY_END = time(23, 59, 59)
 
 # Deprecated compatibility target for old direct helper callers. Production uses NOMINAL_POSTS_PER_DAY and mood ranges.
 POSTS_PER_DAY = 5
-NOMINAL_POSTS_PER_DAY = 10
+NOMINAL_POSTS_PER_DAY = 4
 PREFERRED_GAP_MINUTES = 120
 MIN_GAP_MINUTES = 45
 STARTUP_LEAD_MINUTES = 5
@@ -29,6 +30,11 @@ MISSED_GRACE_MINUTES = 20
 RETRY_MINUTES = 30
 CHECK_INTERVAL_SECONDS = 30
 BURST_WINDOW_SECONDS = 180
+NIGHT_START_HOUR = 1
+NIGHT_END_HOUR = 8
+NIGHT_SLOT_ACCEPTANCE = 0.25
+NIGHT_RESAMPLE_LIMIT = 8
+REPOST_SCAN_INTERVAL_SECONDS = 3600
 
 
 def _local_dt(day: date, clock: time) -> datetime:
@@ -56,6 +62,17 @@ def _pick_legacy_daily_slots(day: date, *, now: datetime | None = None, rng=rand
     jitter = sorted(rng.randint(0, slack) for _ in range(count)) if slack > 0 else [0] * count
     offsets = [jitter[index] + index * effective_gap for index in range(count)]
     return [start + timedelta(minutes=offset) for offset in offsets]
+
+
+def _pick_slot_time(start: datetime, span_seconds: int, rng=random) -> datetime:
+    """Ночь не запрещена, но большинство ночных кандидатов заменяются дневными."""
+    candidate = start
+    for _ in range(NIGHT_RESAMPLE_LIMIT):
+        candidate = start + timedelta(seconds=rng.randint(0, span_seconds))
+        is_night = NIGHT_START_HOUR <= candidate.astimezone(MOSCOW_TZ).hour < NIGHT_END_HOUR
+        if not is_night or rng.random() < NIGHT_SLOT_ACCEPTANCE:
+            break
+    return candidate
 
 
 def _pick_daily_slots(
@@ -90,7 +107,7 @@ def _pick_daily_slots(
             candidate = base + timedelta(seconds=rng.randint(0, BURST_WINDOW_SECONDS))
             candidate = min(max(candidate, start), end)
         else:
-            candidate = start + timedelta(seconds=rng.randint(0, span_seconds))
+            candidate = _pick_slot_time(start, span_seconds, rng)
         slots.append(candidate)
 
     return sorted(slots)
@@ -270,7 +287,15 @@ async def channel_scheduler_loop(bot) -> None:
         logging.warning("[channel] external mention tracker initialization failed: %s", exc, exc_info=True)
 
     await asyncio.sleep(60)
+    last_repost_scan = None
     while True:
+        if last_repost_scan is None or monotonic() - last_repost_scan >= REPOST_SCAN_INTERVAL_SECONDS:
+            last_repost_scan = monotonic()
+            try:
+                await reposts.scan_for_reposts()
+            except Exception as exc:
+                logging.warning("[channel] repost scan failed: %s", exc, exc_info=True)
+
         try:
             now = datetime.now(MOSCOW_TZ)
             await process_due_polls(bot, channel_target=CHANNEL_TARGET)

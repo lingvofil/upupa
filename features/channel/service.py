@@ -45,6 +45,9 @@ MIN_IMAGE_PROMPT_LENGTH = 12
 MAX_IMAGE_PROMPT_LENGTH = 600
 MAX_GENERATION_ATTEMPTS = 3
 DESIRE_OPENING_COOLDOWN_POSTS = 5
+DECREE_OPENING_COOLDOWN_POSTS = 5
+SOURCE_HISTORY_LIMIT = 5
+MIN_CHAT_TITLE_LENGTH = 8
 LOW_ENERGY_COOLDOWN_POSTS = 8
 REPEATED_OPENING_COOLDOWN_POSTS = 12
 HOUSEHOLD_MOTIF_COOLDOWN_POSTS = 12
@@ -55,13 +58,19 @@ SIMILARITY_COOLDOWN_POSTS = 12
 EXTERNAL_COMMENT_SOURCES = (
     {
         "channel": BATYA_CHANNEL,
-        "description": f"@{BATYA_CHANNEL}; этот канал ведёт твой батя",
+        "description": (
+            f"@{BATYA_CHANNEL}; этот канал ведёт твой батя: он тебя создал и держит на своём сервере, "
+            "а ты с ним в подростковом бунте"
+        ),
         "owner": None,
         "allow_batya_reference": True,
     },
     {
         "channel": "muhtarboodka",
-        "description": "@muhtarboodka; этот канал ведёт Мухтар",
+        "description": (
+            "@muhtarboodka; этот канал ведёт Мухтар, твой постоянный соперник: он часто репостит тебя к себе, "
+            "а ты считаешь это то воровством, то данью уважения"
+        ),
         "owner": "Мухтар",
         "allow_batya_reference": False,
     },
@@ -104,6 +113,12 @@ _BATYA_MENTION_RE = re.compile(
     re.IGNORECASE,
 )
 _DESIRE_OPENING_RE = re.compile(r"^\s*хоч(?:у|ется)\b", re.IGNORECASE)
+_DECREE_OPENING_RE = re.compile(
+    r"^\W*(?:с[её]годня\s+)?(?:я\s+)?(?:официально\s+)?"
+    r"(?:объявляю|отменяю|запрещаю|конфискую|назначаю|увольняю|приказываю|требую|арестовываю|ввожу)\b",
+    re.IGNORECASE,
+)
+_PIGEON_RE = re.compile(r"\bголуб\w*", re.IGNORECASE)
 _LOW_ENERGY_RE = re.compile(
     r"\b(?:"
     r"застр\w*|сгни\w*|гни(?:ть|ю|ёт|ем|ете|ют)\w*|исчез\w*|"
@@ -231,6 +246,22 @@ def _starts_with_desire(text: str) -> bool:
     return bool(_DESIRE_OPENING_RE.search(text or ""))
 
 
+def _starts_with_decree(text: str) -> bool:
+    return bool(_DECREE_OPENING_RE.search(text or ""))
+
+
+def _names_real_chat(text: str) -> bool:
+    """Названия чатов не должны попадать в публичный канал, даже если модель их где-то подхватила."""
+    lowered = (text or "").casefold()
+    for chat in chat_list:
+        title = str(chat.get("title") or "").strip().casefold()
+        if len(title) < MIN_CHAT_TITLE_LENGTH:
+            continue
+        if re.search(rf"(?<!\w){re.escape(title)}(?!\w)", lowered):
+            return True
+    return False
+
+
 def _contains_low_energy_motif(text: str) -> bool:
     return bool(_LOW_ENERGY_RE.search(text or ""))
 
@@ -302,6 +333,8 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
     lowered = clean.casefold()
     if any(marker in lowered for marker in _PROVIDER_ERROR_MARKERS):
         return "похоже на служебную ошибку AI-провайдера"
+    if _names_real_chat(clean):
+        return "в посте названо название реального чата; говори обобщённо"
 
     normalized = _normalize_for_duplicate_check(clean)
     recent_normalized = {
@@ -329,6 +362,11 @@ def _validate_post(text: str, recent_posts: list[dict]) -> str | None:
         recent_openings = recent_posts[-DESIRE_OPENING_COOLDOWN_POSTS:]
         if any(_starts_with_desire(str(post.get("text") or "")) for post in recent_openings):
             return "недавний пост уже начинался с «хочу/хочется»; нужен другой зачин"
+
+    if _starts_with_decree(clean):
+        recent_openings = recent_posts[-DECREE_OPENING_COOLDOWN_POSTS:]
+        if any(_starts_with_decree(str(post.get("text") or "")) for post in recent_openings):
+            return "недавний пост уже был указом; покажи поступок или мысль, а не очередной указ"
 
     if _contains_low_energy_motif(clean):
         recent_tone = recent_posts[-LOW_ENERGY_COOLDOWN_POSTS:]
@@ -404,6 +442,10 @@ def _validate_image_plan(image_prompt: str, caption: str, recent_posts: list[dic
         return "в описании картинки не должно быть ссылок или usernames"
     if _contains_batya_mention(prompt):
         return "режим картинки не должен использовать легенду про батю"
+    if _PIGEON_RE.search(prompt) and any(
+        _PIGEON_RE.search(str(post.get("image_prompt") or "")) for post in recent_posts
+    ):
+        return "голубь уже недавно был на картинке; нужен другой герой"
 
     reason = _validate_post(caption, recent_posts)
     if reason:
@@ -419,8 +461,30 @@ def _validate_image_plan(image_prompt: str, caption: str, recent_posts: list[dic
     return None
 
 
+def _is_own_repost(post: dict) -> bool:
+    own_channel = CHANNEL_TARGET.lstrip("@").casefold()
+    return str(post.get("forwarded_from_channel") or "").casefold() == own_channel
+
+
+def _source_history_block(channel: str, published_posts: list[dict]) -> str:
+    """Прошлые реплики этому же автору: без них каждая перепалка начиналась бы с чистого листа."""
+    handle = f"@{channel}".casefold()
+    replies = [
+        re.sub(r"https?://\S+", "", str(post.get("text") or "")).strip()
+        for post in published_posts
+        if str(post.get("external_source_channel") or "").casefold() == handle
+    ]
+    lines = [f"- {reply[:160]}" for reply in replies if reply][-SOURCE_HISTORY_LIMIT:]
+    if not lines:
+        return ""
+    return (
+        "ТВОИ ПРОШЛЫЕ РЕПЛИКИ ЭТОМУ АВТОРУ (можешь припомнить или продолжить спор, но не повторяй их):\n"
+        + "\n".join(lines)
+    )
+
+
 def _pick_uncommented_external_post(source_posts: list[dict], published_posts: list[dict]) -> dict | None:
-    """Не комментируем одну и ту же внешнюю ссылку повторно."""
+    """Не комментируем одну и ту же внешнюю ссылку повторно и не принимаем свой репост за чужой пост."""
     used_urls = {
         str(post.get("external_source_url"))
         for post in published_posts
@@ -429,7 +493,9 @@ def _pick_uncommented_external_post(source_posts: list[dict], published_posts: l
     candidates = [
         post
         for post in source_posts
-        if post.get("url") not in used_urls and (post.get("text") or post.get("image_url"))
+        if post.get("url") not in used_urls
+        and (post.get("text") or post.get("image_url"))
+        and not _is_own_repost(post)
     ]
     if not candidates:
         return None

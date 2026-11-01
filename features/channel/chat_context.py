@@ -22,6 +22,8 @@ CHAT_GUARANTEE_WINDOW_HOURS = 24
 CHAT_USED_EPISODE_WINDOW_HOURS = 36
 
 _TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]{4,}")
+_NAME_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё]{3,}")
+HIDDEN_NAME = "[имя]"
 
 
 def _sanitize_chat_text(text: str) -> str:
@@ -31,14 +33,34 @@ def _sanitize_chat_text(text: str) -> str:
     return text.strip()
 
 
-def anonymize_fragment(messages: list[dict]) -> str:
+def _name_pattern(names: Iterable[str]) -> re.Pattern | None:
+    """Имена участников внутри текста сообщений: в любом падеже и регистре."""
+    alternatives = set()
+    for name in names:
+        for token in _NAME_TOKEN_RE.findall(str(name)):
+            token = token.casefold()
+            if len(token) == 3:
+                alternatives.add(re.escape(token))
+            else:
+                stem = token[:-1] if len(token) >= 5 else token
+                alternatives.add(re.escape(stem) + r"\w{0,3}")
+    if not alternatives:
+        return None
+    ordered = sorted(alternatives, key=len, reverse=True)
+    return re.compile(rf"(?<!\w)(?:{'|'.join(ordered)})(?!\w)", re.IGNORECASE)
+
+
+def anonymize_fragment(messages: list[dict], *, known_names: Iterable[str] = ()) -> str:
     aliases: dict[str, str] = {}
     lines: list[str] = []
+    names_in_text = _name_pattern([*known_names, *(str(m.get("name") or "") for m in messages)])
     for message in messages:
         raw_name = str(message.get("name") or "участник")
         if raw_name not in aliases:
             aliases[raw_name] = f"Участник {len(aliases) + 1}"
         text = _sanitize_chat_text(str(message.get("text") or ""))
+        if names_in_text is not None:
+            text = names_in_text.sub(HIDDEN_NAME, text)
         if text:
             lines.append(f"{aliases[raw_name]}: {text}")
     return "\n".join(lines)
@@ -200,6 +222,7 @@ def pick_chat_episode(
             for message in messages[-500:]
             if (dt := _normalize_dt(message.get("dt"))) is not None and cutoff <= dt <= current
         ]
+        known_names = {str(message.get("name") or "") for message in messages[-500:]}
         for episode in _split_episodes(recent):
             if not _qualifies(episode):
                 continue
@@ -207,7 +230,7 @@ def pick_chat_episode(
             key = _episode_key(chat_id, trimmed)
             if key in used_keys:
                 continue
-            fragment = anonymize_fragment(trimmed)
+            fragment = anonymize_fragment(trimmed, known_names=known_names)
             if not fragment:
                 continue
             participants = len({str(message.get("name") or "участник") for message in trimmed})

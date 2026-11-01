@@ -86,6 +86,7 @@ def _pick_unanswered_image_post(source_posts: list[dict], published_posts: list[
         if post.get("url")
         and post.get("image_url")
         and str(post.get("url")) not in used_urls
+        and not base._is_own_repost(post)
     ]
     if not candidates:
         return None

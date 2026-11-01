@@ -176,7 +176,7 @@ async def scan_for_mentions() -> int:
             url = str(post.get("url") or "")
             if message_id <= last_seen or not url:
                 continue
-            if url in handled_urls or url in pending_urls:
+            if url in handled_urls or url in pending_urls or base._is_own_repost(post):
                 continue
             if not _mentions_upupa(str(post.get("text") or "")):
                 continue
@@ -289,8 +289,10 @@ def _build_prompt(
     *,
     image_description: str | None = None,
     retry_note: str = "",
+    source_history: str = "",
 ) -> str:
     source_material = base._external_source_material(mention, image_description)
+    history_block = f"{source_history}\n\n" if source_history else ""
     retry = (
         f"\n\nПредыдущая попытка не прошла проверку: {retry_note}. Ответь иначе, но всё ещё на этот пост."
         if retry_note
@@ -301,6 +303,7 @@ def _build_prompt(
         "ТВОЁ ТЕКУЩЕЕ ВНУТРЕННЕЕ СОСТОЯНИЕ:\n"
         f"{mood_prompt(mood)}\n"
         "Не называй состояние напрямую.\n\n"
+        f"{history_block}"
         f"{MENTION_REPLY_PROMPT.format(source_description=source['description'], source_material=source_material)}"
         f"{retry}"
     )
@@ -328,6 +331,7 @@ async def prepare_reply(
     recent_posts = published_posts[-base.RECENT_POSTS_LIMIT:]
     retry_note = ""
     allow_batya_reference = bool(source.get("allow_batya_reference"))
+    source_history = base._source_history_block(str(source["channel"]), published_posts)
 
     for attempt in range(1, base.MAX_GENERATION_ATTEMPTS + 1):
         raw = await _generate_with_active_model(
@@ -337,6 +341,7 @@ async def prepare_reply(
                 mood,
                 image_description=image_description,
                 retry_note=retry_note,
+                source_history=source_history,
             ),
             str(base.SPECIAL_CHAT_ID),
         )

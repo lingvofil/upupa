@@ -32,17 +32,17 @@ def test_production_slots_can_land_at_night():
     assert slots[0].astimezone(MOSCOW_TZ).hour == 0
 
 
-def test_round_the_clock_mode_raises_daily_activity_without_flattening_moods():
+def test_daily_activity_stays_low_without_flattening_moods():
     from features.channel.mood import MOODS
     from features.channel.scheduler import NOMINAL_POSTS_PER_DAY
 
-    assert NOMINAL_POSTS_PER_DAY == 10
-    assert MOODS["neutral"]["daily_posts"] == (8, 11)
-    assert MOODS["irritated"]["daily_posts"] == (10, 13)
-    assert MOODS["sleepy"]["daily_posts"] == (5, 7)
-    assert MOODS["thoughtful"]["daily_posts"] == (7, 10)
-    assert MOODS["chaotic"]["daily_posts"] == (11, 15)
-    assert MOODS["social"]["daily_posts"] == (11, 14)
+    assert NOMINAL_POSTS_PER_DAY == 4
+    assert MOODS["neutral"]["daily_posts"] == (3, 5)
+    assert MOODS["irritated"]["daily_posts"] == (4, 5)
+    assert MOODS["sleepy"]["daily_posts"] == (3, 4)
+    assert MOODS["thoughtful"]["daily_posts"] == (3, 4)
+    assert MOODS["chaotic"]["daily_posts"] == (5, 6)
+    assert MOODS["social"]["daily_posts"] == (4, 6)
 
 
 def test_daypart_prompt_changes_with_moscow_time_without_forcing_time_mentions():
