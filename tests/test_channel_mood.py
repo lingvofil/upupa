@@ -3,7 +3,7 @@ import random
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
 
-def test_mood_catalog_has_inertia_and_activity_centered_near_ten_posts():
+def test_mood_catalog_has_inertia_and_activity_centered_near_four_posts():
     from features.channel.mood import MOODS
 
     assert set(MOODS) == {"neutral", "irritated", "sleepy", "thoughtful", "chaotic", "social"}
@@ -14,7 +14,9 @@ def test_mood_catalog_has_inertia_and_activity_centered_near_ten_posts():
         config["weight"] * sum(config["daily_posts"]) / 2
         for config in MOODS.values()
     ) / 100
-    assert 9.5 <= expected_daily <= 10.5
+    assert 3.8 <= expected_daily <= 4.5
+    assert min(config["daily_posts"][0] for config in MOODS.values()) == 3
+    assert max(config["daily_posts"][1] for config in MOODS.values()) == 6
 
 
 def test_mood_state_persists_and_transitions_after_its_post_budget(tmp_path, monkeypatch):
@@ -50,7 +52,7 @@ def test_moods_change_content_length_and_top_level_probabilities():
     content_names = [mode["name"] for mode in POST_CONTENT_MODES]
     thoughtful_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, thoughtful)))
     assert thoughtful_weights["philosophy"] > 10
-    assert thoughtful_weights["mischief"] > thoughtful_weights["philosophy"]
+    assert thoughtful_weights["philosophy"] > thoughtful_weights["mischief"]
     assert thoughtful_weights["chat"] > thoughtful_weights["philosophy"]
 
     sleepy_weights = dict(zip(content_names, content_weights(POST_CONTENT_MODES, sleepy)))
@@ -60,7 +62,7 @@ def test_moods_change_content_length_and_top_level_probabilities():
     length_names = [mode["name"] for mode in POST_LENGTH_MODES]
     thoughtful_lengths = dict(zip(length_names, length_weights(POST_LENGTH_MODES, thoughtful)))
     assert thoughtful_lengths["short"] > thoughtful_lengths["medium"]
-    assert thoughtful_lengths["medium"] == 16
+    assert thoughtful_lengths["medium"] == 24
 
     assert image_probability(chaotic) == 0.25
     assert external_probability(neutral) == 0.15
@@ -100,7 +102,7 @@ def test_sleepy_mood_keeps_lazy_tone_without_defaulting_to_gloom():
     assert "сохраняя действие" in prompt
 
 
-def test_production_scheduler_targets_about_ten_but_mood_can_raise_or_lower_it():
+def test_production_scheduler_targets_about_four_but_mood_can_raise_or_lower_it():
     from features.channel.scheduler import MOSCOW_TZ, NOMINAL_POSTS_PER_DAY, _new_schedule
     from datetime import datetime
 
@@ -108,9 +110,9 @@ def test_production_scheduler_targets_about_ten_but_mood_can_raise_or_lower_it()
     sleepy = _new_schedule(now, mood={"name": "sleepy", "posts_left": 3}, rng=random.Random(1))
     chaotic = _new_schedule(now, mood={"name": "chaotic", "posts_left": 3}, rng=random.Random(1))
 
-    assert NOMINAL_POSTS_PER_DAY == 10
-    assert 5 <= sleepy["target_posts"] <= 7
-    assert 11 <= chaotic["target_posts"] <= 15
+    assert NOMINAL_POSTS_PER_DAY == 4
+    assert 3 <= sleepy["target_posts"] <= 4
+    assert 5 <= chaotic["target_posts"] <= 6
     assert len(sleepy["slots"]) == sleepy["target_posts"]
     assert len(chaotic["slots"]) == chaotic["target_posts"]
 

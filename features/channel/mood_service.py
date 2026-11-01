@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 
-from features.channel import chat_context, dreams, polls, screams, verses, voice_posts
+from features.channel import chat_context, dreams, polls, reposts, screams, verses, voice_posts
 from features.channel import service as base
 from features.channel.mood import (
     consume_mood_post,
@@ -20,6 +21,7 @@ from features.channel.mood import (
 from prompts.channel import (
     CHANNEL_IMAGE_POST_PROMPT,
     CHANNEL_PERSONA,
+    CHARACTER_THREADS,
     EXTERNAL_COMMENT_PROMPT,
     POST_CONTENT_MODES,
     POST_LENGTH_MODES,
@@ -32,7 +34,8 @@ _GROUNDED_CHAT_INSTRUCTION = (
     "конкретную деталь, тему, настроение или повторяющийся паттерн из него и отреагируй коротко от себя. "
     "Связь с перепиской должна угадываться читателем даже после обезличивания. Не пересказывай весь диалог, "
     "не цитируй дословно длинные куски и не называй участников. Нельзя игнорировать фрагмент и писать "
-    "независимый случайный импульс: этот пост существует именно из-за увиденной переписки."
+    "независимый случайный импульс: этот пост существует именно из-за увиденной переписки. Имён и прозвищ "
+    "людей не используй, даже если они есть в тексте; [имя] означает скрытое имя."
 )
 
 
@@ -66,9 +69,37 @@ def _grounded_chat_mode() -> dict:
     return {**mode, "instruction": _GROUNDED_CHAT_INSTRUCTION}
 
 
-def _choose_length_mode(mood: dict, *, rng=random) -> dict:
-    modes = list(POST_LENGTH_MODES)
+def _choose_length_mode(mood: dict, *, allow_micro: bool = True, rng=random) -> dict:
+    modes = [mode for mode in POST_LENGTH_MODES if allow_micro or mode["name"] != "micro"]
     return rng.choices(modes, weights=length_weights(modes, mood), k=1)[0]
+
+
+def _pick_character_thread(published_posts: list[dict], *, rng=random) -> dict | None:
+    """Постоянная тема персонажа, которой не было в последних постах; иначе она стала бы тиком."""
+    available = []
+    for thread in CHARACTER_THREADS:
+        recent = published_posts[-int(thread["cooldown_posts"]):]
+        if any(post.get("character_thread") == thread["name"] for post in recent):
+            continue
+        if any(re.search(thread["pattern"], str(post.get("text") or ""), re.IGNORECASE) for post in recent):
+            continue
+        available.append(thread)
+    if not available:
+        return None
+    return rng.choices(available, weights=[thread["weight"] for thread in available], k=1)[0]
+
+
+def _character_mode(published_posts: list[dict], mood: dict, *, rng=random) -> dict:
+    thread = _pick_character_thread(published_posts, rng=rng)
+    if thread is not None:
+        base_mode = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "character")
+        return {**base_mode, "instruction": thread["instruction"], "character_thread": thread["name"]}
+    modes = [
+        mode
+        for mode in POST_CONTENT_MODES
+        if not mode.get("use_chat_context") and mode["name"] != "character"
+    ]
+    return rng.choices(modes, weights=content_weights(modes, mood), k=1)[0]
 
 
 def _should_try_image_post(published_posts: list[dict], mood: dict, *, rng=random) -> bool:
@@ -131,8 +162,10 @@ def _build_external_prompt(
     retry_note: str = "",
     *,
     image_description: str | None = None,
+    source_history: str = "",
 ) -> str:
     source_material = _external_source_material(source_post, image_description)
+    history_block = f"{source_history}\n\n" if source_history else ""
     retry_block = (
         f"\n\nПредыдущая попытка не прошла техническую проверку: {retry_note}. Дай другой комментарий."
         if retry_note
@@ -141,6 +174,7 @@ def _build_external_prompt(
     return (
         f"{CHANNEL_PERSONA}\n\n"
         f"{_mood_block(mood)}\n\n"
+        f"{history_block}"
         f"{EXTERNAL_COMMENT_PROMPT.format(source_description=source['description'], source_text=source_material)}"
         f"{retry_block}"
     )
@@ -190,6 +224,7 @@ async def _try_generate_external_comment(
 
     retry_note = ""
     allow_batya_reference = bool(selected_source.get("allow_batya_reference"))
+    source_history = base._source_history_block(str(selected_source["channel"]), published_posts)
     for attempt in range(1, base.MAX_GENERATION_ATTEMPTS + 1):
         prompt = _build_external_prompt(
             selected_source,
@@ -197,6 +232,7 @@ async def _try_generate_external_comment(
             mood,
             retry_note,
             image_description=image_description,
+            source_history=source_history,
         )
         raw_comment = await _generate_with_active_model(prompt, str(base.SPECIAL_CHAT_ID))
         comment = (raw_comment or "").strip()
@@ -287,7 +323,11 @@ async def generate_channel_post(
     published_posts = await asyncio.to_thread(base.load_posts)
     recent_posts = published_posts[-base.RECENT_POSTS_LIMIT:]
 
-    if forced_chat_episode is None and random.random() < external_probability(
+    repost_event = None
+    if forced_chat_episode is None:
+        repost_event = await asyncio.to_thread(reposts.pick_reaction_event, published_posts)
+
+    if forced_chat_episode is None and repost_event is None and random.random() < external_probability(
         mood,
         default=base.EXTERNAL_COMMENT_PROBABILITY,
     ):
@@ -302,6 +342,13 @@ async def generate_channel_post(
     chat_episode = forced_chat_episode
     if chat_episode is not None:
         content_mode = _grounded_chat_mode()
+    elif repost_event is not None:
+        content_mode = {
+            "name": reposts.REACTION_MODE_NAME,
+            "instruction": reposts.reaction_instruction(repost_event),
+            "use_chat_context": False,
+            "include_capabilities": False,
+        }
     else:
         content_mode = _choose_content_mode(mood)
         if content_mode.get("use_chat_context"):
@@ -310,10 +357,17 @@ async def generate_channel_post(
                 content_mode = _choose_non_chat_content_mode(mood)
             else:
                 content_mode = _grounded_chat_mode()
+        if content_mode["name"] == "character":
+            content_mode = _character_mode(published_posts, mood)
 
     chat_fragment = str(chat_episode.get("fragment") or "") if chat_episode else None
-    length_mode = _choose_length_mode(mood)
-    allow_batya_mention = base._should_allow_batya_mention(published_posts)
+    # Постоянной теме и реакции на репост двух-трёх слов не хватает: читатель не поймёт, о чём речь.
+    length_mode = _choose_length_mode(
+        mood,
+        allow_micro=not (content_mode.get("character_thread") or repost_event),
+    )
+    batya_reposted = bool(repost_event) and repost_event.get("channel") == base.BATYA_CHANNEL
+    allow_batya_mention = batya_reposted or base._should_allow_batya_mention(published_posts)
     retry_note = ""
 
     for attempt in range(1, base.MAX_GENERATION_ATTEMPTS + 1):
@@ -344,6 +398,10 @@ async def generate_channel_post(
                 "batya_mention_allowed": allow_batya_mention,
                 **_mood_metadata(mood),
             }
+            if content_mode.get("character_thread"):
+                metadata["character_thread"] = content_mode["character_thread"]
+            if repost_event:
+                metadata["repost_reaction_url"] = repost_event.get("url")
             if chat_episode:
                 metadata.update(
                     {

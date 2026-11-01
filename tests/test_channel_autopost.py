@@ -126,11 +126,11 @@ def test_repeated_long_opening_and_near_duplicate_are_blocked():
 
 
 
-def test_channel_length_distribution_is_40_50_10():
+def test_channel_length_distribution_is_30_55_15():
     from prompts.channel import POST_LENGTH_MODES
 
     weights = {mode["name"]: mode["weight"] for mode in POST_LENGTH_MODES}
-    assert weights == {"micro": 40, "short": 50, "medium": 10}
+    assert weights == {"micro": 30, "short": 55, "medium": 15}
     micro = next(mode for mode in POST_LENGTH_MODES if mode["name"] == "micro")
     assert micro["min_words"] == 2
     assert micro["max_words"] == 3
@@ -172,12 +172,13 @@ def test_content_distribution_includes_varied_non_domestic_modes():
     assert sum(weights.values()) == 100
     assert weights["absurd"] == 10
     assert weights["philosophy"] == 11
-    assert weights["domestic"] == 8
-    assert weights["mischief"] == 16
+    assert weights["domestic"] == 5
+    assert weights["mischief"] == 8
     assert weights["chat"] == 25
     assert weights["functionality"] == 10
-    assert weights["outside"] == 8
-    assert weights["wordplay"] == 7
+    assert weights["outside"] == 6
+    assert weights["wordplay"] == 5
+    assert weights["character"] == 15
     assert weights["imperfect"] == 5
 
 
@@ -210,13 +211,13 @@ def test_philosophy_mode_is_ironic_sarcastic_and_can_swear():
     assert philosophy["use_chat_context"] is False
 
 
-def test_functionality_mode_knows_upupa_is_new_to_running_a_channel():
+def test_functionality_mode_treats_the_channel_as_upupas_territory():
     from prompts.channel import POST_CONTENT_MODES
 
     functionality = next(mode for mode in POST_CONTENT_MODES if mode["name"] == "functionality")
     instruction = functionality["instruction"].casefold()
 
-    assert "впервые ведёшь" in instruction
+    assert "не изображай новичка" in instruction
     assert "канал" in instruction
     assert "выругаться" in instruction
 
@@ -247,7 +248,7 @@ def test_capabilities_and_batya_are_injected_only_in_selected_modes():
 
     assert "батя" in prompt.casefold()
     assert "фактчекать" in prompt.casefold()
-    assert "впервые ведёшь" in prompt.casefold()
+    assert "не изображай новичка" in prompt.casefold()
 
 
 def test_batya_mention_is_hard_blocked_outside_rare_mode():

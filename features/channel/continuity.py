@@ -43,7 +43,11 @@ async def _world_context() -> str | None:
         from features.world.news import build_world_fact_feed
         from features.world.service import get_world_service
 
-        facts = await build_world_fact_feed(get_world_service(), days=7, event_limit=8)
+        service = get_world_service()
+        facts = await build_world_fact_feed(service, days=7, event_limit=8)
+        for state in await service.list_all_states():
+            # За названием государства стоит реальный чат, поэтому в публичный канал идёт только номер.
+            facts = facts.replace(f" — {state.title}", "").replace(state.title, f"№{state.world_id}")
         return facts or None
     except Exception:
         return None

@@ -19,6 +19,16 @@ REQUEST_TIMEOUT_SECONDS = 12
 MAX_PUBLIC_IMAGE_BYTES = 8 * 1024 * 1024
 USER_AGENT = "Mozilla/5.0 (compatible; UpupaBot/1.0; +https://t.me/upupa_channel)"
 _IMAGE_URL_RE = re.compile(r"url\((?P<quote>['\"]?)(?P<url>.*?)(?P=quote)\)", re.IGNORECASE)
+_FORWARD_HREF_RE = re.compile(r"t\.me/(?P<channel>[A-Za-z0-9_]+)/(?P<message_id>\d+)")
+
+
+def _extract_forward_source(node) -> tuple[str, int] | None:
+    """Канал и номер исходного поста, если это репост из публичного канала."""
+    link = node.select_one("a.tgme_widget_message_forwarded_from_name")
+    match = _FORWARD_HREF_RE.search(str(link.get("href") or "")) if link else None
+    if not match:
+        return None
+    return match.group("channel"), int(match.group("message_id"))
 
 
 def _extract_photo_url(node) -> str | None:
@@ -61,6 +71,12 @@ def _parse_public_feed(html: str, *, channel: str = BATYA_CHANNEL) -> list[dict]
         }
         if image_url:
             post["image_url"] = image_url
+        forward_source = _extract_forward_source(node)
+        if forward_source:
+            post["forwarded_from_channel"], post["forwarded_from_message_id"] = forward_source
+        time_node = node.select_one(".tgme_widget_message_date time")
+        if time_node and time_node.get("datetime"):
+            post["posted_at"] = str(time_node.get("datetime"))
         posts.append(post)
 
     posts.sort(key=lambda item: item["message_id"])

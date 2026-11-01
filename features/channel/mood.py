@@ -17,8 +17,8 @@ MOODS = {
     "neutral": {
         "weight": 30,
         "duration_posts": (3, 7),
-        "daily_posts": (8, 11),
-        "burst_probability": 0.10,
+        "daily_posts": (3, 5),
+        "burst_probability": 0.05,
         "image_probability": 0.15,
         "external_probability": 0.15,
         "prompt": (
@@ -32,13 +32,13 @@ MOODS = {
     "irritated": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (10, 13),
-        "burst_probability": 0.18,
+        "daily_posts": (4, 5),
+        "burst_probability": 0.10,
         "image_probability": 0.10,
         "external_probability": 0.24,
         "prompt": (
             "Тебя сегодня слегка всё раздражает. Ты быстрее замечаешь нелепость происходящего, суше реагируешь, "
-            "язвишь, передразниваешь формулировки и раздаёшь абсурдные вердикты. Резкая формулировка допустима, "
+            "язвишь, передразниваешь формулировки и докапываешься до мелочей. Резкая формулировка допустима, "
             "но не вставляй её механически и не объявляй, что ты злой или раздражённый. Раздражение должно толкать "
             "к подколке или действию, а не к мрачной рефлексии."
         ),
@@ -47,8 +47,9 @@ MOODS = {
             "functionality": 1.0,
             "domestic": 0.7,
             "absurd": 0.8,
-            "mischief": 1.5,
+            "mischief": 1.2,
             "chat": 1.2,
+            "character": 1.3,
             "imperfect": 1.1,
         },
         "length_multipliers": {"micro": 0.8, "short": 1.3, "medium": 1.2},
@@ -56,8 +57,8 @@ MOODS = {
     "sleepy": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (5, 7),
-        "burst_probability": 0.04,
+        "daily_posts": (3, 4),
+        "burst_probability": 0.02,
         "image_probability": 0.05,
         "external_probability": 0.08,
         "prompt": (
@@ -68,7 +69,7 @@ MOODS = {
         ),
         "content_multipliers": {
             "domestic": 1.2,
-            "mischief": 1.6,
+            "mischief": 1.2,
             "absurd": 1.1,
             "philosophy": 0.5,
             "chat": 0.5,
@@ -80,20 +81,20 @@ MOODS = {
     "thoughtful": {
         "weight": 15,
         "duration_posts": (3, 7),
-        "daily_posts": (7, 10),
-        "burst_probability": 0.08,
+        "daily_posts": (3, 4),
+        "burst_probability": 0.05,
         "image_probability": 0.08,
         "external_probability": 0.20,
         "prompt": (
             "Ты сегодня задумчивый, но задумчивость не лицензия на тоску. Случайные вещи чаще вызывают у тебя "
-            "связные наблюдения, однако мысль должна быстро получить ехидный поворот: подколку, нелепый вердикт, "
+            "связные наблюдения, однако мысль должна быстро получить ехидный поворот: подколку, нелепый вывод, "
             "самоуверенное решение или действие. Будь ироничным, иногда передразнивай формулировки и самого себя, "
             "не превращай состояние в жалость к себе, мудрость, лекцию, пафос или разговор о внутренней пустоте."
         ),
         "content_multipliers": {
             "philosophy": 1.2,
             "chat": 1.5,
-            "mischief": 1.4,
+            "character": 1.2,
             "domestic": 0.8,
             "absurd": 0.7,
             "functionality": 0.8,
@@ -104,8 +105,8 @@ MOODS = {
     "chaotic": {
         "weight": 10,
         "duration_posts": (2, 4),
-        "daily_posts": (11, 15),
-        "burst_probability": 0.38,
+        "daily_posts": (5, 6),
+        "burst_probability": 0.25,
         "image_probability": 0.25,
         "external_probability": 0.15,
         "prompt": (
@@ -115,7 +116,7 @@ MOODS = {
         ),
         "content_multipliers": {
             "absurd": 3.0,
-            "mischief": 2.0,
+            "mischief": 1.5,
             "imperfect": 2.0,
             "domestic": 0.8,
             "philosophy": 0.5,
@@ -127,19 +128,19 @@ MOODS = {
     "social": {
         "weight": 15,
         "duration_posts": (2, 5),
-        "daily_posts": (11, 14),
-        "burst_probability": 0.30,
+        "daily_posts": (4, 6),
+        "burst_probability": 0.15,
         "image_probability": 0.12,
         "external_probability": 0.30,
         "prompt": (
             "Тебе сегодня интереснее смотреть наружу, чем копаться в себе: чаты, чужие посты, странное поведение "
             "людей и происходящее вокруг цепляют сильнее. Реагируй охотнее и озорнее: поддевай конкретную нелепость, "
-            "передразнивай формулировки, иногда придумывай каламбур или абсурдный вердикт, но не становись ведущим "
+            "передразнивай формулировки, иногда придумывай каламбур, но не становись ведущим "
             "ток-шоу и не пересказывай увиденное."
         ),
         "content_multipliers": {
             "chat": 2.5,
-            "mischief": 1.3,
+            "character": 1.3,
             "domestic": 0.6,
             "absurd": 0.7,
             "philosophy": 0.7,
@@ -149,6 +150,12 @@ MOODS = {
         "length_multipliers": {"micro": 0.8, "short": 1.3, "medium": 1.2},
     },
 }
+
+WEEKDAYS_RU = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+MONTHS_RU = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
 
 DAYPART_PROMPTS = {
     "night": (
@@ -225,13 +232,15 @@ def mood_config(mood: dict | None) -> dict:
     return MOODS.get(name, MOODS[DEFAULT_MOOD])
 
 
-def _daypart_name(now: datetime | None = None) -> str:
+def _moscow_now(now: datetime | None = None) -> datetime:
     current = now or datetime.now(MOSCOW_TZ)
     if current.tzinfo is None:
-        current = MOSCOW_TZ.localize(current)
-    else:
-        current = current.astimezone(MOSCOW_TZ)
-    hour = current.hour
+        return MOSCOW_TZ.localize(current)
+    return current.astimezone(MOSCOW_TZ)
+
+
+def _daypart_name(now: datetime | None = None) -> str:
+    hour = _moscow_now(now).hour
     if hour < 6:
         return "night"
     if hour < 11:
@@ -245,10 +254,18 @@ def daypart_prompt(now: datetime | None = None) -> str:
     return DAYPART_PROMPTS[_daypart_name(now)]
 
 
+def clock_prompt(now: datetime | None = None) -> str:
+    current = _moscow_now(now)
+    return (
+        f"Сейчас {WEEKDAYS_RU[current.weekday()]}, {current.day} {MONTHS_RU[current.month - 1]}, "
+        f"{current:%H:%M} по Москве. Если упоминаешь день недели, дату или время, они должны совпадать с этим."
+    )
+
+
 def mood_prompt(mood: dict | None, *, now: datetime | None = None) -> str:
     if not mood:
         return ""
-    return f"{mood_config(mood)['prompt']}\n{daypart_prompt(now)}"
+    return f"{mood_config(mood)['prompt']}\n{daypart_prompt(now)}\n{clock_prompt(now)}"
 
 
 def adjusted_weights(items: Iterable[dict], mood: dict | None, multiplier_key: str) -> list[float]:
