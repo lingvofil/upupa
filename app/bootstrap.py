@@ -16,6 +16,7 @@ from app.diagnostics import build_runtime_diagnostics, resource_snapshot_loop
 from app.flood_control import RetryAfterMiddleware
 from app.lifecycle import TaskSupervisor
 from app.readiness import PollingHealth, ReadinessServer
+from app.systemd_watchdog import systemd_watchdog_loop, watchdog_interval_seconds
 from core.loader import configure_aiogram_components
 from core.logging_setup import logger
 from core.settings import (
@@ -230,6 +231,12 @@ class UpupaApplication:
             crocodile_socket_server_loop,
             name="crocodile-socket-server",
         )
+        watchdog_interval = watchdog_interval_seconds()
+        if watchdog_interval is not None:
+            self.supervisor.start_resilient(
+                lambda: systemd_watchdog_loop(watchdog_interval),
+                name="systemd-watchdog",
+            )
         self._background_tasks_started = True
 
     def configure_dispatcher(self) -> None:
