@@ -1,11 +1,21 @@
+import asyncio
 import random
 import logging
+import re
 from urllib.parse import urlparse
 from aiogram import types
 from aiogram.types import BufferedInputFile
+from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
+from infrastructure.chromium_guard import chromium_slot
 from infrastructure.media_io import download_url_bytes
+
+_MEDIA_REQUEST_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+}
+_TELEGRAM_FEED_MAX_BYTES = 5 * 1024 * 1024
+_BACKGROUND_IMAGE_RE = re.compile(r"background-image:\s*url\(\s*['\"]?([^'\")]+)")
 
 # =============================================================================
 # НОВАЯ ФУНКЦИЯ-ОРКЕСТРАТОР
@@ -78,6 +88,65 @@ def _media_source_urls(url):
     return [url]
 
 
+def _telegram_post_text(post):
+    text_node = post.select_one(".tgme_widget_message_text")
+    if text_node is None:
+        return None
+    for line_break in text_node.find_all("br"):
+        line_break.replace_with("\n")
+    return text_node.get_text().strip() or None
+
+
+def _telegram_media_from_html(html):
+    """Достать медиа из HTML ленты t.me/s: те же посты, что видит браузер."""
+    media_by_url = {}
+
+    def add_media(media_type, media_url, post_text):
+        if (
+            media_url
+            and media_url.startswith("http")
+            and "placeholder" not in media_url
+        ):
+            media_by_url.setdefault(
+                media_url,
+                {"type": media_type, "url": media_url, "post_text": post_text},
+            )
+
+    soup = BeautifulSoup(html, "html.parser")
+    for post in soup.select(".tgme_widget_message"):
+        post_text = _telegram_post_text(post)
+        for video in post.select("video[src]"):
+            add_media("video", video["src"], post_text)
+        for photo in post.select(
+            ".tgme_widget_message_photo_wrap, .tgme_widget_message_service_photo"
+        ):
+            match = _BACKGROUND_IMAGE_RE.search(photo.get("style", ""))
+            if match:
+                add_media("image", match.group(1), post_text)
+    return list(media_by_url.values())
+
+
+async def _telegram_media_without_browser(telegram_url):
+    """Лента t.me/s статична: ради неё не стоит запускать Chromium на 400 МБ."""
+    try:
+        html = await download_url_bytes(
+            telegram_url,
+            headers=_MEDIA_REQUEST_HEADERS,
+            max_bytes=_TELEGRAM_FEED_MAX_BYTES,
+        )
+        return await asyncio.to_thread(
+            _telegram_media_from_html,
+            html.decode("utf-8", errors="replace"),
+        )
+    except Exception as error:
+        logging.warning(
+            "Не удалось разобрать ленту %s без браузера: %s",
+            telegram_url,
+            error,
+        )
+        return []
+
+
 async def _process_random_media(message: types.Message, channel_info: dict) -> bool:
     """
     Обрабатывает запрос на отправку случайного медиафайла.
@@ -133,12 +202,23 @@ async def _process_random_media(message: types.Message, channel_info: dict) -> b
 # Вспомогательные функции переименованы с подчеркиванием для ясности
 async def _download_random_media(url, include_post_title=False):
     """Скачать случайное медиа: сначала из Telegram, затем fallback через TGStat."""
+    telegram_url = _telegram_preview_url(url)
+    if telegram_url:
+        media_items = await _telegram_media_without_browser(telegram_url)
+        if media_items:
+            logging.info(
+                "Найдено медиа без браузера: source=%s count=%d",
+                telegram_url,
+                len(media_items),
+            )
+            return random.choice(media_items)
+
     source_urls = _media_source_urls(url)
 
     last_error = None
 
     try:
-        async with async_playwright() as p:
+        async with chromium_slot(), async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -403,11 +483,8 @@ async def _download_random_media(url, include_post_title=False):
 
 async def _send_media_file(message, media_url, media_type, caption=None):
     """Скачивает и отправляет медиа без блокировки event loop и temp-файлов."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-    }
     try:
-        media_data = await download_url_bytes(media_url, headers=headers)
+        media_data = await download_url_bytes(media_url, headers=_MEDIA_REQUEST_HEADERS)
         file_extension = 'mp4' if media_type == 'video' else 'jpg'
         media = BufferedInputFile(
             media_data,

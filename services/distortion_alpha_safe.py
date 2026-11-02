@@ -238,20 +238,11 @@ async def apply_rgba_video_sticker_distortion(
             return False
 
         base_percent = max(5, min(intensity, 90))
-        loop = asyncio.get_running_loop()
-        tasks = []
+        frame_jobs = []
         for index, frame_path in enumerate(frames):
             wobble = 12 * math.sin(index / 5.0)
-            frame_percent = int(base_percent + wobble)
-            tasks.append(
-                loop.run_in_executor(
-                    distortion._frame_distortion_pool,
-                    _distort_rgba_frame_task,
-                    frame_path,
-                    frame_percent,
-                )
-            )
-        await asyncio.gather(*tasks)
+            frame_jobs.append((frame_path, int(base_percent + wobble)))
+        await distortion.run_frame_distortion(_distort_rgba_frame_task, frame_jobs)
 
         return await stickers._encode_video_sticker_attempts(
             ["-framerate", str(stickers.VIDEO_STICKER_WORK_FPS), "-i", frames_pattern],

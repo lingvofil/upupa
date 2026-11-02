@@ -7,6 +7,7 @@ from playwright.async_api import async_playwright
 
 from AI.leveltravel_parsing import SEARCH_TYPE_HOTEL, SEARCH_TYPE_TOUR
 from AI.leveltravel_search_plan import build_search_url
+from infrastructure.chromium_guard import chromium_slot
 
 
 async def quick_price_scan(
@@ -19,7 +20,7 @@ async def quick_price_scan(
 ) -> Optional[int]:
     """Quickly scan the first LevelTravel result and return its price."""
     try:
-        async with async_playwright() as p:
+        async with chromium_slot(), async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -105,7 +106,7 @@ async def deep_parse_date(
     tours = []
 
     try:
-        async with async_playwright() as p:
+        async with chromium_slot(), async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

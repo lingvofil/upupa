@@ -76,6 +76,25 @@ def test_background_task_set_is_explicit_idempotent_and_resilient():
     assert supervisor.plain_names == []
 
 
+def test_systemd_watchdog_task_runs_only_when_systemd_requests_it(monkeypatch):
+    import app.bootstrap as bootstrap
+
+    def started_tasks():
+        supervisor = RecordingSupervisor()
+        UpupaApplication(
+            bot=object(),
+            dispatcher=object(),
+            supervisor=supervisor,
+        ).start_background_tasks()
+        return supervisor.resilient_names
+
+    monkeypatch.setattr(bootstrap, "watchdog_interval_seconds", lambda: None)
+    assert "systemd-watchdog" not in started_tasks()
+
+    monkeypatch.setattr(bootstrap, "watchdog_interval_seconds", lambda: 90.0)
+    assert "systemd-watchdog" in started_tasks()
+
+
 def test_background_tasks_reload_crocodile_scores_after_session_restore(monkeypatch):
     from AI import dnd
     from games import crocodile

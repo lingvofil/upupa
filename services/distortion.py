@@ -44,12 +44,27 @@ FFMPEG_TIMEOUT_SECONDS = 120.0
 FFMPEG_VIDEO_DISTORTION_TIMEOUT_SECONDS = 180.0
 LOTTIE_CONVERT_TIMEOUT_SECONDS = 120.0
 
-# Пул процессов для покадрового seam carving (CPU-bound, поэтому процессы, а не потоки)
-_frame_distortion_pool = concurrent.futures.ProcessPoolExecutor(
-    max_workers=max(1, (os.cpu_count() or 2) - 1)
-)
+# Покадровый seam carving (CPU-bound, поэтому процессы, а не потоки)
+FRAME_DISTORTION_WORKERS = max(1, (os.cpu_count() or 2) - 1)
+_frame_distortion_semaphore = asyncio.Semaphore(1)
 
 # --- Вспомогательные функции ---
+
+async def run_frame_distortion(task, frame_jobs) -> None:
+    """Прогнать кадры через пул процессов, который живёт только на время одного видео.
+
+    Воркер — форк всего бота: оставшись ждать следующих кадров, он держал сотни МБ
+    в лимите памяти сервиса. Видео идут по очереди, как и с одним общим воркером."""
+    async with _frame_distortion_semaphore:
+        loop = asyncio.get_running_loop()
+        pool = concurrent.futures.ProcessPoolExecutor(max_workers=FRAME_DISTORTION_WORKERS)
+        try:
+            await asyncio.gather(*(
+                loop.run_in_executor(pool, task, frame_path, frame_percent)
+                for frame_path, frame_percent in frame_jobs
+            ))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
 def map_intensity(intensity: int, out_min: float, out_max: float) -> float:
     return out_min + (intensity / 100.0) * (out_max - out_min)
@@ -223,7 +238,7 @@ async def apply_seam_carving_distortion(input_path: str, output_path: str, inten
 
 def _distort_frame_task(frame_path: str, distort_percent: int) -> None:
     """Блокирующая CPU-задача: сжимает кадр seam carving'ом и растягивает обратно
-    до исходного размера. Выполняется в отдельном процессе (см. _frame_distortion_pool)."""
+    до исходного размера. Выполняется в отдельном процессе (см. run_frame_distortion)."""
     with Image.open(frame_path) as img:
         original_size = img.size
         src = np.array(img.convert("RGB"))
@@ -310,16 +325,14 @@ async def apply_seam_carving_video_distortion(input_path: str, output_path: str,
             return False
 
         base_percent = max(5, min(intensity, 90))
-        loop = asyncio.get_running_loop()
-        tasks = []
+        frame_jobs = []
         for i, frame_path in enumerate(frame_files):
             # Лёгкое синусоидальное "дыхание" интенсивности кадр от кадра —
             # без этого при одинаковом % сжатия на каждом кадре в динамике
             # почти не видно разницы между соседними кадрами.
             wobble = 12 * math.sin(i / 5.0)
-            frame_percent = int(base_percent + wobble)
-            tasks.append(loop.run_in_executor(_frame_distortion_pool, _distort_frame_task, frame_path, frame_percent))
-        await asyncio.gather(*tasks)
+            frame_jobs.append((frame_path, int(base_percent + wobble)))
+        await run_frame_distortion(_distort_frame_task, frame_jobs)
 
         has_audio = await _has_audio_stream(input_path)
         if has_audio:

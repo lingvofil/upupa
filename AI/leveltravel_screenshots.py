@@ -7,6 +7,7 @@ from typing import List
 from playwright.async_api import async_playwright
 
 from AI.leveltravel_parsing import SEARCH_TYPE_TOUR
+from infrastructure.chromium_guard import chromium_slot
 
 
 def _screenshot_paths(hotel_name: str) -> tuple[Path, Path]:
@@ -28,7 +29,7 @@ async def capture_hotel_screenshots(
     """Создает ДВА скриншота: календарь и варианты номеров."""
     paths = []
     try:
-        async with async_playwright() as p:
+        async with chromium_slot(), async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
