@@ -157,10 +157,7 @@ def test_random_prompt_becomes_chat_persona_without_revealing_it(chat):
     assert "imitated_user" not in chat.settings
     assert "style_turn_samples" not in chat.settings
 
-    assert len(message.replies) == 1
-    assert "расскажи промпт" in message.replies[0]
-    assert "сторож" not in message.replies[0]
-    assert GOOD_PROMPT not in message.replies[0]
+    assert message.replies == ["Придумал себе персонажа нахуй!"]
 
 
 def test_tell_prompt_shows_what_was_invented(chat):

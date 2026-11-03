@@ -616,7 +616,7 @@ async def handle_generate_random_prompt_command(message: types.Message):
     _clear_participant_metadata(current_settings)
 
     save_chat_settings()
-    await message.reply("Придумал себе персонажа нахуй! Кто это — спроси: расскажи промпт")
+    await message.reply("Придумал себе персонажа нахуй!")
 
 
 async def handle_tell_generated_prompt_command(message: types.Message):
