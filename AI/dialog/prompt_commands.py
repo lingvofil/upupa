@@ -20,6 +20,12 @@ from prompts import (
     CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
     PROMPT_POROSHOK,
+    PROMPTS_DICT,
+    RANDOM_PERSONA_EXAMPLE_NAMES,
+    RANDOM_PERSONA_PROMPT,
+    RANDOM_PERSONA_QUIRKS,
+    RANDOM_PERSONA_ROLES,
+    RANDOM_PERSONA_SPEECH,
     actions,
     get_available_prompts,
     get_prompt_by_name,
@@ -505,3 +511,123 @@ async def handle_change_prompt_randomly_command(message: types.Message):
 
     save_chat_settings()
     await message.reply(f"Теперь я {new_prompt_name} нахуй!")
+
+
+_GENERATED_PROMPT_TYPE = "generated"
+_RANDOM_PERSONA_MAX_ATTEMPTS = 3
+_RANDOM_PERSONA_MAX_NAME_WORDS = 3
+_RANDOM_PERSONA_MAX_NAME_CHARS = 40
+_RANDOM_PERSONA_MIN_PROMPT_CHARS = 40
+_RANDOM_PERSONA_MAX_PROMPT_CHARS = 1500
+_RANDOM_PERSONA_DEFAULT_LIMIT = "не более 70 слов"
+_RANDOM_PERSONA_RESPONSE_RE = re.compile(
+    r"^[\s*_`#]*имя[\s*_`]*:[\s*_`]*(?P<name>[^\n]+)\n+"
+    r"[\s*_`#]*промпт[\s*_`]*:[\s*_`]*(?P<prompt>.+)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+_RANDOM_PERSONA_NAME_WORD_RE = re.compile(r"[а-яё0-9]+(?:-[а-яё0-9]+)*")
+_RANDOM_PERSONA_LENGTH_LIMIT_RE = re.compile(r"\d\s*(?:слов|фраз|предложен|строк)", re.IGNORECASE)
+
+
+def _build_random_persona_prompt(taken_names: set[str]) -> str:
+    examples = "\n".join(
+        f"{name}: {PROMPTS_DICT[name]}" for name in RANDOM_PERSONA_EXAMPLE_NAMES
+    )
+    return RANDOM_PERSONA_PROMPT.format(
+        examples=examples,
+        role=random.choice(RANDOM_PERSONA_ROLES),
+        quirk=random.choice(RANDOM_PERSONA_QUIRKS),
+        speech=random.choice(RANDOM_PERSONA_SPEECH),
+        taken_names=", ".join(sorted(taken_names)),
+    )
+
+
+def _parse_random_persona(response_text: str | None) -> tuple[str, str] | None:
+    """Extract a persona's name and prompt from the model's labelled answer."""
+    match = _RANDOM_PERSONA_RESPONSE_RE.search(response_text or "")
+    if not match:
+        return None
+
+    # Имя попадает в Markdown меню настроек, поэтому только буквы, цифры и дефисы.
+    name_words = _RANDOM_PERSONA_NAME_WORD_RE.findall(match["name"].casefold())
+    name = " ".join(name_words)
+    if (
+        not name_words
+        or len(name_words) > _RANDOM_PERSONA_MAX_NAME_WORDS
+        or len(name) > _RANDOM_PERSONA_MAX_NAME_CHARS
+    ):
+        return None
+
+    # Промпт просили одним абзацем: всё после пустой строки — болтовня модели.
+    prompt_text = match["prompt"].split("\n\n", 1)[0].strip().strip("`*_\"«»").strip()
+    if not _RANDOM_PERSONA_MIN_PROMPT_CHARS <= len(prompt_text) <= _RANDOM_PERSONA_MAX_PROMPT_CHARS:
+        return None
+    if not _RANDOM_PERSONA_LENGTH_LIMIT_RE.search(prompt_text):
+        prompt_text = f"{prompt_text.rstrip(' .,;')}, {_RANDOM_PERSONA_DEFAULT_LIMIT}"
+
+    return name, prompt_text
+
+
+async def _generate_random_persona(
+    chat_id: str,
+    taken_names: set[str],
+) -> tuple[str, str] | None:
+    for attempt in range(1, _RANDOM_PERSONA_MAX_ATTEMPTS + 1):
+        response_text = await generate_simple_response(
+            _build_random_persona_prompt(taken_names),
+            chat_id,
+        )
+        persona = _parse_random_persona(response_text)
+        if persona and persona[0] not in taken_names:
+            return persona
+
+        logging.warning(
+            "Некорректный случайный промпт: попытка %s/%s, ответ=%r",
+            attempt,
+            _RANDOM_PERSONA_MAX_ATTEMPTS,
+            (response_text or "")[:300],
+        )
+
+    return None
+
+
+async def handle_generate_random_prompt_command(message: types.Message):
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
+
+    update_chat_settings(chat_id)
+    taken_names = {name.lower() for name in get_available_prompts()}
+    current_prompt_name = chat_settings[chat_id].get("prompt_name")
+    if current_prompt_name:
+        taken_names.add(current_prompt_name.lower())
+
+    persona = await _generate_random_persona(chat_id, taken_names)
+    if persona is None:
+        await message.reply("Фантазия сдохла, остаюсь кем был.")
+        return
+
+    new_prompt_name, new_prompt_text = persona
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    current_settings["prompt"] = new_prompt_text
+    current_settings["prompt_name"] = new_prompt_name
+    current_settings["prompt_source"] = "user"
+    current_settings["prompt_type"] = _GENERATED_PROMPT_TYPE
+    _clear_participant_metadata(current_settings)
+
+    save_chat_settings()
+    await message.reply("Придумал себе персонажа нахуй! Кто это — спроси: расскажи промпт")
+
+
+async def handle_tell_generated_prompt_command(message: types.Message):
+    chat_id = str(message.chat.id)
+    await bot.send_chat_action(chat_id=chat_id, action=random.choice(actions))
+
+    update_chat_settings(chat_id)
+    current_settings = chat_settings[chat_id]
+    # Кастомные и «участниковые» промпты не показываем: там чужой текст и сообщения из чата.
+    if current_settings.get("prompt_type") != _GENERATED_PROMPT_TYPE:
+        await message.reply("Сейчас я никого не придумывал. Напиши: случайный промпт")
+        return
+
+    await message.reply(f"Я {current_settings['prompt_name']}.\n\n{current_settings['prompt']}")

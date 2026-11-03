@@ -285,6 +285,7 @@ async def handle_settings_callback(query: types.CallbackQuery):
             settings = chat_settings[chat_id]
             settings["prompt"] = prompt_text
             settings["prompt_name"] = prompt_name
+            settings["prompt_type"] = "standard"
             save_chat_settings()
             await query.answer(f"Промпт изменен на: {prompt_name.capitalize()}")
             text, markup = await get_main_settings_markup(chat_id)
