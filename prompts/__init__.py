@@ -24,6 +24,8 @@ from prompts.ai_prompts import (
 )
 from prompts.personas import (
     PROMPTS_DICT, PROMPTS_TEXT,
+    RANDOM_PERSONA_EXAMPLE_NAMES, RANDOM_PERSONA_PROMPT, RANDOM_PERSONA_QUIRKS,
+    RANDOM_PERSONA_ROLES, RANDOM_PERSONA_SPEECH,
     get_prompt_by_name, get_available_prompts, get_prompts_list_text,
 )
 from prompts.chat_data import RANKS, STOPWORDS, CHANNEL_SETTINGS, queries, actions
@@ -48,6 +50,11 @@ __all__ = [
     "DIALOG_TRIGGER_KEYWORDS",
     "PROMPTS_DICT",
     "PROMPTS_TEXT",
+    "RANDOM_PERSONA_EXAMPLE_NAMES",
+    "RANDOM_PERSONA_PROMPT",
+    "RANDOM_PERSONA_QUIRKS",
+    "RANDOM_PERSONA_ROLES",
+    "RANDOM_PERSONA_SPEECH",
     "get_prompt_by_name",
     "get_available_prompts",
     "get_prompts_list_text",

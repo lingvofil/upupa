@@ -16,6 +16,8 @@ from AI.dialog.prompt_commands import (
     handle_set_prompt_command,
     handle_set_participant_prompt_command,
     handle_change_prompt_randomly_command,
+    handle_generate_random_prompt_command,
+    handle_tell_generated_prompt_command,
     handle_poem_command,
 )
 from AI.dialog.serious_mode import handle_serious_mode_command
@@ -67,6 +69,17 @@ async def set_prompt_command(message: types.Message):
 @router.message(F.text.lower() == "поменяй промпт")
 async def change_prompt_randomly_command(message: types.Message):
     await handle_change_prompt_randomly_command(message)
+
+
+@router.message(F.text.lower() == "случайный промпт")
+async def generate_random_prompt_command(message: types.Message):
+    with ai_feature_context("случайный промпт"):
+        await handle_generate_random_prompt_command(message)
+
+
+@router.message(F.text.lower() == "расскажи промпт")
+async def tell_generated_prompt_command(message: types.Message):
+    await handle_tell_generated_prompt_command(message)
 
 
 @router.message(lambda message: message.text and message.text.lower().startswith(("пирожок", "порошок")))
