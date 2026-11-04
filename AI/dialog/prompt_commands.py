@@ -527,6 +527,11 @@ _RANDOM_PERSONA_RESPONSE_RE = re.compile(
 )
 _RANDOM_PERSONA_NAME_WORD_RE = re.compile(r"[а-яё0-9]+(?:-[а-яё0-9]+)*")
 _RANDOM_PERSONA_LENGTH_LIMIT_RE = re.compile(r"\d\s*(?:слов|фраз|предложен|строк)", re.IGNORECASE)
+# Готовые реплики из промпта модель потом повторяет в каждом сообщении.
+_RANDOM_PERSONA_CATCHPHRASE_RE = re.compile(
+    r"[«»\"'„“”]|например|присказк|коронн|фирменн|любим\w*\s+(?:фраз|слов|выражен)",
+    re.IGNORECASE,
+)
 
 
 def _build_random_persona_prompt(taken_names: set[str]) -> str:
@@ -561,6 +566,8 @@ def _parse_random_persona(response_text: str | None) -> tuple[str, str] | None:
     # Промпт просили одним абзацем: всё после пустой строки — болтовня модели.
     prompt_text = match["prompt"].split("\n\n", 1)[0].strip().strip("`*_\"«»").strip()
     if not _RANDOM_PERSONA_MIN_PROMPT_CHARS <= len(prompt_text) <= _RANDOM_PERSONA_MAX_PROMPT_CHARS:
+        return None
+    if _RANDOM_PERSONA_CATCHPHRASE_RE.search(prompt_text):
         return None
     if not _RANDOM_PERSONA_LENGTH_LIMIT_RE.search(prompt_text):
         prompt_text = f"{prompt_text.rstrip(' .,;')}, {_RANDOM_PERSONA_DEFAULT_LIMIT}"

@@ -107,6 +107,36 @@ def test_parse_rejects_unusable_answers(response):
     assert prompt_commands._parse_random_persona(response) is None
 
 
+@pytest.mark.parametrize(
+    "persona_text",
+    [
+        "ты ночной сторож, ворчишь и всё время приговариваешь «ё-моё», не более 70 слов",
+        'ты ночной сторож, ворчишь и всё время приговариваешь "ё-моё", не более 70 слов',
+        "ты ночной сторож, ворчишь и приговариваешь 'ё-моё', не более 70 слов",
+        "ты ночной сторож, используешь словечки, например ё-моё и едрить, не более 70 слов",
+        "ты ночной сторож, ворчишь, твоя присказка про проходную, не более 70 слов",
+        "ты ночной сторож, ворчишь, у тебя есть коронная фраза про смену, не более 70 слов",
+        "ты ночной сторож, ворчишь, у тебя есть фирменная шутка про вахту, не более 70 слов",
+        "ты ночной сторож, ворчишь, вставляешь любимые фразы про завод, не более 70 слов",
+    ],
+)
+def test_parse_rejects_prompts_with_ready_made_phrases(persona_text):
+    assert prompt_commands._parse_random_persona(
+        f"ИМЯ: сторож\nПРОМПТ: {persona_text}"
+    ) is None
+
+
+def test_parse_accepts_manner_of_speech_described_in_general_words():
+    persona_text = (
+        "ты ночной сторож, говоришь короткими рублеными фразами и поговорками "
+        "собственного сочинения, используешь устаревшие словечки, не более 70 слов"
+    )
+
+    assert prompt_commands._parse_random_persona(
+        f"ИМЯ: сторож\nПРОМПТ: {persona_text}"
+    ) == ("сторож", persona_text)
+
+
 def test_parse_keeps_name_safe_for_settings_markdown():
     name, _ = prompt_commands._parse_random_persona(
         f"ИМЯ: `сантехник_мистик*`\nПРОМПТ: {GOOD_PROMPT}"
@@ -139,6 +169,14 @@ def test_generation_prompt_has_examples_seed_and_taken_names(monkeypatch):
     assert prompt_commands.RANDOM_PERSONA_QUIRKS[0] in prompt
     assert prompt_commands.RANDOM_PERSONA_SPEECH[0] in prompt
     assert "бабка, сторож" in prompt
+
+
+def test_generation_prompt_forbids_ready_made_phrases():
+    prompt = prompt_commands._build_random_persona_prompt({"бабка"})
+
+    assert "никаких готовых реплик" in prompt
+    assert "какие словечки" not in prompt
+    assert "«не более" not in prompt
 
 
 def test_random_prompt_becomes_chat_persona_without_revealing_it(chat):
@@ -183,6 +221,18 @@ def test_generation_retries_bad_answers_and_rerolls_seed(chat):
 
     assert chat.settings["prompt_name"] == "сторож"
     assert len(chat.prompts) == 3
+
+
+def test_generation_retries_answer_with_ready_made_phrases(chat):
+    _generate(
+        chat,
+        "ИМЯ: вахтёр\nПРОМПТ: ты вахтёр, ворчишь и всё время приговариваешь «куда прёшь», не более 70 слов",
+        GOOD_RESPONSE,
+    )
+
+    assert chat.settings["prompt_name"] == "сторож"
+    assert chat.settings["prompt"] == GOOD_PROMPT
+    assert len(chat.prompts) == 2
 
 
 def test_generation_rejects_taken_names(chat):
