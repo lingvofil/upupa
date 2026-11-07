@@ -6,8 +6,9 @@
 
 Главное решение — конкретность:
 
-- общие слова (Барнум, «радуга») безопасны, но поднимают доверие только до
-  ``VAGUE_TRUST_CAP`` и денег почти не приносят;
+- гороскоп и «радуга» (эффект Барнума) безопасны, но поднимают доверие
+  только до ``VAGUE_TRUST_CAP`` и денег почти не приносят. Гороскоп на партию
+  один: каждый клиент получает тот же прогноз, какой бы знак ни назвал;
 - зацепки добываются «дробью» и наводящими вопросами, но скептик это видит;
 - конкретное предсказание тратит свежую зацепку: попадание даёт чаевые,
   репутацию и сарафан, промах бьёт по доверию и репутации;
@@ -30,11 +31,17 @@ from games.guru.content import (
     CLIENT_KINDS,
     CLOSED_TITLE,
     EXPOSED_TITLE,
+    HOROSCOPE_AGAIN,
+    HOROSCOPE_ASK,
+    HOROSCOPE_READ,
+    HOROSCOPES,
     KINDS_BY_KEY,
     MOB_LINE,
     MONEY_TITLES,
     PLAYER_LINES,
     REACTIONS,
+    SIGN_ANSWERS,
+    ZODIAC_SIGNS,
     ClientKind,
     Decoy,
     Fact,
@@ -47,10 +54,10 @@ CLIENTS_PER_SALON = len(CLIENT_KINDS)
 START_REPUTATION = 50
 IDLE_TIMEOUT_S = 180
 
-TECHNIQUES = ("barnum", "rainbow", "shotgun", "leading", "specific")
+TECHNIQUES = ("horoscope", "rainbow", "shotgun", "leading", "specific")
 CLOSERS = ("bill", "ritual")
 MOVES = TECHNIQUES + CLOSERS
-VAGUE_MOVES = ("barnum", "rainbow")
+VAGUE_MOVES = ("horoscope", "rainbow")
 
 VAGUE_TRUST_CAP = 70
 EXPOSURE_AT = 100
@@ -59,7 +66,7 @@ SKEPTIC_START_SUSPICION = 20
 MAX_BUZZ_BONUS = 10
 
 # Подозрение скептика за приём.
-SUSPICION = {"barnum": 20, "rainbow": 8, "shotgun": 25, "leading": 35, "miss": 45}
+SUSPICION = {"horoscope": 20, "rainbow": 8, "shotgun": 25, "leading": 35, "miss": 45}
 
 
 @dataclass
@@ -72,10 +79,12 @@ class Client:
     trust: int
     suspicion: int
     patience: int
+    sign: str = ""
     revealed: list[int] = field(default_factory=list)
     used: set[int] = field(default_factory=set)
     turn: int = 0
     vague_uses: int = 0
+    horoscopes: int = 0
     tips: int = 0
     paid: int = 0
     hits: int = 0
@@ -103,6 +112,7 @@ class Salon:
     started_at: float
     last_activity: float
     client: Client
+    horoscope: str = ""
     client_no: int = 0
     money: int = 0
     reputation: int = START_REPUTATION
@@ -210,6 +220,7 @@ def new_client(kind: ClientKind, rng: random.Random, *, reputation: int, buzz: i
         trust=_starting_trust(kind, reputation, buzz),
         suspicion=SKEPTIC_START_SUSPICION if kind.skeptic else 0,
         patience=kind.patience,
+        sign=rng.choice(ZODIAC_SIGNS),
         # Первую зацепку игрок видит сам: холодное чтение начинается с наблюдения.
         revealed=[0],
     )
@@ -238,6 +249,7 @@ def new_salon(
         started_at=now,
         last_activity=now,
         client=first,
+        horoscope=rng.choice(HOROSCOPES),
     )
 
 
@@ -267,6 +279,18 @@ def _say(client: Client, text: str) -> None:
 
 def _narrate(client: Client, text: str) -> None:
     client.lines.append(text)
+
+
+def _read_horoscope(salon: Salon, client: Client, rng: random.Random) -> None:
+    """Спросить знак (только в первый раз) и зачитать прогноз партии."""
+    if client.horoscopes == 0:
+        _say(client, HOROSCOPE_ASK)
+        answers = SIGN_ANSWERS.get(client.kind.key) or SIGN_ANSWERS["*"]
+        _narrate(client, rng.choice(answers).format(name=client.name, sign=client.sign))
+        _say(client, HOROSCOPE_READ.format(sign=client.sign, text=salon.horoscope))
+    else:
+        _say(client, HOROSCOPE_AGAIN.format(sign=client.sign, text=salon.horoscope))
+    client.horoscopes += 1
 
 
 # --- ходы -------------------------------------------------------------------
@@ -299,9 +323,9 @@ def _change_buzz(salon: Salon, amount: int) -> None:
 def _vague(salon: Salon, client: Client, move: str, rng: random.Random) -> tuple[int, bool]:
     kind = client.kind
     if kind.hates_vague:
-        delta = _raise_trust(client, -8 if move == "barnum" else -5)
+        delta = _raise_trust(client, -8 if move == "horoscope" else -5)
     else:
-        base = 12 if move == "barnum" else 5
+        base = 12 if move == "horoscope" else 5
         gain = round(base * kind.gullibility * 0.5 ** client.vague_uses)
         delta = _raise_trust(client, gain, cap=VAGUE_TRUST_CAP)
     client.vague_uses += 1
@@ -313,6 +337,8 @@ def _vague(salon: Salon, client: Client, move: str, rng: random.Random) -> tuple
     if clue is not None:
         _narrate(client, _reaction(rng, "clue", client))
         _narrate(client, f"🧩 Зацепка: {clue.clue}")
+    elif move == "horoscope" and client.horoscopes > 1:
+        _narrate(client, _reaction(rng, "horo_again", client))
     else:
         _narrate(client, _reaction(rng, "warm" if delta > 0 else "cold", client))
     return delta, clue is not None
@@ -464,7 +490,9 @@ def apply_move(salon: Salon, move: str, rng: random.Random, *, now: float) -> Mo
     trust_delta = 0
 
     if move in TECHNIQUES:
-        if move != "specific":
+        if move == "horoscope":
+            _read_horoscope(salon, client, rng)
+        elif move != "specific":
             _say(client, rng.choice(PLAYER_LINES[move]))
         if move in VAGUE_MOVES:
             trust_delta, clue = _vague(salon, client, move, rng)

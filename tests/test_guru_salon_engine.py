@@ -95,7 +95,7 @@ def test_skeptic_starts_suspicious_and_reputation_shifts_starting_trust():
 
 # --- общие слова ------------------------------------------------------------
 
-def test_barnum_raises_trust_with_diminishing_returns_up_to_cap():
+def test_horoscope_raises_trust_with_diminishing_returns_up_to_cap():
     rng = ScriptedRandom()
     salon = make_salon("desperate", rng)
     salon.client.trust = 30
@@ -104,14 +104,51 @@ def test_barnum_raises_trust_with_diminishing_returns_up_to_cap():
     gains = []
     for _ in range(4):
         before = salon.client.trust
-        apply_move(salon, "barnum", rng, now=1)
+        apply_move(salon, "horoscope", rng, now=1)
         gains.append(salon.client.trust - before)
 
     assert gains[0] > gains[1] > gains[2] >= gains[3] >= 0
     salon.client.vague_uses = 0
     salon.client.trust = VAGUE_TRUST_CAP - 1
-    apply_move(salon, "barnum", rng, now=2)
+    apply_move(salon, "horoscope", rng, now=2)
     assert salon.client.trust == VAGUE_TRUST_CAP, "общими словами выше потолка не поднять"
+
+
+def test_horoscope_asks_sign_once_and_reads_the_party_forecast():
+    rng = ScriptedRandom()
+    salon = make_salon("desperate", rng)
+    client = salon.client
+    client.patience = 10
+
+    apply_move(salon, "horoscope", rng, now=1)
+    first = list(client.lines)
+    apply_move(salon, "horoscope", rng, now=2)
+    second = client.lines[len(first):]
+
+    assert content.HOROSCOPE_ASK in first[0]
+    assert client.sign in first[1]
+    assert salon.horoscope.rstrip(".") in first[2]
+    assert not any(content.HOROSCOPE_ASK in line for line in second), "знак второй раз не спрашивают"
+    assert salon.horoscope.rstrip(".") in second[0]
+    assert content.REACTIONS["horo_again"]["desperate"][0].format(name=client.name) in second[1]
+
+
+def test_every_client_gets_the_same_horoscope_whatever_the_sign():
+    rng = random.Random(8)
+    salon = new_salon(session_id="s", chat_id=CHAT, player_id=1, player_name="Зоя", rng=rng, now=0)
+    forecast = salon.horoscope.rstrip(".")
+    seen = []
+
+    while not salon.finished:
+        client = salon.client
+        apply_move(salon, "horoscope", rng, now=1)
+        seen.append((client.sign, any(forecast in line for line in client.lines)))
+        if not client.done:
+            apply_move(salon, "bill", rng, now=1)
+
+    assert len(seen) == CLIENTS_PER_SALON
+    assert all(has_forecast for _, has_forecast in seen)
+    assert all(sign in content.ZODIAC_SIGNS for sign, _ in seen)
 
 
 def test_businessman_hates_vague_talk():
@@ -119,7 +156,7 @@ def test_businessman_hates_vague_talk():
     salon = make_salon("businessman", rng)
     before = salon.client.trust
 
-    result = apply_move(salon, "barnum", rng, now=1)
+    result = apply_move(salon, "horoscope", rng, now=1)
 
     assert salon.client.trust == before - 8
     assert result.hit is None and not result.clue
@@ -168,7 +205,7 @@ def test_skeptic_exposes_salon_when_suspicion_overflows():
     rng = ScriptedRandom([MISS])  # дробь не попала
     salon = make_salon("skeptic", rng)
 
-    results = play(salon, ["barnum", "leading", "shotgun"], rng)
+    results = play(salon, ["horoscope", "leading", "shotgun"], rng)
 
     assert [r.client_result for r in results] == [None, None, "exposed"]
     exposed = results[-1]
@@ -305,7 +342,7 @@ def test_patience_runs_out_and_client_pays_anyway():
     salon = make_salon("jealous", rng)  # терпение 3
     salon.client.trust = 60
 
-    results = play(salon, ["barnum", "barnum", "barnum"], rng)
+    results = play(salon, ["horoscope", "horoscope", "horoscope"], rng)
 
     assert [r.client_result for r in results] == [None, None, "walked_out"]
     assert results[-1].money_delta > 0
@@ -451,7 +488,7 @@ def test_move_resets_idle_clock():
     rng = ScriptedRandom()
     salon = make_salon("desperate", rng, now=0.0)
 
-    apply_move(salon, "barnum", rng, now=170.0)
+    apply_move(salon, "horoscope", rng, now=170.0)
 
     assert not is_idle(salon, now=300.0)
     assert is_idle(salon, now=350.0)
@@ -485,14 +522,14 @@ def test_keyboard_has_every_move_once_and_short_callbacks():
 def test_callback_round_trip_and_staleness():
     rng = ScriptedRandom()
     salon = make_salon("desperate", rng)
-    data = render.move_callback(salon, "barnum")
+    data = render.move_callback(salon, "horoscope")
     parsed = render.parse_callback(data)
 
-    assert parsed == render.SalonCallback("move", "abc123", 0, 0, "barnum")
+    assert parsed == render.SalonCallback("move", "abc123", 0, 0, "horoscope")
     assert render.is_current(salon, parsed)
-    apply_move(salon, "barnum", rng, now=1)
+    apply_move(salon, "horoscope", rng, now=1)
     assert not render.is_current(salon, parsed), "второе нажатие той же кнопки не играет"
-    other = render.SalonCallback("move", "ffffff", 0, 1, "barnum")
+    other = render.SalonCallback("move", "ffffff", 0, 1, "horoscope")
     assert not render.is_current(salon, other)
 
 
@@ -570,9 +607,11 @@ def test_content_is_complete():
 
 
 def test_templates_only_use_known_placeholders():
-    allowed = {"name", "amount", "price"}
+    allowed = {"name", "amount", "price", "sign", "text"}
     lines = [line for pool in content.REACTIONS.values() for variants in pool.values() for line in variants]
     lines += [line for variants in content.PLAYER_LINES.values() for line in variants]
+    lines += [line for variants in content.SIGN_ANSWERS.values() for line in variants]
+    lines += [content.HOROSCOPE_ASK, content.HOROSCOPE_READ, content.HOROSCOPE_AGAIN, *content.HOROSCOPES]
     for line in lines:
         fields = {name for _, name, _, _ in string.Formatter().parse(line) if name}
         assert fields <= allowed, line
@@ -583,7 +622,7 @@ def test_templates_only_use_known_placeholders():
 def _vague_policy(salon, client):
     if client.patience <= 1 or client.trust >= VAGUE_TRUST_CAP:
         return "bill"
-    return "barnum" if client.vague_uses % 2 == 0 else "rainbow"
+    return "horoscope" if client.vague_uses % 2 == 0 else "rainbow"
 
 
 def _reckless_policy(salon, client):

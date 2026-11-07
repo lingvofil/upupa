@@ -207,14 +207,14 @@ def test_full_party_logs_actions_and_finish(bot, events, clock):
     moves = 0
     while current() is not None:
         clock.now += 7
-        press(bot, "bill" if moves % 2 else "barnum")
+        press(bot, "bill" if moves % 2 else "horoscope")
         moves += 1
 
     records = events()
     assert names(records) == ["start"] + ["action"] * moves + ["finish"]
     assert {record["session"] for record in records} == {session}
     action = records[1]["data"]
-    assert action["move"] == "barnum" and action["client_no"] == 0 and action["turn"] == 0
+    assert action["move"] == "horoscope" and action["client_no"] == 0 and action["turn"] == 0
     assert {"client", "hit", "clue", "trust", "money_delta", "result"} <= action.keys()
     finish = records[-1]["data"]
     assert finish["clients"] == 5 and finish["reason"] == "completed"
@@ -230,7 +230,7 @@ def test_move_edits_client_message_in_place(bot, events):
     start(bot)
     message_id = current().message_id
 
-    press(bot, "barnum")
+    press(bot, "horoscope")
 
     edit = bot.edits[-1]
     assert edit.message_id == message_id and edit.chat_id == CHAT
@@ -252,7 +252,7 @@ def test_spectator_cannot_play_but_is_counted(bot, events):
 def test_double_click_plays_once(bot, events):
     start(bot)
     salon = current()
-    data = render.move_callback(salon, "barnum")
+    data = render.move_callback(salon, "horoscope")
 
     first = callback(bot, data, message_id=salon.message_id)
     second = callback(bot, data, message_id=salon.message_id)
@@ -290,7 +290,7 @@ def test_replay_button_starts_new_party_for_whoever_presses(bot, events):
 
 def test_idle_salon_is_abandoned_by_sweep(bot, events, clock):
     start(bot)
-    press(bot, "barnum")
+    press(bot, "horoscope")
     salon = current()
 
     clock.now += engine.IDLE_TIMEOUT_S - 1

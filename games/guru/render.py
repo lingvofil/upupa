@@ -27,7 +27,7 @@ CALLBACK_PREFIX = "guru:"
 AGAIN_CALLBACK = "guru:again"
 
 MOVE_LABELS: dict[str, str] = {
-    "barnum": "🌫 Общие слова",
+    "horoscope": "♈ Гороскоп",
     "rainbow": "🌈 И так, и эдак",
     "shotgun": "🎯 Пальнуть дробью",
     "leading": "❓ Наводящий вопрос",
@@ -36,7 +36,7 @@ MOVE_LABELS: dict[str, str] = {
     "ritual": "🕯 Впарить ритуал",
 }
 KEYBOARD_LAYOUT: tuple[tuple[str, ...], ...] = (
-    ("barnum", "rainbow"),
+    ("horoscope", "rainbow"),
     ("shotgun", "leading"),
     ("specific",),
     ("bill", "ritual"),
@@ -113,7 +113,7 @@ def render_rules(salon: Salon) -> str:
         (
             f"🔮 Мадам {salon.player_name} открывает салон. Сегодня {salon.clients_total} клиентов.",
             "",
-            f"🌫 Общие слова — безопасно, доверие растёт, но только до {VAGUE_TRUST_CAP}",
+            f"♈ Гороскоп — безопасно, доверие растёт, но только до {VAGUE_TRUST_CAP}",
             "🌈 И так, и эдак — немного доверия и шанс на зацепку",
             "🎯 Дробью, ❓ наводящий вопрос — добывают зацепки. Скептик всё записывает",
             "🔮 Конкретно — тратит зацепку. Попала: чаевые, репутация, сарафан. Мимо: позор",
