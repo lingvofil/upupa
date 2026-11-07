@@ -1,4 +1,4 @@
-"""Хэндлеры: Каналы, поиск, шерлок, котогиф, имена, дисторшн, рассылки, погода.
+"""Хэндлеры: Каналы, гороскоп, поиск, шерлок, котогиф, имена, дисторшн, рассылки, погода.
 
 Вырезано из main.py (этап 3). Порядок регистрации сохранён —
 см. handlers/__init__.py: порядок ROUTERS = порядок в старом main.py.
@@ -6,7 +6,7 @@
 from aiogram import Router
 
 import random
-from aiogram import types
+from aiogram import F, types
 from aiogram.types import Message
 from core.settings import BLOCKED_USERS
 from core.upupa_utils import normalize_upupa_command
@@ -23,6 +23,12 @@ from services.sherlock import is_sherlock_command, process_sherlock_command
 from services.weather import (
     handle_current_weather_command,
     handle_weekly_forecast_command as handle_weekly_forecast_service,
+)
+from services.horoscope import (
+    HOROSCOPE_CALLBACK_PREFIX,
+    handle_horoscope_callback,
+    handle_horoscope_message,
+    is_horoscope_command,
 )
 from services.nameinfo import process_name_info
 import services.distortion as distortion
@@ -48,6 +54,14 @@ router = Router(name="media_search")
 @router.message(lambda message: message.text and message.text.lower() in CHANNEL_SETTINGS.keys())
 async def send_random_media(message: types.Message):
     await process_channel_command(message, CHANNEL_SETTINGS)
+
+@router.message(lambda message: message.text and is_horoscope_command(message.text) and message.from_user.id not in BLOCKED_USERS)
+async def handle_horoscope_command(message: types.Message):
+    await handle_horoscope_message(message)
+
+@router.callback_query(F.data.startswith(HOROSCOPE_CALLBACK_PREFIX))
+async def horoscope_callback_handler(query: types.CallbackQuery):
+    await handle_horoscope_callback(query)
 
 @router.message(lambda message: message.text and message.text.lower().startswith("найди") and message.from_user.id not in BLOCKED_USERS)
 async def handle_image_search(message: Message):
