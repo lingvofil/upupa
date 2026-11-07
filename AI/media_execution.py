@@ -33,8 +33,6 @@ HF_IMAGE_TIMEOUT_SECONDS = 80
 CLOUDFLARE_IMAGE_TIMEOUT_SECONDS = 80
 GRADIO_IMG2IMG_JOB_TIMEOUT_SECONDS = 180
 GRADIO_IMG2IMG_REQUEST_TIMEOUT_SECONDS = 200
-HF_VIDEO_INNER_TIMEOUT_SECONDS = 220
-HF_VIDEO_REQUEST_TIMEOUT_SECONDS = 230
 KANDINSKY_VIDEO_INNER_TIMEOUT_SECONDS = 260
 KANDINSKY_VIDEO_REQUEST_TIMEOUT_SECONDS = 270
 POLLINATIONS_VIDEO_INNER_TIMEOUT_SECONDS = 430
@@ -241,12 +239,6 @@ def install_into_videogeneration(videogeneration_module) -> None:
             request_timeout_seconds=KANDINSKY_VIDEO_REQUEST_TIMEOUT_SECONDS,
             inner_timeout_seconds=KANDINSKY_VIDEO_INNER_TIMEOUT_SECONDS,
         )
-    videogeneration_module.generate_hf_zerogpu_video = _wrap_async_provider(
-        videogeneration_module.generate_hf_zerogpu_video,
-        "huggingface.zerogpu.video",
-        request_timeout_seconds=HF_VIDEO_REQUEST_TIMEOUT_SECONDS,
-        inner_timeout_seconds=HF_VIDEO_INNER_TIMEOUT_SECONDS,
-    )
     videogeneration_module.generate_video = _wrap_async_provider(
         videogeneration_module.generate_video,
         "pollinations.video.generate",

@@ -123,26 +123,24 @@ class _Status:
         self.deleted = True
 
 
-def _message(text, photo=True, reply_photo=None):
+def _message(text, photo=True, reply_photo=None, chat_id=vg.SPECIAL_CHAT_ID):
     sent = []
 
     class Message:
         caption = None
         reply_to_message = None
 
-        class Chat:
-            id = 777
-
-        chat = Chat()
-
         def __init__(self):
+            self.chat = type("Chat", (), {"id": chat_id})()
             self.text = text
             self.photo = [object()] if photo else None
             self.status = _Status()
+            self.replies = []
             if reply_photo is not None:
                 self.reply_to_message = type("R", (), {"photo": reply_photo})()
 
-        async def reply(self, _text):
+        async def reply(self, text):
+            self.replies.append(text)
             return self.status
 
         async def reply_video(self, video):
@@ -165,7 +163,6 @@ def test_animate_tries_kandinsky_first(monkeypatch):
     monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: True)
     monkeypatch.setattr(vg, "download_telegram_image", fake_download)
     monkeypatch.setattr(vg, "generate_kandinsky_video", fake_kandinsky)
-    monkeypatch.setattr(vg, "generate_hf_zerogpu_video", forbidden)
     monkeypatch.setattr(vg, "upload_media", forbidden)
 
     message, sent = _message("оживи")
@@ -173,6 +170,91 @@ def test_animate_tries_kandinsky_first(monkeypatch):
 
     assert len(sent) == 1
     assert message.status.deleted is True
+
+
+def test_animate_falls_back_to_pollinations_after_kandinsky(monkeypatch):
+    calls = {}
+
+    async def fake_download(bot, photo):
+        return b"telegram-image"
+
+    async def fake_kandinsky(image, prompt):
+        return None, "quota"
+
+    async def fake_upload(image):
+        calls["uploaded"] = image
+        return "https://example.test/frame.jpg"
+
+    async def fake_pollinations(prompt, start_frame_url=None, duration=vg.VIDEO_DURATION_SECONDS):
+        calls["start"] = start_frame_url
+        return b"p-video", "alibaba/wan-2.2-fast"
+
+    monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: True)
+    monkeypatch.setattr(vg, "download_telegram_image", fake_download)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", fake_kandinsky)
+    monkeypatch.setattr(vg, "upload_media", fake_upload)
+    monkeypatch.setattr(vg, "generate_video", fake_pollinations)
+
+    message, sent = _message("оживи")
+    asyncio.run(vg.process_animate_photo(message, bot=object()))
+
+    assert calls == {"uploaded": b"telegram-image", "start": "https://example.test/frame.jpg"}
+    assert len(sent) == 1
+    assert message.status.deleted is True
+    assert any("резерв" in t.lower() for t in message.status.edits)
+
+
+def test_animate_blames_kandinsky_quota_when_pollinations_is_empty(monkeypatch):
+    async def fake_download(bot, photo):
+        return b"telegram-image"
+
+    async def fake_kandinsky(image, prompt):
+        return None, "quota"
+
+    async def fake_upload(image):
+        return "https://example.test/frame.jpg"
+
+    async def no_pollen(prompt, start_frame_url=None, duration=vg.VIDEO_DURATION_SECONDS):
+        return None, "no_pollen"
+
+    monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: True)
+    monkeypatch.setattr(vg, "download_telegram_image", fake_download)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", fake_kandinsky)
+    monkeypatch.setattr(vg, "upload_media", fake_upload)
+    monkeypatch.setattr(vg, "generate_video", no_pollen)
+
+    message, sent = _message("оживи")
+    asyncio.run(vg.process_animate_photo(message, bot=object()))
+
+    assert sent == []
+    final = message.status.edits[-1]
+    assert "квота" in final and "Pollinations" in final
+    assert "Wan" not in final
+
+
+def test_video_commands_only_work_in_expert_group(monkeypatch):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("в чужом чате генерация не должна начинаться")
+
+    def forbidden_limit(chat_id):
+        raise AssertionError("в чужом чате не должен тратиться дневной лимит")
+
+    monkeypatch.setattr(vg, "_check_and_count_limit", forbidden_limit)
+    monkeypatch.setattr(vg, "download_telegram_image", forbidden)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", forbidden)
+    monkeypatch.setattr(vg, "upload_media", forbidden)
+    monkeypatch.setattr(vg, "generate_video", forbidden)
+
+    other_chat = vg.SPECIAL_CHAT_ID - 1
+    animate, animate_sent = _message("оживи", chat_id=other_chat)
+    shoot, shoot_sent = _message("упупа сними кота", photo=False, chat_id=other_chat)
+
+    asyncio.run(vg.process_animate_photo(animate, bot=object()))
+    asyncio.run(vg.process_video_generation(shoot, bot=object()))
+
+    assert animate.replies == [vg.VIDEO_CHAT_ONLY_TEXT]
+    assert shoot.replies == [vg.VIDEO_CHAT_ONLY_TEXT]
+    assert animate_sent == shoot_sent == []
 
 
 def test_shoot_text_to_video_uses_kandinsky_first(monkeypatch):
