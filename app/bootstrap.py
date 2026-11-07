@@ -89,6 +89,7 @@ class UpupaApplication:
         from features.chat_settings import load_chat_state
         from features.group_bans import load_group_bans
         from features.content_filter import load_antispam_settings
+        from features.lab.flags import load_lab_flags
         from features.sms_settings import load_sms_disabled_chats
         from features.social_graph import (
             configure_social_graph_repository,
@@ -108,6 +109,7 @@ class UpupaApplication:
         load_group_bans()
         load_antispam_settings()
         load_sms_disabled_chats()
+        load_lab_flags()
         configure_counter_repository(SQLiteRankCountersRepository(STATISTICS_DB_PATH))
         load_stat_rank_state()
         bot_statistics.configure_statistics_repository(
@@ -152,6 +154,7 @@ class UpupaApplication:
         from features.social_graph.relationships import relationship_snapshot_loop
         from features.social_graph.digest import social_digest_loop
         from games.crocodile_socket_server import crocodile_socket_server_loop
+        from handlers.guru_salon import guru_salon_timeout_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
 
@@ -230,6 +233,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             crocodile_socket_server_loop,
             name="crocodile-socket-server",
+        )
+        self.supervisor.start_resilient(
+            lambda: guru_salon_timeout_loop(self.bot),
+            name="guru-salon-timeouts",
         )
         watchdog_interval = watchdog_interval_seconds()
         if watchdog_interval is not None:

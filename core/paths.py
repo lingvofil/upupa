@@ -30,3 +30,7 @@ CROCODILE_ARTIST_SCORES_PATH = DATA_DIR / "crocodile_artist_scores.json"
 BIRTHDAYS_PATH = DATA_DIR / "birthdays.json"
 
 GROUP_BANS_PATH = DATA_DIR / "group_bans.json"
+
+# Игровая лаборатория: флаги экспериментов по чатам и журнал событий.
+LAB_FLAGS_PATH = DATA_DIR / "lab_experiments.json"
+LAB_EVENTS_PATH = DATA_DIR / "lab_events.jsonl"

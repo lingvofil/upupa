@@ -14,6 +14,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
     import core.history_store as history_store
     import features.chat_settings as chat_settings_feature
     import features.content_filter as content_filter_feature
+    import features.lab.flags as lab_flags_feature
     import features.sms_settings as sms_settings_feature
     import features.social_graph as social_graph_feature
     import features.stat_rank_settings as stat_rank_feature
@@ -31,6 +32,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
     monkeypatch.setattr(chat_settings_feature, "load_chat_state", lambda: calls.append("chat-state"))
     monkeypatch.setattr(content_filter_feature, "load_antispam_settings", lambda: calls.append("antispam"))
     monkeypatch.setattr(sms_settings_feature, "load_sms_disabled_chats", lambda: calls.append("sms"))
+    monkeypatch.setattr(lab_flags_feature, "load_lab_flags", lambda: calls.append("lab-flags"))
     monkeypatch.setattr(stat_rank_feature, "load_stat_rank_state", lambda: calls.append("rank-state"))
     monkeypatch.setattr(statistics_feature, "init_db", lambda: calls.append("statistics"))
     monkeypatch.setattr(social_graph_feature, "init_db", lambda: calls.append("social-graph"))
@@ -61,6 +63,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
         "chat-state",
         "antispam",
         "sms",
+        "lab-flags",
         "rank-state",
         "statistics",
         "social-graph",

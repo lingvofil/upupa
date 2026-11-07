@@ -58,6 +58,9 @@ crocodile_party_state.json
 crocodile_scores.json
 crocodile_word_history.json
 games/crocodile_scores*.json
+# Игровая лаборатория: флаги по чатам и журнал событий с id игроков
+lab_experiments.json
+lab_events.jsonl
 
 # Static site build output (scripts/build_site.py)
 _site/
