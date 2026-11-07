@@ -8,9 +8,14 @@
 Зато веса Kandinsky 6.0 Video открыты (MIT), и есть живые ZeroGPU Spaces.
 
 Ограничение: квота ZeroGPU у бесплатного HF-токена — несколько минут GPU в
-сутки. Lite-ролик стоит ~75 c GPU, Pro-Space запрашивает 300 c и на
-бесплатной квоте не проходит в принципе. Поэтому вызывающий код обязан
-держать фолбэки (Wan ZeroGPU, Pollinations).
+сутки. Lite-Space запрашивает 135 c квоты (90 c × 1.5 за размер large), хотя
+сам ролик идёт ~75 c GPU; Pro-Space запрашивает 300 c и на бесплатной квоте
+не проходит в принципе. Поэтому вызывающий код обязан держать фолбэк
+(Pollinations).
+
+Wan 2.1 (multimodalart/wan2-1-fast) из цепочки убран в ноябре 2026: Space
+за пять недель не выдал ни одного видео (каждый вызов — AppError
+'RuntimeError'), а неудачные вызовы всё равно съедали квоту ZeroGPU.
 """
 
 from __future__ import annotations
@@ -20,12 +25,13 @@ from io import BytesIO
 import logging
 from pathlib import Path
 import tempfile
+from typing import Any
 
+import requests
 from gradio_client import Client, handle_file
 from PIL import Image
 
 from core.settings import HUGGINGFACE_TOKEN
-from AI.hf_zerogpu_video import _classify_failure, _read_video_result
 
 
 # Порядок важен: Lite укладывается в бесплатную квоту, Pro — только с HF PRO.
@@ -36,8 +42,60 @@ KANDINSKY_VIDEO_SPACES: list[tuple[str, dict]] = [
 ]
 KANDINSKY_VIDEO_API_NAME = "/generate"
 KANDINSKY_VIDEO_TIMEOUT_SECONDS = 240
+KANDINSKY_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 
 DEFAULT_ANIMATE_PROMPT = "make this image come alive, cinematic motion, smooth natural animation"
+
+
+def _read_video_result(value: Any) -> bytes | None:
+    """Extract downloaded Gradio video bytes from tuple/FileData/path/URL shapes."""
+    if value is None:
+        return None
+
+    if isinstance(value, (tuple, list)):
+        for item in value:
+            data = _read_video_result(item)
+            if data:
+                return data
+        return None
+
+    if isinstance(value, dict):
+        for key in ("path", "video", "url"):
+            if key in value:
+                data = _read_video_result(value[key])
+                if data:
+                    return data
+        return None
+
+    if isinstance(value, Path):
+        value = str(value)
+
+    if isinstance(value, str):
+        path = Path(value)
+        if path.is_file():
+            data = path.read_bytes()
+            return data if 0 < len(data) <= KANDINSKY_VIDEO_MAX_BYTES else None
+
+        if value.startswith(("https://", "http://")):
+            response = requests.get(value, timeout=60)
+            response.raise_for_status()
+            data = response.content
+            return data if 0 < len(data) <= KANDINSKY_VIDEO_MAX_BYTES else None
+
+    return None
+
+
+def _classify_failure(exc: Exception) -> str:
+    text = str(exc).lower()
+    quota_markers = (
+        "quota", "rate limit", "rate_limit", "too many requests", "429",
+        "zero gpu", "zerogpu", "gpu quota", "exceeded your gpu",
+    )
+    if any(marker in text for marker in quota_markers):
+        return "quota"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return "unavailable"
 
 
 def _prepare_image(image_bytes: bytes, temp_dir: str) -> str:
