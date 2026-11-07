@@ -70,6 +70,7 @@ def test_background_task_set_is_explicit_idempotent_and_resilient():
         "social-digest",
         "resource-snapshot",
         "crocodile-socket-server",
+        "guru-salon-timeouts",
     ]
     assert supervisor.names == expected
     assert supervisor.resilient_names == expected

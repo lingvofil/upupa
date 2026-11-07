@@ -154,6 +154,7 @@ class UpupaApplication:
         from features.social_graph.relationships import relationship_snapshot_loop
         from features.social_graph.digest import social_digest_loop
         from games.crocodile_socket_server import crocodile_socket_server_loop
+        from handlers.guru_salon import guru_salon_timeout_loop
         from services.history_maintenance import history_maintenance_loop
         from services.holidays import schedule_daily_holidays
 
@@ -232,6 +233,10 @@ class UpupaApplication:
         self.supervisor.start_resilient(
             crocodile_socket_server_loop,
             name="crocodile-socket-server",
+        )
+        self.supervisor.start_resilient(
+            lambda: guru_salon_timeout_loop(self.bot),
+            name="guru-salon-timeouts",
         )
         watchdog_interval = watchdog_interval_seconds()
         if watchdog_interval is not None:
