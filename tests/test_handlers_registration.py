@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 184 # Мир Упупы: дубли роутеров удалены, добавлены битвы, блоки, дары, суд с защитой
+EXPECTED_TOTAL_HANDLERS = 186 # +2: гороскоп (команда и кнопки знаков)
 
 
 def _count_handlers(router):
