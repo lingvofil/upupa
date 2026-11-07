@@ -64,7 +64,8 @@ SERVICE_MODULES = [
 ]
 GAME_MODULES = [
     "games.crocodile", "games.egra", "games.reverse_crocodile",
-    "games.guru", "games.guru.content", "games.guru.engine", "games.guru.render",
+    "games.guru", "games.guru.content", "games.guru.model", "games.guru.stories",
+    "games.guru.contract", "games.guru.rules", "games.guru.textui",
 ]
 HANDLER_MODULES = [
     "handlers", "handlers.basic", "handlers.sms", "handlers.world_common", "handlers.world_hub",
