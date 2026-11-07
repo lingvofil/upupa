@@ -1,7 +1,7 @@
 """Регрессия этапа 3: состав и порядок регистрации хэндлеров контролируются явно."""
 from tests import test_smoke_imports  # noqa: F401  (env + моки)
 
-EXPECTED_TOTAL_HANDLERS = 186 # +2: гороскоп (команда и кнопки знаков)
+EXPECTED_TOTAL_HANDLERS = 187 # +1: админская «лаба» (флаги экспериментов)
 
 
 def _count_handlers(router):
@@ -59,7 +59,7 @@ def test_world_has_no_legacy_duplicate_routers():
 
 def test_routers_count():
     from handlers import ROUTERS
-    assert len(ROUTERS) == 30
+    assert len(ROUTERS) == 31
 
 
 def test_whatisthere_guard_does_not_match_pun_command():

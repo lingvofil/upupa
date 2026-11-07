@@ -53,6 +53,8 @@ FEATURE_MODULES = [
     "features.social_graph.rendering", "features.social_graph.service",
     "features.world", "features.world.models", "features.world.permissions", "features.world.service",
     "features.radio", "features.radio.script", "features.radio.service",
+    "features.lab", "features.lab.registry", "features.lab.flags", "features.lab.events",
+    "features.lab.commands", "features.lab.filters",
 ]
 SERVICE_MODULES = [
     "services.search", "services.smart_search", "services.weather", "services.nameinfo",
@@ -67,7 +69,7 @@ HANDLER_MODULES = [
     "handlers.ai_modes", "handlers.ai_profiles", "handlers.ai_vision",
     "handlers.ai_generation", "handlers.birthdays", "handlers.ai_summary",
     "handlers.ai_prompts", "handlers.video", "handlers.channel", "handlers.social_graph",
-    "handlers.radio", "handlers.dialog",
+    "handlers.radio", "handlers.lab", "handlers.dialog",
 ]
 AI_MODULES = [
     "AI.adddescribe", "AI.birthday_calendar", "AI.dnd",

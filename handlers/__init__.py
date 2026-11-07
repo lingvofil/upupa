@@ -7,7 +7,7 @@ from handlers import (
     world_interactions, world_expansion, world_symbols, world_hub, stats_lexicon,
     media_search, games, media_tools, ai_modes, ai_profiles, ai_vision, ai_generation,
     birthdays, court, ai_summary, ai_prompts, video, channel, chronicle_reactions, chronicle,
-    social_graph, social_navigation, radio, song, dialog,
+    social_graph, social_navigation, radio, song, lab, dialog,
 )
 
 ROUTERS = [
@@ -44,5 +44,6 @@ ROUTERS = [
     social_navigation.router, # досье, роли, фракции и все кнопки соцграфа (sg:*)
     radio.router,   # Радио Упупы — до catch-all
     song.router,    # короткие песни YuE2 — до catch-all
+    lab.router,     # админская «лаба»: флаги экспериментов по чатам — до catch-all
     dialog.router,
 ]

@@ -296,6 +296,7 @@ def _create_backup_once(
                 *source_dir.glob("*.json"),
                 source_dir / JOURNAL_NAME,
                 source_dir / "history_deletions.jsonl",
+                source_dir / "lab_events.jsonl",
             }
         )
         manifest_files = []

@@ -89,6 +89,7 @@ class UpupaApplication:
         from features.chat_settings import load_chat_state
         from features.group_bans import load_group_bans
         from features.content_filter import load_antispam_settings
+        from features.lab.flags import load_lab_flags
         from features.sms_settings import load_sms_disabled_chats
         from features.social_graph import (
             configure_social_graph_repository,
@@ -108,6 +109,7 @@ class UpupaApplication:
         load_group_bans()
         load_antispam_settings()
         load_sms_disabled_chats()
+        load_lab_flags()
         configure_counter_repository(SQLiteRankCountersRepository(STATISTICS_DB_PATH))
         load_stat_rank_state()
         bot_statistics.configure_statistics_repository(
