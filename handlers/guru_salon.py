@@ -43,6 +43,8 @@ STOP_COMMANDS = frozenset({"гуру лаб стоп"})
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
 MAX_CACHED_REPORTS = 300
+TYPING_REFRESH_S = 4.0  # индикатор «печатает…» Telegram гаснет примерно через 5 секунд
+SUMMARY_PAUSE_S = 3.0
 ABANDON_REASONS = frozenset({"timeout", "quit", "restart", "send_failed"})
 
 router = Router(name="guru_salon")
@@ -50,6 +52,7 @@ _enabled = ExperimentEnabled(EXPERIMENT)
 
 _registry = rules.SessionRegistry()
 _rng = random.Random()
+_pace_rng = random.Random()  # разброс пауз не должен влиять на воспроизводимость партии
 _reports: dict[str, str] = {}  # подробные разборы до нажатия кнопки; живут в памяти
 
 
@@ -127,13 +130,15 @@ async def _clear_keyboard(bot: Any, chat_id: int, message_id: int | None) -> Non
 
 async def _pause(bot: Any, session: Session, seconds: float) -> None:
     """Драматическая пауза: «печатает…» и ожидание. Индикатор — не обязателен."""
-    if seconds <= 0:
-        return
-    try:
-        await bot.send_chat_action(chat_id=session.chat_id, action="typing", message_thread_id=session.thread_id)
-    except TelegramAPIError as error:
-        logger.debug("[guru] индикатор набора не показан: %s", error)
-    await _sleep(seconds)
+    remaining = seconds
+    while remaining > 0:
+        try:
+            await bot.send_chat_action(chat_id=session.chat_id, action="typing", message_thread_id=session.thread_id)
+        except TelegramAPIError as error:
+            logger.debug("[guru] индикатор набора не показан: %s", error)
+        chunk = min(TYPING_REFRESH_S, remaining)
+        await _sleep(chunk)
+        remaining -= chunk
 
 
 def _interrupted(session: Session) -> bool:
@@ -152,7 +157,7 @@ async def _play(bot: Any, session: Session, events: tuple[DisplayEvent, ...], vi
 
     last_id = None
     for index, bubble in enumerate(bubbles):
-        await _pause(bot, session, bubble.pause)
+        await _pause(bot, session, bubble.pause + _pace_rng.random() * bubble.spread)
         if _interrupted(session):
             return
         text = bubble.text
@@ -379,7 +384,7 @@ async def _deliver(bot: Any, session: Session, result: Any) -> None:
         await _play(bot, session, result.events, view, rows, textui.render_verdict(view, finished.report))
         if view.finished and not _interrupted(session):
             text, summary_rows = textui.render_summary(view)
-            await _pause(bot, session, rules.BEAT)
+            await _pause(bot, session, SUMMARY_PAUSE_S)
             await _send(bot, session, text, summary_rows)
         return
     if view.client is not None and view.client.phase in ("who", "what", "when", "announce"):

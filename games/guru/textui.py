@@ -73,6 +73,7 @@ class Bubble:
 
     text: str
     pause: float = 0.0
+    spread: float = 0.0
     replace: bool = False
 
 
@@ -150,17 +151,17 @@ def bubbles(events: tuple[DisplayEvent, ...], view: View) -> list[Bubble]:
     """Сгруппировать события в сообщения: новое начинается там, где есть пауза."""
     result: list[Bubble] = []
     parts: list[str] = []
-    pause, replace = 0.0, False
+    pause, spread, replace = 0.0, 0.0, False
     for event in events:
         if parts and (event.pause > 0 or event.replace):
-            result.append(Bubble("\n".join(parts), pause, replace))
+            result.append(Bubble("\n".join(parts), pause, spread, replace))
             parts = []
         if not parts:
-            pause, replace = event.pause, event.replace
+            pause, spread, replace = event.pause, event.spread, event.replace
         text = f"{_header(view)}\n\n{event.text}" if event.kind == "arrive" else event.text
         parts.append(text)
     if parts:
-        result.append(Bubble("\n".join(parts), pause, replace))
+        result.append(Bubble("\n".join(parts), pause, spread, replace))
     return result
 
 
@@ -189,9 +190,17 @@ def render_constructor(view: View) -> tuple[str, Rows]:
 
 
 def render_verdict(view: View, report: ClientReport) -> str:
-    """Одна строка итога под развязкой."""
+    """Итог под развязкой: что случилось и чего это стоило."""
     title = f"{OUTCOME_ICONS[report.outcome]} {OUTCOME_TITLES[report.outcome]}"
-    return f"{title} · очки {report.points:+d} · {rub(report.fee)}\nЛегенда {_candles(view)} · Серия 🔥{view.streak}"
+    lines = [f"{title} · очки {report.points:+d} · {rub(report.fee)}"]
+    if report.outcome == "exposure":
+        lines.append("Это провал: клиент раскусил мадам, легенда салона стала меньше.")
+    if report.parting == "pleased":
+        lines.append("🙂 Сам сеанс клиенту понравился, поэтому +1 очко" + (" и чаевые." if report.outcome == "exposure" else "."))
+    elif report.parting == "sour":
+        lines.append("🙁 Сеанс клиенту не понравился.")
+    lines.append(f"Легенда {_candles(view)} · Серия 🔥{view.streak}")
+    return "\n".join(lines)
 
 
 def _tag_label(slot: str, tag: str) -> str:
@@ -199,7 +208,7 @@ def _tag_label(slot: str, tag: str) -> str:
 
 
 def _reading_label(slot: str, tag: str) -> str:
-    return {"who": C.WHO, "when": C.WHEN, "sphere": C.SPHERES, "emotion": C.EMOTIONS}[slot][tag].button
+    return {"who": C.WHO, "what": C.WHAT, "sphere": C.SPHERES, "emotion": C.EMOTIONS}[slot][tag].button
 
 
 def render_report(report: ClientReport, questions: dict[str, str] | None = None) -> str:

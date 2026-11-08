@@ -61,6 +61,7 @@ class Story:
     who_decoys: tuple[str, ...]
     reveal: str  # {when_lead} — начало развязки
     fee: int
+    theme: str = "other"  # relationships | other — для баланса контента и журнала
     jackpot: Combo | None = None
     trap: Combo | None = None
 
@@ -158,6 +159,8 @@ class ClientReport:
     trap: bool
     fee: int
     points: int
+    satisfaction: int  # понравился ли сам сеанс, 0–100: отдельно от доверия и исхода
+    parting: str  # pleased | mixed | sour — как клиент ушёл
     streak_before: int
     streak_after: int
     streak_bonus: int
@@ -190,6 +193,8 @@ class ClientReport:
             "trap": self.trap,
             "fee": self.fee,
             "points": self.points,
+            "satisfaction": self.satisfaction,
+            "parting": self.parting,
             "streak_before": self.streak_before,
             "streak_after": self.streak_after,
             "legend_before": self.legend_before,
@@ -207,6 +212,7 @@ class Client:
     options: dict[str, tuple[str, ...]]
     trust: int
     suspicion: int
+    satisfaction: int
     started_at: float
     questions_left: int
     readings_left: int
