@@ -198,7 +198,7 @@ def play_shift(bot, chat_id=CHAT):
 
 
 def start(bot, user_id=PLAYER, chat_id=CHAT):
-    msg = message(bot, "Гуру лаб", user_id=user_id, chat_id=chat_id)
+    msg = message(bot, "Гуру", user_id=user_id, chat_id=chat_id)
     asyncio.run(guru_salon.start_salon(msg))
     return msg
 
@@ -215,19 +215,19 @@ def _accepts(observer, event):
 
 def test_salon_does_not_exist_where_experiment_is_off(flags):
     bot = FakeBot()
-    assert _accepts(guru_salon.router.message, message(bot, "гуру лаб"))
-    assert not _accepts(guru_salon.router.message, message(bot, "гуру лаб", chat_id=-1))
+    assert _accepts(guru_salon.router.message, message(bot, "гуру"))
+    assert not _accepts(guru_salon.router.message, message(bot, "гуру", chat_id=-1))
     assert not _accepts(guru_salon.router.callback_query, callback(bot, "guru:abc:0:go", chat_id=-1))
     flags.disable(CHAT, "guru")
-    assert not _accepts(guru_salon.router.message, message(bot, "гуру лаб"))
+    assert not _accepts(guru_salon.router.message, message(bot, "гуру"))
 
 
-@pytest.mark.parametrize("text", ["гуру лаб", "  ГУРУ   ЛАБ ", "гуру лаб стоп"])
+@pytest.mark.parametrize("text", ["гуру", "  ГУРУ ", "гуру стоп", "Гуру  КАССА"])
 def test_commands_match(flags, text):
     assert _accepts(guru_salon.router.message, message(FakeBot(), text))
 
 
-@pytest.mark.parametrize("text", ["гуру", "салон", "гуру лаба", "лаба вкл гуру", None])
+@pytest.mark.parametrize("text", ["гуру лаб", "салон", "гурух", "лаба вкл гуру", None])
 def test_other_text_passes_through(flags, text):
     assert not _accepts(guru_salon.router.message, message(FakeBot(), text))
 
@@ -238,8 +238,39 @@ def test_router_is_registered_before_dialog():
     assert ROUTERS.index(guru_salon.router) < ROUTERS.index(dialog.router)
 
 
+@pytest.mark.parametrize("text", ["гуру лаб", "гуру лаб приём", "гуру лаб касса", "гуру лаб стоп"])
+def test_old_lab_commands_are_gone(flags, text):
+    assert not _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+@pytest.mark.parametrize("text", ["гуру", "гуру приём", "гуру прием", "гуру касса", "гуру стоп"])
+def test_short_commands_are_not_taken_by_earlier_routers(text):
+    """«Гуру» — короткое слово: роутер, стоящий раньше, не должен забрать команду себе."""
+    from datetime import datetime, timezone
+
+    from aiogram import types
+
+    from handlers import ROUTERS
+
+    update = types.Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=types.Chat(id=CHAT, type="supergroup", title="чат"),
+        from_user=types.User(id=PLAYER, is_bot=False, first_name="Зоя"),
+        text=text,
+    )
+    earlier = ROUTERS[:ROUTERS.index(guru_salon.router)]
+    taken = [
+        f"{router.name}.{handler.callback.__name__}"
+        for router in earlier
+        for handler in router.message.handlers
+        if asyncio.run(handler.check(update, bot=FakeBot()))[0]
+    ]
+    assert taken == []
+
+
 def test_works_in_private_chat_with_the_bot(bot, events):
-    assert _accepts(guru_salon.router.message, message(bot, "гуру лаб", chat_id=PLAYER))
+    assert _accepts(guru_salon.router.message, message(bot, "гуру", chat_id=PLAYER))
     start(bot, chat_id=PLAYER)
     play_shift(bot, chat_id=PLAYER)
     assert current(PLAYER) is None
@@ -521,7 +552,7 @@ def test_stop_during_a_pause_interrupts_the_story(bot, events, monkeypatch):
         session = current()
         if session is not None:
             start_session = session
-            await guru_salon.stop_salon(message(bot, "гуру лаб стоп"))
+            await guru_salon.stop_salon(message(bot, "гуру стоп"))
 
     monkeypatch.setattr(guru_salon, "_sleep", stop_midway)
     start(bot)
@@ -542,22 +573,22 @@ def test_start_over_expired_salon_abandons_it_first(bot, events, clock):
 
 def test_player_can_quit(bot, events):
     start(bot)
-    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп")))
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп")))
     assert current() is None and events()[-1]["data"]["reason"] == "quit"
     assert textui.ABANDON_NOTES["quit"] in bot.sent[-1].text
 
 
 def test_only_player_or_admin_can_quit(bot, events):
     start(bot)
-    stranger = message(bot, "гуру лаб стоп", user_id=WATCHER)
+    stranger = message(bot, "гуру стоп", user_id=WATCHER)
     asyncio.run(guru_salon.stop_salon(stranger))
     assert current() is not None and "только мадам Зоя" in stranger.replies[0]
-    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп", user_id=ADMIN_ID)))
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп", user_id=ADMIN_ID)))
     assert current() is None
 
 
 def test_quit_without_salon(bot, events):
-    msg = message(bot, "гуру лаб стоп")
+    msg = message(bot, "гуру стоп")
     asyncio.run(guru_salon.stop_salon(msg))
     assert "и так закрыт" in msg.replies[0] and events() == []
 
@@ -622,7 +653,7 @@ def test_abandoned_shift_keeps_what_was_earned(bot, events, wallets):
     start(bot)
     serve_client(bot, confidence="maybe")
     earned = wallets.balance(CHAT, PLAYER)
-    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп")))
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп")))
     assert wallets.balance(CHAT, PLAYER) == earned
 
 
@@ -642,8 +673,8 @@ def test_confident_miss_takes_money_away(bot, events, wallets):
 def test_wallet_command_shows_table(bot, events, wallets):
     wallets.apply(CHAT, PLAYER, "Зоя", 1500)
     wallets.apply(CHAT, WATCHER, "Гоша", -300)
-    assert _accepts(guru_salon.router.message, message(bot, "гуру лаб касса"))
-    msg = message(bot, "гуру лаб касса", user_id=WATCHER)
+    assert _accepts(guru_salon.router.message, message(bot, "гуру касса"))
+    msg = message(bot, "гуру касса", user_id=WATCHER)
     asyncio.run(guru_salon.show_wallets(msg))
     assert "1. Зоя — 1 500 ₽" in msg.replies[0] and "Твоя касса: −300 ₽" in msg.replies[0]
 
@@ -651,7 +682,7 @@ def test_wallet_command_shows_table(bot, events, wallets):
 # --- живой приём --------------------------------------------------------------
 
 def start_live(bot, user_id=PLAYER, chat_id=CHAT):
-    msg = message(bot, "гуру лаб приём", user_id=user_id, chat_id=chat_id)
+    msg = message(bot, "гуру приём", user_id=user_id, chat_id=chat_id)
     asyncio.run(guru_salon.start_live_reception(msg))
     return msg
 
@@ -664,7 +695,17 @@ def press_live(bot, action, user_id):
     return query
 
 
-@pytest.mark.parametrize("text", ["гуру лаб приём", "Гуру  лаб ПРИЕМ"])
+def answer_intake(bot, user_id=WATCHER):
+    for action in ("q:love", "q:tax", "q:hope"):
+        press_live(bot, action, user_id)
+
+
+def seat_live(bot, user_id=WATCHER):
+    press_live(bot, "join", user_id)
+    answer_intake(bot, user_id)
+
+
+@pytest.mark.parametrize("text", ["гуру приём", "Гуру  ПРИЕМ"])
 def test_live_command_matches(flags, text):
     assert _accepts(guru_salon.router.message, message(FakeBot(), text))
 
@@ -698,7 +739,8 @@ def test_live_full_reception(bot, events, wallets, pauses):
     press_live(bot, "join", WATCHER)
     session = current()
     assert session.client.name == "Гоша" and bot.cleared[-1].message_id == open_message
-    assert any("расскажи мадам" in m.text for m in bot.sent[-2:])
+    answer_intake(bot)
+    assert "пиши прямо в чат" in bot.sent[-1].text
 
     press_live(bot, "m:tarot", PLAYER)
     assert len(bot.albums[-1].media) == 3 and "толкуй вслух" in bot.sent[-1].text
@@ -716,9 +758,99 @@ def test_live_full_reception(bot, events, wallets, pauses):
     assert names(events())[-1] == "finish" and events()[-1]["data"]["verdict"] == "hit"
 
 
-def test_live_client_cannot_touch_the_props_and_host_cannot_judge(bot, events):
+def test_live_intake_fills_one_message_and_only_the_client_answers(bot, events):
     start_live(bot)
     press_live(bot, "join", WATCHER)
+
+    session = current()
+    ask = bot.sent[-1]
+    assert session.phase == "intake" and session.message_id == ask.message_id and "Гоша, о чём беда" in ask.text
+    assert [len(row) for row in ask.reply_markup.inline_keyboard] == [2, 2, 1]
+
+    step = session.step
+    assert "Анкету заполняет" in press_live(bot, "q:love", PLAYER).answers[0] and current().step == step
+    assert "мадам Зоя" in press_live(bot, "q:love", 777).answers[0] and events()[-1]["event"] == "spectator"
+
+    sent_before = len(bot.sent)
+    press_live(bot, "q:love", WATCHER)
+    assert len(bot.sent) == sent_before, "вопросы идут в том же сообщении"
+    edit = bot.edits[-1]
+    assert edit.message_id == ask.message_id and "Беда: отношения" in edit.text and "кто замешан" in edit.text
+    assert edit.reply_markup is not None
+
+    press_live(bot, "q:tax", WATCHER)
+    press_live(bot, "q:hope", WATCHER)
+
+    card = bot.edits[-1]
+    assert card.message_id == ask.message_id and "На душе: надежда" in card.text and card.reply_markup is None
+    assert current().phase == "divine" and current().message_id == bot.sent[-1].message_id
+    assert "пиши прямо в чат" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None, "ход переходит к мадам"
+    assert [r["data"]["slot"] for r in events() if r["data"].get("kind") == "intake"] == ["sphere", "who", "emotion"]
+
+
+def test_live_silent_client_does_not_block_the_intake(bot, events):
+    start_live(bot)
+    press_live(bot, "join", WATCHER)
+    ask = current().message_id
+
+    assert "запасной выход" in press_live(bot, "skip", WATCHER).answers[0] and current().phase == "intake"
+    press_live(bot, "skip", PLAYER)
+
+    assert current().phase == "divine" and bot.cleared[-1].message_id == ask
+    assert events()[-1]["data"] == {"kind": "intake_skip", "mode": "live", "answered": 0}
+
+
+def test_live_horoscope_lets_only_the_client_pick_a_sign(bot, events):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "m:horoscope", PLAYER)
+
+    session = current()
+    ask = bot.sent[-1]
+    assert session.phase == "sign" and session.message_id == ask.message_id and "Гоша, какой у тебя знак" in ask.text
+    assert [len(row) for row in ask.reply_markup.inline_keyboard] == [3, 3, 3, 3, 1]
+
+    step = session.step
+    assert "клиент" in press_live(bot, "z:leo", PLAYER).answers[0] and current().step == step
+    assert "мадам Зоя" in press_live(bot, "z:leo", 777).answers[0] and events()[-1]["event"] == "spectator"
+
+    press_live(bot, "z:leo", WATCHER)
+    session = current()
+    assert session.sign == "Лев" and session.phase == "divine" and bot.cleared[-1].message_id == ask.message_id
+    assert "♌ Лев" in bot.edits[-1].text and "толкуй вслух" in bot.edits[-1].text
+    assert bot.edits[-1].reply_markup is not None, "ход возвращается к мадам"
+    record = events()[-1]
+    assert record["data"]["method"] == "horoscope" and record["data"]["sign_by"] == "client"
+
+
+def test_live_silent_client_does_not_lock_the_host(bot, events):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "m:horoscope", PLAYER)
+
+    assert "запасной выход" in press_live(bot, "stars", WATCHER).answers[0] and current().phase == "sign"
+    press_live(bot, "stars", PLAYER)
+
+    assert current().phase == "divine" and current().sign and "Паспорт" in bot.edits[-1].text
+    assert events()[-1]["data"]["sign_by"] == "stars"
+
+
+def test_live_silent_pair_is_closed_by_the_sweep(bot, events, clock):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "m:horoscope", PLAYER)
+    message_id = current().message_id
+
+    clock.now += rules.IDLE_TIMEOUT_S
+    assert asyncio.run(guru_salon.sweep_idle_salons(bot)) == 1
+
+    assert current() is None and bot.cleared[-1].message_id == message_id
+    assert events()[-1]["event"] == "abandon" and events()[-1]["data"]["phase"] == "sign"
+
+
+def test_live_client_cannot_touch_the_props_and_host_cannot_judge(bot, events):
+    start_live(bot)
+    seat_live(bot)
     step = current().step
     assert "Реквизит" in press_live(bot, "m:tarot", WATCHER).answers[0] and current().step == step
     press_live(bot, "go", PLAYER)
@@ -728,7 +860,7 @@ def test_live_client_cannot_touch_the_props_and_host_cannot_judge(bot, events):
 
 def test_live_stranger_is_a_spectator(bot, events):
     start_live(bot)
-    press_live(bot, "join", WATCHER)
+    seat_live(bot)
     query = press_live(bot, "m:tarot", 777)
     assert "мадам Зоя" in query.answers[0] and events()[-1]["event"] == "spectator"
 
@@ -736,7 +868,7 @@ def test_live_stranger_is_a_spectator(bot, events):
 def test_live_swap_button_opens_new_reception_for_the_presser(bot, events):
     start_live(bot)
     old = current().session_id
-    press_live(bot, "join", WATCHER)
+    seat_live(bot)
     press_live(bot, "go", PLAYER)
     press_live(bot, "a:maybe", PLAYER)
     press_live(bot, "v:partial", WATCHER)
@@ -769,9 +901,9 @@ def test_live_blocks_solo_shift_and_vice_versa(bot, events):
 
 def test_live_can_be_stopped_by_either_side_without_money(bot, events, wallets):
     start_live(bot)
-    press_live(bot, "join", WATCHER)
+    seat_live(bot)
     press_live(bot, "go", PLAYER)
-    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп", user_id=WATCHER)))
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп", user_id=WATCHER)))
     assert current() is None and bot.sent[-1].text == textui.LIVE_ABANDON_NOTES["quit"]
     assert wallets.get(CHAT, PLAYER).balance == 0 and events()[-1]["data"]["reason"] == "quit"
 

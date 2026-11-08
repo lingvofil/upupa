@@ -46,10 +46,11 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 5
+RULES_VERSION = 6
 
 ARCHETYPE_ORDER = ("skeptic", "jealous", "businessman", "romantic", "granny")
 CLIENTS_PER_SESSION = 3
+SKEPTIC_CHANCE = 0.25  # доля смен, в которых появляется скептик (выбор из пяти типов давал 60%)
 LEGEND_START = 2
 CLARIFICATIONS = 2
 READINGS = 2
@@ -192,6 +193,16 @@ def new_client(story: Story, rng: random.Random, now: float) -> Client:
     return client
 
 
+def shift_archetypes(rng: random.Random) -> list[str]:
+    """Типы клиентов на смену: разные, скептик — только с вероятностью ``SKEPTIC_CHANCE``."""
+    others = [archetype for archetype in ARCHETYPE_ORDER if archetype != "skeptic"]
+    if rng.random() >= SKEPTIC_CHANCE:
+        return rng.sample(others, CLIENTS_PER_SESSION)
+    order = ["skeptic", *rng.sample(others, CLIENTS_PER_SESSION - 1)]
+    rng.shuffle(order)
+    return order
+
+
 def new_session(
     *,
     session_id: str,
@@ -204,8 +215,7 @@ def new_session(
     wallet: int = 0,
 ) -> Session:
     if plan is None:
-        order = rng.sample(list(ARCHETYPE_ORDER), CLIENTS_PER_SESSION)
-        plan = tuple(rng.choice(stories_of(archetype)).id for archetype in order)
+        plan = tuple(rng.choice(stories_of(archetype)).id for archetype in shift_archetypes(rng))
     if not plan or any(story_id not in STORIES_BY_ID for story_id in plan):
         raise ValueError(f"неизвестные истории: {plan}")
     return Session(
