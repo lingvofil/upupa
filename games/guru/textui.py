@@ -24,7 +24,7 @@ _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
 _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 
-ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2}
+ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3}
 
 OUTCOME_TITLES = {
     "hit": "Попадание",
@@ -350,7 +350,7 @@ def render_live_abandoned(view: LiveView, reason: str) -> str:
 def render_wallets(top: list, own: object) -> str:
     """Таблица касс чата. ``top`` и ``own`` — записи с полями name, balance, earned, lost."""
     if not top:
-        return "💰 В кассах пусто. Открыть салон: «гуру лаб»."
+        return "💰 В кассах пусто. Открыть салон: «гуру»."
     lines = ["💰 Кассы мадам", ""]
     lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" for place, wallet in enumerate(top, 1)]
     lines += ["", f"Твоя касса: {rub(own.balance)} · заработано {rub(own.earned)} · потеряно {rub(own.lost)}"]

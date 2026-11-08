@@ -231,6 +231,21 @@ ZODIAC: Mapping[str, tuple[str, str]] = MappingProxyType({
     "Рыбы": ("♓", "Вы плывёте по течению, и течение что-то задумало."),
 })
 ZODIAC_SIGNS = tuple(ZODIAC)
+# Callback-данные принимают только латиницу, а ключи ZODIAC кириллические.
+ZODIAC_IDS: Mapping[str, str] = MappingProxyType({
+    "aries": "Овен",
+    "taurus": "Телец",
+    "gemini": "Близнецы",
+    "cancer": "Рак",
+    "leo": "Лев",
+    "virgo": "Дева",
+    "libra": "Весы",
+    "scorpio": "Скорпион",
+    "sagittarius": "Стрелец",
+    "capricorn": "Козерог",
+    "aquarius": "Водолей",
+    "pisces": "Рыбы",
+})
 STAR_ADVICE = (
     "Не верьте первому впечатлению. И второму.",
     "Поговорите с тем, кого избегаете.",
@@ -545,6 +560,8 @@ LIVE_SIT_LINES = (
 )
 LIVE_TELL_LINE = "{client}, расскажи мадам прямо в чат, что тебя привело."
 LIVE_PALM_LINE = "🖐 Ладонь горячая. {omens}."
+LIVE_SIGN_ASK_LINE = "Мадам раскрывает звёздную карту и смотрит поверх очков. Звёздам нужны анкетные данные."
+LIVE_SIGN_SKIP_LABEL = "🌠 Клиент молчит, пусть решат звёзды"
 LIVE_SIGN_LINE = "Звёзды считают, что {client} — {sign}. Паспорт тут не аргумент."
 LIVE_ANNOUNCE_LINE = "🔮 Мадам откладывает реквизит и смотрит клиенту прямо в переносицу."
 LIVE_CONFIDENCE_LINE = "Мадам объявляет: {label}"

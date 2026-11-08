@@ -235,6 +235,20 @@ def test_new_session_has_three_different_archetypes():
         assert session.legend == rules.LEGEND_START == 2
 
 
+def test_skeptic_comes_only_in_some_shifts():
+    shifts = [rules.shift_archetypes(random.Random(seed)) for seed in range(3000)]
+    assert all(len(set(kinds)) == len(kinds) == rules.CLIENTS_PER_SESSION for kinds in shifts)
+    with_skeptic = [kinds for kinds in shifts if "skeptic" in kinds]
+    assert len(with_skeptic) / len(shifts) == pytest.approx(rules.SKEPTIC_CHANCE, abs=0.03)
+    assert {kinds.index("skeptic") for kinds in with_skeptic} == {0, 1, 2}, "скептик приходит в любом месте очереди"
+
+
+@pytest.mark.parametrize("chance,expected", [(0.0, False), (1.0, True)])
+def test_skeptic_chance_is_a_single_constant(monkeypatch, chance, expected):
+    monkeypatch.setattr(rules, "SKEPTIC_CHANCE", chance)
+    assert {"skeptic" in rules.shift_archetypes(random.Random(seed)) for seed in range(100)} == {expected}
+
+
 def test_client_tells_the_story_in_beats():
     session, _ = make("jealous.bookie")
     events = rules.arrival_events(session)
@@ -771,7 +785,7 @@ def test_summary_has_everything_for_the_log():
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 5
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 6
 
 
 def test_participants_only_and_invalid_actions():

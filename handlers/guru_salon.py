@@ -4,11 +4,11 @@
 Здесь только команды, callback, паузы, таймаут и запись метрик ядра в журнал.
 
 Все хэндлеры стоят за ``ExperimentEnabled("guru")``: в чате, где эксперимент
-выключен, «гуру лаб» и кнопки уходят дальше по роутерам, как будто салона нет.
+выключен, «гуру» и кнопки уходят дальше по роутерам, как будто салона нет.
 В личке с ботом эксперимент включается так же: ``лаба вкл гуру``.
 
-Одна партия на чат: одиночная смена («гуру лаб») или живой приём, где один игрок
-гадает другому («гуру лаб приём»). Чужие нажатия пишутся как ``spectator``. Партия
+Одна партия на чат: одиночная смена («гуру») или живой приём, где один игрок
+гадает другому («гуру приём»). Чужие нажатия пишутся как ``spectator``. Партия
 без ходов дольше своего лимита бросается фоновым циклом ``guru_salon_timeout_loop``
 (запускает composition root через ``TaskSupervisor``).
 
@@ -43,10 +43,10 @@ from games.guru.model import ClientReport, LiveSession, Participant, Session
 logger = logging.getLogger(__name__)
 
 EXPERIMENT = "guru"
-START_COMMANDS = frozenset({"гуру лаб"})
-STOP_COMMANDS = frozenset({"гуру лаб стоп"})
-LIVE_COMMANDS = frozenset({"гуру лаб приём", "гуру лаб прием"})
-WALLET_COMMANDS = frozenset({"гуру лаб касса"})
+START_COMMANDS = frozenset({"гуру"})
+STOP_COMMANDS = frozenset({"гуру стоп"})
+LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
+WALLET_COMMANDS = frozenset({"гуру касса"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
@@ -280,7 +280,7 @@ async def _reject_busy(bot: Any, chat_id: int, user: Any, thread_id: int | None,
         reason="busy", own=current.host.user_id == user.id, via=via,
     )
     if current.host.user_id == user.id:
-        text = "Ты уже принимаешь клиента — жми кнопки выше. Бросить партию: «гуру лаб стоп»."
+        text = "Ты уже принимаешь клиента — жми кнопки выше. Бросить партию: «гуру стоп»."
     else:
         text = f"Салон занят: принимает мадам {current.host.name}. Дождись, пока закроется."
     await bot.send_message(chat_id, text, message_thread_id=thread_id)
@@ -385,7 +385,7 @@ async def show_wallets(message: types.Message) -> None:
 async def stop_salon(message: types.Message) -> None:
     session = _registry.get(message.chat.id)
     if session is None:
-        await message.reply("Салон и так закрыт. Открыть: «гуру лаб».")
+        await message.reply("Салон и так закрыт. Открыть: «гуру».")
         return
     if message.from_user.id != ADMIN_ID and not session.is_participant(message.from_user.id):
         await message.reply(f"Закрыть салон может только мадам {session.host.name}.")

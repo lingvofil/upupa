@@ -301,7 +301,7 @@ class LiveSession:
     client: Participant | None = None
     joined_at: float | None = None
     sign: str = ""
-    phase: str = "waiting"  # waiting | divine | announce | verdict | done
+    phase: str = "waiting"  # waiting | divine | sign | announce | verdict | done
     used_methods: list[str] = field(default_factory=list)
     confidence: str | None = None
     outcome: str | None = None
