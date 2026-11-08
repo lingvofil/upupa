@@ -1,7 +1,7 @@
 """Салон «Гуру» (эксперимент лаборатории ``guru``): тонкий Telegram-слой.
 
-Правила — в ``games.guru.rules``, текст и кнопки — в ``games.guru.textui``.
-Здесь только команды, callback, таймаут и запись метрик ядра в журнал.
+Правила — в ``games.guru.rules``, тексты и кнопки — в ``games.guru.textui``.
+Здесь только команды, callback, паузы, таймаут и запись метрик ядра в журнал.
 
 Все хэндлеры стоят за ``ExperimentEnabled("guru")``: в чате, где эксперимент
 выключен, «гуру лаб» и кнопки уходят дальше по роутерам, как будто салона нет.
@@ -11,6 +11,9 @@
 зрителей пишутся как ``spectator``. Партия без ходов ``IDLE_TIMEOUT_S`` секунд
 бросается фоновым циклом ``guru_salon_timeout_loop`` (запускает composition
 root через ``TaskSupervisor``).
+
+Паузы — обычный ``asyncio.sleep`` внутри хэндлера: aiogram обрабатывает update
+отдельными задачами, поэтому ожидание не задерживает остальных пользователей.
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ from core.settings import ADMIN_ID
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
 from games.guru import rules, textui
-from games.guru.model import Session
+from games.guru.contract import DisplayEvent, View
+from games.guru.model import ClientReport, Session
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +42,22 @@ START_COMMANDS = frozenset({"гуру лаб"})
 STOP_COMMANDS = frozenset({"гуру лаб стоп"})
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
+MAX_CACHED_REPORTS = 300
+ABANDON_REASONS = frozenset({"timeout", "quit", "restart", "send_failed"})
 
 router = Router(name="guru_salon")
 _enabled = ExperimentEnabled(EXPERIMENT)
 
 _registry = rules.SessionRegistry()
 _rng = random.Random()
+_reports: dict[str, str] = {}  # подробные разборы до нажатия кнопки; живут в памяти
 
 
 def _clock() -> float:
     return time.monotonic()
+
+
+_sleep = asyncio.sleep
 
 
 # --- разбор команд ----------------------------------------------------------
@@ -106,10 +116,58 @@ async def _edit(bot: Any, chat_id: int, message_id: int | None, text: str, rows:
         logger.warning("[guru] не удалось обновить сообщение салона: %s", error)
 
 
-async def _send_client(bot: Any, session: Session) -> None:
-    text, rows = textui.render_view(rules.build_view(session))
-    sent = await _send(bot, session, text, rows)
-    session.message_id = getattr(sent, "message_id", None)
+async def _clear_keyboard(bot: Any, chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=None)
+    except TelegramAPIError as error:
+        logger.debug("[guru] кнопки уже убраны: %s", error)
+
+
+async def _pause(bot: Any, session: Session, seconds: float) -> None:
+    """Драматическая пауза: «печатает…» и ожидание. Индикатор — не обязателен."""
+    if seconds <= 0:
+        return
+    try:
+        await bot.send_chat_action(chat_id=session.chat_id, action="typing", message_thread_id=session.thread_id)
+    except TelegramAPIError as error:
+        logger.debug("[guru] индикатор набора не показан: %s", error)
+    await _sleep(seconds)
+
+
+def _interrupted(session: Session) -> bool:
+    return session.finish_reason in ABANDON_REASONS
+
+
+async def _play(bot: Any, session: Session, events: tuple[DisplayEvent, ...], view: View,
+                closing_rows: textui.Rows | None = None, closing_text: str | None = None) -> None:
+    """Показать события сообщениями с паузами; кнопки — на последнем."""
+    bubbles = textui.bubbles(events, view)
+    if closing_rows is None and not view.finished:
+        closing_rows = textui.keyboard(view)
+        closing_text = textui.prompt_text(view)
+    if not bubbles:
+        bubbles = [textui.Bubble("")]
+
+    last_id = None
+    for index, bubble in enumerate(bubbles):
+        await _pause(bot, session, bubble.pause)
+        if _interrupted(session):
+            return
+        text = bubble.text
+        rows = None
+        if index == len(bubbles) - 1:
+            rows = closing_rows
+            if closing_text:
+                text = f"{text}\n\n{closing_text}" if text else closing_text
+        if bubble.replace and last_id is not None:
+            await _edit(bot, session.chat_id, last_id, text, rows)
+        else:
+            sent = await _send(bot, session, text, rows)
+            last_id = getattr(sent, "message_id", None)
+    if not view.finished or closing_rows:
+        session.message_id = last_id
 
 
 async def _log_metrics(session: Session, metrics: tuple[tuple[str, dict[str, Any]], ...]) -> None:
@@ -118,6 +176,12 @@ async def _log_metrics(session: Session, metrics: tuple[tuple[str, dict[str, Any
             EXPERIMENT, event, chat_id=session.chat_id, user_id=session.host.user_id,
             session_id=session.session_id, **data,
         )
+
+
+def _remember_report(session: Session, report: ClientReport) -> None:
+    _reports[f"{session.session_id}:{report.client_no}"] = textui.render_report(report)
+    while len(_reports) > MAX_CACHED_REPORTS:
+        del _reports[next(iter(_reports))]
 
 
 # --- жизненный цикл партии --------------------------------------------------
@@ -136,16 +200,20 @@ async def _log_abandon(session: Session, summary: dict[str, Any]) -> None:
 
 
 async def _show_abandoned(bot: Any, session: Session, reason: str, *, summary_message: bool = True) -> None:
-    view = rules.build_view(session)
-    client = rules.current_client_view(session)
-    await _edit(bot, session.chat_id, session.message_id, textui.render_abandoned(view, client, reason))
+    await _clear_keyboard(bot, session.chat_id, session.message_id)
     if not summary_message:
         return
-    text, rows = textui.render_summary(view)
+    text, rows = textui.render_summary(rules.build_view(session))
     try:
-        await _send(bot, session, text, rows, reply_to=session.message_id)
+        await _send(bot, session, f"{textui.render_abandoned(reason)}\n\n{text}", rows)
     except TelegramAPIError as error:
         logger.warning("[guru] не удалось отправить итог брошенного салона: %s", error)
+
+
+async def _fail_send(session: Session) -> None:
+    logger.exception("[guru] Telegram не принял сообщение салона")
+    if _registry.get(session.chat_id) is session:
+        await _log_abandon(session, _detach(session, "send_failed", _clock()))
 
 
 async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str,
@@ -191,13 +259,12 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
         EXPERIMENT, "start", chat_id=chat_id, user_id=user.id, session_id=session.session_id,
         via=via, previous=previous, **rules.start_data(session),
     )
+    view = rules.build_view(session)
     try:
-        await _send(bot, session, textui.render_intro(rules.build_view(session)))
-        await _send_client(bot, session)
+        await _send(bot, session, textui.render_intro(view))
+        await _play(bot, session, rules.arrival_events(session), view)
     except TelegramAPIError:
-        logger.exception("[guru] салон не открылся: Telegram не принял сообщение")
-        if _registry.get(chat_id) is session:
-            await _log_abandon(session, _detach(session, "send_failed", _clock()))
+        await _fail_send(session)
 
 
 # --- хэндлеры ---------------------------------------------------------------
@@ -234,11 +301,19 @@ async def _again(callback: types.CallbackQuery, parsed: textui.Callback) -> None
                              previous=parsed.session_id)
         return
     await callback.answer("Салон закрыт до лучших времён.")
-    try:
-        await callback.bot.edit_message_reply_markup(chat_id=chat_id, message_id=message.message_id,
-                                                     reply_markup=None)
-    except TelegramAPIError as error:
-        logger.warning("[guru] не удалось убрать кнопки итога: %s", error)
+    await _clear_keyboard(callback.bot, chat_id, message.message_id)
+
+
+async def _show_report(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
+    text = _reports.pop(f"{parsed.session_id}:{parsed.client_no}", None)
+    if text is None:
+        await callback.answer("Разбор уже показан или устарел.")
+        return
+    await callback.answer()
+    message = callback.message
+    await callback.bot.send_message(
+        message.chat.id, text, message_thread_id=_thread_id(message), reply_to_message_id=message.message_id
+    )
 
 
 @router.callback_query(_enabled, F.data.startswith(textui.CALLBACK_PREFIX))
@@ -250,6 +325,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
         return
     if parsed.kind == "again":
         await _again(callback, parsed)
+        return
+    if parsed.kind == "report":
+        await _show_report(callback, parsed)
         return
 
     chat_id = message.chat.id
@@ -267,8 +345,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
 
     # Ход применяется синхронно, до первого await: повторное нажатие той же
     # кнопки уже не совпадёт по номеру шага.
+    action = parsed.action or ""
     try:
-        result = rules.act(session, callback.from_user.id, parsed.action or "", _rng, now=_clock())
+        result = rules.act(session, callback.from_user.id, action, _rng, now=_clock())
     except (ValueError, PermissionError):
         await callback.answer("Эта кнопка уже не работает.")
         return
@@ -278,18 +357,36 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
     await _log_metrics(session, result.metrics)
 
     bot = callback.bot
-    message_id = message.message_id
-    if result.finished_client is None:
-        text, rows = textui.render_view(result.view)
-        await _edit(bot, chat_id, message_id, text, rows)
+    if action.startswith("s:") or action == "reset":
+        # Сборка предсказания идёт в одном сообщении.
+        text, rows = textui.render_constructor(result.view)
+        await _edit(bot, chat_id, message.message_id, text, rows)
         return
 
-    await _edit(bot, chat_id, message_id, textui.render_finished(result.view, result.finished_client))
-    if session.finished:
-        text, rows = textui.render_summary(result.view)
-        await _send(bot, session, text, rows)
+    await _clear_keyboard(bot, chat_id, message.message_id)
+    try:
+        await _deliver(bot, session, result)
+    except TelegramAPIError:
+        await _fail_send(session)
+
+
+async def _deliver(bot: Any, session: Session, result: Any) -> None:
+    view = result.view
+    finished = result.finished_client
+    if finished is not None and finished.report is not None:
+        _remember_report(session, finished.report)
+        rows = textui.client_done_keyboard(view, finished.report)
+        await _play(bot, session, result.events, view, rows, textui.render_verdict(view, finished.report))
+        if view.finished and not _interrupted(session):
+            text, summary_rows = textui.render_summary(view)
+            await _pause(bot, session, rules.BEAT)
+            await _send(bot, session, text, summary_rows)
         return
-    await _send_client(bot, session)
+    if view.client is not None and view.client.phase in ("who", "what", "when", "announce"):
+        text, rows = textui.render_constructor(view)
+        await _play(bot, session, result.events, view, rows, text)
+        return
+    await _play(bot, session, result.events, view)
 
 
 # --- таймаут ----------------------------------------------------------------

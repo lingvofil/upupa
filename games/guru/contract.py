@@ -3,8 +3,13 @@
 Ядро отдаёт структурированное состояние (``View``), доступные действия
 (``Action``) и события хода (``DisplayEvent``, метрики). Telegram-текст,
 будущий Mini App или PC-клиент рисуют их по-своему и присылают обратно
-только ``action_id``. Реплики клиентов — контент игры, поэтому приходят
-готовыми строками; раскладка, кнопки и оформление — дело адаптера.
+только ``action_id``. Реплики — контент игры, поэтому приходят готовыми
+строками; разбивка на сообщения, кнопки и оформление — дело адаптера.
+
+``DisplayEvent.pause`` — драматическая пауза перед событием в секундах: адаптер
+сам решает, как её показать (Telegram — «печатает…», графический клиент —
+анимация). ``replace`` — событие заменяет предыдущее на экране («тасует колоду»
+превращается в выпавшие карты).
 """
 
 from __future__ import annotations
@@ -17,24 +22,18 @@ from games.guru.model import ClientReport
 
 @dataclass(frozen=True)
 class Action:
-    id: str  # короткий и стабильный: «m:palm», «s:who:colleague», «a:swear»
+    id: str  # короткий и стабильный: «m:tarot», «i:newbie», «s:who:colleague», «a:swear»
     label: str
-    kind: str  # method | line | question | option | confidence | control
+    kind: str  # question | method | interpretation | option | confidence | control
 
 
 @dataclass(frozen=True)
 class DisplayEvent:
-    kind: str  # line | report
+    kind: str  # arrive | tell | ask | answer | status | ritual | omen | voice | react | announce | line | reveal
     text: str
+    pause: float = 0.0
+    replace: bool = False
     data: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class NoteView:
-    icon: str
-    source: str
-    clarity: str | None  # «ясно» | «мутно» | None для слов клиента
-    text: str
 
 
 @dataclass(frozen=True)
@@ -44,13 +43,10 @@ class ClientView:
     archetype_title: str
     emoji: str
     name: str
-    complaint: str
-    observation: str
-    notebook: tuple[NoteView, ...]
-    dialog: tuple[str, ...]
     mood: str
     suspicion: str | None  # только у скептика
-    actions_left: int
+    questions_left: int
+    readings_left: int
     phase: str
     picks: dict[str, str]
     report: ClientReport | None

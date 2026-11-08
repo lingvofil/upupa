@@ -1,9 +1,8 @@
-"""Текстовый адаптер салона: ``View`` → текст и раскладка кнопок (чистый Python, без aiogram).
+"""Текстовый адаптер салона: события и ``View`` → короткие сообщения и кнопки (без aiogram).
 
-Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Номер шага защищает от
-старых кнопок и двойных нажатий: кнопка действует, только пока партия стоит
-ровно на том шаге, для которого её нарисовали. Финальные кнопки:
-``guru:again:yes|no:<сессия>``.
+Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Номер шага защищает от старых
+кнопок и двойных нажатий. Отдельно: ``guru:again:yes|no:<сессия>`` (финал) и
+``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма).
 """
 
 from __future__ import annotations
@@ -12,23 +11,24 @@ import re
 from dataclasses import dataclass
 
 from games.guru import content as C
-from games.guru.contract import ClientView, View
-from games.guru.model import CLIENT_SOURCES, ClientReport
+from games.guru.contract import DisplayEvent, View
+from games.guru.model import ClientReport
 from games.guru.rules import rub
 
 CALLBACK_PREFIX = "guru:"
 MESSAGE_LIMIT = 4000  # у Telegram 4096, оставляем запас
 
-_ACT_RE = re.compile(r"^guru:([0-9a-f]{1,32}):(\d+):([a-z]+(?::[a-z_]+){0,2})$")
+_ACT_RE = re.compile(r"^guru:([0-9a-f]{1,32}):(\d+):([a-z]+(?::[a-z_0-9]+){0,2})$")
 _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
+_REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 
-ROW_WIDTH = {"method": 2, "line": 2, "question": 3, "option": 2, "confidence": 1, "control": 3}
+ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1}
 
 OUTCOME_TITLES = {
-    "hit": "попадание",
-    "partial": "частичное попадание",
-    "miss": "промах",
-    "exposure": "разоблачение",
+    "hit": "Попадание",
+    "partial": "Частичное попадание",
+    "miss": "Промах",
+    "exposure": "Разоблачение",
 }
 OUTCOME_ICONS = {"hit": "🎯", "partial": "🌗", "miss": "💨", "exposure": "🚨"}
 REASON_TEXTS = {
@@ -39,6 +39,11 @@ REASON_TEXTS = {
     "trap": "сюжетная ловушка",
     "suspicion": "скептик набрал достаточно подозрений",
 }
+QUALITY_TEXTS = {
+    "sharp": "толкований было два, правда среди них",
+    "plain": "правда была среди толкований",
+    "off": "правды среди толкований не было",
+}
 ABANDON_NOTES = {
     "timeout": "💤 Мадам уснула над хрустальным шаром. Салон закрыт.",
     "quit": "🚪 Мадам повесила табличку «Закрыто». Салон закрыт.",
@@ -47,17 +52,28 @@ ABANDON_NOTES = {
 }
 AGAIN_YES = "✅ Да, открываем салон"
 AGAIN_NO = "🚪 С меня хватит, вызывайте налоговую"
+REPORT_BUTTON = "📋 Разбор приёма"
 
 Rows = list[list[tuple[str, str]]]
 
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # act | again
+    kind: str  # act | again | report
     session_id: str
     step: int | None = None
     action: str | None = None
     answer: str | None = None
+    client_no: int | None = None
+
+
+@dataclass(frozen=True)
+class Bubble:
+    """Одно сообщение: пауза перед ним, текст и заменяет ли оно предыдущее."""
+
+    text: str
+    pause: float = 0.0
+    replace: bool = False
 
 
 def encode(view: View, action_id: str) -> str:
@@ -68,11 +84,18 @@ def again_data(session_id: str, answer: str) -> str:
     return f"{CALLBACK_PREFIX}again:{answer}:{session_id}"
 
 
+def report_data(session_id: str, client_no: int) -> str:
+    return f"{CALLBACK_PREFIX}rep:{client_no}:{session_id}"
+
+
 def parse(data: str | None) -> Callback | None:
     data = data or ""
     match = _AGAIN_RE.match(data)
     if match:
         return Callback("again", match.group(2), answer=match.group(1))
+    match = _REPORT_RE.match(data)
+    if match:
+        return Callback("report", match.group(2), client_no=int(match.group(1)))
     match = _ACT_RE.match(data)
     if match:
         return Callback("act", match.group(1), int(match.group(2)), match.group(3))
@@ -107,151 +130,133 @@ def again_keyboard(session_id: str) -> Rows:
     return [[(AGAIN_YES, again_data(session_id, "yes"))], [(AGAIN_NO, again_data(session_id, "no"))]]
 
 
-# --- текст ------------------------------------------------------------------
+def client_done_keyboard(view: View, report: ClientReport) -> Rows:
+    rows: Rows = [[(REPORT_BUTTON, report_data(view.session_id, report.client_no))]]
+    return rows + keyboard(view)
+
+
+# --- сообщения --------------------------------------------------------------
 
 def _candles(view: View) -> str:
     return "🕯" * view.legend + "▫️" * max(0, view.legend_start - view.legend)
 
 
-def _header(view: View, number: int) -> list[str]:
-    return [
-        f"🔮 Салон мадам {view.player} · клиент {number}/{view.clients_total}",
-        f"Легенда {_candles(view)} · Серия 🔥{view.streak} · Очки {view.score} · Касса {rub(view.money)}",
-    ]
+def _header(view: View) -> str:
+    number = view.client.number if view.client else len(view.outcomes)
+    return f"Клиент {number}/{view.clients_total} · Легенда {_candles(view)} · Серия 🔥{view.streak}"
 
 
-def _card(client: ClientView) -> list[str]:
-    lines = [
-        f"{client.emoji} {client.archetype_title} — {client.name}",
-        f"💬 {client.complaint}",
-        f"👀 {client.observation}",
-        "",
-        "📒 Блокнот:",
-    ]
-    for note in client.notebook:
-        clarity = f" ({note.clarity})" if note.clarity else ""
-        lines.append(f"{note.icon} {note.source}{clarity} — {note.text}")
-    return lines
+def bubbles(events: tuple[DisplayEvent, ...], view: View) -> list[Bubble]:
+    """Сгруппировать события в сообщения: новое начинается там, где есть пауза."""
+    result: list[Bubble] = []
+    parts: list[str] = []
+    pause, replace = 0.0, False
+    for event in events:
+        if parts and (event.pause > 0 or event.replace):
+            result.append(Bubble("\n".join(parts), pause, replace))
+            parts = []
+        if not parts:
+            pause, replace = event.pause, event.replace
+        text = f"{_header(view)}\n\n{event.text}" if event.kind == "arrive" else event.text
+        parts.append(text)
+    if parts:
+        result.append(Bubble("\n".join(parts), pause, replace))
+    return result
 
 
-def _status(client: ClientView) -> str:
-    status = f"{client.name} {client.mood}."
-    if client.suspicion:
-        status += f" Скептик {client.suspicion}."
-    return status
+def prompt_text(view: View) -> str:
+    return f"👉 {view.prompt}" if view.prompt else ""
 
 
-def _sciences(view: View) -> str:
-    marks = " ".join(
-        f"{C.METHOD_LABELS[method].split()[0]}{'✅' if used else '⬜'}" for method, used in view.sciences
-    )
-    return f"Науки за смену: {marks}"
+def with_prompt(text: str, view: View) -> str:
+    prompt = prompt_text(view)
+    return f"{text}\n\n{prompt}" if text and prompt else (text or prompt)
 
 
-def _hint_verdict(source: str, clear: bool, truthful: bool) -> str:
-    if not truthful:
-        return "ложь" if source not in CLIENT_SOURCES else "заблуждение"
-    return "правда" if clear else "мутно, но правда внутри"
+def render_constructor(view: View) -> tuple[str, Rows]:
+    """Сборка предсказания: одно сообщение, которое меняется по шагам."""
+    client = view.client
+    lines = ["🔮 Предсказание"]
+    if client is not None:
+        status = f"{client.name} {client.mood}."
+        if client.suspicion:
+            status = f"{client.name} {client.suspicion}."
+        lines.append(status)
+    if view.preview:
+        lines.append(view.preview)
+    lines += ["", prompt_text(view)]
+    return "\n".join(lines), keyboard(view)
 
 
-def _report(report: ClientReport) -> list[str]:
-    slots = []
-    for slot in report.slots:
-        label = C.SLOT_TITLES[slot.slot]
-        picked = _tag_label(slot.slot, slot.picked) if slot.picked else "—"
-        mark = "✅" if slot.matched else "❌"
-        extra = " (Меркурий)" if slot.mercury else ""
-        if not slot.matched:
-            extra = f" (было: {_tag_label(slot.slot, slot.truth)})"
-        slots.append(f"{label}: {picked} {mark}{extra}")
-    own = [h for h in report.hints if h.source not in CLIENT_SOURCES]
-    words = [h for h in report.hints if h.source in CLIENT_SOURCES]
-    lines = ["", "━━ Разбор ━━", " · ".join(slots)]
-    if own:
-        lines.append("Подсказки: " + " · ".join(
-            f"{C.SOURCE_LABELS[h.source][0]} {C.SOURCE_LABELS[h.source][1]} — {_hint_verdict(h.source, h.clear, h.truthful)}"
-            for h in own
-        ))
-    if words:
-        lines.append("Со слов клиента: " + ", ".join(
-            f"{C.SLOT_TITLES[h.slot].lower() if h.slot in C.SLOTS else h.slot} — "
-            f"{_hint_verdict(h.source, h.clear, h.truthful)}"
-            for h in words
-        ))
-    if report.echo_slots:
-        lines.append("Эхо (выдано за ясновидение без подтверждения): "
-                     + ", ".join(C.SLOT_TITLES[s].lower() for s in report.echo_slots))
-    verdict = f"{OUTCOME_ICONS[report.outcome]} {report.matched} из 3 — {OUTCOME_TITLES[report.outcome]}"
-    if report.outcome == "exposure":
-        verdict = f"{OUTCOME_ICONS['exposure']} Разоблачение: {REASON_TEXTS.get(report.reasons[0], report.reasons[0])}"
-    if report.jackpot:
-        verdict += " · 🎰 джекпот"
-    if report.confidence:
-        verdict += f" · объявлено «{C.CONFIDENCE_LABELS[report.confidence].split(' ', 1)[1]}»"
-    lines.append(verdict)
-    streak = f"серия {report.streak_before} → {report.streak_after}"
-    legend = f"легенда {report.legend_before} → {report.legend_after}"
-    lines.append(f"{rub(report.fee)} · очки {report.points:+d} · {streak} · {legend}")
-    return lines
+def render_verdict(view: View, report: ClientReport) -> str:
+    """Одна строка итога под развязкой."""
+    title = f"{OUTCOME_ICONS[report.outcome]} {OUTCOME_TITLES[report.outcome]}"
+    return f"{title} · очки {report.points:+d} · {rub(report.fee)}\nЛегенда {_candles(view)} · Серия 🔥{view.streak}"
 
 
 def _tag_label(slot: str, tag: str) -> str:
     return {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}[slot][tag].label
 
 
-def _fit(head: list[str], dialog: list[str], tail: list[str]) -> str:
-    """Собрать сообщение; если не влезает в лимит, срезать начало переписки."""
-    dialog = list(dialog)
-    while True:
-        parts = head + ([""] + dialog if dialog else []) + tail
-        text = "\n".join(parts)
-        if len(text) <= MESSAGE_LIMIT or not dialog:
-            return text[:MESSAGE_LIMIT]
-        dialog = dialog[1:]
-        if dialog and dialog[0] != "…":
-            dialog[0] = "…"
+def _reading_label(slot: str, tag: str) -> str:
+    return {"who": C.WHO, "when": C.WHEN, "sphere": C.SPHERES, "emotion": C.EMOTIONS}[slot][tag].button
+
+
+def render_report(report: ClientReport, questions: dict[str, str] | None = None) -> str:
+    """Подробный разбор: открывается по кнопке, чтобы не мешать игре."""
+    lines = ["📋 Разбор приёма", ""]
+    for slot in report.slots:
+        label = C.SLOT_TITLES[slot.slot]
+        picked = _tag_label(slot.slot, slot.picked) if slot.picked else "—"
+        mark = "✅" if slot.matched else "❌"
+        if slot.mercury:
+            extra = " (Меркурий простил)"
+        elif not slot.matched:
+            extra = f" (было: {_tag_label(slot.slot, slot.truth)})"
+        else:
+            extra = ""
+        lines.append(f"{label}: {picked} {mark}{extra}")
+    if report.readings:
+        lines.append("")
+        for reading in report.readings:
+            method = C.METHODS[reading.method].label
+            verdict = "верно" if reading.correct else "мимо"
+            lines.append(
+                f"{method}: озвучено «{_reading_label(reading.slot, reading.voiced)}» — {verdict}; "
+                f"{QUALITY_TEXTS[reading.quality]}."
+            )
+    told = [(slot, tag, truthful) for slot, tag, truthful in report.said if slot in C.SLOTS]
+    if told:
+        lines.append("")
+        lines.append("Клиент сказал сам: " + ", ".join(
+            f"{_tag_label(slot, tag)} ({'правда' if truthful else 'заблуждение'})" for slot, tag, truthful in told
+        ))
+    if report.echo_slots:
+        lines.append("Эхо (его слова без гадания): " + ", ".join(C.SLOT_TITLES[s].lower() for s in report.echo_slots))
+    lines.append("")
+    if report.outcome == "exposure":
+        lines.append(f"Почему разоблачение: {REASON_TEXTS.get(report.reasons[0], report.reasons[0])}.")
+    else:
+        lines.append(f"Совпало {report.matched} из 3.")
+    if report.jackpot:
+        lines.append("🎰 Сработал сюжетный джекпот.")
+    lines.append(f"Серия {report.streak_before} → {report.streak_after} · Легенда {report.legend_before} → {report.legend_after}")
+    return "\n".join(lines)[:MESSAGE_LIMIT]
 
 
 def render_intro(view: View) -> str:
     return "\n".join((
         f"🔮 Мадам {view.player} открывает салон. Сегодня {view.clients_total} клиента.",
         "",
-        "У каждого клиента до двух приёмов: 🖐 ладонь подскажет сферу (а значит, что случится), "
-        "🃏 Таро — кто, ♈ гороскоп — когда, 🌀 энергетика — настроение, ❓ вопрос — что клиент думает сам.",
-        "Потом собери предсказание: кто, что, когда — и объяви.",
+        "Слушай, уточняй, гадай, сама решай, что озвучить, и делай предсказание.",
+        f"«Клянусь!» приносит больше всего, но несбывшаяся клятва стоит легенды салона: {_candles(view)}.",
         "",
-        "🤔 «Мне кажется» — безопасно. 🔥 «Клянусь!» — больше всего очков, но несбывшаяся клятва "
-        "или свои же слова клиента, выданные за ясновидение, — это разоблачение.",
-        f"Легенда салона: {_candles(view)}. Кончится — салон закроют.",
-        "",
-        "Кнопки жмёт только мадам. 3 минуты без хода — салон закрывается.",
+        "Кнопки жмёт только мадам. 15 минут без хода — салон закрывается.",
     ))
 
 
-def render_view(view: View) -> tuple[str, Rows]:
-    """Активный приём: карточка, блокнот, переписка, подсказка к действию и кнопки."""
-    client = view.client
-    if client is None:
-        return render_summary(view)
-    tail = ["", _status(client)]
-    if client.phase == "research":
-        tail.append(_sciences(view))
-    if view.preview:
-        tail.append(f"🔮 {view.preview}")
-    tail.append(f"👉 {view.prompt}")
-    text = _fit(_header(view, client.number) + [""] + _card(client), list(client.dialog), tail)
-    return text, keyboard(view)
-
-
-def render_finished(view: View, client: ClientView) -> str:
-    """Законченный приём: переписка, развязка и разбор, без кнопок."""
-    tail = _report(client.report) if client.report else []
-    return _fit(_header(view, client.number) + [""] + _card(client), list(client.dialog), tail)
-
-
-def render_abandoned(view: View, client: ClientView, reason: str) -> str:
-    tail = ["", ABANDON_NOTES.get(reason, "Салон закрыт.")]
-    return _fit(_header(view, client.number) + [""] + _card(client), list(client.dialog), tail)
+def render_abandoned(reason: str) -> str:
+    return ABANDON_NOTES.get(reason, "Салон закрыт.")
 
 
 def render_summary(view: View) -> tuple[str, Rows]:
@@ -262,20 +267,17 @@ def render_summary(view: View) -> tuple[str, Rows]:
     else:
         head = f"🏁 Смена в салоне мадам {view.player} окончена."
     counts = {outcome: view.outcomes.count(outcome) for outcome in OUTCOME_TITLES}
+    sciences = " ".join(f"{C.METHODS[m].label.split()[0]}{'✅' if used else '⬜'}" for m, used in view.sciences)
     lines = [
         head,
         "",
-        f"Очки: {view.score}",
-        f"Касса: {rub(view.money)}",
-        f"Легенда: {_candles(view)}",
+        f"Очки: {view.score} · Касса: {rub(view.money)}",
         f"Клиентов: {len(view.outcomes)}/{view.clients_total} · "
-        + " · ".join(f"{OUTCOME_ICONS[o]} {counts[o]}" for o in OUTCOME_TITLES),
-        f"Лучшая серия: {view.max_streak}",
-        _sciences(view),
+        + " ".join(f"{OUTCOME_ICONS[o]}{counts[o]}" for o in OUTCOME_TITLES),
+        f"Легенда {_candles(view)} · Лучшая серия: {view.max_streak} · Науки: {sciences}",
     ]
     if view.title:
         lines.append(f"Звание: {view.title}")
-    for achievement in view.achievements:
-        lines.append(f"🏅 {achievement}")
+    lines += [f"🏅 {achievement}" for achievement in view.achievements]
     lines += ["", "Хотите ещё одну смену?"]
     return "\n".join(lines), again_keyboard(view.session_id)
