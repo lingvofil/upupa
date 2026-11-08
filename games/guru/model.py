@@ -112,7 +112,7 @@ class Reading:
     method: str
     slot: str
     offered: tuple[str, ...]
-    quality: str  # sharp (два толкования) | plain (три) | off (правды среди них нет)
+    quality: str  # sharp (два толкования) | plain (три) | off (правды среди них нет) | blind (анкеты нет)
 
 
 @dataclass(frozen=True)
@@ -288,7 +288,7 @@ class Session:
 
 @dataclass
 class LiveSession:
-    """Живой приём: один игрок гадает другому. Скрытой правды нет, исход решает клиент."""
+    """Живой приём: один игрок гадает другому. Анкета клиента тайная, исход решает клиент."""
 
     session_id: str
     chat_id: int
@@ -301,8 +301,10 @@ class LiveSession:
     client: Participant | None = None
     joined_at: float | None = None
     sign: str = ""
-    phase: str = "waiting"  # waiting | intake | divine | sign | announce | verdict | done
-    intake: dict[str, str] = field(default_factory=dict)  # анкета: строка → id ответа
+    phase: str = "waiting"  # waiting | intake | divine | sign | interpret | who | what | when | announce | verdict | done
+    intake: dict[str, str] = field(default_factory=dict)  # тайная анкета: строка → id ответа
+    pending: Reading | None = None  # расклад, ждущий выбора толкования
+    picks: dict[str, str] = field(default_factory=dict)  # предсказание мадам: слот → тег
     used_methods: list[str] = field(default_factory=list)
     confidence: str | None = None
     outcome: str | None = None

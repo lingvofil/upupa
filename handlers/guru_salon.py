@@ -508,7 +508,7 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
     if session.finished:
         _registry.remove(session)
         await _book_money(session, session.host, session.fee)
-    await callback.answer()
+    await callback.answer(result.notice)
     await _log_metrics(session, result.metrics)
 
     bot = callback.bot
@@ -519,11 +519,18 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
         await _edit(bot, session.chat_id, callback.message.message_id, text, rows)
         if view.phase == "intake":
             return
+    elif action.startswith("s:"):
+        text, rows = textui.render_live_constructor(view)
+        await _edit(bot, session.chat_id, callback.message.message_id, text, rows)
+        return
     else:
         await _clear_keyboard(bot, session.chat_id, callback.message.message_id)
     try:
         if view.finished:
             await _play(bot, session, result.events, view, textui.live_done_keyboard(view), textui.render_live_result(view))
+        elif action == "go":
+            text, rows = textui.render_live_constructor(view)
+            await _play(bot, session, result.events, view, rows, text)
         else:
             await _play(bot, session, result.events, view)
     except TelegramAPIError:

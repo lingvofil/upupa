@@ -578,13 +578,17 @@ LIVE_SIT_LINES = (
 LIVE_INTAKE_OPEN_LINE = "Мадам раскрывает амбарную книгу и облизывает карандаш."
 LIVE_INTAKE_SKIP_LABEL = "🌠 Клиент молчит, начнём без анкеты"
 LIVE_INTAKE_SKIP_LINE = "Мадам захлопывает книгу. Всё и так написано у клиента на лице."
-LIVE_TELL_LINE = "{client}, если есть что добавить, пиши прямо в чат. Мадам читает, бот отворачивается."
+LIVE_INTAKE_NOTICE = "Записано: {value}. Мадам этого не видит."
+LIVE_INTAKE_CLOSED_LINE = "Заполнена и лежит лицом вниз. Мадам подглядывать нельзя."
+LIVE_REVEAL_LINE = "📇 Мадам переворачивает анкету."
+LIVE_TELL_LINE = "{client}, захочешь подсказать мадам, пиши прямо в чат. Бот отворачивается."
+LIVE_VOICE_LINE = "— Мадам: {text}"
 LIVE_PALM_LINE = "🖐 Ладонь горячая. {omens}."
 LIVE_SIGN_ASK_LINE = "Мадам раскрывает звёздную карту и смотрит поверх очков. Звёздам нужны анкетные данные."
 LIVE_SIGN_SKIP_LABEL = "🌠 Клиент молчит, пусть решат звёзды"
 LIVE_SIGN_LINE = "Звёзды считают, что {client} — {sign}. Паспорт тут не аргумент."
 LIVE_ANNOUNCE_LINE = "🔮 Мадам откладывает реквизит и смотрит клиенту прямо в переносицу."
-LIVE_CONFIDENCE_LINE = "Мадам объявляет: {label}"
+LIVE_CONFIDENCE_LINE = "🔮 Мадам объявляет: {sentence}"
 LIVE_VERDICTS = MappingProxyType({
     "hit": "🎯 Всё так",
     "partial": "🌗 Что-то в этом есть",

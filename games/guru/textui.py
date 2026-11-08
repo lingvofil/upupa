@@ -325,19 +325,24 @@ def render_live_open(view: LiveView) -> str:
     return "\n".join((
         f"🔮 Мадам {view.host} принимает живых людей.",
         "",
-        "Клиент кнопками заполняет анкету. Мадам расспрашивает в чате, гадает и толкует как умеет.",
-        "В конце клиент решает, было ли это ясновидением. От этого зависят деньги мадам.",
+        "Клиент тайно заполняет анкету. Мадам гадает вслепую, выбирает толкования и делает предсказание.",
+        "В конце клиент решает, было ли это ясновидением, и анкета открывается. От приговора зависят деньги мадам.",
         "",
         "Кто первым нажмёт кнопку, тот и клиент.",
     ))
 
 
 def render_intake(view: LiveView) -> tuple[str, Rows | None]:
-    """Анкета клиента: одно сообщение, которое заполняется по шагам."""
-    lines = [f"📇 Анкета: {view.client}", *(f"{title}: {value}" for title, value in view.intake)]
+    """Анкета клиента: одно сообщение со счётчиком. Ответов в нём нет, они тайна до приговора."""
+    head = f"📇 Анкета: {view.client}"
     if view.phase != "intake":
-        return "\n".join(lines), None
-    return "\n".join((*lines, "", prompt_text(view))), keyboard(view)
+        return f"{head}\n{C.LIVE_INTAKE_CLOSED_LINE}", None
+    return f"{head}\nЗаполнено: {view.intake_filled} из {len(C.LIVE_INTAKE)}\n\n{prompt_text(view)}", keyboard(view)
+
+
+def render_live_constructor(view: LiveView) -> tuple[str, Rows]:
+    """Сборка предсказания мадам: одно сообщение, которое меняется по шагам."""
+    return f"🔮 Предсказание\n{view.preview}\n\n{prompt_text(view)}", keyboard(view)
 
 
 def render_live_result(view: LiveView) -> str:

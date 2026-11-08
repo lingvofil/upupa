@@ -705,6 +705,16 @@ def seat_live(bot, user_id=WATCHER):
     answer_intake(bot, user_id)
 
 
+def voice_live(bot):
+    press_live(bot, f"i:{current().pending.offered[0]}", PLAYER)
+
+
+def predict_live(bot):
+    press_live(bot, "go", PLAYER)
+    for action in ("s:who:tax", "s:what:lose", "s:when:week"):
+        press_live(bot, action, PLAYER)
+
+
 @pytest.mark.parametrize("text", ["гуру приём", "Гуру  ПРИЕМ"])
 def test_live_command_matches(flags, text):
     assert _accepts(guru_salon.router.message, message(FakeBot(), text))
@@ -743,11 +753,13 @@ def test_live_full_reception(bot, events, wallets, pauses):
     assert "пиши прямо в чат" in bot.sent[-1].text
 
     press_live(bot, "m:tarot", PLAYER)
-    assert len(bot.albums[-1].media) == 3 and "толкуй вслух" in bot.sent[-1].text
+    assert len(bot.albums[-1].media) == 3 and "что озвучить" in bot.sent[-1].text
+    voice_live(bot)
+    assert "— Мадам: «" in bot.sent[-1].text and "что дальше" in bot.sent[-1].text
 
-    press_live(bot, "go", PLAYER)
+    predict_live(bot)
     press_live(bot, "a:see", PLAYER)
-    assert "приговор" in bot.sent[-1].text
+    assert "Я отчётливо вижу: до конца недели налоговая" in bot.sent[-1].text and "приговор" in bot.sent[-1].text
     press_live(bot, "v:hit", WATCHER)
 
     assert current() is None and wallets.balance(CHAT, PLAYER) == 100 + 1500
@@ -755,10 +767,11 @@ def test_live_full_reception(bot, events, wallets, pauses):
     final = bot.sent[-1]
     assert "+1 500 ₽" in final.text and "1 600 ₽" in final.text
     assert final.reply_markup.inline_keyboard[0][0].text == textui.LIVE_NEW_BUTTON
+    assert "Мадам переворачивает анкету" in final.text and "Беда: отношения" in final.text
     assert names(events())[-1] == "finish" and events()[-1]["data"]["verdict"] == "hit"
 
 
-def test_live_intake_fills_one_message_and_only_the_client_answers(bot, events):
+def test_live_intake_stays_secret_in_one_message(bot, events):
     start_live(bot)
     press_live(bot, "join", WATCHER)
 
@@ -768,24 +781,43 @@ def test_live_intake_fills_one_message_and_only_the_client_answers(bot, events):
     assert [len(row) for row in ask.reply_markup.inline_keyboard] == [2, 2, 1]
 
     step = session.step
-    assert "Анкету заполняет" in press_live(bot, "q:love", PLAYER).answers[0] and current().step == step
+    assert "подглядывать" in press_live(bot, "q:love", PLAYER).answers[0] and current().step == step
     assert "мадам Зоя" in press_live(bot, "q:love", 777).answers[0] and events()[-1]["event"] == "spectator"
 
     sent_before = len(bot.sent)
-    press_live(bot, "q:love", WATCHER)
+    query = press_live(bot, "q:love", WATCHER)
     assert len(bot.sent) == sent_before, "вопросы идут в том же сообщении"
+    assert "отношения" in query.answers[0], "подтверждение видит только нажавший"
     edit = bot.edits[-1]
-    assert edit.message_id == ask.message_id and "Беда: отношения" in edit.text and "кто замешан" in edit.text
-    assert edit.reply_markup is not None
+    assert edit.message_id == ask.message_id and "Заполнено: 1 из 3" in edit.text and "кто замешан" in edit.text
+    assert "отношения" not in edit.text and edit.reply_markup is not None
 
     press_live(bot, "q:tax", WATCHER)
     press_live(bot, "q:hope", WATCHER)
 
     card = bot.edits[-1]
-    assert card.message_id == ask.message_id and "На душе: надежда" in card.text and card.reply_markup is None
-    assert current().phase == "divine" and current().message_id == bot.sent[-1].message_id
+    assert card.message_id == ask.message_id and "лицом вниз" in card.text and card.reply_markup is None
+    assert "надежда" not in card.text and current().phase == "divine" and current().message_id == bot.sent[-1].message_id
     assert "пиши прямо в чат" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None, "ход переходит к мадам"
     assert [r["data"]["slot"] for r in events() if r["data"].get("kind") == "intake"] == ["sphere", "who", "emotion"]
+
+
+def test_live_prediction_is_built_in_one_message(bot, events):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "go", PLAYER)
+    built = bot.sent[-1]
+    assert "Предсказание" in built.text and "Мадам, кто?" in built.text and current().message_id == built.message_id
+
+    sent_before = len(bot.sent)
+    assert "Реквизит" in press_live(bot, "s:who:tax", WATCHER).answers[0] and current().phase == "who"
+    press_live(bot, "s:who:tax", PLAYER)
+    press_live(bot, "s:what:lose", PLAYER)
+    press_live(bot, "s:when:week", PLAYER)
+
+    assert len(bot.sent) == sent_before and bot.edits[-1].message_id == built.message_id
+    assert "«До конца недели налоговая потеряет крупную сумму»" in bot.edits[-1].text
+    assert [len(row) for row in bot.edits[-1].reply_markup.inline_keyboard] == [1, 1, 1]
 
 
 def test_live_silent_client_does_not_block_the_intake(bot, events):
@@ -816,8 +848,8 @@ def test_live_horoscope_lets_only_the_client_pick_a_sign(bot, events):
 
     press_live(bot, "z:leo", WATCHER)
     session = current()
-    assert session.sign == "Лев" and session.phase == "divine" and bot.cleared[-1].message_id == ask.message_id
-    assert "♌ Лев" in bot.edits[-1].text and "толкуй вслух" in bot.edits[-1].text
+    assert session.sign == "Лев" and session.phase == "interpret" and bot.cleared[-1].message_id == ask.message_id
+    assert "♌ Лев" in bot.edits[-1].text and "что озвучить" in bot.edits[-1].text
     assert bot.edits[-1].reply_markup is not None, "ход возвращается к мадам"
     record = events()[-1]
     assert record["data"]["method"] == "horoscope" and record["data"]["sign_by"] == "client"
@@ -831,7 +863,7 @@ def test_live_silent_client_does_not_lock_the_host(bot, events):
     assert "запасной выход" in press_live(bot, "stars", WATCHER).answers[0] and current().phase == "sign"
     press_live(bot, "stars", PLAYER)
 
-    assert current().phase == "divine" and current().sign and "Паспорт" in bot.edits[-1].text
+    assert current().phase == "interpret" and current().sign and "Паспорт" in bot.edits[-1].text
     assert events()[-1]["data"]["sign_by"] == "stars"
 
 
@@ -853,7 +885,7 @@ def test_live_client_cannot_touch_the_props_and_host_cannot_judge(bot, events):
     seat_live(bot)
     step = current().step
     assert "Реквизит" in press_live(bot, "m:tarot", WATCHER).answers[0] and current().step == step
-    press_live(bot, "go", PLAYER)
+    predict_live(bot)
     press_live(bot, "a:maybe", PLAYER)
     assert "Приговор" in press_live(bot, "v:hit", PLAYER).answers[0] and current() is not None
 
@@ -869,7 +901,7 @@ def test_live_swap_button_opens_new_reception_for_the_presser(bot, events):
     start_live(bot)
     old = current().session_id
     seat_live(bot)
-    press_live(bot, "go", PLAYER)
+    predict_live(bot)
     press_live(bot, "a:maybe", PLAYER)
     press_live(bot, "v:partial", WATCHER)
 

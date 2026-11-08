@@ -46,7 +46,7 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 6
+RULES_VERSION = 7
 
 ARCHETYPE_ORDER = ("skeptic", "jealous", "businessman", "romantic", "granny")
 CLIENTS_PER_SESSION = 3
@@ -250,7 +250,7 @@ def _tag_label(slot: str, tag: str) -> str:
     return {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}[slot][tag].label
 
 
-def _interpretation(slot: str, tag: str) -> Any:
+def interpretation(slot: str, tag: str) -> Any:
     return {"who": C.WHO, "what": C.WHAT, "sphere": C.SPHERES, "emotion": C.EMOTIONS}[slot][tag]
 
 
@@ -268,7 +268,7 @@ def available_actions(session: Session) -> tuple[Action, ...]:
         actions.append(Action("go", "🔮 К предсказанию", "control"))
     elif phase == "interpret" and client.pending is not None:
         slot = client.pending.slot
-        actions += [Action(f"i:{tag}", _interpretation(slot, tag).button, "interpretation") for tag in client.pending.offered]
+        actions += [Action(f"i:{tag}", interpretation(slot, tag).button, "interpretation") for tag in client.pending.offered]
     elif phase in C.SLOTS:
         actions += [Action(f"s:{phase}:{tag}", _tag_label(phase, tag), "option") for tag in client.options[phase]]
         if phase != "who":
@@ -336,7 +336,7 @@ def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, 
     return ActResult(tuple(turn.events), tuple(turn.metrics), turn.finished_client, build_view(session))
 
 
-def _quote(text: str) -> str:
+def quote(text: str) -> str:
     # По правилам точка уходит за кавычки; многоточие, «?» и «!» остаются внутри.
     if text.endswith(".") and not text.endswith(".."):
         text = text[:-1]
@@ -385,7 +385,7 @@ def _clarify(session: Session, client: Client, question_id: str, rng: random.Ran
         resolved = client.resolve(tag)
         client.knowledge.append(Knowledge(slot, resolved, "question", resolved == client.truth[slot]))
 
-    turn.show("ask", f"— Ты: {_quote(question.label)}", PACE_ANSWER)
+    turn.show("ask", f"— Ты: {quote(question.label)}", PACE_ANSWER)
     turn.show("answer", client.render(question.answer))
     turn.show("status", _crossed_suspicion(client, before) or rng.choice(kind.statuses["asked"]).format(name=client.name))
     turn.metrics.append(("action", {
@@ -508,7 +508,7 @@ def _interpret(session: Session, client: Client, tag: str, rng: random.Random, t
     client.knowledge.append(Knowledge(reading.slot, tag, reading.method, correct))
     client.readings.append(ReadingResult(reading.method, reading.slot, reading.offered, tag, truth, reading.quality, reaction))
 
-    turn.show("voice", f"— Ты: {_quote(_interpretation(reading.slot, tag).voice)}", PACE_REACTION)
+    turn.show("voice", f"— Ты: {quote(interpretation(reading.slot, tag).voice)}", PACE_REACTION)
     turn.show("react", rng.choice(kind.reactions[reaction]).format(name=client.name))
     status_key = "up" if reaction == "warm" else "down"
     turn.show("status", _crossed_suspicion(client, before) or rng.choice(kind.statuses[status_key]).format(name=client.name))
@@ -574,7 +574,7 @@ def _slot_results(client: Client, matches: dict[str, bool], mercury: bool = Fals
 def _announce(session: Session, client: Client, confidence: str, rng: random.Random, turn: _Turn, now: float) -> None:
     story, kind = client.story, client.kind
     picks = dict(client.picks)
-    turn.show("announce", f"— Ты: {_quote(prediction_sentence(picks, confidence))}", PACE_REACTION)
+    turn.show("announce", f"— Ты: {quote(prediction_sentence(picks, confidence))}", PACE_REACTION)
 
     matches = {slot: picks[slot] == client.truth[slot] for slot in C.SLOTS}
     mercury = False
@@ -865,16 +865,19 @@ def _client_view(session: Session, client: Client) -> ClientView:
     )
 
 
-def _preview(client: Client) -> str | None:
-    if client.phase not in (*C.SLOTS, "announce"):
-        return None
-    if all(slot in client.picks for slot in C.SLOTS):
-        body = prediction_body(client.picks)
+def preview_text(picks: dict[str, str]) -> str:
+    """Собираемая фраза предсказания: по слотам, а когда всё выбрано — целиком."""
+    if all(slot in picks for slot in C.SLOTS):
+        body = prediction_body(picks)
         return "«" + body[:1].upper() + body[1:] + "»"
     return " · ".join(
-        f"{C.SLOT_TITLES[slot]}: {_tag_label(slot, client.picks[slot]) if slot in client.picks else '…'}"
+        f"{C.SLOT_TITLES[slot]}: {_tag_label(slot, picks[slot]) if slot in picks else '…'}"
         for slot in C.SLOTS
     )
+
+
+def _preview(client: Client) -> str | None:
+    return preview_text(client.picks) if client.phase in (*C.SLOTS, "announce") else None
 
 
 def _prompt(client: Client) -> str:

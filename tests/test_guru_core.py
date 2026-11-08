@@ -785,7 +785,7 @@ def test_summary_has_everything_for_the_log():
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 6
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 7
 
 
 def test_participants_only_and_invalid_actions():
