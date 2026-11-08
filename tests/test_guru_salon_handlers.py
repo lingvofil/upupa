@@ -243,10 +243,11 @@ def test_start_sends_intro_and_story_in_beats(bot, events, pauses):
     assert len(story) == 1 + len(session.client.story.told)
     assert all(m.reply_markup is None for m in story[:-1]) and story[-1].reply_markup is not None
     assert session.message_id == story[-1].message_id and "Что уточнить" in story[-1].text
-    assert pauses == [rules.BEAT] * len(session.client.story.told)
+    told = len(session.client.story.told)
+    assert told * rules.PACE_TELL[0] <= sum(pauses) <= told * sum(rules.PACE_TELL)
     assert bot.actions and bot.actions[0].action == "typing"
     (record,) = events()
-    assert record["event"] == "start" and record["data"]["via"] == "command" and record["data"]["rules"] == 3
+    assert record["event"] == "start" and record["data"]["via"] == "command" and record["data"]["rules"] == rules.RULES_VERSION
 
 
 def test_question_removes_old_buttons_and_answers_after_a_pause(bot, events, pauses):
@@ -259,7 +260,7 @@ def test_question_removes_old_buttons_and_answers_after_a_pause(bot, events, pau
     press(bot, f"c:{question.id}")
 
     assert bot.cleared[-1].message_id == old
-    assert pauses == [rules.BEAT_SHORT]
+    assert rules.PACE_ANSWER[0] <= sum(pauses) <= sum(rules.PACE_ANSWER)
     reply = bot.sent[-1]
     assert reply.text.startswith(f"— Ты: «{question.label}»") and reply.reply_markup is not None
     assert session.message_id == reply.message_id
@@ -277,9 +278,16 @@ def test_divination_edits_ritual_into_omen(bot, events, pauses):
 
     assert len(bot.sent) == sent_before + 1 and "колод" in bot.sent[-1].text
     edit = bot.edits[-1]
-    assert edit.message_id == bot.sent[-1].message_id and "Выпали" in edit.text and "Что озвучить" in edit.text
-    assert edit.reply_markup is not None and pauses == [rules.BEAT]
+    assert edit.message_id == bot.sent[-1].message_id and "Расклад" in edit.text and "Что озвучить" in edit.text
+    assert edit.reply_markup is not None and rules.PACE_RITUAL[0] <= sum(pauses) <= sum(rules.PACE_RITUAL)
     assert current().message_id == bot.sent[-1].message_id
+
+
+def test_long_pause_keeps_typing_indicator_alive(bot, pauses):
+    session = rules.new_session(session_id="ab12cd34ef56", chat_id=CHAT, player_id=PLAYER, player_name="Зоя",
+                                rng=random.Random(1), now=0)
+    asyncio.run(guru_salon._pause(bot, session, 6.0))
+    assert pauses == [guru_salon.TYPING_REFRESH_S, 2.0] and len(bot.actions) == 2
 
 
 def test_voiced_interpretation_shows_reaction_and_status(bot, events):

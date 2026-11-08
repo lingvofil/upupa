@@ -6,10 +6,11 @@
 только ``action_id``. Реплики — контент игры, поэтому приходят готовыми
 строками; разбивка на сообщения, кнопки и оформление — дело адаптера.
 
-``DisplayEvent.pause`` — драматическая пауза перед событием в секундах: адаптер
-сам решает, как её показать (Telegram — «печатает…», графический клиент —
-анимация). ``replace`` — событие заменяет предыдущее на экране («тасует колоду»
-превращается в выпавшие карты).
+``DisplayEvent.pause`` — драматическая пауза перед событием в секундах, ``spread`` —
+сколько к ней можно случайно добавить, чтобы ритм не был механическим. Адаптер сам
+решает, как её показать (Telegram — «печатает…», графический клиент — анимация).
+``replace`` — событие заменяет предыдущее на экране («тасует колоду» превращается
+в выпавшие карты).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ class DisplayEvent:
     kind: str  # arrive | tell | ask | answer | status | ritual | omen | voice | react | announce | line | reveal
     text: str
     pause: float = 0.0
+    spread: float = 0.0
     replace: bool = False
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -44,6 +46,7 @@ class ClientView:
     emoji: str
     name: str
     mood: str
+    satisfaction: str
     suspicion: str | None  # только у скептика
     questions_left: int
     readings_left: int

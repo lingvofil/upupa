@@ -100,11 +100,16 @@ def texts(result):
 
 # --- контент ----------------------------------------------------------------
 
-def test_two_stories_per_archetype_one_with_a_twist():
+def test_every_archetype_has_stories_with_a_twist():
     for archetype in rules.ARCHETYPE_ORDER:
         stories = stories_of(archetype)
-        assert len(stories) == 2, archetype
-        assert sorted(story.twist for story in stories) == [False, True], archetype
+        assert len(stories) >= 2, archetype
+        assert any(story.twist for story in stories), archetype
+    assert any(not story.twist for story in STORIES)
+
+
+def test_most_stories_are_about_relationships():
+    assert sum(story.theme == "relationships" for story in STORIES) / len(STORIES) >= 0.5
 
 
 @pytest.mark.parametrize("story", STORIES, ids=lambda story: story.id)
@@ -166,23 +171,39 @@ def test_options_hold_truth_claims_and_combos():
 
 
 def test_every_tag_has_an_interpretation_with_a_short_button():
-    for table in (C.WHO, C.WHEN, C.SPHERES, C.EMOTIONS):
+    for table in (C.WHO, C.WHAT, C.SPHERES, C.EMOTIONS):
         for tag in table.values():
             assert tag.voice and 0 < len(tag.button) <= 32
 
 
 def test_methods_cover_their_slots():
     assert {m.key: m.slot for m in C.METHODS.values()} == {
-        "palm": "sphere", "tarot": "who", "horoscope": "when", "energy": "emotion",
+        "palm": "sphere", "tarot": "who", "horoscope": "what", "energy": "emotion",
     }
     assert all(len(m.rituals) >= 2 for m in C.METHODS.values())
+
+
+def test_every_tarot_card_is_described():
+    for tag in C.WHO.values():
+        assert tag.card in C.TAROT_CARDS
+    assert len(C.TAROT_DECOR) >= 10
+    for card in C.TAROT_CARDS.values():
+        assert len(card.image) > 15 and card.symbols
+
+
+def test_palm_uses_the_line_of_mind():
+    assert "линия ума" in C.SPHERES["work"].omen
+
+
+def test_zodiac_covers_every_sign():
+    assert len(C.ZODIAC) == 12 and all(symbol and trend for symbol, trend in C.ZODIAC.values())
 
 
 def test_templates_only_use_known_placeholders():
     allowed = {"name", "sign", "left", "when_mark", "when_lead"}
     texts_ = [C.MERCURY_LINE, C.LEGEND_LOST_LINE, C.SUSPICION_EXIT_LINE]
     for kind in C.ARCHETYPES.values():
-        texts_ += [kind.sign_answer, *kind.echo_lines.values(), *kind.outcomes.values()]
+        texts_ += [kind.sign_answer, *kind.echo_lines.values(), *kind.outcomes.values(), *kind.farewells.values()]
         texts_ += [line for lines in kind.reactions.values() for line in lines]
         texts_ += [line for lines in kind.statuses.values() for line in lines]
         texts_ += [line for _, line in kind.suspicion_lines]
@@ -198,16 +219,18 @@ def test_archetypes_have_all_reactions_and_statuses():
         assert kind.reactions["warm"] and kind.reactions["cold"]
         assert set(kind.statuses) == {"up", "down", "asked"}
         assert set(kind.outcomes) == {"hit", "partial", "miss", "exposure"}
+        assert set(kind.farewells) == {"pleased", "mixed", "sour"}
 
 
 # --- приход клиента ---------------------------------------------------------
 
-def test_new_session_has_one_story_per_archetype():
+def test_new_session_has_three_different_archetypes():
     for seed in range(20):
         session = rules.new_session(session_id=SID, chat_id=1, player_id=1, player_name="Зоя",
                                     rng=random.Random(seed), now=0)
         archetypes = [STORIES_BY_ID[story_id].archetype for story_id in session.plan]
-        assert sorted(archetypes) == sorted(rules.ARCHETYPE_ORDER)
+        assert len(archetypes) == len(set(archetypes)) == rules.CLIENTS_PER_SESSION
+        assert set(archetypes) <= set(rules.ARCHETYPE_ORDER)
         assert session.legend == rules.LEGEND_START == 2
 
 
@@ -301,11 +324,30 @@ def test_ritual_pauses_then_omen_replaces_it():
     result = act(session, rng, "c:stop", "m:tarot")[-1]
     ritual, omen = result.events
     assert ritual.kind == "ritual" and "колод" in ritual.text
-    assert omen.kind == "omen" and omen.replace and omen.pause > 0 and "Выпали" in omen.text
+    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Расклад" in omen.text
+
+
+def test_tarot_shows_what_is_drawn_and_what_it_may_mean():
+    session, rng = make("businessman.partner")
+    omen = act(session, rng, "c:stop", "m:tarot")[-1].events[-1].text
+    for position in C.TAROT_POSITIONS:
+        assert position in omen
+    assert omen.count("Образы:") == 3
+    assert C.TAROT_CARDS["Двойка пентаклей"].image in omen
+
+
+def test_horoscope_describes_the_sign_not_a_date():
+    session, rng = make("businessman.partner")
+    omen = act(session, rng, "c:stop", "m:horoscope")[-1].events[-1].text
+    assert C.ZODIAC[session.client.sign][1] in omen and "Совет звёзд" in omen
+    assert C.WHAT["betray"].forecast in omen
+    for tag in C.WHEN.values():
+        assert tag.phrase.rstrip(",") not in omen, "гороскоп не называет срок"
+    assert session.client.pending.slot == "what"
 
 
 def test_each_method_reads_its_own_slot():
-    expected = {"palm": "sphere", "tarot": "who", "horoscope": "when", "energy": "emotion"}
+    expected = {"palm": "sphere", "tarot": "who", "horoscope": "what", "energy": "emotion"}
     for method, slot in expected.items():
         session, rng = make("businessman.partner")
         act(session, rng, "c:stop", f"m:{method}")
@@ -316,7 +358,7 @@ def test_honest_client_reacts_truthfully_and_status_follows():
     session, rng = make("businessman.partner", rolls=[0.5, 0.0])
     before = session.client.trust
     result = act(session, rng, "c:stop", "m:tarot", "i:partner")[-1]
-    assert session.client.trust == before + rules.TRUST_WARM
+    assert session.client.trust == before + round(rules.TRUST_WARM * (0.5 + C.BUSINESSMAN.belief / 100))
     assert result.events[-1].kind == "status" and "телефон" in result.events[-1].text
     assert session.client.readings[-1].reaction == "warm"
 
@@ -359,6 +401,16 @@ def test_two_readings_then_constructor_each_method_once():
     assert session.client.phase == "divine"
     read(session, rng, "energy", "anger")
     assert session.client.phase == "who"
+
+
+def test_belief_makes_trust_easier_to_win():
+    gains = {}
+    for story_id in ("skeptic.mom", "romantic.ex"):
+        session, rng = make(story_id, rolls=[0.5, 0.0])
+        before = session.client.trust
+        act(session, rng, "c:stop", "m:tarot", f"i:{session.client.truth['who']}")
+        gains[story_id] = session.client.trust - before
+    assert gains["romantic.ex"] > gains["skeptic.mom"]
 
 
 def test_can_go_to_prediction_early():
@@ -451,6 +503,7 @@ def test_businessman_sworn_echo_and_soft_discount():
 
     session, rng = make("businessman.partner")
     session.client.trust = 50
+    session.client.satisfaction = 25  # после попадания станет 50, множитель гонорара равен 1
     report = report_of(hit(session, rng, "see"))
     assert report.outcome == "hit" and report.echo_slots == ("who",)
     assert report.fee == rules._round_money(5000 * rules.FEE["hit"][1] * rules.ECHO_DISCOUNT)
@@ -480,7 +533,7 @@ def test_jackpot_counts_as_hit():
 
 def _horoscope(session, rng):
     act(session, rng, "c:stop")
-    read(session, rng, "horoscope", session.client.truth["when"])
+    read(session, rng, "horoscope", session.client.truth["what"])
 
 
 def test_mercury_forgives_when_once_and_only_after_horoscope():
@@ -593,7 +646,7 @@ def test_streak_of_three_and_reset():
         hit(session, rng, "maybe")
         next_client(session, rng)
     assert session.max_streak == 3 and C.STREAK_ACHIEVEMENT in rules.achievements(session)
-    assert session.score == 3 * rules.SCORE["hit"][0] + 2 + 3
+    assert session.score == 3 * (rules.SCORE["hit"][0] + rules.PLEASED_POINTS) + 2 + 3
 
     session, rng = make("jealous.lena", "jealous.lena")
     hit(session, rng, "maybe")
@@ -622,10 +675,42 @@ def test_mastery_bonus_once_for_three_main_methods():
     assert not session.mastery, "энергетика не считается"
     next_client(session, rng)
     act(session, rng, "c:stop")
-    results.append(read(session, rng, "horoscope", session.client.truth["when"]))
+    results.append(read(session, rng, "horoscope", session.client.truth["what"]))
     assert session.mastery
     (bonus,) = metrics(results, "mastery_bonus")
     assert bonus == {"client_no": 2, "method": "horoscope", "points": rules.MASTERY_BONUS}
+
+
+def test_ritual_itself_pleases_even_when_it_misses():
+    session, rng = make("jealous.lena")
+    before = session.client.satisfaction
+    act(session, rng, "c:stop")
+    read(session, rng, "palm", "love")
+    assert session.client.satisfaction == before + rules.SATISFACTION_WARM
+
+    session, rng = make("businessman.partner", rolls=[0.5, 0.0])
+    before = session.client.satisfaction
+    wrong_tag = next(t for t in session.client.options["who"] if t != "partner")
+    act(session, rng, "c:stop", "m:tarot", f"i:{wrong_tag}")
+    assert session.client.satisfaction == before + rules.SATISFACTION_COLD
+
+
+def test_exposed_but_pleased_client_tips_and_says_so():
+    session, rng = make("skeptic.believer", "skeptic.believer")
+    session.client.satisfaction = 90
+    result = predict(session, rng, "colleague", "secret", session.client.truth["when"], "see")
+    report = report_of(result)
+    assert report.outcome == "exposure" and report.parting == "pleased"
+    assert report.fee == rules._round_money(1500 * rules.EXPOSURE_TIP) and report.points == -4 + rules.PLEASED_POINTS
+    assert C.SKEPTIC.farewells["pleased"].format(name=session.client.name) in texts(result)
+    assert session.legend == 1, "понравился сеанс или нет, разоблачение стоит легенды"
+
+
+def test_parting_reflects_satisfaction():
+    for satisfaction, parting in [(70, "pleased"), (45, "mixed"), (5, "sour")]:
+        session, rng = make("businessman.partner")
+        session.client.satisfaction = satisfaction
+        assert report_of(miss(session, rng, "maybe")).parting == parting
 
 
 def test_titles():
@@ -668,10 +753,10 @@ def test_summary_has_everything_for_the_log():
         miss(session, rng, "maybe")
         next_client(session, rng)
     data = rules.summary(session, now=123.0)
-    for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures",
+    for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 3
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 4
 
 
 def test_participants_only_and_invalid_actions():
@@ -777,7 +862,7 @@ def test_events_split_into_short_messages():
     view = rules.build_view(session)
     bubbles = textui.bubbles(rules.arrival_events(session), view)
     assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
-    assert bubbles[0].pause == 0 and bubbles[1].pause > 0
+    assert bubbles[0].pause == 0 and bubbles[1].pause == rules.PACE_TELL[0] and bubbles[1].spread == rules.PACE_TELL[1]
     result = act(session, rng, "c:stop", "m:tarot")[-1]
     ritual, omen = textui.bubbles(result.events, result.view)
     assert not ritual.replace and omen.replace and omen.pause > 0
@@ -797,9 +882,17 @@ def test_verdict_and_report_are_separate():
     result = miss(session, rng, "maybe")
     report = report_of(result)
     verdict = textui.render_verdict(result.view, report)
-    assert verdict.count("\n") == 1 and "Промах" in verdict
+    assert verdict.splitlines()[0].startswith("💨 Промах") and "Легенда" in verdict
     detailed = textui.render_report(report)
     assert "Разбор" in detailed and "было:" in detailed and len(detailed) <= textui.MESSAGE_LIMIT
+
+
+def test_verdict_explains_what_exposure_costs():
+    session, rng = make("skeptic.mom", "skeptic.mom")
+    session.client.suspicion = 60
+    result = miss(session, rng, "see")
+    verdict = textui.render_verdict(result.view, report_of(result))
+    assert "Разоблачение" in verdict and "провал" in verdict and "легенда" in verdict.lower()
 
 
 def test_client_done_keyboard_offers_report_and_next():

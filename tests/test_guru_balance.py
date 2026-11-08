@@ -65,8 +65,11 @@ def ranked(client, slot, rng):
 
 
 def reading_score(client, scores, slot, tag):
-    if slot in ("who", "when"):
+    if slot == "who":
         return scores[(slot, tag)]
+    if slot == "what":
+        what = C.WHAT[tag]
+        return scores[("what", tag)] + scores[("sphere", what.sphere)] + 0.7 * scores[("emotion", what.emotion)]
     tags = [t for t in C.WHAT.values() if t.key in client.options["what"]
             and (t.sphere if slot == "sphere" else t.emotion) == tag]
     return scores[(slot, tag)] + max((scores[("what", t.key)] for t in tags), default=0)
@@ -94,7 +97,7 @@ class Investigator:
         for slot in sorted(gaps, key=gaps.get):
             if gaps[slot] >= 3:
                 break
-            for method in {"who": ("tarot",), "when": ("horoscope",), "what": ("palm", "energy")}[slot]:
+            for method in {"who": ("tarot",), "when": (), "what": ("palm", "horoscope", "energy")}[slot]:
                 if method not in client.used_methods and not (client.kind.suspicion and method == "horoscope"):
                     return f"m:{method}"
         return "go"
