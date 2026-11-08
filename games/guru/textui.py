@@ -24,7 +24,7 @@ _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
 _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 
-ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3}
+ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2}
 
 OUTCOME_TITLES = {
     "hit": "Попадание",
@@ -325,11 +325,19 @@ def render_live_open(view: LiveView) -> str:
     return "\n".join((
         f"🔮 Мадам {view.host} принимает живых людей.",
         "",
-        "Клиент рассказывает своё прямо в чат, мадам расспрашивает, гадает и толкует как умеет.",
+        "Клиент кнопками заполняет анкету. Мадам расспрашивает в чате, гадает и толкует как умеет.",
         "В конце клиент решает, было ли это ясновидением. От этого зависят деньги мадам.",
         "",
         "Кто первым нажмёт кнопку, тот и клиент.",
     ))
+
+
+def render_intake(view: LiveView) -> tuple[str, Rows | None]:
+    """Анкета клиента: одно сообщение, которое заполняется по шагам."""
+    lines = [f"📇 Анкета: {view.client}", *(f"{title}: {value}" for title, value in view.intake)]
+    if view.phase != "intake":
+        return "\n".join(lines), None
+    return "\n".join((*lines, "", prompt_text(view))), keyboard(view)
 
 
 def render_live_result(view: LiveView) -> str:

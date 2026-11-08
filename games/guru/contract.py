@@ -26,7 +26,7 @@ from games.guru.model import ClientReport
 class Action:
     id: str  # короткий и стабильный: «m:tarot», «i:newbie», «s:who:colleague», «a:swear»
     label: str
-    kind: str  # question | method | interpretation | option | confidence | control
+    kind: str  # question | method | interpretation | option | confidence | verdict | intake | sign | control
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,7 @@ class LiveView:
     outcome: str | None
     fee: int
     wallet: int  # касса мадам с учётом этого приёма
+    intake: tuple[tuple[str, str], ...] = ()  # заполненные строки анкеты: (заголовок, значение)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

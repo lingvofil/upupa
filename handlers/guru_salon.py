@@ -512,8 +512,15 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
     await _log_metrics(session, result.metrics)
 
     bot = callback.bot
-    await _clear_keyboard(bot, session.chat_id, callback.message.message_id)
     view = result.view
+    if action.startswith("q:"):
+        # Анкета заполняется в одном сообщении, как сборка предсказания в смене.
+        text, rows = textui.render_intake(view)
+        await _edit(bot, session.chat_id, callback.message.message_id, text, rows)
+        if view.phase == "intake":
+            return
+    else:
+        await _clear_keyboard(bot, session.chat_id, callback.message.message_id)
     try:
         if view.finished:
             await _play(bot, session, result.events, view, textui.live_done_keyboard(view), textui.render_live_result(view))
