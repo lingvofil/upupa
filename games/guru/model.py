@@ -7,16 +7,19 @@ from typing import Any, Mapping
 
 from games.guru.content import ARCHETYPES, WHAT, WHEN, Archetype
 
-# Свои источники: то, что мадам «увидела». Слова клиента — эхо, если не подтверждены своим источником.
-OWN_SOURCES = frozenset({"observation", "palm", "tarot", "horoscope", "energy"})
+# Слова клиента. Выданные за ясновидение без своего подтверждения — это эхо.
 CLIENT_SOURCES = frozenset({"disclosed", "question"})
+
+WHEN_TRUTH = "@when"  # подставляется правда «когда» этой партии
+
+Pairs = tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
 class Combo:
     """Сюжетная комбинация конструктора: джекпот или ловушка."""
 
-    picks: tuple[tuple[str, str], ...]
+    picks: Pairs
     text: str
 
     def matches(self, prediction: Mapping[str, str]) -> bool:
@@ -24,12 +27,22 @@ class Combo:
 
 
 @dataclass(frozen=True)
-class Observation:
-    """Видимый признак: настоящая подсказка по одному слоту (``who``, ``when``, ``sphere``, ``emotion``)."""
+class Question:
+    """Уточнение: проверка версии (``check``) или неожиданная деталь (``open``).
 
-    slot: str
-    tags: tuple[str, ...]  # один — ясно, два — мутно; ``("@when",)`` — подставить правду «когда»
-    text: str  # может содержать {when_mark}
+    Ответ полезен, но не обязан быть однозначным. ``said`` — что клиент сказал
+    прямо (для правила эха). ``points`` и ``doubts`` игрок не видит: это разметка
+    того, что внимательный слушатель может понять из ответа, для симуляции баланса
+    и журнала.
+    """
+
+    id: str
+    label: str
+    answer: str
+    kind: str
+    said: Mapping[str, str] = field(default_factory=dict)
+    points: Pairs = ()
+    doubts: Pairs = ()
 
 
 @dataclass(frozen=True)
@@ -37,16 +50,17 @@ class Story:
     id: str
     archetype: str
     names: tuple[str, ...]
-    complaint: str
-    disclosed: Mapping[str, str]  # что клиент сказал сам (его убеждение, может быть ложным)
-    observation: Observation
+    arrival: str
+    told: tuple[str, ...]  # рассказ клиента по репликам
+    said: Mapping[str, str]  # что клиент утверждает сам (его убеждение, может быть ложным)
+    points: Pairs  # на что рассказ намекает внимательному слушателю
+    questions: tuple[Question, ...]
     who: str
     what: str
     when_options: tuple[str, ...]  # правда «когда» выбирается на партию — против заучивания
     who_decoys: tuple[str, ...]
     reveal: str  # {when_lead} — начало развязки
     fee: int
-    beliefs: Mapping[str, str] = field(default_factory=dict)  # ответы на вопросы, если клиент заблуждается
     jackpot: Combo | None = None
     trap: Combo | None = None
 
@@ -59,36 +73,60 @@ class Story:
         return WHAT[self.what].sphere
 
     @property
+    def emotion(self) -> str:
+        return WHAT[self.what].emotion
+
+    @property
     def twist(self) -> bool:
         """История с подвохом: клиент заблуждается насчёт «кто» или «что»."""
-        return self.belief("who", self.who) != self.who or self.belief("what", self.what) != self.what
+        return self.said.get("who", self.who) != self.who or self.said.get("what", self.what) != self.what
 
-    def belief(self, slot: str, truth: str) -> str:
-        """Что клиент ответит на вопрос по слоту: его убеждение или правда."""
-        return self.beliefs.get(slot, self.disclosed.get(slot, truth))
+    def question(self, question_id: str) -> Question:
+        return next(q for q in self.questions if q.id == question_id)
 
 
 @dataclass
 class Knowledge:
-    """Запись блокнота мадам."""
+    """Скрытая запись: что прозвучало на приёме. Игроку не показывается."""
 
     slot: str  # who | what | when | sphere | emotion
-    tags: tuple[str, ...]
-    source: str
-    clear: bool
+    tag: str
+    source: str  # disclosed | question | palm | tarot | horoscope | energy
     truthful: bool
-    positive: bool = True  # для ладони: «линия молчит» — отрицательная запись
 
     def supports(self, slot: str, tag: str) -> bool:
-        if not self.positive:
-            return False
         if self.slot == slot:
-            return tag in self.tags
+            return self.tag == tag
         if slot == "what" and self.slot == "sphere":
-            return WHAT[tag].sphere in self.tags
+            return WHAT[tag].sphere == self.tag
         if slot == "what" and self.slot == "emotion":
-            return WHAT[tag].emotion in self.tags
+            return WHAT[tag].emotion == self.tag
         return False
+
+
+@dataclass(frozen=True)
+class Reading:
+    """Открытое гадание: что выпало и какие толкования предложены."""
+
+    method: str
+    slot: str
+    offered: tuple[str, ...]
+    quality: str  # sharp (два толкования) | plain (три) | off (правды среди них нет)
+
+
+@dataclass(frozen=True)
+class ReadingResult:
+    method: str
+    slot: str
+    offered: tuple[str, ...]
+    voiced: str
+    truth: str
+    quality: str
+    reaction: str  # warm | cold
+
+    @property
+    def correct(self) -> bool:
+        return self.voiced == self.truth
 
 
 @dataclass(frozen=True)
@@ -101,16 +139,6 @@ class SlotResult:
 
 
 @dataclass(frozen=True)
-class HintResult:
-    source: str
-    slot: str
-    tags: tuple[str, ...]
-    clear: bool
-    truthful: bool
-    positive: bool = True
-
-
-@dataclass(frozen=True)
 class ClientReport:
     """Разбор приёма: что было на самом деле и почему такой исход."""
 
@@ -119,7 +147,9 @@ class ClientReport:
     archetype: str
     reveal: str
     slots: tuple[SlotResult, ...]
-    hints: tuple[HintResult, ...]
+    readings: tuple[ReadingResult, ...]
+    questions: tuple[str, ...]
+    said: tuple[tuple[str, str, bool], ...]  # (слот, тег, правда ли) — что клиент сказал сам
     echo_slots: tuple[str, ...]
     outcome: str  # hit | partial | miss | exposure
     reasons: tuple[str, ...]
@@ -133,7 +163,6 @@ class ClientReport:
     streak_bonus: int
     legend_before: int
     legend_after: int
-    info_actions: int
     duration_s: float
 
     @property
@@ -150,9 +179,12 @@ class ClientReport:
             "confidence": self.confidence,
             "slots": {s.slot: {"picked": s.picked, "truth": s.truth, "matched": s.matched} for s in self.slots},
             "mercury": any(s.mercury for s in self.slots),
-            "hints": [
-                {"source": h.source, "slot": h.slot, "clear": h.clear, "truthful": h.truthful} for h in self.hints
+            "readings": [
+                {"method": r.method, "voiced": r.voiced, "correct": r.correct, "quality": r.quality,
+                 "reaction": r.reaction}
+                for r in self.readings
             ],
+            "questions": list(self.questions),
             "echo_slots": list(self.echo_slots),
             "jackpot": self.jackpot,
             "trap": self.trap,
@@ -162,7 +194,6 @@ class ClientReport:
             "streak_after": self.streak_after,
             "legend_before": self.legend_before,
             "legend_after": self.legend_after,
-            "info_actions": self.info_actions,
             "duration_s": self.duration_s,
         }
 
@@ -177,11 +208,14 @@ class Client:
     trust: int
     suspicion: int
     started_at: float
-    actions_left: int = 2
+    questions_left: int
+    readings_left: int
+    asked: list[str] = field(default_factory=list)
     used_methods: list[str] = field(default_factory=list)
     knowledge: list[Knowledge] = field(default_factory=list)
-    lines: list[str] = field(default_factory=list)
-    phase: str = "research"  # research | palm | ask | who | what | when | announce | done
+    readings: list[ReadingResult] = field(default_factory=list)
+    phase: str = "clarify"  # clarify | divine | interpret | who | what | when | announce | done
+    pending: Reading | None = None
     picks: dict[str, str] = field(default_factory=dict)
     horoscope_used: bool = False
     report: ClientReport | None = None
@@ -190,9 +224,11 @@ class Client:
     def kind(self) -> Archetype:
         return self.story.kind
 
-    @property
-    def observation_text(self) -> str:
-        return self.story.observation.text.format(when_mark=WHEN[self.truth["when"]].mark)
+    def render(self, text: str) -> str:
+        return text.format(name=self.name, when_mark=WHEN[self.truth["when"]].mark)
+
+    def resolve(self, tag: str) -> str:
+        return self.truth["when"] if tag == WHEN_TRUTH else tag
 
 
 @dataclass(frozen=True)

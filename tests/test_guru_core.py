@@ -1,4 +1,4 @@
-"""Салон «Гуру» v0.2: ядро без Telegram — контент, правила, контракт, текстовый адаптер."""
+"""Салон «Гуру»: ядро без Telegram — контент, правила приёма, контракт, текстовый адаптер."""
 
 import ast
 import json
@@ -10,7 +10,7 @@ import pytest
 
 from games.guru import content as C
 from games.guru import rules, textui
-from games.guru.model import CLIENT_SOURCES, Knowledge
+from games.guru.model import WHEN_TRUTH, Knowledge
 from games.guru.stories import STORIES, STORIES_BY_ID, stories_of
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,14 +45,24 @@ def make(*story_ids, rolls=(), now=0.0):
 
 
 def act(session, rng, *actions, actor=7):
-    results = []
-    for action in actions:
-        results.append(rules.act(session, actor, action, rng, now=float(session.step + 1)))
-    return results
+    return [rules.act(session, actor, action, rng, now=float(session.step + 1)) for action in actions]
+
+
+def read(session, rng, method, tag):
+    return act(session, rng, f"m:{method}", f"i:{tag}")[-1]
+
+
+def to_constructor(session, rng):
+    client = session.client
+    if client.phase == "clarify":
+        act(session, rng, "c:stop")
+    if client.phase == "divine":
+        act(session, rng, "go")
 
 
 def predict(session, rng, who, what, when, confidence):
-    return act(session, rng, "go", f"s:who:{who}", f"s:what:{what}", f"s:when:{when}", f"a:{confidence}")[-1]
+    to_constructor(session, rng)
+    return act(session, rng, f"s:who:{who}", f"s:what:{what}", f"s:when:{when}", f"a:{confidence}")[-1]
 
 
 def wrong(client, slot):
@@ -66,8 +76,26 @@ def miss(session, rng, confidence):
     return predict(session, rng, wrong(client, "who"), wrong(client, "what"), wrong(client, "when"), confidence)
 
 
+def hit(session, rng, confidence):
+    truth = session.client.truth
+    return predict(session, rng, truth["who"], truth["what"], truth["when"], confidence)
+
+
+def next_client(session, rng):
+    if not session.finished:
+        act(session, rng, "next")
+
+
+def report_of(result):
+    return result.finished_client.report
+
+
 def metrics(results, name):
     return [data for result in results for event, data in result.metrics if event == name]
+
+
+def texts(result):
+    return "\n".join(event.text for event in result.events)
 
 
 # --- контент ----------------------------------------------------------------
@@ -82,61 +110,97 @@ def test_two_stories_per_archetype_one_with_a_twist():
 @pytest.mark.parametrize("story", STORIES, ids=lambda story: story.id)
 def test_story_is_consistent(story):
     assert story.who not in story.who_decoys and len(set(story.who_decoys)) == 3
-    assert set(story.who_decoys) <= set(C.WHO)
-    assert story.what in C.WHAT
+    assert set(story.who_decoys) <= set(C.WHO) and story.what in C.WHAT
     assert len(story.when_options) == 2 and set(story.when_options) <= set(C.WHEN)
+    assert 2 <= len(story.told) <= 3, "клиент рассказывает историю несколькими репликами"
+    for when in story.when_options:
+        assert "{" not in story.reveal.format(when_lead=C.WHEN[when].lead)
     for combo in (story.jackpot, story.trap):
         if combo is None:
             continue
         picks = dict(combo.picks)
         assert picks["who"] in (story.who, *story.who_decoys)
-        sphere = C.WHAT[picks["what"]].sphere
-        assert picks["what"] == story.what or sphere != story.sphere, "событие комбинации должно влезть в варианты"
+        assert picks["what"] == story.what or C.WHAT[picks["what"]].sphere != story.sphere
     if story.jackpot and story.trap:
         assert C.WHAT[dict(story.jackpot.picks)["what"]].sphere != C.WHAT[dict(story.trap.picks)["what"]].sphere
-    for when in story.when_options:
-        assert "{" not in story.reveal.format(when_lead=C.WHEN[when].lead)
-        client = rules.new_client(story, ScriptedRandom(), 0)
-        assert client.knowledge[-1].source == "observation" and client.knowledge[-1].truthful
-        assert "{" not in client.observation_text
 
 
-def test_what_options_are_one_per_sphere_with_truth_and_combos():
+@pytest.mark.parametrize("story", STORIES, ids=lambda story: story.id)
+def test_questions_create_a_dilemma(story):
+    kinds = [q.kind for q in story.questions]
+    assert len(story.questions) == 4 > rules.CLARIFICATIONS, "вопросов больше, чем можно задать"
+    assert "check" in kinds and "open" in kinds, "и проверка версии, и неожиданная деталь"
+    assert len({q.id for q in story.questions}) == 4
+    assert all(q.points or q.doubts for q in story.questions), "ответ должен что-то давать внимательному слушателю"
+
+
+@pytest.mark.parametrize("story", STORIES, ids=lambda story: story.id)
+def test_deadline_has_to_be_earned(story):
+    assert "when" not in story.said, "срок не сказан в рассказе: за него платят вопросом или гороскопом"
+    assert any(("when", WHEN_TRUTH) in q.points for q in story.questions)
+
+
+def _all_claims(story):
+    claims = dict(story.said)
+    for question in story.questions:
+        claims.update({k: v for k, v in question.said.items() if v != WHEN_TRUTH})
+    return claims
+
+
+def test_options_hold_truth_claims_and_combos():
     for story in STORIES:
         for seed in range(30):
             client = rules.new_client(story, random.Random(seed), 0)
             options = client.options["what"]
             assert sorted(C.WHAT[tag].sphere for tag in options) == sorted(C.SPHERES)
             assert story.what in options
-            assert story.belief("what", story.what) in options, "убеждение клиента должно быть среди вариантов"
-            assert story.belief("who", story.who) in client.options["who"]
+            claims = _all_claims(story)
+            if "what" in claims:
+                assert claims["what"] in options
+            if "who" in claims:
+                assert claims["who"] in client.options["who"]
             for combo in (story.jackpot, story.trap):
                 if combo:
                     assert dict(combo.picks)["what"] in options
                     assert dict(combo.picks)["who"] in client.options["who"]
 
 
+def test_every_tag_has_an_interpretation_with_a_short_button():
+    for table in (C.WHO, C.WHEN, C.SPHERES, C.EMOTIONS):
+        for tag in table.values():
+            assert tag.voice and 0 < len(tag.button) <= 32
+
+
+def test_methods_cover_their_slots():
+    assert {m.key: m.slot for m in C.METHODS.values()} == {
+        "palm": "sphere", "tarot": "who", "horoscope": "when", "energy": "emotion",
+    }
+    assert all(len(m.rituals) >= 2 for m in C.METHODS.values())
+
+
 def test_templates_only_use_known_placeholders():
-    allowed = {"name", "value", "sign", "left", "when_mark", "when_lead"}
-    texts = [C.MERCURY_LINE, C.LEGEND_LOST_LINE, C.SUSPICION_EXIT_LINE]
+    allowed = {"name", "sign", "left", "when_mark", "when_lead"}
+    texts_ = [C.MERCURY_LINE, C.LEGEND_LOST_LINE, C.SUSPICION_EXIT_LINE]
     for kind in C.ARCHETYPES.values():
-        texts += [*kind.answers.values(), kind.sign_answer, *kind.echo_lines.values(), *kind.outcomes.values()]
-        texts += [line for lines in kind.reactions.values() for line in lines]
-        texts += [line for _, line in kind.suspicion_lines]
-    texts += [story.reveal for story in STORIES] + [story.observation.text for story in STORIES]
-    for text in texts:
+        texts_ += [kind.sign_answer, *kind.echo_lines.values(), *kind.outcomes.values()]
+        texts_ += [line for lines in kind.reactions.values() for line in lines]
+        texts_ += [line for lines in kind.statuses.values() for line in lines]
+        texts_ += [line for _, line in kind.suspicion_lines]
+    for story in STORIES:
+        texts_ += [story.arrival, *story.told, story.reveal, *(q.answer for q in story.questions)]
+    for text in texts_:
         fields = {name for _, name, _, _ in string.Formatter().parse(text) if name}
         assert fields <= allowed, text
 
 
-def test_reactions_exist_for_each_style():
-    styles = {"poker": "neutral", "overreact": "warm", "honest": "cold"}
+def test_archetypes_have_all_reactions_and_statuses():
     for kind in C.ARCHETYPES.values():
-        assert kind.reactions[styles[kind.style]]
+        assert kind.reactions["warm"] and kind.reactions["cold"]
+        assert set(kind.statuses) == {"up", "down", "asked"}
         assert set(kind.outcomes) == {"hit", "partial", "miss", "exposure"}
 
 
-# --- партия и приход клиента ------------------------------------------------
+# --- приход клиента ---------------------------------------------------------
 
 def test_new_session_has_one_story_per_archetype():
     for seed in range(20):
@@ -145,20 +209,26 @@ def test_new_session_has_one_story_per_archetype():
         archetypes = [STORIES_BY_ID[story_id].archetype for story_id in session.plan]
         assert sorted(archetypes) == sorted(rules.ARCHETYPE_ORDER)
         assert session.legend == rules.LEGEND_START == 2
-        assert [p.user_id for p in session.participants] == [1]
 
 
-def test_client_arrives_with_complaint_and_observation():
+def test_client_tells_the_story_in_beats():
+    session, _ = make("jealous.bookie")
+    events = rules.arrival_events(session)
+    assert [e.kind for e in events] == ["arrive", "tell", "tell"]
+    assert events[0].pause == 0 and all(e.pause > 0 for e in events[1:])
+    assert "Наташа" in events[0].text and "Бывшая" in events[2].text
+    assert not any("{" in e.text for e in events)
+
+
+def test_nothing_is_written_down_for_the_player():
     session, _ = make("jealous.lena")
-    client = session.client
-    sources = [(k.source, k.slot, k.tags) for k in client.knowledge]
-    assert ("disclosed", "who", ("colleague",)) in sources
-    assert ("disclosed", "what", ("cheat",)) in sources
-    assert ("observation", "when", (client.truth["when"],)) in sources
-    assert client.actions_left == 2 and client.phase == "research"
+    view = rules.build_view(session)
+    payload = json.dumps(view.to_dict(), ensure_ascii=False)
+    assert "Коллега" not in payload, "выводы из рассказа игрок делает сам"
+    assert session.client.phase == "clarify" and session.client.questions_left == 2
 
 
-def test_when_truth_varies_between_parties():
+def test_deadline_changes_between_parties():
     story = STORIES_BY_ID["jealous.lena"]
     seen = {rules.new_client(story, random.Random(seed), 0).truth["when"] for seed in range(30)}
     assert seen == set(story.when_options)
@@ -169,268 +239,317 @@ def test_unknown_story_is_rejected():
         make("nope")
 
 
-# --- инфо-приёмы ------------------------------------------------------------
+# --- уточнения --------------------------------------------------------------
 
-def test_two_actions_then_constructor_and_each_method_once():
-    session, rng = make("businessman.partner")
-    act(session, rng, "m:tarot")
-    ids = {a.id for a in rules.available_actions(session)}
-    assert "m:tarot" not in ids and "m:horoscope" in ids
-    act(session, rng, "m:energy")
-    assert session.client.phase == "who"
-    with pytest.raises(ValueError):
-        act(session, rng, "m:palm")
-
-
-def test_palm_speaks_on_true_sphere_and_lies_rarely():
-    session, rng = make("jealous.bookie", rolls=[0.5, 0.5])  # правда — деньги
-    act(session, rng, "m:palm", "p:fate")
-    palm = session.client.knowledge[-1]
-    assert (palm.slot, palm.tags, palm.positive, palm.truthful) == ("sphere", ("money",), True, True)
-
-    session, rng = make("jealous.bookie", rolls=[0.05, 0.5])  # бросок ошибки
-    act(session, rng, "m:palm", "p:heart")
-    palm = session.client.knowledge[-1]
-    assert palm.positive and not palm.truthful, "ладонь соврала: «линия говорит» на неверной сфере"
-    assert palm.supports("what", "cheat")
-
-
-@pytest.mark.parametrize(("roll", "clear", "truthful", "size"),
-                         [(0.0, True, True, 1), (0.6, False, True, 2), (0.95, True, False, 1)])
-def test_tarot_hint_quality(roll, clear, truthful, size):
-    session, rng = make("businessman.partner", rolls=[roll, 0.5, 0.5])
-    act(session, rng, "m:tarot")
-    hint = session.client.knowledge[-1]
-    assert (hint.source, hint.slot, hint.clear, hint.truthful, len(hint.tags)) == ("tarot", "who", clear, truthful, size)
-    assert ("partner" in hint.tags) == truthful
-
-
-def test_horoscope_hints_when_and_charms_everyone_but_skeptic():
-    session, rng = make("jealous.lena", rolls=[0.0])
-    act(session, rng, "m:horoscope")
-    client = session.client
-    assert client.knowledge[-1].tags == (client.truth["when"],) and client.horoscope_used
-    assert client.trust == C.JEALOUS.base_trust + 10
-
-    session, rng = make("skeptic.mom", rolls=[0.0])
-    act(session, rng, "m:horoscope")
-    assert session.client.trust == C.SKEPTIC.base_trust - 10
-    assert session.client.suspicion == rules.SKEPTIC_START_SUSPICION + 20
-
-
-def test_energy_points_to_emotion_of_true_event():
-    session, rng = make("businessman.wife", rolls=[0.0])
-    act(session, rng, "m:energy")
-    hint = session.client.knowledge[-1]
-    assert hint.tags == ("fear",) and hint.supports("what", "leave") and hint.supports("what", "lose")
-
-
-def test_question_returns_belief_and_jealous_blurts():
+def test_two_questions_then_divination():
     session, rng = make("jealous.bookie")
-    act(session, rng, "m:question", "q:when")
-    words = [k for k in session.client.knowledge if k.source == "question"]
-    assert {k.slot for k in words} == {"when"}, "о «кто» и «что» она уже сказала сама — выбалтывать нечего"
-    assert session.client.trust == C.JEALOUS.base_trust - 10
-
-    session, rng = make("businessman.wife")
-    act(session, rng, "m:question", "q:who")
-    answer = session.client.knowledge[-1]
-    assert answer.tags == ("partner",) and not answer.truthful, "в истории с подвохом клиент заблуждается"
+    ids = {a.id for a in rules.available_actions(session)}
+    assert ids == {"c:seen", "c:sure", "c:whisper", "c:bracelet", "c:stop"}
+    first = act(session, rng, "c:whisper")[0]
+    assert "тотал" in texts(first) and first.events[0].pause > 0
+    assert "c:whisper" not in {a.id for a in rules.available_actions(session)}
+    act(session, rng, "c:seen")
+    assert session.client.phase == "divine"
 
 
-def test_skeptic_question_raises_suspicion_and_shows_it():
+def test_player_may_stop_asking():
+    session, rng = make("jealous.bookie")
+    act(session, rng, "c:stop")
+    assert session.client.phase == "divine" and session.client.questions_left == 2
+
+
+def test_questions_change_client_state_and_show_status():
+    session, rng = make("businessman.partner")
+    result = act(session, rng, "c:trust")[0]
+    assert session.client.trust == C.BUSINESSMAN.base_trust + C.BUSINESSMAN.question_trust
+    assert [e.kind for e in result.events] == ["ask", "answer", "status"]
+
     session, rng = make("skeptic.mom")
-    act(session, rng, "m:question", "q:who")
-    assert session.client.suspicion == 55
-    assert any("щурится" in line for line in session.client.lines)
+    act(session, rng, "c:why")
+    assert session.client.suspicion == rules.SKEPTIC_START_SUSPICION + C.SKEPTIC.question_suspicion
 
 
-def test_reactions_by_style():
-    session, rng = make("businessman.partner", rolls=[0.95, 0.5, 0.5, 0.0])  # ложное Таро, честная реакция
-    act(session, rng, "m:tarot")
-    assert any(line in session.client.lines[-1] for line in ("Мимо", "за воду"))
+def test_answer_records_client_words_for_echo_only():
+    session, rng = make("jealous.lena")
+    act(session, rng, "c:party")
+    said = [k for k in session.client.knowledge if k.source == "question"]
+    assert [(k.slot, k.tag) for k in said] == [("when", session.client.truth["when"])]
 
-    session, rng = make("jealous.lena", rolls=[0.95, 0.5, 0.5])
-    act(session, rng, "m:tarot")
-    warm = [line.format(name=session.client.name) for line in C.JEALOUS.reactions["warm"]]
-    assert session.client.lines[-1] in warm, "ревнивая бурно реагирует даже на ложь"
+
+def test_question_metrics():
+    session, rng = make("jealous.bookie")
+    (data,) = metrics(act(session, rng, "c:whisper"), "action")
+    assert data["kind"] == "question" and data["question"] == "whisper" and data["question_kind"] == "open"
+
+
+# --- гадания и толкования ---------------------------------------------------
+
+@pytest.mark.parametrize(("roll", "quality", "size", "truth_in"), [
+    (0.0, "sharp", 2, True), (0.5, "plain", 3, True), (0.99, "off", 3, False),
+])
+def test_reading_offers_interpretations_by_quality(roll, quality, size, truth_in):
+    session, rng = make("businessman.partner", rolls=[roll])
+    act(session, rng, "c:stop", "m:tarot")
+    reading = session.client.pending
+    assert (reading.quality, len(reading.offered), "partner" in reading.offered) == (quality, size, truth_in)
+    assert session.client.phase == "interpret"
+    assert {a.kind for a in rules.available_actions(session)} == {"interpretation"}
+
+
+def test_ritual_pauses_then_omen_replaces_it():
+    session, rng = make("businessman.partner")
+    result = act(session, rng, "c:stop", "m:tarot")[-1]
+    ritual, omen = result.events
+    assert ritual.kind == "ritual" and "колод" in ritual.text
+    assert omen.kind == "omen" and omen.replace and omen.pause > 0 and "Выпали" in omen.text
+
+
+def test_each_method_reads_its_own_slot():
+    expected = {"palm": "sphere", "tarot": "who", "horoscope": "when", "energy": "emotion"}
+    for method, slot in expected.items():
+        session, rng = make("businessman.partner")
+        act(session, rng, "c:stop", f"m:{method}")
+        assert session.client.pending.slot == slot
+
+
+def test_honest_client_reacts_truthfully_and_status_follows():
+    session, rng = make("businessman.partner", rolls=[0.5, 0.0])
+    before = session.client.trust
+    result = act(session, rng, "c:stop", "m:tarot", "i:partner")[-1]
+    assert session.client.trust == before + rules.TRUST_WARM
+    assert result.events[-1].kind == "status" and "телефон" in result.events[-1].text
+    assert session.client.readings[-1].reaction == "warm"
+
+    session, rng = make("businessman.partner", rolls=[0.5, 0.0])
+    before = session.client.trust
+    wrong_tag = next(t for t in session.client.options["who"] if t != "partner")
+    act(session, rng, "c:stop", "m:tarot", f"i:{wrong_tag}")
+    assert session.client.trust == before + rules.TRUST_COLD
+    assert session.client.readings[-1].reaction == "cold"
+
+
+def test_honest_client_sometimes_misleads():
+    session, rng = make("businessman.partner", rolls=[0.5, 0.95])
+    act(session, rng, "c:stop", "m:tarot", "i:partner")
+    assert session.client.readings[-1].reaction == "cold", "правду можно принять за промах"
+
+
+def test_jealous_overreacts_to_anything():
+    session, rng = make("jealous.lena", rolls=[0.5])
+    wrong_tag = next(t for t in session.client.options["who"] if t != "colleague")
+    result = act(session, rng, "c:stop", "m:tarot", f"i:{wrong_tag}")[-1]
+    assert session.client.readings[-1].reaction == "warm"
+    assert "ЗНАЛА" in texts(result)
+
+
+def test_skeptic_has_only_a_faint_tell():
+    session, rng = make("skeptic.mom", rolls=[0.5, 0.9])
+    act(session, rng, "c:stop", "m:tarot", "i:relative")
+    assert session.client.readings[-1].reaction == "cold"
+    session, rng = make("skeptic.mom", rolls=[0.5, 0.1])
+    act(session, rng, "c:stop", "m:tarot", "i:relative")
+    assert session.client.readings[-1].reaction == "warm"
+
+
+def test_two_readings_then_constructor_each_method_once():
+    session, rng = make("businessman.partner")
+    act(session, rng, "c:stop")
+    read(session, rng, "tarot", "partner")
+    assert "m:tarot" not in {a.id for a in rules.available_actions(session)}
+    assert session.client.phase == "divine"
+    read(session, rng, "energy", "anger")
+    assert session.client.phase == "who"
+
+
+def test_can_go_to_prediction_early():
+    session, rng = make("businessman.partner")
+    act(session, rng, "c:stop", "go")
+    assert session.client.phase == "who"
+
+
+def test_suspicion_crossing_replaces_status():
+    session, rng = make("skeptic.mom")
+    session.client.suspicion = 35
+    result = act(session, rng, "c:why")[0]
+    assert "щурится" in texts(result)
 
 
 def test_suspicion_overflow_exposes_mid_session():
     session, rng = make("skeptic.mom", "jealous.lena")
     session.client.suspicion = 90
-    result = act(session, rng, "m:tarot")[0]
-    assert result.finished_client.report.outcome == "exposure"
-    assert result.finished_client.report.reasons == ("suspicion",)
-    assert session.legend == 1 and session.client.story.id == "jealous.lena"
+    result = act(session, rng, "c:why")[0]
+    assert report_of(result).outcome == "exposure" and report_of(result).reasons == ("suspicion",)
+    assert session.legend == 1 and session.client.phase == "done"
 
 
 # --- предсказание и исходы --------------------------------------------------
 
 def test_hit_partial_miss():
-    session, rng = make("businessman.partner", "businessman.partner", "businessman.partner")
-    truth = session.client.truth
-    hit = predict(session, rng, "partner", "betray", truth["when"], "maybe")
-    partial = predict(session, rng, "partner", "betray", "sudden", "maybe")
-    miss = predict(session, rng, "colleague", "betray", "sudden", "maybe")
-    assert [r.finished_client.report.outcome for r in (hit, partial, miss)] == ["hit", "partial", "miss"]
+    plan = ("businessman.partner",) * 3
+    session, rng = make(*plan)
+    outcomes = [report_of(hit(session, rng, "maybe")).outcome]
+    next_client(session, rng)
+    outcomes.append(report_of(predict(session, rng, "partner", "betray", "sudden", "maybe")).outcome)
+    next_client(session, rng)
+    outcomes.append(report_of(predict(session, rng, "colleague", "betray", "sudden", "maybe")).outcome)
+    assert outcomes == ["hit", "partial", "miss"]
 
 
 def test_prediction_sentence_agrees_with_self():
     assert rules.prediction_sentence({"who": "self", "what": "secret", "when": "sudden"}, "maybe") == (
         "Мне кажется, когда вы меньше всего будете ждать, вы сами раскроете тайну."
     )
-    assert rules.prediction_sentence({"who": "colleague", "what": "cheat", "when": "week"}, "swear") == (
-        "Клянусь своим третьим глазом: до конца недели человек из рабочего окружения изменит."
-    )
 
 
-def test_echo_is_clients_word_without_own_support():
-    session, _ = make("businessman.partner")
+def test_echo_is_clients_word_without_own_reading():
+    session, rng = make("businessman.partner")
     client = session.client
-    assert rules.is_echo(client, "who", "partner"), "партнёра назвал сам клиент"
+    assert rules.is_echo(client, "who", "partner")
     assert not rules.is_echo(client, "what", "betray"), "не говорил — не эхо"
-    client.knowledge.append(Knowledge("who", ("partner", "colleague"), "tarot", False, True))
-    assert not rules.is_echo(client, "who", "partner"), "подтверждено Таро — переупаковка, не эхо"
+    act(session, rng, "c:stop")
+    read(session, rng, "tarot", "partner")
+    assert not rules.is_echo(client, "who", "partner"), "озвучено через Таро — переупаковка, не эхо"
 
 
-def test_observation_is_own_source_not_echo():
-    session, _ = make("skeptic.mom")
-    session.client.knowledge.append(Knowledge("who", ("relative",), "question", True, True))
-    assert not rules.is_echo(session.client, "who", "relative")
+def test_reading_supports_event_through_sphere_and_emotion():
+    assert Knowledge("sphere", "work", "palm", True).supports("what", "betray")
+    assert Knowledge("emotion", "anger", "energy", True).supports("what", "betray")
+    assert not Knowledge("sphere", "love", "palm", False).supports("what", "betray")
 
 
 def test_skeptic_echo_with_see_is_critical_but_maybe_is_not():
-    session, rng = make("skeptic.believer", "skeptic.believer")
-    result = predict(session, rng, "colleague", "secret", session.client.truth["when"], "see")
-    report = result.finished_client.report
+    plan = ("skeptic.believer", "skeptic.believer")
+    session, rng = make(*plan)
+    report = report_of(predict(session, rng, "colleague", "secret", session.client.truth["when"], "see"))
     assert report.outcome == "exposure" and report.reasons[0] == "skeptic_echo" and session.legend == 1
-
-    result = predict(session, rng, "colleague", "secret", session.client.truth["when"], "maybe")
-    report = result.finished_client.report
+    next_client(session, rng)
+    report = report_of(predict(session, rng, "colleague", "secret", session.client.truth["when"], "maybe"))
     assert report.outcome == "partial" and report.echo_slots == ("who",) and session.legend == 1
 
 
 def test_sworn_miss_is_critical_for_every_archetype():
     for story_id in ("jealous.lena", "businessman.partner", "skeptic.mom"):
         session, rng = make(story_id, story_id)
-        result = miss(session, rng, "swear")
-        assert result.finished_client.report.reasons[0] == "sworn_miss", story_id
+        assert report_of(miss(session, rng, "swear")).reasons[0] == "sworn_miss", story_id
         assert session.legend == 1
 
 
 def test_skeptic_confident_miss_depends_on_suspicion():
     session, rng = make("skeptic.mom", "skeptic.mom")
     session.client.suspicion = 60
-    assert miss(session, rng, "see").finished_client.report.reasons == ("skeptic_confident_miss",)
+    assert report_of(miss(session, rng, "see")).reasons == ("skeptic_confident_miss",)
+    next_client(session, rng)
     session.client.suspicion = 59
-    report = miss(session, rng, "see").finished_client.report
-    assert report.outcome == "miss" and session.legend == 1
+    assert report_of(miss(session, rng, "see")).outcome == "miss" and session.legend == 1
 
 
 def test_businessman_sworn_echo_and_soft_discount():
     session, rng = make("businessman.partner")
-    act(session, rng, "m:question", "q:when")
-    result = act(session, rng, "go", "s:who:partner", "s:what:betray", f"s:when:{session.client.truth['when']}",
-                 "a:swear")[-1]
-    report = result.finished_client.report
+    act(session, rng, "c:rush")
+    report = report_of(predict(session, rng, "partner", "betray", session.client.truth["when"], "swear"))
     assert report.reasons == ("sworn_echo",) and set(report.echo_slots) == {"who", "when"}
-
-    session, rng = make("businessman.wife")
-    act(session, rng, "m:question", "q:when")
-    result = act(session, rng, "go", "s:who:colleague", "s:what:gain", f"s:when:{session.client.truth['when']}",
-                 "a:swear")[-1]
-    reasons = result.finished_client.report.reasons
-    assert reasons[0] == "sworn_miss" and "sworn_echo" in reasons, "мимо и под клятву — первой идёт клятва"
 
     session, rng = make("businessman.partner")
     session.client.trust = 50
-    full = rules._round_money(5000 * 1.0 * rules.FEE["hit"][1])
-    result = predict(session, rng, "partner", "betray", session.client.truth["when"], "see")
-    report = result.finished_client.report
+    report = report_of(hit(session, rng, "see"))
     assert report.outcome == "hit" and report.echo_slots == ("who",)
-    assert report.fee == rules._round_money(full * rules.ECHO_DISCOUNT)
+    assert report.fee == rules._round_money(5000 * rules.FEE["hit"][1] * rules.ECHO_DISCOUNT)
 
 
 def test_jealous_echo_is_free():
     session, rng = make("jealous.lena")
-    result = predict(session, rng, "colleague", "cheat", session.client.truth["when"], "swear")
-    report = result.finished_client.report
-    assert report.outcome == "hit" and set(report.echo_slots) == {"who", "what"}
-    assert "Я же говорила" in " ".join(result.finished_client.dialog)
+    result = hit(session, rng, "swear")
+    assert report_of(result).outcome == "hit" and set(report_of(result).echo_slots) == {"who", "what"}
+    assert "Я же говорила" in texts(result)
 
 
 def test_trap_only_with_confidence():
     session, rng = make("businessman.partner", "businessman.partner")
-    result = predict(session, rng, "tax", "secret", session.client.truth["when"], "see")
-    assert result.finished_client.report.reasons == ("trap",)
-    result = predict(session, rng, "tax", "secret", session.client.truth["when"], "maybe")
-    assert result.finished_client.report.outcome == "miss" and session.legend == 1
+    assert report_of(predict(session, rng, "tax", "secret", "sudden", "see")).reasons == ("trap",)
+    next_client(session, rng)
+    assert report_of(predict(session, rng, "tax", "secret", "sudden", "maybe")).outcome == "miss"
+    assert session.legend == 1
 
 
 def test_jackpot_counts_as_hit():
     session, rng = make("jealous.lena")
     result = predict(session, rng, "animal", "secret", "sudden", "maybe")
-    report = result.finished_client.report
-    assert report.outcome == "hit" and report.jackpot and session.streak == 1
-    assert "серёжку" in " ".join(result.finished_client.dialog)
+    assert report_of(result).outcome == "hit" and report_of(result).jackpot and session.streak == 1
+    assert "серёжку" in texts(result)
+
+
+def _horoscope(session, rng):
+    act(session, rng, "c:stop")
+    read(session, rng, "horoscope", session.client.truth["when"])
 
 
 def test_mercury_forgives_when_once_and_only_after_horoscope():
-    session, rng = make("businessman.partner", "businessman.partner", "businessman.partner", rolls=[0.95, 0.5])
-    act(session, rng, "m:horoscope")
-    first = predict(session, rng, "partner", "betray", "sudden", "maybe").finished_client.report
+    session, rng = make("businessman.partner", "businessman.partner", "businessman.partner")
+    _horoscope(session, rng)
+    first = report_of(predict(session, rng, "partner", "betray", "sudden", "maybe"))
     assert first.outcome == "hit" and any(slot.mercury for slot in first.slots)
-    act(session, rng, "m:horoscope")
-    second = predict(session, rng, "partner", "betray", "sudden", "maybe").finished_client.report
+    next_client(session, rng)
+    _horoscope(session, rng)
+    second = report_of(predict(session, rng, "partner", "betray", "sudden", "maybe"))
     assert second.outcome == "partial", "Меркурий — один раз за партию"
-    third = predict(session, rng, "partner", "betray", "sudden", "maybe").finished_client.report
-    assert third.outcome == "partial", "без гороскопа на этом клиенте Меркурий не помогает"
 
 
 def test_mercury_does_not_rescue_total_miss():
-    session, rng = make("businessman.partner", rolls=[0.95, 0.5])
-    act(session, rng, "m:horoscope")
-    report = miss(session, rng, "maybe").finished_client.report
-    assert report.outcome == "miss" and session.mercury_left
+    session, rng = make("businessman.partner")
+    _horoscope(session, rng)
+    assert report_of(miss(session, rng, "maybe")).outcome == "miss" and session.mercury_left
 
 
 def test_several_reasons_cost_one_legend():
     session, rng = make("skeptic.believer", "skeptic.believer")
-    session.client.suspicion = 70
     result = predict(session, rng, "colleague", "betray", "sudden", "swear")
-    report = result.finished_client.report
-    assert report.reasons == ("skeptic_echo", "sworn_miss")
-    assert session.legend == 1
+    assert report_of(result).reasons == ("skeptic_echo", "sworn_miss") and session.legend == 1
     (lost,) = metrics([result], "legend_lost")
-    assert lost["reason"] == "skeptic_echo" and len(lost["reasons"]) >= 2
+    assert lost["reason"] == "skeptic_echo" and len(lost["reasons"]) == 2
 
 
 @pytest.mark.parametrize(("story_id", "picks", "confidence"), [
-    ("jealous.lena", None, "maybe"),  # промах с «Мне кажется»
-    ("jealous.lena", None, "see"),  # промах с «Вижу» у не-скептика
-    ("businessman.partner", ("partner", "betray", "sudden"), "swear"),  # частичное под клятву
-    ("businessman.partner", ("tax", "secret", "sudden"), "maybe"),  # ловушка без уверенности
+    ("jealous.lena", None, "maybe"),
+    ("jealous.lena", None, "see"),
+    ("businessman.partner", ("partner", "betray", "sudden"), "swear"),
+    ("businessman.partner", ("tax", "secret", "sudden"), "maybe"),
 ])
 def test_ordinary_failures_keep_the_legend(story_id, picks, confidence):
     session, rng = make(story_id, story_id)
     result = miss(session, rng, confidence) if picks is None else predict(session, rng, *picks, confidence)
-    report = result.finished_client.report
-    assert report.outcome != "exposure" and session.legend == 2
+    assert report_of(result).outcome != "exposure" and session.legend == 2
 
 
 def test_sworn_partial_costs_a_point():
     session, rng = make("businessman.partner", "businessman.partner")
-    report = predict(session, rng, "partner", "betray", "sudden", "swear").finished_client.report
+    report = report_of(predict(session, rng, "partner", "betray", "sudden", "swear"))
     assert report.outcome == "partial" and report.points == -1
+
+
+# --- ход партии -------------------------------------------------------------
+
+def test_next_client_comes_only_when_asked():
+    session, rng = make("jealous.lena", "businessman.partner")
+    result = hit(session, rng, "maybe")
+    assert session.client.phase == "done" and session.client.story.id == "jealous.lena"
+    assert [a.id for a in result.view.actions] == ["next"]
+    arrival = act(session, rng, "next")[0]
+    assert session.client.story.id == "businessman.partner" and arrival.events[0].kind == "arrive"
+
+
+def test_last_client_finishes_without_next():
+    session, rng = make("jealous.lena")
+    result = hit(session, rng, "maybe")
+    assert session.finished and session.finish_reason == "completed"
+    assert metrics([result], "finish")[0]["clients"] == 1
 
 
 def test_two_criticals_close_the_salon_early():
     session, rng = make("jealous.lena", "businessman.partner", "skeptic.mom")
     miss(session, rng, "swear")
+    next_client(session, rng)
     result = miss(session, rng, "swear")
-    assert session.finished and session.finish_reason == "exposed"
-    assert len(session.reports) == 2
+    assert session.finished and session.finish_reason == "exposed" and len(session.reports) == 2
     assert rules.title(session) == C.EXPOSED_TITLE
     (finish,) = metrics([result], "finish")
     assert finish["reason"] == "exposed" and finish["legend_left"] == 0 and finish["exposures"] == 2
@@ -440,8 +559,10 @@ def test_three_legends_cannot_end_a_three_client_shift_early():
     session, rng = make("jealous.lena", "businessman.partner", "skeptic.mom")
     session.legend = session.legend_start = 3
     miss(session, rng, "swear")
+    next_client(session, rng)
     miss(session, rng, "swear")
     assert not session.finished
+    next_client(session, rng)
     miss(session, rng, "swear")
     assert session.finished and len(session.reports) == 3
 
@@ -449,56 +570,62 @@ def test_three_legends_cannot_end_a_three_client_shift_early():
 def test_only_ordinary_misses_finish_the_shift_intact():
     session, rng = make("jealous.lena", "businessman.partner", "skeptic.mom")
     for _ in range(3):
-        miss(session, rng, "see")
+        miss(session, rng, "maybe")
+        next_client(session, rng)
     assert session.finish_reason == "completed" and session.legend == 2 and session.max_streak == 0
 
 
-# --- серия, мастерство, итог ------------------------------------------------
-
 def test_streak_rules_and_bonus():
-    session, rng = make("businessman.partner", "businessman.partner", "businessman.partner")
-    first = predict(session, rng, "partner", "betray", session.client.truth["when"], "maybe")
+    session, rng = make(*("businessman.partner",) * 3)
+    first = hit(session, rng, "maybe")
+    next_client(session, rng)
     partial = predict(session, rng, "partner", "betray", "sudden", "maybe")
-    third = predict(session, rng, "partner", "betray", session.client.truth["when"], "maybe")
-    assert [r.finished_client.report.streak_after for r in (first, partial, third)] == [1, 1, 2]
-    assert third.finished_client.report.streak_bonus == rules.STREAK_BONUS[2]
-    assert third.finished_client.report.points == rules.SCORE["hit"][0] + rules.STREAK_BONUS[2]
-    updates = metrics([first, partial, third], "streak_updated")
-    assert [(u["before"], u["after"]) for u in updates] == [(0, 1), (1, 2)]
+    next_client(session, rng)
+    third = hit(session, rng, "maybe")
+    assert [report_of(r).streak_after for r in (first, partial, third)] == [1, 1, 2]
+    assert report_of(third).streak_bonus == rules.STREAK_BONUS[2]
+    assert [(u["before"], u["after"]) for u in metrics([first, partial, third], "streak_updated")] == [(0, 1), (1, 2)]
 
 
 def test_streak_of_three_and_reset():
-    session, rng = make("jealous.lena", "jealous.lena", "jealous.lena")
+    session, rng = make(*("jealous.lena",) * 3)
     for _ in range(3):
-        predict(session, rng, "colleague", "cheat", session.client.truth["when"], "maybe")
-    assert session.max_streak == 3
-    assert C.STREAK_ACHIEVEMENT in rules.achievements(session)
+        hit(session, rng, "maybe")
+        next_client(session, rng)
+    assert session.max_streak == 3 and C.STREAK_ACHIEVEMENT in rules.achievements(session)
     assert session.score == 3 * rules.SCORE["hit"][0] + 2 + 3
 
     session, rng = make("jealous.lena", "jealous.lena")
-    predict(session, rng, "colleague", "cheat", session.client.truth["when"], "maybe")
+    hit(session, rng, "maybe")
+    next_client(session, rng)
     miss(session, rng, "maybe")
     assert session.streak == 0 and session.max_streak == 1
 
 
 def test_streak_does_not_pay_money():
     session, rng = make("jealous.lena", "jealous.lena")
-    first = predict(session, rng, "colleague", "cheat", session.client.truth["when"], "see").finished_client.report
-    second = predict(session, rng, "colleague", "cheat", session.client.truth["when"], "see").finished_client.report
+    first = report_of(hit(session, rng, "see"))
+    next_client(session, rng)
+    second = report_of(hit(session, rng, "see"))
     assert second.streak_bonus == 2 and second.fee == first.fee
 
 
 def test_mastery_bonus_once_for_three_main_methods():
     session, rng = make("jealous.lena", "businessman.partner", "skeptic.mom")
-    results = act(session, rng, "m:palm", "p:heart", "m:energy", "s:who:colleague", "s:what:cheat",
-                  f"s:when:{session.client.truth['when']}", "a:maybe")
-    results += act(session, rng, "m:tarot", "m:question", "q:what")
-    assert not session.mastery, "энергетика и вопрос не считаются"
-    results += act(session, rng, "s:who:partner", "s:what:betray", "s:when:sudden", "a:maybe", "m:horoscope")
+    act(session, rng, "c:stop")
+    results = [read(session, rng, "palm", "love"), read(session, rng, "energy", "guilt")]
+    results.append(hit(session, rng, "maybe"))
+    next_client(session, rng)
+    act(session, rng, "c:stop")
+    results.append(read(session, rng, "tarot", "partner"))
+    results.append(miss(session, rng, "maybe"))
+    assert not session.mastery, "энергетика не считается"
+    next_client(session, rng)
+    act(session, rng, "c:stop")
+    results.append(read(session, rng, "horoscope", session.client.truth["when"]))
     assert session.mastery
     (bonus,) = metrics(results, "mastery_bonus")
     assert bonus == {"client_no": 2, "method": "horoscope", "points": rules.MASTERY_BONUS}
-    assert C.MASTERY_LINE in session.client.lines[-1] or any(C.MASTERY_LINE in line for line in session.client.lines)
 
 
 def test_titles():
@@ -510,46 +637,47 @@ def test_titles():
     assert rules.title(session) == C.CROOK_TITLE
 
 
-def test_report_and_metrics_explain_the_episode():
-    session, rng = make("businessman.wife", rolls=[0.0, 0.0])
-    results = act(session, rng, "m:tarot", "m:question", "q:what")
-    results.append(predict_after_research(session, rng, "relative", "gain", "sudden", "see"))
-    report = results[-1].finished_client.report
+def test_report_explains_the_episode():
+    session, rng = make("businessman.wife", rolls=[0.5, 0.0])
+    act(session, rng, "c:talk")
+    act(session, rng, "c:stop")
+    read(session, rng, "tarot", "relative")
+    result = predict(session, rng, "relative", "gain", session.client.truth["when"], "see")
+    report = report_of(result)
     assert [(s.slot, s.matched) for s in report.slots] == [("who", True), ("what", False), ("when", True)]
-    assert report.outcome == "partial" and report.echo_slots == ("what",)
-    hints = {(h.source, h.slot): h.truthful for h in report.hints}
-    assert hints[("tarot", "who")] is True and hints[("question", "what")] is False
-    assert report.legend_before == report.legend_after == 2
-    (reveal,) = metrics(results, "client_reveal")
-    assert reveal["outcome"] == "partial" and reveal["echo_slots"] == ["what"] and reveal["story"] == "businessman.wife"
-    info = metrics(results, "action")
-    assert [d["kind"] for d in info] == ["info", "info", "prediction"]
-    assert info[0]["method"] == "tarot" and info[0]["quality"] == "clear" and info[0]["truthful"] is True
+    assert report.outcome == "partial" and report.echo_slots[0] == "what"
+    assert report.readings[0].correct and report.questions == ("talk",)
+    assert ("what", "gain", False) in report.said
+    (reveal,) = metrics([result], "client_reveal")
+    assert reveal["outcome"] == "partial" and reveal["story"] == "businessman.wife"
 
 
-def predict_after_research(session, rng, who, what, when, confidence):
-    return act(session, rng, f"s:who:{who}", f"s:what:{what}", f"s:when:{when}", f"a:{confidence}")[-1]
+def test_reading_metrics():
+    session, rng = make("businessman.partner", rolls=[0.5, 0.0])
+    act(session, rng, "c:stop")
+    (data,) = metrics([read(session, rng, "tarot", "partner")], "action")
+    assert data["kind"] == "reading" and data["method"] == "tarot" and data["correct"] is True
+    assert data["quality"] == "plain" and data["reaction"] == "warm" and "partner" in data["offered"]
 
 
 def test_summary_has_everything_for_the_log():
     session, rng = make("jealous.lena", "businessman.partner", "skeptic.mom")
-    act(session, rng, "m:tarot")
+    act(session, rng, "c:stop")
+    read(session, rng, "tarot", "colleague")
     for _ in range(3):
-        if session.client.phase == "research":
-            act(session, rng, "go")
-        act(session, rng, "s:who:" + session.client.options["who"][0], "s:what:" + session.client.options["what"][0],
-            "s:when:sudden", "a:maybe")
+        miss(session, rng, "maybe")
+        next_client(session, rng)
     data = rules.summary(session, now=123.0)
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 3
 
 
 def test_participants_only_and_invalid_actions():
     session, rng = make("jealous.lena")
     with pytest.raises(PermissionError):
-        rules.act(session, 999, "go", rng, now=1)
+        rules.act(session, 999, "c:stop", rng, now=1)
     with pytest.raises(ValueError):
         rules.act(session, 7, "a:swear", rng, now=1)
 
@@ -559,19 +687,19 @@ def test_same_seed_same_party():
         rng = random.Random(seed)
         session = rules.new_session(session_id=SID, chat_id=1, player_id=1, player_name="Зоя", rng=rng, now=0)
         while not session.finished:
-            actions = [a.id for a in rules.available_actions(session)]
-            rules.act(session, 1, rng.choice(actions), rng, now=1)
+            rules.act(session, 1, rng.choice([a.id for a in rules.available_actions(session)]), rng, now=1)
         return rules.summary(session, now=1)
 
     assert run(42) == run(42)
 
 
-def test_idle_and_abandon():
+def test_idle_is_fifteen_minutes():
     session, rng = make("jealous.lena", now=0.0)
-    assert not rules.is_idle(session, now=179.0) and rules.is_idle(session, now=180.0)
-    act(session, rng, "m:tarot")
-    data = rules.abandon_summary(session, "timeout", now=500.0)
-    assert data["reason"] == "timeout" and data["idle_s"] == 499.0 and data["phase"] == "research"
+    assert rules.IDLE_TIMEOUT_S == 900
+    assert not rules.is_idle(session, now=899.0) and rules.is_idle(session, now=900.0)
+    act(session, rng, "c:stop")
+    data = rules.abandon_summary(session, "timeout", now=2000.0)
+    assert data["reason"] == "timeout" and data["idle_s"] == 1999.0 and data["phase"] == "divine"
     rules.abandon(session, "quit")
     assert session.finish_reason == "timeout"
 
@@ -584,7 +712,7 @@ def test_registry_one_session_per_chat():
     with pytest.raises(ValueError):
         registry.add(second)
     assert not registry.remove(second) and registry.get(-1) is first
-    assert registry.idle(now=500.0) == [first]
+    assert registry.idle(now=5000.0) == [first]
     assert registry.remove(first) and len(registry) == 0
 
 
@@ -593,13 +721,11 @@ def test_registry_one_session_per_chat():
 def test_view_matches_phase_and_serializes():
     session, rng = make("jealous.lena")
     view = rules.build_view(session)
-    assert {a.kind for a in view.actions} == {"method", "control"}
-    assert view.client.observation and view.preview is None
+    assert {a.kind for a in view.actions} == {"question", "control"} and view.preview is None
     json.dumps(view.to_dict(), ensure_ascii=False)
-
-    act(session, rng, "go", "s:who:colleague")
+    to_constructor(session, rng)
+    act(session, rng, "s:who:colleague")
     view = rules.build_view(session)
-    assert {a.id for a in view.actions if a.kind == "option"} == {f"s:what:{t}" for t in session.client.options["what"]}
     assert view.preview.startswith("Кто: Коллега")
     act(session, rng, "s:what:cheat", "s:when:week")
     view = rules.build_view(session)
@@ -613,13 +739,12 @@ def _all_views(seed):
     rng = random.Random(seed)
     session = rules.new_session(session_id=SID, chat_id=1, player_id=1, player_name="Зоя", rng=rng, now=0)
     views = [rules.build_view(session)]
-    finished = []
+    results = []
     while not session.finished:
         result = rules.act(session, 1, rng.choice([a.id for a in rules.available_actions(session)]), rng, now=1)
         views.append(result.view)
-        if result.finished_client:
-            finished.append((result.view, result.finished_client))
-    return views, finished
+        results.append(result)
+    return views, results
 
 
 def test_every_button_fits_telegram_and_round_trips():
@@ -627,17 +752,19 @@ def test_every_button_fits_telegram_and_round_trips():
         views, _ = _all_views(seed)
         for view in views:
             for row in textui.keyboard(view):
-                for _, data in row:
-                    assert len(data.encode()) <= 64
+                for label, data in row:
+                    assert len(data.encode()) <= 64 and label
                     parsed = textui.parse(data)
                     assert parsed.kind == "act" and parsed.session_id == SID and parsed.step == view.step
             assert {textui.parse(d).action for row in textui.keyboard(view) for _, d in row} == {a.id for a in view.actions}
 
 
-def test_again_buttons_round_trip():
+def test_special_callbacks_round_trip():
     for answer in ("yes", "no"):
         parsed = textui.parse(textui.again_data(SID, answer))
         assert (parsed.kind, parsed.answer, parsed.session_id) == ("again", answer, SID)
+    parsed = textui.parse(textui.report_data(SID, 2))
+    assert (parsed.kind, parsed.client_no, parsed.session_id) == ("report", 2, SID)
 
 
 @pytest.mark.parametrize("data", [None, "", "guru", "guru:XYZ:1:go", "guru:abc:x:go", "croc:abc:1:go"])
@@ -645,42 +772,63 @@ def test_parse_rejects_garbage(data):
     assert textui.parse(data) is None
 
 
-def test_texts_fit_and_hide_numbers():
-    for seed in range(15):
-        views, finished = _all_views(seed)
-        for view in views:
-            if view.client is None:
-                continue
-            text, _ = textui.render_view(view)
-            assert len(text) <= 4096
-            assert "%" not in text and "Доверие" not in text and "подозрение" not in text.lower()
-        for view, client in finished:
-            text = textui.render_finished(view, client)
-            assert len(text) <= 4096 and "Разбор" in text and client.report.reveal[:20] in text
-
-
-def test_long_dialog_is_trimmed_from_the_top():
-    session, _ = make("jealous.lena")
-    session.client.lines.extend(["очень длинная реплика " * 10] * 40)
-    text, _ = textui.render_view(rules.build_view(session))
-    assert len(text) <= textui.MESSAGE_LIMIT and "👉" in text and "…" in text
-
-
-def test_summary_and_abandoned_texts():
-    session, rng = make("jealous.lena")
-    data = rules.abandon_summary(session, "timeout", now=999.0)
+def test_events_split_into_short_messages():
+    session, rng = make("jealous.bookie")
     view = rules.build_view(session)
-    text, rows = textui.render_summary(view)
-    assert "брошен" in text and "Звание" in text and data["reason"] == "timeout"
+    bubbles = textui.bubbles(rules.arrival_events(session), view)
+    assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
+    assert bubbles[0].pause == 0 and bubbles[1].pause > 0
+    result = act(session, rng, "c:stop", "m:tarot")[-1]
+    ritual, omen = textui.bubbles(result.events, result.view)
+    assert not ritual.replace and omen.replace and omen.pause > 0
+
+
+def test_messages_are_short_and_hide_numbers():
+    for seed in range(15):
+        _, results = _all_views(seed)
+        for result in results:
+            for bubble in textui.bubbles(result.events, result.view):
+                assert len(bubble.text) <= 1000, bubble.text
+                assert "%" not in bubble.text and "Доверие" not in bubble.text
+
+
+def test_verdict_and_report_are_separate():
+    session, rng = make("jealous.lena")
+    result = miss(session, rng, "maybe")
+    report = report_of(result)
+    verdict = textui.render_verdict(result.view, report)
+    assert verdict.count("\n") == 1 and "Промах" in verdict
+    detailed = textui.render_report(report)
+    assert "Разбор" in detailed and "было:" in detailed and len(detailed) <= textui.MESSAGE_LIMIT
+
+
+def test_client_done_keyboard_offers_report_and_next():
+    session, rng = make("jealous.lena", "jealous.lena")
+    result = hit(session, rng, "maybe")
+    labels = [label for row in textui.client_done_keyboard(result.view, report_of(result)) for label, _ in row]
+    assert labels == [textui.REPORT_BUTTON, "🚪 Следующий клиент"]
+
+
+def test_constructor_shows_preview_and_mood():
+    session, rng = make("jealous.lena")
+    to_constructor(session, rng)
+    act(session, rng, "s:who:colleague")
+    text, rows = textui.render_constructor(rules.build_view(session))
+    assert "Кто: Коллега" in text and session.client.name in text and rows
+
+
+def test_summary_and_abandon_note():
+    session, _ = make("jealous.lena")
+    rules.abandon_summary(session, "timeout", now=999.0)
+    text, rows = textui.render_summary(rules.build_view(session))
+    assert "брошен" in text and "Звание" in text
     assert [label for row in rows for label, _ in row] == [textui.AGAIN_YES, textui.AGAIN_NO]
-    abandoned = textui.render_abandoned(view, rules.current_client_view(session), "timeout")
-    assert textui.ABANDON_NOTES["timeout"] in abandoned
+    assert textui.render_abandoned("timeout") == textui.ABANDON_NOTES["timeout"]
 
 
-def test_intro_explains_the_rules():
+def test_intro_is_short():
     text = textui.render_intro(rules.build_view(make("jealous.lena")[0]))
-    for word in ("ладонь", "Таро", "гороскоп", "Клянусь", "Легенда"):
-        assert word in text
+    assert len(text) < 400 and "Клянусь" in text and "15 минут" in text
 
 
 # --- архитектура ------------------------------------------------------------
@@ -711,10 +859,3 @@ def test_transport_does_not_create_unowned_tasks():
         and isinstance(node.func.value, ast.Name) and node.func.value.id == "asyncio"
     ]
     assert "create_task" not in calls and "ensure_future" not in calls
-
-
-def test_client_sources_are_distinct_from_own():
-    from games.guru.model import OWN_SOURCES
-
-    assert not (CLIENT_SOURCES & OWN_SOURCES)
-    assert set(C.SOURCE_LABELS) == CLIENT_SOURCES | OWN_SOURCES

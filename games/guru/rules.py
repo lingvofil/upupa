@@ -1,21 +1,22 @@
-"""Правила салона «Гуру» v0.2: единственное место, где меняется состояние партии.
+"""Правила салона «Гуру»: единственное место, где меняется состояние партии.
 
-Цикл клиента: приход (жалоба и видимый признак) → до двух инфо-приёмов
-(ладонь, Таро, гороскоп, энергетика, вопрос; каждый — раз на клиента) →
-конструктор «кто / что / когда» → объявление с уверенностью → разбор.
+Приём клиента повторяет работу гадалки:
 
-- Ладонь отвечает «да / нет» на сферу, а сфера однозначно задаёт вариант «что»:
-  в конструкторе по одному событию на сферу.
-- Таро намекает на «кто», гороскоп — на «когда», энергетика — на эмоцию,
-  то есть сужает «что». Подсказка бывает ясной, мутной или ложной; ложная
-  выглядит как ясная.
-- Вопрос даёт убеждение клиента. Это «слова клиента»: выдать их за ясновидение,
-  не подтвердив своим источником, — эхо, и цена эха зависит от архетипа.
-- Уверенность — ставка (``SCORE``/``FEE``); критическое разоблачение стоит
-  одного запаса легенды салона, на нуле салон разоблачён.
+1. Клиент приходит и рассказывает свою версию. Выводы игрок делает сам.
+2. До двух уточнений (``clarify``): проверить версию клиента или узнать новое.
+3. До двух гаданий (``divine``): метод показывает расклад и толкования, игрок сам
+   выбирает, что озвучить (``interpret``). Попал или нет, видно только по реакции,
+   а реакция зависит от характера клиента. Настроение клиента меняется вслух.
+4. Конструктор «кто / что / когда» и объявление с уверенностью (``announce``).
+5. Развязка и итог (``done``); следующий клиент приходит по кнопке.
 
-Случайность приходит как ``random.Random``, время — числом секунд, поэтому
-партия воспроизводится по seed.
+Таро намекает на «кто», гороскоп — на «когда», ладонь — на сферу, энергетика — на
+эмоцию; сфера и эмоция сужают «что». Эхо — слова клиента, выданные за ясновидение
+без своего гадания: цена зависит от архетипа. Уверенность — ставка; критическое
+разоблачение стоит запаса легенды салона.
+
+Случайность приходит как ``random.Random``, время — числом секунд, поэтому партия
+воспроизводится по seed.
 """
 
 from __future__ import annotations
@@ -25,15 +26,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from games.guru import content as C
-from games.guru.contract import Action, ActResult, ClientView, DisplayEvent, NoteView, View
+from games.guru.contract import Action, ActResult, ClientView, DisplayEvent, View
 from games.guru.model import (
     CLIENT_SOURCES,
-    OWN_SOURCES,
     Client,
     ClientReport,
-    HintResult,
     Knowledge,
     Participant,
+    Reading,
+    ReadingResult,
     Session,
     SlotResult,
     Story,
@@ -41,24 +42,39 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 2
+RULES_VERSION = 3
 
 ARCHETYPE_ORDER = ("skeptic", "jealous", "businessman")
 CLIENTS_PER_SESSION = len(ARCHETYPE_ORDER)
 LEGEND_START = 2
-INFO_ACTIONS = 2
-IDLE_TIMEOUT_S = 180
+CLARIFICATIONS = 2
+READINGS = 2
+IDLE_TIMEOUT_S = 900
 
-METHODS = ("palm", "tarot", "horoscope", "energy", "question")
-HINT_QUALITY = {"tarot": (0.55, 0.30), "horoscope": (0.55, 0.30), "energy": (0.35, 0.45)}  # ясно, мутно
-PALM_ERROR = 0.10
-REACTION_ACCURACY = 0.90
+# Драматические паузы, секунды.
+BEAT_SHORT = 1.5
+BEAT = 2.5
+BEAT_LONG = 3.0
+
+# Качество расклада: (два толкования с правдой, три с правдой); остаток — правды среди них нет.
+READING_QUALITY = {
+    "palm": (0.25, 0.65),
+    "tarot": (0.20, 0.65),
+    "horoscope": (0.20, 0.65),
+    "energy": (0.15, 0.60),
+}
+REACTION_ACCURACY = {"honest": 0.90, "poker": 0.65}
+TRUST_WARM = 10
+TRUST_COLD = -8
+TRUST_OVERREACT = 6
+HOROSCOPE_TRUST = 4
+SKEPTIC_HOROSCOPE_TRUST = -5
+SUSPICION_WARM = -5
+SUSPICION_COLD = 10
 SKEPTIC_START_SUSPICION = 20
 SUSPICION_EXIT = 100
 SKEPTIC_SEE_MISS_AT = 60
 SOFT_ECHO_SUSPICION = 20
-TRUST_DELTA = {"palm": 5, "tarot": 5, "energy": 5, "horoscope": 10, "question": -10}
-SKEPTIC_HOROSCOPE_TRUST = -10
 
 SCORE = {"hit": (2, 3, 5), "partial": (1, 1, -1), "miss": (0, -1, -3), "exposure": (-4, -4, -4)}
 FEE = {"hit": (0.6, 1.0, 1.6), "partial": (0.5, 0.4, 0.2), "miss": (0.2, 0.1, 0.0), "exposure": (0, 0, 0)}
@@ -71,11 +87,9 @@ CROOK_MAX_SCORE = 4
 # Порядок важен: в журнал идёт первая сработавшая причина.
 CRITICAL_REASONS = ("skeptic_echo", "sworn_miss", "skeptic_confident_miss", "sworn_echo", "trap", "suspicion")
 
-SPHERE_ACCUSATIVE = {"love": "отношения", "work": "работу", "money": "деньги", "family": "семью"}
 PROMPTS = {
-    "palm": "Какую линию смотрим?",
-    "ask": "О чём спросить?",
-    "who": "Предсказание. Кто?",
+    "interpret": "Что озвучить?",
+    "who": "Кто?",
     "what": "Что произойдёт?",
     "when": "Когда?",
     "announce": "Как объявить?",
@@ -99,16 +113,17 @@ def rub(amount: int) -> str:
 # --- создание ---------------------------------------------------------------
 
 def _what_options(story: Story, rng: random.Random) -> tuple[str, ...]:
-    """По одному событию на сферу: правда, убеждение клиента, события джекпота и ловушки, остальное случайно."""
-    belief = story.belief("what", story.what)
-    forced = {C.WHAT[belief].sphere: belief} if belief != story.what else {}
-    forced.update({
-        C.WHAT[tag].sphere: tag
-        for combo in (story.jackpot, story.trap)
-        if combo is not None
-        for slot, tag in combo.picks
-        if slot == "what"
-    })
+    """По одному событию на сферу: правда, версии клиента, события джекпота и ловушки, остальное случайно."""
+    forced: dict[str, str] = {}
+    claims = [story.said.get("what")] + [q.said.get("what") for q in story.questions]
+    for tag in claims:
+        if tag and tag != story.what:
+            forced[C.WHAT[tag].sphere] = tag
+    for combo in (story.jackpot, story.trap):
+        if combo is not None:
+            for slot, tag in combo.picks:
+                if slot == "what":
+                    forced[C.WHAT[tag].sphere] = tag
     options = []
     for sphere in C.SPHERES:
         if sphere == story.sphere:
@@ -119,12 +134,6 @@ def _what_options(story: Story, rng: random.Random) -> tuple[str, ...]:
             options.append(rng.choice([tag.key for tag in C.WHAT.values() if tag.sphere == sphere]))
     rng.shuffle(options)
     return tuple(options)
-
-
-def _observation_truthful(story: Story, slot: str, tags: tuple[str, ...], when: str) -> bool:
-    truth = {"who": story.who, "what": story.what, "when": when,
-             "sphere": story.sphere, "emotion": C.WHAT[story.what].emotion}[slot]
-    return truth in tags
 
 
 def new_client(story: Story, rng: random.Random, now: float) -> Client:
@@ -141,16 +150,12 @@ def new_client(story: Story, rng: random.Random, now: float) -> Client:
         trust=kind.base_trust,
         suspicion=SKEPTIC_START_SUSPICION if kind.suspicion else 0,
         started_at=now,
-        actions_left=INFO_ACTIONS,
+        questions_left=CLARIFICATIONS,
+        readings_left=READINGS,
     )
-    for slot, tag in story.disclosed.items():
-        client.knowledge.append(Knowledge(slot, (tag,), "disclosed", True, tag == client.truth[slot]))
-    observation = story.observation
-    tags = (when,) if observation.tags == ("@when",) else observation.tags
-    client.knowledge.append(
-        Knowledge(observation.slot, tags, "observation", len(tags) == 1,
-                  _observation_truthful(story, observation.slot, tags, when))
-    )
+    for slot, tag in story.said.items():
+        resolved = client.resolve(tag)
+        client.knowledge.append(Knowledge(slot, resolved, "disclosed", resolved == client.truth[slot]))
     return client
 
 
@@ -183,7 +188,23 @@ def new_session(
     )
 
 
+def arrival_events(session: Session) -> tuple[DisplayEvent, ...]:
+    """Клиент заходит и рассказывает свою версию."""
+    client = session.client
+    events = [DisplayEvent("arrive", client.render(client.story.arrival))]
+    events += [DisplayEvent("tell", client.render(part), pause=BEAT) for part in client.story.told]
+    return tuple(events)
+
+
 # --- действия ---------------------------------------------------------------
+
+def _tag_label(slot: str, tag: str) -> str:
+    return {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}[slot][tag].label
+
+
+def _interpretation(slot: str, tag: str) -> Any:
+    return {"who": C.WHO, "when": C.WHEN, "sphere": C.SPHERES, "emotion": C.EMOTIONS}[slot][tag]
+
 
 def available_actions(session: Session) -> tuple[Action, ...]:
     if session.finished:
@@ -191,20 +212,15 @@ def available_actions(session: Session) -> tuple[Action, ...]:
     client = session.client
     phase = client.phase
     actions: list[Action] = []
-    if phase == "research":
-        if client.actions_left > 0:
-            actions += [
-                Action(f"m:{method}", C.METHOD_LABELS[method], "method")
-                for method in METHODS
-                if method not in client.used_methods
-            ]
+    if phase == "clarify":
+        actions += [Action(f"c:{q.id}", q.label, "question") for q in client.story.questions if q.id not in client.asked]
+        actions.append(Action("c:stop", "Хватит вопросов", "control"))
+    elif phase == "divine":
+        actions += [Action(f"m:{m.key}", m.label, "method") for m in C.METHODS.values() if m.key not in client.used_methods]
         actions.append(Action("go", "🔮 К предсказанию", "control"))
-    elif phase == "palm":
-        actions += [Action(f"p:{line.key}", line.label, "line") for line in C.PALM_LINES.values()]
-        actions.append(Action("back", "← Назад", "control"))
-    elif phase == "ask":
-        actions += [Action(f"q:{slot}", f"{C.SLOT_TITLES[slot]}?", "question") for slot in C.SLOTS]
-        actions.append(Action("back", "← Назад", "control"))
+    elif phase == "interpret" and client.pending is not None:
+        slot = client.pending.slot
+        actions += [Action(f"i:{tag}", _interpretation(slot, tag).button, "interpretation") for tag in client.pending.offered]
     elif phase in C.SLOTS:
         actions += [Action(f"s:{phase}:{tag}", _tag_label(phase, tag), "option") for tag in client.options[phase]]
         if phase != "who":
@@ -212,6 +228,8 @@ def available_actions(session: Session) -> tuple[Action, ...]:
     elif phase == "announce":
         actions += [Action(f"a:{level}", C.CONFIDENCE_LABELS[level], "confidence") for level in C.CONFIDENCE]
         actions.append(Action("reset", "↺ Заново", "control"))
+    elif phase == "done":
+        actions.append(Action("next", "🚪 Следующий клиент", "control"))
     return tuple(actions)
 
 
@@ -220,6 +238,9 @@ class _Turn:
     events: list[DisplayEvent] = field(default_factory=list)
     metrics: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     finished_client: ClientView | None = None
+
+    def show(self, kind: str, text: str, pause: float = 0.0, *, replace: bool = False) -> None:
+        self.events.append(DisplayEvent(kind, text, pause=pause, replace=replace))
 
 
 def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, now: float) -> ActResult:
@@ -237,17 +258,15 @@ def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, 
     client = session.client
     head, _, rest = action_id.partition(":")
 
-    if head == "m":
-        if rest == "palm":
-            client.phase = "palm"
-        elif rest == "question":
-            client.phase = "ask"
+    if head == "c":
+        if rest == "stop":
+            client.phase = "divine"
         else:
-            _info(session, client, rest, None, rng, turn, now)
-    elif head == "p":
-        _info(session, client, "palm", rest, rng, turn, now)
-    elif head == "q":
-        _info(session, client, "question", rest, rng, turn, now)
+            _clarify(session, client, rest, rng, turn, now)
+    elif head == "m":
+        _open_reading(client, rest, rng, turn)
+    elif head == "i":
+        _interpret(session, client, rest, rng, turn, now)
     elif head == "s":
         slot, _, tag = rest.partition(":")
         client.picks[slot] = tag
@@ -257,18 +276,15 @@ def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, 
         _announce(session, client, rest, rng, turn, now)
     elif action_id == "go":
         client.phase = "who"
-    elif action_id == "back":
-        client.phase = "research"
     elif action_id == "reset":
         client.picks.clear()
         client.phase = "who"
+    elif action_id == "next":
+        session.client_no += 1
+        session.client = new_client(STORIES_BY_ID[session.plan[session.client_no]], rng, now)
+        turn.events.extend(arrival_events(session))
 
     return ActResult(tuple(turn.events), tuple(turn.metrics), turn.finished_client, build_view(session))
-
-
-def _line(client: Client, turn: _Turn, text: str) -> None:
-    client.lines.append(text)
-    turn.events.append(DisplayEvent("line", text))
 
 
 def _quote(text: str) -> str:
@@ -278,198 +294,183 @@ def _quote(text: str) -> str:
     return f"«{text}»"
 
 
-def _say(client: Client, turn: _Turn, text: str) -> None:
-    _line(client, turn, f"— Ты: {_quote(text)}")
+def _crossed_suspicion(client: Client, before: int) -> str | None:
+    crossed = [text for threshold, text in client.kind.suspicion_lines if before < threshold <= client.suspicion]
+    return crossed[-1].format(name=client.name) if crossed else None
 
 
-def _slot_hint(client: Client, slot: str, method: str, rng: random.Random) -> tuple[Knowledge, str]:
-    clear, vague = HINT_QUALITY[method]
-    truth = client.truth[slot]
-    others = [tag for tag in client.options[slot] if tag != truth]
-    roll = rng.random()
-    if roll < clear:
-        return Knowledge(slot, (truth,), method, True, True), "clear"
-    if roll < clear + vague:
-        alt = rng.choice(others)
-        tags = (truth, alt) if rng.random() < 0.5 else (alt, truth)
-        return Knowledge(slot, tags, method, False, True), "vague"
-    return Knowledge(slot, (rng.choice(others),), method, True, False), "false"
+def _set_trust(client: Client, delta: int) -> None:
+    client.trust = int(_clamp(client.trust + delta, 0, 100))
 
 
-def _palm(client: Client, line_key: str, rng: random.Random, turn: _Turn) -> tuple[Knowledge, str]:
-    line = C.PALM_LINES[line_key]
-    correct = line.sphere == client.story.sphere
-    shown = correct if rng.random() >= PALM_ERROR else not correct
-    _say(client, turn, "Дай-ка руку…")
-    _line(client, turn, f"🖐 {line.speaks if shown else line.silent}")
-    return Knowledge("sphere", (line.sphere,), "palm", True, shown == correct, positive=shown), (
-        "speaks" if shown else "silent"
-    )
+def _check_exit(session: Session, client: Client, rng: random.Random, turn: _Turn, now: float) -> bool:
+    """Скептик набрал достаточно и уходит посреди сеанса."""
+    if not client.kind.suspicion or client.suspicion < SUSPICION_EXIT:
+        return False
+    turn.show("line", C.SUSPICION_EXIT_LINE.format(name=client.name), BEAT)
+    _settle(session, client, rng, turn, now, confidence=None, reasons=("suspicion",), outcome="exposure",
+            echo=(), slots=_slot_results(client, {}), jackpot=False, trap=False)
+    return True
 
 
-def _tarot(client: Client, rng: random.Random, turn: _Turn) -> tuple[Knowledge, str]:
-    knowledge, quality = _slot_hint(client, "who", "tarot", rng)
-    past, future = rng.sample(C.TAROT_DECOR, 2)
-    _say(client, turn, "Сними колоду левой рукой. Левой, я сказала.")
-    if knowledge.clear:
-        card = C.WHO[knowledge.tags[0]]
-        _line(client, turn, f"🃏 {past} · {card.card} · {future}. Карта настоящего — {card.card}: {card.meaning}.")
-    else:
-        first, second = (C.WHO[tag] for tag in knowledge.tags)
-        _line(client, turn, f"🃏 {past} · {first.card} · {second.card}. Карты спорят: то ли {first.meaning}, "
-                            f"то ли {second.meaning}.")
-    return knowledge, quality
-
-
-def _horoscope(client: Client, rng: random.Random, turn: _Turn) -> tuple[Knowledge, str]:
-    _say(client, turn, "Кто ты по знаку?")
-    _line(client, turn, f"{client.name}: {client.kind.sign_answer.format(sign=client.sign)}")
-    knowledge, quality = _slot_hint(client, "when", "horoscope", rng)
-    client.horoscope_used = True
-    phrases = [C.WHEN[tag].phrase.rstrip(",") for tag in knowledge.tags]
-    if knowledge.clear:
-        _line(client, turn, f"♈ {client.sign}: звёзды говорят — главное случится {phrases[0]}.")
-    else:
-        _line(client, turn, f"♈ {client.sign}: звёзды мнутся — то ли {phrases[0]}, то ли {phrases[1]}.")
-    return knowledge, quality
-
-
-def _energy(client: Client, rng: random.Random, turn: _Turn) -> tuple[Knowledge, str]:
-    clear, vague = HINT_QUALITY["energy"]
-    truth = C.WHAT[client.truth["what"]].emotion
-    others = [emotion for emotion in C.EMOTIONS if emotion != truth]
-    roll = rng.random()
-    if roll < clear:
-        knowledge, quality = Knowledge("emotion", (truth,), "energy", True, True), "clear"
-    elif roll < clear + vague:
-        alt = rng.choice(others)
-        tags = (truth, alt) if rng.random() < 0.5 else (alt, truth)
-        knowledge, quality = Knowledge("emotion", tags, "energy", False, True), "vague"
-    else:
-        knowledge, quality = Knowledge("emotion", (rng.choice(others),), "energy", True, False), "false"
-    _say(client, turn, "Помолчи. Я считываю энергетику…")
-    if knowledge.clear:
-        _line(client, turn, f"🌀 {C.ENERGY_CLEAR[knowledge.tags[0]]}")
-    else:
-        first, second = (C.EMOTIONS[tag] for tag in knowledge.tags)
-        _line(client, turn, f"🌀 Аура мутная: то ли {first}, то ли {second}.")
-    return knowledge, quality
-
-
-def _answer_text(slot: str, tag: str) -> str:
-    if slot == "who":
-        return C.WHO[tag].phrase
-    if slot == "what":
-        return C.WHAT[tag].label.lower()
-    return C.WHEN[tag].phrase.rstrip(",")
-
-
-def _fill(template: str, value: str) -> str:
-    if template.startswith("«{value}"):
-        value = value[:1].upper() + value[1:]
-    return template.format(value=value)
-
-
-def _question(client: Client, slot: str, rng: random.Random, turn: _Turn) -> tuple[Knowledge, str]:
+def _clarify(session: Session, client: Client, question_id: str, rng: random.Random, turn: _Turn, now: float) -> None:
     kind = client.kind
-    _say(client, turn, C.QUESTION_TEXTS[slot])
-    value = client.story.belief(slot, client.truth[slot])
-    _line(client, turn, f"{client.name}: {_fill(kind.answers[slot], _answer_text(slot, value))}")
-    knowledge = Knowledge(slot, (value,), "question", True, value == client.truth[slot])
-    if kind.blurts:
-        known = {k.slot for k in client.knowledge if k.source in CLIENT_SOURCES} | {slot}
-        rest = [other for other in C.SLOTS if other not in known]
-        if rest:
-            extra = rng.choice(rest)
-            extra_value = client.story.belief(extra, client.truth[extra])
-            _line(client, turn, f"…и заодно выбалтывает: {_fill(kind.answers[extra], _answer_text(extra, extra_value))}")
-            client.knowledge.append(
-                Knowledge(extra, (extra_value,), "question", True, extra_value == client.truth[extra])
-            )
-    return knowledge, "said"
+    question = client.story.question(question_id)
+    client.questions_left -= 1
+    client.asked.append(question.id)
+    before = client.suspicion
+    client.suspicion += kind.question_suspicion
+    _set_trust(client, kind.question_trust)
+    for slot, tag in question.said.items():
+        resolved = client.resolve(tag)
+        client.knowledge.append(Knowledge(slot, resolved, "question", resolved == client.truth[slot]))
 
-
-def _react(client: Client, knowledge: Knowledge, rng: random.Random, turn: _Turn) -> None:
-    kind = client.kind
-    if kind.style == "poker":
-        mood = "neutral"
-    elif kind.style == "overreact":
-        mood = "warm"
-    else:
-        accurate = rng.random() < REACTION_ACCURACY
-        mood = "warm" if knowledge.truthful == accurate else "cold"
-    _line(client, turn, rng.choice(kind.reactions[mood]).format(name=client.name))
-
-
-def _info(session: Session, client: Client, method: str, sub: str | None, rng: random.Random,
-          turn: _Turn, now: float) -> None:
-    kind = client.kind
-    client.actions_left -= 1
-    client.used_methods.append(method)
-    suspicion_before = client.suspicion
-    if kind.suspicion:
-        client.suspicion += kind.suspicion[method]
-    trust_delta = SKEPTIC_HOROSCOPE_TRUST if method == "horoscope" and kind.suspicion else TRUST_DELTA[method]
-    client.trust = int(_clamp(client.trust + trust_delta, 0, 100))
-
-    if method == "palm":
-        knowledge, quality = _palm(client, sub or "", rng, turn)
-    elif method == "tarot":
-        knowledge, quality = _tarot(client, rng, turn)
-    elif method == "horoscope":
-        knowledge, quality = _horoscope(client, rng, turn)
-    elif method == "energy":
-        knowledge, quality = _energy(client, rng, turn)
-    else:
-        knowledge, quality = _question(client, sub or "", rng, turn)
-    client.knowledge.append(knowledge)
-    if method != "question":
-        _react(client, knowledge, rng, turn)
-
-    crossed = [text for threshold, text in kind.suspicion_lines if suspicion_before < threshold <= client.suspicion]
-    if crossed:
-        _line(client, turn, crossed[-1].format(name=client.name))
-
+    turn.show("ask", f"— Ты: {_quote(question.label)}", BEAT_SHORT)
+    turn.show("answer", client.render(question.answer))
+    turn.show("status", _crossed_suspicion(client, before) or rng.choice(kind.statuses["asked"]).format(name=client.name))
     turn.metrics.append(("action", {
-        "kind": "info",
+        "kind": "question",
         "client_no": session.client_no,
         "archetype": kind.key,
         "story": client.story.id,
-        "method": method,
-        "sub": sub,
-        "quality": quality,
-        "truthful": knowledge.truthful,
-        "slot": knowledge.slot,
+        "question": question.id,
+        "question_kind": question.kind,
+        "trust": client.trust,
+        "suspicion": client.suspicion,
+    }))
+    if not _check_exit(session, client, rng, turn, now) and client.questions_left <= 0:
+        client.phase = "divine"
+
+
+def _reading_truth(client: Client, slot: str) -> str:
+    if slot == "sphere":
+        return client.story.sphere
+    if slot == "emotion":
+        return client.story.emotion
+    return client.truth[slot]
+
+
+def _universe(client: Client, slot: str) -> tuple[str, ...]:
+    if slot == "who":
+        return client.options["who"]
+    if slot == "when":
+        return tuple(C.WHEN)
+    return tuple(C.SPHERES) if slot == "sphere" else tuple(C.EMOTIONS)
+
+
+def _deal(client: Client, method: C.Method, rng: random.Random) -> Reading:
+    truth = _reading_truth(client, method.slot)
+    others = [tag for tag in _universe(client, method.slot) if tag != truth]
+    sharp, plain = READING_QUALITY[method.key]
+    roll = rng.random()
+    if roll < sharp:
+        offered, quality = [truth, rng.choice(others)], "sharp"
+    elif roll < sharp + plain:
+        offered, quality = [truth, *rng.sample(others, 2)], "plain"
+    else:
+        offered, quality = rng.sample(others, 3), "off"
+    rng.shuffle(offered)
+    return Reading(method.key, method.slot, tuple(offered), quality)
+
+
+def _omen(client: Client, reading: Reading, rng: random.Random) -> str:
+    if reading.method == "tarot":
+        cards = [C.WHO[tag].card for tag in reading.offered]
+        cards += rng.sample(C.TAROT_DECOR, 3 - len(cards))
+        rng.shuffle(cards)
+        return "🃏 Выпали: " + " · ".join(cards) + "."
+    if reading.method == "palm":
+        return "🖐 Ладонь горячая. " + ", ".join(C.SPHERES[tag].omen for tag in reading.offered).capitalize() + "."
+    if reading.method == "horoscope":
+        return (f"{client.name}: {client.kind.sign_answer.format(sign=client.sign)}\n"
+                f"♈ {client.sign}. {rng.choice(C.SKY_OMENS)}")
+    return f"🌀 {rng.choice(C.AURA_OMENS)}"
+
+
+def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Turn) -> None:
+    method = C.METHODS[method_key]
+    client.readings_left -= 1
+    client.used_methods.append(method.key)
+    client.pending = _deal(client, method, rng)
+    client.phase = "interpret"
+    turn.show("ritual", rng.choice(method.rituals))
+    turn.show("omen", _omen(client, client.pending, rng), BEAT, replace=True)
+
+
+def _reaction(client: Client, correct: bool, rng: random.Random) -> str:
+    style = client.kind.style
+    if style == "overreact":
+        return "warm"
+    accurate = rng.random() < REACTION_ACCURACY[style]
+    return "warm" if correct == accurate else "cold"
+
+
+def _interpret(session: Session, client: Client, tag: str, rng: random.Random, turn: _Turn, now: float) -> None:
+    kind = client.kind
+    reading = client.pending
+    assert reading is not None
+    client.pending = None
+    truth = _reading_truth(client, reading.slot)
+    correct = tag == truth
+    reaction = _reaction(client, correct, rng)
+    before = client.suspicion
+
+    if kind.style == "overreact":
+        trust_delta = TRUST_OVERREACT
+    else:
+        trust_delta = TRUST_WARM if reaction == "warm" else TRUST_COLD
+    if kind.suspicion:
+        client.suspicion += kind.suspicion[reading.method] + (SUSPICION_WARM if reaction == "warm" else SUSPICION_COLD)
+    if reading.method == "horoscope":
+        client.horoscope_used = True
+        trust_delta += SKEPTIC_HOROSCOPE_TRUST if kind.suspicion else HOROSCOPE_TRUST
+    _set_trust(client, trust_delta)
+
+    client.knowledge.append(Knowledge(reading.slot, tag, reading.method, correct))
+    client.readings.append(ReadingResult(reading.method, reading.slot, reading.offered, tag, truth, reading.quality, reaction))
+
+    turn.show("voice", f"— Ты: {_quote(_interpretation(reading.slot, tag).voice)}", BEAT_SHORT)
+    turn.show("react", rng.choice(kind.reactions[reaction]).format(name=client.name))
+    status_key = "up" if reaction == "warm" else "down"
+    turn.show("status", _crossed_suspicion(client, before) or rng.choice(kind.statuses[status_key]).format(name=client.name))
+    turn.metrics.append(("action", {
+        "kind": "reading",
+        "client_no": session.client_no,
+        "archetype": kind.key,
+        "story": client.story.id,
+        "method": reading.method,
+        "slot": reading.slot,
+        "quality": reading.quality,
+        "offered": list(reading.offered),
+        "voiced": tag,
+        "correct": correct,
+        "reaction": reaction,
         "trust": client.trust,
         "suspicion": client.suspicion,
     }))
 
-    if method in C.MAIN_METHODS:
-        session.methods_used.add(method)
+    if reading.method in C.MAIN_METHODS:
+        session.methods_used.add(reading.method)
         if not session.mastery and set(C.MAIN_METHODS) <= session.methods_used:
             session.mastery = True
             session.score += MASTERY_BONUS
-            _line(client, turn, f"{C.MASTERY_LINE} +{MASTERY_BONUS} очка.")
+            turn.show("line", f"{C.MASTERY_LINE} +{MASTERY_BONUS} очка.")
             turn.metrics.append(("mastery_bonus", {
-                "client_no": session.client_no, "method": method, "points": MASTERY_BONUS,
+                "client_no": session.client_no, "method": reading.method, "points": MASTERY_BONUS,
             }))
 
-    if kind.suspicion and client.suspicion >= SUSPICION_EXIT:
-        _line(client, turn, C.SUSPICION_EXIT_LINE.format(name=client.name))
-        _settle(session, client, rng, turn, now, confidence=None, reasons=("suspicion",),
-                outcome="exposure", echo=(), slots=_slot_results(client, {}), jackpot=False, trap=False)
-    else:
-        client.phase = "who" if client.actions_left <= 0 else "research"
+    if not _check_exit(session, client, rng, turn, now):
+        client.phase = "who" if client.readings_left <= 0 else "divine"
 
 
 # --- предсказание -----------------------------------------------------------
 
 def is_echo(client: Client, slot: str, tag: str) -> bool:
-    """Тег взят из слов клиента и не подтверждён своим источником мадам."""
-    said = any(k.source in CLIENT_SOURCES and k.slot == slot and tag in k.tags for k in client.knowledge)
+    """Тег взят из слов клиента и не подтверждён своим гаданием."""
+    said = any(k.source in CLIENT_SOURCES and k.slot == slot and k.tag == tag for k in client.knowledge)
     if not said:
         return False
-    return not any(k.source in OWN_SOURCES and k.supports(slot, tag) for k in client.knowledge)
+    return not any(k.source not in CLIENT_SOURCES and k.supports(slot, tag) for k in client.knowledge)
 
 
 def prediction_body(picks: dict[str, str]) -> str:
@@ -491,11 +492,10 @@ def _slot_results(client: Client, matches: dict[str, bool], mercury: bool = Fals
     )
 
 
-def _announce(session: Session, client: Client, confidence: str, rng: random.Random, turn: _Turn,
-              now: float) -> None:
+def _announce(session: Session, client: Client, confidence: str, rng: random.Random, turn: _Turn, now: float) -> None:
     story, kind = client.story, client.kind
     picks = dict(client.picks)
-    _say(client, turn, prediction_sentence(picks, confidence))
+    turn.show("announce", f"— Ты: {_quote(prediction_sentence(picks, confidence))}", BEAT_SHORT)
 
     matches = {slot: picks[slot] == client.truth[slot] for slot in C.SLOTS}
     mercury = False
@@ -504,7 +504,6 @@ def _announce(session: Session, client: Client, confidence: str, rng: random.Ran
         matches["when"] = True
         mercury = True
         session.mercury_left = False
-        _line(client, turn, C.MERCURY_LINE)
     count = sum(matches.values())
     outcome = "hit" if count == 3 else "partial" if count == 2 else "miss"
     jackpot = bool(story.jackpot and story.jackpot.matches(picks))
@@ -529,23 +528,28 @@ def _announce(session: Session, client: Client, confidence: str, rng: random.Ran
     if reasons:
         outcome = "exposure"
 
+    pause = BEAT
+    if mercury:
+        turn.show("line", C.MERCURY_LINE, pause)
+        pause = 0.0
     if echo:
         critical = outcome == "exposure" and reasons[0] in ("skeptic_echo", "sworn_echo")
         # Восторг ревнивой и торг бизнесмена уместны, только если что-то совпало.
         if critical or kind.echo == "expose" or outcome in ("hit", "partial"):
-            _line(client, turn, kind.echo_lines["critical" if critical else "soft"].format(name=client.name))
+            turn.show("react", kind.echo_lines["critical" if critical else "soft"].format(name=client.name), pause)
+            pause = 0.0
         if kind.echo == "expose" and outcome != "exposure":
             client.suspicion += SOFT_ECHO_SUSPICION
     if outcome == "exposure" and reasons[0] == "trap" and story.trap is not None:
-        _line(client, turn, f"💥 {story.trap.text}")
+        turn.show("react", f"💥 {story.trap.text}", pause)
     elif outcome == "exposure":
-        _line(client, turn, kind.outcomes["exposure"].format(name=client.name))
+        turn.show("react", kind.outcomes["exposure"].format(name=client.name), pause)
     elif jackpot and story.jackpot is not None:
-        _line(client, turn, f"🎰 {story.jackpot.text}")
+        turn.show("react", f"🎰 {story.jackpot.text}", pause)
     else:
-        _line(client, turn, kind.outcomes[outcome].format(name=client.name))
+        turn.show("react", kind.outcomes[outcome].format(name=client.name), pause)
     if outcome == "partial" and confidence == "swear":
-        _line(client, turn, C.SWORN_PARTIAL_LINE)
+        turn.show("line", C.SWORN_PARTIAL_LINE)
 
     turn.metrics.append(("action", {
         "kind": "prediction",
@@ -568,7 +572,7 @@ def _announce(session: Session, client: Client, confidence: str, rng: random.Ran
 def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, now: float, *,
             confidence: str | None, reasons: tuple[str, ...], outcome: str, echo: tuple[str, ...],
             slots: tuple[SlotResult, ...], jackpot: bool, trap: bool) -> None:
-    """Очки, гонорар, серия, легенда, развязка и переход к следующему клиенту."""
+    """Очки, гонорар, серия, легенда и развязка. Следующий клиент приходит по кнопке."""
     story, kind = client.story, client.kind
     level = C.CONFIDENCE.index(confidence) if confidence else 1
     points = SCORE[outcome][level]
@@ -587,9 +591,10 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     session.score += points + bonus
     session.money += fee
 
-    _line(client, turn, "📜 " + story.reveal.format(when_lead=C.WHEN[client.truth["when"]].lead))
+    reveal = story.reveal.format(when_lead=C.WHEN[client.truth["when"]].lead)
+    turn.show("reveal", f"📜 {reveal}", BEAT_LONG)
     if bonus:
-        _line(client, turn, f"{C.STREAK_LINES[session.streak]} +{bonus} очка за серию.")
+        turn.show("line", f"{C.STREAK_LINES[session.streak]} +{bonus} очка за серию.")
     if session.streak != streak_before:
         turn.metrics.append(("streak_updated", {
             "client_no": session.client_no, "before": streak_before, "after": session.streak, "bonus": bonus,
@@ -599,11 +604,11 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     if outcome == "exposure":
         session.legend -= 1  # не больше одного запаса за клиента, сколько бы причин ни сработало
         if session.legend <= 0:
-            _line(client, turn, C.LEGEND_GONE_LINE)
+            turn.show("line", C.LEGEND_GONE_LINE)
         else:
-            _line(client, turn, C.LEGEND_LOST_LINE.format(left=session.legend))
+            turn.show("line", C.LEGEND_LOST_LINE.format(left=session.legend))
             if session.legend == 1:
-                _line(client, turn, C.LEGEND_LAST_LINE)
+                turn.show("line", C.LEGEND_LAST_LINE)
         turn.metrics.append(("legend_lost", {
             "client_no": session.client_no,
             "archetype": kind.key,
@@ -618,9 +623,11 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
         client_no=session.client_no,
         story=story.id,
         archetype=kind.key,
-        reveal=story.reveal.format(when_lead=C.WHEN[client.truth["when"]].lead),
+        reveal=reveal,
         slots=slots,
-        hints=tuple(HintResult(k.source, k.slot, k.tags, k.clear, k.truthful, k.positive) for k in client.knowledge),
+        readings=tuple(client.readings),
+        questions=tuple(client.asked),
+        said=tuple((k.slot, k.tag, k.truthful) for k in client.knowledge if k.source in CLIENT_SOURCES),
         echo_slots=echo,
         outcome=outcome,
         reasons=reasons,
@@ -634,22 +641,19 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
         streak_bonus=bonus,
         legend_before=legend_before,
         legend_after=session.legend,
-        info_actions=len(client.used_methods),
         duration_s=round(max(0.0, now - client.started_at), 1),
     )
     client.report = report
     client.phase = "done"
+    client.pending = None
     session.reports.append(report)
     turn.finished_client = _client_view(session, client)
     turn.metrics.append(("client_reveal", report.log_data()))
 
-    session.client_no += 1
     if session.legend <= 0:
         _finish(session, "exposed")
-    elif session.client_no >= session.clients_total:
+    elif session.client_no + 1 >= session.clients_total:
         _finish(session, "completed")
-    else:
-        session.client = new_client(STORIES_BY_ID[session.plan[session.client_no]], rng, now)
     if session.finished:
         turn.metrics.append(("finish", summary(session, now)))
 
@@ -737,25 +741,6 @@ def abandon_summary(session: Session, reason: str, now: float) -> dict[str, Any]
 
 # --- представление ----------------------------------------------------------
 
-def _tag_label(slot: str, tag: str) -> str:
-    return {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}[slot][tag].label
-
-
-def _note(knowledge: Knowledge) -> NoteView:
-    icon, source = C.SOURCE_LABELS[knowledge.source]
-    clarity = None if knowledge.source in CLIENT_SOURCES else ("ясно" if knowledge.clear else "мутно")
-    slot = knowledge.slot
-    if slot in C.SLOTS:
-        text = f"{C.SLOT_TITLES[slot].lower()}: " + " или ".join(_tag_label(slot, tag) for tag in knowledge.tags)
-    elif slot == "sphere" and knowledge.positive:
-        text = "дело в: " + " или ".join(C.SPHERE_TITLES[tag] for tag in knowledge.tags)
-    elif slot == "sphere":
-        text = "не про " + SPHERE_ACCUSATIVE[knowledge.tags[0]]
-    else:
-        text = "эмоция: " + " или ".join(C.EMOTIONS[tag] for tag in knowledge.tags)
-    return NoteView(icon, source, clarity, text)
-
-
 def _band(value: int, bands: tuple[tuple[int, str], ...]) -> str:
     for threshold, label in bands:
         if value >= threshold:
@@ -771,13 +756,10 @@ def _client_view(session: Session, client: Client) -> ClientView:
         archetype_title=kind.title,
         emoji=kind.emoji,
         name=client.name,
-        complaint=client.story.complaint,
-        observation=client.observation_text,
-        notebook=tuple(_note(k) for k in client.knowledge),
-        dialog=tuple(client.lines),
         mood=_band(client.trust, C.MOOD_BANDS),
         suspicion=_band(client.suspicion, C.SUSPICION_BANDS) if kind.suspicion else None,
-        actions_left=client.actions_left,
+        questions_left=client.questions_left,
+        readings_left=client.readings_left,
         phase=client.phase,
         picks=dict(client.picks),
         report=client.report,
@@ -788,7 +770,7 @@ def _preview(client: Client) -> str | None:
     if client.phase not in (*C.SLOTS, "announce"):
         return None
     if all(slot in client.picks for slot in C.SLOTS):
-        body = prediction_body(client.picks).replace(",", "")
+        body = prediction_body(client.picks)
         return "«" + body[:1].upper() + body[1:] + "»"
     return " · ".join(
         f"{C.SLOT_TITLES[slot]}: {_tag_label(slot, client.picks[slot]) if slot in client.picks else '…'}"
@@ -796,17 +778,16 @@ def _preview(client: Client) -> str | None:
     )
 
 
+def _prompt(client: Client) -> str:
+    if client.phase == "clarify":
+        return f"Что уточнить? Осталось вопросов: {client.questions_left}"
+    if client.phase == "divine":
+        return f"Чем гадать? Осталось раскладов: {client.readings_left}"
+    return PROMPTS.get(client.phase, "")
+
+
 def build_view(session: Session) -> View:
     client = None if session.finished else session.client
-    if client is None:
-        prompt = ""
-    elif client.phase == "research":
-        prompt = (
-            f"Выбери приём (осталось {client.actions_left}) или переходи к предсказанию."
-            if client.actions_left > 0 else "Приёмы кончились — пора предсказывать."
-        )
-    else:
-        prompt = PROMPTS.get(client.phase, "")
     return View(
         session_id=session.session_id,
         step=session.step,
@@ -819,7 +800,7 @@ def build_view(session: Session) -> View:
         money=session.money,
         sciences=tuple((method, method in session.methods_used) for method in C.MAIN_METHODS),
         client=_client_view(session, client) if client is not None else None,
-        prompt=prompt,
+        prompt=_prompt(client) if client is not None else "",
         preview=_preview(client) if client is not None else None,
         actions=available_actions(session),
         finished=session.finished,
@@ -829,11 +810,6 @@ def build_view(session: Session) -> View:
         outcomes=tuple(report.outcome for report in session.reports),
         max_streak=session.max_streak,
     )
-
-
-def current_client_view(session: Session) -> ClientView:
-    """Текущий клиент даже после конца партии — для экрана брошенной партии."""
-    return _client_view(session, session.client)
 
 
 # --- партии по чатам --------------------------------------------------------
