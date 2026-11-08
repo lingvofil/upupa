@@ -10,7 +10,8 @@
 сколько к ней можно случайно добавить, чтобы ритм не был механическим. Адаптер сам
 решает, как её показать (Telegram — «печатает…», графический клиент — анимация).
 ``replace`` — событие заменяет предыдущее на экране («тасует колоду» превращается
-в выпавшие карты).
+в выпавшие карты). ``data["cards"]`` — рисунки расклада по порядку; адаптер показывает
+их перед текстом события.
 """
 
 from __future__ import annotations
@@ -65,7 +66,8 @@ class View:
     legend_start: int
     streak: int
     score: int
-    money: int
+    money: int  # за партию; может быть отрицательным
+    wallet: int  # касса игрока с учётом этой партии
     sciences: tuple[tuple[str, bool], ...]  # (метод, применён ли за партию)
     client: ClientView | None
     prompt: str
@@ -81,6 +83,35 @@ class View:
     def to_dict(self) -> dict[str, Any]:
         """Сериализуемое состояние — для будущего Mini App / PC-клиента."""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class LiveView:
+    """Живой приём: что видно интерфейсу."""
+
+    session_id: str
+    step: int
+    host: str
+    client: str | None
+    phase: str
+    prompt: str
+    actions: tuple[Action, ...]
+    finished: bool
+    finish_reason: str | None
+    confidence: str | None
+    outcome: str | None
+    fee: int
+    wallet: int  # касса мадам с учётом этого приёма
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class LiveResult:
+    events: tuple[DisplayEvent, ...]
+    metrics: tuple[tuple[str, dict[str, Any]], ...]
+    view: LiveView
 
 
 @dataclass(frozen=True)

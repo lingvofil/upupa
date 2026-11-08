@@ -34,3 +34,4 @@ GROUP_BANS_PATH = DATA_DIR / "group_bans.json"
 # Игровая лаборатория: флаги экспериментов по чатам и журнал событий.
 LAB_FLAGS_PATH = DATA_DIR / "lab_experiments.json"
 LAB_EVENTS_PATH = DATA_DIR / "lab_events.jsonl"
+GURU_WALLETS_PATH = DATA_DIR / "guru_wallets.json"

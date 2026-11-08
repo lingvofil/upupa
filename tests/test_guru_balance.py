@@ -205,6 +205,8 @@ def stats(policy, parties=PARTIES, legend=None):
     outcomes = [r.outcome for s in sessions for r in s.reports]
     return {
         "score": statistics.mean(s.score for s in sessions),
+        "money": statistics.mean(s.money for s in sessions),
+        "red": sum(s.money < 0 for s in sessions) / parties,
         "hit": outcomes.count("hit") / len(outcomes),
         "partial": outcomes.count("partial") / len(outcomes),
         "exposure": outcomes.count("exposure") / len(outcomes),
@@ -265,6 +267,13 @@ def test_source_of_information_matters(results):
 def test_mastery_is_an_incentive_not_a_tax(results):
     assert results["mastery"]["mastery"] > 0.9
     assert results["mastery"]["score"] >= results["adaptive"]["score"] - 0.3
+
+
+def test_care_pays_and_recklessness_costs(results):
+    assert results["adaptive"]["money"] > results["bold"]["money"]
+    assert results["adaptive"]["red"] <= 0.05, "внимательный игрок редко заканчивает смену в минусе"
+    assert results["cautious"]["red"] == 0, "осторожность не приносит убытков, только скромный доход"
+    assert results["bold"]["red"] >= 0.25, "вечные клятвы должны заметно бить по кассе"
 
 
 def test_shift_has_room_to_think(results):

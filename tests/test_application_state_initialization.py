@@ -14,6 +14,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
     import core.history_store as history_store
     import features.chat_settings as chat_settings_feature
     import features.content_filter as content_filter_feature
+    import features.guru_wallets as guru_wallets_feature
     import features.lab.flags as lab_flags_feature
     import features.sms_settings as sms_settings_feature
     import features.social_graph as social_graph_feature
@@ -33,6 +34,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
     monkeypatch.setattr(content_filter_feature, "load_antispam_settings", lambda: calls.append("antispam"))
     monkeypatch.setattr(sms_settings_feature, "load_sms_disabled_chats", lambda: calls.append("sms"))
     monkeypatch.setattr(lab_flags_feature, "load_lab_flags", lambda: calls.append("lab-flags"))
+    monkeypatch.setattr(guru_wallets_feature, "load_guru_wallets", lambda: calls.append("guru-wallets"))
     monkeypatch.setattr(stat_rank_feature, "load_stat_rank_state", lambda: calls.append("rank-state"))
     monkeypatch.setattr(statistics_feature, "init_db", lambda: calls.append("statistics"))
     monkeypatch.setattr(social_graph_feature, "init_db", lambda: calls.append("social-graph"))
@@ -64,6 +66,7 @@ def test_application_initializes_file_state_explicitly(monkeypatch, tmp_path):
         "antispam",
         "sms",
         "lab-flags",
+        "guru-wallets",
         "rank-state",
         "statistics",
         "social-graph",
