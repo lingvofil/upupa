@@ -61,6 +61,7 @@ games/crocodile_scores*.json
 # Игровая лаборатория: флаги по чатам и журнал событий с id игроков
 lab_experiments.json
 lab_events.jsonl
+guru_wallets.json
 
 # Static site build output (scripts/build_site.py)
 _site/

@@ -9,11 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 from core.settings import ADMIN_ID
+from features import guru_wallets
+from features.guru_wallets import WalletBook
 from features.lab import events as lab_events
 from features.lab import flags as lab_flags
 from features.lab.events import EventLog, read_events
 from features.lab.flags import ExperimentFlags
-from games.guru import rules, textui
+from games.guru import live, rules, textui
 from handlers import guru_salon
 
 CHAT = -100900
@@ -35,12 +37,17 @@ class FakeBot:
         self.edits = []
         self.cleared = []
         self.actions = []
+        self.albums = []
         self._next_id = 1000
 
     async def send_message(self, chat_id, text, **kwargs):
         self._next_id += 1
         self.sent.append(SimpleNamespace(chat_id=chat_id, text=text, message_id=self._next_id, **kwargs))
         return SimpleNamespace(message_id=self._next_id)
+
+    async def send_media_group(self, **kwargs):
+        self.albums.append(SimpleNamespace(**kwargs))
+        return [SimpleNamespace(photo=[SimpleNamespace(file_id=f"id{index}")]) for index in range(len(kwargs["media"]))]
 
     async def edit_message_text(self, **kwargs):
         self.edits.append(SimpleNamespace(**kwargs))
@@ -104,7 +111,16 @@ def bot(monkeypatch, flags, clock, pauses):
     monkeypatch.setattr(guru_salon, "_registry", rules.SessionRegistry())
     monkeypatch.setattr(guru_salon, "_rng", random.Random(3))
     monkeypatch.setattr(guru_salon, "_reports", {})
+    monkeypatch.setattr(guru_salon, "_card_file_ids", {})
     return FakeBot()
+
+
+@pytest.fixture(autouse=True)
+def wallets(monkeypatch):
+    book = WalletBook(MemoryRepository())
+    book.load()
+    monkeypatch.setattr(guru_wallets, "_wallets", book)
+    return book
 
 
 def user(user_id, name="Зоя"):
@@ -119,7 +135,7 @@ def message(bot, text, user_id=PLAYER, chat_id=CHAT):
 
     return SimpleNamespace(
         text=text,
-        chat=SimpleNamespace(id=chat_id),
+        chat=SimpleNamespace(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
         from_user=user(user_id, "Зоя" if user_id == PLAYER else "Гоша"),
         bot=bot,
         message_id=1,
@@ -138,7 +154,7 @@ def callback(bot, data, user_id=PLAYER, message_id=None, chat_id=CHAT):
 
     return SimpleNamespace(
         data=data,
-        from_user=user(user_id),
+        from_user=user(user_id, "Зоя" if user_id == PLAYER else "Гоша"),
         message=SimpleNamespace(chat=SimpleNamespace(id=chat_id), message_id=message_id, message_thread_id=None),
         bot=bot,
         answer=answer,
@@ -274,13 +290,58 @@ def test_divination_edits_ritual_into_omen(bot, events, pauses):
     pauses.clear()
     sent_before = len(bot.sent)
 
-    press(bot, "m:tarot")
+    press(bot, "m:palm")
 
-    assert len(bot.sent) == sent_before + 1 and "колод" in bot.sent[-1].text
+    assert len(bot.sent) == sent_before + 1 and "ладонь" in bot.sent[-1].text.lower()
     edit = bot.edits[-1]
-    assert edit.message_id == bot.sent[-1].message_id and "Расклад" in edit.text and "Что озвучить" in edit.text
+    assert edit.message_id == bot.sent[-1].message_id and "Ладонь" in edit.text and "Что озвучить" in edit.text
     assert edit.reply_markup is not None and rules.PACE_RITUAL[0] <= sum(pauses) <= sum(rules.PACE_RITUAL)
     assert current().message_id == bot.sent[-1].message_id
+    assert bot.albums == []
+
+
+def test_tarot_shows_album_then_text_with_buttons(bot, events, pauses):
+    start(bot)
+    press(bot, "c:stop")
+    sent_before = len(bot.sent)
+
+    press(bot, "m:tarot")
+
+    (album,) = bot.albums
+    assert album.chat_id == CHAT and len(album.media) == 3
+    assert len(bot.sent) == sent_before + 2 and "колод" in bot.sent[-2].text
+    text = bot.sent[-1]
+    assert "Расклад" in text.text and "Что озвучить" in text.text and text.reply_markup is not None
+    assert current().message_id == text.message_id
+
+
+def test_tarot_pictures_are_uploaded_once(bot, events):
+    guru_salon._card_file_ids.update({card.art: "known" for card in rules.C.TAROT_CARDS.values()})
+    start(bot)
+    press(bot, "c:stop")
+    press(bot, "m:tarot")
+    assert all(item.media == "known" for item in bot.albums[-1].media)
+
+
+def test_first_upload_remembers_file_ids(bot, events):
+    start(bot)
+    press(bot, "c:stop")
+    press(bot, "m:tarot")
+    assert len(guru_salon._card_file_ids) == 3
+
+
+def test_failed_album_does_not_stop_the_reading(bot, events, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(**kwargs):
+        raise TelegramForbiddenError(method=None, message="no media rights")
+
+    monkeypatch.setattr(bot, "send_media_group", refuse)
+    start(bot)
+    press(bot, "c:stop")
+    press(bot, "m:tarot")
+    assert current() is not None and current().client.phase == "interpret"
+    assert "Расклад" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None
 
 
 def test_long_pause_keeps_typing_indicator_alive(bot, pauses):
@@ -539,4 +600,202 @@ def test_failed_send_mid_game_abandons_instead_of_hanging(bot, events, monkeypat
 
     monkeypatch.setattr(bot, "send_message", refuse)
     press(bot, "c:stop")
+    assert current() is None and events()[-1]["data"]["reason"] == "send_failed"
+
+
+# --- касса -------------------------------------------------------------------
+
+def test_money_is_booked_after_each_client(bot, events, wallets):
+    start(bot)
+    session = current()
+    serve_client(bot, confidence="maybe")
+    assert wallets.balance(CHAT, PLAYER) == session.reports[0].fee == session.money
+
+
+def test_shift_starts_with_the_saved_wallet(bot, events, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 4200)
+    start(bot)
+    assert current().wallet_start == 4200 and "В кассе: 4 200 ₽" in bot.sent[0].text
+
+
+def test_abandoned_shift_keeps_what_was_earned(bot, events, wallets):
+    start(bot)
+    serve_client(bot, confidence="maybe")
+    earned = wallets.balance(CHAT, PLAYER)
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп")))
+    assert wallets.balance(CHAT, PLAYER) == earned
+
+
+def test_confident_miss_takes_money_away(bot, events, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 10000)
+    start(bot)
+    session = current()
+    client = session.client
+    for slot in ("who", "what", "when"):
+        client.truth[slot] = client.options[slot][1]  # игрок жмёт первые кнопки — мимо
+    serve_client(bot, confidence="see")
+    report = session.reports[0]
+    assert report.fee < 0 and wallets.balance(CHAT, PLAYER) == 10000 + report.fee
+    assert wallets.get(CHAT, PLAYER).lost == -report.fee
+
+
+def test_wallet_command_shows_table(bot, events, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 1500)
+    wallets.apply(CHAT, WATCHER, "Гоша", -300)
+    assert _accepts(guru_salon.router.message, message(bot, "гуру лаб касса"))
+    msg = message(bot, "гуру лаб касса", user_id=WATCHER)
+    asyncio.run(guru_salon.show_wallets(msg))
+    assert "1. Зоя — 1 500 ₽" in msg.replies[0] and "Твоя касса: −300 ₽" in msg.replies[0]
+
+
+# --- живой приём --------------------------------------------------------------
+
+def start_live(bot, user_id=PLAYER, chat_id=CHAT):
+    msg = message(bot, "гуру лаб приём", user_id=user_id, chat_id=chat_id)
+    asyncio.run(guru_salon.start_live_reception(msg))
+    return msg
+
+
+def press_live(bot, action, user_id):
+    session = current()
+    data = textui.encode(live.build_view(session), action)
+    query = callback(bot, data, user_id=user_id, message_id=session.message_id)
+    asyncio.run(guru_salon.salon_callback(query))
+    return query
+
+
+@pytest.mark.parametrize("text", ["гуру лаб приём", "Гуру  лаб ПРИЕМ"])
+def test_live_command_matches(flags, text):
+    assert _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+def test_live_needs_a_group(bot, events):
+    msg = start_live(bot, chat_id=PLAYER)
+    assert current(PLAYER) is None and "второй человек" in msg.replies[0] and events() == []
+
+
+def test_live_open_call_has_a_button_for_anyone(bot, events):
+    start_live(bot)
+    session = current()
+    assert isinstance(session, guru_salon.LiveSession) and session.message_id == bot.sent[-1].message_id
+    (row,) = bot.sent[-1].reply_markup.inline_keyboard
+    assert row[0].text.startswith("🙋") and "принимает живых людей" in bot.sent[-1].text
+    record = events()[-1]
+    assert record["event"] == "start" and record["data"]["mode"] == "live" and record["data"]["via"] == "command"
+
+
+def test_live_host_cannot_be_own_client(bot, events):
+    start_live(bot)
+    query = press_live(bot, "join", PLAYER)
+    assert "Самой себе" in query.answers[0] and current().client is None
+
+
+def test_live_full_reception(bot, events, wallets, pauses):
+    wallets.apply(CHAT, PLAYER, "Зоя", 100)
+    start_live(bot)
+    open_message = current().message_id
+
+    press_live(bot, "join", WATCHER)
+    session = current()
+    assert session.client.name == "Гоша" and bot.cleared[-1].message_id == open_message
+    assert any("расскажи мадам" in m.text for m in bot.sent[-2:])
+
+    press_live(bot, "m:tarot", PLAYER)
+    assert len(bot.albums[-1].media) == 3 and "толкуй вслух" in bot.sent[-1].text
+
+    press_live(bot, "go", PLAYER)
+    press_live(bot, "a:see", PLAYER)
+    assert "приговор" in bot.sent[-1].text
+    press_live(bot, "v:hit", WATCHER)
+
+    assert current() is None and wallets.balance(CHAT, PLAYER) == 100 + 1500
+    assert wallets.balance(CHAT, WATCHER) == 0, "клиент за приём не платит и денег не получает"
+    final = bot.sent[-1]
+    assert "+1 500 ₽" in final.text and "1 600 ₽" in final.text
+    assert final.reply_markup.inline_keyboard[0][0].text == textui.LIVE_NEW_BUTTON
+    assert names(events())[-1] == "finish" and events()[-1]["data"]["verdict"] == "hit"
+
+
+def test_live_client_cannot_touch_the_props_and_host_cannot_judge(bot, events):
+    start_live(bot)
+    press_live(bot, "join", WATCHER)
+    step = current().step
+    assert "Реквизит" in press_live(bot, "m:tarot", WATCHER).answers[0] and current().step == step
+    press_live(bot, "go", PLAYER)
+    press_live(bot, "a:maybe", PLAYER)
+    assert "Приговор" in press_live(bot, "v:hit", PLAYER).answers[0] and current() is not None
+
+
+def test_live_stranger_is_a_spectator(bot, events):
+    start_live(bot)
+    press_live(bot, "join", WATCHER)
+    query = press_live(bot, "m:tarot", 777)
+    assert "мадам Зоя" in query.answers[0] and events()[-1]["event"] == "spectator"
+
+
+def test_live_swap_button_opens_new_reception_for_the_presser(bot, events):
+    start_live(bot)
+    old = current().session_id
+    press_live(bot, "join", WATCHER)
+    press_live(bot, "go", PLAYER)
+    press_live(bot, "a:maybe", PLAYER)
+    press_live(bot, "v:partial", WATCHER)
+
+    query = callback(bot, textui.live_new_data(old), user_id=WATCHER, message_id=88)
+    asyncio.run(guru_salon.salon_callback(query))
+
+    assert current().host.user_id == WATCHER and current().phase == "waiting"
+    record = events()[-1]
+    assert record["data"]["via"] == "swap" and record["data"]["previous"] == old
+
+
+def test_live_unanswered_call_closes_after_three_minutes(bot, events, clock):
+    start_live(bot)
+    session = current()
+    clock.now += live.WAIT_TIMEOUT_S - 1
+    assert asyncio.run(guru_salon.sweep_idle_salons(bot)) == 0
+    clock.now += 1
+    assert asyncio.run(guru_salon.sweep_idle_salons(bot)) == 1
+    assert current() is None and bot.cleared[-1].message_id == session.message_id
+    assert bot.sent[-1].text == textui.LIVE_WAIT_EXPIRED
+    assert events()[-1]["event"] == "abandon" and events()[-1]["data"]["phase"] == "waiting"
+
+
+def test_live_blocks_solo_shift_and_vice_versa(bot, events):
+    start_live(bot)
+    start(bot, user_id=WATCHER)
+    assert isinstance(current(), guru_salon.LiveSession) and "занят" in bot.sent[-1].text
+
+
+def test_live_can_be_stopped_by_either_side_without_money(bot, events, wallets):
+    start_live(bot)
+    press_live(bot, "join", WATCHER)
+    press_live(bot, "go", PLAYER)
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру лаб стоп", user_id=WATCHER)))
+    assert current() is None and bot.sent[-1].text == textui.LIVE_ABANDON_NOTES["quit"]
+    assert wallets.get(CHAT, PLAYER).balance == 0 and events()[-1]["data"]["reason"] == "quit"
+
+
+def test_live_shutdown_is_logged(bot, events):
+    start_live(bot)
+
+    async def run_and_stop():
+        task = asyncio.ensure_future(guru_salon.guru_salon_timeout_loop(bot, interval=3600))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_and_stop())
+    assert current() is None and events()[-1]["data"]["reason"] == "restart" and events()[-1]["data"]["mode"] == "live"
+
+
+def test_live_failed_send_does_not_leave_zombie(bot, events, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(*args, **kwargs):
+        raise TelegramForbiddenError(method=None, message="bot was kicked")
+
+    monkeypatch.setattr(bot, "send_message", refuse)
+    start_live(bot)
     assert current() is None and events()[-1]["data"]["reason"] == "send_failed"

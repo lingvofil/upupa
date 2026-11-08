@@ -2,7 +2,8 @@
 
 Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Номер шага защищает от старых
 кнопок и двойных нажатий. Отдельно: ``guru:again:yes|no:<сессия>`` (финал) и
-``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма).
+``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма), ``guru:livenew:<сессия>``
+(после живого приёма: нажавший открывает следующий).
 """
 
 from __future__ import annotations
@@ -11,9 +12,9 @@ import re
 from dataclasses import dataclass
 
 from games.guru import content as C
-from games.guru.contract import DisplayEvent, View
+from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport
-from games.guru.rules import rub
+from games.guru.rules import rub, signed_rub
 
 CALLBACK_PREFIX = "guru:"
 MESSAGE_LIMIT = 4000  # у Telegram 4096, оставляем запас
@@ -21,8 +22,9 @@ MESSAGE_LIMIT = 4000  # у Telegram 4096, оставляем запас
 _ACT_RE = re.compile(r"^guru:([0-9a-f]{1,32}):(\d+):([a-z]+(?::[a-z_0-9]+){0,2})$")
 _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
 _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
+_LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 
-ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1}
+ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2}
 
 OUTCOME_TITLES = {
     "hit": "Попадание",
@@ -53,13 +55,21 @@ ABANDON_NOTES = {
 AGAIN_YES = "✅ Да, открываем салон"
 AGAIN_NO = "🚪 С меня хватит, вызывайте налоговую"
 REPORT_BUTTON = "📋 Разбор приёма"
+LIVE_NEW_BUTTON = "🔮 Теперь я гадаю"
+LIVE_WAIT_EXPIRED = "🕯 Никто не записался. Мадам гасит свечи."
+LIVE_ABANDON_NOTES = {
+    "timeout": "💤 Мадам и клиент разошлись, не попрощавшись. Денег никто не получил.",
+    "quit": "🚪 Приём прерван. Денег никто не получил.",
+    "restart": "⚡ Во всём районе вырубили свет. Приём прерван.",
+    "send_failed": "📵 Связь с космосом потеряна. Приём прерван.",
+}
 
 Rows = list[list[tuple[str, str]]]
 
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # act | again | report
+    kind: str  # act | again | report | livenew
     session_id: str
     step: int | None = None
     action: str | None = None
@@ -75,9 +85,10 @@ class Bubble:
     pause: float = 0.0
     spread: float = 0.0
     replace: bool = False
+    cards: tuple[str, ...] = ()  # рисунки, которые показать перед текстом
 
 
-def encode(view: View, action_id: str) -> str:
+def encode(view: View | LiveView, action_id: str) -> str:
     return f"{CALLBACK_PREFIX}{view.session_id}:{view.step}:{action_id}"
 
 
@@ -89,8 +100,15 @@ def report_data(session_id: str, client_no: int) -> str:
     return f"{CALLBACK_PREFIX}rep:{client_no}:{session_id}"
 
 
+def live_new_data(session_id: str) -> str:
+    return f"{CALLBACK_PREFIX}livenew:{session_id}"
+
+
 def parse(data: str | None) -> Callback | None:
     data = data or ""
+    match = _LIVE_NEW_RE.match(data)
+    if match:
+        return Callback("livenew", match.group(1))
     match = _AGAIN_RE.match(data)
     if match:
         return Callback("again", match.group(2), answer=match.group(1))
@@ -105,7 +123,7 @@ def parse(data: str | None) -> Callback | None:
 
 # --- кнопки -----------------------------------------------------------------
 
-def keyboard(view: View) -> Rows:
+def keyboard(view: View | LiveView) -> Rows:
     rows: Rows = []
     controls: list[tuple[str, str]] = []
     current_kind, row = None, []
@@ -131,6 +149,10 @@ def again_keyboard(session_id: str) -> Rows:
     return [[(AGAIN_YES, again_data(session_id, "yes"))], [(AGAIN_NO, again_data(session_id, "no"))]]
 
 
+def live_done_keyboard(view: LiveView) -> Rows:
+    return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))]]
+
+
 def client_done_keyboard(view: View, report: ClientReport) -> Rows:
     rows: Rows = [[(REPORT_BUTTON, report_data(view.session_id, report.client_no))]]
     return rows + keyboard(view)
@@ -147,25 +169,27 @@ def _header(view: View) -> str:
     return f"Клиент {number}/{view.clients_total} · Легенда {_candles(view)} · Серия 🔥{view.streak}"
 
 
-def bubbles(events: tuple[DisplayEvent, ...], view: View) -> list[Bubble]:
+def bubbles(events: tuple[DisplayEvent, ...], view: View | LiveView) -> list[Bubble]:
     """Сгруппировать события в сообщения: новое начинается там, где есть пауза."""
     result: list[Bubble] = []
     parts: list[str] = []
     pause, spread, replace = 0.0, 0.0, False
+    cards: tuple[str, ...] = ()
     for event in events:
         if parts and (event.pause > 0 or event.replace):
-            result.append(Bubble("\n".join(parts), pause, spread, replace))
+            result.append(Bubble("\n".join(parts), pause, spread, replace, cards))
             parts = []
         if not parts:
             pause, spread, replace = event.pause, event.spread, event.replace
+            cards = tuple(event.data.get("cards", ()))
         text = f"{_header(view)}\n\n{event.text}" if event.kind == "arrive" else event.text
         parts.append(text)
     if parts:
-        result.append(Bubble("\n".join(parts), pause, spread, replace))
+        result.append(Bubble("\n".join(parts), pause, spread, replace, cards))
     return result
 
 
-def prompt_text(view: View) -> str:
+def prompt_text(view: View | LiveView) -> str:
     return f"👉 {view.prompt}" if view.prompt else ""
 
 
@@ -192,14 +216,16 @@ def render_constructor(view: View) -> tuple[str, Rows]:
 def render_verdict(view: View, report: ClientReport) -> str:
     """Итог под развязкой: что случилось и чего это стоило."""
     title = f"{OUTCOME_ICONS[report.outcome]} {OUTCOME_TITLES[report.outcome]}"
-    lines = [f"{title} · очки {report.points:+d} · {rub(report.fee)}"]
+    lines = [f"{title} · очки {report.points:+d} · {signed_rub(report.fee)}"]
     if report.outcome == "exposure":
         lines.append("Это провал: клиент раскусил мадам, легенда салона стала меньше.")
+    if report.fee < 0:
+        lines.append(C.LOSS_LINES[report.outcome])
     if report.parting == "pleased":
         lines.append("🙂 Сам сеанс клиенту понравился, поэтому +1 очко" + (" и чаевые." if report.outcome == "exposure" else "."))
     elif report.parting == "sour":
         lines.append("🙁 Сеанс клиенту не понравился.")
-    lines.append(f"Легенда {_candles(view)} · Серия 🔥{view.streak}")
+    lines.append(f"Легенда {_candles(view)} · Серия 🔥{view.streak} · 💰 {rub(view.wallet)}")
     return "\n".join(lines)
 
 
@@ -258,7 +284,8 @@ def render_intro(view: View) -> str:
         f"🔮 Мадам {view.player} открывает салон. Сегодня {view.clients_total} клиента.",
         "",
         "Слушай, уточняй, гадай, сама решай, что озвучить, и делай предсказание.",
-        f"«Клянусь!» приносит больше всего, но несбывшаяся клятва стоит легенды салона: {_candles(view)}.",
+        f"«Клянусь!» приносит больше всего, но несбывшаяся клятва стоит денег и легенды салона: {_candles(view)}.",
+        f"💰 В кассе: {rub(view.wallet)}",
         "",
         "Кнопки жмёт только мадам. 15 минут без хода — салон закрывается.",
     ))
@@ -280,7 +307,7 @@ def render_summary(view: View) -> tuple[str, Rows]:
     lines = [
         head,
         "",
-        f"Очки: {view.score} · Касса: {rub(view.money)}",
+        f"Очки: {view.score} · За смену: {signed_rub(view.money)} · 💰 В кассе: {rub(view.wallet)}",
         f"Клиентов: {len(view.outcomes)}/{view.clients_total} · "
         + " ".join(f"{OUTCOME_ICONS[o]}{counts[o]}" for o in OUTCOME_TITLES),
         f"Легенда {_candles(view)} · Лучшая серия: {view.max_streak} · Науки: {sciences}",
@@ -290,3 +317,41 @@ def render_summary(view: View) -> tuple[str, Rows]:
     lines += [f"🏅 {achievement}" for achievement in view.achievements]
     lines += ["", "Хотите ещё одну смену?"]
     return "\n".join(lines), again_keyboard(view.session_id)
+
+
+# --- живой приём ------------------------------------------------------------
+
+def render_live_open(view: LiveView) -> str:
+    return "\n".join((
+        f"🔮 Мадам {view.host} принимает живых людей.",
+        "",
+        "Клиент рассказывает своё прямо в чат, мадам расспрашивает, гадает и толкует как умеет.",
+        "В конце клиент решает, было ли это ясновидением. От этого зависят деньги мадам.",
+        "",
+        "Кто первым нажмёт кнопку, тот и клиент.",
+    ))
+
+
+def render_live_result(view: LiveView) -> str:
+    outcome = view.outcome or "miss"
+    lines = [f"{OUTCOME_ICONS[outcome]} {OUTCOME_TITLES[outcome]} · {signed_rub(view.fee)}"]
+    if view.fee < 0:
+        lines.append(C.LOSS_LINES[outcome])
+    lines.append(f"💰 В кассе мадам {view.host}: {rub(view.wallet)}")
+    return "\n".join(lines)
+
+
+def render_live_abandoned(view: LiveView, reason: str) -> str:
+    if view.phase == "waiting":
+        return LIVE_WAIT_EXPIRED
+    return LIVE_ABANDON_NOTES.get(reason, "Приём прерван.")
+
+
+def render_wallets(top: list, own: object) -> str:
+    """Таблица касс чата. ``top`` и ``own`` — записи с полями name, balance, earned, lost."""
+    if not top:
+        return "💰 В кассах пусто. Открыть салон: «гуру лаб»."
+    lines = ["💰 Кассы мадам", ""]
+    lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" for place, wallet in enumerate(top, 1)]
+    lines += ["", f"Твоя касса: {rub(own.balance)} · заработано {rub(own.earned)} · потеряно {rub(own.lost)}"]
+    return "\n".join(lines)

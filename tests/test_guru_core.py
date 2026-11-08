@@ -183,12 +183,13 @@ def test_methods_cover_their_slots():
     assert all(len(m.rituals) >= 2 for m in C.METHODS.values())
 
 
-def test_every_tarot_card_is_described():
+def test_every_tarot_card_has_a_picture_and_a_meaning():
     for tag in C.WHO.values():
         assert tag.card in C.TAROT_CARDS
-    assert len(C.TAROT_DECOR) >= 10
+    assert len({tag.card for tag in C.WHO.values()}) == len(C.WHO), "карта указывает только на одного «кто»"
+    assert len(C.TAROT_CARDS) >= len(C.TAROT_POSITIONS) + 1
     for card in C.TAROT_CARDS.values():
-        assert len(card.image) > 15 and card.symbols
+        assert card.symbols and (ROOT / "assets" / "guru_tarot" / f"{card.art}.jpg").is_file(), card.name
 
 
 def test_palm_uses_the_line_of_mind():
@@ -321,10 +322,24 @@ def test_reading_offers_interpretations_by_quality(roll, quality, size, truth_in
 
 def test_ritual_pauses_then_omen_replaces_it():
     session, rng = make("businessman.partner")
+    result = act(session, rng, "c:stop", "m:palm")[-1]
+    ritual, omen = result.events
+    assert ritual.kind == "ritual" and "ладонь" in ritual.text.lower()
+    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Ладонь" in omen.text
+
+
+def test_tarot_keeps_the_ritual_and_brings_pictures():
+    session, rng = make("businessman.partner")
     result = act(session, rng, "c:stop", "m:tarot")[-1]
     ritual, omen = result.events
     assert ritual.kind == "ritual" and "колод" in ritual.text
-    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Расклад" in omen.text
+    assert not omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Расклад" in omen.text
+    cards = omen.data["cards"]
+    assert len(cards) == len(set(cards)) == 3
+    arts = {card.art for card in C.TAROT_CARDS.values()}
+    assert set(cards) <= arts
+    bubble = textui.bubbles(result.events, result.view)[-1]
+    assert bubble.cards == tuple(cards)
 
 
 def test_tarot_shows_what_is_drawn_and_what_it_may_mean():
@@ -333,7 +348,7 @@ def test_tarot_shows_what_is_drawn_and_what_it_may_mean():
     for position in C.TAROT_POSITIONS:
         assert position in omen
     assert omen.count("Образы:") == 3
-    assert C.TAROT_CARDS["Двойка пентаклей"].image in omen
+    assert C.WHO["partner"].card in omen
 
 
 def test_horoscope_describes_the_sign_not_a_date():
@@ -756,7 +771,7 @@ def test_summary_has_everything_for_the_log():
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 4
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 5
 
 
 def test_participants_only_and_invalid_actions():
@@ -863,7 +878,7 @@ def test_events_split_into_short_messages():
     bubbles = textui.bubbles(rules.arrival_events(session), view)
     assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
     assert bubbles[0].pause == 0 and bubbles[1].pause == rules.PACE_TELL[0] and bubbles[1].spread == rules.PACE_TELL[1]
-    result = act(session, rng, "c:stop", "m:tarot")[-1]
+    result = act(session, rng, "c:stop", "m:palm")[-1]
     ritual, omen = textui.bubbles(result.events, result.view)
     assert not ritual.replace and omen.replace and omen.pause > 0
 
@@ -922,6 +937,83 @@ def test_summary_and_abandon_note():
 def test_intro_is_short():
     text = textui.render_intro(rules.build_view(make("jealous.lena")[0]))
     assert len(text) < 400 and "Клянусь" in text and "15 минут" in text
+
+
+# --- деньги -------------------------------------------------------------------
+
+def test_money_formats_a_minus_sign():
+    assert rules.rub(-1500) == "−1 500 ₽" and rules.signed_rub(-1500) == "−1 500 ₽"
+    assert rules.signed_rub(1500) == "+1 500 ₽" and rules.signed_rub(0) == "0 ₽"
+
+
+def test_confidence_is_a_stake_in_money():
+    low, mid, high = rules.FEE["hit"]
+    assert low < mid < high
+    for outcome in ("miss", "exposure"):
+        low, mid, high = rules.FEE[outcome]
+        assert low > mid > high and high < 0
+
+
+def test_cautious_miss_costs_nothing():
+    assert rules.FEE["miss"][0] >= 0 and rules.FEE["partial"][0] >= 0
+
+
+def test_confident_miss_returns_money_regardless_of_mood():
+    session, rng = make("jealous.lena")
+    session.client.trust = session.client.satisfaction = 100
+    report = report_of(miss(session, rng, "see"))
+    assert report.outcome == "miss" and report.fee == rules._round_money(2000 * rules.FEE["miss"][1]) < 0
+    assert session.money == report.fee
+
+
+def test_exposure_is_a_fine():
+    session, rng = make("skeptic.mom", "skeptic.mom")
+    session.client.suspicion = 60
+    session.client.satisfaction = 0
+    report = report_of(miss(session, rng, "see"))
+    assert report.outcome == "exposure" and report.parting != "pleased"
+    assert report.fee == rules.flat_fee(session.client.story.fee, "exposure", 1) < 0
+
+
+def test_discount_for_echo_does_not_halve_a_refund():
+    session, rng = make("businessman.partner")
+    act(session, rng, "c:rush")
+    client = session.client
+    report = report_of(predict(session, rng, "partner", wrong(client, "what"), wrong(client, "when"), "see"))
+    assert report.outcome == "miss" and "who" in report.echo_slots
+    assert report.fee == rules.flat_fee(5000, "miss", 1)
+
+
+def test_wallet_includes_what_was_earned_in_the_party():
+    session, rng = make("jealous.lena")
+    session.wallet_start = 1000
+    result = miss(session, rng, "see")
+    assert result.view.money == report_of(result).fee and result.view.wallet == 1000 + report_of(result).fee
+
+
+def test_wallet_may_go_below_zero():
+    session, rng = make("jealous.lena")
+    session.wallet_start = 0
+    result = miss(session, rng, "see")
+    assert result.view.wallet < 0 and "−" in textui.render_verdict(result.view, report_of(result))
+
+
+def test_verdict_explains_a_loss_and_shows_the_wallet():
+    session, rng = make("jealous.lena")
+    session.wallet_start = 5000
+    result = miss(session, rng, "see")
+    report = report_of(result)
+    verdict = textui.render_verdict(result.view, report)
+    assert C.LOSS_LINES["miss"] in verdict and rules.rub(5000 + report.fee) in verdict
+
+
+def test_summary_separates_shift_from_wallet():
+    session, _ = make("jealous.lena")
+    session.wallet_start = 2000
+    session.money = -500
+    rules.abandon_summary(session, "timeout", now=999.0)
+    text, _ = textui.render_summary(rules.build_view(session))
+    assert "За смену: −500 ₽" in text and "В кассе: 1 500 ₽" in text
 
 
 # --- архитектура ------------------------------------------------------------

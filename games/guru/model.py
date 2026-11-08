@@ -263,7 +263,9 @@ class Session:
     mastery: bool = False
     mercury_left: bool = True
     score: int = 0
-    money: int = 0
+    money: int = 0  # заработано за партию; может уйти в минус
+    wallet_start: int = 0  # сколько было в кассе игрока до партии
+    idle_limit: float = 900.0
     step: int = 0
     reports: list[ClientReport] = field(default_factory=list)
     finished: bool = False
@@ -282,3 +284,33 @@ class Session:
 
     def is_participant(self, user_id: int) -> bool:
         return any(p.user_id == user_id for p in self.participants)
+
+
+@dataclass
+class LiveSession:
+    """Живой приём: один игрок гадает другому. Скрытой правды нет, исход решает клиент."""
+
+    session_id: str
+    chat_id: int
+    host: Participant
+    started_at: float
+    last_activity: float
+    idle_limit: float
+    wallet_start: int
+    readings_left: int
+    client: Participant | None = None
+    joined_at: float | None = None
+    sign: str = ""
+    phase: str = "waiting"  # waiting | divine | announce | verdict | done
+    used_methods: list[str] = field(default_factory=list)
+    confidence: str | None = None
+    outcome: str | None = None
+    fee: int = 0
+    step: int = 0
+    finished: bool = False
+    finish_reason: str | None = None
+    message_id: int | None = None
+    thread_id: int | None = None
+
+    def is_participant(self, user_id: int) -> bool:
+        return self.host.user_id == user_id or (self.client is not None and self.client.user_id == user_id)

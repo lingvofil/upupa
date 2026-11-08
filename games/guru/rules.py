@@ -46,7 +46,7 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 4
+RULES_VERSION = 5
 
 ARCHETYPE_ORDER = ("skeptic", "jealous", "businessman", "romantic", "granny")
 CLIENTS_PER_SESSION = 3
@@ -94,7 +94,13 @@ PLEASED_POINTS = 1
 EXPOSURE_TIP = 0.2  # разоблачили, но сеанс понравился: чаевые
 
 SCORE = {"hit": (2, 3, 5), "partial": (1, 1, -1), "miss": (0, -1, -3), "exposure": (-4, -4, -4)}
-FEE = {"hit": (0.6, 1.0, 1.6), "partial": (0.5, 0.4, 0.2), "miss": (0.2, 0.1, 0.0), "exposure": (0, 0, 0)}
+# Доля гонорара: (кажется, вижу, клянусь). Минус — мадам возвращает деньги, настроение клиента тут не важно.
+FEE = {
+    "hit": (0.6, 1.0, 1.6),
+    "partial": (0.5, 0.4, -0.2),
+    "miss": (0.2, -0.3, -0.6),
+    "exposure": (-0.4, -0.6, -1.0),
+}
 ECHO_DISCOUNT = 0.5
 STREAK_BONUS = {2: 2, 3: 3}
 MASTERY_BONUS = 2
@@ -124,7 +130,16 @@ def _round_money(value: float) -> int:
 
 
 def rub(amount: int) -> str:
-    return f"{amount:,}".replace(",", " ") + " ₽"
+    return f"{amount:,}".replace(",", " ").replace("-", "−") + " ₽"
+
+
+def signed_rub(amount: int) -> str:
+    return f"+{rub(amount)}" if amount > 0 else rub(amount)
+
+
+def flat_fee(base: int, outcome: str, level: int) -> int:
+    """Деньги за исход без поправки на настроение клиента."""
+    return _round_money(base * FEE[outcome][level])
 
 
 # --- создание ---------------------------------------------------------------
@@ -186,6 +201,7 @@ def new_session(
     rng: random.Random,
     now: float,
     plan: tuple[str, ...] | None = None,
+    wallet: int = 0,
 ) -> Session:
     if plan is None:
         order = rng.sample(list(ARCHETYPE_ORDER), CLIENTS_PER_SESSION)
@@ -202,6 +218,8 @@ def new_session(
         client=new_client(STORIES_BY_ID[plan[0]], rng, now),
         legend=LEGEND_START,
         legend_start=LEGEND_START,
+        wallet_start=wallet,
+        idle_limit=IDLE_TIMEOUT_S,
     )
 
 
@@ -259,8 +277,9 @@ class _Turn:
     metrics: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     finished_client: ClientView | None = None
 
-    def show(self, kind: str, text: str, pace: tuple[float, float] = NO_PAUSE, *, replace: bool = False) -> None:
-        self.events.append(DisplayEvent(kind, text, pause=pace[0], spread=pace[1], replace=replace))
+    def show(self, kind: str, text: str, pace: tuple[float, float] = NO_PAUSE, *, replace: bool = False,
+             data: dict[str, Any] | None = None) -> None:
+        self.events.append(DisplayEvent(kind, text, pause=pace[0], spread=pace[1], replace=replace, data=data or {}))
 
 
 def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, now: float) -> ActResult:
@@ -402,16 +421,23 @@ def _deal(client: Client, method: C.Method, rng: random.Random) -> Reading:
     return Reading(method.key, method.slot, tuple(offered), quality)
 
 
+def deal_spread(required: tuple[str, ...], rng: random.Random) -> tuple[C.TarotCard, ...]:
+    """Расклад: обязательные карты и добор из колоды, по положениям как ляжет."""
+    names = list(required)
+    spare = [name for name in C.TAROT_CARDS if name not in names]
+    names += rng.sample(spare, len(C.TAROT_POSITIONS) - len(names))
+    rng.shuffle(names)
+    return tuple(C.TAROT_CARDS[name] for name in names)
+
+
+def spread_text(cards: tuple[C.TarotCard, ...]) -> str:
+    lines = ["🃏 Расклад:"]
+    for position, card in zip(C.TAROT_POSITIONS, cards):
+        lines += ["", f"{position} — {card.name}", f"Образы: {card.symbols}."]
+    return "\n".join(lines)
+
+
 def _omen(client: Client, reading: Reading, rng: random.Random) -> str:
-    if reading.method == "tarot":
-        names = [C.WHO[tag].card for tag in reading.offered]
-        names += rng.sample(C.TAROT_DECOR, 3 - len(names))
-        rng.shuffle(names)
-        lines = ["🃏 Расклад:"]
-        for position, name in zip(C.TAROT_POSITIONS, names):
-            card = C.TAROT_CARDS[name]
-            lines += ["", f"{position} — {name}", card.image, f"Образы: {card.symbols}."]
-        return "\n".join(lines)
     if reading.method == "palm":
         return "🖐 Ладонь горячая. " + ", ".join(C.SPHERES[tag].omen for tag in reading.offered).capitalize() + "."
     if reading.method == "horoscope":
@@ -430,7 +456,11 @@ def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Tu
     client.pending = _deal(client, method, rng)
     client.phase = "interpret"
     turn.show("ritual", rng.choice(method.rituals))
-    turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, replace=True)
+    if method.key == "tarot":
+        cards = deal_spread(tuple(C.WHO[tag].card for tag in client.pending.offered), rng)
+        turn.show("omen", spread_text(cards), PACE_RITUAL, data={"cards": [card.art for card in cards]})
+    else:
+        turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, replace=True)
 
 
 def _reaction(client: Client, correct: bool, rng: random.Random) -> str:
@@ -608,6 +638,20 @@ def _announce(session: Session, client: Client, confidence: str, rng: random.Ran
             echo=echo, slots=_slot_results(client, matches, mercury), jackpot=jackpot, trap=trap)
 
 
+def _payment(client: Client, outcome: str, level: int, echo: tuple[str, ...], parting: str) -> int:
+    """Гонорар клиента или, со знаком минус, сколько мадам возвращает."""
+    story, kind = client.story, client.kind
+    if outcome == "exposure" and parting == "pleased":
+        return _round_money(story.fee * EXPOSURE_TIP)
+    rate = FEE[outcome][level]
+    if rate <= 0:
+        return flat_fee(story.fee, outcome, level)
+    fee = story.fee * (0.5 + (client.trust + client.satisfaction) / 200) * rate
+    if kind.echo == "discount" and echo:
+        fee *= ECHO_DISCOUNT
+    return _round_money(fee)
+
+
 def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, now: float, *,
             confidence: str | None, reasons: tuple[str, ...], outcome: str, echo: tuple[str, ...],
             slots: tuple[SlotResult, ...], jackpot: bool, trap: bool) -> None:
@@ -617,12 +661,7 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     _add_satisfaction(client, SATISFACTION_OUTCOME[outcome] + (SATISFACTION_JACKPOT if jackpot else 0))
     parting = _parting(client)
     points = SCORE[outcome][level] + (PLEASED_POINTS if parting == "pleased" else 0)
-    fee = story.fee * (0.5 + (client.trust + client.satisfaction) / 200) * FEE[outcome][level]
-    if kind.echo == "discount" and echo and outcome != "exposure":
-        fee *= ECHO_DISCOUNT
-    if outcome == "exposure" and parting == "pleased":
-        fee = story.fee * EXPOSURE_TIP
-    fee = _round_money(fee)
+    fee = _payment(client, outcome, level, echo, parting)
 
     streak_before, bonus = session.streak, 0
     if outcome == "hit":
@@ -717,8 +756,9 @@ def abandon(session: Session, reason: str) -> None:
         _finish(session, reason)
 
 
-def is_idle(session: Session, now: float, timeout: float = IDLE_TIMEOUT_S) -> bool:
-    return not session.finished and now - session.last_activity >= timeout
+def is_idle(session: Any, now: float, timeout: float | None = None) -> bool:
+    limit = session.idle_limit if timeout is None else timeout
+    return not session.finished and now - session.last_activity >= limit
 
 
 def title(session: Session) -> str:
@@ -746,6 +786,7 @@ def summary(session: Session, now: float) -> dict[str, Any]:
     outcomes = [report.outcome for report in session.reports]
     return {
         "money": session.money,
+        "wallet": session.wallet_start + session.money,
         "score": session.score,
         "legend_left": session.legend,
         "legend_start": session.legend_start,
@@ -846,6 +887,7 @@ def build_view(session: Session) -> View:
         streak=session.streak,
         score=session.score,
         money=session.money,
+        wallet=session.wallet_start + session.money,
         sciences=tuple((method, method in session.methods_used) for method in C.MAIN_METHODS),
         client=_client_view(session, client) if client is not None else None,
         prompt=_prompt(client) if client is not None else "",
@@ -863,30 +905,30 @@ def build_view(session: Session) -> View:
 # --- партии по чатам --------------------------------------------------------
 
 class SessionRegistry:
-    """Одна активная партия на чат. Живёт в памяти: рестарт бота бросает партии."""
+    """Одна активная партия на чат (одиночная или живой приём). Живёт в памяти: рестарт бота её бросает."""
 
     def __init__(self) -> None:
-        self._by_chat: dict[int, Session] = {}
+        self._by_chat: dict[int, Any] = {}
 
-    def get(self, chat_id: int) -> Session | None:
+    def get(self, chat_id: int) -> Any | None:
         return self._by_chat.get(chat_id)
 
-    def add(self, session: Session) -> None:
+    def add(self, session: Any) -> None:
         if session.chat_id in self._by_chat:
             raise ValueError("в этом чате уже идёт партия")
         self._by_chat[session.chat_id] = session
 
-    def remove(self, session: Session) -> bool:
+    def remove(self, session: Any) -> bool:
         """Убрать именно эту партию; ``False``, если в чате уже другая."""
         if self._by_chat.get(session.chat_id) is not session:
             return False
         del self._by_chat[session.chat_id]
         return True
 
-    def idle(self, now: float, timeout: float = IDLE_TIMEOUT_S) -> list[Session]:
+    def idle(self, now: float, timeout: float | None = None) -> list[Any]:
         return [session for session in self._by_chat.values() if is_idle(session, now, timeout)]
 
-    def active(self) -> list[Session]:
+    def active(self) -> list[Any]:
         return list(self._by_chat.values())
 
     def __len__(self) -> int:
