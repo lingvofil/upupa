@@ -1,10 +1,10 @@
 """Живой приём: один игрок гадает другому.
 
-Скрытой правды здесь нет. Клиент — человек из чата: вводные даёт кнопками анкеты (ИИ не
-нужен, анкету читает мадам), подробности может дописать словами. Мадам расспрашивает и
-толкует выпавшее тоже словами, а ядро даёт реквизит (расклады, ритуал, паузы), принимает
-ставку уверенности и считает деньги. Было ли это ясновидением, решает сам клиент.
-Сообщения людей ядро не читает.
+Клиент — человек из чата: тайно заполняет анкету кнопками (беда, кто замешан, что на душе),
+мадам её не видит и гадает вслепую. Ядро показывает расклады и предлагает толкования, среди
+которых ответ клиента бывает не всегда. Мадам выбирает, что озвучить, и собирает предсказание
+кнопками, а бот произносит всё это вслух. ИИ не нужен. Было ли это ясновидением, решает сам
+клиент; после приговора анкета открывается. Сообщения людей ядро не читает.
 
 Гонорар мадам платит касса салона, а не клиент: иначе клиенту всегда выгодно кричать
 «Шарлатанка!», и оценка перестанет что-либо значить.
@@ -18,14 +18,17 @@ from typing import Any
 from games.guru import content as C
 from games.guru import rules
 from games.guru.contract import Action, DisplayEvent, LiveResult, LiveView
-from games.guru.model import LiveSession, Participant
+from games.guru.model import LiveSession, Participant, Reading
 
 LIVE_FEE = 1500
 LIVE_READINGS = 3
+LIVE_OPTIONS = 3  # сколько толкований предлагает расклад
+LIVE_TRUTH_CHANCE = 0.75  # как часто ответ клиента из анкеты попадает в толкования
 WAIT_TIMEOUT_S = 180  # открытый приём не должен надолго занимать чат
-PALM_LINES = 3
 
-HOST_ACTIONS = ("m", "go", "a")
+HOST_ACTIONS = ("m", "go", "i", "s", "a")
+SLOT_TAGS = {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}
+READING_TAGS = {"who": C.WHO, "what": C.WHAT, "sphere": C.SPHERES, "emotion": C.EMOTIONS}
 
 
 def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0) -> LiveSession:
@@ -49,24 +52,31 @@ def _intake_slot(session: LiveSession) -> C.IntakeSlot | None:
 def available_actions(session: LiveSession) -> tuple[Action, ...]:
     if session.finished:
         return ()
-    if session.phase == "waiting":
+    phase = session.phase
+    if phase == "waiting":
         return (Action("join", "🙋 Записаться на приём", "control"),)
-    if session.phase == "intake":
+    if phase == "intake":
         options = [Action(f"q:{key}", value.capitalize(), "intake") for key, value in _intake_slot(session).options.items()]
         return (*options, Action("skip", C.LIVE_INTAKE_SKIP_LABEL, "control"))
-    if session.phase == "divine":
+    if phase == "divine":
         actions: list[Action] = []
         if session.readings_left > 0:
             actions += [Action(f"m:{m.key}", m.label, "method") for m in C.METHODS.values()
                         if m.key not in session.used_methods]
         actions.append(Action("go", "🔮 К предсказанию", "control"))
         return tuple(actions)
-    if session.phase == "sign":
+    if phase == "sign":
         signs = [Action(f"z:{key}", f"{C.ZODIAC[sign][0]} {sign}", "sign") for key, sign in C.ZODIAC_IDS.items()]
         return (*signs, Action("stars", C.LIVE_SIGN_SKIP_LABEL, "control"))
-    if session.phase == "announce":
+    if phase == "interpret":
+        slot = session.pending.slot
+        return tuple(Action(f"i:{tag}", rules.interpretation(slot, tag).button, "interpretation")
+                     for tag in session.pending.offered)
+    if phase in C.SLOTS:
+        return tuple(Action(f"s:{phase}:{key}", tag.label, "option") for key, tag in SLOT_TAGS[phase].items())
+    if phase == "announce":
         return tuple(Action(f"a:{level}", C.CONFIDENCE_LABELS[level], "confidence") for level in C.CONFIDENCE)
-    if session.phase == "verdict":
+    if phase == "verdict":
         return tuple(Action(f"v:{key}", label, "verdict") for key, label in C.LIVE_VERDICTS.items())
     return ()
 
@@ -83,7 +93,7 @@ def refusal(session: LiveSession, actor_id: int, action_id: str) -> str | None:
     if head == "z" and actor_id == session.host.user_id:
         return "Знак называет клиент. Мадам делает вид, что и так его знает."
     if head == "q" and actor_id == session.host.user_id:
-        return "Анкету заполняет клиент. Мадам делает вид, что и так всё знает."
+        return "Анкету заполняет клиент. Мадам подглядывать нельзя."
     if head in HOST_ACTIONS and actor_id != session.host.user_id:
         return "Реквизит в руках у мадам. Твоё слово будет в конце."
     if head == "v" and actor_id == session.host.user_id:
@@ -113,18 +123,52 @@ def _open_seance(session: LiveSession, events: list[DisplayEvent]) -> None:
 
 
 def _answer_intake(session: LiveSession, key: str, events: list[DisplayEvent],
-                   metrics: list[tuple[str, dict[str, Any]]]) -> None:
+                   metrics: list[tuple[str, dict[str, Any]]]) -> str:
+    """Записать ответ. Возвращает подтверждение, которое увидит только клиент."""
     slot = _intake_slot(session)
     session.intake[slot.key] = key
     metrics.append(("action", {"kind": "intake", "mode": "live", "slot": slot.key, "value": key}))
     if _intake_slot(session) is None:
         _open_seance(session, events)
+    return C.LIVE_INTAKE_NOTICE.format(value=slot.options[key])
 
 
 def _skip_intake(session: LiveSession, events: list[DisplayEvent], metrics: list[tuple[str, dict[str, Any]]]) -> None:
     events.append(_event("line", C.LIVE_INTAKE_SKIP_LINE))
     metrics.append(("action", {"kind": "intake_skip", "mode": "live", "answered": len(session.intake)}))
     _open_seance(session, events)
+
+
+def _truth(session: LiveSession, slot: str, rng: random.Random) -> str | None:
+    """Ответ клиента на то, о чём говорит расклад. «Что случится» в анкете нет: берём событие из его беды."""
+    if slot != "what":
+        return session.intake.get(slot)
+    sphere = session.intake.get("sphere")
+    if sphere is None:
+        return None
+    same_sphere = [tag for tag in C.WHAT.values() if tag.sphere == sphere]
+    same_mood = [tag for tag in same_sphere if tag.emotion == session.intake.get("emotion")]
+    return rng.choice(same_mood or same_sphere).key
+
+
+def _deal(session: LiveSession, method: C.Method, rng: random.Random) -> Reading:
+    tags = list(READING_TAGS[method.slot])
+    truth = _truth(session, method.slot, rng)
+    if truth is None:
+        return Reading(method.key, method.slot, tuple(rng.sample(tags, LIVE_OPTIONS)), "blind")
+    others = [tag for tag in tags if tag != truth]
+    if rng.random() >= LIVE_TRUTH_CHANCE:
+        return Reading(method.key, method.slot, tuple(rng.sample(others, LIVE_OPTIONS)), "off")
+    offered = [truth, *rng.sample(others, LIVE_OPTIONS - 1)]
+    rng.shuffle(offered)
+    return Reading(method.key, method.slot, tuple(offered), "plain")
+
+
+def _log_reading(reading: Reading, metrics: list[tuple[str, dict[str, Any]]], **extra: Any) -> None:
+    metrics.append(("action", {
+        "kind": "reading", "mode": "live", "method": reading.method, "slot": reading.slot,
+        "quality": reading.quality, "offered": list(reading.offered), **extra,
+    }))
 
 
 def _read(session: LiveSession, method_key: str, rng: random.Random, events: list[DisplayEvent],
@@ -137,34 +181,62 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
         session.phase = "sign"
         events.append(_event("line", C.LIVE_SIGN_ASK_LINE))
         return
+    reading = session.pending = _deal(session, method, rng)
+    session.phase = "interpret"
     events.append(_event("ritual", rng.choice(method.rituals)))
     if method.key == "tarot":
-        cards = rules.deal_spread((), rng)
+        cards = rules.deal_spread(tuple(C.WHO[tag].card for tag in reading.offered), rng)
         events.append(_event("omen", rules.spread_text(cards), rules.PACE_RITUAL,
                              data={"cards": [card.art for card in cards]}))
     else:
         if method.key == "palm":
-            lines = rng.sample([tag.omen for tag in C.SPHERES.values()], PALM_LINES)
-            text = C.LIVE_PALM_LINE.format(omens=", ".join(lines).capitalize())
+            omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
+            text = C.LIVE_PALM_LINE.format(omens=omens.capitalize())
         else:
             text = f"🌀 {rng.choice(C.AURA_OMENS)}"
         events.append(_event("omen", text, rules.PACE_RITUAL, replace=True))
-    metrics.append(("action", {"kind": "reading", "mode": "live", "method": method.key}))
+    _log_reading(reading, metrics)
 
 
 def _horoscope(session: LiveSession, sign: str, by_stars: bool, rng: random.Random, events: list[DisplayEvent],
                metrics: list[tuple[str, dict[str, Any]]]) -> None:
     """Прогноз для знака. Выбор звёзд объявляем вслух: клиент его не называл."""
+    method = C.METHODS["horoscope"]
     session.sign = sign
-    session.phase = "divine"
+    reading = session.pending = _deal(session, method, rng)
+    session.phase = "interpret"
     symbol, trend = C.ZODIAC[sign]
-    text = f"{symbol} {sign}. {trend}\nСовет звёзд: {rng.choice(C.STAR_ADVICE)}"
+    forecasts = "\n".join(f"· {C.WHAT[tag].forecast}" for tag in reading.offered)
+    text = f"{symbol} {sign}. {trend}\n{forecasts}\nСовет звёзд: {rng.choice(C.STAR_ADVICE)}"
     if by_stars:
         text = f"{C.LIVE_SIGN_LINE.format(client=session.client.name, sign=sign)}\n\n{text}"
-    events.append(_event("ritual", rng.choice(C.METHODS["horoscope"].rituals)))
+    events.append(_event("ritual", rng.choice(method.rituals)))
     events.append(_event("omen", text, rules.PACE_RITUAL, replace=True))
-    metrics.append(("action", {"kind": "reading", "mode": "live", "method": "horoscope",
-                               "sign_by": "stars" if by_stars else "client"}))
+    _log_reading(reading, metrics, sign_by="stars" if by_stars else "client")
+
+
+def _interpret(session: LiveSession, tag: str, events: list[DisplayEvent], metrics: list[tuple[str, dict[str, Any]]]) -> None:
+    reading = session.pending
+    session.pending = None
+    session.phase = "divine"
+    voice = rules.quote(rules.interpretation(reading.slot, tag).voice)
+    events.append(_event("voice", C.LIVE_VOICE_LINE.format(text=voice), rules.PACE_REACTION))
+    metrics.append(("action", {"kind": "interpretation", "mode": "live", "method": reading.method,
+                               "slot": reading.slot, "voiced": tag}))
+
+
+def _announce(session: LiveSession, level: str, events: list[DisplayEvent], metrics: list[tuple[str, dict[str, Any]]]) -> None:
+    session.confidence = level
+    session.phase = "verdict"
+    sentence = rules.quote(rules.prediction_sentence(session.picks, level))
+    events.append(_event("announce", C.LIVE_CONFIDENCE_LINE.format(sentence=sentence), rules.PACE_REACTION))
+    metrics.append(("action", {"kind": "confidence", "mode": "live", "confidence": level}))
+
+
+def _reveal(session: LiveSession) -> str | None:
+    """Анкета открывается только после приговора. Пропущенная анкета открывать нечего."""
+    rows = [f"{slot.title}: {slot.options[session.intake[slot.key]]}" for slot in C.LIVE_INTAKE if slot.key in session.intake]
+    return "\n".join((C.LIVE_REVEAL_LINE, *rows)) if rows else None
 
 
 def _verdict(session: LiveSession, picked: str, now: float, events: list[DisplayEvent],
@@ -178,6 +250,9 @@ def _verdict(session: LiveSession, picked: str, now: float, events: list[Display
     events.append(_event("react", C.LIVE_OUTCOME_LINES[picked].format(client=client), rules.PACE_REVEAL))
     if outcome != picked:
         events.append(_event("line", C.LIVE_SWORN_MISS_LINE))
+    reveal = _reveal(session)
+    if reveal is not None:
+        events.append(_event("reveal", reveal, rules.PACE_REVEAL))
     session.finished = True
     session.finish_reason = "completed"
     metrics.append(("finish", {
@@ -188,6 +263,8 @@ def _verdict(session: LiveSession, picked: str, now: float, events: list[Display
         "fee": session.fee,
         "wallet": session.wallet_start + session.fee,
         "methods_used": list(session.used_methods),
+        "intake": dict(session.intake),
+        "picks": dict(session.picks),
         "client": session.client.user_id,
         "duration_s": round(max(0.0, now - session.started_at), 1),
         "reason": "completed",
@@ -209,12 +286,13 @@ def act(session: LiveSession, actor_id: int, actor_name: str, action_id: str, rn
     session.last_activity = now
     events: list[DisplayEvent] = []
     metrics: list[tuple[str, dict[str, Any]]] = []
+    notice: str | None = None
     head, _, rest = action_id.partition(":")
 
     if head == "join":
         _join(session, actor_id, actor_name, rng, now, events, metrics)
     elif head == "q":
-        _answer_intake(session, rest, events, metrics)
+        notice = _answer_intake(session, rest, events, metrics)
     elif head == "skip":
         _skip_intake(session, events, metrics)
     elif head == "m":
@@ -223,39 +301,45 @@ def act(session: LiveSession, actor_id: int, actor_name: str, action_id: str, rn
         _horoscope(session, C.ZODIAC_IDS[rest], False, rng, events, metrics)
     elif head == "stars":
         _horoscope(session, rng.choice(C.ZODIAC_SIGNS), True, rng, events, metrics)
+    elif head == "i":
+        _interpret(session, rest, events, metrics)
     elif head == "go":
-        session.phase = "announce"
+        session.phase = "who"
         events.append(_event("line", C.LIVE_ANNOUNCE_LINE, rules.PACE_REACTION))
+    elif head == "s":
+        slot, _, tag = rest.partition(":")
+        session.picks[slot] = tag
+        following = C.SLOTS.index(slot) + 1
+        session.phase = C.SLOTS[following] if following < len(C.SLOTS) else "announce"
     elif head == "a":
-        session.confidence = rest
-        session.phase = "verdict"
-        events.append(_event("announce", C.LIVE_CONFIDENCE_LINE.format(label=C.CONFIDENCE_LABELS[rest]), rules.PACE_REACTION))
-        metrics.append(("action", {"kind": "confidence", "mode": "live", "confidence": rest}))
+        _announce(session, rest, events, metrics)
     elif head == "v":
         _verdict(session, rest, now, events, metrics)
 
-    return LiveResult(tuple(events), tuple(metrics), build_view(session))
+    return LiveResult(tuple(events), tuple(metrics), build_view(session), notice)
 
 
 def _prompt(session: LiveSession) -> str:
-    if session.phase == "intake":
+    phase = session.phase
+    if phase == "intake":
         return f"{session.client.name}, {_intake_slot(session).question}"
-    if session.phase == "divine":
-        if session.used_methods:
-            if session.readings_left > 0:
-                return f"Мадам, толкуй вслух, прямо в чат. Что дальше? Осталось раскладов: {session.readings_left}"
-            return "Мадам, толкуй вслух, прямо в чат. Раскладов больше нет, пора к предсказанию."
-        return f"Мадам, спрашивай словами, сколько нужно. Чем гадать? Раскладов: {session.readings_left}"
-    if session.phase == "sign" and session.client is not None:
+    if phase == "divine":
+        if not session.used_methods:
+            return f"Мадам, чем гадать? Раскладов: {session.readings_left}"
+        if session.readings_left > 0:
+            return f"Мадам, что дальше? Осталось раскладов: {session.readings_left}"
+        return "Мадам, раскладов больше нет, пора к предсказанию."
+    if phase == "sign" and session.client is not None:
         return f"{session.client.name}, какой у тебя знак?"
-    if session.phase == "announce":
-        return "Мадам, скажи предсказание прямо в чат и выбери, как объявить."
-    if session.phase == "verdict" and session.client is not None:
+    if phase == "verdict" and session.client is not None:
         return f"{session.client.name}, твой приговор?"
+    if phase in rules.PROMPTS:
+        return f"Мадам, {rules.PROMPTS[phase].lower()}"
     return ""
 
 
 def build_view(session: LiveSession) -> LiveView:
+    """Ответы анкеты сюда не попадают: их не должен увидеть ни один интерфейс до приговора."""
     return LiveView(
         session_id=session.session_id,
         step=session.step,
@@ -270,8 +354,8 @@ def build_view(session: LiveSession) -> LiveView:
         outcome=session.outcome,
         fee=session.fee,
         wallet=session.wallet_start + session.fee,
-        intake=tuple((slot.title, slot.options[session.intake[slot.key]])
-                     for slot in C.LIVE_INTAKE if slot.key in session.intake),
+        intake_filled=len(session.intake),
+        preview=rules.preview_text(session.picks) if session.phase in (*C.SLOTS, "announce") else None,
     )
 
 

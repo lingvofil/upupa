@@ -102,7 +102,8 @@ class LiveView:
     outcome: str | None
     fee: int
     wallet: int  # касса мадам с учётом этого приёма
-    intake: tuple[tuple[str, str], ...] = ()  # заполненные строки анкеты: (заголовок, значение)
+    intake_filled: int = 0  # сколько строк анкеты заполнено; сами ответы тайна до приговора
+    preview: str | None = None  # собираемая фраза предсказания
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,6 +114,7 @@ class LiveResult:
     events: tuple[DisplayEvent, ...]
     metrics: tuple[tuple[str, dict[str, Any]], ...]
     view: LiveView
+    notice: str | None = None  # подтверждение, которое увидит только нажавший
 
 
 @dataclass(frozen=True)
