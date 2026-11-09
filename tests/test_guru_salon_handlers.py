@@ -15,7 +15,7 @@ from features.lab import events as lab_events
 from features.lab import flags as lab_flags
 from features.lab.events import EventLog, read_events
 from features.lab.flags import ExperimentFlags
-from games.guru import live, rules, textui
+from games.guru import live, rules, salon, textui
 from handlers import guru_salon
 
 CHAT = -100900
@@ -129,9 +129,11 @@ def user(user_id, name="Зоя"):
 
 def message(bot, text, user_id=PLAYER, chat_id=CHAT):
     replies = []
+    markups = []
 
     async def reply(answer, **kwargs):
         replies.append(answer)
+        markups.append(kwargs.get("reply_markup"))
 
     return SimpleNamespace(
         text=text,
@@ -143,6 +145,7 @@ def message(bot, text, user_id=PLAYER, chat_id=CHAT):
         is_topic_message=False,
         reply=reply,
         replies=replies,
+        markups=markups,
     )
 
 
@@ -238,6 +241,78 @@ def test_router_is_registered_before_dialog():
     assert ROUTERS.index(guru_salon.router) < ROUTERS.index(dialog.router)
 
 
+@pytest.mark.parametrize("text", ["гуру лавка", "Гуру  МАГАЗИН"])
+def test_shop_command_matches(flags, text):
+    assert _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+def open_shop(bot, user_id=PLAYER):
+    msg = message(bot, "гуру лавка", user_id=user_id)
+    asyncio.run(guru_salon.show_shop(msg))
+    return msg
+
+
+def buy(bot, item, user_id=PLAYER, owner=PLAYER):
+    query = callback(bot, textui.buy_data(item, owner), user_id=user_id, message_id=77)
+    asyncio.run(guru_salon.salon_callback(query))
+    return query
+
+
+def test_shop_lists_goods_and_buttons(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    msg = open_shop(bot)
+    assert "Лавка салона мадам Зоя" in msg.replies[0] and "3 000 ₽" in msg.replies[0]
+    assert "Чай с чабрецом" in msg.replies[0]
+    buttons = [button for row in msg.markups[0].inline_keyboard for button in row]
+    assert len(buttons) == len(salon.ITEMS) and all(len(b.callback_data.encode()) <= 64 for b in buttons)
+
+
+def test_buying_takes_money_and_updates_the_shop(bot, events, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 5000)
+    query = buy(bot, "tea")
+    wallet = wallets.get(CHAT, PLAYER)
+    assert wallet.balance == 2000 and wallet.items == ["tea"] and wallet.spent == 3000 and wallet.lost == 0
+    assert "Чай с чабрецом" in query.answers[0]
+    edit = bot.edits[-1]
+    assert edit.message_id == 77 and "2 000 ₽" in edit.text and "✅" in edit.text
+    assert all(b.callback_data != textui.buy_data("tea", PLAYER) for row in edit.reply_markup.inline_keyboard for b in row)
+    record = events()[-1]
+    assert record["event"] == "purchase" and record["data"]["item"] == "tea" and record["data"]["price"] == 3000
+
+
+def test_cannot_buy_twice_or_without_money(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    buy(bot, "tea")
+    assert "уже стоит" in buy(bot, "tea").answers[0]
+    assert "Не хватает 18 000 ₽" in buy(bot, "reviews").answers[0]
+    assert wallets.get(CHAT, PLAYER).items == ["tea"] and wallets.get(CHAT, PLAYER).balance == 0
+
+
+def test_strangers_cannot_buy_from_someone_elses_shop(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 5000)
+    wallets.apply(CHAT, WATCHER, "Гоша", 5000)
+    query = buy(bot, "tea", user_id=WATCHER, owner=PLAYER)
+    assert "чужая лавка" in query.answers[0] and wallets.get(CHAT, WATCHER).items == [] and wallets.get(CHAT, PLAYER).items == []
+
+
+def test_purchases_work_in_the_next_shift(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 50000)
+    buy(bot, "tea")
+    buy(bot, "reviews")
+    start(bot)
+    session = current()
+    assert session.client.satisfaction >= rules.SATISFACTION_START + 10 and session.clients_total == 4
+    intro = bot.sent[0].text
+    assert "🫖" in intro and "Кабинет в подвале" in intro
+
+
+def test_purchases_work_in_live_reception(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 50000)
+    buy(bot, "ball")
+    start_live(bot)
+    assert current().readings_left == live.LIVE_READINGS + 1
+
+
 @pytest.mark.parametrize("text", ["гуру лаб", "гуру лаб приём", "гуру лаб касса", "гуру лаб стоп"])
 def test_old_lab_commands_are_gone(flags, text):
     assert not _accepts(guru_salon.router.message, message(FakeBot(), text))
@@ -323,7 +398,7 @@ def test_divination_edits_ritual_into_omen(bot, events, pauses):
 
     press(bot, "m:palm")
 
-    assert len(bot.sent) == sent_before + 1 and "ладонь" in bot.sent[-1].text.lower()
+    assert len(bot.sent) == sent_before + 1 and "ладон" in bot.sent[-1].text.lower()
     edit = bot.edits[-1]
     assert edit.message_id == bot.sent[-1].message_id and "Ладонь" in edit.text and "Что озвучить" in edit.text
     assert edit.reply_markup is not None and rules.PACE_RITUAL[0] <= sum(pauses) <= sum(rules.PACE_RITUAL)

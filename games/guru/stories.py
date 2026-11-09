@@ -17,6 +17,7 @@ from types import MappingProxyType as Map
 from typing import Mapping
 
 from games.guru.model import WHEN_TRUTH, Combo, Question, Story
+from games.guru.stories_extra import EXTRA_STORIES
 
 STORIES: tuple[Story, ...] = (
     # --- ревнивая -----------------------------------------------------------
@@ -488,6 +489,7 @@ STORIES: tuple[Story, ...] = (
             "Его кот на стриме уронил с полки натальную карту хозяина. Сорок тысяч зрителей увидели асцендент в Раке.",
         ),
     ),
+    *EXTRA_STORIES,
 )
 
 STORIES_BY_ID: Mapping[str, Story] = Map({story.id: story for story in STORIES})

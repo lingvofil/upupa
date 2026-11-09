@@ -355,8 +355,8 @@ def test_host_picks_which_interpretation_to_voice(method, slot, table):
 def test_tarot_cards_match_the_offered_interpretations():
     session = seated()
     result = press(session, HOST, "m:tarot", random.Random(5))
-    art = {C.TAROT_CARDS[C.WHO[tag].card].art for tag in session.pending.offered}
-    assert set(result.events[-1].data["cards"]) == art
+    drawn = [next(card for card in C.TAROT_CARDS.values() if card.art == art) for art in result.events[-1].data["cards"]]
+    assert {card.who for card in drawn} == set(session.pending.offered)
 
 
 @pytest.mark.parametrize("method,answer", [("palm", "love"), ("tarot", "tax"), ("energy", "hope")])

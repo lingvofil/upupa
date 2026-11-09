@@ -31,6 +31,7 @@ from typing import Any
 
 from games.guru import content as C
 from games.guru.contract import Action, ActResult, ClientView, DisplayEvent, View
+from games.guru import salon
 from games.guru.model import (
     CLIENT_SOURCES,
     Client,
@@ -46,11 +47,14 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 7
+RULES_VERSION = 8
 
-ARCHETYPE_ORDER = ("skeptic", "jealous", "businessman", "romantic", "granny")
+ARCHETYPE_ORDER = (
+    "skeptic", "jealous", "businessman", "romantic", "granny", "blogger", "conspiracy", "student", "tycoon", "desperate",
+)
 CLIENTS_PER_SESSION = 3
-SKEPTIC_CHANCE = 0.25  # доля смен, в которых появляется скептик (выбор из пяти типов давал 60%)
+SKEPTIC_CHANCE = 0.25  # доля смен, в которых появляется скептик
+EVENT_CHANCE = 0.35  # как часто на приёме что-то случается
 LEGEND_START = 2
 CLARIFICATIONS = 2
 READINGS = 2
@@ -138,12 +142,16 @@ def signed_rub(amount: int) -> str:
     return f"+{rub(amount)}" if amount > 0 else rub(amount)
 
 
-def flat_fee(base: int, outcome: str, level: int) -> int:
-    """Деньги за исход без поправки на настроение клиента."""
-    return _round_money(base * FEE[outcome][level])
+def flat_fee(base: int, outcome: str, level: int, bonus: float = 0.0) -> int:
+    """Деньги за исход без поправки на настроение клиента. Надбавка не увеличивает возврат."""
+    rate = FEE[outcome][level]
+    return _round_money(base * rate * (1 + bonus if rate > 0 else 1))
 
 
 # --- создание ---------------------------------------------------------------
+
+_NO_EVENT = C.ClientEvent("none", "")
+
 
 def _what_options(story: Story, rng: random.Random) -> tuple[str, ...]:
     """По одному событию на сферу: правда, версии клиента, события джекпота и ловушки, остальное случайно."""
@@ -169,8 +177,12 @@ def _what_options(story: Story, rng: random.Random) -> tuple[str, ...]:
     return tuple(options)
 
 
-def new_client(story: Story, rng: random.Random, now: float) -> Client:
+def new_client(story: Story, rng: random.Random, now: float, *, perks: salon.Perks = salon.NO_PERKS,
+               event_chance: float = 0.0) -> Client:
     kind = story.kind
+    event = rng.choice(C.CLIENT_EVENTS) if event_chance and rng.random() < event_chance else None
+    ritual = rng.choice(perks.rituals) if perks.rituals else None
+    shift = event or _NO_EVENT
     when = rng.choice(story.when_options)
     who_options = [story.who, *story.who_decoys]
     rng.shuffle(who_options)
@@ -180,12 +192,15 @@ def new_client(story: Story, rng: random.Random, now: float) -> Client:
         sign=rng.choice(C.ZODIAC_SIGNS),
         truth={"who": story.who, "what": story.what, "when": when},
         options={"who": tuple(who_options), "what": _what_options(story, rng), "when": tuple(C.WHEN)},
-        trust=kind.base_trust,
-        suspicion=SKEPTIC_START_SUSPICION if kind.suspicion else 0,
-        satisfaction=SATISFACTION_START,
+        trust=int(_clamp(kind.base_trust + perks.trust + shift.trust, 0, 100)),
+        suspicion=SKEPTIC_START_SUSPICION + shift.suspicion if kind.suspicion else 0,
+        satisfaction=int(_clamp(SATISFACTION_START + perks.satisfaction + shift.satisfaction, 0, 100)),
         started_at=now,
-        questions_left=CLARIFICATIONS,
-        readings_left=READINGS,
+        questions_left=CLARIFICATIONS + perks.questions + shift.questions,
+        readings_left=READINGS + perks.readings + shift.readings,
+        event=event,
+        ritual=ritual,
+        perks=perks,
     )
     for slot, tag in story.said.items():
         resolved = client.resolve(tag)
@@ -193,12 +208,12 @@ def new_client(story: Story, rng: random.Random, now: float) -> Client:
     return client
 
 
-def shift_archetypes(rng: random.Random) -> list[str]:
-    """Типы клиентов на смену: разные, скептик — только с вероятностью ``SKEPTIC_CHANCE``."""
+def shift_archetypes(rng: random.Random, clients: int = CLIENTS_PER_SESSION, skeptic_factor: float = 1.0) -> list[str]:
+    """Типы клиентов на смену: разные, скептик — с вероятностью ``SKEPTIC_CHANCE`` (лавка может её снизить)."""
     others = [archetype for archetype in ARCHETYPE_ORDER if archetype != "skeptic"]
-    if rng.random() >= SKEPTIC_CHANCE:
-        return rng.sample(others, CLIENTS_PER_SESSION)
-    order = ["skeptic", *rng.sample(others, CLIENTS_PER_SESSION - 1)]
+    if rng.random() >= SKEPTIC_CHANCE * skeptic_factor:
+        return rng.sample(others, clients)
+    order = ["skeptic", *rng.sample(others, clients - 1)]
     rng.shuffle(order)
     return order
 
@@ -213,9 +228,14 @@ def new_session(
     now: float,
     plan: tuple[str, ...] | None = None,
     wallet: int = 0,
+    items: tuple[str, ...] = (),
 ) -> Session:
+    perks = salon.perks_of(items)
+    # Заданный план — воспроизводимый сценарий, случайные события ему не нужны.
+    event_chance = EVENT_CHANCE if plan is None else 0.0
     if plan is None:
-        plan = tuple(rng.choice(stories_of(archetype)).id for archetype in shift_archetypes(rng))
+        archetypes = shift_archetypes(rng, CLIENTS_PER_SESSION + perks.clients, perks.skeptic)
+        plan = tuple(rng.choice(stories_of(archetype)).id for archetype in archetypes)
     if not plan or any(story_id not in STORIES_BY_ID for story_id in plan):
         raise ValueError(f"неизвестные истории: {plan}")
     return Session(
@@ -225,11 +245,15 @@ def new_session(
         plan=tuple(plan),
         started_at=now,
         last_activity=now,
-        client=new_client(STORIES_BY_ID[plan[0]], rng, now),
+        client=new_client(STORIES_BY_ID[plan[0]], rng, now, perks=perks, event_chance=event_chance),
         legend=LEGEND_START,
         legend_start=LEGEND_START,
         wallet_start=wallet,
         idle_limit=IDLE_TIMEOUT_S,
+        items=tuple(items),
+        perks=perks,
+        event_chance=event_chance,
+        forgive_left=perks.forgive,
     )
 
 
@@ -237,6 +261,7 @@ def arrival_events(session: Session) -> tuple[DisplayEvent, ...]:
     """Клиент заходит и рассказывает свою версию."""
     client = session.client
     events = [DisplayEvent("arrive", client.render(client.story.arrival))]
+    events += [DisplayEvent("line", client.render(line)) for line in (client.ritual, client.event.line if client.event else None) if line]
     events += [
         DisplayEvent("tell", client.render(part), pause=PACE_TELL[0], spread=PACE_TELL[1])
         for part in client.story.told
@@ -330,7 +355,8 @@ def act(session: Session, actor_id: int, action_id: str, rng: random.Random, *, 
         client.phase = "who"
     elif action_id == "next":
         session.client_no += 1
-        session.client = new_client(STORIES_BY_ID[session.plan[session.client_no]], rng, now)
+        session.client = new_client(STORIES_BY_ID[session.plan[session.client_no]], rng, now,
+                                    perks=session.perks, event_chance=session.event_chance)
         turn.events.extend(arrival_events(session))
 
     return ActResult(tuple(turn.events), tuple(turn.metrics), turn.finished_client, build_view(session))
@@ -378,8 +404,9 @@ def _clarify(session: Session, client: Client, question_id: str, rng: random.Ran
     client.questions_left -= 1
     client.asked.append(question.id)
     before = client.suspicion
-    client.suspicion += kind.question_suspicion
-    _set_trust(client, kind.question_trust)
+    soft = client.perks.soft_questions
+    client.suspicion += kind.question_suspicion // 2 if soft else kind.question_suspicion
+    _set_trust(client, max(kind.question_trust, 0) if soft else kind.question_trust)
     _add_satisfaction(client, SATISFACTION_QUESTION)
     for slot, tag in question.said.items():
         resolved = client.resolve(tag)
@@ -420,6 +447,9 @@ def _deal(client: Client, method: C.Method, rng: random.Random) -> Reading:
     truth = _reading_truth(client, method.slot)
     others = [tag for tag in _universe(client, method.slot) if tag != truth]
     sharp, plain = READING_QUALITY[method.key]
+    # Хороший инструмент сначала убирает расклады без правды, потом делает их точнее.
+    sharp = min(1.0, sharp + client.perks.quality.get(method.key, 0.0))
+    plain = min(plain, 1.0 - sharp)
     roll = rng.random()
     if roll < sharp:
         offered, quality = [truth, rng.choice(others)], "sharp"
@@ -431,13 +461,14 @@ def _deal(client: Client, method: C.Method, rng: random.Random) -> Reading:
     return Reading(method.key, method.slot, tuple(offered), quality)
 
 
-def deal_spread(required: tuple[str, ...], rng: random.Random) -> tuple[C.TarotCard, ...]:
-    """Расклад: обязательные карты и добор из колоды, по положениям как ляжет."""
-    names = list(required)
-    spare = [name for name in C.TAROT_CARDS if name not in names]
-    names += rng.sample(spare, len(C.TAROT_POSITIONS) - len(names))
-    rng.shuffle(names)
-    return tuple(C.TAROT_CARDS[name] for name in names)
+def deal_spread(offered: tuple[str, ...], rng: random.Random) -> tuple[C.TarotCard, ...]:
+    """Расклад: случайная карта на каждое толкование и добор из колоды, по положениям как ляжет."""
+    cards = [rng.choice(C.cards_of(who)) for who in offered]
+    taken = {card.name for card in cards}
+    spare = [card for card in C.TAROT_CARDS.values() if card.name not in taken]
+    cards += rng.sample(spare, len(C.TAROT_POSITIONS) - len(cards))
+    rng.shuffle(cards)
+    return tuple(cards)
 
 
 def spread_text(cards: tuple[C.TarotCard, ...]) -> str:
@@ -447,14 +478,25 @@ def spread_text(cards: tuple[C.TarotCard, ...]) -> str:
     return "\n".join(lines)
 
 
+def _deadline_hint(client: Client, rng: random.Random) -> str:
+    """Альманах из лавки называет срок. Иногда промахивается, как и положено альманаху."""
+    if not client.perks.deadline:
+        return ""
+    truth = client.truth["when"]
+    tag = truth if rng.random() < client.perks.deadline else rng.choice([key for key in C.WHEN if key != truth])
+    client.knowledge.append(Knowledge("when", tag, "horoscope", tag == truth))
+    return f"🌙 Альманах подсказывает срок: {C.WHEN[tag].label.lower()}.\n"
+
+
 def _omen(client: Client, reading: Reading, rng: random.Random) -> str:
     if reading.method == "palm":
         return "🖐 Ладонь горячая. " + ", ".join(C.SPHERES[tag].omen for tag in reading.offered).capitalize() + "."
     if reading.method == "horoscope":
         symbol, trend = C.ZODIAC[client.sign]
         forecasts = "\n".join(f"· {C.WHAT[tag].forecast}" for tag in reading.offered)
+        hint = _deadline_hint(client, rng)
         return (f"{client.name}: {client.kind.sign_answer.format(sign=client.sign)}\n\n"
-                f"{symbol} {client.sign}. {trend}\n{forecasts}\n"
+                f"{symbol} {client.sign}. {trend}\n{forecasts}\n{hint}"
                 f"Совет звёзд: {rng.choice(C.STAR_ADVICE)}")
     return f"🌀 {rng.choice(C.AURA_OMENS)}"
 
@@ -467,7 +509,7 @@ def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Tu
     client.phase = "interpret"
     turn.show("ritual", rng.choice(method.rituals))
     if method.key == "tarot":
-        cards = deal_spread(tuple(C.WHO[tag].card for tag in client.pending.offered), rng)
+        cards = deal_spread(client.pending.offered, rng)
         turn.show("omen", spread_text(cards), PACE_RITUAL, data={"cards": [card.art for card in cards]})
     else:
         turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, replace=True)
@@ -476,7 +518,7 @@ def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Tu
 def _reaction(client: Client, correct: bool, rng: random.Random) -> str:
     if client.kind.style == "overreact":
         return "warm"
-    accurate = rng.random() < client.kind.accuracy
+    accurate = rng.random() < client.kind.accuracy + client.perks.accuracy
     return "warm" if correct == accurate else "cold"
 
 
@@ -659,7 +701,8 @@ def _payment(client: Client, outcome: str, level: int, echo: tuple[str, ...], pa
     fee = story.fee * (0.5 + (client.trust + client.satisfaction) / 200) * rate
     if kind.echo == "discount" and echo:
         fee *= ECHO_DISCOUNT
-    return _round_money(fee)
+    event_fee = client.event.fee if client.event else 1.0
+    return _round_money(fee * event_fee * (1 + client.perks.fee))
 
 
 def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, now: float, *,
@@ -672,6 +715,10 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     parting = _parting(client)
     points = SCORE[outcome][level] + (PLEASED_POINTS if parting == "pleased" else 0)
     fee = _payment(client, outcome, level, echo, parting)
+    forgiven = outcome == "exposure" and session.forgive_left > 0
+    if forgiven:
+        session.forgive_left -= 1
+        fee = max(fee, 0)
 
     streak_before, bonus = session.streak, 0
     if outcome == "hit":
@@ -694,7 +741,9 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
         }))
 
     legend_before = session.legend
-    if outcome == "exposure":
+    if forgiven:
+        turn.show("line", C.CAT_FORGIVE_LINE)
+    elif outcome == "exposure":
         session.legend -= 1  # не больше одного запаса за клиента, сколько бы причин ни сработало
         if session.legend <= 0:
             turn.show("line", C.LEGEND_GONE_LINE)
@@ -737,6 +786,7 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
         legend_before=legend_before,
         legend_after=session.legend,
         duration_s=round(max(0.0, now - client.started_at), 1),
+        event=client.event.key if client.event else None,
     )
     client.report = report
     client.phase = "done"
@@ -816,6 +866,7 @@ def summary(session: Session, now: float) -> dict[str, Any]:
         "title": title(session),
         "achievements": list(achievements(session)),
         "stories": list(session.plan),
+        "items": list(session.items),
         "rules": RULES_VERSION,
     }
 
@@ -823,6 +874,7 @@ def summary(session: Session, now: float) -> dict[str, Any]:
 def start_data(session: Session) -> dict[str, Any]:
     return {
         "stories": list(session.plan),
+        "items": list(session.items),
         "participants": len(session.participants),
         "legend": session.legend_start,
         "rules": RULES_VERSION,
@@ -912,6 +964,7 @@ def build_view(session: Session) -> View:
         achievements=achievements(session) if session.finished else (),
         outcomes=tuple(report.outcome for report in session.reports),
         max_streak=session.max_streak,
+        salon=salon.describe(session.items),
     )
 
 

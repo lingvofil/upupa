@@ -34,6 +34,8 @@ def evidence(client):
     for k in client.knowledge:
         if k.source in CLIENT_SOURCES:
             scores[(k.slot, k.tag)] += 1.5
+        elif k.slot == "when":  # срок из альманаха
+            scores[("when", k.tag)] += 2
     for question_id in client.asked:
         question = client.story.question(question_id)
         for slot, tag in question.points:
@@ -187,10 +189,10 @@ class MasteryHunter(Investigator):
         return super().divine(client, session, rng)
 
 
-def play(policy, seed, legend=None):
+def play(policy, seed, legend=None, items=()):
     rng = random.Random(seed)
     policy_rng = random.Random(seed + 10_000)
-    session = rules.new_session(session_id="ab12cd34ef56", chat_id=1, player_id=1, player_name="Зоя", rng=rng, now=0)
+    session = rules.new_session(session_id="ab12cd34ef56", chat_id=1, player_id=1, player_name="Зоя", rng=rng, now=0, items=items)
     if legend is not None:
         session.legend = session.legend_start = legend
     step = 0
@@ -200,8 +202,8 @@ def play(policy, seed, legend=None):
     return session
 
 
-def stats(policy, parties=PARTIES, legend=None):
-    sessions = [play(policy, seed, legend) for seed in range(parties)]
+def stats(policy, parties=PARTIES, legend=None, items=()):
+    sessions = [play(policy, seed, legend, items) for seed in range(parties)]
     outcomes = [r.outcome for s in sessions for r in s.reports]
     return {
         "score": statistics.mean(s.score for s in sessions),

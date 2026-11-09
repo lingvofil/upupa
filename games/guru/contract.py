@@ -79,6 +79,7 @@ class View:
     achievements: tuple[str, ...]
     outcomes: tuple[str, ...]  # исходы обслуженных клиентов по порядку
     max_streak: int
+    salon: str | None = None  # строка о купленном; None, если лавку ещё не открывали
 
     def to_dict(self) -> dict[str, Any]:
         """Сериализуемое состояние — для будущего Mini App / PC-клиента."""

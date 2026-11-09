@@ -36,7 +36,7 @@ from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import live, rules, textui
+from games.guru import live, rules, salon, textui
 from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport, LiveSession, Participant, Session
 
@@ -47,6 +47,7 @@ START_COMMANDS = frozenset({"гуру"})
 STOP_COMMANDS = frozenset({"гуру стоп"})
 LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
+SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
@@ -92,6 +93,10 @@ def _is_live_command(message: types.Message) -> bool:
 
 def _is_wallet_command(message: types.Message) -> bool:
     return _normalize(message.text) in WALLET_COMMANDS
+
+
+def _is_shop_command(message: types.Message) -> bool:
+    return _normalize(message.text) in SHOP_COMMANDS
 
 
 def _player_name(user: Any) -> str:
@@ -301,6 +306,7 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
         await _reject_busy(bot, chat_id, user, thread_id, via, current)
         return
 
+    wallet = get_guru_wallets().get(chat_id, user.id)
     session = rules.new_session(
         session_id=new_session_id(),
         chat_id=chat_id,
@@ -308,7 +314,8 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
         player_name=_player_name(user),
         rng=_rng,
         now=now,
-        wallet=get_guru_wallets().balance(chat_id, user.id),
+        wallet=wallet.balance,
+        items=tuple(wallet.items),
     )
     session.thread_id = thread_id
     # В реестр — до первого await: второй старт в ту же секунду увидит занятый чат.
@@ -335,13 +342,15 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
         await _reject_busy(bot, chat_id, user, thread_id, via, current)
         return
 
+    wallet = get_guru_wallets().get(chat_id, user.id)
     session = live.new_session(
         session_id=new_session_id(),
         chat_id=chat_id,
         host_id=user.id,
         host_name=_player_name(user),
         now=now,
-        wallet=get_guru_wallets().balance(chat_id, user.id),
+        wallet=wallet.balance,
+        items=tuple(wallet.items),
     )
     session.thread_id = thread_id
     _registry.add(session)
@@ -381,6 +390,16 @@ async def show_wallets(message: types.Message) -> None:
     await message.reply(textui.render_wallets(wallets.top(message.chat.id), wallets.get(message.chat.id, message.from_user.id)))
 
 
+@router.message(_enabled, _is_shop_command)
+async def show_shop(message: types.Message) -> None:
+    user = message.from_user
+    wallet = get_guru_wallets().get(message.chat.id, user.id)
+    await message.reply(
+        textui.render_shop(_player_name(user), wallet.balance, wallet.items),
+        reply_markup=_markup(textui.shop_keyboard(wallet.items, user.id)),
+    )
+
+
 @router.message(_enabled, _is_stop_command)
 async def stop_salon(message: types.Message) -> None:
     session = _registry.get(message.chat.id)
@@ -411,6 +430,31 @@ async def _again(callback: types.CallbackQuery, parsed: textui.Callback) -> None
     await _clear_keyboard(callback.bot, chat_id, message.message_id)
 
 
+async def _buy(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
+    user = callback.from_user
+    if user.id != parsed.owner:
+        await callback.answer("Это чужая лавка. Открой свою: «гуру лавка».")
+        return
+    chat_id = callback.message.chat.id
+    wallets = get_guru_wallets()
+    wallet = wallets.get(chat_id, user.id)
+    denied = salon.refusal(parsed.item, wallet.balance, wallet.items)
+    if denied is not None:
+        await callback.answer(denied)
+        return
+    item = salon.ITEMS[parsed.item]
+    name = _player_name(user)
+    if not wallets.buy(chat_id, user.id, name, item.key, item.price):
+        await callback.answer("Эта кнопка уже не работает.")
+        return
+    await wallets.persist()
+    wallet = wallets.get(chat_id, user.id)
+    await log_event(EXPERIMENT, "purchase", chat_id=chat_id, user_id=user.id, item=item.key, price=item.price, wallet=wallet.balance)
+    await callback.answer(f"Куплено: {item.name}")
+    await _edit(callback.bot, chat_id, callback.message.message_id, textui.render_shop(name, wallet.balance, wallet.items),
+                textui.shop_keyboard(wallet.items, user.id))
+
+
 async def _show_report(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
     text = _reports.pop(f"{parsed.session_id}:{parsed.client_no}", None)
     if text is None:
@@ -435,6 +479,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
         return
     if parsed.kind == "report":
         await _show_report(callback, parsed)
+        return
+    if parsed.kind == "buy":
+        await _buy(callback, parsed)
         return
     if parsed.kind == "livenew":
         await callback.answer()

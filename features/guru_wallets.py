@@ -1,6 +1,6 @@
 """Касса игроков салона «Гуру»: копится от партии к партии и может уйти в минус.
 
-Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ...}}}``.
+Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ..., "spent": ..., "items": [...]}}}``.
 Касса своя в каждом чате: тренировки в личке с ботом не влияют на таблицу группы.
 Файл читается на startup (``load_guru_wallets``), а не при импорте.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from core.json_repository import JsonFileRepository, JsonRepository
 from core.paths import GURU_WALLETS_PATH
@@ -23,6 +23,8 @@ class Wallet:
     balance: int = 0
     earned: int = 0
     lost: int = 0
+    spent: int = 0  # потрачено в лавке: это вложение, а не потеря
+    items: list[str] = field(default_factory=list)  # купленное в лавке
 
 
 class WalletBook:
@@ -59,6 +61,8 @@ class WalletBook:
             balance=int(entry.get("balance", 0)),
             earned=int(entry.get("earned", 0)),
             lost=int(entry.get("lost", 0)),
+            spent=int(entry.get("spent", 0)),
+            items=[str(item) for item in entry.get("items", []) if isinstance(item, str)],
         )
 
     def get(self, chat_id: int | str, user_id: int | str) -> Wallet:
@@ -77,6 +81,17 @@ class WalletBook:
         else:
             wallet.lost -= delta
         return wallet.balance
+
+    def buy(self, chat_id: int | str, user_id: int | str, name: str, item: str, price: int) -> bool:
+        """Купить вещь. Без await: проверка и списание атомарны, двойное нажатие не спишет дважды."""
+        wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
+        if item in wallet.items or wallet.balance < price:
+            return False
+        wallet.name = name
+        wallet.balance -= price
+        wallet.spent += price
+        wallet.items.append(item)
+        return True
 
     def top(self, chat_id: int | str, limit: int = 10) -> list[Wallet]:
         wallets = self._chats.get(str(chat_id), {}).values()
