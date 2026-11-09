@@ -90,7 +90,7 @@ class Bubble:
     spread: float = 0.0
     replace: bool = False
     cards: tuple[str, ...] = ()  # рисунки, которые показать перед текстом
-    palm: tuple[str, ...] = ()  # сферы, чьи линии показать на ладони перед текстом
+    drawing: tuple[str, tuple[str, ...]] | None = None  # рисунок перед текстом: (ладонь или аура, ключи)
 
 
 def encode(view: View | LiveView, action_id: str) -> str:
@@ -187,19 +187,19 @@ def bubbles(events: tuple[DisplayEvent, ...], view: View | LiveView) -> list[Bub
     parts: list[str] = []
     pause, spread, replace = 0.0, 0.0, False
     cards: tuple[str, ...] = ()
-    palm: tuple[str, ...] = ()
+    drawing: tuple[str, tuple[str, ...]] | None = None
     for event in events:
         if parts and (event.pause > 0 or event.replace):
-            result.append(Bubble("\n".join(parts), pause, spread, replace, cards, palm))
+            result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing))
             parts = []
         if not parts:
             pause, spread, replace = event.pause, event.spread, event.replace
             cards = tuple(event.data.get("cards", ()))
-            palm = tuple(event.data.get("palm", ()))
+            drawing = event.data.get("drawing")
         text = f"{_header(view)}\n\n{event.text}" if event.kind == "arrive" else event.text
         parts.append(text)
     if parts:
-        result.append(Bubble("\n".join(parts), pause, spread, replace, cards, palm))
+        result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing))
     return result
 
 

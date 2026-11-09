@@ -336,10 +336,10 @@ def test_reading_offers_interpretations_by_quality(roll, quality, size, truth_in
 
 def test_ritual_pauses_then_omen_replaces_it():
     session, rng = make("businessman.partner")
-    result = act(session, rng, "c:stop", "m:energy")[-1]
+    result = act(session, rng, "c:stop", "m:horoscope")[-1]
     ritual, omen = result.events
     assert ritual.kind == "ritual"
-    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "🌀" in omen.text
+    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Совет звёзд" in omen.text
 
 
 def test_palm_brings_a_picture_of_the_offered_lines():
@@ -348,8 +348,18 @@ def test_palm_brings_a_picture_of_the_offered_lines():
     ritual, omen = result.events
     assert ritual.kind == "ritual" and "ладон" in ritual.text.lower()
     assert omen.kind == "omen" and not omen.replace and "Ладонь" in omen.text
-    assert omen.data["palm"] == list(session.client.pending.offered)
-    assert textui.bubbles(result.events, result.view)[-1].palm == session.client.pending.offered
+    assert omen.data["drawing"] == ("palm", session.client.pending.offered)
+    assert textui.bubbles(result.events, result.view)[-1].drawing == ("palm", session.client.pending.offered)
+
+
+def test_energy_brings_a_picture_of_the_aura():
+    session, rng = make("businessman.partner")
+    result = act(session, rng, "c:stop", "m:energy")[-1]
+    ritual, omen = result.events
+    offered = session.client.pending.offered
+    assert ritual.kind == "ritual" and not omen.replace and "🌀" in omen.text
+    assert omen.data["drawing"] == ("aura", offered)
+    assert all(C.EMOTIONS[tag].omen in omen.text.lower() for tag in offered)
 
 
 def test_tarot_keeps_the_ritual_and_brings_pictures():
@@ -902,7 +912,7 @@ def test_events_split_into_short_messages():
     bubbles = textui.bubbles(rules.arrival_events(session), view)
     assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
     assert bubbles[0].pause == 0 and bubbles[1].pause == rules.PACE_TELL[0] and bubbles[1].spread == rules.PACE_TELL[1]
-    result = act(session, rng, "c:stop", "m:energy")[-1]
+    result = act(session, rng, "c:stop", "m:horoscope")[-1]
     ritual, omen = textui.bubbles(result.events, result.view)
     assert not ritual.replace and omen.replace and omen.pause > 0
 

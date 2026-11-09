@@ -36,7 +36,7 @@ from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import live, palm_art, rules, salon, textui
+from games.guru import aura_art, live, palm_art, rules, salon, textui
 from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport, LiveSession, Participant, Session
 
@@ -49,6 +49,7 @@ LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
 SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
+_DRAWINGS = {"palm": palm_art, "aura": aura_art}
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
 MAX_CACHED_REPORTS = 300
@@ -163,14 +164,15 @@ async def _send_cards(bot: Any, session: Session | LiveSession, cards: tuple[str
             _card_file_ids[art] = item.photo[-1].file_id
 
 
-async def _send_palm(bot: Any, session: Session | LiveSession, lines: tuple[str, ...]) -> None:
-    """Показать ладонь. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста."""
-    key = "palm:" + "+".join(sorted(lines))
+async def _send_drawing(bot: Any, session: Session | LiveSession, drawing: tuple[str, tuple[str, ...]]) -> None:
+    """Показать рисунок. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста."""
+    kind, marks = drawing
+    key = f"{kind}:" + "+".join(sorted(marks))
     try:
-        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(palm_art.render, lines), "palm.jpg")
+        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(_DRAWINGS[kind].render, marks), f"{kind}.jpg")
         sent = await bot.send_photo(chat_id=session.chat_id, photo=photo, message_thread_id=session.thread_id)
     except (TelegramAPIError, OSError, ValueError) as error:
-        logger.warning("[guru] не удалось показать ладонь: %s", error)
+        logger.warning("[guru] не удалось показать рисунок %s: %s", kind, error)
         return
     if sent.photo:
         _card_file_ids[key] = sent.photo[-1].file_id
@@ -210,8 +212,8 @@ async def _play(bot: Any, session: Session | LiveSession, events: tuple[DisplayE
             return
         if bubble.cards:
             await _send_cards(bot, session, bubble.cards)
-        if bubble.palm:
-            await _send_palm(bot, session, bubble.palm)
+        if bubble.drawing:
+            await _send_drawing(bot, session, bubble.drawing)
         text = bubble.text
         rows = None
         if index == len(bubbles) - 1:

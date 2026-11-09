@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 
 from games.guru import content as C
-from games.guru import palm_art
+from games.guru import art, palm_art
 
 
 def picture(lines=()):
@@ -27,7 +27,7 @@ def test_every_sphere_has_a_line():
 def test_every_combination_renders_a_card_sized_jpeg(lines):
     data = palm_art.render(lines)
     assert data[:2] == b"\xff\xd8" and len(data) < 1_000_000
-    assert Image.open(io.BytesIO(data)).size == (palm_art.WIDTH, palm_art.HEIGHT)
+    assert Image.open(io.BytesIO(data)).size == (art.WIDTH, art.HEIGHT)
 
 
 @pytest.mark.parametrize("sphere", list(C.SPHERES))
