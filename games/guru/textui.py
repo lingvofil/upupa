@@ -379,10 +379,25 @@ def render_wallets(top: list, own: object) -> str:
     if not top:
         return "💰 В кассах пусто. Открыть салон: «гуру»."
     lines = ["💰 Кассы мадам", ""]
-    lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" for place, wallet in enumerate(top, 1)]
+    lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" + (f" · {salon.icons(wallet.items)}" if wallet.items else "")
+              for place, wallet in enumerate(top, 1)]
     lines += ["", f"Твоя касса: {rub(own.balance)} · заработано {rub(own.earned)} · потеряно {rub(own.lost)}"]
-    lines += [f"🏠 {salon.rank(len(own.items))} · потрачено в лавке {rub(own.spent)}", "Лавка: «гуру лавка»."]
+    lines += [f"🏠 {salon.rank(len(own.items))} · потрачено в лавке {rub(own.spent)}", "Лавка: «гуру лавка». Кто что купил: «гуру салон»."]
     return "\n".join(lines)
+
+
+def render_salons(players: list, own: object) -> str:
+    """Что стоит в салонах этого чата и что приносит. ``players`` и ``own`` — записи с полями name и items."""
+    equipped = [player for player in players if player.items]
+    if not equipped:
+        return "🏠 Пока никто ничего не купил. Лавка: «гуру лавка»."
+    lines = ["🏠 Салоны мадам"]
+    for player in equipped:
+        lines += ["", f"{player.name} · {salon.rank(len(player.items))} · {salon.icons(player.items)}", " · ".join(salon.effects(player.items))]
+    if own.items:
+        lines += ["", "Твой салон:"]
+        lines += [f"{item.emoji} {item.name} — {item.note}" for item in salon.owned_items(own.items)]
+    return "\n".join(lines)[:MESSAGE_LIMIT]
 
 
 # --- лавка ------------------------------------------------------------------
@@ -398,6 +413,11 @@ def render_shop(name: str, balance: int, owned: list[str]) -> str:
                 lines.append(f"{item.emoji} {item.name} · {state} · {item.note}")
     lines += ["", "Покупка остаётся навсегда и работает со следующей партии."]
     return "\n".join(lines)[:MESSAGE_LIMIT]
+
+
+def render_purchase(item: salon.Item, name: str, balance: int) -> str:
+    """Реплика в чат: покупку должны видеть все, а не только нажавший."""
+    return f"{salon.PURCHASE_LINES[item.key].format(name=name)}\n{item.note.capitalize()}. 💰 В кассе: {rub(balance)}"
 
 
 def shop_keyboard(owned: list[str], owner: int) -> Rows:

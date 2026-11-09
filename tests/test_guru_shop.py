@@ -44,6 +44,51 @@ def test_items_are_well_formed():
         assert len(textui.buy_data(key, 2 ** 40).encode()) <= 64
 
 
+def test_every_item_has_a_purchase_line():
+    assert set(salon.PURCHASE_LINES) == set(salon.ITEMS)
+    for line in salon.PURCHASE_LINES.values():
+        assert "{name}" in line and "купила" in line and line.format(name="Зоя")
+
+
+def test_purchase_line_tells_everyone_what_happened():
+    text = textui.render_purchase(salon.ITEMS["zina"], "Зоя", 2300)
+    assert "Мадам Зоя купила тётю Зину" in text and "Скептиков пускает вдвое реже" in text and "2 300 ₽" in text
+
+
+def test_effects_describe_everything_owned():
+    assert salon.effects(()) == []
+    text = " · ".join(salon.effects(tuple(salon.ITEMS)))
+    for phrase in ("заработок +25%", "клиентов в смену +1", "вопросов +1", "гаданий +1", "Таро, ладонь, гороскоп, энергетика",
+                   "гороскоп называет срок", "реакции честнее", "доверие +15", "довольство +24", "вопросы не портят настроение",
+                   "скептиков вдвое меньше", "кот прикрывает разоблачение"):
+        assert phrase in text, phrase
+
+
+def test_every_item_shows_up_in_effects():
+    for key in salon.ITEMS:
+        assert salon.effects((key,)), f"{key} ничего не приносит на витрине"
+
+
+def test_salons_text():
+    from types import SimpleNamespace as Player
+
+    zoya = Player(name="Зоя", items=["tea", "flyers"])
+    gosha = Player(name="Гоша", items=[])
+    text = textui.render_salons([zoya, gosha], zoya)
+    assert "Зоя" in text and "Гоша" not in text and "Кабинет в подвале" in text and "📰 🫖" in text
+    assert "заработок +10%" in text and "довольство +18" in text
+    assert "Твой салон" in text and "🫖 Чай с чабрецом — сеанс нравится сильнее" in text
+    assert "Твой салон" not in textui.render_salons([zoya, gosha], gosha)
+    assert "никто ничего не купил" in textui.render_salons([gosha], gosha)
+
+
+def test_salons_fit_a_message_even_when_everything_is_owned():
+    from types import SimpleNamespace as Player
+
+    rich = [Player(name=f"Мадам {index}", items=list(salon.ITEMS)) for index in range(10)]
+    assert len(textui.render_salons(rich, rich[0])) <= textui.MESSAGE_LIMIT
+
+
 def test_every_group_has_goods():
     assert {item.group for item in salon.ITEMS.values()} == set(salon.GROUP_TITLES)
 

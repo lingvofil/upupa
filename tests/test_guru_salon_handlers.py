@@ -281,8 +281,43 @@ def test_buying_takes_money_and_updates_the_shop(bot, events, wallets):
     edit = bot.edits[-1]
     assert edit.message_id == 77 and "2 000 ₽" in edit.text and "✅" in edit.text
     assert all(b.callback_data != textui.buy_data("tea", PLAYER) for row in edit.reply_markup.inline_keyboard for b in row)
+    announcement = bot.sent[-1]
+    assert announcement.chat_id == CHAT and "Мадам Зоя купила чай с чабрецом" in announcement.text and "2 000 ₽" in announcement.text
     record = events()[-1]
     assert record["event"] == "purchase" and record["data"]["item"] == "tea" and record["data"]["price"] == 3000
+
+
+def test_failed_purchase_announcement_keeps_the_purchase(bot, wallets, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(*args, **kwargs):
+        raise TelegramForbiddenError(method=None, message="muted")
+
+    monkeypatch.setattr(bot, "send_message", refuse)
+    wallets.apply(CHAT, PLAYER, "Зоя", 5000)
+    buy(bot, "tea")
+    assert wallets.get(CHAT, PLAYER).items == ["tea"]
+
+
+def test_refused_purchase_is_not_announced(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 100)
+    buy(bot, "tea")
+    assert bot.sent == []
+
+
+@pytest.mark.parametrize("text", ["гуру салон", "Гуру  САЛОНЫ"])
+def test_salon_command_matches(flags, text):
+    assert _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+def test_salons_show_what_players_own_and_what_it_gives(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 9000)
+    wallets.apply(CHAT, WATCHER, "Гоша", 500)
+    buy(bot, "zina")
+    msg = message(bot, "гуру салон", user_id=WATCHER)
+    asyncio.run(guru_salon.show_salons(msg))
+    assert "Зоя" in msg.replies[0] and "🚪" in msg.replies[0] and "скептиков вдвое меньше" in msg.replies[0]
+    assert "Твой салон" not in msg.replies[0], "своего салона у Гоши пока нет"
 
 
 def test_cannot_buy_twice_or_without_money(bot, wallets):
@@ -307,7 +342,7 @@ def test_purchases_work_in_the_next_shift(bot, wallets):
     start(bot)
     session = current()
     assert session.client.satisfaction >= rules.SATISFACTION_START + 10 and session.clients_total == 4
-    intro = bot.sent[0].text
+    intro = next(m.text for m in bot.sent if "открывает салон" in m.text)
     assert "🫖" in intro and "Кабинет в подвале" in intro
 
 
