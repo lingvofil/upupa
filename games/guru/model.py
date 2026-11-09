@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from games.guru.content import ARCHETYPES, WHAT, WHEN, Archetype
+from games.guru.content import ARCHETYPES, WHAT, WHEN, Archetype, ClientEvent
+from games.guru.salon import NO_PERKS, Perks
 
 # Слова клиента. Выданные за ясновидение без своего подтверждения — это эхо.
 CLIENT_SOURCES = frozenset({"disclosed", "question"})
@@ -167,6 +168,7 @@ class ClientReport:
     legend_before: int
     legend_after: int
     duration_s: float
+    event: str | None = None  # случайное событие приёма
 
     @property
     def matched(self) -> int:
@@ -200,6 +202,7 @@ class ClientReport:
             "legend_before": self.legend_before,
             "legend_after": self.legend_after,
             "duration_s": self.duration_s,
+            "incident": self.event,
         }
 
 
@@ -225,6 +228,9 @@ class Client:
     picks: dict[str, str] = field(default_factory=dict)
     horoscope_used: bool = False
     report: ClientReport | None = None
+    event: ClientEvent | None = None  # что случилось на этом приёме
+    ritual: str | None = None  # реплика о купленном уюте при входе
+    perks: Perks = NO_PERKS
 
     @property
     def kind(self) -> Archetype:
@@ -270,6 +276,10 @@ class Session:
     reports: list[ClientReport] = field(default_factory=list)
     finished: bool = False
     finish_reason: str | None = None
+    items: tuple[str, ...] = ()  # купленное в лавке на момент старта
+    perks: Perks = NO_PERKS
+    event_chance: float = 0.0
+    forgive_left: int = 0  # сколько разоблачений ещё прикроет кот
     # Где живёт партия в мессенджере; нужно только transport-слою.
     message_id: int | None = None
     thread_id: int | None = None
@@ -305,6 +315,8 @@ class LiveSession:
     intake: dict[str, str] = field(default_factory=dict)  # тайная анкета: строка → id ответа
     pending: Reading | None = None  # расклад, ждущий выбора толкования
     picks: dict[str, str] = field(default_factory=dict)  # предсказание мадам: слот → тег
+    items: tuple[str, ...] = ()  # купленное мадам в лавке
+    perks: Perks = NO_PERKS
     used_methods: list[str] = field(default_factory=list)
     confidence: str | None = None
     outcome: str | None = None

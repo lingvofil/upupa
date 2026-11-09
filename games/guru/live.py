@@ -16,7 +16,7 @@ import random
 from typing import Any
 
 from games.guru import content as C
-from games.guru import rules
+from games.guru import rules, salon
 from games.guru.contract import Action, DisplayEvent, LiveResult, LiveView
 from games.guru.model import LiveSession, Participant, Reading
 
@@ -24,6 +24,7 @@ LIVE_FEE = 1500
 LIVE_READINGS = 3
 LIVE_OPTIONS = 3  # сколько толкований предлагает расклад
 LIVE_TRUTH_CHANCE = 0.75  # как часто ответ клиента из анкеты попадает в толкования
+LIVE_TRUTH_MAX = 0.95  # никакой реквизит не делает мадам всевидящей
 WAIT_TIMEOUT_S = 180  # открытый приём не должен надолго занимать чат
 
 HOST_ACTIONS = ("m", "go", "i", "s", "a")
@@ -31,7 +32,9 @@ SLOT_TAGS = {"who": C.WHO, "what": C.WHAT, "when": C.WHEN}
 READING_TAGS = {"who": C.WHO, "what": C.WHAT, "sphere": C.SPHERES, "emotion": C.EMOTIONS}
 
 
-def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0) -> LiveSession:
+def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0,
+                items: tuple[str, ...] = ()) -> LiveSession:
+    perks = salon.perks_of(items)
     return LiveSession(
         session_id=session_id,
         chat_id=chat_id,
@@ -40,7 +43,9 @@ def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, 
         last_activity=now,
         idle_limit=WAIT_TIMEOUT_S,
         wallet_start=wallet,
-        readings_left=LIVE_READINGS,
+        readings_left=min(LIVE_READINGS + perks.readings, len(C.METHODS)),
+        items=tuple(items),
+        perks=perks,
     )
 
 
@@ -157,7 +162,7 @@ def _deal(session: LiveSession, method: C.Method, rng: random.Random) -> Reading
     if truth is None:
         return Reading(method.key, method.slot, tuple(rng.sample(tags, LIVE_OPTIONS)), "blind")
     others = [tag for tag in tags if tag != truth]
-    if rng.random() >= LIVE_TRUTH_CHANCE:
+    if rng.random() >= min(LIVE_TRUTH_CHANCE + session.perks.quality.get(method.key, 0.0), LIVE_TRUTH_MAX):
         return Reading(method.key, method.slot, tuple(rng.sample(others, LIVE_OPTIONS)), "off")
     offered = [truth, *rng.sample(others, LIVE_OPTIONS - 1)]
     rng.shuffle(offered)
@@ -185,7 +190,7 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
     session.phase = "interpret"
     events.append(_event("ritual", rng.choice(method.rituals)))
     if method.key == "tarot":
-        cards = rules.deal_spread(tuple(C.WHO[tag].card for tag in reading.offered), rng)
+        cards = rules.deal_spread(reading.offered, rng)
         events.append(_event("omen", rules.spread_text(cards), rules.PACE_RITUAL,
                              data={"cards": [card.art for card in cards]}))
     else:
@@ -244,7 +249,7 @@ def _verdict(session: LiveSession, picked: str, now: float, events: list[Display
     level = C.CONFIDENCE.index(session.confidence)
     outcome = "exposure" if picked == "miss" and session.confidence == "swear" else picked
     session.outcome = outcome
-    session.fee = rules.flat_fee(LIVE_FEE, outcome, level)
+    session.fee = rules.flat_fee(LIVE_FEE, outcome, level, session.perks.fee)
     session.phase = "done"
     client = session.client.name
     events.append(_event("react", C.LIVE_OUTCOME_LINES[picked].format(client=client), rules.PACE_REVEAL))

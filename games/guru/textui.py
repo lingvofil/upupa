@@ -3,7 +3,7 @@
 Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Номер шага защищает от старых
 кнопок и двойных нажатий. Отдельно: ``guru:again:yes|no:<сессия>`` (финал) и
 ``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма), ``guru:livenew:<сессия>``
-(после живого приёма: нажавший открывает следующий).
+(после живого приёма: нажавший открывает следующий), ``guru:buy:<вещь>:<владелец>`` (лавка).
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from games.guru import content as C
+from games.guru import salon
 from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport
 from games.guru.rules import rub, signed_rub
@@ -23,6 +24,7 @@ _ACT_RE = re.compile(r"^guru:([0-9a-f]{1,32}):(\d+):([a-z]+(?::[a-z_0-9]+){0,2})
 _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
 _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
+_BUY_RE = re.compile(r"^guru:buy:([a-z_0-9]+):(\d+)$")
 
 ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2}
 
@@ -69,12 +71,14 @@ Rows = list[list[tuple[str, str]]]
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # act | again | report | livenew
-    session_id: str
+    kind: str  # act | again | report | livenew | buy
+    session_id: str = ""
     step: int | None = None
     action: str | None = None
     answer: str | None = None
     client_no: int | None = None
+    item: str | None = None
+    owner: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,8 +108,15 @@ def live_new_data(session_id: str) -> str:
     return f"{CALLBACK_PREFIX}livenew:{session_id}"
 
 
+def buy_data(item: str, owner: int) -> str:
+    return f"{CALLBACK_PREFIX}buy:{item}:{owner}"
+
+
 def parse(data: str | None) -> Callback | None:
     data = data or ""
+    match = _BUY_RE.match(data)
+    if match:
+        return Callback("buy", item=match.group(1), owner=int(match.group(2)))
     match = _LIVE_NEW_RE.match(data)
     if match:
         return Callback("livenew", match.group(1))
@@ -285,7 +296,7 @@ def render_intro(view: View) -> str:
         "",
         "Слушай, уточняй, гадай, сама решай, что озвучить, и делай предсказание.",
         f"«Клянусь!» приносит больше всего, но несбывшаяся клятва стоит денег и легенды салона: {_candles(view)}.",
-        f"💰 В кассе: {rub(view.wallet)}",
+        f"💰 В кассе: {rub(view.wallet)}" + (f" · {view.salon}" if view.salon else ""),
         "",
         "Кнопки жмёт только мадам. 15 минут без хода — салон закрывается.",
     ))
@@ -367,4 +378,25 @@ def render_wallets(top: list, own: object) -> str:
     lines = ["💰 Кассы мадам", ""]
     lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" for place, wallet in enumerate(top, 1)]
     lines += ["", f"Твоя касса: {rub(own.balance)} · заработано {rub(own.earned)} · потеряно {rub(own.lost)}"]
+    lines += [f"🏠 {salon.rank(len(own.items))} · потрачено в лавке {rub(own.spent)}", "Лавка: «гуру лавка»."]
     return "\n".join(lines)
+
+
+# --- лавка ------------------------------------------------------------------
+
+def render_shop(name: str, balance: int, owned: list[str]) -> str:
+    """Витрина: что есть, сколько стоит и что даёт."""
+    lines = [f"🏪 Лавка салона мадам {name}", f"🏠 {salon.rank(len(owned))} · 💰 В кассе: {rub(balance)}"]
+    for group, title in salon.GROUP_TITLES.items():
+        lines += ["", title]
+        for item in salon.ITEMS.values():
+            if item.group == group:
+                state = "✅" if item.key in owned else rub(item.price)
+                lines.append(f"{item.emoji} {item.name} · {state} · {item.note}")
+    lines += ["", "Покупка остаётся навсегда и работает со следующей партии."]
+    return "\n".join(lines)[:MESSAGE_LIMIT]
+
+
+def shop_keyboard(owned: list[str], owner: int) -> Rows:
+    buttons = [(f"{item.emoji} {item.short}", buy_data(item.key, owner)) for item in salon.ITEMS.values() if item.key not in owned]
+    return [buttons[index:index + 2] for index in range(0, len(buttons), 2)]

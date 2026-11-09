@@ -86,6 +86,6 @@ def test_failed_save_does_not_stop_the_game():
 def test_table_text():
     assert "пусто" in textui.render_wallets([], Wallet())
     rows = [SimpleNamespace(name="Зоя", balance=12300, earned=15000, lost=2700),
-            SimpleNamespace(name="Гоша", balance=-1500, earned=0, lost=1500)]
+            SimpleNamespace(name="Гоша", balance=-1500, earned=0, lost=1500, spent=0, items=[])]
     text = textui.render_wallets(rows, rows[1])
     assert "1. Зоя — 12 300 ₽" in text and "2. Гоша — −1 500 ₽" in text and "потеряно 1 500 ₽" in text

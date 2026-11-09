@@ -184,10 +184,10 @@ def test_methods_cover_their_slots():
 
 
 def test_every_tarot_card_has_a_picture_and_a_meaning():
-    for tag in C.WHO.values():
-        assert tag.card in C.TAROT_CARDS
-    assert len({tag.card for tag in C.WHO.values()}) == len(C.WHO), "карта указывает только на одного «кто»"
-    assert len(C.TAROT_CARDS) >= len(C.TAROT_POSITIONS) + 1
+    for who in C.WHO:
+        assert len(C.cards_of(who)) >= 2, f"у «{who}» должен быть выбор рисунков"
+    assert all(card.who in C.WHO for card in C.TAROT_CARDS.values()), "каждая карта указывает на одного «кто»"
+    assert len({card.art for card in C.TAROT_CARDS.values()}) == len(C.TAROT_CARDS) == 21
     for card in C.TAROT_CARDS.values():
         assert card.symbols and (ROOT / "assets" / "guru_tarot" / f"{card.art}.jpg").is_file(), card.name
 
@@ -362,7 +362,7 @@ def test_tarot_shows_what_is_drawn_and_what_it_may_mean():
     for position in C.TAROT_POSITIONS:
         assert position in omen
     assert omen.count("Образы:") == 3
-    assert C.WHO["partner"].card in omen
+    assert any(card.name in omen for card in C.cards_of("partner"))
 
 
 def test_horoscope_describes_the_sign_not_a_date():
@@ -785,7 +785,7 @@ def test_summary_has_everything_for_the_log():
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 7
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 8
 
 
 def test_participants_only_and_invalid_actions():
