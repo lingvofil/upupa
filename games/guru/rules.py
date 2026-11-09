@@ -68,6 +68,8 @@ PACE_RITUAL = (4.0, 1.0)  # тасование, разглядывание ла�
 PACE_REACTION = (1.0, 1.0)  # реакция на выбор игрока
 PACE_REVEAL = (4.0, 2.0)  # важное открытие
 
+DRAWINGS = {"palm": "palm", "energy": "aura"}  # метод → рисунок, который показывает адаптер
+
 # Качество расклада: (два толкования с правдой, три с правдой); остаток — правды среди них нет.
 READING_QUALITY = {
     "palm": (0.25, 0.65),
@@ -478,6 +480,11 @@ def spread_text(cards: tuple[C.TarotCard, ...]) -> str:
     return "\n".join(lines)
 
 
+def aura_text(offered: tuple[str, ...], rng: random.Random) -> str:
+    colors = ", ".join(C.EMOTIONS[tag].omen for tag in offered)
+    return f"🌀 {rng.choice(C.AURA_OMENS)} {colors.capitalize()}."
+
+
 def _deadline_hint(client: Client, rng: random.Random) -> str:
     """Альманах из лавки называет срок. Иногда промахивается, как и положено альманаху."""
     if not client.perks.deadline:
@@ -498,7 +505,7 @@ def _omen(client: Client, reading: Reading, rng: random.Random) -> str:
         return (f"{client.name}: {client.kind.sign_answer.format(sign=client.sign)}\n\n"
                 f"{symbol} {client.sign}. {trend}\n{forecasts}\n{hint}"
                 f"Совет звёзд: {rng.choice(C.STAR_ADVICE)}")
-    return f"🌀 {rng.choice(C.AURA_OMENS)}"
+    return aura_text(reading.offered, rng)
 
 
 def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Turn) -> None:
@@ -511,8 +518,9 @@ def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Tu
     if method.key == "tarot":
         cards = deal_spread(client.pending.offered, rng)
         turn.show("omen", spread_text(cards), PACE_RITUAL, data={"cards": [card.art for card in cards]})
-    elif method.key == "palm":
-        turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, data={"palm": list(client.pending.offered)})
+    elif method.key in DRAWINGS:
+        turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL,
+                  data={"drawing": (DRAWINGS[method.key], client.pending.offered)})
     else:
         turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, replace=True)
 

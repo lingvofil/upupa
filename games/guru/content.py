@@ -66,6 +66,7 @@ class EmotionTag:
     title: str
     button: str
     voice: str
+    omen: str  # как это выглядит в ауре
 
 
 WHO: Mapping[str, WhoTag] = MappingProxyType({tag.key: tag for tag in (
@@ -139,10 +140,10 @@ SPHERES: Mapping[str, SphereTag] = MappingProxyType({tag.key: tag for tag in (
 )})
 
 EMOTIONS: Mapping[str, EmotionTag] = MappingProxyType({tag.key: tag for tag in (
-    EmotionTag("guilt", "вина", "Чувство вины", "Чувствую вину. Липкую, как чужая переписка."),
-    EmotionTag("fear", "страх потери", "Страх потери", "Чувствую страх что-то потерять. Дрожит по краям."),
-    EmotionTag("hope", "надежда", "Надежда", "Чувствую надежду. Тёплую и наивную."),
-    EmotionTag("anger", "злость", "Злость", "Чувствую злость. Искрит."),
+    EmotionTag("guilt", "вина", "Чувство вины", "Чувствую вину. Липкую, как чужая переписка.", "болотная муть липнет к плечам"),
+    EmotionTag("fear", "страх потери", "Страх потери", "Чувствую страх что-то потерять. Дрожит по краям.", "бледный лиловый дрожит по краям"),
+    EmotionTag("hope", "надежда", "Надежда", "Чувствую надежду. Тёплую и наивную.", "золотой свет стоит над головой"),
+    EmotionTag("anger", "злость", "Злость", "Чувствую злость. Искрит.", "красные искры летят от висков"),
 )})
 
 

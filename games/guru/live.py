@@ -196,9 +196,10 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
     elif method.key == "palm":
         omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
         events.append(_event("omen", C.LIVE_PALM_LINE.format(omens=omens.capitalize()), rules.PACE_RITUAL,
-                             data={"palm": list(reading.offered)}))
+                             data={"drawing": ("palm", reading.offered)}))
     else:
-        events.append(_event("omen", f"🌀 {rng.choice(C.AURA_OMENS)}", rules.PACE_RITUAL, replace=True))
+        events.append(_event("omen", rules.aura_text(reading.offered, rng), rules.PACE_RITUAL,
+                             data={"drawing": ("aura", reading.offered)}))
     _log_reading(reading, metrics)
 
 

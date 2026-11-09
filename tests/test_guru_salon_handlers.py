@@ -401,11 +401,11 @@ def test_divination_edits_ritual_into_omen(bot, events, pauses):
     pauses.clear()
     sent_before = len(bot.sent)
 
-    press(bot, "m:energy")
+    press(bot, "m:horoscope")
 
     assert len(bot.sent) == sent_before + 1
     edit = bot.edits[-1]
-    assert edit.message_id == bot.sent[-1].message_id and "🌀" in edit.text and "Что озвучить" in edit.text
+    assert edit.message_id == bot.sent[-1].message_id and "Совет звёзд" in edit.text and "Что озвучить" in edit.text
     assert edit.reply_markup is not None and rules.PACE_RITUAL[0] <= sum(pauses) <= sum(rules.PACE_RITUAL)
     assert current().message_id == bot.sent[-1].message_id
     assert bot.albums == [] and bot.photos == []
@@ -426,12 +426,26 @@ def test_palm_sends_picture_then_text_with_buttons(bot, events):
     assert current().message_id == text.message_id
 
 
+def test_energy_sends_aura_picture_then_text_with_buttons(bot, events):
+    start(bot)
+    press(bot, "c:stop")
+    sent_before = len(bot.sent)
+
+    press(bot, "m:energy")
+
+    (photo,) = bot.photos
+    assert photo.chat_id == CHAT and photo.photo.filename == "aura.jpg" and photo.photo.data[:2] == b"\xff\xd8"
+    assert len(bot.sent) == sent_before + 2
+    text = bot.sent[-1]
+    assert "🌀" in text.text and "Что озвучить" in text.text and text.reply_markup is not None
+
+
 def test_palm_is_drawn_once_per_combination(bot, events):
     start(bot)
     press(bot, "c:stop")
     offered = ("love", "work", "money")
-    asyncio.run(guru_salon._send_palm(bot, current(), offered))
-    asyncio.run(guru_salon._send_palm(bot, current(), tuple(reversed(offered))))
+    asyncio.run(guru_salon._send_drawing(bot, current(), ("palm", offered)))
+    asyncio.run(guru_salon._send_drawing(bot, current(), ("palm", tuple(reversed(offered)))))
     assert bot.photos[0].photo.filename == "palm.jpg" and bot.photos[1].photo == "palm1"
 
 

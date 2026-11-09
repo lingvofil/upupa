@@ -7,29 +7,18 @@
 
 from __future__ import annotations
 
-import io
 import math
 import random
 from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from core.paths import PROJECT_ROOT
+from games.guru import art
+from games.guru.art import GOLD, SCALE, Point
 
-Point = tuple[float, float]
-
-WIDTH, HEIGHT = 738, 1100
-SCALE = 2  # рисуем крупнее и уменьшаем: так края гладкие
 TITLE = "ЛАДОНЬ КЛИЕНТА"
-FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "BerlinSansFBCyrillic-Regular.ttf"
 
-PARCHMENT = (214, 190, 148)
-FRAME = (20, 17, 16)
-GOLD = (222, 178, 96)
-GOLD_DIM = (146, 116, 66)
-SKY_TOP = (22, 30, 66)
-SKY_BOTTOM = (70, 48, 74)
 SKIN = (238, 214, 178)
 SKIN_SHADOW = (168, 120, 92)
 SKIN_LIGHT = (250, 234, 206)
@@ -39,8 +28,6 @@ INK = (96, 48, 38)
 MARKED_INK = (150, 22, 34)
 GLOW = (255, 196, 92)
 LABEL_DIM = (172, 170, 190)
-
-PICTURE = (48, 100, 690, 1040)
 
 
 @dataclass(frozen=True)
@@ -68,35 +55,6 @@ HEART = ((222, 566), (292, 552), (370, 538), (446, 508), (506, 468))
 HEAD = ((526, 640), (452, 642), (372, 658), (292, 702), (246, 748))
 LIFE = ((530, 612), (472, 680), (442, 770), (440, 860), (460, 938))
 FATE = ((392, 955), (388, 830), (395, 700), (404, 590), (408, 512))
-
-
-def _catmull(points: Sequence[Point], steps: int = 24) -> list[Point]:
-    """Плавная кривая через точки."""
-    knots = [points[0], *points, points[-1]]
-    curve: list[Point] = []
-    for i in range(1, len(knots) - 2):
-        p0, p1, p2, p3 = knots[i - 1], knots[i], knots[i + 1], knots[i + 2]
-        for step in range(steps):
-            t = step / steps
-            curve.append(tuple(
-                0.5 * (2 * p1[axis] + (p2[axis] - p0[axis]) * t + (2 * p0[axis] - 5 * p1[axis] + 4 * p2[axis] - p3[axis]) * t ** 2
-                       + (3 * p1[axis] - p0[axis] - 3 * p2[axis] + p3[axis]) * t ** 3)
-                for axis in (0, 1)
-            ))
-    curve.append(points[-1])
-    return curve
-
-
-def _closed_curve(points: Sequence[Point]) -> list[Point]:
-    knots = [points[-1], *points, points[0], points[1]]
-    curve: list[Point] = []
-    for i in range(1, len(knots) - 2):
-        curve += _catmull([knots[i - 1], knots[i], knots[i + 1], knots[i + 2]], 16)[16:32]
-    return curve
-
-
-def _scaled(points: Iterable[Point]) -> list[Point]:
-    return [(x * SCALE, y * SCALE) for x, y in points]
 
 
 def _normals(curve: Sequence[Point]) -> list[Point]:
@@ -192,26 +150,6 @@ def _marked(key: str, curve: list[Point], rng: random.Random) -> list[list[Point
     return _looped(curve)
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(str(FONT_PATH), size * SCALE)
-
-
-def _sky(size: tuple[int, int], rng: random.Random) -> Image.Image:
-    width, height = size
-    sky = Image.new("RGB", (1, height))
-    for y in range(height):
-        t = y / max(height - 1, 1)
-        sky.putpixel((0, y), tuple(round(a + (b - a) * t) for a, b in zip(SKY_TOP, SKY_BOTTOM)))
-    sky = sky.resize(size)
-    draw = ImageDraw.Draw(sky)
-    for _ in range(220):
-        x, y = rng.uniform(0, width), rng.uniform(0, height)
-        radius = rng.choice((1, 1, 1, 2, 3)) * SCALE * 0.6
-        light = rng.randint(150, 255)
-        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=(light, light, min(255, light + 20)))
-    return sky
-
-
 def _finger_shape(finger: Finger) -> tuple[list[Point], Point, float]:
     angle = math.radians(finger.angle)
     ax, ay = math.sin(angle), -math.cos(angle)
@@ -230,10 +168,10 @@ def _finger_shape(finger: Finger) -> tuple[list[Point], Point, float]:
 def _hand_mask(size: tuple[int, int]) -> Image.Image:
     mask = Image.new("L", size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.polygon(_scaled(_closed_curve(PALM)), fill=255)
+    draw.polygon(art.scaled(art.closed_curve(PALM)), fill=255)
     for finger in FINGERS:
         outline, _, radius = _finger_shape(finger)
-        draw.polygon(_scaled(outline), fill=255)
+        draw.polygon(art.scaled(outline), fill=255)
         bx, by = finger.base
         scaled_radius = radius * SCALE
         draw.ellipse((bx * SCALE - scaled_radius, by * SCALE - scaled_radius, bx * SCALE + scaled_radius, by * SCALE + scaled_radius), fill=255)
@@ -251,15 +189,15 @@ def _creases(draw: ImageDraw.ImageDraw) -> None:
             cx = finger.base[0] + ax * finger.length * share
             cy = finger.base[1] + ay * finger.length * share
             half = (finger.base_radius + (finger.tip_radius - finger.base_radius) * share) * 0.72
-            arc = _catmull([(cx - px * half, cy - py * half), (cx - ax * 4, cy - ay * 4), (cx + px * half, cy + py * half)], 10)
-            draw.line(_scaled(arc), fill=CREASE, width=2 * SCALE, joint="curve")
+            arc = art.catmull([(cx - px * half, cy - py * half), (cx - ax * 4, cy - ay * 4), (cx + px * half, cy + py * half)], 10)
+            draw.line(art.scaled(arc), fill=CREASE, width=2 * SCALE, joint="curve")
             shifted = [(x + ax * 7, y + ay * 7) for x, y in arc]
-            draw.line(_scaled(shifted), fill=CREASE, width=1 * SCALE, joint="curve")
+            draw.line(art.scaled(shifted), fill=CREASE, width=1 * SCALE, joint="curve")
 
 
 def _stroke(draw: ImageDraw.ImageDraw, pieces: Iterable[Sequence[Point]], fill: int | tuple[int, int, int], width: int) -> None:
     for piece in pieces:
-        scaled = _scaled(piece)
+        scaled = art.scaled(piece)
         draw.line(scaled, fill=fill, width=width, joint="curve")
         radius = width / 2
         for x, y in (scaled[0], scaled[-1]):
@@ -269,24 +207,11 @@ def _stroke(draw: ImageDraw.ImageDraw, pieces: Iterable[Sequence[Point]], fill: 
 def _label(draw: ImageDraw.ImageDraw, line: Line, marked: bool) -> None:
     color = GOLD if marked else LABEL_DIM
     x, y = line.label_at
-    draw.text((x * SCALE, y * SCALE), line.label, font=_font(22), fill=color, anchor=line.anchor)
-    draw.line(_scaled(line.leader), fill=color, width=SCALE)
+    draw.text((x * SCALE, y * SCALE), line.label, font=art.font(22), fill=color, anchor=line.anchor)
+    draw.line(art.scaled(line.leader), fill=color, width=SCALE)
     ax, ay = line.leader[1]
     dot = 3.5 * SCALE
     draw.ellipse((ax * SCALE - dot, ay * SCALE - dot, ax * SCALE + dot, ay * SCALE + dot), fill=color)
-
-
-def _frame(image: Image.Image) -> None:
-    draw = ImageDraw.Draw(image)
-    width, height = image.size
-    draw.rectangle((18 * SCALE, 18 * SCALE, width - 18 * SCALE, height - 18 * SCALE), fill=FRAME)
-    for inset, color, line in ((26, GOLD_DIM, 1), (32, GOLD, 2)):
-        draw.rectangle((inset * SCALE, inset * SCALE, width - inset * SCALE, height - inset * SCALE), outline=color, width=line * SCALE)
-    draw.text((width / 2, 66 * SCALE), TITLE, font=_font(38), fill=GOLD, anchor="mm")
-    for x in (64, WIDTH - 64):
-        cx, cy, radius = x * SCALE, 66 * SCALE, 16 * SCALE
-        draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=GOLD, width=2 * SCALE)
-        draw.polygon([(cx + math.sin(math.radians(a * 144)) * radius, cy - math.cos(math.radians(a * 144)) * radius) for a in range(5)], outline=GOLD)
 
 
 def render(marked: Iterable[str] = ()) -> bytes:
@@ -294,17 +219,9 @@ def render(marked: Iterable[str] = ()) -> bytes:
     chosen = set(marked)
     if unknown := chosen - set(LINES):
         raise ValueError(f"неизвестные линии: {sorted(unknown)}")
-    size = (WIDTH * SCALE, HEIGHT * SCALE)
     rng = random.Random(7)
-
-    image = Image.new("RGB", size, PARCHMENT)
-    _frame(image)
-
-    left, top, right, bottom = PICTURE
-    box = (left * SCALE, top * SCALE, right * SCALE, bottom * SCALE)
-    picture_size = (box[2] - box[0], box[3] - box[1])
-    picture = Image.new("RGB", size, FRAME)
-    picture.paste(_sky(picture_size, rng), box[:2])
+    image, picture, box = art.canvas(TITLE, rng)
+    size = image.size
 
     hand = _hand_mask(size)
     clip = Image.new("L", size, 0)
@@ -325,13 +242,13 @@ def render(marked: Iterable[str] = ()) -> bytes:
     draw = ImageDraw.Draw(picture)
     _creases(draw)
     for minor in MINOR_LINES:
-        draw.line(_scaled(_catmull(minor, 12)), fill=CREASE, width=2 * SCALE, joint="curve")
+        draw.line(art.scaled(art.catmull(minor, 12)), fill=CREASE, width=2 * SCALE, joint="curve")
 
     glow = Image.new("L", size, 0)
     glow_draw = ImageDraw.Draw(glow)
     shapes: dict[str, list[list[Point]]] = {}
     for key, line in LINES.items():
-        curve = _catmull(line.points)
+        curve = art.catmull(line.points)
         shapes[key] = _marked(key, curve, rng) if key in chosen else [curve]
         if key in chosen:
             _stroke(glow_draw, shapes[key], 255, 11 * SCALE)
@@ -342,12 +259,4 @@ def render(marked: Iterable[str] = ()) -> bytes:
     for key, line in LINES.items():
         _label(draw, line, key in chosen)
 
-    grain = Image.effect_noise((WIDTH // 2, HEIGHT // 2), 26).resize(size, Image.BILINEAR).point(lambda v: max(0, (v - 128) // 3))
-    picture.paste((30, 22, 18), mask=grain)
-    image.paste(picture.crop(box), box[:2])
-    frame = ImageDraw.Draw(image)
-    frame.rectangle((box[0], box[1], box[2] - 1, box[3] - 1), outline=GOLD, width=2 * SCALE)
-
-    output = io.BytesIO()
-    image.resize((WIDTH, HEIGHT), Image.LANCZOS).save(output, "JPEG", quality=86, optimize=True, progressive=True)
-    return output.getvalue()
+    return art.finish(image, picture, box)
