@@ -48,6 +48,7 @@ STOP_COMMANDS = frozenset({"гуру стоп"})
 LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
 SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
+SALON_COMMANDS = frozenset({"гуру салон", "гуру салоны"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 _DRAWINGS = {"palm": palm_art, "aura": aura_art}
 SWEEP_INTERVAL_S = 15
@@ -98,6 +99,10 @@ def _is_wallet_command(message: types.Message) -> bool:
 
 def _is_shop_command(message: types.Message) -> bool:
     return _normalize(message.text) in SHOP_COMMANDS
+
+
+def _is_salon_command(message: types.Message) -> bool:
+    return _normalize(message.text) in SALON_COMMANDS
 
 
 def _player_name(user: Any) -> str:
@@ -417,6 +422,12 @@ async def show_shop(message: types.Message) -> None:
     )
 
 
+@router.message(_enabled, _is_salon_command)
+async def show_salons(message: types.Message) -> None:
+    wallets = get_guru_wallets()
+    await message.reply(textui.render_salons(wallets.top(message.chat.id), wallets.get(message.chat.id, message.from_user.id)))
+
+
 @router.message(_enabled, _is_stop_command)
 async def stop_salon(message: types.Message) -> None:
     session = _registry.get(message.chat.id)
@@ -470,6 +481,11 @@ async def _buy(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
     await callback.answer(f"Куплено: {item.name}")
     await _edit(callback.bot, chat_id, callback.message.message_id, textui.render_shop(name, wallet.balance, wallet.items),
                 textui.shop_keyboard(wallet.items, user.id))
+    try:
+        await callback.bot.send_message(chat_id, textui.render_purchase(item, name, wallet.balance),
+                                        message_thread_id=_thread_id(callback.message))
+    except TelegramAPIError as error:
+        logger.warning("[guru] не удалось объявить покупку: %s", error)
 
 
 async def _show_report(callback: types.CallbackQuery, parsed: textui.Callback) -> None:

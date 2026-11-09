@@ -90,6 +90,27 @@ ITEMS: Mapping[str, Item] = MappingProxyType({item.key: item for item in (
          Perks(forgive=1, rituals=("🐈‍⬛ Чёрный кот забирается клиенту на колени. Сопротивление бесполезно.",))),
 )})
 
+# Реплика в чат при покупке. Игрок для клиентов — «мадам» независимо от пола.
+PURCHASE_LINES: Mapping[str, str] = MappingProxyType({
+    "deck": "🃏 Мадам {name} купила колоду с золотым обрезом. Карты теперь врут реже, а стоят как почка.",
+    "loupe": "🔍 Мадам {name} купила лупу хироманта. На ладонях теперь видно даже долги.",
+    "almanac": "🌙 Мадам {name} купила лунный альманах. Звёзды наконец-то называют сроки.",
+    "bowl": "🥣 Мадам {name} купила поющую чашу. Соседи уже стучат.",
+    "ledger": "📒 Мадам {name} купила тетрадку сплетен. Теперь есть о чём спросить.",
+    "ball": "🔮 Мадам {name} купила настоящий хрустальный шар. Старый оказался плафоном.",
+    "mirror": "🪞 Мадам {name} купила зеркало за спиной клиента. Врать лицом стало труднее.",
+    "flyers": "📰 Мадам {name} купила объявления на подъездах. «Верну мужа, сниму порчу, оформлю вычет».",
+    "neon": "💡 Мадам {name} купила неоновую вывеску «МАГИЯ». Буква Г уже мигает.",
+    "reviews": "⭐ Мадам {name} купила отзывы. Двенадцать человек довольны, трое из них существуют.",
+    "zina": "🚪 Мадам {name} купила тётю Зину. Скептиков теперь разворачивают прямо на лестнице.",
+    "candles": "🕯 Мадам {name} купила свечи с запахом денег. Клиенты доверяют, ещё не сев.",
+    "tea": "🫖 Мадам {name} купила чай с чабрецом. Сеанс нравится даже тем, кто не любит чабрец.",
+    "armchair": "🛋 Мадам {name} купила кресло, из которого трудно встать. Вопросы теперь терпят: деваться некуда.",
+    "cat": "🐈‍⬛ Мадам {name} купила чёрного кота. Кот пока не в курсе.",
+})
+
+METHOD_TITLES = MappingProxyType({"tarot": "Таро", "palm": "ладонь", "horoscope": "гороскоп", "energy": "энергетика"})
+
 RANKS = (
     (12, "Храм всех религий сразу"),
     (8, "Академия тайных наук"),
@@ -141,7 +162,42 @@ def describe(keys: Iterable[str]) -> str | None:
     items = owned_items(keys)
     if not items:
         return None
-    return f"🏠 {rank(len(items))}: {' '.join(item.emoji for item in items)}"
+    return f"🏠 {rank(len(items))}: {icons(keys)}"
+
+
+def icons(keys: Iterable[str]) -> str:
+    return " ".join(item.emoji for item in owned_items(keys))
+
+
+def effects(keys: Iterable[str]) -> list[str]:
+    """Что приносит всё купленное вместе, короткими фразами."""
+    perks = perks_of(keys)
+    result: list[str] = []
+    if perks.fee:
+        result.append(f"заработок +{round(perks.fee * 100)}%")
+    if perks.clients:
+        result.append(f"клиентов в смену +{perks.clients}")
+    if perks.questions:
+        result.append(f"вопросов +{perks.questions}")
+    if perks.readings:
+        result.append(f"гаданий +{perks.readings}")
+    if perks.quality:
+        result.append("точнее: " + ", ".join(title for method, title in METHOD_TITLES.items() if method in perks.quality))
+    if perks.deadline:
+        result.append("гороскоп называет срок")
+    if perks.accuracy:
+        result.append("реакции честнее")
+    if perks.trust:
+        result.append(f"доверие +{perks.trust}")
+    if perks.satisfaction:
+        result.append(f"довольство +{perks.satisfaction}")
+    if perks.soft_questions:
+        result.append("вопросы не портят настроение")
+    if perks.skeptic < 1:
+        result.append("скептиков вдвое меньше")
+    if perks.forgive:
+        result.append("кот прикрывает разоблачение")
+    return result
 
 
 def refusal(key: str, balance: int, keys: Iterable[str]) -> str | None:
