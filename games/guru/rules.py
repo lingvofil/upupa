@@ -511,6 +511,8 @@ def _open_reading(client: Client, method_key: str, rng: random.Random, turn: _Tu
     if method.key == "tarot":
         cards = deal_spread(client.pending.offered, rng)
         turn.show("omen", spread_text(cards), PACE_RITUAL, data={"cards": [card.art for card in cards]})
+    elif method.key == "palm":
+        turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, data={"palm": list(client.pending.offered)})
     else:
         turn.show("omen", _omen(client, client.pending, rng), PACE_RITUAL, replace=True)
 

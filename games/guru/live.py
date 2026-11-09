@@ -193,13 +193,12 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
         cards = rules.deal_spread(reading.offered, rng)
         events.append(_event("omen", rules.spread_text(cards), rules.PACE_RITUAL,
                              data={"cards": [card.art for card in cards]}))
+    elif method.key == "palm":
+        omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
+        events.append(_event("omen", C.LIVE_PALM_LINE.format(omens=omens.capitalize()), rules.PACE_RITUAL,
+                             data={"palm": list(reading.offered)}))
     else:
-        if method.key == "palm":
-            omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
-            text = C.LIVE_PALM_LINE.format(omens=omens.capitalize())
-        else:
-            text = f"🌀 {rng.choice(C.AURA_OMENS)}"
-        events.append(_event("omen", text, rules.PACE_RITUAL, replace=True))
+        events.append(_event("omen", f"🌀 {rng.choice(C.AURA_OMENS)}", rules.PACE_RITUAL, replace=True))
     _log_reading(reading, metrics)
 
 

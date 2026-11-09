@@ -226,11 +226,17 @@ def test_tarot_deals_three_different_pictures():
     assert len(cards) == len(set(cards)) == 3 and omen.text.count("Образы:") == 3 and not omen.replace
 
 
-@pytest.mark.parametrize("method", ["palm", "energy"])
-def test_other_methods_replace_the_ritual_with_props(method):
+def test_energy_replaces_the_ritual_with_props():
     session = seated()
-    result = press(session, HOST, f"m:{method}", random.Random(5))
+    result = press(session, HOST, "m:energy", random.Random(5))
     assert result.events[-1].replace and not result.events[-1].data
+
+
+def test_palm_brings_a_picture_of_the_offered_lines():
+    session = seated()
+    result = press(session, HOST, "m:palm", random.Random(5))
+    omen = result.events[-1]
+    assert not omen.replace and "Ладонь" in omen.text and omen.data["palm"] == list(session.pending.offered)
 
 
 def asked_for_sign():
