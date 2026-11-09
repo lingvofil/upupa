@@ -38,6 +38,7 @@ class FakeBot:
         self.cleared = []
         self.actions = []
         self.albums = []
+        self.photos = []
         self._next_id = 1000
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -48,6 +49,10 @@ class FakeBot:
     async def send_media_group(self, **kwargs):
         self.albums.append(SimpleNamespace(**kwargs))
         return [SimpleNamespace(photo=[SimpleNamespace(file_id=f"id{index}")]) for index in range(len(kwargs["media"]))]
+
+    async def send_photo(self, **kwargs):
+        self.photos.append(SimpleNamespace(**kwargs))
+        return SimpleNamespace(photo=[SimpleNamespace(file_id=f"palm{len(self.photos)}")])
 
     async def edit_message_text(self, **kwargs):
         self.edits.append(SimpleNamespace(**kwargs))
@@ -396,14 +401,62 @@ def test_divination_edits_ritual_into_omen(bot, events, pauses):
     pauses.clear()
     sent_before = len(bot.sent)
 
-    press(bot, "m:palm")
+    press(bot, "m:energy")
 
-    assert len(bot.sent) == sent_before + 1 and "ладон" in bot.sent[-1].text.lower()
+    assert len(bot.sent) == sent_before + 1
     edit = bot.edits[-1]
-    assert edit.message_id == bot.sent[-1].message_id and "Ладонь" in edit.text and "Что озвучить" in edit.text
+    assert edit.message_id == bot.sent[-1].message_id and "🌀" in edit.text and "Что озвучить" in edit.text
     assert edit.reply_markup is not None and rules.PACE_RITUAL[0] <= sum(pauses) <= sum(rules.PACE_RITUAL)
     assert current().message_id == bot.sent[-1].message_id
-    assert bot.albums == []
+    assert bot.albums == [] and bot.photos == []
+
+
+def test_palm_sends_picture_then_text_with_buttons(bot, events):
+    start(bot)
+    press(bot, "c:stop")
+    sent_before = len(bot.sent)
+
+    press(bot, "m:palm")
+
+    (photo,) = bot.photos
+    assert photo.chat_id == CHAT and photo.photo.filename == "palm.jpg" and photo.photo.data[:2] == b"\xff\xd8"
+    assert len(bot.sent) == sent_before + 2 and "ладон" in bot.sent[-2].text.lower()
+    text = bot.sent[-1]
+    assert "Ладонь" in text.text and "Что озвучить" in text.text and text.reply_markup is not None
+    assert current().message_id == text.message_id
+
+
+def test_palm_is_drawn_once_per_combination(bot, events):
+    start(bot)
+    press(bot, "c:stop")
+    offered = ("love", "work", "money")
+    asyncio.run(guru_salon._send_palm(bot, current(), offered))
+    asyncio.run(guru_salon._send_palm(bot, current(), tuple(reversed(offered))))
+    assert bot.photos[0].photo.filename == "palm.jpg" and bot.photos[1].photo == "palm1"
+
+
+def test_palm_failure_does_not_stop_the_game(bot, events, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(**kwargs):
+        raise TelegramForbiddenError(method=None, message="no photos")
+
+    monkeypatch.setattr(bot, "send_photo", refuse)
+    start(bot)
+    press(bot, "c:stop")
+    press(bot, "m:palm")
+    assert current().client.phase == "interpret" and bot.sent[-1].reply_markup is not None
+
+
+def test_broken_palm_drawing_does_not_stop_the_game(bot, events, monkeypatch):
+    def fail(lines):
+        raise OSError("шрифт потерялся")
+
+    monkeypatch.setattr(guru_salon.palm_art, "render", fail)
+    start(bot)
+    press(bot, "c:stop")
+    press(bot, "m:palm")
+    assert bot.photos == [] and current().client.phase == "interpret" and bot.sent[-1].reply_markup is not None
 
 
 def test_tarot_shows_album_then_text_with_buttons(bot, events, pauses):

@@ -29,14 +29,14 @@ from typing import Any
 
 from aiogram import F, Router, types
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.types import BufferedInputFile, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
 from core.paths import PROJECT_ROOT
 from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import live, rules, salon, textui
+from games.guru import live, palm_art, rules, salon, textui
 from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport, LiveSession, Participant, Session
 
@@ -163,6 +163,19 @@ async def _send_cards(bot: Any, session: Session | LiveSession, cards: tuple[str
             _card_file_ids[art] = item.photo[-1].file_id
 
 
+async def _send_palm(bot: Any, session: Session | LiveSession, lines: tuple[str, ...]) -> None:
+    """Показать ладонь. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста."""
+    key = "palm:" + "+".join(sorted(lines))
+    try:
+        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(palm_art.render, lines), "palm.jpg")
+        sent = await bot.send_photo(chat_id=session.chat_id, photo=photo, message_thread_id=session.thread_id)
+    except (TelegramAPIError, OSError, ValueError) as error:
+        logger.warning("[guru] не удалось показать ладонь: %s", error)
+        return
+    if sent.photo:
+        _card_file_ids[key] = sent.photo[-1].file_id
+
+
 async def _pause(bot: Any, session: Session | LiveSession, seconds: float) -> None:
     """Драматическая пауза: «печатает…» и ожидание. Индикатор — не обязателен."""
     remaining = seconds
@@ -197,6 +210,8 @@ async def _play(bot: Any, session: Session | LiveSession, events: tuple[DisplayE
             return
         if bubble.cards:
             await _send_cards(bot, session, bubble.cards)
+        if bubble.palm:
+            await _send_palm(bot, session, bubble.palm)
         text = bubble.text
         rows = None
         if index == len(bubbles) - 1:

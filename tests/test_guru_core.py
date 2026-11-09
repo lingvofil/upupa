@@ -336,10 +336,20 @@ def test_reading_offers_interpretations_by_quality(roll, quality, size, truth_in
 
 def test_ritual_pauses_then_omen_replaces_it():
     session, rng = make("businessman.partner")
+    result = act(session, rng, "c:stop", "m:energy")[-1]
+    ritual, omen = result.events
+    assert ritual.kind == "ritual"
+    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "🌀" in omen.text
+
+
+def test_palm_brings_a_picture_of_the_offered_lines():
+    session, rng = make("businessman.partner")
     result = act(session, rng, "c:stop", "m:palm")[-1]
     ritual, omen = result.events
-    assert ritual.kind == "ritual" and "ладонь" in ritual.text.lower()
-    assert omen.kind == "omen" and omen.replace and omen.pause >= rules.PACE_RITUAL[0] and "Ладонь" in omen.text
+    assert ritual.kind == "ritual" and "ладон" in ritual.text.lower()
+    assert omen.kind == "omen" and not omen.replace and "Ладонь" in omen.text
+    assert omen.data["palm"] == list(session.client.pending.offered)
+    assert textui.bubbles(result.events, result.view)[-1].palm == session.client.pending.offered
 
 
 def test_tarot_keeps_the_ritual_and_brings_pictures():
@@ -892,7 +902,7 @@ def test_events_split_into_short_messages():
     bubbles = textui.bubbles(rules.arrival_events(session), view)
     assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
     assert bubbles[0].pause == 0 and bubbles[1].pause == rules.PACE_TELL[0] and bubbles[1].spread == rules.PACE_TELL[1]
-    result = act(session, rng, "c:stop", "m:palm")[-1]
+    result = act(session, rng, "c:stop", "m:energy")[-1]
     ritual, omen = textui.bubbles(result.events, result.view)
     assert not ritual.replace and omen.replace and omen.pause > 0
 
