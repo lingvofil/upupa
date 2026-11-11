@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from games.guru.content import ARCHETYPES, WHAT, WHEN, Archetype, ClientEvent
+from games.guru.dialog import Dialog
 from games.guru.salon import NO_PERKS, Perks
 
 # Слова клиента. Выданные за ясновидение без своего подтверждения — это эхо.
@@ -288,6 +289,7 @@ class Session:
     # Где живёт партия в мессенджере; нужно только transport-слою.
     message_id: int | None = None
     thread_id: int | None = None
+    dialog: Dialog = field(default_factory=Dialog)
 
     @property
     def host(self) -> Participant:
@@ -333,6 +335,7 @@ class LiveSession:
     finish_reason: str | None = None
     message_id: int | None = None
     thread_id: int | None = None
+    dialog: Dialog = field(default_factory=Dialog)
 
     def is_participant(self, user_id: int) -> bool:
         return self.host.user_id == user_id or (self.client is not None and self.client.user_id == user_id)

@@ -19,6 +19,18 @@ WIDTH, HEIGHT = 738, 1100
 SCALE = 2  # рисуем крупнее и уменьшаем: так края гладкие
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "BerlinSansFBCyrillic-Regular.ttf"
 
+
+def render_spread(cards: tuple[str, ...]) -> bytes:
+    """Весь расклад одним изображением, чтобы обновлять его внутри панели приёма."""
+    width, height, gap = 400, 596, 12
+    image = Image.new("RGB", (width * len(cards) + gap * (len(cards) - 1), height), (20, 17, 16))
+    for index, card in enumerate(cards):
+        with Image.open(PROJECT_ROOT / "assets" / "guru_tarot" / f"{card}.jpg") as source:
+            image.paste(source.convert("RGB").resize((width, height), Image.Resampling.LANCZOS), (index * (width + gap), 0))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=90)
+    return output.getvalue()
+
 PARCHMENT = (214, 190, 148)
 FRAME = (20, 17, 16)
 GOLD = (222, 178, 96)

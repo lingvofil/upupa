@@ -1,7 +1,7 @@
 """Салон «Гуру» (эксперимент лаборатории ``guru``): тонкий Telegram-слой.
 
 Правила — в ``games.guru.rules``, тексты и кнопки — в ``games.guru.textui``.
-Здесь только команды, callback, паузы, таймаут и запись метрик ядра в журнал.
+Здесь только команды, callback, компактная панель, таймаут и запись метрик ядра в журнал.
 
 Все хэндлеры стоят за ``ExperimentEnabled("guru")``: в чате, где эксперимент
 выключен, «гуру» и кнопки уходят дальше по роутерам, как будто салона нет.
@@ -15,16 +15,15 @@
 
 «гуру карта» — карта дня: не партия, чату не мешает, доступна и во время чужого приёма.
 
-Салон игрока рисуется (``games.guru.salon_art``): с каждым клиентом приходит картинка комнаты
-с купленными вещами, клиентом напротив и подарками на полке; её же показывают «гуру салон»
-и объявление о покупке. Не вышло нарисовать или отправить — тот же текст уходит без картинки.
-Сообщения партии идут с HTML-разметкой из ``textui.bubbles``; всё остальное — простой текст.
+Приём занимает одну текстовую панель и одну иллюстрацию. Ход целиком обновляет панель,
+а салон, расклад, ладонь и диплом сменяют друг друга в иллюстрации. Предыдущие реплики
+доступны по «Диалог», длинные тексты листаются; «Мой салон» открывает салон нажавшего.
+Не вышло показать рисунок — текст и кнопки остаются рабочими. Панель размечена HTML.
 
 Деньги игроков копятся в ``features.guru_wallets``: ядро считает сумму, здесь она
 зачисляется, как только приём закончен, поэтому брошенная смена заработанного не теряет.
 
-Паузы — обычный ``asyncio.sleep`` внутри хэндлера: aiogram обрабатывает update
-отдельными задачами, поэтому ожидание не задерживает остальных пользователей.
+Искусственных пауз между репликами нет. Рисунки создаются через ``asyncio.to_thread``.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import aura_art, cert_art, daily, live, palm_art, rules, salon, salon_art, seance, textui
+from games.guru import art, aura_art, cert_art, daily, dialog, live, palm_art, rules, salon, salon_art, seance, textui
 from games.guru import content as C
 from games.guru.contract import DisplayEvent, LiveView, SeanceView, View
 from games.guru.seance import Seance
@@ -69,8 +68,6 @@ _DRAWINGS = {"palm": palm_art, "aura": aura_art}
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
 MAX_CACHED_REPORTS = 300
-TYPING_REFRESH_S = 4.0  # индикатор «печатает…» Telegram гаснет примерно через 5 секунд
-SUMMARY_PAUSE_S = 3.0
 ABANDON_REASONS = frozenset({"timeout", "quit", "restart", "send_failed"})
 CAPTION_LIMIT = 1000  # у Telegram 1024, оставляем запас
 BRAND = "@expertyebaniebot · напиши «гуру»"  # подпись на справке и дипломе: по ней переславшие находят игру
@@ -81,9 +78,9 @@ _enabled = ExperimentEnabled(EXPERIMENT)
 
 _registry = rules.SessionRegistry()
 _rng = random.Random()
-_pace_rng = random.Random()  # разброс пауз не должен влиять на воспроизводимость партии
 _reports: dict[str, str] = {}  # подробные разборы до нажатия кнопки; живут в памяти
 _card_file_ids: dict[str, str] = {}  # рисунок уже загружен в Telegram: повторно не отправляем файл
+_closed_dialogs: dict[str, Session | LiveSession | Seance] = {}  # журнал завершённых приёмов
 
 
 def _clock() -> float:
@@ -92,9 +89,6 @@ def _clock() -> float:
 
 def _today() -> date:
     return datetime.now(MOSCOW).date()
-
-
-_sleep = asyncio.sleep
 
 
 # --- разбор команд ----------------------------------------------------------
@@ -206,96 +200,115 @@ async def _clear_keyboard(bot: Any, chat_id: int, message_id: int | None) -> Non
         logger.debug("[guru] кнопки уже убраны: %s", error)
 
 
-async def _send_cards(bot: Any, session: Session | LiveSession, cards: tuple[str, ...]) -> None:
-    """Показать расклад альбомом. Если не вышло, игра идёт дальше: текст называет все карты."""
-    media = [InputMediaPhoto(media=_card_file_ids.get(art) or FSInputFile(TAROT_ART_DIR / f"{art}.jpg")) for art in cards]
-    try:
-        sent = await bot.send_media_group(chat_id=session.chat_id, media=media, message_thread_id=session.thread_id)
-    except (TelegramAPIError, OSError) as error:
-        logger.warning("[guru] не удалось показать расклад: %s", error)
-        return
-    for art, item in zip(cards, sent):
-        if item.photo:
-            _card_file_ids[art] = item.photo[-1].file_id
-
-
-async def _send_drawing(bot: Any, session: Session | LiveSession, drawing: tuple[str, tuple[str, ...]]) -> None:
-    """Показать рисунок. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста.
-
-    ``drawing`` — (рисунок, ключи) и, для ладони в живом приёме, тип руки клиента. ``study`` — ладонь для осмотра по областям.
-    """
-    kind, marks, *extra = drawing
-    hand = extra[0] if extra else None
-    key = f"{kind}:" + "+".join(sorted(marks)) + (f":{hand}" if hand else "")
-    if kind == "study":
-        painter, name = (palm_art.render_study, marks), "palm.jpg"
-    elif hand:
-        painter, name = (palm_art.render, marks, hand), "palm.jpg"
-    else:
-        painter, name = (_DRAWINGS[kind].render, marks), f"{kind}.jpg"
-    try:
-        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(*painter), name)
-        sent = await bot.send_photo(chat_id=session.chat_id, photo=photo, message_thread_id=session.thread_id)
-    except (TelegramAPIError, OSError, ValueError) as error:
-        logger.warning("[guru] не удалось показать рисунок %s: %s", kind, error)
-        return
-    if sent.photo:
-        _card_file_ids[key] = sent.photo[-1].file_id
-
-
-async def _pause(bot: Any, session: Session | LiveSession, seconds: float) -> None:
-    """Драматическая пауза: «печатает…» и ожидание. Индикатор — не обязателен."""
-    remaining = seconds
-    while remaining > 0:
-        try:
-            await bot.send_chat_action(chat_id=session.chat_id, action="typing", message_thread_id=session.thread_id)
-        except TelegramAPIError as error:
-            logger.debug("[guru] индикатор набора не показан: %s", error)
-        chunk = min(TYPING_REFRESH_S, remaining)
-        await _sleep(chunk)
-        remaining -= chunk
-
-
 def _interrupted(session: Session | LiveSession) -> bool:
     return session.finish_reason in ABANDON_REASONS
 
 
 async def _play(bot: Any, session: Session | LiveSession | Seance, events: tuple[DisplayEvent, ...], view: View | LiveView | SeanceView,
-                closing_rows: textui.Rows | None = None, closing_text: str | None = None) -> None:
-    """Показать события сообщениями с паузами; кнопки — на последнем."""
-    bubbles = textui.bubbles(events, view)
+                closing_rows: textui.Rows | None = None, closing_text: str | None = None, *, intro: str = "") -> None:
+    """Один ход — одно обновление диалога. Иллюстрация тоже остаётся на своём месте."""
     if closing_rows is None and not view.finished:
         closing_rows = textui.keyboard(view)
         closing_text = textui.prompt_text(view)
-    if not bubbles:
-        bubbles = [textui.Bubble("")]
-
-    last_id = None
-    for index, bubble in enumerate(bubbles):
-        await _pause(bot, session, bubble.pause + _pace_rng.random() * bubble.spread)
-        if _interrupted(session):
-            return
-        if bubble.cards:
-            await _send_cards(bot, session, bubble.cards)
-        if bubble.drawing:
-            await _send_drawing(bot, session, bubble.drawing)
-        text = bubble.text  # размечен как HTML; всё, что дописываем сами, экранируем
-        rows = None
-        if index == len(bubbles) - 1:
-            rows = closing_rows
-            if closing_text:
-                text = f"{text}\n\n{textui.escape(closing_text)}" if text else textui.escape(closing_text)
-        if bubble.replace and last_id is not None:
-            await _edit(bot, session.chat_id, last_id, text, rows, html=True)
-            continue
-        sent = None
+    parts = [textui.escape(intro)] if intro else []
+    for bubble in textui.bubbles(events, view):
+        if bubble.text:
+            parts.append(bubble.text)
         if bubble.scene:
-            sent = await _send_salon(bot, session.chat_id, session.thread_id, *bubble.scene, text, rows, html=True)
+            client, items, gifts = bubble.scene
+            key = f"salon:{client or '-'}:{'+'.join(sorted(items))}:{'+'.join(sorted(gifts))}"
+            await _illustration(bot, session, key, salon_art.render, (items, client, gifts), "salon.jpg")
+        if bubble.cards:
+            await _illustration(bot, session, "spread:" + "+".join(bubble.cards), art.render_spread, (bubble.cards,), "spread.jpg")
+        if bubble.drawing:
+            kind, marks, *extra = bubble.drawing
+            hand = extra[0] if extra else None
+            key = f"{kind}:" + "+".join(sorted(marks)) + (f":{hand}" if hand else "")
+            painter = palm_art.render_study if kind == "study" else _DRAWINGS[kind].render
+            args = (marks, hand) if hand else (marks,)
+            await _illustration(bot, session, key, painter, args, "palm.jpg" if kind == "study" else f"{kind}.jpg")
+    if _interrupted(session):
+        return
+    session.dialog.history.extend(parts)
+    if closing_text:
+        parts.append(textui.escape(closing_text))
+    await _panel(bot, session, parts, closing_rows or [])
+
+
+def _cache_dialog(session: Session | LiveSession | Seance) -> None:
+    _closed_dialogs[session.session_id] = session
+    while len(_closed_dialogs) > MAX_CACHED_REPORTS:
+        del _closed_dialogs[next(iter(_closed_dialogs))]
+
+
+async def _panel(bot: Any, session: Session | LiveSession | Seance, parts: list[str], rows: textui.Rows) -> None:
+    session.dialog.pages = dialog.pages(parts)
+    session.dialog.rows = rows or []
+    if session.finished:
+        _cache_dialog(session)
+    await _dialog_page(bot, session, "screen", 0)
+
+
+async def _dialog_page(bot: Any, session: Session | LiveSession | Seance, mode: str, page: int) -> None:
+    if mode == "heard" and isinstance(session, Seance):
+        pages = dialog.pages([textui.escape(line) for line in session.heard])
+    else:
+        pages = dialog.pages(session.dialog.history) if mode == "log" else session.dialog.pages
+    page = min(max(page, 0), len(pages) - 1)
+    heading = "📜 Что сказала Людмила" if mode == "heard" else "📜 Диалог" if mode == "log" else f"🕯 Мадам {session.host.name}"
+    if len(pages) > 1:
+        heading += f" · {page + 1}/{len(pages)}"
+    text = f"<b>{textui.escape(heading)}</b>\n\n{pages[page]}"
+    rows = textui.dialog_keyboard(session.session_id, session.step, [] if mode != "screen" else session.dialog.rows,
+                                  mode=mode, page=page, total=len(pages), history=bool(session.dialog.history))
+    if session.message_id is not None:
+        try:
+            await bot.edit_message_text(text=text, chat_id=session.chat_id, message_id=session.message_id,
+                                        reply_markup=_markup(rows), parse_mode="HTML")
+            return
+        except TelegramBadRequest as error:
+            detail = str(error).lower()
+            if "not modified" in detail:
+                return
+            if "message to edit not found" not in detail and "message can't be edited" not in detail:
+                raise
+    sent = await _send(bot, session, text, rows, html=True)
+    session.message_id = sent.message_id
+
+
+async def _illustration(bot: Any, session: Session | LiveSession | Seance, key: str, painter: Any, args: tuple,
+                        filename: str) -> None:
+    """Одно фото на приём: меняются салон, расклад, ладонь и итоговая справка."""
+    if key == session.dialog.media_key:
+        return
+    try:
+        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(painter, *args), filename)
+    except Exception:
+        logger.exception("[guru] не удалось нарисовать иллюстрацию")
+        return
+    if _interrupted(session):
+        return
+    try:
+        sent = None
+        if session.dialog.media_id is not None:
+            try:
+                sent = await bot.edit_message_media(chat_id=session.chat_id, message_id=session.dialog.media_id,
+                                                    media=InputMediaPhoto(media=photo))
+            except TelegramBadRequest as error:
+                detail = str(error).lower()
+                if "not modified" in detail:
+                    session.dialog.media_key = key
+                    return
+                if "message to edit not found" not in detail and "message can't be edited" not in detail:
+                    raise
         if sent is None:
-            sent = await _send(bot, session, text, rows, html=True)
-        last_id = getattr(sent, "message_id", None)
-    if not view.finished or closing_rows:
-        session.message_id = last_id
+            sent = await bot.send_photo(chat_id=session.chat_id, photo=photo, message_thread_id=session.thread_id,
+                                        disable_notification=True)
+        session.dialog.media_id, session.dialog.media_key = sent.message_id, key
+        if getattr(sent, "photo", None) and not key.startswith(("certificate:", "diploma:")):
+            _card_file_ids[key] = sent.photo[-1].file_id
+    except (TelegramAPIError, OSError):
+        logger.warning("[guru] не удалось обновить иллюстрацию", exc_info=True)
 
 
 async def _log_metrics(session: Session | LiveSession, metrics: tuple[tuple[str, dict[str, Any]], ...]) -> None:
@@ -349,7 +362,7 @@ async def _show_abandoned(bot: Any, session: Session | LiveSession, reason: str,
         summary, rows = textui.render_summary(rules.build_view(session), _is_group(session.chat_id))
         text = f"{textui.render_abandoned(reason)}\n\n{summary}"
     try:
-        await _send(bot, session, text, rows)
+        await _panel(bot, session, [textui.escape(text)], rows or [])
     except TelegramAPIError as error:
         logger.warning("[guru] не удалось отправить итог брошенного салона: %s", error)
 
@@ -420,8 +433,7 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
     )
     view = rules.build_view(session)
     try:
-        await _send(bot, session, textui.render_intro(view))
-        await _play(bot, session, rules.arrival_events(session), view)
+        await _play(bot, session, rules.arrival_events(session), view, intro=textui.render_intro(view))
     except TelegramAPIError:
         await _fail_send(session)
 
@@ -455,11 +467,10 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
     )
     view = live.build_view(session)
     try:
-        sent = await _send(bot, session, textui.render_live_open(view), textui.keyboard(view))
+        await _panel(bot, session, [textui.escape(textui.render_live_open(view))], textui.keyboard(view))
     except TelegramAPIError:
         await _fail_send(session)
         return
-    session.message_id = getattr(sent, "message_id", None)
 
 
 async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str) -> None:
@@ -483,9 +494,8 @@ async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None
                     **seance.start_data(session))
     view = seance.build_view(session)
     try:
-        await _send(bot, session, textui.render_seance_intro(view))
         text, rows = textui.render_seance(view)
-        await _play(bot, session, seance.arrival_events(session), view, rows, text)
+        await _play(bot, session, seance.arrival_events(session), view, rows, text, intro=textui.render_seance_intro(view))
     except TelegramAPIError:
         await _fail_send(session)
 
@@ -782,11 +792,31 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
 
     chat_id = message.chat.id
     session = _registry.get(chat_id)
+    if parsed.kind == "dialog":
+        # Журнал доступен и после завершения; игровые действия по старым кнопкам не принимаем.
+        target = session if session is not None and session.session_id == parsed.session_id else _closed_dialogs.get(parsed.session_id)
+        if target is None or target.chat_id != chat_id or target.step != parsed.step:
+            await callback.answer("Этот диалог уже устарел.")
+            return
+        if not target.is_participant(callback.from_user.id):
+            await callback.answer(C.SPECTATOR_LINE.format(name=target.host.name))
+            return
+        if message.message_id != target.message_id:
+            await callback.answer("Открой диалог под текущим сообщением.")
+            return
+        if not target.finished:
+            target.last_activity = _clock()
+        await callback.answer()
+        await _dialog_page(callback.bot, target, parsed.action or "screen", parsed.page)
+        return
     if session is None or session.session_id != parsed.session_id or session.step != parsed.step:
         await callback.answer("Эта кнопка уже не работает.")
         return
     if isinstance(session, LiveSession):
-        await _live_callback(callback, session, parsed)
+        try:
+            await _live_callback(callback, session, parsed)
+        except TelegramAPIError:
+            await _fail_send(session)
         return
     if isinstance(session, Seance):
         await _seance_callback(callback, session, parsed)
@@ -823,10 +853,12 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
     if action.startswith("s:") or action == "reset":
         # Сборка предсказания идёт в одном сообщении.
         text, rows = textui.render_constructor(result.view)
-        await _edit(bot, chat_id, message.message_id, text, rows)
+        try:
+            await _panel(bot, session, [textui.escape(text)], rows)
+        except TelegramAPIError:
+            await _fail_send(session)
         return
 
-    await _clear_keyboard(bot, chat_id, message.message_id)
     try:
         await _deliver(bot, session, result)
     except TelegramAPIError:
@@ -861,15 +893,13 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
     if action.startswith("q:"):
         # Анкета заполняется в одном сообщении, как сборка предсказания в смене.
         text, rows = textui.render_intake(view)
-        await _edit(bot, session.chat_id, callback.message.message_id, text, rows)
+        await _panel(bot, session, [textui.escape(text)], rows)
         if view.phase == "intake":
             return
     elif action.startswith("s:"):
         text, rows = textui.render_live_constructor(view)
-        await _edit(bot, session.chat_id, callback.message.message_id, text, rows)
+        await _panel(bot, session, [textui.escape(text)], rows)
         return
-    else:
-        await _clear_keyboard(bot, session.chat_id, callback.message.message_id)
     try:
         if view.finished:
             await _finish_live(bot, session, result.events, view)
@@ -883,7 +913,7 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
 
 
 async def _seance_callback(callback: types.CallbackQuery, session: Seance, parsed: textui.Callback) -> None:
-    user, bot, message = callback.from_user, callback.bot, callback.message
+    user, bot = callback.from_user, callback.bot
     action = parsed.action or ""
     if not session.is_participant(user.id):
         await log_event(EXPERIMENT, "spectator", chat_id=session.chat_id, user_id=user.id, session_id=session.session_id, action=action)
@@ -905,14 +935,13 @@ async def _seance_callback(callback: types.CallbackQuery, session: Seance, parse
     view = result.view
     try:
         if action == "heard":
-            # Перечитать её слова — не ход: текущий экран с кнопками остаётся как был.
-            await _send(bot, session, seance.heard_text(session)[:textui.MESSAGE_LIMIT], reply_to=message.message_id)
+            # Перечитать без нового сообщения; назад вернётся тот же игровой экран.
+            await _dialog_page(bot, session, "heard", 0)
             return
         text, rows = textui.render_seance(view)
         if not result.fresh:
-            await _edit(bot, session.chat_id, message.message_id, text, rows)
+            await _panel(bot, session, [textui.escape(text)], rows)
             return
-        await _clear_keyboard(bot, session.chat_id, message.message_id)
         if view.finished:
             await _play(bot, session, result.events, view, textui.seance_done_keyboard(),
                         textui.render_seance_result(view, seen, len(seance.ENDINGS)))
@@ -922,26 +951,12 @@ async def _seance_callback(callback: types.CallbackQuery, session: Seance, parse
         await _fail_send(session)
 
 
-async def _render_picture(painter: Any, *args: Any) -> BufferedInputFile | None:
-    """Нарисовать справку или диплом вне event loop. Не вышло — партия закончится текстом."""
-    try:
-        return BufferedInputFile(await asyncio.to_thread(painter, *args), "guru.jpg")
-    except Exception:
-        logger.exception("[guru] не удалось нарисовать картинку")
-        return None
-
-
 async def _finish_live(bot: Any, session: LiveSession, events: tuple[DisplayEvent, ...], view: LiveView) -> None:
     """Развязка живого приёма и справка о предсказании: её удобно переслать."""
     text, rows = textui.render_live_result(view), textui.live_done_keyboard(view)
-    photo = await _render_picture(cert_art.render_certificate, live.certificate(session), BRAND)
-    if photo is None:
-        await _play(bot, session, events, view, rows, text)
-        return
-    if events:  # без событий _play отправил бы пустое сообщение
-        await _play(bot, session, events, view)
-    if await _send_picture(bot, session.chat_id, session.thread_id, photo, text, rows) is None:
-        await _send(bot, session, text, rows)
+    await _illustration(bot, session, f"certificate:{session.session_id}", cert_art.render_certificate,
+                        (live.certificate(session), BRAND), "guru.jpg")
+    await _play(bot, session, events, view, rows, text)
 
 
 async def _deliver(bot: Any, session: Session, result: Any) -> None:
@@ -950,13 +965,13 @@ async def _deliver(bot: Any, session: Session, result: Any) -> None:
     if finished is not None and finished.report is not None:
         _remember_report(session, finished.report)
         rows = textui.client_done_keyboard(view, finished.report)
-        await _play(bot, session, result.events, view, rows, textui.render_verdict(view, finished.report))
+        text = textui.render_verdict(view, finished.report)
         if view.finished and not _interrupted(session):
-            text, summary_rows = textui.render_summary(view, _is_group(session.chat_id))
-            await _pause(bot, session, SUMMARY_PAUSE_S)
-            photo = await _render_picture(cert_art.render_diploma, rules.diploma(session), BRAND)
-            if photo is None or await _send_picture(bot, session.chat_id, session.thread_id, photo, text, summary_rows) is None:
-                await _send(bot, session, text, summary_rows)
+            summary, rows = textui.render_summary(view, _is_group(session.chat_id))
+            text += f"\n\n{summary}"
+            await _illustration(bot, session, f"diploma:{session.session_id}", cert_art.render_diploma,
+                                (rules.diploma(session), BRAND), "guru.jpg")
+        await _play(bot, session, result.events, view, rows, text)
         return
     if view.client is not None and view.client.phase in ("who", "what", "when", "announce"):
         text, rows = textui.render_constructor(view)

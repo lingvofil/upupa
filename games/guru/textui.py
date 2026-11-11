@@ -33,6 +33,7 @@ _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 _BUY_RE = re.compile(r"^guru:buy:([a-z_0-9]+):(\d+)$")
 _MENU_RE = re.compile(r"^guru:menu:([a-z]+)$")
+_DIALOG_RE = re.compile(r"^guru:ui:([0-9a-f]{1,32}):(\d+):(screen|log|heard):(\d+)$")
 
 ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2,
              "hub": 2, "choice": 1, "area": 3, "hand": 1}
@@ -109,6 +110,7 @@ class Callback:
     client_no: int | None = None
     item: str | None = None
     owner: int | None = None
+    page: int = 0
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,9 @@ def menu_data(action: str) -> str:
 
 def parse(data: str | None) -> Callback | None:
     data = data or ""
+    match = _DIALOG_RE.match(data)
+    if match:
+        return Callback("dialog", match.group(1), int(match.group(2)), match.group(3), page=int(match.group(4)))
     match = _MENU_RE.match(data)
     if match:
         return Callback("menu", action=match.group(1)) if match.group(1) in MENU_ACTIONS else None
@@ -195,6 +200,29 @@ def keyboard(view: View | LiveView | SeanceView) -> Rows:
     return rows
 
 
+def dialog_data(session_id: str, step: int, mode: str, page: int = 0) -> str:
+    return f"guru:ui:{session_id}:{step}:{mode}:{page}"
+
+
+def dialog_keyboard(session_id: str, step: int, rows: Rows, *, mode: str = "screen", page: int = 0,
+                    total: int = 1, history: bool = True) -> Rows:
+    result = [list(row) for row in rows]
+    navigation = []
+    if page > 0:
+        navigation.append(("◀", dialog_data(session_id, step, mode, page - 1)))
+    if page + 1 < total:
+        navigation.append(("▶", dialog_data(session_id, step, mode, page + 1)))
+    if navigation:
+        result.append(navigation)
+    if mode in ("log", "heard"):
+        result.append([("↩ К приёму", dialog_data(session_id, step, "screen"))])
+    elif history:
+        result.append([("📜 Диалог", dialog_data(session_id, step, "log"))])
+    if not any(data == menu_data("salon") for row in result for _, data in row):
+        result.append([(MENU_SALON, menu_data("salon"))])
+    return result
+
+
 def _live_door(group: bool) -> list[tuple[str, str]]:
     """Живой приём предлагаем только там, где есть второй человек."""
     return [(MENU_LIVE, menu_data("live"))] if group else []
@@ -205,11 +233,12 @@ def again_keyboard(session_id: str, group: bool = True) -> Rows:
         [(AGAIN_YES, again_data(session_id, "yes"))],
         [*_live_door(group), (MENU_CARD, menu_data("card"))],
         [(AGAIN_NO, again_data(session_id, "no"))],
+        [(MENU_SALON, menu_data("salon"))],
     ]
 
 
 def live_done_keyboard(view: LiveView) -> Rows:
-    return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))], [(MENU_CARD, menu_data("card"))]]
+    return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))], [(MENU_CARD, menu_data("card")), (MENU_SALON, menu_data("salon"))]]
 
 
 def menu_keyboard(group: bool = True) -> Rows:
@@ -222,11 +251,11 @@ def menu_keyboard(group: bool = True) -> Rows:
 
 def salon_keyboard() -> Rows:
     """Под рисунком салона: кнопки работают для любого, кто нажал, и ведут в его лавку."""
-    return [[(MENU_SHOP, menu_data("shop")), (MENU_SALONS, menu_data("salons"))]]
+    return [[(MENU_SHOP, menu_data("shop")), (MENU_SALONS, menu_data("salons"))], [(MENU_SALON, menu_data("salon"))]]
 
 
 def daily_keyboard() -> Rows:
-    return [[(MENU_CARD_OWN, menu_data("card"))], [(MENU_SHIFT, menu_data("shift"))]]
+    return [[(MENU_CARD_OWN, menu_data("card"))], [(MENU_SHIFT, menu_data("shift")), (MENU_SALON, menu_data("salon"))]]
 
 
 def client_done_keyboard(view: View, report: ClientReport) -> Rows:
@@ -497,7 +526,8 @@ def render_seance_result(view: SeanceView, seen: int, total: int) -> str:
 
 
 def seance_done_keyboard() -> Rows:
-    return [[(MENU_SEANCE_AGAIN, menu_data("seance"))], [(MENU_SHIFT, menu_data("shift")), (MENU_CARD, menu_data("card"))]]
+    return [[(MENU_SEANCE_AGAIN, menu_data("seance"))], [(MENU_SHIFT, menu_data("shift")), (MENU_CARD, menu_data("card"))],
+            [(MENU_SALON, menu_data("salon"))]]
 
 
 def render_seance_abandoned(reason: str) -> str:

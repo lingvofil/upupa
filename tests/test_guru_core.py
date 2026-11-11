@@ -966,7 +966,7 @@ def test_summary_and_abandon_note():
     rules.abandon_summary(session, "timeout", now=999.0)
     text, rows = textui.render_summary(rules.build_view(session))
     assert "брошен" in text and "Звание" in text
-    assert [label for row in rows for label, _ in row] == [textui.AGAIN_YES, textui.MENU_LIVE, textui.MENU_CARD, textui.AGAIN_NO]
+    assert [label for row in rows for label, _ in row] == [textui.AGAIN_YES, textui.MENU_LIVE, textui.MENU_CARD, textui.AGAIN_NO, textui.MENU_SALON]
     _, private_rows = textui.render_summary(rules.build_view(session), group=False)
     assert textui.MENU_LIVE not in [label for row in private_rows for label, _ in row], "в личке живого приёма нет"
     assert textui.render_abandoned("timeout") == textui.ABANDON_NOTES["timeout"]
@@ -1189,7 +1189,7 @@ def test_menu_buttons_round_trip_and_fit_telegram():
     doors = [*textui.menu_keyboard(), *textui.salon_keyboard()]
     assert {textui.parse(data).action for row in doors for _, data in row} == textui.MENU_ACTIONS
     assert textui.parse(textui.menu_data("nope")) is None
-    assert [label for row in textui.daily_keyboard() for label, _ in row] == [textui.MENU_CARD_OWN, textui.MENU_SHIFT]
+    assert [label for row in textui.daily_keyboard() for label, _ in row] == [textui.MENU_CARD_OWN, textui.MENU_SHIFT, textui.MENU_SALON]
     assert textui.MENU_LIVE not in [label for row in textui.menu_keyboard(group=False) for label, _ in row]
 
 
