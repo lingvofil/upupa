@@ -169,6 +169,7 @@ class ClientReport:
     legend_after: int
     duration_s: float
     event: str | None = None  # случайное событие приёма
+    gift: str | None = None  # подарок, который клиент оставил в салоне
 
     @property
     def matched(self) -> int:
@@ -203,6 +204,7 @@ class ClientReport:
             "legend_after": self.legend_after,
             "duration_s": self.duration_s,
             "incident": self.event,
+            "gift": self.gift,
         }
 
 
@@ -282,6 +284,7 @@ class Session:
     forgive_left: int = 0  # сколько разоблачений ещё прикроет кот
     novice: bool = False  # одна из первых смен игрока
     luck_left: int = 0  # сколько разоблачений ещё сойдёт новичку с рук
+    gifts: list[str] = field(default_factory=list)  # подарки клиентов на полке, вместе с полученными в этой партии
     # Где живёт партия в мессенджере; нужно только transport-слою.
     message_id: int | None = None
     thread_id: int | None = None
@@ -313,11 +316,13 @@ class LiveSession:
     client: Participant | None = None
     joined_at: float | None = None
     sign: str = ""
-    phase: str = "waiting"  # waiting | intake | divine | sign | interpret | who | what | when | announce | verdict | done
+    hand: str = ""  # тип руки, который клиент выбрал как похожий на свою
+    phase: str = "waiting"  # waiting | intake | divine | sign | hand | interpret | who | what | when | announce | verdict | done
     intake: dict[str, str] = field(default_factory=dict)  # тайная анкета: строка → id ответа
     pending: Reading | None = None  # расклад, ждущий выбора толкования
     picks: dict[str, str] = field(default_factory=dict)  # предсказание мадам: слот → тег
     items: tuple[str, ...] = ()  # купленное мадам в лавке
+    gifts: tuple[str, ...] = ()  # подарки клиентов на полке мадам
     perks: Perks = NO_PERKS
     used_methods: list[str] = field(default_factory=list)
     confidence: str | None = None

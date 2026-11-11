@@ -43,3 +43,29 @@ def test_same_lines_give_the_same_shape_of_defect():
 def test_unknown_line_is_refused():
     with pytest.raises(ValueError):
         palm_art.render(("luck",))
+
+
+@pytest.mark.parametrize("hand", sorted(palm_art.HANDS))
+def test_every_hand_type_renders_and_looks_different(hand):
+    data = palm_art.render(("love",), hand)
+    assert data[:2] == b"\xff\xd8" and Image.open(io.BytesIO(data)).size == (palm_art.WIDTH if hasattr(palm_art, "WIDTH") else 738, 1100)
+    if hand != palm_art.PLAIN_HAND:
+        plain = Image.open(io.BytesIO(palm_art.render(("love",)))).convert("L").resize((64, 96)).tobytes()
+        other = Image.open(io.BytesIO(data)).convert("L").resize((64, 96)).tobytes()
+        assert sum(abs(a - b) for a, b in zip(plain, other)) > 20000, f"рука {hand} неотличима от обычной"
+
+
+def test_unknown_hand_is_refused():
+    with pytest.raises(ValueError):
+        palm_art.render((), "paw")
+
+
+@pytest.mark.parametrize("areas", [(), ("heart",), ("heart", "head"), ("head", "thumb"), ("heart", "thumb")], ids=lambda value: "+".join(value) or "none")
+def test_study_palm_renders_for_every_inspection(areas):
+    data = palm_art.render_study(areas)
+    assert data[:2] == b"\xff\xd8" and len(data) < 1_000_000
+
+
+def test_study_palm_refuses_unknown_areas():
+    with pytest.raises(ValueError):
+        palm_art.render_study(("elbow",))

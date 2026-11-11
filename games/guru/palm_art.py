@@ -3,6 +3,10 @@
 Рисунок строится кодом, поэтому линия выглядит ровно так, как сказано в толковании:
 сердце рваное, ум ломается посередине, судьба двоится, жизнь петляет. Telegram тут ни при чём:
 модуль получает ключи сфер и отдаёт JPEG.
+
+Рук несколько типов (``HANDS``): в живом приёме клиент выбирает ту, что похожа на его собственную.
+``render_study`` рисует ладонь для осмотра по областям: у неё свои приметы, а подсвечено то,
+что мадам уже осмотрела.
 """
 
 from __future__ import annotations
@@ -150,6 +154,50 @@ def _marked(key: str, curve: list[Point], rng: random.Random) -> list[list[Point
     return _looped(curve)
 
 
+def _forked(curve: Sequence[Point]) -> list[list[Point]]:
+    """Линия в конце расходится на две ветви."""
+    fork = 0.7
+    start = round(fork * (len(curve) - 1))
+    spread = lambda t: 26 * max(0.0, (t - fork) / (1 - fork)) ** 0.9
+    return [list(curve), _shifted(curve, spread)[start:]]
+
+
+# --- тип руки ---------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Hand:
+    """Пропорции руки: в живом приёме клиент выбирает ту, что похожа на его собственную."""
+
+    width: float = 1.0  # ширина ладони, доля от обычной
+    fingers: float = 1.0  # длина пальцев
+    girth: float = 1.0  # толщина пальцев
+    thumb: float = 0.0  # на сколько градусов отставлен большой палец
+
+
+PLAIN_HAND = "plain"
+HANDS = {
+    PLAIN_HAND: Hand(),
+    "earth": Hand(1.07, 0.82, 1.10),  # широкая ладонь, короткие пальцы
+    "air": Hand(1.05, 1.12, 0.98),  # широкая ладонь, длинные пальцы
+    "fire": Hand(0.92, 0.84, 1.00),  # узкая ладонь, короткие пальцы
+    "water": Hand(0.90, 1.14, 0.86),  # узкая ладонь, длинные тонкие пальцы
+}
+AXIS = 400  # вертикаль, от которой ладонь становится шире или уже
+
+
+def _fit(hand: Hand, points: Iterable[Point]) -> tuple[Point, ...]:
+    return tuple((AXIS + (x - AXIS) * hand.width, y) for x, y in points)
+
+
+def _fingers(hand: Hand) -> tuple[Finger, ...]:
+    result = []
+    for index, finger in enumerate(FINGERS):
+        thumb = index == len(FINGERS) - 1
+        result.append(Finger(_fit(hand, [finger.base])[0], finger.angle + (hand.thumb if thumb else 0.0),
+                             finger.length * hand.fingers, finger.base_radius * hand.girth, finger.tip_radius * hand.girth))
+    return tuple(result)
+
+
 def _finger_shape(finger: Finger) -> tuple[list[Point], Point, float]:
     angle = math.radians(finger.angle)
     ax, ay = math.sin(angle), -math.cos(angle)
@@ -165,11 +213,11 @@ def _finger_shape(finger: Finger) -> tuple[list[Point], Point, float]:
     return outline, tip, finger.base_radius
 
 
-def _hand_mask(size: tuple[int, int]) -> Image.Image:
+def _hand_mask(size: tuple[int, int], hand: Hand) -> Image.Image:
     mask = Image.new("L", size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.polygon(art.scaled(art.closed_curve(PALM)), fill=255)
-    for finger in FINGERS:
+    draw.polygon(art.scaled(art.closed_curve(_fit(hand, PALM))), fill=255)
+    for finger in _fingers(hand):
         outline, _, radius = _finger_shape(finger)
         draw.polygon(art.scaled(outline), fill=255)
         bx, by = finger.base
@@ -178,13 +226,14 @@ def _hand_mask(size: tuple[int, int]) -> Image.Image:
     return mask
 
 
-def _creases(draw: ImageDraw.ImageDraw) -> None:
+def _creases(draw: ImageDraw.ImageDraw, hand: Hand) -> None:
     """Сгибы фаланг: короткие дуги поперёк пальцев."""
-    for finger in FINGERS:
+    fingers = _fingers(hand)
+    for finger in fingers:
         angle = math.radians(finger.angle)
         ax, ay = math.sin(angle), -math.cos(angle)
         px, py = math.cos(angle), math.sin(angle)
-        marks = (0.30, 0.64) if finger is not FINGERS[-1] else (0.52,)
+        marks = (0.30, 0.64) if finger is not fingers[-1] else (0.52,)
         for share in marks:
             cx = finger.base[0] + ax * finger.length * share
             cy = finger.base[1] + ay * finger.length * share
@@ -204,59 +253,105 @@ def _stroke(draw: ImageDraw.ImageDraw, pieces: Iterable[Sequence[Point]], fill: 
             draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
 
 
-def _label(draw: ImageDraw.ImageDraw, line: Line, marked: bool) -> None:
+def _label(draw: ImageDraw.ImageDraw, line: Line, marked: bool, hand: Hand) -> None:
     color = GOLD if marked else LABEL_DIM
     x, y = line.label_at
     draw.text((x * SCALE, y * SCALE), line.label, font=art.font(22), fill=color, anchor=line.anchor)
-    draw.line(art.scaled(line.leader), fill=color, width=SCALE)
-    ax, ay = line.leader[1]
+    leader = (line.leader[0], _fit(hand, [line.leader[1]])[0])
+    draw.line(art.scaled(leader), fill=color, width=SCALE)
+    ax, ay = leader[1]
     dot = 3.5 * SCALE
     draw.ellipse((ax * SCALE - dot, ay * SCALE - dot, ax * SCALE + dot, ay * SCALE + dot), fill=color)
 
 
-def render(marked: Iterable[str] = ()) -> bytes:
-    """Нарисовать ладонь. ``marked`` — сферы из расклада: их линии получают изъян и подсветку."""
-    chosen = set(marked)
-    if unknown := chosen - set(LINES):
-        raise ValueError(f"неизвестные линии: {sorted(unknown)}")
-    rng = random.Random(7)
+Shape = tuple[list[list[Point]], bool]  # куски линии и подсвечена ли она
+
+
+def _paint(hand: Hand, shapes: Iterable[Shape], labels: Iterable[tuple[Line, bool]], rng: random.Random,
+           spots: Iterable[tuple[Point, float]] = ()) -> bytes:
+    """Рука с линиями и подписями. ``spots`` — подсвеченные места вне линий: (центр, радиус)."""
     image, picture, box = art.canvas(TITLE, rng)
     size = image.size
 
-    hand = _hand_mask(size)
+    mask = _hand_mask(size, hand)
     clip = Image.new("L", size, 0)
     ImageDraw.Draw(clip).rectangle(box, fill=255)
-    hand = ImageChops.multiply(hand, clip)
+    mask = ImageChops.multiply(mask, clip)
 
-    rim = hand.filter(ImageFilter.GaussianBlur(2.5 * SCALE)).point(lambda v: 255 if v > 26 else 0)
+    rim = mask.filter(ImageFilter.GaussianBlur(2.5 * SCALE)).point(lambda v: 255 if v > 26 else 0)
     picture.paste(OUTLINE, mask=ImageChops.multiply(rim, clip))
-    picture.paste(SKIN, mask=hand)
+    picture.paste(SKIN, mask=mask)
 
-    inner = ImageChops.multiply(hand, ImageChops.invert(hand.filter(ImageFilter.GaussianBlur(17 * SCALE)))).point(lambda v: min(255, v * 2))
+    inner = ImageChops.multiply(mask, ImageChops.invert(mask.filter(ImageFilter.GaussianBlur(17 * SCALE)))).point(lambda v: min(255, v * 2))
     picture.paste(SKIN_SHADOW, mask=inner)
     light = Image.new("L", size, 0)
     ImageDraw.Draw(light).ellipse((452 * SCALE, 650 * SCALE, 572 * SCALE, 850 * SCALE), fill=120)
     ImageDraw.Draw(light).ellipse((238 * SCALE, 610 * SCALE, 340 * SCALE, 860 * SCALE), fill=70)
-    picture.paste(SKIN_LIGHT, mask=ImageChops.multiply(light.filter(ImageFilter.GaussianBlur(32 * SCALE)), hand))
+    picture.paste(SKIN_LIGHT, mask=ImageChops.multiply(light.filter(ImageFilter.GaussianBlur(32 * SCALE)), mask))
 
     draw = ImageDraw.Draw(picture)
-    _creases(draw)
+    _creases(draw, hand)
     for minor in MINOR_LINES:
-        draw.line(art.scaled(art.catmull(minor, 12)), fill=CREASE, width=2 * SCALE, joint="curve")
+        draw.line(art.scaled(art.catmull(_fit(hand, minor), 12)), fill=CREASE, width=2 * SCALE, joint="curve")
 
+    shapes = list(shapes)
     glow = Image.new("L", size, 0)
     glow_draw = ImageDraw.Draw(glow)
-    shapes: dict[str, list[list[Point]]] = {}
-    for key, line in LINES.items():
-        curve = art.catmull(line.points)
-        shapes[key] = _marked(key, curve, rng) if key in chosen else [curve]
-        if key in chosen:
-            _stroke(glow_draw, shapes[key], 255, 11 * SCALE)
-    picture.paste(GLOW, mask=ImageChops.multiply(glow.filter(ImageFilter.GaussianBlur(6 * SCALE)), hand))
+    for pieces, marked in shapes:
+        if marked:
+            _stroke(glow_draw, pieces, 255, 11 * SCALE)
+    for (x, y), radius in spots:
+        glow_draw.ellipse(((x - radius) * SCALE, (y - radius) * SCALE, (x + radius) * SCALE, (y + radius) * SCALE), fill=200)
+    picture.paste(GLOW, mask=ImageChops.multiply(glow.filter(ImageFilter.GaussianBlur(6 * SCALE)), mask))
 
-    for key, pieces in shapes.items():
-        _stroke(draw, pieces, MARKED_INK if key in chosen else INK, (5 if key in chosen else 4) * SCALE)
-    for key, line in LINES.items():
-        _label(draw, line, key in chosen)
-
+    for pieces, marked in shapes:
+        _stroke(draw, pieces, MARKED_INK if marked else INK, (5 if marked else 4) * SCALE)
+    for line, marked in labels:
+        _label(draw, line, marked, hand)
     return art.finish(image, picture, box)
+
+
+def render(marked: Iterable[str] = (), hand: str = PLAIN_HAND) -> bytes:
+    """Нарисовать ладонь. ``marked`` — сферы из расклада: их линии получают изъян и подсветку. ``hand`` — тип руки."""
+    chosen = set(marked)
+    if unknown := chosen - set(LINES):
+        raise ValueError(f"неизвестные линии: {sorted(unknown)}")
+    if hand not in HANDS:
+        raise ValueError(f"неизвестный тип руки: {hand}")
+    shape = HANDS[hand]
+    rng = random.Random(7)
+    shapes: list[Shape] = []
+    for key, line in LINES.items():
+        curve = art.catmull(_fit(shape, line.points))
+        shapes.append((_marked(key, curve, rng) if key in chosen else [curve], key in chosen))
+    return _paint(shape, shapes, [(line, key in chosen) for key, line in LINES.items()], rng)
+
+
+# --- ладонь для осмотра по областям -----------------------------------------
+
+# У этой руки свои приметы: линия сердца в конце раздваивается, линия ума идёт рядом с ней,
+# но отдельно, а большой палец заметно отставлен. Мадам выбирает, какие области осмотреть.
+STUDY_HAND = Hand(thumb=13.0)
+STUDY_HEAD = ((522, 600), (450, 604), (372, 612), (298, 632), (246, 660))
+STUDY_GAP = ((556, 668), 46.0)  # промежуток между большим пальцем и ладонью
+AREAS = {
+    "heart": Line(HEART, "Сердце", (58, 592), ((132, 603), (229, 568))),
+    "head": Line(STUDY_HEAD, "Голова", (58, 722), ((130, 733), (252, 660))),
+    "thumb": Line((), "Большой палец", (684, 905), ((560, 893), (560, 706)), "ra"),
+}
+
+
+def render_study(inspected: Iterable[str] = ()) -> bytes:
+    """Ладонь, которую осматривают по областям. ``inspected`` — уже осмотренные: они подсвечены."""
+    seen = set(inspected)
+    if unknown := seen - set(AREAS):
+        raise ValueError(f"неизвестные области: {sorted(unknown)}")
+    rng = random.Random(7)
+    shapes: list[Shape] = [
+        (_forked(art.catmull(HEART)), "heart" in seen),
+        ([art.catmull(STUDY_HEAD)], "head" in seen),
+        ([art.catmull(LIFE)], False),
+        ([art.catmull(FATE)], False),
+    ]
+    spots = [STUDY_GAP] if "thumb" in seen else []
+    return _paint(STUDY_HAND, shapes, [(area, key in seen) for key, area in AREAS.items()], rng, spots)

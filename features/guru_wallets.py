@@ -1,7 +1,7 @@
 """Касса игроков салона «Гуру»: копится от партии к партии и может уйти в минус.
 
 Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ..., "spent": ..., "items": [...],
-"shifts": ..., "card_day": ..., "card_streak": ...}}}``.
+"gifts": [...], "endings": [...], "shifts": ..., "card_day": ..., "card_streak": ...}}}``.
 Касса своя в каждом чате: тренировки в личке с ботом не влияют на таблицу группы.
 Здесь же лежит то, что игрок копит помимо денег: счётчик смен и серия «карт дня».
 Файл читается на startup (``load_guru_wallets``), а не при импорте.
@@ -31,6 +31,8 @@ class Wallet:
     lost: int = 0
     spent: int = 0  # потрачено в лавке: это вложение, а не потеря
     items: list[str] = field(default_factory=list)  # купленное в лавке
+    gifts: list[str] = field(default_factory=list)  # подарки клиентов: по одному от каждого типа
+    endings: list[str] = field(default_factory=list)  # какие финалы сеанса игрок уже видел
     shifts: int = 0  # смены, в которых принят хотя бы один клиент
     card_day: str = ""  # день последней «карты дня» (ISO)
     card_streak: int = 0  # сколько дней подряд игрок тянет карту
@@ -73,6 +75,8 @@ class WalletBook:
             lost=lost,
             spent=int(entry.get("spent", 0)),
             items=[str(item) for item in entry.get("items", []) if isinstance(item, str)],
+            gifts=[str(gift) for gift in entry.get("gifts", []) if isinstance(gift, str)],
+            endings=[str(ending) for ending in entry.get("endings", []) if isinstance(ending, str)],
             shifts=int(entry.get("shifts", SEASONED_SHIFTS if earned or lost else 0)),
             card_day=str(entry.get("card_day", "")),
             card_streak=int(entry.get("card_streak", 0)),
@@ -105,6 +109,23 @@ class WalletBook:
         wallet.spent += price
         wallet.items.append(item)
         return True
+
+    def add_gift(self, chat_id: int | str, user_id: int | str, name: str, gift: str) -> bool:
+        """Поставить подарок клиента на полку; ``False``, если такой уже стоит."""
+        wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
+        if gift in wallet.gifts:
+            return False
+        wallet.name = name
+        wallet.gifts.append(gift)
+        return True
+
+    def see_ending(self, chat_id: int | str, user_id: int | str, name: str, ending: str) -> int:
+        """Запомнить увиденный финал сеанса; вернуть, сколько разных финалов игрок уже видел."""
+        wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
+        wallet.name = name
+        if ending not in wallet.endings:
+            wallet.endings.append(ending)
+        return len(wallet.endings)
 
     def count_shift(self, chat_id: int | str, user_id: int | str, name: str) -> int:
         """Засчитать смену; вернуть, сколько их теперь."""

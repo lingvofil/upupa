@@ -17,8 +17,13 @@ def make(wallet=0):
     return live.new_session(session_id="ab12cd34ef56", chat_id=-1, host_id=HOST, host_name="Зоя", now=0.0, wallet=wallet)
 
 
-def press(session, actor, action, rng=None, now=1.0):
-    return live.act(session, actor, "Гоша" if actor == CLIENT else "Зоя", action, rng or random.Random(1), now=now)
+def press(session, actor, action, rng=None, now=1.0, hand="earth"):
+    rng = rng or random.Random(1)
+    result = live.act(session, actor, "Гоша" if actor == CLIENT else "Зоя", action, rng, now=now)
+    if action == "m:palm" and hand:
+        # Ладонь ждёт, пока клиент выберет руку, похожую на свою.
+        result = live.act(session, CLIENT, "Гоша", f"h:{hand}", rng, now=now)
+    return result
 
 
 def joined(wallet=0):
@@ -237,7 +242,43 @@ def test_palm_brings_a_picture_of_the_offered_lines():
     session = seated()
     result = press(session, HOST, "m:palm", random.Random(5))
     omen = result.events[-1]
-    assert not omen.replace and "Ладонь" in omen.text and omen.data["drawing"] == ("palm", session.pending.offered)
+    assert not omen.replace and "Ладонь" in omen.text and omen.data["drawing"] == ("palm", session.pending.offered, "earth")
+    assert C.LIVE_HANDS["earth"][1] in omen.text and session.hand == "earth"
+
+
+def test_client_picks_a_hand_like_their_own():
+    session = seated()
+    asked = press(session, HOST, "m:palm", hand=None)
+    assert session.phase == "hand" and asked.events[-1].text == C.LIVE_HAND_ASK_LINE
+    view = live.build_view(session)
+    assert "Гоша, какая у тебя рука?" in view.prompt
+    assert [action.id for action in view.actions] == [*(f"h:{key}" for key in C.LIVE_HANDS), "anyhand"]
+    assert "Руку показывает клиент" in live.refusal(session, HOST, "h:water")
+    assert "запасной выход" in live.refusal(session, CLIENT, "anyhand")
+    assert live.refusal(session, CLIENT, "h:water") is None and live.refusal(session, HOST, "anyhand") is None
+    for row in textui.keyboard(view):
+        assert len(row) == 1 and len(row[0][1].encode()) <= 64, "длинные описания рук стоят по одному в ряд"
+
+    result = press(session, CLIENT, "h:water")
+    assert session.phase == "interpret" and session.hand == "water"
+    assert result.events[-1].data["drawing"] == ("palm", session.pending.offered, "water")
+    (name, data), = result.metrics
+    assert data["hand"] == "water" and data["hand_by"] == "client"
+
+
+def test_host_can_go_on_when_the_client_keeps_silent_about_the_hand():
+    session = seated()
+    press(session, HOST, "m:palm", hand=None)
+    result = press(session, HOST, "anyhand")
+    assert session.phase == "interpret" and session.hand == ""
+    assert result.events[-1].data["drawing"] == ("palm", session.pending.offered), "рука обычная"
+    assert result.metrics[0][1]["hand_by"] == "host"
+
+
+def test_every_hand_type_can_be_drawn():
+    from games.guru import palm_art
+
+    assert set(C.LIVE_HANDS) == set(palm_art.HANDS) - {palm_art.PLAIN_HAND}
 
 
 def asked_for_sign():

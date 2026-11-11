@@ -17,7 +17,7 @@ from features.lab import flags as lab_flags
 from features.lab.events import EventLog, read_events
 from features.lab.flags import ExperimentFlags
 from games.guru import content as C
-from games.guru import cert_art, daily, live, rules, salon, textui
+from games.guru import cert_art, daily, live, rules, salon, seance, textui
 from handlers import guru_salon
 
 CHAT = -100900
@@ -41,6 +41,7 @@ class FakeBot:
         self.actions = []
         self.albums = []
         self.photos = []
+        self.scenes = []  # рисунки салона: отдельно, чтобы не мешать проверкам ладони, ауры и бумаг
         self._next_id = 1000
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -53,8 +54,13 @@ class FakeBot:
         return [SimpleNamespace(photo=[SimpleNamespace(file_id=f"id{index}")]) for index in range(len(kwargs["media"]))]
 
     async def send_photo(self, **kwargs):
+        self._next_id += 1
+        photo = kwargs["photo"]
+        if getattr(photo, "filename", None) == "salon.jpg" or (isinstance(photo, str) and photo.startswith("salon")):
+            self.scenes.append(SimpleNamespace(message_id=self._next_id, **kwargs))
+            return SimpleNamespace(message_id=self._next_id, photo=[SimpleNamespace(file_id=f"salon{len(self.scenes)}")])
         self.photos.append(SimpleNamespace(**kwargs))
-        return SimpleNamespace(photo=[SimpleNamespace(file_id=f"palm{len(self.photos)}")])
+        return SimpleNamespace(message_id=self._next_id, photo=[SimpleNamespace(file_id=f"palm{len(self.photos)}")])
 
     async def edit_message_text(self, **kwargs):
         self.edits.append(SimpleNamespace(**kwargs))
@@ -119,6 +125,8 @@ def bot(monkeypatch, flags, clock, pauses):
     monkeypatch.setattr(guru_salon, "_rng", random.Random(3))
     monkeypatch.setattr(guru_salon, "_reports", {})
     monkeypatch.setattr(guru_salon, "_card_file_ids", {})
+    # Настоящий рисунок салона проверяет test_guru_salon_art: здесь он только замедлял бы каждую партию.
+    monkeypatch.setattr(guru_salon.salon_art, "render", lambda items, client, gifts: b"\xff\xd8salon")
     return FakeBot()
 
 
@@ -282,8 +290,10 @@ def test_buying_takes_money_and_updates_the_shop(bot, events, wallets):
     edit = bot.edits[-1]
     assert edit.message_id == 77 and "2 000 ₽" in edit.text and "✅" in edit.text
     assert all(b.callback_data != textui.buy_data("tea", PLAYER) for row in edit.reply_markup.inline_keyboard for b in row)
-    announcement = bot.sent[-1]
-    assert announcement.chat_id == CHAT and "Мадам Зоя купила чай с чабрецом" in announcement.text and "2 000 ₽" in announcement.text
+    (announcement,) = bot.scenes
+    assert announcement.chat_id == CHAT and announcement.photo.filename == "salon.jpg", "покупку видно: салон с новой вещью"
+    assert "Мадам Зоя купила чай с чабрецом" in announcement.caption and "2 000 ₽" in announcement.caption
+    assert bot.sent == [] and announcement.parse_mode is None
     record = events()[-1]
     assert record["event"] == "purchase" and record["data"]["item"] == "tea" and record["data"]["price"] == 3000
 
@@ -295,9 +305,20 @@ def test_failed_purchase_announcement_keeps_the_purchase(bot, wallets, monkeypat
         raise TelegramForbiddenError(method=None, message="muted")
 
     monkeypatch.setattr(bot, "send_message", refuse)
+    monkeypatch.setattr(bot, "send_photo", refuse)
     wallets.apply(CHAT, PLAYER, "Зоя", 5000)
     buy(bot, "tea")
     assert wallets.get(CHAT, PLAYER).items == ["tea"]
+
+
+def test_purchase_is_announced_by_text_when_the_salon_cannot_be_drawn(bot, wallets, monkeypatch):
+    def fail(items, client, gifts):
+        raise OSError("шрифт потерялся")
+
+    monkeypatch.setattr(guru_salon.salon_art, "render", fail)
+    wallets.apply(CHAT, PLAYER, "Зоя", 5000)
+    buy(bot, "tea")
+    assert bot.scenes == [] and "Мадам Зоя купила чай с чабрецом" in bot.sent[-1].text
 
 
 def test_refused_purchase_is_not_announced(bot, wallets):
@@ -306,7 +327,7 @@ def test_refused_purchase_is_not_announced(bot, wallets):
     assert bot.sent == []
 
 
-@pytest.mark.parametrize("text", ["гуру салон", "Гуру  САЛОНЫ"])
+@pytest.mark.parametrize("text", ["гуру салон", "Гуру  САЛОНЫ", "гуру мой салон"])
 def test_salon_command_matches(flags, text):
     assert _accepts(guru_salon.router.message, message(FakeBot(), text))
 
@@ -315,11 +336,53 @@ def test_salons_show_what_players_own_and_what_it_gives(bot, wallets):
     wallets.apply(CHAT, PLAYER, "Зоя", 9000)
     wallets.apply(CHAT, WATCHER, "Гоша", 500)
     buy(bot, "zina")
-    msg = message(bot, "гуру салон", user_id=WATCHER)
+    msg = message(bot, "гуру салоны", user_id=WATCHER)
     asyncio.run(guru_salon.show_salons(msg))
     text = bot.sent[-1].text
     assert "Зоя" in text and "🚪" in text and "скептиков вдвое меньше" in text
     assert "Твой салон" not in text, "своего салона у Гоши пока нет"
+
+
+def test_own_salon_is_a_picture_with_what_is_bought(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 9000)
+    buy(bot, "zina")
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    bot.scenes.clear()
+    asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
+    (picture,) = bot.scenes
+    assert "Салон мадам Зоя" in picture.caption and "Кабинет в подвале · куплено 1 из" in picture.caption
+    assert "скептиков вдвое меньше" in picture.caption and "🥒 банка огурцов" in picture.caption
+    assert labels_of(picture) == [textui.MENU_SHOP, textui.MENU_SALONS]
+    asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
+    assert bot.scenes[-1].photo == "salon1" and "salon:-:zina:granny" in guru_salon._card_file_ids, "тот же салон второй раз не рисуем"
+
+
+def test_empty_salon_is_still_shown(bot, wallets):
+    asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
+    (picture,) = bot.scenes
+    assert "Каморка за гаражами" in picture.caption and "гуру лавка" in picture.caption and "Полка для подарков пуста" in picture.caption
+
+
+def test_salon_command_in_reply_shows_that_players_salon(bot, wallets):
+    wallets.apply(CHAT, WATCHER, "Гоша", 9000)
+    buy(bot, "tea", user_id=WATCHER, owner=WATCHER)
+    bot.scenes.clear()
+    msg = message(bot, "гуру салон")
+    msg.reply_to_message = SimpleNamespace(from_user=user(WATCHER, "Гоша"))
+    asyncio.run(guru_salon.show_salon(msg))
+    (picture,) = bot.scenes
+    assert "Салон мадам Гоша" in picture.caption and "🫖" in picture.caption and "гуру лавка" not in picture.caption
+
+
+def test_salon_falls_back_to_text_without_pictures(bot, wallets, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(**kwargs):
+        raise TelegramForbiddenError(method=None, message="no photos")
+
+    monkeypatch.setattr(bot, "send_photo", refuse)
+    asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
+    assert "Салон мадам Зоя" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None
 
 
 def test_cannot_buy_twice_or_without_money(bot, wallets):
@@ -402,9 +465,12 @@ def test_start_sends_intro_and_story_in_beats(bot, events, pauses):
     session = current()
     assert session.host.user_id == PLAYER
     intro, *story = bot.sent
-    assert "открывает салон" in intro.text and "легенды салона" in intro.text
-    assert story[0].text.startswith("Клиент 1/3") and "🚪" in story[0].text
-    assert len(story) == 1 + len(session.client.story.told)
+    assert "открывает салон" in intro.text and "легенды салона" in intro.text and intro.parse_mode is None
+    (arrival,) = bot.scenes
+    assert arrival.photo.filename == "salon.jpg" and arrival.parse_mode == "HTML" and arrival.reply_markup is None
+    assert arrival.caption.startswith("<b>Клиент 1 из 3</b>") and "<i>🚪" in arrival.caption
+    assert len(story) == len(session.client.story.told), "клиент входит картинкой, рассказ идёт сообщениями"
+    assert all(m.parse_mode == "HTML" and m.text.startswith("<blockquote>—") for m in story), "слова клиента стоят цитатой"
     assert all(m.reply_markup is None for m in story[:-1]) and story[-1].reply_markup is not None
     assert session.message_id == story[-1].message_id and "Что уточнить" in story[-1].text
     told = len(session.client.story.told)
@@ -412,6 +478,39 @@ def test_start_sends_intro_and_story_in_beats(bot, events, pauses):
     assert bot.actions and bot.actions[0].action == "typing"
     (record,) = events()
     assert record["event"] == "start" and record["data"]["via"] == "command" and record["data"]["rules"] == rules.RULES_VERSION
+
+
+def test_client_arrives_by_text_when_the_salon_cannot_be_shown(bot, events, monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    async def refuse(**kwargs):
+        raise TelegramForbiddenError(method=None, message="no photos")
+
+    monkeypatch.setattr(bot, "send_photo", refuse)
+    start(bot)
+    _, arrival, *story = bot.sent
+    assert arrival.text.startswith("<b>Клиент 1 из 3</b>") and arrival.parse_mode == "HTML"
+    assert len(story) == len(current().client.story.told) and story[-1].reply_markup is not None
+
+
+def test_salon_picture_shows_what_the_player_owns(bot, events, wallets, monkeypatch):
+    drawn = []
+    monkeypatch.setattr(guru_salon.salon_art, "render", lambda items, client, gifts: drawn.append((items, client, gifts)) or b"\xff\xd8salon")
+    wallets.apply(CHAT, PLAYER, "Зоя", 9000)
+    buy(bot, "tea")
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    start(bot)
+    assert drawn[-1] == (("tea",), current().client.kind.key, ("granny",))
+
+
+def test_names_from_the_messenger_cannot_break_the_markup(bot, events):
+    asyncio.run(guru_salon.start_live_reception(message(bot, "гуру приём")))
+    query = callback(bot, textui.encode(live.build_view(current()), "join"), user_id=WATCHER, message_id=current().message_id)
+    query.from_user.first_name = "<b>Гоша</b> & Ко"
+    asyncio.run(guru_salon.salon_callback(query))
+    (sit,) = bot.scenes
+    assert "&lt;b&gt;Гоша&lt;/b&gt; &amp; Ко" in sit.caption and sit.parse_mode == "HTML"
+    assert sit.photo.filename == "salon.jpg", "в живом приёме тоже виден салон мадам"
 
 
 def test_question_removes_old_buttons_and_answers_after_a_pause(bot, events, pauses):
@@ -537,7 +636,7 @@ def test_first_upload_remembers_file_ids(bot, events):
     start(bot)
     press(bot, "c:stop")
     press(bot, "m:tarot")
-    assert len(guru_salon._card_file_ids) == 3
+    assert len([key for key in guru_salon._card_file_ids if not key.startswith("salon:")]) == 3
 
 
 def test_failed_album_does_not_stop_the_reading(bot, events, monkeypatch):
@@ -643,7 +742,7 @@ def test_next_client_arrives_on_button(bot, events):
     first_story = current().client.story.id
     press(bot, "next")
     assert current().client.story.id != first_story and current().client.phase == "clarify"
-    assert any(m.text.startswith("Клиент 2/3") for m in bot.sent)
+    assert [scene.caption.split("</b>")[0] for scene in bot.scenes] == ["<b>Клиент 1 из 3", "<b>Клиент 2 из 3"]
 
 
 def test_spectator_cannot_play_but_is_counted(bot, events):
@@ -1178,8 +1277,8 @@ def test_bare_guru_opens_the_menu_and_starts_nothing(bot, events):
     menu = open_menu(bot)
     assert current() is None, "меню не занимает чат"
     assert "Салон «Гуру»" in menu.text and "Живой приём — гадаешь человеку из чата" in menu.text and menu.reply_to_message_id == 1
-    assert labels_of(menu) == [textui.MENU_SHIFT, textui.MENU_LIVE, textui.MENU_CARD, textui.MENU_SHOP, textui.MENU_WALLET,
-                               textui.MENU_SALONS]
+    assert labels_of(menu) == [textui.MENU_SHIFT, textui.MENU_LIVE, textui.MENU_SEANCE, textui.MENU_CARD, textui.MENU_SHOP,
+                               textui.MENU_WALLET, textui.MENU_SALON]
     assert all(len(button.callback_data.encode()) <= 64 for row in menu.reply_markup.inline_keyboard for button in row)
     (record,) = events()
     assert record["event"] == "menu" and record["data"]["action"] == "open"
@@ -1215,6 +1314,8 @@ def test_menu_buttons_show_shop_wallets_and_salons(bot, wallets):
     assert "1. Зоя — 3 000 ₽" in bot.sent[-1].text
     press_menu(bot, "salons")
     assert len(bot.sent) == 3 and current() is None
+    press_menu(bot, "salon")
+    assert "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.sent) == 3
     assert all(sent.reply_to_message_id is None for sent in bot.sent), "по кнопке отвечать не на что"
 
 
@@ -1426,3 +1527,145 @@ def test_repeated_card_button_answers_with_a_toast_not_a_message(bot, events, wa
     assert "уже вытянута" in again.answers[0] and (len(bot.sent), len(bot.photos)) == (sent, photos)
     assert wallets.balance(CHAT, WATCHER) == daily.TIP_BASE
     assert events()[-1]["event"] == "daily_card" and events()[-1]["data"] == {"via": "button", "repeat": True}
+
+
+# --- подарки клиентов -------------------------------------------------------
+
+def test_gift_from_a_grateful_client_goes_to_the_shelf(bot, events, wallets):
+    start(bot)
+    session = current()
+    press(bot, "c:stop")
+    press(bot, "go")
+    for slot in ("who", "what", "when"):
+        press(bot, f"s:{slot}:{session.client.truth[slot]}")
+    archetype = session.client.kind.key
+    press(bot, "a:maybe")
+    assert wallets.get(CHAT, PLAYER).gifts == [archetype]
+    assert any("🎁" in sent.text and "1 из 10" in sent.text for sent in bot.sent)
+    assert "gift" in names(events())
+    press(bot, "next")
+    assert bot.scenes[-1].photo.filename == "salon.jpg" and current().gifts == [archetype], "подарок уже на полке у следующего клиента"
+
+
+# --- сеанс с Людмилой -------------------------------------------------------
+
+def start_seance(bot, user_id=PLAYER, chat_id=CHAT):
+    asyncio.run(guru_salon.start_seance(message(bot, "гуру сеанс", user_id=user_id, chat_id=chat_id)))
+    return current(chat_id)
+
+
+def press_seance(bot, *actions, user_id=PLAYER):
+    query = None
+    for action in actions:
+        session = current()
+        data = textui.encode(seance.build_view(session), action)
+        query = callback(bot, data, user_id=user_id, message_id=session.message_id)
+        asyncio.run(guru_salon.salon_callback(query))
+    return query
+
+
+@pytest.mark.parametrize("text", ["гуру сеанс", "Гуру  ЛЮДМИЛА"])
+def test_seance_command_matches(flags, text):
+    assert _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+def test_seance_starts_with_the_salon_and_a_long_story(bot, events):
+    session = start_seance(bot)
+    assert isinstance(session, seance.Seance) and session.host.user_id == PLAYER
+    intro, *story = bot.sent
+    assert "принимает одну клиентку" in intro.text and "Правильного ответа здесь нет" in intro.text
+    (arrival,) = bot.scenes
+    assert "Заходит Людмила" in arrival.caption and arrival.parse_mode == "HTML"
+    assert len(story) == len(seance.TOLD) and all(m.text.startswith("<blockquote>—") for m in story)
+    assert "Что дальше" in story[-1].text and session.message_id == story[-1].message_id
+    assert textui.MENU_SEANCE not in labels_of(story[-1]) and "📜 Что она сказала" in labels_of(story[-1])
+    (record,) = events()
+    assert record["event"] == "start" and record["data"]["mode"] == "seance"
+
+
+def test_seance_choices_change_the_message_in_place(bot, events):
+    start_seance(bot)
+    press_seance(bot, "tarot")
+    assert len(bot.albums[-1].media) == 3 and "Фарфоровая голова" in bot.sent[-1].text
+    sent, screen = len(bot.sent), bot.sent[-1].message_id
+    press_seance(bot, "p:ha", "r:t1")
+    assert len(bot.sent) == sent, "выбор связи и прочтения не плодит сообщений"
+    assert [edit.message_id for edit in bot.edits[-2:]] == [screen, screen] and "Как это сказать" in bot.edits[-1].text
+    press_seance(bot, "v:idea")
+    assert "версию" in bot.sent[-2].text and "<blockquote>— Стесняется?" in bot.sent[-1].text and "Что дальше" in bot.sent[-1].text
+
+
+def test_seance_palm_shows_the_hand_and_then_what_was_inspected(bot, events):
+    start_seance(bot)
+    press_seance(bot, "palm", "a:heart")
+    assert bot.photos[-1].photo.filename == "palm.jpg" and "расходится на две ветви" in bot.edits[-1].text
+    shown = len(bot.photos)
+    press_seance(bot, "a:head")
+    assert len(bot.photos) == shown + 1 and "Что ты в этом видишь" in bot.sent[-1].text
+    assert {"study:", "study:head+heart"} <= set(guru_salon._card_file_ids)
+
+
+def test_heard_lines_come_as_a_reply_and_keep_the_buttons(bot, events):
+    session = start_seance(bot)
+    step, screen = session.step, session.message_id
+    press_seance(bot, "heard")
+    review = bot.sent[-1]
+    assert review.text.startswith("📜 Что сказала Людмила") and review.reply_to_message_id == screen and review.parse_mode is None
+    assert current().step == step and bot.cleared == [], "кнопки под приёмом остались рабочими"
+    press_seance(bot, "ask")
+    assert "Что уточнить" in bot.edits[-1].text
+
+
+def test_seance_ends_with_an_epilogue_money_and_a_counter_of_endings(bot, events, wallets):
+    start_seance(bot)
+    press_seance(bot, "horo", "r:g2", "v:claim", "bye", "f:terms")
+    assert current() is None
+    final = bot.sent[-1]
+    assert "под яблоней" in final.text and "Финал: «Песня под яблоней»" in final.text and "открыто: 1 из 5" in final.text
+    assert labels_of(final)[0] == textui.MENU_SEANCE_AGAIN
+    wallet = wallets.get(CHAT, PLAYER)
+    assert wallet.balance > 0 and wallet.endings == ["terms"]
+    assert names(events())[-1] == "finish" and events()[-1]["data"]["ending"] == "terms"
+
+    press_menu(bot, "seance")
+    assert isinstance(current(), seance.Seance), "повторить можно сразу"
+    press_seance(bot, "bye", "f:own")
+    assert wallets.get(CHAT, PLAYER).endings == ["terms", "nothing"] and "открыто: 2 из 5" in bot.sent[-1].text
+
+
+def test_spectator_cannot_lead_the_seance(bot, events):
+    start_seance(bot)
+    query = press_seance(bot, "tarot", user_id=WATCHER)
+    assert "Это салон мадам Зоя" in query.answers[0] and current().phase == "hub"
+    assert names(events())[-1] == "spectator"
+
+
+def test_seance_times_out_and_can_be_stopped(bot, events, clock):
+    start_seance(bot)
+    clock.now += rules.IDLE_TIMEOUT_S + 1
+    assert asyncio.run(guru_salon.sweep_idle_salons(bot)) == 1 and current() is None
+    assert textui.SEANCE_ABANDON_NOTES["timeout"] in bot.sent[-1].text
+    assert events()[-1]["event"] == "abandon" and events()[-1]["data"]["mode"] == "seance"
+
+    start_seance(bot)
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп")))
+    assert current() is None and textui.SEANCE_ABANDON_NOTES["quit"] in bot.sent[-1].text
+
+
+def test_live_palm_waits_for_the_clients_hand(bot, events):
+    asyncio.run(guru_salon.start_live_reception(message(bot, "гуру приём")))
+
+    def press_live(action, user_id):
+        session = current()
+        query = callback(bot, textui.encode(live.build_view(session), action), user_id=user_id, message_id=session.message_id)
+        asyncio.run(guru_salon.salon_callback(query))
+        return query
+
+    press_live("join", WATCHER)
+    press_live("skip", PLAYER)
+    press_live("m:palm", PLAYER)
+    assert "какая у тебя рука" in bot.sent[-1].text and bot.photos == []
+    assert "Руку показывает клиент" in press_live("h:air", PLAYER).answers[0]
+    press_live("h:air", WATCHER)
+    assert bot.photos[-1].photo.filename == "palm.jpg" and C.LIVE_HANDS["air"][1] in bot.sent[-1].text
+    assert any(key.startswith("palm:") and key.endswith(":air") for key in guru_salon._card_file_ids)

@@ -5,16 +5,21 @@ Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Но
 ``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма), ``guru:livenew:<сессия>``
 (после живого приёма: нажавший открывает следующий), ``guru:buy:<вещь>:<владелец>`` (лавка),
 ``guru:menu:<пункт>`` (меню салона: кнопка работает для любого, кто её нажал).
+
+Сообщения партии (``bubbles``) размечены для Telegram как HTML: слова клиента стоят цитатой,
+то, что происходит в салоне, — курсивом. Весь чужой текст в них экранирован (``escape``).
+Остальные тексты модуля — обычные строки без разметки.
 """
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 
 from games.guru import content as C
 from games.guru import salon
-from games.guru.contract import DisplayEvent, LiveView, View
+from games.guru.contract import DisplayEvent, LiveView, SeanceView, View
 from games.guru.daily import DailyCard
 from games.guru.model import ClientReport
 from games.guru.rules import rub, signed_rub
@@ -29,7 +34,8 @@ _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 _BUY_RE = re.compile(r"^guru:buy:([a-z_0-9]+):(\d+)$")
 _MENU_RE = re.compile(r"^guru:menu:([a-z]+)$")
 
-ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2}
+ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2,
+             "hub": 2, "choice": 1, "area": 3, "hand": 1}
 
 OUTCOME_TITLES = {
     "hit": "Попадание",
@@ -67,8 +73,20 @@ MENU_CARD = "🃏 Карта дня"
 MENU_CARD_OWN = "🃏 Вытянуть свою карту"
 MENU_SHOP = "🏪 Лавка"
 MENU_WALLET = "💰 Кассы"
-MENU_SALONS = "🏠 Салоны"
-MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salons"})
+MENU_SALON = "🏠 Мой салон"
+MENU_SALONS = "👥 Салоны чата"
+MENU_SEANCE = "🕯 Сеанс: Людмила"
+MENU_SEANCE_AGAIN = "🕯 Принять Людмилу ещё раз"
+MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salon", "salons", "seance"})
+SEANCE_ABANDON_NOTES = {
+    "timeout": "💤 Мадам задумалась так надолго, что Людмила ушла сама. Денег никто не получил.",
+    "quit": "🚪 Сеанс прерван. Людмила уходит, прижимая к себе распечатку.",
+    "restart": "⚡ Во всём районе вырубили свет. Сеанс прерван.",
+    "send_failed": "📵 Связь с космосом потеряна. Сеанс прерван.",
+}
+ENDING_ICONS = {"scandal": "💥", "talk": "🍳", "terms": "🍎", "restaurant": "🎤", "nothing": "💨"}
+SPEECH_KINDS = frozenset({"tell", "answer"})  # слова клиента: цитатой
+ROOM_KINDS = frozenset({"arrive", "line", "status", "ritual", "react"})  # что происходит в салоне: курсивом
 LIVE_NEEDS_GROUP = "Живому приёму нужен второй человек. Открой его в группе."
 LIVE_WAIT_EXPIRED = "🕯 Никто не записался. Мадам гасит свечи."
 LIVE_ABANDON_NOTES = {
@@ -103,9 +121,10 @@ class Bubble:
     replace: bool = False
     cards: tuple[str, ...] = ()  # рисунки, которые показать перед текстом
     drawing: tuple[str, tuple[str, ...]] | None = None  # рисунок перед текстом: (ладонь или аура, ключи)
+    scene: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None  # салон с текстом в подписи: (клиент, вещи, подарки)
 
 
-def encode(view: View | LiveView, action_id: str) -> str:
+def encode(view: View | LiveView | SeanceView, action_id: str) -> str:
     return f"{CALLBACK_PREFIX}{view.session_id}:{view.step}:{action_id}"
 
 
@@ -154,7 +173,7 @@ def parse(data: str | None) -> Callback | None:
 
 # --- кнопки -----------------------------------------------------------------
 
-def keyboard(view: View | LiveView) -> Rows:
+def keyboard(view: View | LiveView | SeanceView) -> Rows:
     rows: Rows = []
     controls: list[tuple[str, str]] = []
     current_kind, row = None, []
@@ -196,9 +215,14 @@ def live_done_keyboard(view: LiveView) -> Rows:
 def menu_keyboard(group: bool = True) -> Rows:
     return [
         [(MENU_SHIFT, menu_data("shift")), *_live_door(group)],
-        [(MENU_CARD, menu_data("card"))],
-        [(MENU_SHOP, menu_data("shop")), (MENU_WALLET, menu_data("wallet")), (MENU_SALONS, menu_data("salons"))],
+        [(MENU_SEANCE, menu_data("seance")), (MENU_CARD, menu_data("card"))],
+        [(MENU_SHOP, menu_data("shop")), (MENU_WALLET, menu_data("wallet")), (MENU_SALON, menu_data("salon"))],
     ]
+
+
+def salon_keyboard() -> Rows:
+    """Под рисунком салона: кнопки работают для любого, кто нажал, и ведут в его лавку."""
+    return [[(MENU_SHOP, menu_data("shop")), (MENU_SALONS, menu_data("salons"))]]
 
 
 def daily_keyboard() -> Rows:
@@ -218,32 +242,50 @@ def _candles(view: View) -> str:
 
 def _header(view: View) -> str:
     number = view.client.number if view.client else len(view.outcomes)
-    return f"Клиент {number}/{view.clients_total} · Легенда {_candles(view)} · Серия 🔥{view.streak}"
+    return f"<b>Клиент {number} из {view.clients_total}</b> · Легенда {_candles(view)} · Серия 🔥{view.streak}"
+
+
+def escape(text: str) -> str:
+    """Обезвредить текст для HTML-сообщения: имена из мессенджера бывают любыми."""
+    return html.escape(text, quote=False)
+
+
+def _styled(event: DisplayEvent, view: View | LiveView) -> str:
+    """Реплика в разметке: речь клиента — цитатой, происходящее в салоне — курсивом."""
+    text = escape(event.text)
+    if event.kind in SPEECH_KINDS:
+        return f"<blockquote>{text}</blockquote>"
+    if event.kind in ROOM_KINDS:
+        text = f"<i>{text}</i>"
+    if event.kind == "arrive":
+        return f"{_header(view)}\n\n{text}"
+    return text
 
 
 def bubbles(events: tuple[DisplayEvent, ...], view: View | LiveView) -> list[Bubble]:
-    """Сгруппировать события в сообщения: новое начинается там, где есть пауза."""
+    """Сгруппировать события в сообщения с HTML-разметкой: новое начинается там, где есть пауза."""
     result: list[Bubble] = []
     parts: list[str] = []
     pause, spread, replace = 0.0, 0.0, False
     cards: tuple[str, ...] = ()
     drawing: tuple[str, tuple[str, ...]] | None = None
+    scene: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None
     for event in events:
         if parts and (event.pause > 0 or event.replace):
-            result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing))
+            result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing, scene))
             parts = []
         if not parts:
             pause, spread, replace = event.pause, event.spread, event.replace
             cards = tuple(event.data.get("cards", ()))
             drawing = event.data.get("drawing")
-        text = f"{_header(view)}\n\n{event.text}" if event.kind == "arrive" else event.text
-        parts.append(text)
+            scene = event.data.get("scene")
+        parts.append(_styled(event, view))
     if parts:
-        result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing))
+        result.append(Bubble("\n".join(parts), pause, spread, replace, cards, drawing, scene))
     return result
 
 
-def prompt_text(view: View | LiveView) -> str:
+def prompt_text(view: View | LiveView | SeanceView) -> str:
     return f"👉 {view.prompt}" if view.prompt else ""
 
 
@@ -393,7 +435,8 @@ def render_menu(name: str, own: object, group: bool = True) -> str:
         lines.append("🤝 Живой приём — гадаешь человеку из чата, приговор выносит он.")
     else:
         lines.append("🤝 Живой приём — в группе: там гадают настоящим людям.")
-    lines += ["🃏 Карта дня — одна в сутки, с чаевыми в кассу.", ""]
+    lines += ["🕯 Сеанс — одна клиентка и долгий приём: сама толкуешь знаки и решаешь, что сказать.",
+              "🃏 Карта дня — одна в сутки, с чаевыми в кассу.", ""]
     lines.append(f"💰 Касса мадам {name}: {rub(own.balance)}" + (f" · {salon.describe(own.items)}" if own.items else ""))
     return "\n".join(lines)
 
@@ -423,6 +466,42 @@ def render_daily_repeat(name: str, daily: DailyCard) -> str:
 def render_daily_toast(daily: DailyCard) -> str:
     """Повтор по кнопке: всплывающая строка, а не сообщение в чат. У мессенджера на неё 200 знаков."""
     return f"Твоя карта дня уже вытянута: «{daily.card.name}». Новая будет завтра."
+
+
+# --- сеанс ------------------------------------------------------------------
+
+def render_seance_intro(view: SeanceView) -> str:
+    return "\n".join((
+        f"🕯 Мадам {view.host} принимает одну клиентку. Торопиться некуда.",
+        "",
+        "Правильного ответа здесь нет. Слушай, связывай знаки с её словами и решай, что сказать и как: версией или утверждением. "
+        "От твоих слов зависит, как она поступит. Гадать не обязательно.",
+        "",
+        "Кнопки жмёт только мадам. 15 минут без хода — сеанс прерывается.",
+    ))
+
+
+def render_seance(view: SeanceView) -> tuple[str, Rows]:
+    """Текущий экран сеанса: то, что лежит на столе, вопрос к мадам и кнопки."""
+    prompt = prompt_text(view)
+    return (f"{view.screen}\n\n{prompt}" if view.screen else prompt), keyboard(view)
+
+
+def render_seance_result(view: SeanceView, seen: int, total: int) -> str:
+    icon = ENDING_ICONS.get(view.ending or "", "🕯")
+    return "\n".join((
+        f"{icon} Финал: «{view.ending_title}» · {signed_rub(view.fee)}",
+        f"💰 В кассе мадам {view.host}: {rub(view.wallet)}",
+        f"Финалов этой истории открыто: {seen} из {total}. Скажешь иначе — суббота выйдет другой.",
+    ))
+
+
+def seance_done_keyboard() -> Rows:
+    return [[(MENU_SEANCE_AGAIN, menu_data("seance"))], [(MENU_SHIFT, menu_data("shift")), (MENU_CARD, menu_data("card"))]]
+
+
+def render_seance_abandoned(reason: str) -> str:
+    return SEANCE_ABANDON_NOTES.get(reason, "Сеанс прерван.")
 
 
 # --- живой приём ------------------------------------------------------------
@@ -478,18 +557,42 @@ def render_wallets(top: list, own: object) -> str:
     return "\n".join(lines)
 
 
+def _gifts_of(player: object) -> tuple:
+    return salon.owned_gifts(getattr(player, "gifts", ()))
+
+
 def render_salons(players: list, own: object) -> str:
-    """Что стоит в салонах этого чата и что приносит. ``players`` и ``own`` — записи с полями name и items."""
+    """Что стоит в салонах этого чата и что приносит. ``players`` и ``own`` — записи с полями name, items и gifts."""
     equipped = [player for player in players if player.items]
     if not equipped:
         return "🏠 Пока никто ничего не купил. Лавка: «гуру лавка»."
     lines = ["🏠 Салоны мадам"]
     for player in equipped:
-        lines += ["", f"{player.name} · {salon.rank(len(player.items))} · {salon.icons(player.items)}", " · ".join(salon.effects(player.items))]
+        gifts = _gifts_of(player)
+        shelf = f" · 🎁 {len(gifts)}" if gifts else ""
+        lines += ["", f"{player.name} · {salon.rank(len(player.items))} · {salon.icons(player.items)}{shelf}", " · ".join(salon.effects(player.items))]
     if own.items:
         lines += ["", "Твой салон:"]
         lines += [f"{item.emoji} {item.name} — {item.note}" for item in salon.owned_items(own.items)]
+    lines += ["", "Заглянуть в салон: «гуру салон». В чужой — той же командой в ответ на сообщение мадам."]
     return "\n".join(lines)[:MESSAGE_LIMIT]
+
+
+def render_salon_card(name: str, own: object, visitor: bool = False) -> str:
+    """Подпись под рисунком салона: звание, что куплено, что это даёт и какие подарки стоят на полке."""
+    items, gifts = salon.owned_items(own.items), _gifts_of(own)
+    lines = [f"🏠 Салон мадам {name}", f"{salon.rank(len(items))} · куплено {len(items)} из {len(salon.ITEMS)}"]
+    if items:
+        lines += ["", salon.icons(own.items), "Что даёт: " + " · ".join(salon.effects(own.items)) + "."]
+    elif visitor:
+        lines += ["", "Пока тут только стол, стул и плафон от люстры."]
+    else:
+        lines += ["", "Пока тут только стол, стул и плафон от люстры. Обставить: «гуру лавка»."]
+    if gifts:
+        lines += ["", f"🎁 Подарки клиентов, {len(gifts)} из {len(salon.GIFTS)}: " + ", ".join(f"{gift.emoji} {gift.name}" for gift in gifts) + "."]
+    else:
+        lines += ["", "🎁 Полка для подарков пуста: их оставляют клиенты, которым сбылось."]
+    return "\n".join(lines)
 
 
 # --- лавка ------------------------------------------------------------------

@@ -235,6 +235,7 @@ def new_session(
     wallet: int = 0,
     items: tuple[str, ...] = (),
     novice: bool = False,
+    gifts: tuple[str, ...] = (),
 ) -> Session:
     perks = salon.perks_of(items)
     # Заданный план — воспроизводимый сценарий, случайные события ему не нужны.
@@ -263,13 +264,15 @@ def new_session(
         forgive_left=perks.forgive,
         novice=novice,
         luck_left=NOVICE_LUCK if novice else 0,
+        gifts=[gift.key for gift in salon.owned_gifts(gifts)],
     )
 
 
 def arrival_events(session: Session) -> tuple[DisplayEvent, ...]:
     """Клиент заходит и рассказывает свою версию."""
     client = session.client
-    events = [DisplayEvent("arrive", client.render(client.story.arrival))]
+    scene = {"scene": (client.kind.key, tuple(session.items), tuple(session.gifts))}
+    events = [DisplayEvent("arrive", client.render(client.story.arrival), data=scene)]
     events += [DisplayEvent("line", client.render(line)) for line in (client.ritual, client.event.line if client.event else None) if line]
     events += [
         DisplayEvent("tell", client.render(part), pause=PACE_TELL[0], spread=PACE_TELL[1])
@@ -767,6 +770,17 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
             "client_no": session.client_no, "before": streak_before, "after": session.streak, "bonus": bonus,
         }))
 
+    gift = salon.GIFTS.get(kind.key) if outcome == "hit" and kind.key not in session.gifts else None
+    if gift is not None:
+        # Подарок — память о попадании: в правилах ничего не меняет, только встаёт на полку.
+        session.gifts.append(gift.key)
+        turn.show("line", salon.GIFT_LINE.format(line=gift.line.format(name=client.name), count=len(session.gifts), total=len(salon.GIFTS)))
+        if len(session.gifts) == len(salon.GIFTS):
+            turn.show("line", salon.GIFTS_COMPLETE_LINE)
+        turn.metrics.append(("gift", {
+            "client_no": session.client_no, "archetype": kind.key, "story": story.id, "shelf": len(session.gifts),
+        }))
+
     legend_before = session.legend
     if forgiven:
         turn.show("line", C.CAT_FORGIVE_LINE)
@@ -819,6 +833,7 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
         legend_after=session.legend,
         duration_s=round(max(0.0, now - client.started_at), 1),
         event=client.event.key if client.event else None,
+        gift=gift.key if gift is not None else None,
     )
     client.report = report
     client.phase = "done"

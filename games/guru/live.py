@@ -33,7 +33,7 @@ READING_TAGS = {"who": C.WHO, "what": C.WHAT, "sphere": C.SPHERES, "emotion": C.
 
 
 def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0,
-                items: tuple[str, ...] = ()) -> LiveSession:
+                items: tuple[str, ...] = (), gifts: tuple[str, ...] = ()) -> LiveSession:
     perks = salon.perks_of(items)
     return LiveSession(
         session_id=session_id,
@@ -45,6 +45,7 @@ def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, 
         wallet_start=wallet,
         readings_left=min(LIVE_READINGS + perks.readings, len(C.METHODS)),
         items=tuple(items),
+        gifts=tuple(gift.key for gift in salon.owned_gifts(gifts)),
         perks=perks,
     )
 
@@ -73,6 +74,9 @@ def available_actions(session: LiveSession) -> tuple[Action, ...]:
     if phase == "sign":
         signs = [Action(f"z:{key}", f"{C.ZODIAC[sign][0]} {sign}", "sign") for key, sign in C.ZODIAC_IDS.items()]
         return (*signs, Action("stars", C.LIVE_SIGN_SKIP_LABEL, "control"))
+    if phase == "hand":
+        hands = [Action(f"h:{key}", label, "hand") for key, (label, _) in C.LIVE_HANDS.items()]
+        return (*hands, Action("anyhand", C.LIVE_HAND_SKIP_LABEL, "control"))
     if phase == "interpret":
         slot = session.pending.slot
         return tuple(Action(f"i:{tag}", rules.interpretation(slot, tag).button, "interpretation")
@@ -93,8 +97,10 @@ def refusal(session: LiveSession, actor_id: int, action_id: str) -> str | None:
         return "Самой себе гадать нельзя: дождись клиента." if actor_id == session.host.user_id else None
     if not session.is_participant(actor_id):
         return C.SPECTATOR_LINE.format(name=session.host.name)
-    if head in ("stars", "skip") and actor_id != session.host.user_id:
+    if head in ("stars", "skip", "anyhand") and actor_id != session.host.user_id:
         return "Это запасной выход для мадам. А ты жми свой вариант."
+    if head == "h" and actor_id == session.host.user_id:
+        return "Руку показывает клиент. Мадам пока протирает лупу."
     if head == "z" and actor_id == session.host.user_id:
         return "Знак называет клиент. Мадам делает вид, что и так его знает."
     if head == "q" and actor_id == session.host.user_id:
@@ -117,14 +123,15 @@ def _join(session: LiveSession, actor_id: int, actor_name: str, rng: random.Rand
     session.joined_at = now
     session.phase = "intake"
     session.idle_limit = rules.IDLE_TIMEOUT_S
-    events.append(_event("line", rng.choice(C.LIVE_SIT_LINES).format(client=actor_name)))
+    events.append(_event("line", rng.choice(C.LIVE_SIT_LINES).format(client=actor_name),
+                         data={"scene": (salon.GUEST, session.items, session.gifts)}))
     events.append(_event("line", C.LIVE_INTAKE_OPEN_LINE, rules.PACE_REACTION))
     metrics.append(("action", {"kind": "join", "mode": "live", "wait_s": round(max(0.0, now - session.started_at), 1)}))
 
 
 def _open_seance(session: LiveSession, events: list[DisplayEvent]) -> None:
     session.phase = "divine"
-    events.append(_event("tell", C.LIVE_TELL_LINE.format(client=session.client.name), rules.PACE_REACTION))
+    events.append(_event("hint", C.LIVE_TELL_LINE.format(client=session.client.name), rules.PACE_REACTION))
 
 
 def _answer_intake(session: LiveSession, key: str, events: list[DisplayEvent],
@@ -186,6 +193,11 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
         session.phase = "sign"
         events.append(_event("line", C.LIVE_SIGN_ASK_LINE))
         return
+    if method.key == "palm":
+        # Ладонь продолжится, когда клиент выберет руку, похожую на свою (или мадам устанет ждать).
+        session.phase = "hand"
+        events.append(_event("line", C.LIVE_HAND_ASK_LINE))
+        return
     reading = session.pending = _deal(session, method, rng)
     session.phase = "interpret"
     events.append(_event("ritual", rng.choice(method.rituals)))
@@ -193,14 +205,28 @@ def _read(session: LiveSession, method_key: str, rng: random.Random, events: lis
         cards = rules.deal_spread(reading.offered, rng)
         events.append(_event("omen", rules.spread_text(cards), rules.PACE_RITUAL,
                              data={"cards": [card.art for card in cards]}))
-    elif method.key == "palm":
-        omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
-        events.append(_event("omen", C.LIVE_PALM_LINE.format(omens=omens.capitalize()), rules.PACE_RITUAL,
-                             data={"drawing": ("palm", reading.offered)}))
     else:
         events.append(_event("omen", rules.aura_text(reading.offered, rng), rules.PACE_RITUAL,
                              data={"drawing": ("aura", reading.offered)}))
     _log_reading(reading, metrics)
+
+
+def _palm(session: LiveSession, hand: str | None, rng: random.Random, events: list[DisplayEvent],
+          metrics: list[tuple[str, dict[str, Any]]]) -> None:
+    """Ладонь того типа, который клиент выбрал как свой. ``None`` — клиент промолчал: рука обычная."""
+    method = C.METHODS["palm"]
+    session.hand = hand or ""
+    reading = session.pending = _deal(session, method, rng)
+    session.phase = "interpret"
+    omens = ", ".join(C.SPHERES[tag].omen for tag in reading.offered)
+    text = C.LIVE_PALM_LINE.format(omens=omens.capitalize())
+    drawing: tuple = ("palm", reading.offered)
+    if hand:
+        text = f"{C.LIVE_HANDS[hand][1]}\n{text}"
+        drawing = ("palm", reading.offered, hand)
+    events.append(_event("ritual", rng.choice(method.rituals)))
+    events.append(_event("omen", text, rules.PACE_RITUAL, data={"drawing": drawing}))
+    _log_reading(reading, metrics, hand=hand, hand_by="client" if hand else "host")
 
 
 def _horoscope(session: LiveSession, sign: str, by_stars: bool, rng: random.Random, events: list[DisplayEvent],
@@ -304,6 +330,10 @@ def act(session: LiveSession, actor_id: int, actor_name: str, action_id: str, rn
         _read(session, rest, rng, events, metrics)
     elif head == "z":
         _horoscope(session, C.ZODIAC_IDS[rest], False, rng, events, metrics)
+    elif head == "h":
+        _palm(session, rest, rng, events, metrics)
+    elif head == "anyhand":
+        _palm(session, None, rng, events, metrics)
     elif head == "stars":
         _horoscope(session, rng.choice(C.ZODIAC_SIGNS), True, rng, events, metrics)
     elif head == "i":
@@ -336,6 +366,8 @@ def _prompt(session: LiveSession) -> str:
         return "Мадам, раскладов больше нет, пора к предсказанию."
     if phase == "sign" and session.client is not None:
         return f"{session.client.name}, какой у тебя знак?"
+    if phase == "hand" and session.client is not None:
+        return f"{session.client.name}, какая у тебя рука? Выбери самую похожую."
     if phase == "verdict" and session.client is not None:
         return f"{session.client.name}, твой приговор?"
     if phase in rules.PROMPTS:
