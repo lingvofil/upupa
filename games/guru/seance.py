@@ -27,6 +27,7 @@ from typing import Any, Mapping
 
 from games.guru import rules, salon
 from games.guru.contract import Action, DisplayEvent, SeanceResult, SeanceView
+from games.guru.dialog import Dialog
 from games.guru.model import Participant
 
 CLIENT = "Людмила"
@@ -332,6 +333,7 @@ class Seance:
     finish_reason: str | None = None
     message_id: int | None = None
     thread_id: int | None = None
+    dialog: Dialog = field(default_factory=Dialog)
 
     def is_participant(self, user_id: int) -> bool:
         return self.host.user_id == user_id
