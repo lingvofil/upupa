@@ -55,8 +55,11 @@ def parse_lab_command(text: str | None) -> LabCommand | None:
 def _status_text(flags: ExperimentFlags, chat_id: int | str) -> str:
     lines = ["Лаба в этом чате:"]
     for experiment in EXPERIMENTS:
-        mark = "✅" if flags.is_enabled(chat_id, experiment.key) else "❌"
         aliases = f" ({', '.join(experiment.aliases)})" if experiment.aliases else ""
+        if experiment.public:
+            lines.append(f"🌐 {experiment.key}{aliases} — {experiment.title} (открыто всем чатам)")
+            continue
+        mark = "✅" if flags.is_enabled(chat_id, experiment.key) else "❌"
         lines.append(f"{mark} {experiment.key}{aliases} — {experiment.title}")
     lines.append("")
     lines.append("лаба вкл <имя> · лаба выкл <имя> · лаба выкл все")
@@ -80,6 +83,9 @@ def apply_lab_command(flags: ExperimentFlags, chat_id: int | str, command: LabCo
     if experiment is None:
         known = ", ".join(experiment.key for experiment in EXPERIMENTS)
         return LabResult(f"Не знаю эксперимент «{command.target}». Есть: {known}.")
+
+    if experiment.public:
+        return LabResult(f"{experiment.title}: открыто во всех чатах, флаг не нужен.")
 
     if command.action == "enable":
         if not flags.enable(chat_id, experiment.key):
