@@ -315,7 +315,10 @@ def bubbles(events: tuple[DisplayEvent, ...], view: View | LiveView) -> list[Bub
 
 
 def prompt_text(view: View | LiveView | SeanceView) -> str:
-    return f"👉 {view.prompt}" if view.prompt else ""
+    prompt = f"👉 {view.prompt}" if view.prompt else ""
+    if isinstance(view, LiveView) and view.screen:
+        return f"{view.screen}\n\n{prompt}" if prompt else view.screen
+    return prompt
 
 
 def with_prompt(text: str, view: View) -> str:
@@ -540,8 +543,8 @@ def render_live_open(view: LiveView) -> str:
     return "\n".join((
         f"🔮 Мадам {view.host} принимает живых людей.",
         "",
-        "Клиент тайно заполняет анкету. Мадам гадает вслепую, выбирает толкования и делает предсказание.",
-        "В конце клиент решает, было ли это ясновидением, и анкета открывается. От приговора зависят деньги мадам.",
+        "Клиент тайно заполняет анкету и рассказывает в чате. Мадам связывает карты, осматривает ладонь или выбирает путь к сроку.",
+        "Трактовку можно сказать версией, утверждением или оставить при себе. Клиент отвечает и оценивает весь сеанс. От приговора зависят деньги мадам.",
         "",
         "Кто первым нажмёт кнопку, тот и клиент.",
     ))
@@ -556,8 +559,8 @@ def render_intake(view: LiveView) -> tuple[str, Rows | None]:
 
 
 def render_live_constructor(view: LiveView) -> tuple[str, Rows]:
-    """Сборка предсказания мадам: одно сообщение, которое меняется по шагам."""
-    return f"🔮 Предсказание\n{view.preview}\n\n{prompt_text(view)}", keyboard(view)
+    """Напутствие и всё произнесённое за сеанс, без тайной анкеты."""
+    return f"🔮 Напутствие\n\n{prompt_text(view)}", keyboard(view)
 
 
 def render_live_result(view: LiveView) -> str:
@@ -636,7 +639,9 @@ def render_shop(name: str, balance: int, owned: list[str]) -> str:
             if item.group == group:
                 state = "✅" if item.key in owned else rub(item.price)
                 lines.append(f"{item.emoji} {item.name} · {state} · {item.note}")
-    lines += ["", "Покупка остаётся навсегда и работает со следующей партии."]
+    lines += ["", "Покупка остаётся навсегда и работает со следующей партии.",
+              "В живом приёме работают надбавка к гонорару, вопрос от тетрадки и повтор гадания от шара. "
+              "Точность инструментов относится к одиночной смене; тайную анкету они не раскрывают."]
     return "\n".join(lines)[:MESSAGE_LIMIT]
 
 

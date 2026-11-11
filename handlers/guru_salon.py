@@ -896,7 +896,7 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
         await _panel(bot, session, [textui.escape(text)], rows)
         if view.phase == "intake":
             return
-    elif action.startswith("s:"):
+    elif action.startswith("f:"):
         text, rows = textui.render_live_constructor(view)
         await _panel(bot, session, [textui.escape(text)], rows)
         return

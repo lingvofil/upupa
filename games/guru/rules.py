@@ -48,7 +48,7 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 9
+RULES_VERSION = 10
 
 ARCHETYPE_ORDER = (
     "skeptic", "jealous", "businessman", "romantic", "granny", "blogger", "conspiracy", "student", "tycoon", "desperate",

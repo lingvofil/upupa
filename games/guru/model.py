@@ -319,10 +319,19 @@ class LiveSession:
     joined_at: float | None = None
     sign: str = ""
     hand: str = ""  # тип руки, который клиент выбрал как похожий на свою
-    phase: str = "waiting"  # waiting | intake | divine | sign | hand | interpret | who | what | when | announce | verdict | done
+    phase: str = "waiting"
     intake: dict[str, str] = field(default_factory=dict)  # тайная анкета: строка → id ответа
-    pending: Reading | None = None  # расклад, ждущий выбора толкования
-    picks: dict[str, str] = field(default_factory=dict)  # предсказание мадам: слот → тег
+    pending: str | None = None  # прочтение, ждущее выбора способа произнесения
+    picks: dict[str, str] = field(default_factory=dict)  # выбранное напутствие
+    method: str = ""
+    options: tuple[str, ...] = ()
+    areas: list[str] = field(default_factory=list)
+    asked: list[str] = field(default_factory=list)
+    question: str = ""
+    horizon: str = ""
+    voiced: list[tuple[str, str]] = field(default_factory=list)  # код прочтения, версия или утверждение
+    drafts: list[str] = field(default_factory=list)
+    reactions: list[tuple[str, str]] = field(default_factory=list)  # код прочтения, ответ клиента
     items: tuple[str, ...] = ()  # купленное мадам в лавке
     gifts: tuple[str, ...] = ()  # подарки клиентов на полке мадам
     perks: Perks = NO_PERKS

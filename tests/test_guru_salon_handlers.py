@@ -1002,13 +1002,15 @@ def seat_live(bot, user_id=WATCHER):
 
 
 def voice_live(bot):
-    press_live(bot, f"i:{current().pending.offered[0]}", PLAYER)
+    press_live(bot, "pair:ha", PLAYER)
+    press_live(bot, "r:t1", PLAYER)
+    press_live(bot, "say:idea", PLAYER)
+    press_live(bot, "feedback:yes", WATCHER)
 
 
 def predict_live(bot):
     press_live(bot, "go", PLAYER)
-    for action in ("s:who:tax", "s:what:lose", "s:when:week"):
-        press_live(bot, action, PLAYER)
+    press_live(bot, "f:terms", PLAYER)
 
 
 @pytest.mark.parametrize("text", ["гуру приём", "Гуру  ПРИЕМ"])
@@ -1049,13 +1051,14 @@ def test_live_full_reception(bot, events, wallets, pauses):
     assert "пиши прямо в чат" in bot.sent[-1].text
 
     press_live(bot, "m:tarot", PLAYER)
-    assert bot.photos[-1].photo.filename == "spread.jpg" and "что озвучить" in bot.sent[-1].text
+    assert bot.photos[-1].photo.filename == "spread.jpg" and "две карты" in bot.sent[-1].text
     voice_live(bot)
-    assert "— Мадам: «" in bot.sent[-1].text and "что дальше" in bot.sent[-1].text
+    assert any("— Мадам: «" in line for line in session.dialog.history)
+    assert "Это про меня" in bot.sent[-1].text and "что дальше" in bot.sent[-1].text
 
     predict_live(bot)
     press_live(bot, "a:see", PLAYER)
-    assert "Я отчётливо вижу: до конца недели налоговая" in bot.sent[-1].text and "приговор" in bot.sent[-1].text
+    assert "назовите свои условия" in bot.sent[-1].text and "приговор" in bot.sent[-1].text
     press_live(bot, "v:hit", WATCHER)
 
     assert current() is None and wallets.balance(CHAT, PLAYER) == 100 + 1500
@@ -1100,22 +1103,18 @@ def test_live_intake_stays_secret_in_one_message(bot, events):
     assert [r["data"]["slot"] for r in events() if r["data"].get("kind") == "intake"] == ["sphere", "who", "emotion"]
 
 
-def test_live_prediction_is_built_in_one_message(bot, events):
+def test_live_farewell_is_built_in_one_message(bot, events):
     start_live(bot)
     seat_live(bot)
     press_live(bot, "go", PLAYER)
     built = bot.sent[-1]
-    assert "Предсказание" in built.text and "Мадам, кто?" in built.text and current().message_id == built.message_id
-
+    assert "Напутствие" in built.text and "что сказать на прощание" in built.text and current().message_id == built.message_id
     sent_before = len(bot.sent)
-    assert "Реквизит" in press_live(bot, "s:who:tax", WATCHER).answers[0] and current().phase == "who"
-    press_live(bot, "s:who:tax", PLAYER)
-    press_live(bot, "s:what:lose", PLAYER)
-    press_live(bot, "s:when:week", PLAYER)
-
+    assert "Реквизит" in press_live(bot, "f:terms", WATCHER).answers[0] and current().phase == "farewell"
+    press_live(bot, "f:terms", PLAYER)
     assert len(bot.sent) == sent_before and bot.edits[-1].message_id == built.message_id
-    assert "«До конца недели налоговая потеряет крупную сумму»" in bot.edits[-1].text
-    assert [len(row) for row in bot.edits[-1].reply_markup.inline_keyboard] == [1, 1, 1, 1, 1]
+    assert "Назовите свои условия" in bot.edits[-1].text and "как объявить" in bot.edits[-1].text
+
 
 
 def test_live_silent_client_does_not_block_the_intake(bot, events):
@@ -1146,8 +1145,8 @@ def test_live_horoscope_lets_only_the_client_pick_a_sign(bot, events):
 
     press_live(bot, "z:leo", WATCHER)
     session = current()
-    assert session.sign == "Лев" and session.phase == "interpret" and session.message_id == ask.message_id and bot.cleared == []
-    assert "♌ Лев" in bot.edits[-1].text and "что озвучить" in bot.edits[-1].text
+    assert session.sign == "Лев" and session.phase == "horizon" and session.message_id == ask.message_id and bot.cleared == []
+    assert "♌ Лев" in bot.edits[-1].text and "к какому сроку" in bot.edits[-1].text
     assert bot.edits[-1].reply_markup is not None, "ход возвращается к мадам"
     record = events()[-1]
     assert record["data"]["method"] == "horoscope" and record["data"]["sign_by"] == "client"
@@ -1161,7 +1160,7 @@ def test_live_silent_client_does_not_lock_the_host(bot, events):
     assert "запасной выход" in press_live(bot, "stars", WATCHER).answers[0] and current().phase == "sign"
     press_live(bot, "stars", PLAYER)
 
-    assert current().phase == "interpret" and current().sign and "Паспорт" in bot.edits[-1].text
+    assert current().phase == "horizon" and current().sign and "Паспорт" in bot.edits[-1].text
     assert events()[-1]["data"]["sign_by"] == "stars"
 
 
@@ -1525,7 +1524,7 @@ def test_live_certificate_names_both_sides(bot, events, monkeypatch):
     finish_live(bot)
     ((paper, brand),) = seen
     assert (paper.host, paper.client, paper.outcome, paper.confidence, paper.fee) == ("Зоя", "Гоша", "hit", "see", 1500)
-    assert brand == guru_salon.BRAND and paper.prediction.startswith("До конца недели налоговая")
+    assert brand == guru_salon.BRAND and paper.prediction.startswith("Назовите свои условия")
     assert labels_of(bot.sent[-1]) == [textui.LIVE_NEW_BUTTON, textui.MENU_CARD, textui.MENU_SALON, "📜 Диалог"]
 
 
@@ -1689,7 +1688,55 @@ def test_live_palm_waits_for_the_clients_hand(bot, events):
     assert "Руку показывает клиент" in press_live("h:air", PLAYER).answers[0]
     press_live("h:air", WATCHER)
     assert bot.photos[-1].photo.filename == "palm.jpg" and C.LIVE_HANDS["air"][1] in bot.sent[-1].text
-    assert any(key.startswith("palm:") and key.endswith(":air") for key in guru_salon._card_file_ids)
+    assert any(key.startswith("study:") and key.endswith(":air") for key in guru_salon._card_file_ids)
+
+
+def test_live_question_and_horoscope_have_real_client_turns(bot, events):
+    start_live(bot)
+    seat_live(bot)
+    panel = current().message_id
+    press_live(bot, "ask", PLAYER)
+    press_live(bot, "question:want", PLAYER)
+    assert "Чего вы хотите" in bot.sent[-1].text and current().phase == "answer"
+    assert "отвечает клиент" in press_live(bot, "said", PLAYER).answers[0]
+    press_live(bot, "said", WATCHER)
+    press_live(bot, "m:horoscope", PLAYER)
+    press_live(bot, "z:leo", WATCHER)
+    assert "к какому сроку" in bot.sent[-1].text
+    press_live(bot, "d:event", WATCHER)
+    assert "К событию" in bot.sent[-1].text and "Условия, потом ждать" in labels_of(bot.sent[-1])
+    press_live(bot, "r:g2", PLAYER)
+    assert "Как утверждение" in " ".join(labels_of(bot.sent[-1]))
+    press_live(bot, "say:idea", PLAYER)
+    assert "как тебе эта трактовка" in bot.sent[-1].text
+    press_live(bot, "feedback:maybe", WATCHER)
+    assert "Есть над чем подумать" in bot.sent[-1].text
+    assert current().message_id == panel and len(bot.sent) == 1
+    assert any(r["data"].get("kind") == "reaction" and r["data"]["reaction"] == "maybe" for r in events())
+
+
+def test_live_spoken_claim_survives_client_reaction_and_cautious_farewell(bot, events, wallets):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "m:tarot", PLAYER)
+    press_live(bot, "pair:ha", PLAYER)
+    press_live(bot, "r:t2", PLAYER)
+    stale = textui.encode(live.build_view(current()), "say:claim")
+    press_live(bot, "say:claim", PLAYER)
+    step = current().step
+    assert "отвечает клиент" in press_live(bot, "feedback:yes", PLAYER).answers[0]
+    assert current().step == step
+    duplicate = callback(bot, stale, user_id=PLAYER, message_id=current().message_id)
+    asyncio.run(guru_salon.salon_callback(duplicate))
+    assert current().step == step and len(current().voiced) == 1
+    press_live(bot, "feedback:no", WATCHER)
+    predict_live(bot)
+    assert "Утверждение:" in bot.sent[-1].text and "Не согласен" in bot.sent[-1].text
+    press_live(bot, "a:maybe", PLAYER)
+    assert current().confidence == "see" and "Я отчётливо вижу" in bot.sent[-1].text
+    press_live(bot, "v:miss", WATCHER)
+    assert current() is None and wallets.balance(CHAT, PLAYER) == -450
+    assert events()[-1]["data"]["voiced"] == [["t2", "claim"]]
 
 
 # --- компактный диалог -------------------------------------------------------

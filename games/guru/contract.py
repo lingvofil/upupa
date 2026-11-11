@@ -113,7 +113,8 @@ class LiveView:
     fee: int
     wallet: int  # касса мадам с учётом этого приёма
     intake_filled: int = 0  # сколько строк анкеты заполнено; сами ответы тайна до приговора
-    preview: str | None = None  # собираемая фраза предсказания
+    preview: str | None = None  # итоговое напутствие мадам
+    screen: str = ""  # символы и прочтения текущего шага; анкеты здесь нет
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

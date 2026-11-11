@@ -341,17 +341,20 @@ AREAS = {
 }
 
 
-def render_study(inspected: Iterable[str] = ()) -> bytes:
-    """Ладонь, которую осматривают по областям. ``inspected`` — уже осмотренные: они подсвечены."""
+def render_study(inspected: Iterable[str] = (), hand: str | None = None) -> bytes:
+    """Осмотр по областям; ``hand`` сохраняет выбранные клиентом пропорции."""
     seen = set(inspected)
     if unknown := seen - set(AREAS):
         raise ValueError(f"неизвестные области: {sorted(unknown)}")
+    if hand is not None and hand not in HANDS:
+        raise ValueError(f"неизвестный тип руки: {hand}")
+    shape = HANDS[hand] if hand else STUDY_HAND
     rng = random.Random(7)
     shapes: list[Shape] = [
-        (_forked(art.catmull(HEART)), "heart" in seen),
-        ([art.catmull(STUDY_HEAD)], "head" in seen),
-        ([art.catmull(LIFE)], False),
-        ([art.catmull(FATE)], False),
+        (_forked(art.catmull(_fit(shape, HEART))), "heart" in seen),
+        ([art.catmull(_fit(shape, STUDY_HEAD))], "head" in seen),
+        ([art.catmull(_fit(shape, LIFE))], False),
+        ([art.catmull(_fit(shape, FATE))], False),
     ]
-    spots = [STUDY_GAP] if "thumb" in seen else []
-    return _paint(STUDY_HAND, shapes, [(area, key in seen) for key, area in AREAS.items()], rng, spots)
+    spots = [(_fit(shape, (STUDY_GAP[0],))[0], STUDY_GAP[1])] if "thumb" in seen else []
+    return _paint(shape, shapes, [(area, key in seen) for key, area in AREAS.items()], rng, spots)
