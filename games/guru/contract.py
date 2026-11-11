@@ -81,6 +81,7 @@ class View:
     outcomes: tuple[str, ...]  # исходы обслуженных клиентов по порядку
     max_streak: int
     salon: str | None = None  # строка о купленном; None, если лавку ещё не открывали
+    novice: bool = False  # смена новичка: без скептиков и с одним прощённым разоблачением
 
     def to_dict(self) -> dict[str, Any]:
         """Сериализуемое состояние — для будущего Mini App / PC-клиента."""
@@ -109,6 +110,34 @@ class LiveView:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class Certificate:
+    """Справка о живом приёме: что предсказано и что решил клиент. Интерфейс рисует её как хочет."""
+
+    number: int
+    host: str
+    client: str
+    prediction: str  # готовая фраза без вводных слов мадам
+    confidence: str  # maybe | see | swear
+    outcome: str  # hit | partial | miss | exposure
+    fee: int
+
+
+@dataclass(frozen=True)
+class Diploma:
+    """Диплом о смене: звание и итог."""
+
+    number: int
+    player: str
+    title: str
+    score: int
+    money: int
+    hits: int
+    clients: int  # сколько клиентов принято
+    achievements: tuple[str, ...]
+    exposed: bool  # салон закрыли за разоблачения
 
 
 @dataclass(frozen=True)

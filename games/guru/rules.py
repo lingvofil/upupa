@@ -26,11 +26,12 @@
 from __future__ import annotations
 
 import random
+import zlib
 from dataclasses import dataclass, field
 from typing import Any
 
 from games.guru import content as C
-from games.guru.contract import Action, ActResult, ClientView, DisplayEvent, View
+from games.guru.contract import Action, ActResult, ClientView, Diploma, DisplayEvent, View
 from games.guru import salon
 from games.guru.model import (
     CLIENT_SOURCES,
@@ -47,7 +48,7 @@ from games.guru.model import (
 from games.guru.stories import STORIES_BY_ID, stories_of
 
 # Меняется при любом изменении баланса: по нему разделяют метрики в журнале.
-RULES_VERSION = 8
+RULES_VERSION = 9
 
 ARCHETYPE_ORDER = (
     "skeptic", "jealous", "businessman", "romantic", "granny", "blogger", "conspiracy", "student", "tycoon", "desperate",
@@ -56,6 +57,8 @@ CLIENTS_PER_SESSION = 3
 SKEPTIC_CHANCE = 0.25  # доля смен, в которых появляется скептик
 EVENT_CHANCE = 0.35  # как часто на приёме что-то случается
 LEGEND_START = 2
+NOVICE_SHIFTS = 2  # столько первых смен игрок считается новичком
+NOVICE_LUCK = 1  # сколько разоблачений за смену сходит новичку с рук
 CLARIFICATIONS = 2
 READINGS = 2
 IDLE_TIMEOUT_S = 900
@@ -231,12 +234,14 @@ def new_session(
     plan: tuple[str, ...] | None = None,
     wallet: int = 0,
     items: tuple[str, ...] = (),
+    novice: bool = False,
 ) -> Session:
     perks = salon.perks_of(items)
     # Заданный план — воспроизводимый сценарий, случайные события ему не нужны.
     event_chance = EVENT_CHANCE if plan is None else 0.0
     if plan is None:
-        archetypes = shift_archetypes(rng, CLIENTS_PER_SESSION + perks.clients, perks.skeptic)
+        # Скептик разоблачает за одну ошибку: новичку он достаётся, когда правила уже понятны.
+        archetypes = shift_archetypes(rng, CLIENTS_PER_SESSION + perks.clients, 0.0 if novice else perks.skeptic)
         plan = tuple(rng.choice(stories_of(archetype)).id for archetype in archetypes)
     if not plan or any(story_id not in STORIES_BY_ID for story_id in plan):
         raise ValueError(f"неизвестные истории: {plan}")
@@ -256,6 +261,8 @@ def new_session(
         perks=perks,
         event_chance=event_chance,
         forgive_left=perks.forgive,
+        novice=novice,
+        luck_left=NOVICE_LUCK if novice else 0,
     )
 
 
@@ -615,6 +622,12 @@ def prediction_sentence(picks: dict[str, str], confidence: str) -> str:
     return f"{C.CONFIDENCE_PREFIX[confidence]} {prediction_body(picks)}."
 
 
+def prediction_plain(picks: dict[str, str]) -> str:
+    """Предсказание отдельной фразой, без вводных слов мадам: для карты дня и справки."""
+    body = prediction_body(picks)
+    return body[:1].upper() + body[1:] + "."
+
+
 def _slot_results(client: Client, matches: dict[str, bool], mercury: bool = False) -> tuple[SlotResult, ...]:
     return tuple(
         SlotResult(slot, client.picks.get(slot), client.truth[slot], matches.get(slot, False),
@@ -726,8 +739,12 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     points = SCORE[outcome][level] + (PLEASED_POINTS if parting == "pleased" else 0)
     fee = _payment(client, outcome, level, echo, parting)
     forgiven = outcome == "exposure" and session.forgive_left > 0
+    lucky = outcome == "exposure" and not forgiven and session.luck_left > 0
     if forgiven:
         session.forgive_left -= 1
+        fee = max(fee, 0)
+    elif lucky:
+        session.luck_left -= 1
         fee = max(fee, 0)
 
     streak_before, bonus = session.streak, 0
@@ -753,6 +770,11 @@ def _settle(session: Session, client: Client, rng: random.Random, turn: _Turn, n
     legend_before = session.legend
     if forgiven:
         turn.show("line", C.CAT_FORGIVE_LINE)
+    elif lucky:
+        turn.show("line", C.NOVICE_LUCK_LINE)
+        turn.metrics.append(("novice_luck", {
+            "client_no": session.client_no, "archetype": kind.key, "story": story.id, "reason": reasons[0],
+        }))
     elif outcome == "exposure":
         session.legend -= 1  # не больше одного запаса за клиента, сколько бы причин ни сработало
         if session.legend <= 0:
@@ -851,6 +873,26 @@ def achievements(session: Session) -> tuple[str, ...]:
     return tuple(earned)
 
 
+def paper_number(session_id: str) -> int:
+    """Номер справки или диплома: четыре цифры, для одной партии всегда одни и те же."""
+    return 1000 + zlib.crc32(session_id.encode()) % 9000
+
+
+def diploma(session: Session) -> Diploma:
+    outcomes = [report.outcome for report in session.reports]
+    return Diploma(
+        number=paper_number(session.session_id),
+        player=session.host.name,
+        title=title(session),
+        score=session.score,
+        money=session.money,
+        hits=outcomes.count("hit"),
+        clients=len(outcomes),
+        achievements=achievements(session),
+        exposed=session.finish_reason == "exposed",
+    )
+
+
 def summary(session: Session, now: float) -> dict[str, Any]:
     """Итог партии для журнала: всё, что потом не восстановить."""
     outcomes = [report.outcome for report in session.reports]
@@ -887,6 +929,7 @@ def start_data(session: Session) -> dict[str, Any]:
         "items": list(session.items),
         "participants": len(session.participants),
         "legend": session.legend_start,
+        "novice": session.novice,
         "rules": RULES_VERSION,
     }
 
@@ -975,6 +1018,7 @@ def build_view(session: Session) -> View:
         outcomes=tuple(report.outcome for report in session.reports),
         max_streak=session.max_streak,
         salon=salon.describe(session.items),
+        novice=session.novice,
     )
 
 

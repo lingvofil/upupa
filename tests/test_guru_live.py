@@ -523,3 +523,18 @@ def test_open_call_and_abandon_texts():
     assert textui.render_live_abandoned(view, "timeout") == textui.LIVE_WAIT_EXPIRED
     press(session, CLIENT, "join")
     assert textui.render_live_abandoned(live.build_view(session), "quit") == textui.LIVE_ABANDON_NOTES["quit"]
+
+
+def test_certificate_is_issued_only_after_the_verdict():
+    session = to_verdict("swear")
+    with pytest.raises(ValueError):
+        live.certificate(session)
+    press(session, CLIENT, "v:miss")
+    paper = live.certificate(session)
+    assert (paper.host, paper.client, paper.confidence) == ("Зоя", "Гоша", "swear")
+    assert (paper.outcome, paper.fee) == (session.outcome, session.fee) and paper.fee < 0
+    assert paper.number == rules.paper_number(session.session_id) and paper.prediction == rules.prediction_plain(session.picks)
+
+
+def test_stranger_is_pointed_to_the_daily_card():
+    assert "гуру карта" in live.refusal(seated(), STRANGER, "m:tarot")

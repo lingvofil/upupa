@@ -280,6 +280,8 @@ class Session:
     perks: Perks = NO_PERKS
     event_chance: float = 0.0
     forgive_left: int = 0  # сколько разоблачений ещё прикроет кот
+    novice: bool = False  # одна из первых смен игрока
+    luck_left: int = 0  # сколько разоблачений ещё сойдёт новичку с рук
     # Где живёт партия в мессенджере; нужно только transport-слою.
     message_id: int | None = None
     thread_id: int | None = None

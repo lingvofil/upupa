@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import math
 import random
+from functools import lru_cache
 from typing import Iterable, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
@@ -54,6 +55,24 @@ def closed_curve(points: Sequence[Point]) -> list[Point]:
 
 def font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(FONT_PATH), size * SCALE)
+
+
+def _glyph(char: str) -> bytes:
+    image = Image.new("L", (40 * SCALE, 40 * SCALE), 0)
+    ImageDraw.Draw(image).text((8 * SCALE, 8 * SCALE), char, font=font(12), fill=255)
+    return image.tobytes()
+
+
+@lru_cache(maxsize=4096)
+def _has_glyph(char: str) -> bool:
+    # Знак, которого нет в шрифте, рисуется той же заглушкой, что и заведомо несуществующий.
+    return _glyph(char) != _glyph("\uffff")
+
+
+def printable(text: str, fallback: str = "") -> str:
+    """Оставить то, что шрифт умеет рисовать: в именах из мессенджера бывают эмодзи и чужие письменности."""
+    spaced = "".join(" " if char.isspace() else char for char in text)
+    return " ".join("".join(char for char in spaced if char == " " or _has_glyph(char)).split()) or fallback
 
 
 def scaled(points: Iterable[Point]) -> list[Point]:

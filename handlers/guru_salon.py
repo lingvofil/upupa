@@ -7,10 +7,13 @@
 выключен, «гуру» и кнопки уходят дальше по роутерам, как будто салона нет.
 В личке с ботом эксперимент включается так же: ``лаба вкл гуру``.
 
-Одна партия на чат: одиночная смена («гуру») или живой приём, где один игрок
-гадает другому («гуру приём»). Чужие нажатия пишутся как ``spectator``. Партия
-без ходов дольше своего лимита бросается фоновым циклом ``guru_salon_timeout_loop``
-(запускает composition root через ``TaskSupervisor``).
+«гуру» открывает меню с кнопками: кнопку может нажать любой, и действие достаётся
+нажавшему. Одна партия на чат: одиночная смена («гуру смена») или живой приём, где
+один игрок гадает другому («гуру приём»). Чужие нажатия пишутся как ``spectator``.
+Партия без ходов дольше своего лимита бросается фоновым циклом
+``guru_salon_timeout_loop`` (запускает composition root через ``TaskSupervisor``).
+
+«гуру карта» — карта дня: не партия, чату не мешает, доступна и во время чужого приёма.
 
 Деньги игроков копятся в ``features.guru_wallets``: ядро считает сумму, здесь она
 зачисляется, как только приём закончен, поэтому брошенная смена заработанного не теряет.
@@ -25,6 +28,7 @@ import asyncio
 import logging
 import random
 import time
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from aiogram import F, Router, types
@@ -36,14 +40,17 @@ from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import aura_art, live, palm_art, rules, salon, textui
+from games.guru import aura_art, cert_art, daily, live, palm_art, rules, salon, textui
+from games.guru import content as C
 from games.guru.contract import DisplayEvent, LiveView, View
 from games.guru.model import ClientReport, LiveSession, Participant, Session
 
 logger = logging.getLogger(__name__)
 
 EXPERIMENT = "guru"
-START_COMMANDS = frozenset({"гуру"})
+MENU_COMMANDS = frozenset({"гуру", "гуру меню"})
+START_COMMANDS = frozenset({"гуру смена", "гуру играть"})
+CARD_COMMANDS = frozenset({"гуру карта", "гуру карта дня"})
 STOP_COMMANDS = frozenset({"гуру стоп"})
 LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
@@ -57,6 +64,9 @@ MAX_CACHED_REPORTS = 300
 TYPING_REFRESH_S = 4.0  # индикатор «печатает…» Telegram гаснет примерно через 5 секунд
 SUMMARY_PAUSE_S = 3.0
 ABANDON_REASONS = frozenset({"timeout", "quit", "restart", "send_failed"})
+CAPTION_LIMIT = 1000  # у Telegram 1024, оставляем запас
+BRAND = "@expertyebaniebot · напиши «гуру»"  # подпись на справке и дипломе: по ней переславшие находят игру
+MOSCOW = timezone(timedelta(hours=3))  # день карты меняется в полночь по Москве; tzdata для этого не нужна
 
 router = Router(name="guru_salon")
 _enabled = ExperimentEnabled(EXPERIMENT)
@@ -72,6 +82,10 @@ def _clock() -> float:
     return time.monotonic()
 
 
+def _today() -> date:
+    return datetime.now(MOSCOW).date()
+
+
 _sleep = asyncio.sleep
 
 
@@ -81,8 +95,16 @@ def _normalize(text: str | None) -> str:
     return " ".join((text or "").lower().split())
 
 
+def _is_menu_command(message: types.Message) -> bool:
+    return _normalize(message.text) in MENU_COMMANDS
+
+
 def _is_start_command(message: types.Message) -> bool:
     return _normalize(message.text) in START_COMMANDS
+
+
+def _is_card_command(message: types.Message) -> bool:
+    return _normalize(message.text) in CARD_COMMANDS
 
 
 def _is_stop_command(message: types.Message) -> bool:
@@ -112,6 +134,11 @@ def _player_name(user: Any) -> str:
 
 def _thread_id(message: Any) -> int | None:
     return getattr(message, "message_thread_id", None) if getattr(message, "is_topic_message", False) else None
+
+
+def _is_group(chat_id: int) -> bool:
+    """В Telegram у личных чатов номер положительный, у групп и каналов — отрицательный."""
+    return chat_id < 0
 
 
 def _markup(rows: textui.Rows | None) -> InlineKeyboardMarkup | None:
@@ -278,7 +305,7 @@ async def _show_abandoned(bot: Any, session: Session | LiveSession, reason: str,
     if isinstance(session, LiveSession):
         text, rows = textui.render_live_abandoned(live.build_view(session), reason), None
     else:
-        summary, rows = textui.render_summary(rules.build_view(session))
+        summary, rows = textui.render_summary(rules.build_view(session), _is_group(session.chat_id))
         text = f"{textui.render_abandoned(reason)}\n\n{summary}"
     try:
         await _send(bot, session, text, rows)
@@ -338,6 +365,7 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
         now=now,
         wallet=wallet.balance,
         items=tuple(wallet.items),
+        novice=wallet.shifts < rules.NOVICE_SHIFTS,
     )
     session.thread_id = thread_id
     # В реестр — до первого await: второй старт в ту же секунду увидит занятый чат.
@@ -391,7 +419,90 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
     session.message_id = getattr(sent, "message_id", None)
 
 
+# --- меню, карта дня и справки ----------------------------------------------
+
+async def _post(bot: Any, chat_id: int, thread_id: int | None, text: str, rows: textui.Rows | None = None, *,
+                reply_to: int | None = None) -> Any:
+    """Сообщение вне партии: меню, касса, лавка. ``reply_to`` — когда отвечаем на команду."""
+    return await bot.send_message(chat_id, text, message_thread_id=thread_id, reply_markup=_markup(rows),
+                                  reply_to_message_id=reply_to)
+
+
+async def _show_menu(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
+    wallet = get_guru_wallets().get(chat_id, user.id)
+    group = _is_group(chat_id)
+    await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="open")
+    await _post(bot, chat_id, thread_id, textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group),
+                reply_to=reply_to)
+
+
+async def _show_wallets(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
+    wallets = get_guru_wallets()
+    await _post(bot, chat_id, thread_id, textui.render_wallets(wallets.top(chat_id), wallets.get(chat_id, user.id)),
+                reply_to=reply_to)
+
+
+async def _show_shop(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
+    wallet = get_guru_wallets().get(chat_id, user.id)
+    await _post(bot, chat_id, thread_id, textui.render_shop(_player_name(user), wallet.balance, wallet.items),
+                textui.shop_keyboard(wallet.items, user.id), reply_to=reply_to)
+
+
+async def _show_salons(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
+    wallets = get_guru_wallets()
+    await _post(bot, chat_id, thread_id, textui.render_salons(wallets.top(chat_id), wallets.get(chat_id, user.id)),
+                reply_to=reply_to)
+
+
+async def _send_picture(bot: Any, chat_id: int, thread_id: int | None, photo: Any, caption: str,
+                        rows: textui.Rows | None = None, *, cache_key: str | None = None) -> Any | None:
+    """Картинка с подписью и кнопками. ``None`` — не вышло: вызывающий отправит то же текстом."""
+    if len(caption) > CAPTION_LIMIT:
+        return None
+    try:
+        sent = await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, message_thread_id=thread_id,
+                                    reply_markup=_markup(rows))
+    except (TelegramAPIError, OSError) as error:
+        logger.warning("[guru] не удалось отправить картинку: %s", error)
+        return None
+    if cache_key and getattr(sent, "photo", None):
+        _card_file_ids[cache_key] = sent.photo[-1].file_id
+    return sent
+
+
+async def _daily_card(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str) -> None:
+    """Карта дня: одна на человека в сутки. Не партия: чат не занимает и чужому приёму не мешает."""
+    today = _today()
+    name = _player_name(user)
+    card = daily.draw(user.id, today.isoformat())
+    wallets = get_guru_wallets()
+    # Отметка и чаевые — до первого await: двойное нажатие не заплатит дважды.
+    streak = wallets.claim_card(chat_id, user.id, name, today.isoformat(), (today - timedelta(days=1)).isoformat())
+    if streak is None:
+        await log_event(EXPERIMENT, "daily_card", chat_id=chat_id, user_id=user.id, via=via, repeat=True)
+        await _post(bot, chat_id, thread_id, textui.render_daily_repeat(name, card))
+        return
+    tip = daily.tip(streak)
+    balance = wallets.apply(chat_id, user.id, name, tip)
+    await wallets.persist()
+    await log_event(
+        EXPERIMENT, "daily_card", chat_id=chat_id, user_id=user.id, via=via, repeat=False,
+        card=card.card.art, streak=streak, tip=tip, wallet=balance, **card.picks,
+    )
+    caption = textui.render_daily(name, card, tip, streak, daily.tip(streak + 1), balance)
+    rows = textui.daily_keyboard()
+    art = card.card.art
+    photo = _card_file_ids.get(art) or FSInputFile(TAROT_ART_DIR / f"{art}.jpg")
+    if await _send_picture(bot, chat_id, thread_id, photo, caption, rows, cache_key=art) is None:
+        await _post(bot, chat_id, thread_id, caption, rows)
+
+
 # --- хэндлеры ---------------------------------------------------------------
+
+@router.message(_enabled, _is_menu_command)
+async def show_menu(message: types.Message) -> None:
+    await _show_menu(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
+
 
 @router.message(_enabled, _is_start_command)
 async def start_salon(message: types.Message) -> None:
@@ -401,31 +512,29 @@ async def start_salon(message: types.Message) -> None:
 @router.message(_enabled, _is_live_command)
 async def start_live_reception(message: types.Message) -> None:
     if message.chat.type == "private":
-        await message.reply("Живому приёму нужен второй человек. Открой его в группе.")
+        await message.reply(textui.LIVE_NEEDS_GROUP)
         return
     await _start_live(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
 
 
+@router.message(_enabled, _is_card_command)
+async def show_daily_card(message: types.Message) -> None:
+    await _daily_card(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
+
+
 @router.message(_enabled, _is_wallet_command)
 async def show_wallets(message: types.Message) -> None:
-    wallets = get_guru_wallets()
-    await message.reply(textui.render_wallets(wallets.top(message.chat.id), wallets.get(message.chat.id, message.from_user.id)))
+    await _show_wallets(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_shop_command)
 async def show_shop(message: types.Message) -> None:
-    user = message.from_user
-    wallet = get_guru_wallets().get(message.chat.id, user.id)
-    await message.reply(
-        textui.render_shop(_player_name(user), wallet.balance, wallet.items),
-        reply_markup=_markup(textui.shop_keyboard(wallet.items, user.id)),
-    )
+    await _show_shop(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_salon_command)
 async def show_salons(message: types.Message) -> None:
-    wallets = get_guru_wallets()
-    await message.reply(textui.render_salons(wallets.top(message.chat.id), wallets.get(message.chat.id, message.from_user.id)))
+    await _show_salons(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_stop_command)
@@ -456,6 +565,37 @@ async def _again(callback: types.CallbackQuery, parsed: textui.Callback) -> None
         return
     await callback.answer("Салон закрыт до лучших времён.")
     await _clear_keyboard(callback.bot, chat_id, message.message_id)
+
+
+async def _menu(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
+    """Кнопка меню: действие достаётся тому, кто нажал. Само меню остаётся для следующих."""
+    message = callback.message
+    bot, chat_id, user, thread_id = callback.bot, message.chat.id, callback.from_user, _thread_id(message)
+    action = parsed.action
+    if action == "live" and not _is_group(chat_id):
+        await callback.answer(textui.LIVE_NEEDS_GROUP)
+        return
+    if action == "card":
+        today = _today().isoformat()
+        if get_guru_wallets().get(chat_id, user.id).card_day == today:
+            # Повтор по кнопке — всплывающей строкой: чужая карта в чате не должна обрастать ответами.
+            await callback.answer(textui.render_daily_toast(daily.draw(user.id, today)))
+            await log_event(EXPERIMENT, "daily_card", chat_id=chat_id, user_id=user.id, via="button", repeat=True)
+            return
+    await callback.answer()
+    await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action=action)
+    if action == "shift":
+        await _start_session(bot, chat_id, user, thread_id, via="menu")
+    elif action == "live":
+        await _start_live(bot, chat_id, user, thread_id, via="menu")
+    elif action == "card":
+        await _daily_card(bot, chat_id, user, thread_id, via="button")
+    elif action == "shop":
+        await _show_shop(bot, chat_id, user, thread_id)
+    elif action == "wallet":
+        await _show_wallets(bot, chat_id, user, thread_id)
+    else:
+        await _show_salons(bot, chat_id, user, thread_id)
 
 
 async def _buy(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
@@ -507,6 +647,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
     if parsed is None or message is None:
         await callback.answer()
         return
+    if parsed.kind == "menu":
+        await _menu(callback, parsed)
+        return
     if parsed.kind == "again":
         await _again(callback, parsed)
         return
@@ -536,7 +679,7 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
             EXPERIMENT, "spectator", chat_id=chat_id, user_id=callback.from_user.id,
             session_id=session.session_id, action=parsed.action,
         )
-        await callback.answer(f"Это салон мадам {session.host.name}. Смотри и учись.")
+        await callback.answer(C.SPECTATOR_LINE.format(name=session.host.name))
         return
 
     # Ход применяется синхронно, до первого await: повторное нажатие той же
@@ -550,6 +693,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
     if session.finished:
         _registry.remove(session)
     if result.finished_client is not None and result.finished_client.report is not None:
+        if len(session.reports) == 1:
+            # Смена засчитана с первого принятого клиента: брошенная на пороге не тратит везение новичка.
+            get_guru_wallets().count_shift(chat_id, session.host.user_id, session.host.name)
         await _book_money(session, session.host, result.finished_client.report.fee)
     await callback.answer()
     await _log_metrics(session, result.metrics)
@@ -607,7 +753,7 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
         await _clear_keyboard(bot, session.chat_id, callback.message.message_id)
     try:
         if view.finished:
-            await _play(bot, session, result.events, view, textui.live_done_keyboard(view), textui.render_live_result(view))
+            await _finish_live(bot, session, result.events, view)
         elif action == "go":
             text, rows = textui.render_live_constructor(view)
             await _play(bot, session, result.events, view, rows, text)
@@ -615,6 +761,28 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
             await _play(bot, session, result.events, view)
     except TelegramAPIError:
         await _fail_send(session)
+
+
+async def _render_picture(painter: Any, *args: Any) -> BufferedInputFile | None:
+    """Нарисовать справку или диплом вне event loop. Не вышло — партия закончится текстом."""
+    try:
+        return BufferedInputFile(await asyncio.to_thread(painter, *args), "guru.jpg")
+    except Exception:
+        logger.exception("[guru] не удалось нарисовать картинку")
+        return None
+
+
+async def _finish_live(bot: Any, session: LiveSession, events: tuple[DisplayEvent, ...], view: LiveView) -> None:
+    """Развязка живого приёма и справка о предсказании: её удобно переслать."""
+    text, rows = textui.render_live_result(view), textui.live_done_keyboard(view)
+    photo = await _render_picture(cert_art.render_certificate, live.certificate(session), BRAND)
+    if photo is None:
+        await _play(bot, session, events, view, rows, text)
+        return
+    if events:  # без событий _play отправил бы пустое сообщение
+        await _play(bot, session, events, view)
+    if await _send_picture(bot, session.chat_id, session.thread_id, photo, text, rows) is None:
+        await _send(bot, session, text, rows)
 
 
 async def _deliver(bot: Any, session: Session, result: Any) -> None:
@@ -625,9 +793,11 @@ async def _deliver(bot: Any, session: Session, result: Any) -> None:
         rows = textui.client_done_keyboard(view, finished.report)
         await _play(bot, session, result.events, view, rows, textui.render_verdict(view, finished.report))
         if view.finished and not _interrupted(session):
-            text, summary_rows = textui.render_summary(view)
+            text, summary_rows = textui.render_summary(view, _is_group(session.chat_id))
             await _pause(bot, session, SUMMARY_PAUSE_S)
-            await _send(bot, session, text, summary_rows)
+            photo = await _render_picture(cert_art.render_diploma, rules.diploma(session), BRAND)
+            if photo is None or await _send_picture(bot, session.chat_id, session.thread_id, photo, text, summary_rows) is None:
+                await _send(bot, session, text, summary_rows)
         return
     if view.client is not None and view.client.phase in ("who", "what", "when", "announce"):
         text, rows = textui.render_constructor(view)

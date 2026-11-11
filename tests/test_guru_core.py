@@ -805,7 +805,7 @@ def test_summary_has_everything_for_the_log():
     for key in ("money", "score", "legend_left", "max_streak", "hits", "partials", "misses", "exposures", "pleased",
                 "methods_used", "mastery", "clients", "duration_s", "reason", "title", "rules"):
         assert key in data, key
-    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 8
+    assert data["methods_used"] == ["tarot"] and data["clients"] == 3 and data["rules"] == rules.RULES_VERSION == 9
 
 
 def test_participants_only_and_invalid_actions():
@@ -964,7 +964,9 @@ def test_summary_and_abandon_note():
     rules.abandon_summary(session, "timeout", now=999.0)
     text, rows = textui.render_summary(rules.build_view(session))
     assert "брошен" in text and "Звание" in text
-    assert [label for row in rows for label, _ in row] == [textui.AGAIN_YES, textui.AGAIN_NO]
+    assert [label for row in rows for label, _ in row] == [textui.AGAIN_YES, textui.MENU_LIVE, textui.MENU_CARD, textui.AGAIN_NO]
+    _, private_rows = textui.render_summary(rules.build_view(session), group=False)
+    assert textui.MENU_LIVE not in [label for row in private_rows for label, _ in row], "в личке живого приёма нет"
     assert textui.render_abandoned("timeout") == textui.ABANDON_NOTES["timeout"]
 
 
@@ -1078,3 +1080,122 @@ def test_transport_does_not_create_unowned_tasks():
         and isinstance(node.func.value, ast.Name) and node.func.value.id == "asyncio"
     ]
     assert "create_task" not in calls and "ensure_future" not in calls
+
+
+# --- новичок, меню, бумаги ---------------------------------------------------
+
+def make_novice(*story_ids):
+    rng = ScriptedRandom()
+    session = rules.new_session(session_id=SID, chat_id=-1, player_id=7, player_name="Зоя", rng=rng, now=0.0,
+                                plan=story_ids or None, novice=True)
+    return session, rng
+
+
+def _plans(novice):
+    return [
+        rules.new_session(session_id=SID, chat_id=-1, player_id=7, player_name="Зоя", rng=random.Random(seed), now=0.0,
+                          novice=novice).plan
+        for seed in range(200)
+    ]
+
+
+def test_novice_shift_never_has_a_skeptic():
+    assert not any(story.startswith("skeptic.") for plan in _plans(novice=True) for story in plan)
+    assert any(story.startswith("skeptic.") for plan in _plans(novice=False) for story in plan), "без защиты скептик приходит"
+
+
+def test_novice_is_forgiven_one_exposure_per_shift():
+    session, rng = make_novice("skeptic.mom", "skeptic.mom", "skeptic.mom")
+    session.client.suspicion = 60
+    session.client.satisfaction = 0
+    first = miss(session, rng, "see")
+    report = report_of(first)
+    assert report.outcome == "exposure" and report.fee == 0 and session.legend == rules.LEGEND_START
+    assert C.NOVICE_LUCK_LINE in texts(first) and session.luck_left == 0
+    assert metrics([first], "novice_luck") == [
+        {"client_no": 0, "archetype": "skeptic", "story": "skeptic.mom", "reason": report.reasons[0]},
+    ]
+
+    next_client(session, rng)
+    session.client.suspicion = 60
+    session.client.satisfaction = 0
+    second = miss(session, rng, "see")
+    assert report_of(second).outcome == "exposure" and report_of(second).fee < 0
+    assert session.legend == rules.LEGEND_START - 1 and C.NOVICE_LUCK_LINE not in texts(second)
+
+
+def test_seasoned_player_has_no_luck():
+    session, rng = make("skeptic.mom", "skeptic.mom")
+    assert not session.novice and session.luck_left == 0 and rules.start_data(session)["novice"] is False
+    session.client.suspicion = 60
+    session.client.satisfaction = 0
+    assert report_of(miss(session, rng, "see")).fee < 0 and session.legend == rules.LEGEND_START - 1
+
+
+def test_intro_tells_the_novice_about_the_protection():
+    session, _ = make_novice("jealous.lena")
+    view = rules.build_view(session)
+    assert C.NOVICE_INTRO_LINE in textui.render_intro(view) and view.to_dict()["novice"] is True
+    assert rules.start_data(session)["novice"] is True
+    assert C.NOVICE_INTRO_LINE not in textui.render_intro(rules.build_view(make("jealous.lena")[0]))
+
+
+def test_prediction_plain_is_a_sentence_without_madam():
+    picks = {"who": "tax", "what": "lose", "when": "week"}
+    plain, body = rules.prediction_plain(picks), rules.prediction_body(picks)
+    assert plain == body[0].upper() + body[1:] + "." and not any(prefix in plain for prefix in C.CONFIDENCE_PREFIX.values())
+
+
+def test_paper_number_is_stable_and_has_four_digits():
+    numbers = {rules.paper_number(f"{index:012x}") for index in range(60)}
+    assert rules.paper_number(SID) == rules.paper_number(SID) and all(1000 <= number <= 9999 for number in numbers)
+    assert len(numbers) > 50
+
+
+def test_diploma_sums_up_the_shift():
+    session, rng = make("businessman.partner", "businessman.partner", "businessman.partner")
+    hit(session, rng, "maybe")
+    next_client(session, rng)
+    miss(session, rng, "maybe")
+    next_client(session, rng)
+    hit(session, rng, "maybe")
+    assert session.finished
+    paper = rules.diploma(session)
+    assert (paper.player, paper.hits, paper.clients, paper.exposed) == ("Зоя", 2, 3, False)
+    assert (paper.title, paper.score, paper.money) == (rules.title(session), session.score, session.money)
+    assert paper.number == rules.paper_number(SID) and paper.achievements == rules.achievements(session)
+
+
+def test_diploma_of_an_exposed_salon():
+    session, rng = make("skeptic.mom", "skeptic.mom", "skeptic.mom")
+    for _ in range(rules.LEGEND_START):
+        session.client.suspicion = 60
+        session.client.satisfaction = 0
+        miss(session, rng, "see")
+        next_client(session, rng)
+    paper = rules.diploma(session)
+    assert session.finished and paper.exposed and paper.title == C.EXPOSED_TITLE and paper.hits == 0
+    assert paper.clients == rules.LEGEND_START
+
+
+def test_menu_buttons_round_trip_and_fit_telegram():
+    for group in (True, False):
+        for row in textui.menu_keyboard(group):
+            for _, data in row:
+                parsed = textui.parse(data)
+                assert parsed.kind == "menu" and parsed.action in textui.MENU_ACTIONS and len(data.encode()) <= 64
+    assert {textui.parse(data).action for row in textui.menu_keyboard() for _, data in row} == textui.MENU_ACTIONS
+    assert textui.parse(textui.menu_data("nope")) is None
+    assert [label for row in textui.daily_keyboard() for label, _ in row] == [textui.MENU_CARD_OWN, textui.MENU_SHIFT]
+    assert textui.MENU_LIVE not in [label for row in textui.menu_keyboard(group=False) for label, _ in row]
+
+
+def test_menu_text_explains_the_game_and_shows_the_wallet():
+    class Own:
+        balance = 4200
+        items = ["tea"]
+
+    text = textui.render_menu("Зоя", Own(), group=True)
+    assert "Салон «Гуру»" in text and "Смена" in text and "Живой приём" in text and "Карта дня" in text
+    assert "Касса мадам Зоя: 4 200 ₽" in text and len(text) < 700
+    assert "в группе" in textui.render_menu("Зоя", Own(), group=False)

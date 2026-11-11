@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from features.guru_wallets import Wallet, WalletBook
+from features.guru_wallets import SEASONED_SHIFTS, Wallet, WalletBook
 from games.guru import textui
 
 CHAT = -100
@@ -89,3 +89,50 @@ def test_table_text():
             SimpleNamespace(name="Гоша", balance=-1500, earned=0, lost=1500, spent=0, items=[])]
     text = textui.render_wallets(rows, rows[1])
     assert "1. Зоя — 12 300 ₽ · 🫖" in text and "«гуру салон»" in text and "2. Гоша — −1 500 ₽" in text and "потеряно 1 500 ₽" in text
+
+
+def test_shifts_are_counted_per_chat():
+    wallets = book()
+    assert wallets.get(CHAT, 1).shifts == 0
+    assert wallets.count_shift(CHAT, 1, "Зоя") == 1 and wallets.count_shift(CHAT, 1, "Зоя") == 2
+    assert wallets.get(CHAT, 1).name == "Зоя" and wallets.get(OTHER_CHAT, 1).shifts == 0
+
+
+def test_old_wallets_with_money_are_not_novices():
+    wallets = book({str(CHAT): {
+        "1": {"name": "Зоя", "balance": 500, "earned": 500, "lost": 0},
+        "2": {"name": "Гоша"},
+        "3": {"name": "Аня", "earned": 100, "shifts": 1},
+    }})
+    assert wallets.get(CHAT, 1).shifts == SEASONED_SHIFTS, "играла до счётчика смен"
+    assert wallets.get(CHAT, 2).shifts == 0 and wallets.get(CHAT, 3).shifts == 1
+
+
+def test_daily_card_is_claimed_once_a_day_and_counts_the_streak():
+    wallets = book()
+    assert wallets.claim_card(CHAT, 1, "Зоя", "2026-11-10", "2026-11-09") == 1
+    assert wallets.claim_card(CHAT, 1, "Зоя", "2026-11-10", "2026-11-09") is None
+    assert wallets.claim_card(CHAT, 1, "Зоя", "2026-11-11", "2026-11-10") == 2
+    assert wallets.claim_card(CHAT, 1, "Зоя", "2026-11-13", "2026-11-12") == 1, "пропущенный день обнуляет серию"
+    assert wallets.claim_card(OTHER_CHAT, 1, "Зоя", "2026-11-13", "2026-11-12") == 1, "в каждом чате своя касса"
+
+
+def test_counters_survive_a_restart():
+    repository = MemoryRepository()
+    wallets = WalletBook(repository)
+    wallets.load()
+    wallets.count_shift(CHAT, 1, "Зоя")
+    wallets.claim_card(CHAT, 1, "Зоя", "2026-11-10", "2026-11-09")
+    asyncio.run(wallets.persist())
+
+    wallet = book(repository.saved[-1]).get(CHAT, 1)
+    assert (wallet.shifts, wallet.card_day, wallet.card_streak) == (1, "2026-11-10", 1)
+
+
+def test_table_hides_wallets_without_money():
+    wallets = book()
+    wallets.count_shift(CHAT, 1, "Зоя")
+    wallets.claim_card(CHAT, 2, "Гоша", "2026-11-10", "2026-11-09")
+    assert wallets.top(CHAT) == [], "счётчики без денег в таблицу не идут"
+    wallets.apply(CHAT, 2, "Гоша", 300)
+    assert [wallet.name for wallet in wallets.top(CHAT)] == ["Гоша"]

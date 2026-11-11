@@ -4,6 +4,7 @@ from tests import test_smoke_imports  # noqa: F401  (env + моки до имп�
 
 import asyncio
 import random
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +16,8 @@ from features.lab import events as lab_events
 from features.lab import flags as lab_flags
 from features.lab.events import EventLog, read_events
 from features.lab.flags import ExperimentFlags
-from games.guru import live, rules, salon, textui
+from games.guru import content as C
+from games.guru import cert_art, daily, live, rules, salon, textui
 from handlers import guru_salon
 
 CHAT = -100900
@@ -254,7 +256,7 @@ def test_shop_command_matches(flags, text):
 def open_shop(bot, user_id=PLAYER):
     msg = message(bot, "гуру лавка", user_id=user_id)
     asyncio.run(guru_salon.show_shop(msg))
-    return msg
+    return bot.sent[-1]
 
 
 def buy(bot, item, user_id=PLAYER, owner=PLAYER):
@@ -265,10 +267,10 @@ def buy(bot, item, user_id=PLAYER, owner=PLAYER):
 
 def test_shop_lists_goods_and_buttons(bot, wallets):
     wallets.apply(CHAT, PLAYER, "Зоя", 3000)
-    msg = open_shop(bot)
-    assert "Лавка салона мадам Зоя" in msg.replies[0] and "3 000 ₽" in msg.replies[0]
-    assert "Чай с чабрецом" in msg.replies[0]
-    buttons = [button for row in msg.markups[0].inline_keyboard for button in row]
+    shop = open_shop(bot)
+    assert "Лавка салона мадам Зоя" in shop.text and "3 000 ₽" in shop.text and shop.reply_to_message_id == 1
+    assert "Чай с чабрецом" in shop.text
+    buttons = [button for row in shop.reply_markup.inline_keyboard for button in row]
     assert len(buttons) == len(salon.ITEMS) and all(len(b.callback_data.encode()) <= 64 for b in buttons)
 
 
@@ -316,8 +318,9 @@ def test_salons_show_what_players_own_and_what_it_gives(bot, wallets):
     buy(bot, "zina")
     msg = message(bot, "гуру салон", user_id=WATCHER)
     asyncio.run(guru_salon.show_salons(msg))
-    assert "Зоя" in msg.replies[0] and "🚪" in msg.replies[0] and "скептиков вдвое меньше" in msg.replies[0]
-    assert "Твой салон" not in msg.replies[0], "своего салона у Гоши пока нет"
+    text = bot.sent[-1].text
+    assert "Зоя" in text and "🚪" in text and "скептиков вдвое меньше" in text
+    assert "Твой салон" not in text, "своего салона у Гоши пока нет"
 
 
 def test_cannot_buy_twice_or_without_money(bot, wallets):
@@ -602,10 +605,11 @@ def test_full_party_logs_everything(bot, events, clock):
     finish = records[-1]["data"]
     for key in ("max_streak", "legend_left", "hits", "partials", "misses", "exposures", "methods_used", "duration_s"):
         assert key in finish
-    summary = bot.sent[-1]
-    assert "Хотите ещё одну смену?" in summary.text
+    summary = bot.photos[-1]
+    assert summary.photo.filename == "guru.jpg" and summary.photo.data[:2] == b"\xff\xd8", "итог смены приходит дипломом"
+    assert "Хотите ещё одну смену?" in summary.caption
     labels = [button.text for row in summary.reply_markup.inline_keyboard for button in row]
-    assert labels == [textui.AGAIN_YES, textui.AGAIN_NO]
+    assert labels == [textui.AGAIN_YES, textui.MENU_LIVE, textui.MENU_CARD, textui.AGAIN_NO]
 
 
 def test_client_result_offers_report_and_next(bot, events):
@@ -853,7 +857,8 @@ def test_wallet_command_shows_table(bot, events, wallets):
     assert _accepts(guru_salon.router.message, message(bot, "гуру касса"))
     msg = message(bot, "гуру касса", user_id=WATCHER)
     asyncio.run(guru_salon.show_wallets(msg))
-    assert "1. Зоя — 1 500 ₽" in msg.replies[0] and "Твоя касса: −300 ₽" in msg.replies[0]
+    table = bot.sent[-1].text
+    assert "1. Зоя — 1 500 ₽" in table and "Твоя касса: −300 ₽" in table
 
 
 # --- живой приём --------------------------------------------------------------
@@ -941,10 +946,11 @@ def test_live_full_reception(bot, events, wallets, pauses):
 
     assert current() is None and wallets.balance(CHAT, PLAYER) == 100 + 1500
     assert wallets.balance(CHAT, WATCHER) == 0, "клиент за приём не платит и денег не получает"
-    final = bot.sent[-1]
-    assert "+1 500 ₽" in final.text and "1 600 ₽" in final.text
+    final = bot.photos[-1]
+    assert final.photo.filename == "guru.jpg" and final.photo.data[:2] == b"\xff\xd8", "итог приёма приходит справкой"
+    assert "+1 500 ₽" in final.caption and "1 600 ₽" in final.caption
     assert final.reply_markup.inline_keyboard[0][0].text == textui.LIVE_NEW_BUTTON
-    assert "Мадам переворачивает анкету" in final.text and "Беда: отношения" in final.text
+    assert "Мадам переворачивает анкету" in bot.sent[-1].text and "Беда: отношения" in bot.sent[-1].text
     assert names(events())[-1] == "finish" and events()[-1]["data"]["verdict"] == "hit"
 
 
@@ -1140,3 +1146,284 @@ def test_live_failed_send_does_not_leave_zombie(bot, events, monkeypatch):
     monkeypatch.setattr(bot, "send_message", refuse)
     start_live(bot)
     assert current() is None and events()[-1]["data"]["reason"] == "send_failed"
+
+
+# --- меню ---------------------------------------------------------------------
+
+def open_menu(bot, user_id=PLAYER, chat_id=CHAT):
+    asyncio.run(guru_salon.show_menu(message(bot, "гуру", user_id=user_id, chat_id=chat_id)))
+    return bot.sent[-1]
+
+
+def press_menu(bot, action, user_id=PLAYER, chat_id=CHAT):
+    query = callback(bot, textui.menu_data(action), user_id=user_id, message_id=42, chat_id=chat_id)
+    asyncio.run(guru_salon.salon_callback(query))
+    return query
+
+
+def labels_of(sent):
+    return [button.text for row in sent.reply_markup.inline_keyboard for button in row]
+
+
+@pytest.mark.parametrize("text, handler", [
+    ("гуру", "show_menu"), ("Гуру  МЕНЮ", "show_menu"), ("гуру смена", "start_salon"), ("гуру играть", "start_salon"),
+    ("гуру карта", "show_daily_card"), ("гуру карта дня", "show_daily_card"), ("гуру приём", "start_live_reception"),
+])
+def test_commands_reach_their_handlers(flags, text, handler):
+    msg = message(FakeBot(), text)
+    matched = [h.callback.__name__ for h in guru_salon.router.message.handlers if asyncio.run(h.check(msg))[0]]
+    assert matched == [handler]
+
+
+def test_bare_guru_opens_the_menu_and_starts_nothing(bot, events):
+    menu = open_menu(bot)
+    assert current() is None, "меню не занимает чат"
+    assert "Салон «Гуру»" in menu.text and "Живой приём — гадаешь человеку из чата" in menu.text and menu.reply_to_message_id == 1
+    assert labels_of(menu) == [textui.MENU_SHIFT, textui.MENU_LIVE, textui.MENU_CARD, textui.MENU_SHOP, textui.MENU_WALLET,
+                               textui.MENU_SALONS]
+    assert all(len(button.callback_data.encode()) <= 64 for row in menu.reply_markup.inline_keyboard for button in row)
+    (record,) = events()
+    assert record["event"] == "menu" and record["data"]["action"] == "open"
+
+
+def test_menu_in_private_chat_has_no_live_reception(bot, events):
+    menu = open_menu(bot, chat_id=PLAYER)
+    assert textui.MENU_LIVE not in labels_of(menu) and "в группе" in menu.text
+    query = press_menu(bot, "live", chat_id=PLAYER)
+    assert query.answers == [textui.LIVE_NEEDS_GROUP] and current(PLAYER) is None
+
+
+def test_menu_button_starts_a_shift_for_whoever_pressed(bot, events):
+    open_menu(bot)
+    press_menu(bot, "shift", user_id=WATCHER)
+    assert current().host.user_id == WATCHER
+    pressed, started = events()[-2:]
+    assert pressed["event"] == "menu" and pressed["data"]["action"] == "shift" and pressed["user_id"] == WATCHER
+    assert started["event"] == "start" and started["data"]["via"] == "menu"
+
+
+def test_menu_button_opens_live_reception(bot, events):
+    press_menu(bot, "live")
+    assert isinstance(current(), guru_salon.LiveSession) and current().host.user_id == PLAYER
+    assert events()[-1]["event"] == "start" and events()[-1]["data"]["via"] == "menu"
+
+
+def test_menu_buttons_show_shop_wallets_and_salons(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    press_menu(bot, "shop")
+    assert "Лавка салона мадам Зоя" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None
+    press_menu(bot, "wallet")
+    assert "1. Зоя — 3 000 ₽" in bot.sent[-1].text
+    press_menu(bot, "salons")
+    assert len(bot.sent) == 3 and current() is None
+    assert all(sent.reply_to_message_id is None for sent in bot.sent), "по кнопке отвечать не на что"
+
+
+def test_unknown_menu_button_does_nothing(bot, events):
+    query = callback(bot, f"{textui.CALLBACK_PREFIX}menu:nope", message_id=42)
+    asyncio.run(guru_salon.salon_callback(query))
+    assert bot.sent == [] and current() is None and events() == []
+
+
+def test_private_shift_summary_does_not_offer_live_reception(bot, events):
+    start(bot, chat_id=PLAYER)
+    play_shift(bot, chat_id=PLAYER)
+    assert labels_of(bot.photos[-1]) == [textui.AGAIN_YES, textui.MENU_CARD, textui.AGAIN_NO]
+
+
+# --- карта дня -----------------------------------------------------------------
+
+DAY = date(2026, 11, 10)
+
+
+@pytest.fixture
+def today(monkeypatch):
+    box = SimpleNamespace(day=DAY)
+    monkeypatch.setattr(guru_salon, "_today", lambda: box.day)
+    return box
+
+
+def draw_card(bot, user_id=PLAYER, chat_id=CHAT):
+    asyncio.run(guru_salon.show_daily_card(message(bot, "гуру карта", user_id=user_id, chat_id=chat_id)))
+
+
+def test_daily_card_is_a_picture_with_a_tip(bot, events, wallets, today):
+    draw_card(bot)
+    card = daily.draw(PLAYER, DAY.isoformat())
+    (photo,) = bot.photos
+    assert photo.chat_id == CHAT and str(photo.photo.path).endswith(f"{card.card.art}.jpg")
+    assert f"«{card.card.name}»" in photo.caption and card.prediction in photo.caption and "300 ₽" in photo.caption
+    assert labels_of(photo) == [textui.MENU_CARD_OWN, textui.MENU_SHIFT]
+    assert wallets.balance(CHAT, PLAYER) == daily.TIP_BASE and current() is None
+    assert guru_salon._card_file_ids[card.card.art] == "palm1", "картинка карты загружается один раз"
+    record = events()[-1]
+    assert record["event"] == "daily_card" and record["data"]["repeat"] is False and record["data"]["tip"] == daily.TIP_BASE
+    assert record["data"]["streak"] == 1 and record["data"]["via"] == "command" and record["data"]["card"] == card.card.art
+
+
+def test_second_card_the_same_day_gives_no_money(bot, events, wallets, today):
+    draw_card(bot)
+    draw_card(bot)
+    assert len(bot.photos) == 1 and "уже вытянута" in bot.sent[-1].text
+    assert wallets.balance(CHAT, PLAYER) == daily.TIP_BASE and events()[-1]["data"]["repeat"] is True
+
+
+def test_daily_streak_raises_the_tip_and_a_missed_day_resets_it(bot, wallets, today):
+    draw_card(bot)
+    today.day += timedelta(days=1)
+    draw_card(bot)
+    assert wallets.balance(CHAT, PLAYER) == 300 + 400 and "Дней подряд: 2" in bot.photos[-1].caption
+    today.day += timedelta(days=2)
+    draw_card(bot)
+    assert wallets.balance(CHAT, PLAYER) == 300 + 400 + 300 and wallets.get(CHAT, PLAYER).card_streak == 1
+
+
+def test_card_button_gives_the_presser_their_own_card(bot, events, wallets, today):
+    press_menu(bot, "card", user_id=WATCHER)
+    assert wallets.balance(CHAT, WATCHER) == daily.TIP_BASE and wallets.balance(CHAT, PLAYER) == 0
+    assert "для Гоша" in bot.photos[-1].caption and events()[-1]["data"]["via"] == "button"
+
+
+def test_daily_card_does_not_disturb_a_running_shift(bot, wallets, today):
+    start(bot)
+    session = current()
+    step, buttons = session.step, session.message_id
+    draw_card(bot, user_id=WATCHER)
+    assert current() is session and (session.step, session.message_id) == (step, buttons)
+    assert wallets.balance(CHAT, WATCHER) == daily.TIP_BASE
+
+
+def test_daily_card_falls_back_to_text_when_the_picture_fails(bot, wallets, today, monkeypatch):
+    from aiogram.exceptions import TelegramBadRequest
+
+    async def refuse(**kwargs):
+        raise TelegramBadRequest(method=None, message="wrong file")
+
+    monkeypatch.setattr(bot, "send_photo", refuse)
+    draw_card(bot)
+    assert "Карта дня для Зоя" in bot.sent[-1].text and labels_of(bot.sent[-1]) == [textui.MENU_CARD_OWN, textui.MENU_SHIFT]
+    assert wallets.balance(CHAT, PLAYER) == daily.TIP_BASE
+
+
+def test_day_changes_at_moscow_midnight(monkeypatch):
+    from datetime import datetime, timezone
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 10, 21, 30, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(guru_salon, "datetime", Frozen)
+    assert guru_salon._today() == date(2026, 11, 11)
+
+
+# --- новичок -------------------------------------------------------------------
+
+def test_first_shifts_are_protected_and_counted_once(bot, events, wallets):
+    start(bot)
+    session = current()
+    assert session.novice and session.luck_left == rules.NOVICE_LUCK and C.NOVICE_INTRO_LINE in bot.sent[0].text
+    assert all(not story.startswith("skeptic.") for story in session.plan)
+    assert events()[0]["data"]["novice"] is True and wallets.get(CHAT, PLAYER).shifts == 0, "смена без клиента не считается"
+    serve_client(bot)
+    assert wallets.get(CHAT, PLAYER).shifts == 1
+    next_client(bot)
+    serve_client(bot)
+    assert wallets.get(CHAT, PLAYER).shifts == 1
+
+
+def test_seasoned_player_gets_no_protection(bot, events, wallets):
+    for _ in range(rules.NOVICE_SHIFTS):
+        wallets.count_shift(CHAT, PLAYER, "Зоя")
+    start(bot)
+    assert not current().novice and C.NOVICE_INTRO_LINE not in bot.sent[0].text and events()[0]["data"]["novice"] is False
+
+
+def test_spectators_are_pointed_to_the_daily_card(bot, events):
+    start(bot)
+    assert "гуру карта" in press(bot, "c:stop", user_id=WATCHER).answers[0]
+
+
+# --- справка и диплом ------------------------------------------------------------
+
+def spy_on(monkeypatch, name):
+    seen = []
+    real = getattr(cert_art, name)
+
+    def spy(paper, brand=""):
+        seen.append((paper, brand))
+        return real(paper, brand)
+
+    monkeypatch.setattr(cert_art, name, spy)
+    return seen
+
+
+def broken_painter(*args):
+    raise RuntimeError("шрифт потерялся")
+
+
+def finish_live(bot, verdict="hit"):
+    start_live(bot)
+    seat_live(bot)
+    press_live(bot, "m:tarot", PLAYER)
+    voice_live(bot)
+    predict_live(bot)
+    press_live(bot, "a:see", PLAYER)
+    press_live(bot, f"v:{verdict}", WATCHER)
+
+
+def test_diploma_sums_up_the_shift_and_carries_the_brand(bot, events, monkeypatch):
+    seen = spy_on(monkeypatch, "render_diploma")
+    start(bot)
+    session = current()
+    play_shift(bot)
+    ((paper, brand),) = seen
+    assert brand == guru_salon.BRAND and "гуру" in brand
+    assert (paper.player, paper.clients, paper.score, paper.money) == ("Зоя", 3, session.score, session.money)
+    assert paper.title == rules.title(session) and not paper.exposed
+
+
+def test_shift_ends_with_text_when_the_diploma_cannot_be_drawn(bot, events, monkeypatch):
+    monkeypatch.setattr(cert_art, "render_diploma", broken_painter)
+    start(bot)
+    play_shift(bot)
+    assert bot.photos == [] and "Хотите ещё одну смену?" in bot.sent[-1].text
+    assert labels_of(bot.sent[-1])[0] == textui.AGAIN_YES and names(events())[-1] == "finish"
+
+
+def test_shift_ends_with_text_when_telegram_refuses_the_diploma(bot, events, monkeypatch):
+    from aiogram.exceptions import TelegramBadRequest
+
+    async def refuse(**kwargs):
+        raise TelegramBadRequest(method=None, message="photo too big")
+
+    monkeypatch.setattr(bot, "send_photo", refuse)
+    start(bot)
+    play_shift(bot)
+    assert "Хотите ещё одну смену?" in bot.sent[-1].text and labels_of(bot.sent[-1])[-1] == textui.AGAIN_NO
+
+
+def test_live_certificate_names_both_sides(bot, events, monkeypatch):
+    seen = spy_on(monkeypatch, "render_certificate")
+    finish_live(bot)
+    ((paper, brand),) = seen
+    assert (paper.host, paper.client, paper.outcome, paper.confidence, paper.fee) == ("Зоя", "Гоша", "hit", "see", 1500)
+    assert brand == guru_salon.BRAND and paper.prediction.startswith("До конца недели налоговая")
+    assert labels_of(bot.photos[-1]) == [textui.LIVE_NEW_BUTTON, textui.MENU_CARD]
+
+
+def test_live_ends_with_text_when_the_certificate_cannot_be_drawn(bot, events, monkeypatch):
+    monkeypatch.setattr(cert_art, "render_certificate", broken_painter)
+    finish_live(bot)
+    final = bot.sent[-1]
+    assert bot.photos == [] and "+1 500 ₽" in final.text and "Мадам переворачивает анкету" in final.text
+    assert labels_of(final) == [textui.LIVE_NEW_BUTTON, textui.MENU_CARD] and current() is None
+
+
+def test_repeated_card_button_answers_with_a_toast_not_a_message(bot, events, wallets, today):
+    press_menu(bot, "card", user_id=WATCHER)
+    sent, photos = len(bot.sent), len(bot.photos)
+    again = press_menu(bot, "card", user_id=WATCHER)
+    assert "уже вытянута" in again.answers[0] and (len(bot.sent), len(bot.photos)) == (sent, photos)
+    assert wallets.balance(CHAT, WATCHER) == daily.TIP_BASE
+    assert events()[-1]["event"] == "daily_card" and events()[-1]["data"] == {"via": "button", "repeat": True}
