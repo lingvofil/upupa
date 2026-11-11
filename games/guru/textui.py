@@ -3,7 +3,8 @@
 Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Номер шага защищает от старых
 кнопок и двойных нажатий. Отдельно: ``guru:again:yes|no:<сессия>`` (финал) и
 ``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма), ``guru:livenew:<сессия>``
-(после живого приёма: нажавший открывает следующий), ``guru:buy:<вещь>:<владелец>`` (лавка).
+(после живого приёма: нажавший открывает следующий), ``guru:buy:<вещь>:<владелец>`` (лавка),
+``guru:menu:<пункт>`` (меню салона: кнопка работает для любого, кто её нажал).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from games.guru import content as C
 from games.guru import salon
 from games.guru.contract import DisplayEvent, LiveView, View
+from games.guru.daily import DailyCard
 from games.guru.model import ClientReport
 from games.guru.rules import rub, signed_rub
 
@@ -25,6 +27,7 @@ _AGAIN_RE = re.compile(r"^guru:again:(yes|no):([0-9a-f]{1,32})$")
 _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 _BUY_RE = re.compile(r"^guru:buy:([a-z_0-9]+):(\d+)$")
+_MENU_RE = re.compile(r"^guru:menu:([a-z]+)$")
 
 ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2}
 
@@ -58,6 +61,15 @@ AGAIN_YES = "✅ Да, открываем салон"
 AGAIN_NO = "🚪 С меня хватит, вызывайте налоговую"
 REPORT_BUTTON = "📋 Разбор приёма"
 LIVE_NEW_BUTTON = "🔮 Теперь я гадаю"
+MENU_SHIFT = "🔮 Открыть смену"
+MENU_LIVE = "🤝 Живой приём"
+MENU_CARD = "🃏 Карта дня"
+MENU_CARD_OWN = "🃏 Вытянуть свою карту"
+MENU_SHOP = "🏪 Лавка"
+MENU_WALLET = "💰 Кассы"
+MENU_SALONS = "🏠 Салоны"
+MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salons"})
+LIVE_NEEDS_GROUP = "Живому приёму нужен второй человек. Открой его в группе."
 LIVE_WAIT_EXPIRED = "🕯 Никто не записался. Мадам гасит свечи."
 LIVE_ABANDON_NOTES = {
     "timeout": "💤 Мадам и клиент разошлись, не попрощавшись. Денег никто не получил.",
@@ -71,7 +83,7 @@ Rows = list[list[tuple[str, str]]]
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # act | again | report | livenew | buy
+    kind: str  # act | again | report | livenew | buy | menu
     session_id: str = ""
     step: int | None = None
     action: str | None = None
@@ -113,8 +125,15 @@ def buy_data(item: str, owner: int) -> str:
     return f"{CALLBACK_PREFIX}buy:{item}:{owner}"
 
 
+def menu_data(action: str) -> str:
+    return f"{CALLBACK_PREFIX}menu:{action}"
+
+
 def parse(data: str | None) -> Callback | None:
     data = data or ""
+    match = _MENU_RE.match(data)
+    if match:
+        return Callback("menu", action=match.group(1)) if match.group(1) in MENU_ACTIONS else None
     match = _BUY_RE.match(data)
     if match:
         return Callback("buy", item=match.group(1), owner=int(match.group(2)))
@@ -157,12 +176,33 @@ def keyboard(view: View | LiveView) -> Rows:
     return rows
 
 
-def again_keyboard(session_id: str) -> Rows:
-    return [[(AGAIN_YES, again_data(session_id, "yes"))], [(AGAIN_NO, again_data(session_id, "no"))]]
+def _live_door(group: bool) -> list[tuple[str, str]]:
+    """Живой приём предлагаем только там, где есть второй человек."""
+    return [(MENU_LIVE, menu_data("live"))] if group else []
+
+
+def again_keyboard(session_id: str, group: bool = True) -> Rows:
+    return [
+        [(AGAIN_YES, again_data(session_id, "yes"))],
+        [*_live_door(group), (MENU_CARD, menu_data("card"))],
+        [(AGAIN_NO, again_data(session_id, "no"))],
+    ]
 
 
 def live_done_keyboard(view: LiveView) -> Rows:
-    return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))]]
+    return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))], [(MENU_CARD, menu_data("card"))]]
+
+
+def menu_keyboard(group: bool = True) -> Rows:
+    return [
+        [(MENU_SHIFT, menu_data("shift")), *_live_door(group)],
+        [(MENU_CARD, menu_data("card"))],
+        [(MENU_SHOP, menu_data("shop")), (MENU_WALLET, menu_data("wallet")), (MENU_SALONS, menu_data("salons"))],
+    ]
+
+
+def daily_keyboard() -> Rows:
+    return [[(MENU_CARD_OWN, menu_data("card"))], [(MENU_SHIFT, menu_data("shift"))]]
 
 
 def client_done_keyboard(view: View, report: ClientReport) -> Rows:
@@ -231,8 +271,10 @@ def render_verdict(view: View, report: ClientReport) -> str:
     """Итог под развязкой: что случилось и чего это стоило."""
     title = f"{OUTCOME_ICONS[report.outcome]} {OUTCOME_TITLES[report.outcome]}"
     lines = [f"{title} · очки {report.points:+d} · {signed_rub(report.fee)}"]
-    if report.outcome == "exposure":
+    if report.outcome == "exposure" and report.legend_after < report.legend_before:
         lines.append("Это провал: клиент раскусил мадам, легенда салона стала меньше.")
+    elif report.outcome == "exposure":
+        lines.append("Клиент раскусил мадам, но шума не вышло: легенда салона цела.")
     if report.fee < 0:
         lines.append(C.LOSS_LINES[report.outcome])
     if report.parting == "pleased":
@@ -294,22 +336,24 @@ def render_report(report: ClientReport, questions: dict[str, str] | None = None)
 
 
 def render_intro(view: View) -> str:
-    return "\n".join((
+    lines = [
         f"🔮 Мадам {view.player} открывает салон. Сегодня {view.clients_total} клиента.",
         "",
         "Слушай, уточняй, гадай, сама решай, что озвучить, и делай предсказание.",
         f"«Клянусь!» приносит больше всего, но несбывшаяся клятва стоит денег и легенды салона: {_candles(view)}.",
         f"💰 В кассе: {rub(view.wallet)}" + (f" · {view.salon}" if view.salon else ""),
-        "",
-        "Кнопки жмёт только мадам. 15 минут без хода — салон закрывается.",
-    ))
+    ]
+    if view.novice:
+        lines.append(C.NOVICE_INTRO_LINE)
+    lines += ["", "Кнопки жмёт только мадам. 15 минут без хода — салон закрывается."]
+    return "\n".join(lines)
 
 
 def render_abandoned(reason: str) -> str:
     return ABANDON_NOTES.get(reason, "Салон закрыт.")
 
 
-def render_summary(view: View) -> tuple[str, Rows]:
+def render_summary(view: View, group: bool = True) -> tuple[str, Rows]:
     if view.finish_reason == "exposed":
         head = f"🚨 Салон мадам {view.player} разоблачён."
     elif view.finish_reason in ABANDON_NOTES:
@@ -330,7 +374,55 @@ def render_summary(view: View) -> tuple[str, Rows]:
         lines.append(f"Звание: {view.title}")
     lines += [f"🏅 {achievement}" for achievement in view.achievements]
     lines += ["", "Хотите ещё одну смену?"]
-    return "\n".join(lines), again_keyboard(view.session_id)
+    return "\n".join(lines), again_keyboard(view.session_id, group)
+
+
+# --- меню и карта дня -------------------------------------------------------
+
+def render_menu(name: str, own: object, group: bool = True) -> str:
+    """Вход в салон: что здесь делают и с чего начать. ``own`` — касса с полями balance и items."""
+    lines = [
+        "🔮 Салон «Гуру»",
+        "",
+        "Здесь гадают за деньги: слушаешь клиента, раскладываешь карты, решаешь, что озвучить, и делаешь предсказание. "
+        "Сбылось — платят. Поклялась и промахнулась — платишь сама.",
+        "",
+        "🔮 Смена — три клиента со своими тайнами, играешь одна.",
+    ]
+    if group:
+        lines.append("🤝 Живой приём — гадаешь человеку из чата, приговор выносит он.")
+    else:
+        lines.append("🤝 Живой приём — в группе: там гадают настоящим людям.")
+    lines += ["🃏 Карта дня — одна в сутки, с чаевыми в кассу.", ""]
+    lines.append(f"💰 Касса мадам {name}: {rub(own.balance)}" + (f" · {salon.describe(own.items)}" if own.items else ""))
+    return "\n".join(lines)
+
+
+def render_daily(name: str, daily: DailyCard, tip: int, streak: int, next_tip: int, balance: int) -> str:
+    """Подпись под картой дня. Чаевые видны всем: это и есть повод вытянуть свою."""
+    lines = [
+        f"🃏 Карта дня для {name}: «{daily.card.name}»",
+        f"Образы: {daily.card.symbols}.",
+        "",
+        f"🔮 {daily.prediction}",
+        f"✨ {daily.advice}",
+        "",
+        f"🪙 Вселенная оставила на чай {rub(tip)}. В кассе: {rub(balance)}",
+    ]
+    if next_tip > tip:
+        lines.append(f"🔥 Дней подряд: {streak}. Завтра чаевые будут {rub(next_tip)}.")
+    else:
+        lines.append(f"🔥 Дней подряд: {streak}.")
+    return "\n".join(lines)
+
+
+def render_daily_repeat(name: str, daily: DailyCard) -> str:
+    return f"🃏 {name}, твоя карта дня уже вытянута: «{daily.card.name}». {daily.prediction} Новая будет завтра."
+
+
+def render_daily_toast(daily: DailyCard) -> str:
+    """Повтор по кнопке: всплывающая строка, а не сообщение в чат. У мессенджера на неё 200 знаков."""
+    return f"Твоя карта дня уже вытянута: «{daily.card.name}». Новая будет завтра."
 
 
 # --- живой приём ------------------------------------------------------------

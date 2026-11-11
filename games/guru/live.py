@@ -17,7 +17,7 @@ from typing import Any
 
 from games.guru import content as C
 from games.guru import rules, salon
-from games.guru.contract import Action, DisplayEvent, LiveResult, LiveView
+from games.guru.contract import Action, Certificate, DisplayEvent, LiveResult, LiveView
 from games.guru.model import LiveSession, Participant, Reading
 
 LIVE_FEE = 1500
@@ -92,7 +92,7 @@ def refusal(session: LiveSession, actor_id: int, action_id: str) -> str | None:
     if head == "join":
         return "Самой себе гадать нельзя: дождись клиента." if actor_id == session.host.user_id else None
     if not session.is_participant(actor_id):
-        return f"Это салон мадам {session.host.name}. Смотри и учись."
+        return C.SPECTATOR_LINE.format(name=session.host.name)
     if head in ("stars", "skip") and actor_id != session.host.user_id:
         return "Это запасной выход для мадам. А ты жми свой вариант."
     if head == "z" and actor_id == session.host.user_id:
@@ -361,6 +361,21 @@ def build_view(session: LiveSession) -> LiveView:
         wallet=session.wallet_start + session.fee,
         intake_filled=len(session.intake),
         preview=rules.preview_text(session.picks) if session.phase in (*C.SLOTS, "announce") else None,
+    )
+
+
+def certificate(session: LiveSession) -> Certificate:
+    """Справка о законченном приёме. До приговора её не бывает."""
+    if session.client is None or session.outcome is None or session.confidence is None:
+        raise ValueError("справку выдают после приговора")
+    return Certificate(
+        number=rules.paper_number(session.session_id),
+        host=session.host.name,
+        client=session.client.name,
+        prediction=rules.prediction_plain(session.picks),
+        confidence=session.confidence,
+        outcome=session.outcome,
+        fee=session.fee,
     )
 
 

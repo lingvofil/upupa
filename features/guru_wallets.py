@@ -1,7 +1,9 @@
 """Касса игроков салона «Гуру»: копится от партии к партии и может уйти в минус.
 
-Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ..., "spent": ..., "items": [...]}}}``.
+Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ..., "spent": ..., "items": [...],
+"shifts": ..., "card_day": ..., "card_streak": ...}}}``.
 Касса своя в каждом чате: тренировки в личке с ботом не влияют на таблицу группы.
+Здесь же лежит то, что игрок копит помимо денег: счётчик смен и серия «карт дня».
 Файл читается на startup (``load_guru_wallets``), а не при импорте.
 """
 
@@ -16,6 +18,10 @@ from core.paths import GURU_WALLETS_PATH
 
 logger = logging.getLogger(__name__)
 
+# В кассах, заведённых до счётчика смен, его нет. Если в такой кассе уже были деньги,
+# игрок не новичок: ставим заведомо больше любого порога новичка.
+SEASONED_SHIFTS = 99
+
 
 @dataclass
 class Wallet:
@@ -25,6 +31,9 @@ class Wallet:
     lost: int = 0
     spent: int = 0  # потрачено в лавке: это вложение, а не потеря
     items: list[str] = field(default_factory=list)  # купленное в лавке
+    shifts: int = 0  # смены, в которых принят хотя бы один клиент
+    card_day: str = ""  # день последней «карты дня» (ISO)
+    card_streak: int = 0  # сколько дней подряд игрок тянет карту
 
 
 class WalletBook:
@@ -56,13 +65,17 @@ class WalletBook:
 
     @staticmethod
     def _parse(entry: dict) -> Wallet:
+        earned, lost = int(entry.get("earned", 0)), int(entry.get("lost", 0))
         return Wallet(
             name=str(entry.get("name", "")),
             balance=int(entry.get("balance", 0)),
-            earned=int(entry.get("earned", 0)),
-            lost=int(entry.get("lost", 0)),
+            earned=earned,
+            lost=lost,
             spent=int(entry.get("spent", 0)),
             items=[str(item) for item in entry.get("items", []) if isinstance(item, str)],
+            shifts=int(entry.get("shifts", SEASONED_SHIFTS if earned or lost else 0)),
+            card_day=str(entry.get("card_day", "")),
+            card_streak=int(entry.get("card_streak", 0)),
         )
 
     def get(self, chat_id: int | str, user_id: int | str) -> Wallet:
@@ -93,8 +106,30 @@ class WalletBook:
         wallet.items.append(item)
         return True
 
+    def count_shift(self, chat_id: int | str, user_id: int | str, name: str) -> int:
+        """Засчитать смену; вернуть, сколько их теперь."""
+        wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
+        wallet.name = name
+        wallet.shifts += 1
+        return wallet.shifts
+
+    def claim_card(self, chat_id: int | str, user_id: int | str, name: str, day: str, previous_day: str) -> int | None:
+        """Отметить «карту дня». Вернуть серию дней подряд или ``None``, если карта на ``day`` уже вытянута.
+
+        Без await: проверка и отметка атомарны, двойное нажатие не даст чаевые дважды.
+        """
+        wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
+        if wallet.card_day == day:
+            return None
+        wallet.name = name
+        wallet.card_streak = wallet.card_streak + 1 if wallet.card_day == previous_day else 1
+        wallet.card_day = day
+        return wallet.card_streak
+
     def top(self, chat_id: int | str, limit: int = 10) -> list[Wallet]:
-        wallets = self._chats.get(str(chat_id), {}).values()
+        """Самые богатые кассы чата. Кассы без оборота (только счётчики) в таблицу не идут."""
+        wallets = [wallet for wallet in self._chats.get(str(chat_id), {}).values()
+                   if wallet.balance or wallet.earned or wallet.lost or wallet.items]
         return sorted(wallets, key=lambda wallet: wallet.balance, reverse=True)[:limit]
 
     def snapshot(self) -> dict[str, dict[str, dict]]:
