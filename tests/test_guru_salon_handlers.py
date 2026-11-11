@@ -223,13 +223,12 @@ def _accepts(observer, event):
     return any(asyncio.run(handler.check(event))[0] for handler in observer.handlers)
 
 
-def test_salon_does_not_exist_where_experiment_is_off(flags):
+def test_salon_is_open_in_every_chat_without_flag(flags):
     bot = FakeBot()
-    assert _accepts(guru_salon.router.message, message(bot, "гуру"))
-    assert not _accepts(guru_salon.router.message, message(bot, "гуру", chat_id=-1))
-    assert not _accepts(guru_salon.router.callback_query, callback(bot, "guru:abc:0:go", chat_id=-1))
     flags.disable(CHAT, "guru")
-    assert not _accepts(guru_salon.router.message, message(bot, "гуру"))
+    assert _accepts(guru_salon.router.message, message(bot, "гуру"))
+    assert _accepts(guru_salon.router.message, message(bot, "гуру", chat_id=-1))
+    assert _accepts(guru_salon.router.callback_query, callback(bot, "guru:abc:0:go", chat_id=-1))
 
 
 @pytest.mark.parametrize("text", ["гуру", "  ГУРУ ", "гуру стоп", "Гуру  КАССА"])

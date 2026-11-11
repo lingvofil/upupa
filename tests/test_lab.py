@@ -154,7 +154,7 @@ def test_status_lists_every_experiment_with_its_state(flags):
     result = apply_lab_command(flags, CHAT, LabCommand("status"))
 
     assert not result.changed
-    assert "✅ guru" in result.text
+    assert "🌐 guru" in result.text
     assert "❌ oracle" in result.text
     assert all(experiment.key in result.text for experiment in EXPERIMENTS)
 
@@ -178,15 +178,27 @@ def test_unknown_experiment_is_rejected_with_list(flags):
 
 def test_disable_and_disable_all(flags):
     flags.enable(CHAT, "oracle")
-    flags.enable(CHAT, "guru")
+    flags.enable(CHAT, "brain_chat")
 
-    single = apply_lab_command(flags, CHAT, LabCommand("disable", "гуру"))
+    single = apply_lab_command(flags, CHAT, LabCommand("disable", "мозг"))
     everything = apply_lab_command(flags, CHAT, LabCommand("disable_all"))
     nothing = apply_lab_command(flags, CHAT, LabCommand("disable_all"))
 
-    assert single.toggled == (("guru", False),)
+    assert single.toggled == (("brain_chat", False),)
     assert everything.toggled == (("oracle", False),)
     assert not nothing.changed
+
+
+def test_public_experiment_needs_no_flag(flags):
+    for action in ("enable", "disable"):
+        result = apply_lab_command(flags, CHAT, LabCommand(action, "гуру"))
+        assert not result.changed
+        assert "всех чатах" in result.text
+    assert flags.snapshot() == {}
+
+    guru = ExperimentEnabled("guru")
+    assert asyncio.run(guru(SimpleNamespace(chat=SimpleNamespace(id=-1)))) is True
+    assert asyncio.run(guru(SimpleNamespace())) is False
 
 
 # --- журнал событий ---------------------------------------------------------
@@ -337,7 +349,7 @@ def test_handler_reports_failed_save(monkeypatch, event_log):
             raise OSError("read-only fs")
 
     monkeypatch.setattr(lab_flags, "_flags", ExperimentFlags(FailingRepository()))
-    message = _message("лаба вкл гуру")
+    message = _message("лаба вкл мозг")
 
     asyncio.run(handle_lab_command(message))
 

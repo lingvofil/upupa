@@ -2,7 +2,7 @@
 
     @router.message(ExperimentEnabled("oracle"), F.text.lower() == "оракул")
 
-Если эксперимент выключен, фильтр возвращает ``False`` и update идёт дальше
+Эксперимент с ``public=True`` проходит в любом чате. Если эксперимент выключен, фильтр возвращает ``False`` и update идёт дальше
 по роутерам, как будто эксперимента нет.
 """
 
@@ -29,10 +29,14 @@ def update_chat_id(event: Any) -> int | None:
 class ExperimentEnabled(Filter):
     def __init__(self, key: str) -> None:
         # Опечатка в ключе должна падать на импорте, а не молча выключать игру.
-        self.key = get_experiment(key).key
+        experiment = get_experiment(key)
+        self.key = experiment.key
+        self.public = experiment.public
 
     async def __call__(self, event: Any) -> bool:
         chat_id = update_chat_id(event)
         if chat_id is None:
             return False
+        if self.public:
+            return True
         return get_lab_flags().is_enabled(chat_id, self.key)

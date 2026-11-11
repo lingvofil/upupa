@@ -14,12 +14,14 @@ class Experiment:
     key: str
     title: str
     aliases: tuple[str, ...] = ()
+    # Открыт всем: работает в любом чате и в личке без флага «лаба вкл».
+    public: bool = False
 
 
 EXPERIMENTS: tuple[Experiment, ...] = (
     Experiment("crocodile_lab", "Кракадил: экспериментальные режимы", ("кракадил", "крокодил")),
     Experiment("oracle", "Оракул", ("оракул",)),
-    Experiment("guru", "Гуру", ("гуру",)),
+    Experiment("guru", "Гуру", ("гуру",), public=True),
     Experiment("brain_chat", "Мозг чата", ("мозг",)),
 )
 
