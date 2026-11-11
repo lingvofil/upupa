@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from games.guru import content as C
-from games.guru import rules, textui
+from games.guru import rules, salon, textui
 from games.guru.model import WHEN_TRUTH, Knowledge
 from games.guru.stories import STORIES, STORIES_BY_ID, stories_of
 
@@ -910,7 +910,9 @@ def test_events_split_into_short_messages():
     session, rng = make("jealous.bookie")
     view = rules.build_view(session)
     bubbles = textui.bubbles(rules.arrival_events(session), view)
-    assert len(bubbles) == 3 and bubbles[0].text.startswith("Клиент 1/1")
+    assert len(bubbles) == 3 and bubbles[0].text.startswith("<b>Клиент 1 из 1</b>")
+    assert bubbles[0].scene == ("jealous", (), ()) and bubbles[1].scene is None, "салон рисуется, когда клиент входит"
+    assert all(bubble.text.startswith("<blockquote>—") and bubble.text.endswith("</blockquote>") for bubble in bubbles[1:])
     assert bubbles[0].pause == 0 and bubbles[1].pause == rules.PACE_TELL[0] and bubbles[1].spread == rules.PACE_TELL[1]
     result = act(session, rng, "c:stop", "m:horoscope")[-1]
     ritual, omen = textui.bubbles(result.events, result.view)
@@ -1184,7 +1186,8 @@ def test_menu_buttons_round_trip_and_fit_telegram():
             for _, data in row:
                 parsed = textui.parse(data)
                 assert parsed.kind == "menu" and parsed.action in textui.MENU_ACTIONS and len(data.encode()) <= 64
-    assert {textui.parse(data).action for row in textui.menu_keyboard() for _, data in row} == textui.MENU_ACTIONS
+    doors = [*textui.menu_keyboard(), *textui.salon_keyboard()]
+    assert {textui.parse(data).action for row in doors for _, data in row} == textui.MENU_ACTIONS
     assert textui.parse(textui.menu_data("nope")) is None
     assert [label for row in textui.daily_keyboard() for label, _ in row] == [textui.MENU_CARD_OWN, textui.MENU_SHIFT]
     assert textui.MENU_LIVE not in [label for row in textui.menu_keyboard(group=False) for label, _ in row]
@@ -1199,3 +1202,70 @@ def test_menu_text_explains_the_game_and_shows_the_wallet():
     assert "Салон «Гуру»" in text and "Смена" in text and "Живой приём" in text and "Карта дня" in text
     assert "Касса мадам Зоя: 4 200 ₽" in text and len(text) < 700
     assert "в группе" in textui.render_menu("Зоя", Own(), group=False)
+
+
+# --- подарки клиентов ---------------------------------------------------------
+
+def test_client_leaves_a_gift_after_a_hit():
+    session, rng = make("jealous.lena", "granny.petrovich")
+    result = hit(session, rng, "maybe")
+    report = report_of(result)
+    assert report.gift == "jealous" and session.gifts == ["jealous"] and report.log_data()["gift"] == "jealous"
+    line = next(event.text for event in result.events if event.text.startswith("🎁"))
+    assert "бинокль" in line and "1 из 10" in line and session.client.name in line
+    assert ("gift", {"client_no": 0, "archetype": "jealous", "story": "jealous.lena", "shelf": 1}) in result.metrics
+
+
+def test_gift_is_given_once_per_client_type_and_only_for_a_hit():
+    session, rng = make("jealous.lena", "jealous.bookie", "granny.petrovich")
+    session.gifts.append("granny")
+    assert report_of(hit(session, rng, "maybe")).gift == "jealous"
+    act(session, rng, "next")
+    second = hit(session, rng, "maybe")
+    assert report_of(second).gift is None and not any(event.text.startswith("🎁") for event in second.events)
+    act(session, rng, "next")
+    assert report_of(hit(session, rng, "maybe")).gift is None, "такой подарок уже стоит на полке"
+    assert session.gifts == ["granny", "jealous"]
+
+    other, rng = make("jealous.lena")
+    assert report_of(miss(other, rng, "maybe")).gift is None and other.gifts == []
+
+
+def test_gifts_do_not_change_the_rules():
+    plain, rng = make("jealous.lena")
+    first = report_of(hit(plain, rng, "see"))
+    session = rules.new_session(session_id=SID, chat_id=-1, player_id=7, player_name="Зоя", rng=ScriptedRandom(()), now=0.0,
+                                plan=("jealous.lena",), gifts=("jealous", "granny", "samovar"))
+    assert session.gifts == ["jealous", "granny"], "неизвестные подарки из старого файла пропускаются"
+    second = report_of(hit(session, ScriptedRandom(()), "see"))
+    assert (first.fee, first.points, first.outcome) == (second.fee, second.points, second.outcome)
+
+
+def test_arrival_carries_the_salon_scene():
+    session = rules.new_session(session_id=SID, chat_id=-1, player_id=7, player_name="Зоя", rng=ScriptedRandom(()), now=0.0,
+                                plan=("granny.petrovich",), items=("tea", "cat"), gifts=("student",))
+    arrive, *rest = rules.arrival_events(session)
+    assert arrive.data["scene"] == ("granny", ("tea", "cat"), ("student",))
+    assert all("scene" not in event.data for event in rest)
+
+
+def test_salon_card_lists_purchases_effects_and_gifts():
+    from types import SimpleNamespace as Player
+
+    card = textui.render_salon_card("Зоя", Player(items=["tea", "flyers"], gifts=["granny", "student"]))
+    assert "Салон мадам Зоя" in card and "Кабинет в подвале · куплено 2 из" in card and "📰 🫖" in card
+    assert "заработок +10%" in card and "2 из 10: 🥒 банка огурцов, 📘 зачётка" in card
+    empty = textui.render_salon_card("Гоша", Player(items=[], gifts=[]))
+    assert "Каморка за гаражами" in empty and "гуру лавка" in empty and "Полка для подарков пуста" in empty
+    assert "гуру лавка" not in textui.render_salon_card("Гоша", Player(items=[], gifts=[]), visitor=True)
+    full = textui.render_salon_card("Мадам с очень длинным именем", Player(items=list(salon.ITEMS), gifts=list(salon.GIFTS)))
+    assert len(full) < 1000, "подпись под картинкой должна влезать в лимит Telegram"
+
+
+def test_bubbles_escape_markup_and_style_speech():
+    from games.guru.contract import DisplayEvent
+
+    session, _ = make("jealous.lena")
+    events = (DisplayEvent("line", "Клиент <b>Вася</b> & Ко садится."), DisplayEvent("answer", "— 2 < 3"), DisplayEvent("omen", "Расклад"))
+    (bubble,) = textui.bubbles(events, rules.build_view(session))
+    assert bubble.text == "<i>Клиент &lt;b&gt;Вася&lt;/b&gt; &amp; Ко садится.</i>\n<blockquote>— 2 &lt; 3</blockquote>\nРасклад"

@@ -15,6 +15,11 @@
 
 «гуру карта» — карта дня: не партия, чату не мешает, доступна и во время чужого приёма.
 
+Салон игрока рисуется (``games.guru.salon_art``): с каждым клиентом приходит картинка комнаты
+с купленными вещами, клиентом напротив и подарками на полке; её же показывают «гуру салон»
+и объявление о покупке. Не вышло нарисовать или отправить — тот же текст уходит без картинки.
+Сообщения партии идут с HTML-разметкой из ``textui.bubbles``; всё остальное — простой текст.
+
 Деньги игроков копятся в ``features.guru_wallets``: ядро считает сумму, здесь она
 зачисляется, как только приём закончен, поэтому брошенная смена заработанного не теряет.
 
@@ -40,9 +45,10 @@ from core.settings import ADMIN_ID
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
-from games.guru import aura_art, cert_art, daily, live, palm_art, rules, salon, textui
+from games.guru import aura_art, cert_art, daily, live, palm_art, rules, salon, salon_art, seance, textui
 from games.guru import content as C
-from games.guru.contract import DisplayEvent, LiveView, View
+from games.guru.contract import DisplayEvent, LiveView, SeanceView, View
+from games.guru.seance import Seance
 from games.guru.model import ClientReport, LiveSession, Participant, Session
 
 logger = logging.getLogger(__name__)
@@ -53,9 +59,11 @@ START_COMMANDS = frozenset({"гуру смена", "гуру играть"})
 CARD_COMMANDS = frozenset({"гуру карта", "гуру карта дня"})
 STOP_COMMANDS = frozenset({"гуру стоп"})
 LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
+SEANCE_COMMANDS = frozenset({"гуру сеанс", "гуру людмила"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
 SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
-SALON_COMMANDS = frozenset({"гуру салон", "гуру салоны"})
+SALON_COMMANDS = frozenset({"гуру салон", "гуру мой салон"})
+SALONS_COMMANDS = frozenset({"гуру салоны"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 _DRAWINGS = {"palm": palm_art, "aura": aura_art}
 SWEEP_INTERVAL_S = 15
@@ -115,6 +123,10 @@ def _is_live_command(message: types.Message) -> bool:
     return _normalize(message.text) in LIVE_COMMANDS
 
 
+def _is_seance_command(message: types.Message) -> bool:
+    return _normalize(message.text) in SEANCE_COMMANDS
+
+
 def _is_wallet_command(message: types.Message) -> bool:
     return _normalize(message.text) in WALLET_COMMANDS
 
@@ -125,6 +137,10 @@ def _is_shop_command(message: types.Message) -> bool:
 
 def _is_salon_command(message: types.Message) -> bool:
     return _normalize(message.text) in SALON_COMMANDS
+
+
+def _is_salons_command(message: types.Message) -> bool:
+    return _normalize(message.text) in SALONS_COMMANDS
 
 
 def _player_name(user: Any) -> str:
@@ -151,22 +167,29 @@ def _markup(rows: textui.Rows | None) -> InlineKeyboardMarkup | None:
 
 # --- Telegram I/O -----------------------------------------------------------
 
+def _mode(html: bool) -> str | None:
+    return "HTML" if html else None
+
+
 async def _send(bot: Any, session: Session | LiveSession, text: str, rows: textui.Rows | None = None, *,
-                reply_to: int | None = None) -> Any:
+                reply_to: int | None = None, html: bool = False) -> Any:
     return await bot.send_message(
         session.chat_id,
         text,
         message_thread_id=session.thread_id,
         reply_markup=_markup(rows),
         reply_to_message_id=reply_to,
+        parse_mode=_mode(html),
     )
 
 
-async def _edit(bot: Any, chat_id: int, message_id: int | None, text: str, rows: textui.Rows | None = None) -> None:
+async def _edit(bot: Any, chat_id: int, message_id: int | None, text: str, rows: textui.Rows | None = None, *,
+                html: bool = False) -> None:
     if message_id is None:
         return
     try:
-        await bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id, reply_markup=_markup(rows))
+        await bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id, reply_markup=_markup(rows),
+                                    parse_mode=_mode(html))
     except TelegramBadRequest as error:
         if "not modified" not in str(error).lower():
             logger.warning("[guru] не удалось обновить сообщение салона: %s", error)
@@ -197,11 +220,21 @@ async def _send_cards(bot: Any, session: Session | LiveSession, cards: tuple[str
 
 
 async def _send_drawing(bot: Any, session: Session | LiveSession, drawing: tuple[str, tuple[str, ...]]) -> None:
-    """Показать рисунок. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста."""
-    kind, marks = drawing
-    key = f"{kind}:" + "+".join(sorted(marks))
+    """Показать рисунок. Рисуем только сочетания, которых ещё нет у Telegram; если не вышло, хватит текста.
+
+    ``drawing`` — (рисунок, ключи) и, для ладони в живом приёме, тип руки клиента. ``study`` — ладонь для осмотра по областям.
+    """
+    kind, marks, *extra = drawing
+    hand = extra[0] if extra else None
+    key = f"{kind}:" + "+".join(sorted(marks)) + (f":{hand}" if hand else "")
+    if kind == "study":
+        painter, name = (palm_art.render_study, marks), "palm.jpg"
+    elif hand:
+        painter, name = (palm_art.render, marks, hand), "palm.jpg"
+    else:
+        painter, name = (_DRAWINGS[kind].render, marks), f"{kind}.jpg"
     try:
-        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(_DRAWINGS[kind].render, marks), f"{kind}.jpg")
+        photo = _card_file_ids.get(key) or BufferedInputFile(await asyncio.to_thread(*painter), name)
         sent = await bot.send_photo(chat_id=session.chat_id, photo=photo, message_thread_id=session.thread_id)
     except (TelegramAPIError, OSError, ValueError) as error:
         logger.warning("[guru] не удалось показать рисунок %s: %s", kind, error)
@@ -227,7 +260,7 @@ def _interrupted(session: Session | LiveSession) -> bool:
     return session.finish_reason in ABANDON_REASONS
 
 
-async def _play(bot: Any, session: Session | LiveSession, events: tuple[DisplayEvent, ...], view: View | LiveView,
+async def _play(bot: Any, session: Session | LiveSession | Seance, events: tuple[DisplayEvent, ...], view: View | LiveView | SeanceView,
                 closing_rows: textui.Rows | None = None, closing_text: str | None = None) -> None:
     """Показать события сообщениями с паузами; кнопки — на последнем."""
     bubbles = textui.bubbles(events, view)
@@ -246,17 +279,21 @@ async def _play(bot: Any, session: Session | LiveSession, events: tuple[DisplayE
             await _send_cards(bot, session, bubble.cards)
         if bubble.drawing:
             await _send_drawing(bot, session, bubble.drawing)
-        text = bubble.text
+        text = bubble.text  # размечен как HTML; всё, что дописываем сами, экранируем
         rows = None
         if index == len(bubbles) - 1:
             rows = closing_rows
             if closing_text:
-                text = f"{text}\n\n{closing_text}" if text else closing_text
+                text = f"{text}\n\n{textui.escape(closing_text)}" if text else textui.escape(closing_text)
         if bubble.replace and last_id is not None:
-            await _edit(bot, session.chat_id, last_id, text, rows)
-        else:
-            sent = await _send(bot, session, text, rows)
-            last_id = getattr(sent, "message_id", None)
+            await _edit(bot, session.chat_id, last_id, text, rows, html=True)
+            continue
+        sent = None
+        if bubble.scene:
+            sent = await _send_salon(bot, session.chat_id, session.thread_id, *bubble.scene, text, rows, html=True)
+        if sent is None:
+            sent = await _send(bot, session, text, rows, html=True)
+        last_id = getattr(sent, "message_id", None)
     if not view.finished or closing_rows:
         session.message_id = last_id
 
@@ -282,6 +319,8 @@ def _detach(session: Session | LiveSession, reason: str, now: float) -> dict[str
     _registry.remove(session)
     if isinstance(session, LiveSession):
         return live.abandon_summary(session, reason, now)
+    if isinstance(session, Seance):
+        return seance.abandon_summary(session, reason, now)
     return rules.abandon_summary(session, reason, now)
 
 
@@ -304,6 +343,8 @@ async def _show_abandoned(bot: Any, session: Session | LiveSession, reason: str,
         return
     if isinstance(session, LiveSession):
         text, rows = textui.render_live_abandoned(live.build_view(session), reason), None
+    elif isinstance(session, Seance):
+        text, rows = textui.render_seance_abandoned(reason), textui.seance_done_keyboard()
     else:
         summary, rows = textui.render_summary(rules.build_view(session), _is_group(session.chat_id))
         text = f"{textui.render_abandoned(reason)}\n\n{summary}"
@@ -366,6 +407,7 @@ async def _start_session(bot: Any, chat_id: int, user: Any, thread_id: int | Non
         wallet=wallet.balance,
         items=tuple(wallet.items),
         novice=wallet.shifts < rules.NOVICE_SHIFTS,
+        gifts=tuple(wallet.gifts),
     )
     session.thread_id = thread_id
     # В реестр — до первого await: второй старт в ту же секунду увидит занятый чат.
@@ -401,6 +443,7 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
         now=now,
         wallet=wallet.balance,
         items=tuple(wallet.items),
+        gifts=tuple(wallet.gifts),
     )
     session.thread_id = thread_id
     _registry.add(session)
@@ -417,6 +460,34 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
         await _fail_send(session)
         return
     session.message_id = getattr(sent, "message_id", None)
+
+
+async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str) -> None:
+    """Сеанс с одной клиенткой: мадам сама толкует знаки и решает, что сказать."""
+    now = _clock()
+    current, expired = _claim_chat(chat_id, now)
+    if current is not None:
+        await _reject_busy(bot, chat_id, user, thread_id, via, current)
+        return
+
+    wallet = get_guru_wallets().get(chat_id, user.id)
+    session = seance.new_session(
+        session_id=new_session_id(), chat_id=chat_id, host_id=user.id, host_name=_player_name(user), now=now,
+        wallet=wallet.balance, items=tuple(wallet.items), gifts=tuple(wallet.gifts),
+    )
+    session.thread_id = thread_id
+    _registry.add(session)
+    await _close_expired(bot, expired)
+
+    await log_event(EXPERIMENT, "start", chat_id=chat_id, user_id=user.id, session_id=session.session_id, via=via,
+                    **seance.start_data(session))
+    view = seance.build_view(session)
+    try:
+        await _send(bot, session, textui.render_seance_intro(view))
+        text, rows = textui.render_seance(view)
+        await _play(bot, session, seance.arrival_events(session), view, rows, text)
+    except TelegramAPIError:
+        await _fail_send(session)
 
 
 # --- меню, карта дня и справки ----------------------------------------------
@@ -454,20 +525,43 @@ async def _show_salons(bot: Any, chat_id: int, user: Any, thread_id: int | None,
                 reply_to=reply_to)
 
 
+async def _show_salon(bot: Any, chat_id: int, owner: Any, thread_id: int | None, *, visitor: bool = False) -> None:
+    """Салон одного игрока картинкой: что куплено, что это даёт и что стоит на полке."""
+    wallet = get_guru_wallets().get(chat_id, owner.id)
+    text = textui.render_salon_card(wallet.name or _player_name(owner), wallet, visitor)
+    rows = textui.salon_keyboard()
+    if await _send_salon(bot, chat_id, thread_id, None, tuple(wallet.items), tuple(wallet.gifts), text, rows) is None:
+        await _post(bot, chat_id, thread_id, text, rows)
+
+
 async def _send_picture(bot: Any, chat_id: int, thread_id: int | None, photo: Any, caption: str,
-                        rows: textui.Rows | None = None, *, cache_key: str | None = None) -> Any | None:
+                        rows: textui.Rows | None = None, *, cache_key: str | None = None, html: bool = False) -> Any | None:
     """Картинка с подписью и кнопками. ``None`` — не вышло: вызывающий отправит то же текстом."""
     if len(caption) > CAPTION_LIMIT:
         return None
     try:
         sent = await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, message_thread_id=thread_id,
-                                    reply_markup=_markup(rows))
+                                    reply_markup=_markup(rows), parse_mode=_mode(html))
     except (TelegramAPIError, OSError) as error:
         logger.warning("[guru] не удалось отправить картинку: %s", error)
         return None
     if cache_key and getattr(sent, "photo", None):
         _card_file_ids[cache_key] = sent.photo[-1].file_id
     return sent
+
+
+async def _send_salon(bot: Any, chat_id: int, thread_id: int | None, client: str | None, items: tuple[str, ...],
+                      gifts: tuple[str, ...], caption: str, rows: textui.Rows | None = None, *, html: bool = False) -> Any | None:
+    """Рисунок салона с подписью. Каждое сочетание вещей, клиента и подарков рисуется один раз."""
+    key = f"salon:{client or '-'}:{'+'.join(sorted(items))}:{'+'.join(sorted(gifts))}"
+    photo = _card_file_ids.get(key)
+    if photo is None:
+        try:
+            photo = BufferedInputFile(await asyncio.to_thread(salon_art.render, items, client, gifts), "salon.jpg")
+        except Exception:
+            logger.exception("[guru] не удалось нарисовать салон")
+            return None
+    return await _send_picture(bot, chat_id, thread_id, photo, caption, rows, cache_key=key, html=html)
 
 
 async def _daily_card(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str) -> None:
@@ -517,6 +611,11 @@ async def start_live_reception(message: types.Message) -> None:
     await _start_live(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
 
 
+@router.message(_enabled, _is_seance_command)
+async def start_seance(message: types.Message) -> None:
+    await _start_seance(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
+
+
 @router.message(_enabled, _is_card_command)
 async def show_daily_card(message: types.Message) -> None:
     await _daily_card(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
@@ -533,6 +632,14 @@ async def show_shop(message: types.Message) -> None:
 
 
 @router.message(_enabled, _is_salon_command)
+async def show_salon(message: types.Message) -> None:
+    """Свой салон; в ответ на сообщение другой мадам — её салон."""
+    replied = getattr(getattr(message, "reply_to_message", None), "from_user", None)
+    guest = replied is not None and not getattr(replied, "is_bot", False) and replied.id != message.from_user.id
+    await _show_salon(message.bot, message.chat.id, replied if guest else message.from_user, _thread_id(message), visitor=guest)
+
+
+@router.message(_enabled, _is_salons_command)
 async def show_salons(message: types.Message) -> None:
     await _show_salons(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
 
@@ -588,12 +695,16 @@ async def _menu(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
         await _start_session(bot, chat_id, user, thread_id, via="menu")
     elif action == "live":
         await _start_live(bot, chat_id, user, thread_id, via="menu")
+    elif action == "seance":
+        await _start_seance(bot, chat_id, user, thread_id, via="menu")
     elif action == "card":
         await _daily_card(bot, chat_id, user, thread_id, via="button")
     elif action == "shop":
         await _show_shop(bot, chat_id, user, thread_id)
     elif action == "wallet":
         await _show_wallets(bot, chat_id, user, thread_id)
+    elif action == "salon":
+        await _show_salon(bot, chat_id, user, thread_id)
     else:
         await _show_salons(bot, chat_id, user, thread_id)
 
@@ -621,9 +732,12 @@ async def _buy(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
     await callback.answer(f"Куплено: {item.name}")
     await _edit(callback.bot, chat_id, callback.message.message_id, textui.render_shop(name, wallet.balance, wallet.items),
                 textui.shop_keyboard(wallet.items, user.id))
+    # Покупку видят все: салон с новой вещью на своём месте.
+    text, thread_id = textui.render_purchase(item, name, wallet.balance), _thread_id(callback.message)
+    if await _send_salon(callback.bot, chat_id, thread_id, None, tuple(wallet.items), tuple(wallet.gifts), text) is not None:
+        return
     try:
-        await callback.bot.send_message(chat_id, textui.render_purchase(item, name, wallet.balance),
-                                        message_thread_id=_thread_id(callback.message))
+        await callback.bot.send_message(chat_id, text, message_thread_id=thread_id)
     except TelegramAPIError as error:
         logger.warning("[guru] не удалось объявить покупку: %s", error)
 
@@ -674,6 +788,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
     if isinstance(session, LiveSession):
         await _live_callback(callback, session, parsed)
         return
+    if isinstance(session, Seance):
+        await _seance_callback(callback, session, parsed)
+        return
     if not session.is_participant(callback.from_user.id):
         await log_event(
             EXPERIMENT, "spectator", chat_id=chat_id, user_id=callback.from_user.id,
@@ -696,6 +813,8 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
         if len(session.reports) == 1:
             # Смена засчитана с первого принятого клиента: брошенная на пороге не тратит везение новичка.
             get_guru_wallets().count_shift(chat_id, session.host.user_id, session.host.name)
+        if result.finished_client.report.gift:
+            get_guru_wallets().add_gift(chat_id, session.host.user_id, session.host.name, result.finished_client.report.gift)
         await _book_money(session, session.host, result.finished_client.report.fee)
     await callback.answer()
     await _log_metrics(session, result.metrics)
@@ -759,6 +878,46 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
             await _play(bot, session, result.events, view, rows, text)
         else:
             await _play(bot, session, result.events, view)
+    except TelegramAPIError:
+        await _fail_send(session)
+
+
+async def _seance_callback(callback: types.CallbackQuery, session: Seance, parsed: textui.Callback) -> None:
+    user, bot, message = callback.from_user, callback.bot, callback.message
+    action = parsed.action or ""
+    if not session.is_participant(user.id):
+        await log_event(EXPERIMENT, "spectator", chat_id=session.chat_id, user_id=user.id, session_id=session.session_id, action=action)
+        await callback.answer(C.SPECTATOR_LINE.format(name=session.host.name))
+        return
+    try:
+        result = seance.act(session, user.id, action, now=_clock())
+    except (ValueError, PermissionError):
+        await callback.answer("Эта кнопка уже не работает.")
+        return
+    seen = 0
+    if session.finished:
+        _registry.remove(session)
+        seen = get_guru_wallets().see_ending(session.chat_id, user.id, session.host.name, session.ending or "")
+        await _book_money(session, session.host, session.fee)
+    await callback.answer()
+    await _log_metrics(session, result.metrics)
+
+    view = result.view
+    try:
+        if action == "heard":
+            # Перечитать её слова — не ход: текущий экран с кнопками остаётся как был.
+            await _send(bot, session, seance.heard_text(session)[:textui.MESSAGE_LIMIT], reply_to=message.message_id)
+            return
+        text, rows = textui.render_seance(view)
+        if not result.fresh:
+            await _edit(bot, session.chat_id, message.message_id, text, rows)
+            return
+        await _clear_keyboard(bot, session.chat_id, message.message_id)
+        if view.finished:
+            await _play(bot, session, result.events, view, textui.seance_done_keyboard(),
+                        textui.render_seance_result(view, seen, len(seance.ENDINGS)))
+        else:
+            await _play(bot, session, result.events, view, rows, text)
     except TelegramAPIError:
         await _fail_send(session)
 

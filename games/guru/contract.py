@@ -12,7 +12,14 @@
 ``replace`` — событие заменяет предыдущее на экране («тасует колоду» превращается
 в выпавшие карты). ``data["cards"]`` — рисунки расклада по порядку; адаптер показывает
 их перед текстом события. ``data["drawing"]`` — пара (рисунок, ключи): ладонь с изъянами
-на линиях или аура с чувствами; адаптер показывает рисунок перед текстом.
+на линиях (третьим идёт тип руки, если клиент его выбрал), ладонь для осмотра по областям
+(``study``) или аура с чувствами; адаптер показывает рисунок перед текстом.
+``data["scene"]`` — тройка (кто сидит напротив, купленное, подарки на полке): адаптер рисует
+салон и ставит текст события подписью под рисунком.
+
+Вид реплики задаёт ``kind``: ``tell`` и ``answer`` — слова клиента, ``ask``, ``voice`` и
+``announce`` — слова мадам, ``arrive``, ``line``, ``status``, ``ritual`` и ``react`` — то, что
+происходит в салоне; ``omen``, ``reveal`` и ``hint`` показываются как есть.
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ class Action:
 
 @dataclass(frozen=True)
 class DisplayEvent:
-    kind: str  # arrive | tell | ask | answer | status | ritual | omen | voice | react | announce | line | reveal
+    kind: str  # arrive | tell | ask | answer | status | ritual | omen | voice | react | announce | line | reveal | hint
     text: str
     pause: float = 0.0
     spread: float = 0.0
@@ -110,6 +117,38 @@ class LiveView:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class SeanceView:
+    """Сеанс с одним клиентом: что видно интерфейсу. Чисел доверия здесь нет: только слова и кнопки."""
+
+    session_id: str
+    step: int
+    host: str
+    client: str
+    phase: str
+    prompt: str
+    screen: str  # текст текущего шага: расклад, приметы, прочтения на выбор
+    actions: tuple[Action, ...]
+    finished: bool
+    finish_reason: str | None
+    fee: int
+    wallet: int  # касса мадам с учётом этого сеанса
+    ending: str | None = None
+    ending_title: str | None = None
+    voiced: int = 0  # сколько прочтений мадам произнесла
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SeanceResult:
+    events: tuple[DisplayEvent, ...]
+    metrics: tuple[tuple[str, dict[str, Any]], ...]
+    view: SeanceView
+    fresh: bool = True  # False — ход без новых реплик: интерфейс обновляет текущий экран на месте
 
 
 @dataclass(frozen=True)

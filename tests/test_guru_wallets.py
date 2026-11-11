@@ -136,3 +136,14 @@ def test_table_hides_wallets_without_money():
     assert wallets.top(CHAT) == [], "счётчики без денег в таблицу не идут"
     wallets.apply(CHAT, 2, "Гоша", 300)
     assert [wallet.name for wallet in wallets.top(CHAT)] == ["Гоша"]
+
+
+def test_gifts_are_kept_once_and_survive_a_restart():
+    repository = MemoryRepository()
+    wallets = WalletBook(repository)
+    wallets.load()
+    assert wallets.add_gift(CHAT, 1, "Зоя", "granny") and not wallets.add_gift(CHAT, 1, "Зоя", "granny")
+    assert wallets.add_gift(CHAT, 1, "Зоя", "student")
+    asyncio.run(wallets.persist())
+    assert book(repository.saved[-1]).get(CHAT, 1).gifts == ["granny", "student"]
+    assert book({str(CHAT): {"1": {"name": "Зоя", "balance": 5}}}).get(CHAT, 1).gifts == [], "в старых кассах подарков нет"

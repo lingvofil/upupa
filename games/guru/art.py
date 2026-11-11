@@ -26,6 +26,7 @@ GOLD_DIM = (146, 116, 66)
 SKY_TOP = (22, 30, 66)
 SKY_BOTTOM = (70, 48, 74)
 PICTURE = (48, 100, 690, 1040)
+TITLE_MARGIN = 96  # по краям заголовка стоят звёзды в кругах
 
 
 def catmull(points: Sequence[Point], steps: int = 24) -> list[Point]:
@@ -101,7 +102,10 @@ def _draw_frame(image: Image.Image, title: str) -> None:
     draw.rectangle((18 * SCALE, 18 * SCALE, width - 18 * SCALE, height - 18 * SCALE), fill=FRAME)
     for inset, color, line in ((26, GOLD_DIM, 1), (32, GOLD, 2)):
         draw.rectangle((inset * SCALE, inset * SCALE, width - inset * SCALE, height - inset * SCALE), outline=color, width=line * SCALE)
-    draw.text((width / 2, 66 * SCALE), title, font=font(38), fill=GOLD, anchor="mm")
+    size = 38
+    while size > 20 and draw.textlength(title, font=font(size)) > (WIDTH - 2 * TITLE_MARGIN) * SCALE:
+        size -= 2  # длинный заголовок уменьшается, чтобы не наехать на звёзды по углам
+    draw.text((width / 2, 66 * SCALE), title, font=font(size), fill=GOLD, anchor="mm")
     for x in (64, WIDTH - 64):
         cx, cy, radius = x * SCALE, 66 * SCALE, 16 * SCALE
         draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=GOLD, width=2 * SCALE)
