@@ -69,3 +69,18 @@ def test_study_palm_renders_for_every_inspection(areas):
 def test_study_palm_refuses_unknown_areas():
     with pytest.raises(ValueError):
         palm_art.render_study(("elbow",))
+
+
+@pytest.mark.parametrize("hand", C.LIVE_HANDS)
+def test_study_keeps_the_clients_hand_shape_and_highlights_inspected_areas(hand):
+    plain = Image.open(io.BytesIO(palm_art.render_study((), hand))).convert("RGB")
+    marked = Image.open(io.BytesIO(palm_art.render_study(("heart", "thumb"), hand))).convert("RGB")
+    other = Image.open(io.BytesIO(palm_art.render_study(("heart", "thumb")))).convert("RGB")
+    assert plain.size == marked.size == other.size == (art.WIDTH, art.HEIGHT)
+    assert difference(plain, marked) > 1000
+    assert difference(marked, other) > 1000
+
+
+def test_study_refuses_unknown_hand_shape():
+    with pytest.raises(ValueError):
+        palm_art.render_study((), "paw")

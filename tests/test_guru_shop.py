@@ -257,22 +257,20 @@ def test_live_reception_uses_earnings_readings_and_tools():
     for action in ("q:love", "q:tax", "q:hope"):
         live.act(session, 2, "Гоша", action, random.Random(1), now=2.0)
     live.act(session, 1, "Зоя", "go", random.Random(1), now=3.0)
-    for action in ("s:who:tax", "s:what:lose", "s:when:week"):
-        live.act(session, 1, "Зоя", action, random.Random(1), now=4.0)
+    live.act(session, 1, "Зоя", "f:terms", random.Random(1), now=4.0)
     live.act(session, 1, "Зоя", "a:see", random.Random(1), now=5.0)
     live.act(session, 2, "Гоша", "v:hit", random.Random(1), now=6.0)
     assert session.fee == 1650
 
 
-def test_live_tool_shows_the_truth_more_often_but_never_always():
-    runs = 600
-    found = 0
-    for seed in range(runs):
-        session = live.new_session(session_id=SID, chat_id=-1, host_id=1, host_name="Зоя", now=0.0, items=("deck",))
-        session.client, session.intake, session.phase = rules.Participant(2, "Гоша"), {"sphere": "love", "who": "tax", "emotion": "hope"}, "divine"
-        live.act(session, 1, "Зоя", "m:tarot", random.Random(seed), now=1.0)
-        found += "tax" in session.pending.offered
-    assert live.LIVE_TRUTH_CHANCE < found / runs <= live.LIVE_TRUTH_MAX + 0.03
+def test_live_tools_do_not_reveal_the_private_intake():
+    views = []
+    for items in ((), ("deck", "loupe", "almanac", "ball")):
+        session = live.new_session(session_id=SID, chat_id=-1, host_id=1, host_name="Зоя", now=0.0, items=items)
+        session.client, session.intake, session.phase = rules.Participant(2, "Гоша"), {"who": "tax"}, "divine"
+        result = live.act(session, 1, "Зоя", "m:tarot", random.Random(1), now=1.0)
+        views.append((result.events, result.view.screen, result.view.actions))
+    assert views[0] == views[1], "реквизит не подбирает символы по тайным ответам"
 
 
 # --- случайные события ------------------------------------------------------

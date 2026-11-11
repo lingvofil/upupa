@@ -6,7 +6,7 @@ import random
 import pytest
 
 from games.guru import content as C
-from games.guru import live, rules, textui
+from games.guru import live, live_readings as R, rules, textui
 
 HOST = 1
 CLIENT = 2
@@ -40,13 +40,19 @@ def seated(wallet=0):
 
 
 def voice_first(session):
-    return press(session, HOST, f"i:{session.pending.offered[0]}")
+    if session.phase == "tarot":
+        press(session, HOST, "pair:ha")
+    elif session.phase == "palm":
+        press(session, HOST, "area:heart")
+        press(session, HOST, "area:head")
+    press(session, HOST, f"r:{session.options[0]}")
+    press(session, HOST, "say:idea")
+    return press(session, CLIENT, "feedback:yes")
 
 
-def predict(session, who="tax", what="lose", when="week"):
+def predict(session):
     press(session, HOST, "go")
-    for slot, tag in (("who", who), ("what", what), ("when", when)):
-        press(session, HOST, f"s:{slot}:{tag}")
+    press(session, HOST, "f:terms")
 
 
 def to_verdict(confidence, wallet=0):
@@ -115,8 +121,7 @@ def test_intake_answers_stay_hidden_until_the_verdict():
     watch(press(session, HOST, "m:palm"))
     watch(voice_first(session))
     watch(press(session, HOST, "go"))
-    for action in ("s:who:friend", "s:what:gain", "s:when:today"):
-        watch(press(session, HOST, action))
+    watch(press(session, HOST, "f:terms"))
     result = watch(press(session, HOST, "a:maybe"))
 
     assert [text for text in seen if "Беда:" in text or "Кто замешан:" in text or "На душе:" in text] == []
@@ -203,8 +208,7 @@ def test_silent_client_leaves_nothing_to_reveal():
     session = joined()
     press(session, HOST, "skip")
     press(session, HOST, "go")
-    for action in ("s:who:friend", "s:what:gain", "s:when:today"):
-        press(session, HOST, action)
+    press(session, HOST, "f:terms")
     press(session, HOST, "a:maybe")
     assert not any(event.kind == "reveal" for event in press(session, CLIENT, "v:hit").events)
 
@@ -222,59 +226,6 @@ def test_buttons_belong_to_their_owners():
     assert live.refusal(session, CLIENT, "v:hit") is None
 
 
-def test_tarot_deals_three_different_pictures():
-    session = seated()
-    result = press(session, HOST, "m:tarot", random.Random(5))
-    ritual, omen = result.events
-    assert ritual.kind == "ritual" and "колод" in ritual.text
-    cards = omen.data["cards"]
-    assert len(cards) == len(set(cards)) == 3 and omen.text.count("Образы:") == 3 and not omen.replace
-
-
-def test_energy_brings_a_picture_of_the_aura():
-    session = seated()
-    result = press(session, HOST, "m:energy", random.Random(5))
-    omen = result.events[-1]
-    assert not omen.replace and "🌀" in omen.text and omen.data["drawing"] == ("aura", session.pending.offered)
-
-
-def test_palm_brings_a_picture_of_the_offered_lines():
-    session = seated()
-    result = press(session, HOST, "m:palm", random.Random(5))
-    omen = result.events[-1]
-    assert not omen.replace and "Ладонь" in omen.text and omen.data["drawing"] == ("palm", session.pending.offered, "earth")
-    assert C.LIVE_HANDS["earth"][1] in omen.text and session.hand == "earth"
-
-
-def test_client_picks_a_hand_like_their_own():
-    session = seated()
-    asked = press(session, HOST, "m:palm", hand=None)
-    assert session.phase == "hand" and asked.events[-1].text == C.LIVE_HAND_ASK_LINE
-    view = live.build_view(session)
-    assert "Гоша, какая у тебя рука?" in view.prompt
-    assert [action.id for action in view.actions] == [*(f"h:{key}" for key in C.LIVE_HANDS), "anyhand"]
-    assert "Руку показывает клиент" in live.refusal(session, HOST, "h:water")
-    assert "запасной выход" in live.refusal(session, CLIENT, "anyhand")
-    assert live.refusal(session, CLIENT, "h:water") is None and live.refusal(session, HOST, "anyhand") is None
-    for row in textui.keyboard(view):
-        assert len(row) == 1 and len(row[0][1].encode()) <= 64, "длинные описания рук стоят по одному в ряд"
-
-    result = press(session, CLIENT, "h:water")
-    assert session.phase == "interpret" and session.hand == "water"
-    assert result.events[-1].data["drawing"] == ("palm", session.pending.offered, "water")
-    (name, data), = result.metrics
-    assert data["hand"] == "water" and data["hand_by"] == "client"
-
-
-def test_host_can_go_on_when_the_client_keeps_silent_about_the_hand():
-    session = seated()
-    press(session, HOST, "m:palm", hand=None)
-    result = press(session, HOST, "anyhand")
-    assert session.phase == "interpret" and session.hand == ""
-    assert result.events[-1].data["drawing"] == ("palm", session.pending.offered), "рука обычная"
-    assert result.metrics[0][1]["hand_by"] == "host"
-
-
 def test_every_hand_type_can_be_drawn():
     from games.guru import palm_art
 
@@ -287,32 +238,6 @@ def asked_for_sign():
     return session
 
 
-def test_horoscope_asks_the_client_for_a_sign_first():
-    session = seated()
-    result = press(session, HOST, "m:horoscope", random.Random(5))
-
-    assert session.phase == "sign" and session.sign == "" and session.readings_left == live.LIVE_READINGS - 1
-    assert session.used_methods == ["horoscope"] and result.metrics == (), "гадание ещё не состоялось"
-    assert "Гоша" in result.view.prompt and "знак" in result.view.prompt
-    assert [a.id for a in result.view.actions if a.kind == "sign"] == [f"z:{key}" for key in C.ZODIAC_IDS]
-
-
-def test_client_picks_the_sign_and_the_horoscope_uses_it():
-    session = asked_for_sign()
-    result = press(session, CLIENT, "z:virgo", random.Random(5))
-
-    assert session.sign == "Дева" and session.phase == "interpret"
-    ritual, omen = result.events
-    assert ritual.kind == "ritual" and omen.replace and C.ZODIAC["Дева"][1] in omen.text
-    assert "Паспорт" not in omen.text, "клиент назвал знак сам, звёзды не вмешиваются"
-    assert all(C.WHAT[tag].forecast in omen.text for tag in session.pending.offered)
-    event, data = result.metrics[-1]
-    assert event == "action" and data["method"] == "horoscope" and data["slot"] == "what" and data["sign_by"] == "client"
-    assert result.view.prompt == "Мадам, что озвучить?"
-    voice_first(session)
-    assert session.phase == "divine" and "m:horoscope" not in ids(session)
-
-
 def test_only_the_client_can_name_the_sign():
     session = asked_for_sign()
     assert "клиент" in live.refusal(session, HOST, "z:leo")
@@ -323,19 +248,6 @@ def test_only_the_client_can_name_the_sign():
     with pytest.raises(PermissionError):
         press(session, STRANGER, "z:leo")
     assert session.phase == "sign" and session.sign == ""
-
-
-def test_host_can_move_on_when_the_client_is_silent():
-    session = asked_for_sign()
-    assert "запасной выход" in live.refusal(session, CLIENT, "stars")
-    with pytest.raises(PermissionError):
-        press(session, CLIENT, "stars")
-
-    result = press(session, HOST, "stars", random.Random(5), now=60.0)
-
-    assert session.phase == "interpret" and session.sign in C.ZODIAC and session.pending.slot == "what"
-    assert "Паспорт" in result.events[-1].text and "Гоша" in result.events[-1].text
-    assert result.metrics[-1][1]["sign_by"] == "stars"
 
 
 def test_silent_client_is_bounded_by_the_usual_idle_timeout():
@@ -362,132 +274,6 @@ def test_sign_keyboard_fits_telegram():
             assert len(longest.encode()) <= 64, "запас на самый длинный id сессии, который принимает разбор"
             parsed = textui.parse(data)
             assert parsed.kind == "act" and parsed.session_id == view.session_id and parsed.step == view.step
-
-
-def test_readings_are_limited_and_do_not_repeat():
-    session = seated()
-    methods = ["tarot", "palm", "energy"]
-    for number, method in enumerate(methods, 1):
-        press(session, HOST, f"m:{method}")
-        voice_first(session)
-        assert f"m:{method}" not in ids(session) and session.readings_left == live.LIVE_READINGS - number
-    assert ids(session) == ["go"] and "пора к предсказанию" in live.build_view(session).prompt
-    with pytest.raises(ValueError):
-        press(session, HOST, "m:horoscope")
-
-
-@pytest.mark.parametrize("method,slot,table", [
-    ("palm", "sphere", C.SPHERES),
-    ("tarot", "who", C.WHO),
-    ("energy", "emotion", C.EMOTIONS),
-])
-def test_host_picks_which_interpretation_to_voice(method, slot, table):
-    session = seated()
-    press(session, HOST, f"m:{method}", random.Random(5))
-
-    assert session.phase == "interpret" and session.pending.slot == slot and len(session.pending.offered) == live.LIVE_OPTIONS
-    actions = live.available_actions(session)
-    assert [a.kind for a in actions] == ["interpretation"] * live.LIVE_OPTIONS
-    assert live.build_view(session).prompt == "Мадам, что озвучить?"
-
-    tag = session.pending.offered[1]
-    assert "Реквизит" in live.refusal(session, CLIENT, f"i:{tag}")
-    result = press(session, HOST, f"i:{tag}")
-
-    assert session.phase == "divine" and session.pending is None
-    voice = result.events[0]
-    assert voice.kind == "voice" and voice.text.startswith("— Мадам: «") and table[tag].voice.rstrip(".") in voice.text
-    assert result.metrics == (("action", {"kind": "interpretation", "mode": "live", "method": method, "slot": slot, "voiced": tag}),)
-
-
-def test_tarot_cards_match_the_offered_interpretations():
-    session = seated()
-    result = press(session, HOST, "m:tarot", random.Random(5))
-    drawn = [next(card for card in C.TAROT_CARDS.values() if card.art == art) for art in result.events[-1].data["cards"]]
-    assert {card.who for card in drawn} == set(session.pending.offered)
-
-
-@pytest.mark.parametrize("method,answer", [("palm", "love"), ("tarot", "tax"), ("energy", "hope")])
-def test_client_answer_appears_among_interpretations_often_but_not_always(method, answer):
-    runs = 800
-    found = 0
-    for seed in range(runs):
-        session = seated()
-        press(session, HOST, f"m:{method}", random.Random(seed))
-        found += answer in session.pending.offered
-    assert found / runs == pytest.approx(live.LIVE_TRUTH_CHANCE, abs=0.06)
-
-
-def test_horoscope_leans_towards_the_clients_trouble():
-    runs = 400
-    in_sphere = 0
-    for seed in range(runs):
-        session = seated()  # беда: отношения
-        press(session, HOST, "m:horoscope", random.Random(seed))
-        press(session, CLIENT, "z:leo", random.Random(seed))
-        in_sphere += any(C.WHAT[tag].sphere == "love" for tag in session.pending.offered)
-    assert in_sphere / runs > 0.7
-
-
-def test_without_intake_interpretations_are_blind():
-    session = joined()
-    press(session, HOST, "skip")
-    result = press(session, HOST, "m:tarot", random.Random(5))
-    assert session.pending.quality == "blind" and result.metrics[-1][1]["quality"] == "blind"
-
-
-def test_host_builds_the_prediction_with_buttons():
-    session = seated()
-    result = press(session, HOST, "go")
-    assert session.phase == "who" and result.view.prompt == "Мадам, кто?" and len(ids(session)) == len(C.WHO)
-    assert result.view.preview == "Кто: … · Что: … · Когда: …"
-
-    assert "Реквизит" in live.refusal(session, CLIENT, "s:who:tax")
-    press(session, HOST, "s:who:tax")
-    assert session.phase == "what" and len(ids(session)) == len(C.WHAT)
-    press(session, HOST, "s:what:lose")
-    assert session.phase == "when" and len(ids(session)) == len(C.WHEN)
-    result = press(session, HOST, "s:when:week")
-
-    assert session.phase == "announce" and result.view.prompt == "Мадам, как объявить?"
-    assert result.view.preview == "«До конца недели налоговая потеряет крупную сумму»"
-
-
-def test_client_judges_a_concrete_prediction():
-    session = seated()
-    predict(session, who="friend", what="gain", when="today")
-    result = press(session, HOST, "a:see")
-
-    announce = result.events[0]
-    assert announce.kind == "announce" and "Я отчётливо вижу: сегодня же близкий друг принесёт деньги" in announce.text
-    assert session.phase == "verdict" and "Гоша" in result.view.prompt
-
-    event, data = press(session, CLIENT, "v:hit").metrics[-1]
-    assert event == "finish" and data["picks"] == {"who": "friend", "what": "gain", "when": "today"}
-
-
-def test_constructor_message_edits_in_place():
-    session = seated()
-    press(session, HOST, "go")
-    text, rows = textui.render_live_constructor(live.build_view(session))
-    assert text.startswith("🔮 Предсказание") and "👉 Мадам, кто?" in text and [len(row) for row in rows] == [2, 2, 2, 2, 1]
-
-
-@pytest.mark.parametrize("prefix,steps", [
-    ("who", ()),
-    ("what", ("s:who:tax",)),
-    ("when", ("s:who:tax", "s:what:propose")),
-])
-def test_constructor_buttons_fit_telegram(prefix, steps):
-    session = seated()
-    press(session, HOST, "go")
-    for action in steps:
-        press(session, HOST, action)
-    view = live.build_view(session)
-    assert view.phase == prefix
-    for row in textui.keyboard(view):
-        for _, data in row:
-            assert len(data.replace(view.session_id, "f" * 32, 1).encode()) <= 64 and textui.parse(data).kind == "act"
 
 
 @pytest.mark.parametrize("verdict,confidence,outcome,fee", [
@@ -531,8 +317,8 @@ def test_abandon_reports_phase_and_ends_session():
     data = live.abandon_summary(session, "timeout", now=950.0)
     assert session.finished and session.finish_reason == "timeout"
     assert data == {
-        "mode": "live", "reason": "timeout", "phase": "interpret", "idle_s": 900.0, "client_joined": True,
-        "methods_used": ["palm"], "duration_s": 950.0, "rules": rules.RULES_VERSION,
+        "mode": "live", "reason": "timeout", "phase": "palm", "idle_s": 900.0, "client_joined": True,
+        "methods_used": ["palm"], "duration_s": 950.0, "rules": rules.RULES_VERSION, "mechanic": live.MECHANIC,
     }
 
 
@@ -560,7 +346,7 @@ def test_every_step_fits_callback_data():
 def test_open_call_and_abandon_texts():
     session = make()
     view = live.build_view(session)
-    assert "Зоя" in textui.render_live_open(view) and len(textui.render_live_open(view)) < 400
+    assert "Зоя" in textui.render_live_open(view) and len(textui.render_live_open(view)) < 600
     assert textui.render_live_abandoned(view, "timeout") == textui.LIVE_WAIT_EXPIRED
     press(session, CLIENT, "join")
     assert textui.render_live_abandoned(live.build_view(session), "quit") == textui.LIVE_ABANDON_NOTES["quit"]
@@ -574,7 +360,7 @@ def test_certificate_is_issued_only_after_the_verdict():
     paper = live.certificate(session)
     assert (paper.host, paper.client, paper.confidence) == ("Зоя", "Гоша", "swear")
     assert (paper.outcome, paper.fee) == (session.outcome, session.fee) and paper.fee < 0
-    assert paper.number == rules.paper_number(session.session_id) and paper.prediction == rules.prediction_plain(session.picks)
+    assert paper.number == rules.paper_number(session.session_id) and paper.prediction == R.FAREWELLS[session.picks["farewell"]][1]
 
 
 def test_stranger_is_pointed_to_the_daily_card():
