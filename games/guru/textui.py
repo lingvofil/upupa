@@ -4,7 +4,8 @@ Callback-данные: ``guru:<сессия>:<шаг>:<действие>``. Но
 кнопок и двойных нажатий. Отдельно: ``guru:again:yes|no:<сессия>`` (финал) и
 ``guru:rep:<клиент>:<сессия>`` (подробный разбор приёма), ``guru:livenew:<сессия>``
 (после живого приёма: нажавший открывает следующий), ``guru:buy:<вещь>:<владелец>`` (лавка),
-``guru:menu:<пункт>`` (меню салона: кнопка работает для любого, кто её нажал).
+``guru:menu:<пункт>`` (меню салона: кнопка работает для любого, кто её нажал),
+``guru:nav:<раздел>`` (разделы меню: открываются в том же сообщении, а не новым).
 
 Сообщения партии (``bubbles``) размечены для Telegram как HTML: слова клиента стоят цитатой,
 то, что происходит в салоне, — курсивом. Весь чужой текст в них экранирован (``escape``).
@@ -33,6 +34,7 @@ _REPORT_RE = re.compile(r"^guru:rep:(\d+):([0-9a-f]{1,32})$")
 _LIVE_NEW_RE = re.compile(r"^guru:livenew:([0-9a-f]{1,32})$")
 _BUY_RE = re.compile(r"^guru:buy:([a-z_0-9]+):(\d+)$")
 _MENU_RE = re.compile(r"^guru:menu:([a-z]+)$")
+_NAV_RE = re.compile(r"^guru:nav:([a-z]+)$")
 _DIALOG_RE = re.compile(r"^guru:ui:([0-9a-f]{1,32}):(\d+):(screen|log|heard):(\d+)$")
 
 ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2,
@@ -76,9 +78,16 @@ MENU_SHOP = "🏪 Лавка"
 MENU_WALLET = "💰 Кассы"
 MENU_SALON = "🏠 Мой салон"
 MENU_SALONS = "👥 Салоны чата"
+MENU_SHELF = "🎁 Полка"
+NAV_MENU = "⬅️ Меню"
+NAV_PICTURE = "🖼 Рисунок салона"
 MENU_SEANCE = "🕯 Сеанс: Людмила"
 MENU_SEANCE_AGAIN = "🕯 Принять Людмилу ещё раз"
-MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salon", "salons", "seance"})
+MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salon", "salons", "shelf", "seance"})
+# Разделы меню: справки салона листаются в одном сообщении. Порядок — порядок кнопок под разделом.
+NAV_LABELS = {"shop": MENU_SHOP, "wallet": MENU_WALLET, "salon": MENU_SALON, "shelf": MENU_SHELF, "salons": MENU_SALONS, "menu": NAV_MENU}
+NAV_SECTIONS = frozenset(NAV_LABELS)
+SHELF_HINT = "Подарок оставляет клиент, которому сбылось: по одному от каждого типа."
 SEANCE_ABANDON_NOTES = {
     "timeout": "💤 Мадам задумалась так надолго, что Людмила ушла сама. Денег никто не получил.",
     "quit": "🚪 Сеанс прерван. Людмила уходит, прижимая к себе распечатку.",
@@ -102,7 +111,7 @@ Rows = list[list[tuple[str, str]]]
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # act | again | report | livenew | buy | menu
+    kind: str  # act | again | report | livenew | buy | menu | nav | dialog
     session_id: str = ""
     step: int | None = None
     action: str | None = None
@@ -150,6 +159,10 @@ def menu_data(action: str) -> str:
     return f"{CALLBACK_PREFIX}menu:{action}"
 
 
+def nav_data(section: str) -> str:
+    return f"{CALLBACK_PREFIX}nav:{section}"
+
+
 def parse(data: str | None) -> Callback | None:
     data = data or ""
     match = _DIALOG_RE.match(data)
@@ -158,6 +171,9 @@ def parse(data: str | None) -> Callback | None:
     match = _MENU_RE.match(data)
     if match:
         return Callback("menu", action=match.group(1)) if match.group(1) in MENU_ACTIONS else None
+    match = _NAV_RE.match(data)
+    if match:
+        return Callback("nav", action=match.group(1)) if match.group(1) in NAV_SECTIONS else None
     match = _BUY_RE.match(data)
     if match:
         return Callback("buy", item=match.group(1), owner=int(match.group(2)))
@@ -241,17 +257,33 @@ def live_done_keyboard(view: LiveView) -> Rows:
     return [[(LIVE_NEW_BUTTON, live_new_data(view.session_id))], [(MENU_CARD, menu_data("card")), (MENU_SALON, menu_data("salon"))]]
 
 
+def _nav_button(section: str) -> tuple[str, str]:
+    return NAV_LABELS[section], nav_data(section)
+
+
 def menu_keyboard(group: bool = True) -> Rows:
+    """Меню — главная страница: партии начинаются новым сообщением, справки открываются в этом же."""
     return [
         [(MENU_SHIFT, menu_data("shift")), *_live_door(group)],
         [(MENU_SEANCE, menu_data("seance")), (MENU_CARD, menu_data("card"))],
-        [(MENU_SHOP, menu_data("shop")), (MENU_WALLET, menu_data("wallet")), (MENU_SALON, menu_data("salon"))],
+        [_nav_button("shop"), _nav_button("wallet"), _nav_button("salon")],
+        [_nav_button("shelf"), _nav_button("salons")],
     ]
 
 
+def section_keyboard(section: str, rows: Rows | None = None) -> Rows:
+    """Кнопки под разделом меню: свои (``rows``), потом остальные разделы и возврат в меню."""
+    doors = [_nav_button(other) for other in NAV_LABELS if other != section]
+    result = [list(row) for row in rows or []]
+    if section == "salon":
+        result.append([(NAV_PICTURE, menu_data("salon"))])  # картинку в текстовое сообщение не превратить: она придёт отдельно
+    return [*result, doors[:3], doors[3:]]
+
+
 def salon_keyboard() -> Rows:
-    """Под рисунком салона: кнопки работают для любого, кто нажал, и ведут в его лавку."""
-    return [[(MENU_SHOP, menu_data("shop")), (MENU_SALONS, menu_data("salons"))], [(MENU_SALON, menu_data("salon"))]]
+    """Под рисунком салона: кнопки работают для любого, кто нажал, и открывают его меню на нужном разделе."""
+    return [[(MENU_SHOP, menu_data("shop")), (MENU_SHELF, menu_data("shelf")), (MENU_SALONS, menu_data("salons"))],
+            [(MENU_SALON, menu_data("salon"))]]
 
 
 def daily_keyboard() -> Rows:
@@ -628,6 +660,26 @@ def render_salon_card(name: str, own: object, visitor: bool = False) -> str:
     return "\n".join(lines)
 
 
+def render_shelf(name: str, own: object) -> str:
+    """Полка подарков вблизи: что стоит, от кого и с какой историей. Пустое место называет только того, кто ещё не дарил."""
+    slots = salon.shelf(getattr(own, "gifts", ()))
+    count = sum(owned for _, owned in slots)
+    blocks = [f"🎁 Полка мадам {name}: {count} из {len(slots)}"]
+    waiting: list[str] = []  # пустые места подряд идут одним абзацем
+    for gift, owned in slots:
+        if not owned:
+            waiting.append(f"▫️ от {gift.giver}: ещё не подарили")
+            continue
+        if waiting:
+            blocks.append("\n".join(waiting))
+            waiting = []
+        blocks.append(f"{gift.emoji} {gift.name[0].upper()}{gift.name[1:]} · от {gift.giver}\n{gift.story}")
+    if waiting:
+        blocks.append("\n".join(waiting))
+    blocks.append(salon.GIFTS_COMPLETE_LINE if count == len(slots) else SHELF_HINT)
+    return "\n\n".join(blocks)[:MESSAGE_LIMIT]
+
+
 # --- лавка ------------------------------------------------------------------
 
 def render_shop(name: str, balance: int, owned: list[str]) -> str:
@@ -651,5 +703,6 @@ def render_purchase(item: salon.Item, name: str, balance: int) -> str:
 
 
 def shop_keyboard(owned: list[str], owner: int) -> Rows:
+    """Товары, которых ещё нет, и под ними остальные разделы меню."""
     buttons = [(f"{item.emoji} {item.short}", buy_data(item.key, owner)) for item in salon.ITEMS.values() if item.key not in owned]
-    return [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    return section_keyboard("shop", [buttons[index:index + 2] for index in range(0, len(buttons), 2)])

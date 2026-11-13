@@ -297,7 +297,9 @@ def test_shop_lists_goods_and_buttons(bot, wallets):
     assert "Лавка салона мадам Зоя" in shop.text and "3 000 ₽" in shop.text and shop.reply_to_message_id == 1
     assert "Чай с чабрецом" in shop.text
     buttons = [button for row in shop.reply_markup.inline_keyboard for button in row]
-    assert len(buttons) == len(salon.ITEMS) and all(len(b.callback_data.encode()) <= 64 for b in buttons)
+    goods = [button for button in buttons if textui.parse(button.callback_data).kind == "buy"]
+    assert len(goods) == len(salon.ITEMS) and all(len(b.callback_data.encode()) <= 64 for b in buttons)
+    assert buttons[-1].text == textui.NAV_MENU, "из лавки можно вернуться в меню в том же сообщении"
 
 
 def test_buying_takes_money_and_updates_the_shop(bot, events, wallets):
@@ -371,7 +373,7 @@ def test_own_salon_is_a_picture_with_what_is_bought(bot, wallets):
     (picture,) = bot.scenes
     assert "Салон мадам Зоя" in picture.caption and "Кабинет в подвале · куплено 1 из" in picture.caption
     assert "скептиков вдвое меньше" in picture.caption and "🥒 банка огурцов" in picture.caption
-    assert labels_of(picture) == [textui.MENU_SHOP, textui.MENU_SALONS, textui.MENU_SALON]
+    assert labels_of(picture) == [textui.MENU_SHOP, textui.MENU_SHELF, textui.MENU_SALONS, textui.MENU_SALON]
     asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
     assert bot.scenes[-1].photo == "salon1" and "salon:-:zina:granny" in guru_salon._card_file_ids, "тот же салон второй раз не рисуем"
 
@@ -402,6 +404,46 @@ def test_salon_falls_back_to_text_without_pictures(bot, wallets, monkeypatch):
     monkeypatch.setattr(bot, "send_photo", refuse)
     asyncio.run(guru_salon.show_salon(message(bot, "гуру салон")))
     assert "Салон мадам Зоя" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None
+
+
+@pytest.mark.parametrize("text", ["гуру полка", "Гуру  ПОДАРКИ"])
+def test_shelf_command_matches(flags, text):
+    assert _accepts(guru_salon.router.message, message(FakeBot(), text))
+
+
+def test_shelf_command_tells_the_story_of_every_gift(bot, wallets):
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    asyncio.run(guru_salon.show_shelf(message(bot, "гуру полка")))
+    (shelf,) = bot.sent
+    assert shelf.text.startswith("🎁 Полка мадам Зоя: 1 из 10") and shelf.reply_to_message_id == 1
+    assert "🥒 Банка огурцов · от бабушки" in shelf.text and salon.GIFTS["granny"].story in shelf.text
+    assert shelf.text.count("ещё не подарили") == 9 and "бинокль" not in shelf.text, "чего нет на полке, то не названо"
+    assert bot.scenes == [], "полка — текст: истории в подпись к рисунку не влезут"
+    assert labels_of(shelf) == [textui.MENU_SHOP, textui.MENU_WALLET, textui.MENU_SALON, textui.MENU_SALONS, textui.NAV_MENU]
+
+
+def test_empty_shelf_is_still_shown(bot, wallets):
+    asyncio.run(guru_salon.show_shelf(message(bot, "гуру полка")))
+    assert "Полка мадам Зоя: 0 из 10" in bot.sent[-1].text and textui.SHELF_HINT in bot.sent[-1].text
+
+
+def test_shelf_command_in_reply_shows_that_players_shelf(bot, wallets):
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    wallets.add_gift(CHAT, WATCHER, "Гоша", "tycoon")
+    msg = message(bot, "гуру полка")
+    msg.reply_to_message = SimpleNamespace(from_user=user(WATCHER, "Гоша"))
+    asyncio.run(guru_salon.show_shelf(msg))
+    assert "Полка мадам Гоша: 1 из 10" in bot.sent[-1].text and "🪙 Золотой слиток" in bot.sent[-1].text
+    assert "Банка огурцов" not in bot.sent[-1].text
+
+
+def test_shelf_command_in_reply_to_a_bot_or_to_oneself_shows_own_shelf(bot, wallets):
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    for author in (SimpleNamespace(id=999, is_bot=True, first_name="Бот", username=None), user(PLAYER)):
+        msg = message(bot, "гуру полка")
+        msg.reply_to_message = SimpleNamespace(from_user=author)
+        asyncio.run(guru_salon.show_shelf(msg))
+        assert "Полка мадам Зоя: 1 из 10" in bot.sent[-1].text
 
 
 def test_cannot_buy_twice_or_without_money(bot, wallets):
@@ -1294,7 +1336,7 @@ def test_bare_guru_opens_the_menu_and_starts_nothing(bot, events):
     assert current() is None, "меню не занимает чат"
     assert "Салон «Гуру»" in menu.text and "Живой приём — гадаешь человеку из чата" in menu.text and menu.reply_to_message_id == 1
     assert labels_of(menu) == [textui.MENU_SHIFT, textui.MENU_LIVE, textui.MENU_SEANCE, textui.MENU_CARD, textui.MENU_SHOP,
-                               textui.MENU_WALLET, textui.MENU_SALON]
+                               textui.MENU_WALLET, textui.MENU_SALON, textui.MENU_SHELF, textui.MENU_SALONS]
     assert all(len(button.callback_data.encode()) <= 64 for row in menu.reply_markup.inline_keyboard for button in row)
     (record,) = events()
     assert record["event"] == "menu" and record["data"]["action"] == "open"
@@ -1322,7 +1364,8 @@ def test_menu_button_opens_live_reception(bot, events):
     assert events()[-1]["event"] == "start" and events()[-1]["data"]["via"] == "menu"
 
 
-def test_menu_buttons_show_shop_wallets_and_salons(bot, wallets):
+def test_buttons_under_a_picture_open_sections_as_new_messages(bot, wallets):
+    # Под рисунком салона и в партии кнопки старого вида: то сообщение в текст раздела не превратить.
     wallets.apply(CHAT, PLAYER, "Зоя", 3000)
     press_menu(bot, "shop")
     assert "Лавка салона мадам Зоя" in bot.sent[-1].text and bot.sent[-1].reply_markup is not None
@@ -1330,9 +1373,83 @@ def test_menu_buttons_show_shop_wallets_and_salons(bot, wallets):
     assert "1. Зоя — 3 000 ₽" in bot.sent[-1].text
     press_menu(bot, "salons")
     assert len(bot.sent) == 3 and current() is None
+    press_menu(bot, "shelf")
+    assert "Полка мадам Зоя: 0 из 10" in bot.sent[-1].text and len(bot.sent) == 4
     press_menu(bot, "salon")
-    assert "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.sent) == 3
+    assert "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.sent) == 4
     assert all(sent.reply_to_message_id is None for sent in bot.sent), "по кнопке отвечать не на что"
+    assert all(labels_of(sent)[-1] == textui.NAV_MENU for sent in bot.sent), "дальше разделы листаются в этом сообщении"
+    assert bot.edits == []
+
+
+def press_nav(bot, section, message_id, user_id=PLAYER, chat_id=CHAT):
+    query = callback(bot, textui.nav_data(section), user_id=user_id, message_id=message_id, chat_id=chat_id)
+    asyncio.run(guru_salon.salon_callback(query))
+    return query
+
+
+def edited_labels(edit):
+    return [button.text for row in edit.reply_markup.inline_keyboard for button in row]
+
+
+def test_menu_sections_open_in_the_same_message(bot, wallets, events):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
+    menu = open_menu(bot)
+    expected = {"shop": "Лавка салона мадам Зоя", "wallet": "1. Зоя — 3 000 ₽", "salon": "Салон мадам Зоя",
+                "shelf": "🥒 Банка огурцов · от бабушки", "salons": "Пока никто ничего не купил"}
+    for section, words in expected.items():
+        query = press_nav(bot, section, menu.message_id)
+        edit = bot.edits[-1]
+        assert words in edit.text and edit.message_id == menu.message_id and edit.chat_id == CHAT and query.answers == [None]
+        assert edited_labels(edit)[-1] == textui.NAV_MENU and textui.NAV_LABELS[section] not in edited_labels(edit)
+    assert len(bot.sent) == 1 and bot.scenes == [] and current() is None, "ни одного нового сообщения"
+    assert textui.NAV_PICTURE in edited_labels(bot.edits[list(expected).index("salon")])
+    pressed = [record["data"] for record in events() if record["event"] == "menu"][1:]
+    assert [data["action"] for data in pressed] == list(expected) and all(data["inplace"] for data in pressed)
+
+
+def test_menu_section_returns_to_the_menu_in_the_same_message(bot, wallets, events):
+    menu = open_menu(bot)
+    press_nav(bot, "shop", menu.message_id)
+    press_nav(bot, "menu", menu.message_id)
+    back = bot.edits[-1]
+    assert back.text == menu.text and back.message_id == menu.message_id and edited_labels(back) == labels_of(menu)
+    assert len(bot.sent) == 1 and events()[-1]["data"]["action"] == "back"
+
+
+def test_menu_section_belongs_to_whoever_pressed(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    wallets.apply(CHAT, WATCHER, "Гоша", 500)
+    menu = open_menu(bot)
+    press_nav(bot, "shop", menu.message_id, user_id=WATCHER)
+    shop = bot.edits[-1]
+    assert "Лавка салона мадам Гоша" in shop.text and "500 ₽" in shop.text
+    goods = [button for row in shop.reply_markup.inline_keyboard for button in row if textui.parse(button.callback_data).kind == "buy"]
+    assert goods and all(textui.parse(button.callback_data).owner == WATCHER for button in goods)
+    press_nav(bot, "menu", menu.message_id, user_id=WATCHER)
+    assert "Касса мадам Гоша: 500 ₽" in bot.edits[-1].text
+
+
+def test_picture_button_in_the_salon_section_sends_the_picture(bot, wallets):
+    menu = open_menu(bot)
+    press_nav(bot, "salon", menu.message_id)
+    button = next(button for row in bot.edits[-1].reply_markup.inline_keyboard for button in row if button.text == textui.NAV_PICTURE)
+    asyncio.run(guru_salon.salon_callback(callback(bot, button.callback_data, message_id=menu.message_id)))
+    assert "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.sent) == 1 and len(bot.edits) == 1
+
+
+def test_purchase_keeps_the_way_back_to_the_menu(bot, wallets):
+    wallets.apply(CHAT, PLAYER, "Зоя", 3000)
+    buy(bot, "tea")
+    shop = bot.edits[-1]
+    assert "Чай с чабрецом · ✅" in shop.text and edited_labels(shop)[-1] == textui.NAV_MENU
+
+
+def test_unknown_section_does_nothing(bot, events):
+    query = callback(bot, f"{textui.CALLBACK_PREFIX}nav:nope", message_id=42)
+    asyncio.run(guru_salon.salon_callback(query))
+    assert bot.sent == [] and bot.edits == [] and events() == []
 
 
 def test_unknown_menu_button_does_nothing(bot, events):

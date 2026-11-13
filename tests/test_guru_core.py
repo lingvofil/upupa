@@ -1185,9 +1185,19 @@ def test_menu_buttons_round_trip_and_fit_telegram():
         for row in textui.menu_keyboard(group):
             for _, data in row:
                 parsed = textui.parse(data)
-                assert parsed.kind == "menu" and parsed.action in textui.MENU_ACTIONS and len(data.encode()) <= 64
+                assert parsed.kind in ("menu", "nav") and len(data.encode()) <= 64
+                assert parsed.action in (textui.MENU_ACTIONS if parsed.kind == "menu" else textui.NAV_SECTIONS)
+    # Партии начинаются новым сообщением (menu), справки открываются в самом меню (nav).
+    kinds = {textui.parse(data).action: textui.parse(data).kind for row in textui.menu_keyboard() for _, data in row}
+    assert kinds == {"shift": "menu", "live": "menu", "seance": "menu", "card": "menu",
+                     "shop": "nav", "wallet": "nav", "salon": "nav", "shelf": "nav", "salons": "nav"}
+    under_salon = {label: data for row in textui.salon_keyboard() for label, data in row}
+    assert list(under_salon) == [textui.MENU_SHOP, textui.MENU_SHELF, textui.MENU_SALONS, textui.MENU_SALON]
+    assert all(textui.parse(data).kind == "menu" and len(data.encode()) <= 64 for data in under_salon.values()), \
+        "картинку в текст раздела не превратить: под ней кнопки открывают раздел новым сообщением"
+    assert textui.parse(under_salon[textui.MENU_SHELF]).action == "shelf"
     doors = [*textui.menu_keyboard(), *textui.salon_keyboard()]
-    assert {textui.parse(data).action for row in doors for _, data in row} == textui.MENU_ACTIONS
+    assert {textui.parse(data).action for row in doors for _, data in row} == textui.MENU_ACTIONS | textui.NAV_SECTIONS - {"menu"}
     assert textui.parse(textui.menu_data("nope")) is None
     assert [label for row in textui.daily_keyboard() for label, _ in row] == [textui.MENU_CARD_OWN, textui.MENU_SHIFT, textui.MENU_SALON]
     assert textui.MENU_LIVE not in [label for row in textui.menu_keyboard(group=False) for label, _ in row]

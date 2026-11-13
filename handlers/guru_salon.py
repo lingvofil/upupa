@@ -15,6 +15,11 @@
 
 «гуру карта» — карта дня: не партия, чату не мешает, доступна и во время чужого приёма.
 
+Справки салона — лавка, кассы, салон, полка подарков, салоны чата — это разделы одного меню:
+кнопки ``guru:nav:*`` правят то же сообщение, а не шлют новое, и в каждом разделе есть «Меню».
+Раздел приходит новым сообщением только по команде или по кнопке под картинкой и в партии,
+потому что картинку и ход партии в текст раздела не превратить. Партии и рисунки всегда новые.
+
 Приём занимает одну текстовую панель и одну иллюстрацию. Ход целиком обновляет панель,
 а салон, расклад, ладонь и диплом сменяют друг друга в иллюстрации. Предыдущие реплики
 доступны по «Диалог», длинные тексты листаются; «Мой салон» открывает салон нажавшего.
@@ -63,6 +68,7 @@ WALLET_COMMANDS = frozenset({"гуру касса"})
 SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
 SALON_COMMANDS = frozenset({"гуру салон", "гуру мой салон"})
 SALONS_COMMANDS = frozenset({"гуру салоны"})
+SHELF_COMMANDS = frozenset({"гуру полка", "гуру подарки"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 _DRAWINGS = {"palm": palm_art, "aura": aura_art}
 SWEEP_INTERVAL_S = 15
@@ -135,6 +141,17 @@ def _is_salon_command(message: types.Message) -> bool:
 
 def _is_salons_command(message: types.Message) -> bool:
     return _normalize(message.text) in SALONS_COMMANDS
+
+
+def _is_shelf_command(message: types.Message) -> bool:
+    return _normalize(message.text) in SHELF_COMMANDS
+
+
+def _salon_owner(message: types.Message) -> tuple[Any, bool]:
+    """Чей салон смотрят: свой или, в ответ на сообщение другой мадам, её. Второе значение — в гостях ли смотрящий."""
+    replied = getattr(getattr(message, "reply_to_message", None), "from_user", None)
+    guest = replied is not None and not getattr(replied, "is_bot", False) and replied.id != message.from_user.id
+    return (replied if guest else message.from_user), guest
 
 
 def _player_name(user: Any) -> str:
@@ -509,30 +526,34 @@ async def _post(bot: Any, chat_id: int, thread_id: int | None, text: str, rows: 
                                   reply_to_message_id=reply_to)
 
 
-async def _show_menu(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
-    wallet = get_guru_wallets().get(chat_id, user.id)
+def _section(chat_id: int, user: Any, section: str) -> tuple[str, textui.Rows]:
+    """Раздел меню салона глазами ``user``: текст и кнопки. Одинаков для нового сообщения и для правки прежнего."""
+    wallets = get_guru_wallets()
+    wallet = wallets.get(chat_id, user.id)
+    if section == "shop":
+        return textui.render_shop(_player_name(user), wallet.balance, wallet.items), textui.shop_keyboard(wallet.items, user.id)
+    if section == "wallet":
+        return textui.render_wallets(wallets.top(chat_id), wallet), textui.section_keyboard(section)
+    if section == "salons":
+        return textui.render_salons(wallets.top(chat_id), wallet), textui.section_keyboard(section)
+    if section == "shelf":
+        return textui.render_shelf(wallet.name or _player_name(user), wallet), textui.section_keyboard(section)
+    if section == "salon":
+        return textui.render_salon_card(wallet.name or _player_name(user), wallet), textui.section_keyboard(section)
     group = _is_group(chat_id)
+    return textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group)
+
+
+async def _open_section(bot: Any, chat_id: int, user: Any, thread_id: int | None, section: str, *,
+                        reply_to: int | None = None) -> None:
+    """Раздел меню новым сообщением: по команде или по кнопке под картинкой. Дальше разделы листаются в нём же."""
+    text, rows = _section(chat_id, user, section)
+    await _post(bot, chat_id, thread_id, text, rows, reply_to=reply_to)
+
+
+async def _show_menu(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
     await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="open")
-    await _post(bot, chat_id, thread_id, textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group),
-                reply_to=reply_to)
-
-
-async def _show_wallets(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
-    wallets = get_guru_wallets()
-    await _post(bot, chat_id, thread_id, textui.render_wallets(wallets.top(chat_id), wallets.get(chat_id, user.id)),
-                reply_to=reply_to)
-
-
-async def _show_shop(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
-    wallet = get_guru_wallets().get(chat_id, user.id)
-    await _post(bot, chat_id, thread_id, textui.render_shop(_player_name(user), wallet.balance, wallet.items),
-                textui.shop_keyboard(wallet.items, user.id), reply_to=reply_to)
-
-
-async def _show_salons(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
-    wallets = get_guru_wallets()
-    await _post(bot, chat_id, thread_id, textui.render_salons(wallets.top(chat_id), wallets.get(chat_id, user.id)),
-                reply_to=reply_to)
+    await _open_section(bot, chat_id, user, thread_id, "menu", reply_to=reply_to)
 
 
 async def _show_salon(bot: Any, chat_id: int, owner: Any, thread_id: int | None, *, visitor: bool = False) -> None:
@@ -633,25 +654,31 @@ async def show_daily_card(message: types.Message) -> None:
 
 @router.message(_enabled, _is_wallet_command)
 async def show_wallets(message: types.Message) -> None:
-    await _show_wallets(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
+    await _open_section(message.bot, message.chat.id, message.from_user, _thread_id(message), "wallet", reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_shop_command)
 async def show_shop(message: types.Message) -> None:
-    await _show_shop(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
+    await _open_section(message.bot, message.chat.id, message.from_user, _thread_id(message), "shop", reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_salon_command)
 async def show_salon(message: types.Message) -> None:
     """Свой салон; в ответ на сообщение другой мадам — её салон."""
-    replied = getattr(getattr(message, "reply_to_message", None), "from_user", None)
-    guest = replied is not None and not getattr(replied, "is_bot", False) and replied.id != message.from_user.id
-    await _show_salon(message.bot, message.chat.id, replied if guest else message.from_user, _thread_id(message), visitor=guest)
+    owner, guest = _salon_owner(message)
+    await _show_salon(message.bot, message.chat.id, owner, _thread_id(message), visitor=guest)
+
+
+@router.message(_enabled, _is_shelf_command)
+async def show_shelf(message: types.Message) -> None:
+    """Своя полка подарков; в ответ на сообщение другой мадам — её полка."""
+    owner, _ = _salon_owner(message)
+    await _open_section(message.bot, message.chat.id, owner, _thread_id(message), "shelf", reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_salons_command)
 async def show_salons(message: types.Message) -> None:
-    await _show_salons(message.bot, message.chat.id, message.from_user, _thread_id(message), reply_to=message.message_id)
+    await _open_section(message.bot, message.chat.id, message.from_user, _thread_id(message), "salons", reply_to=message.message_id)
 
 
 @router.message(_enabled, _is_stop_command)
@@ -685,7 +712,7 @@ async def _again(callback: types.CallbackQuery, parsed: textui.Callback) -> None
 
 
 async def _menu(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
-    """Кнопка меню: действие достаётся тому, кто нажал. Само меню остаётся для следующих."""
+    """Кнопка меню: действие достаётся тому, кто нажал, и приходит новым сообщением. Сообщение с кнопкой не меняется."""
     message = callback.message
     bot, chat_id, user, thread_id = callback.bot, message.chat.id, callback.from_user, _thread_id(message)
     action = parsed.action
@@ -709,14 +736,22 @@ async def _menu(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
         await _start_seance(bot, chat_id, user, thread_id, via="menu")
     elif action == "card":
         await _daily_card(bot, chat_id, user, thread_id, via="button")
-    elif action == "shop":
-        await _show_shop(bot, chat_id, user, thread_id)
-    elif action == "wallet":
-        await _show_wallets(bot, chat_id, user, thread_id)
     elif action == "salon":
         await _show_salon(bot, chat_id, user, thread_id)
     else:
-        await _show_salons(bot, chat_id, user, thread_id)
+        # Кнопка стоит под картинкой или в чужой партии: то сообщение править нельзя, раздел открывается своим.
+        await _open_section(bot, chat_id, user, thread_id, action)
+
+
+async def _nav(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
+    """Раздел меню в том же сообщении. Показывается глазами нажавшего: в группе меню общее, но касса у каждого своя."""
+    message = callback.message
+    chat_id, user = message.chat.id, callback.from_user
+    await callback.answer()
+    await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="back" if parsed.action == "menu" else parsed.action,
+                    inplace=True)
+    text, rows = _section(chat_id, user, parsed.action)
+    await _edit(callback.bot, chat_id, message.message_id, text, rows)
 
 
 async def _buy(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
@@ -773,6 +808,9 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
         return
     if parsed.kind == "menu":
         await _menu(callback, parsed)
+        return
+    if parsed.kind == "nav":
+        await _nav(callback, parsed)
         return
     if parsed.kind == "again":
         await _again(callback, parsed)
