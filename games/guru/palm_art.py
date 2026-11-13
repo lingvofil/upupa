@@ -358,3 +358,32 @@ def render_study(inspected: Iterable[str] = (), hand: str | None = None) -> byte
     ]
     spots = [(_fit(shape, (STUDY_GAP[0],))[0], STUDY_GAP[1])] if "thumb" in seen else []
     return _paint(shape, shapes, [(area, key in seen) for key, area in AREAS.items()], rng, spots)
+
+
+# --- ладонь для сеанса: шесть участков ---------------------------------------
+
+# В сеансе мадам осматривает три участка из шести: три линии и три холма. Холм — место на ладони,
+# поэтому подсвечивается пятном, а не линией.
+ZONES = {
+    "heart": Line(HEART, "Линия сердца", (58, 592), ((200, 603), (229, 568))),
+    "head": Line(HEAD, "Линия ума", (58, 762), ((154, 774), (252, 744))),
+    "fate": Line(FATE, "Линия судьбы", (58, 985), ((210, 996), (390, 940))),
+    "apollo": Line((), "Холм Аполлона", (58, 430), ((222, 441), (336, 506))),
+    "mars": Line((), "Холм Марса", (684, 470), ((604, 481), (500, 622)), "ra"),
+    "venus": Line((), "Холм Венеры", (684, 928), ((548, 939), (508, 800)), "ra"),
+}
+ZONE_SPOTS = {"apollo": ((336, 506), 30.0), "mars": ((500, 622), 34.0), "venus": ((508, 800), 54.0)}
+ZONE_LINES = {"heart": HEART, "head": HEAD, "fate": FATE}
+
+
+def render_zones(inspected: Iterable[str] = ()) -> bytes:
+    """Ладонь для сеанса: осмотренные участки подсвечены, остальные только подписаны."""
+    seen = set(inspected)
+    if unknown := seen - set(ZONES):
+        raise ValueError(f"неизвестные участки: {sorted(unknown)}")
+    shape = HANDS[PLAIN_HAND]
+    rng = random.Random(7)
+    shapes: list[Shape] = [([art.catmull(_fit(shape, points))], key in seen) for key, points in ZONE_LINES.items()]
+    shapes.append(([art.catmull(_fit(shape, LIFE))], False))
+    spots = [(_fit(shape, (center,))[0], radius) for key, (center, radius) in ZONE_SPOTS.items() if key in seen]
+    return _paint(shape, shapes, [(zone, key in seen) for key, zone in ZONES.items()], rng, spots)

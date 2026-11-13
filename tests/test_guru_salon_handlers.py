@@ -419,7 +419,7 @@ def test_shelf_command_tells_the_story_of_every_gift(bot, wallets):
     assert "🥒 Банка огурцов · от бабушки" in shelf.text and salon.GIFTS["granny"].story in shelf.text
     assert shelf.text.count("ещё не подарили") == 9 and "бинокль" not in shelf.text, "чего нет на полке, то не названо"
     assert bot.scenes == [], "полка — текст: истории в подпись к рисунку не влезут"
-    assert labels_of(shelf) == [textui.MENU_SHOP, textui.MENU_WALLET, textui.MENU_SALON, textui.MENU_SALONS, textui.NAV_MENU]
+    assert labels_of(shelf) == [textui.MENU_SHOP, textui.MENU_WALLET, textui.MENU_SALONS, textui.MENU_SALON, textui.NAV_MENU]
 
 
 def test_empty_shelf_is_still_shown(bot, wallets):
@@ -1396,7 +1396,7 @@ def test_menu_sections_open_in_the_same_message(bot, wallets, events):
     wallets.apply(CHAT, PLAYER, "Зоя", 3000)
     wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
     menu = open_menu(bot)
-    expected = {"shop": "Лавка салона мадам Зоя", "wallet": "1. Зоя — 3 000 ₽", "salon": "Салон мадам Зоя",
+    expected = {"shop": "Лавка салона мадам Зоя", "wallet": "1. Зоя — 3 000 ₽",
                 "shelf": "🥒 Банка огурцов · от бабушки", "salons": "Пока никто ничего не купил"}
     for section, words in expected.items():
         query = press_nav(bot, section, menu.message_id)
@@ -1404,7 +1404,6 @@ def test_menu_sections_open_in_the_same_message(bot, wallets, events):
         assert words in edit.text and edit.message_id == menu.message_id and edit.chat_id == CHAT and query.answers == [None]
         assert edited_labels(edit)[-1] == textui.NAV_MENU and textui.NAV_LABELS[section] not in edited_labels(edit)
     assert len(bot.sent) == 1 and bot.scenes == [] and current() is None, "ни одного нового сообщения"
-    assert textui.NAV_PICTURE in edited_labels(bot.edits[list(expected).index("salon")])
     pressed = [record["data"] for record in events() if record["event"] == "menu"][1:]
     assert [data["action"] for data in pressed] == list(expected) and all(data["inplace"] for data in pressed)
 
@@ -1431,12 +1430,20 @@ def test_menu_section_belongs_to_whoever_pressed(bot, wallets):
     assert "Касса мадам Гоша: 500 ₽" in bot.edits[-1].text
 
 
-def test_picture_button_in_the_salon_section_sends_the_picture(bot, wallets):
+def test_my_salon_is_always_the_picture_with_its_caption(bot, wallets, events):
+    wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
     menu = open_menu(bot)
-    press_nav(bot, "salon", menu.message_id)
-    button = next(button for row in bot.edits[-1].reply_markup.inline_keyboard for button in row if button.text == textui.NAV_PICTURE)
+    button = next(button for row in menu.reply_markup.inline_keyboard for button in row if button.text == textui.MENU_SALON)
+    assert textui.parse(button.callback_data).kind == "menu", "«Мой салон» не раздел меню: это рисунок"
     asyncio.run(guru_salon.salon_callback(callback(bot, button.callback_data, message_id=menu.message_id)))
-    assert "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.sent) == 1 and len(bot.edits) == 1
+    (picture,) = bot.scenes
+    assert "Салон мадам Зоя" in picture.caption and "Подарки клиентов, 1 из 10" in picture.caption
+    assert len(bot.sent) == 1 and bot.edits == [], "меню остаётся на месте, салон приходит одной картинкой с подписью"
+
+    press_nav(bot, "shop", menu.message_id)
+    assert textui.MENU_SALON in edited_labels(bot.edits[-1]), "из любого раздела до салона одно нажатие"
+    press_nav(bot, "salon", menu.message_id)  # кнопка из сообщения, отправленного до объединения
+    assert len(bot.scenes) == 2 and "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.edits) == 1
 
 
 def test_purchase_keeps_the_way_back_to_the_menu(bot, wallets):
@@ -1681,10 +1688,14 @@ def test_gift_from_a_grateful_client_goes_to_the_shelf(bot, events, wallets):
     assert bot.scenes[-1].photo.filename == "salon.jpg" and current().gifts == [archetype], "подарок уже на полке у следующего клиента"
 
 
-# --- сеанс с Людмилой -------------------------------------------------------
+# --- сеанс ------------------------------------------------------------------
 
-def start_seance(bot, user_id=PLAYER, chat_id=CHAT):
-    asyncio.run(guru_salon.start_seance(message(bot, "гуру сеанс", user_id=user_id, chat_id=chat_id)))
+EVADE = ("begin", "hush", "next", "hush", "next", "hush", "next", "adv:0")  # уклониться во всех трёх гаданиях
+
+
+def start_seance(bot, user_id=PLAYER, chat_id=CHAT, text="гуру сеанс"):
+    handler = guru_salon.start_ludmila if text == "гуру людмила" else guru_salon.start_seance
+    asyncio.run(handler(message(bot, text, user_id=user_id, chat_id=chat_id)))
     return current(chat_id)
 
 
@@ -1698,7 +1709,7 @@ def press_seance(bot, *actions, user_id=PLAYER):
     return query
 
 
-@pytest.mark.parametrize("text", ["гуру сеанс", "Гуру  ЛЮДМИЛА"])
+@pytest.mark.parametrize("text", ["гуру сеанс", "Гуру  ЛЮДМИЛА", "гуру клиент"])
 def test_seance_command_matches(flags, text):
     assert _accepts(guru_salon.router.message, message(FakeBot(), text))
 
@@ -1706,38 +1717,55 @@ def test_seance_command_matches(flags, text):
 def test_seance_starts_with_the_salon_and_a_long_story(bot, events):
     session = start_seance(bot)
     assert isinstance(session, seance.Seance) and session.host.user_id == PLAYER
+    assert session.story.id == seance.LUDMILA, "первой в салон приходит Людмила"
     (intro,) = bot.sent
-    assert "принимает одну клиентку" in intro.text and "Правильного ответа здесь нет" in intro.text
+    assert "принимает одного клиента" in intro.text and "Правильного ответа здесь нет" in intro.text
     (arrival,) = bot.scenes
     assert "Заходит Людмила" in intro.text and intro.parse_mode == "HTML" and arrival.photo.filename == "salon.jpg"
-    assert intro.text.count("<blockquote>—") == len(seance.TOLD)
-    assert "Что дальше" in intro.text and session.message_id == intro.message_id
-    assert textui.MENU_SEANCE not in labels_of(intro) and "📜 Что она сказала" in labels_of(intro)
+    assert intro.text.count("<blockquote>—") == len(session.content.intro)
+    assert "Что уточнить" in intro.text and session.message_id == intro.message_id
+    assert textui.MENU_SEANCE not in labels_of(intro) and "📜 Что прозвучало" in labels_of(intro)
     (record,) = events()
-    assert record["event"] == "start" and record["data"]["mode"] == "seance"
+    assert record["event"] == "start" and record["data"]["mode"] == "seance" and record["data"]["story"] == seance.LUDMILA
 
 
 def test_seance_choices_change_the_message_in_place(bot, events):
     start_seance(bot)
-    press_seance(bot, "tarot")
-    assert bot.photos[-1].photo.filename == "spread.jpg" and "Фарфоровая голова" in bot.sent[-1].text
+    press_seance(bot, "begin")
+    assert bot.photos[-1].photo.filename == "spread.jpg" and "Лиса и зеркала" in bot.sent[-1].text
     sent, screen = len(bot.sent), bot.sent[-1].message_id
-    press_seance(bot, "p:ha", "r:t1")
-    assert len(bot.sent) == sent, "выбор связи и прочтения не плодит сообщений"
-    assert [edit.message_id for edit in bot.edits[-2:]] == [screen, screen] and "Как это сказать" in bot.edits[-1].text
-    press_seance(bot, "v:idea")
-    assert "версию" in bot.sent[-1].text and "<blockquote>— Стесняется?" in bot.sent[-1].text and "Что дальше" in bot.sent[-1].text
-    assert len(bot.sent) == sent and bot.photo_sends == 1
+    press_seance(bot, "st:0", "rd:0:0")
+    assert len(bot.sent) == sent, "осмотр образа и выбор прочтения не плодят сообщений"
+    assert [edit.message_id for edit in bot.edits[-2:]] == [screen, screen] and "Маяк на дне океана" in bot.edits[-1].text
+    press_seance(bot, "st:0", "rd:0:0", "st:0", "rd:0:0")
+    assert "Как это сказать" in bot.edits[-1].text and "Вот что складывается" in bot.edits[-1].text
+    press_seance(bot, "tone:firm")
+    assert "Карты легли ясно" in bot.sent[-1].text and "<blockquote>— Знак, который слышат?" in bot.sent[-1].text
+    assert "Что дальше" in bot.sent[-1].text and len(bot.sent) == sent and bot.photo_sends == 1
+    assert {"✏️ Уточнить", "🙇 Ошиблась", "🚫 Отозвать", "🖐 К ладони"} <= set(labels_of(bot.sent[-1]))
+
+
+def test_seance_shows_what_the_client_does_as_a_separate_scene(bot, events):
+    start_seance(bot)
+    press_seance(bot, "begin", "st:0", "rd:0:1", "st:0", "rd:0:1", "st:0", "rd:0:0", "tone:firm")
+    assert "Сейчас напишу им обоим" in bot.sent[-1].text and "✉️" not in bot.sent[-1].text
+    assert labels_of(bot.sent[-1])[0] == "👀 Она уже печатает…"
+    press_seance(bot, "scene")
+    assert "🎬 Сообщение ушло" in bot.sent[-1].text and "✉️ Алла Борисовна: Милочка" in bot.sent[-1].text
+    assert [record["data"]["kind"] for record in events() if record["event"] == "action"] == ["say", "scene"]
 
 
 def test_seance_palm_shows_the_hand_and_then_what_was_inspected(bot, events):
     start_seance(bot)
-    press_seance(bot, "palm", "a:heart")
-    assert bot.photos[-1].photo.filename == "palm.jpg" and "расходится на две ветви" in bot.edits[-1].text
+    press_seance(bot, "begin", "hush", "next")
+    assert bot.photos[-1].photo.filename == "palm.jpg" and "Какой участок осмотреть" in bot.sent[-1].text
     shown = len(bot.photos)
-    press_seance(bot, "a:head")
-    assert len(bot.photos) == shown + 1 and "Что ты в этом видишь" in bot.sent[-1].text
-    assert {"study:", "study:head+heart"} <= set(guru_salon._card_file_ids)
+    press_seance(bot, "zn:0")
+    assert len(bot.photos) == shown + 1 and "Линия рвётся в двух местах" in bot.sent[-1].text
+    assert "<blockquote>— Мы с ним дольше двух дней не молчали" in bot.sent[-1].text
+    press_seance(bot, "words")
+    assert "Мириться первой" in labels_of(bot.sent[-1]) and "Что сказать о руке" in bot.sent[-1].text
+    assert {"zones:", "zones:heart"} <= set(guru_salon._card_file_ids)
 
 
 def test_heard_lines_open_inside_panel_and_return_to_the_game(bot, events):
@@ -1745,35 +1773,47 @@ def test_heard_lines_open_inside_panel_and_return_to_the_game(bot, events):
     step, screen = session.step, session.message_id
     press_seance(bot, "heard")
     review = bot.sent[-1]
-    assert "📜 Что сказала Людмила" in review.text and review.message_id == screen and review.parse_mode == "HTML"
+    assert "📜 Людмила: что прозвучало" in review.text and review.message_id == screen and review.parse_mode == "HTML"
     assert current().step == step and bot.cleared == [] and len(bot.sent) == 1
     data = next(button.callback_data for row in review.reply_markup.inline_keyboard for button in row if button.text == "↩ К приёму")
     asyncio.run(guru_salon.salon_callback(callback(bot, data, message_id=screen)))
-    press_seance(bot, "ask")
-    assert "Что уточнить" in bot.edits[-1].text
+    press_seance(bot, "q:0")
+    assert "Осталось вопросов: 1" in bot.sent[-1].text
 
 
 def test_seance_ends_with_an_epilogue_money_and_a_counter_of_endings(bot, events, wallets):
     start_seance(bot)
-    press_seance(bot, "horo", "r:g2", "v:claim", "bye", "f:terms")
+    press_seance(bot, *EVADE)
     assert current() is None
     final = bot.sent[-1]
-    assert "под яблоней" in final.text and "Финал: «Песня под яблоней»" in final.text and "открыто: 1 из 5" in final.text
+    assert "Развязка: «Алла Борисовна принимает вызов»" in final.text and "открыто: 1 из 6" in final.text
+    assert "🎬 Сообщение ушло" in final.text, "то, что она сделала без мадам, показано сценой в развязке"
+    assert "🔮 Что сбылось" in final.text and "Как было на самом деле" in final.text
     assert labels_of(final)[0] == textui.MENU_SEANCE_AGAIN
     wallet = wallets.get(CHAT, PLAYER)
-    assert wallet.balance > 0 and wallet.endings == ["terms"]
-    assert names(events())[-1] == "finish" and events()[-1]["data"]["ending"] == "terms"
+    assert wallet.balance == 400 and wallet.endings == ["jealous.vocal:challenge"]
+    assert names(events())[-1] == "finish" and events()[-1]["data"]["ending"] == "challenge"
 
     press_menu(bot, "seance")
-    assert isinstance(current(), seance.Seance), "повторить можно сразу"
-    press_seance(bot, "bye", "f:own")
-    assert wallets.get(CHAT, PLAYER).endings == ["terms", "nothing"] and "открыто: 2 из 5" in bot.sent[-1].text
+    session = current()
+    assert isinstance(session, seance.Seance) and session.story.id != seance.LUDMILA, "дальше приходят другие клиенты"
+    press_seance(bot, *EVADE)
+    wallet = wallets.get(CHAT, PLAYER)
+    assert len(wallet.endings) == 2 and wallet.endings[1].startswith(f"{session.story.id}:")
+    assert f"открыто: 1 из {len(session.story.endings)}" in bot.sent[-1].text
+
+
+def test_ludmila_can_be_called_by_name(bot, events, wallets):
+    wallets.see_ending(CHAT, PLAYER, "Зоя", seance.ending_key(seance.LUDMILA, "own"))
+    assert start_seance(bot, text="гуру людмила").story.id == seance.LUDMILA
+    asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп")))
+    assert start_seance(bot).story.id != seance.LUDMILA
 
 
 def test_spectator_cannot_lead_the_seance(bot, events):
     start_seance(bot)
-    query = press_seance(bot, "tarot", user_id=WATCHER)
-    assert "Это салон мадам Зоя" in query.answers[0] and current().phase == "hub"
+    query = press_seance(bot, "begin", user_id=WATCHER)
+    assert "Это салон мадам Зоя" in query.answers[0] and current().phase == "questions"
     assert names(events())[-1] == "spectator"
 
 
@@ -1882,12 +1922,12 @@ def test_dialog_history_and_return_do_not_send_messages_or_make_moves(bot, event
 
 def test_finished_dialog_is_readable_without_repaying_the_fee(bot, events, wallets):
     session = start_seance(bot)
-    press_seance(bot, "bye", "f:terms")
+    press_seance(bot, *EVADE)
     balance, recorded = wallets.balance(CHAT, PLAYER), len(events())
     open_dialog(bot, session=session)
     assert "Заходит Людмила" in bot.sent[-1].text and current() is None
     open_dialog(bot, "screen", session=session)
-    assert "Финал:" in bot.sent[-1].text
+    assert "Развязка:" in bot.sent[-1].text
     assert wallets.balance(CHAT, PLAYER) == balance and len(events()) == recorded
     assert len(bot.sent) == 1 and bot.photo_sends == 1
 

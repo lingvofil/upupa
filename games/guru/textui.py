@@ -38,7 +38,7 @@ _NAV_RE = re.compile(r"^guru:nav:([a-z]+)$")
 _DIALOG_RE = re.compile(r"^guru:ui:([0-9a-f]{1,32}):(\d+):(screen|log|heard):(\d+)$")
 
 ROW_WIDTH = {"question": 1, "method": 2, "interpretation": 1, "option": 2, "confidence": 1, "verdict": 2, "sign": 3, "intake": 2,
-             "hub": 2, "choice": 1, "area": 3, "hand": 1}
+             "hub": 2, "choice": 1, "area": 3, "hand": 1, "look": 1, "zone": 2, "fix": 3}
 
 OUTCOME_TITLES = {
     "hit": "Попадание",
@@ -80,21 +80,22 @@ MENU_SALON = "🏠 Мой салон"
 MENU_SALONS = "👥 Салоны чата"
 MENU_SHELF = "🎁 Полка"
 NAV_MENU = "⬅️ Меню"
-NAV_PICTURE = "🖼 Рисунок салона"
-MENU_SEANCE = "🕯 Сеанс: Людмила"
-MENU_SEANCE_AGAIN = "🕯 Принять Людмилу ещё раз"
+MENU_SEANCE = "🕯 Сеанс"
+MENU_SEANCE_AGAIN = "🕯 Следующий клиент"
 MENU_ACTIONS = frozenset({"shift", "live", "card", "shop", "wallet", "salon", "salons", "shelf", "seance"})
 # Разделы меню: справки салона листаются в одном сообщении. Порядок — порядок кнопок под разделом.
-NAV_LABELS = {"shop": MENU_SHOP, "wallet": MENU_WALLET, "salon": MENU_SALON, "shelf": MENU_SHELF, "salons": MENU_SALONS, "menu": NAV_MENU}
+# «Мой салон» в их число не входит: это рисунок с подписью, он всегда приходит отдельным сообщением.
+NAV_LABELS = {"shop": MENU_SHOP, "wallet": MENU_WALLET, "shelf": MENU_SHELF, "salons": MENU_SALONS, "menu": NAV_MENU}
 NAV_SECTIONS = frozenset(NAV_LABELS)
+NAV_LEGACY = frozenset({"salon"})  # кнопки из старых сообщений: по ним тоже придёт рисунок
 SHELF_HINT = "Подарок оставляет клиент, которому сбылось: по одному от каждого типа."
 SEANCE_ABANDON_NOTES = {
-    "timeout": "💤 Мадам задумалась так надолго, что Людмила ушла сама. Денег никто не получил.",
-    "quit": "🚪 Сеанс прерван. Людмила уходит, прижимая к себе распечатку.",
+    "timeout": "💤 Мадам задумалась так надолго, что клиент ушёл сам. Денег никто не получил.",
+    "quit": "🚪 Сеанс прерван. Клиент уходит, так и не узнав, что было в картах.",
     "restart": "⚡ Во всём районе вырубили свет. Сеанс прерван.",
     "send_failed": "📵 Связь с космосом потеряна. Сеанс прерван.",
 }
-ENDING_ICONS = {"scandal": "💥", "talk": "🍳", "terms": "🍎", "restaurant": "🎤", "nothing": "💨"}
+CLIENT_STATE_ICONS = {"content": "🙂", "mixed": "😐", "displeased": "🙁"}
 SPEECH_KINDS = frozenset({"tell", "answer"})  # слова клиента: цитатой
 ROOM_KINDS = frozenset({"arrive", "line", "status", "ritual", "react"})  # что происходит в салоне: курсивом
 LIVE_NEEDS_GROUP = "Живому приёму нужен второй человек. Открой его в группе."
@@ -173,7 +174,7 @@ def parse(data: str | None) -> Callback | None:
         return Callback("menu", action=match.group(1)) if match.group(1) in MENU_ACTIONS else None
     match = _NAV_RE.match(data)
     if match:
-        return Callback("nav", action=match.group(1)) if match.group(1) in NAV_SECTIONS else None
+        return Callback("nav", action=match.group(1)) if match.group(1) in NAV_SECTIONS | NAV_LEGACY else None
     match = _BUY_RE.match(data)
     if match:
         return Callback("buy", item=match.group(1), owner=int(match.group(2)))
@@ -266,18 +267,17 @@ def menu_keyboard(group: bool = True) -> Rows:
     return [
         [(MENU_SHIFT, menu_data("shift")), *_live_door(group)],
         [(MENU_SEANCE, menu_data("seance")), (MENU_CARD, menu_data("card"))],
-        [_nav_button("shop"), _nav_button("wallet"), _nav_button("salon")],
+        [_nav_button("shop"), _nav_button("wallet"), (MENU_SALON, menu_data("salon"))],
         [_nav_button("shelf"), _nav_button("salons")],
     ]
 
 
 def section_keyboard(section: str, rows: Rows | None = None) -> Rows:
     """Кнопки под разделом меню: свои (``rows``), потом остальные разделы и возврат в меню."""
-    doors = [_nav_button(other) for other in NAV_LABELS if other != section]
+    doors = [_nav_button(other) for other in NAV_LABELS if other not in (section, "menu")]
     result = [list(row) for row in rows or []]
-    if section == "salon":
-        result.append([(NAV_PICTURE, menu_data("salon"))])  # картинку в текстовое сообщение не превратить: она придёт отдельно
-    return [*result, doors[:3], doors[3:]]
+    # Салон — рисунок: в текстовое сообщение его не превратить, он придёт отдельно.
+    return [*result, doors, [(MENU_SALON, menu_data("salon")), _nav_button("menu")]]
 
 
 def salon_keyboard() -> Rows:
@@ -499,7 +499,7 @@ def render_menu(name: str, own: object, group: bool = True) -> str:
         lines.append("🤝 Живой приём — гадаешь человеку из чата, приговор выносит он.")
     else:
         lines.append("🤝 Живой приём — в группе: там гадают настоящим людям.")
-    lines += ["🕯 Сеанс — одна клиентка и долгий приём: сама толкуешь знаки и решаешь, что сказать.",
+    lines += ["🕯 Сеанс — один клиент и долгий приём: карты, ладонь, звёзды. Что скажешь, то он и сделает.",
               "🃏 Карта дня — одна в сутки, с чаевыми в кассу.", ""]
     lines.append(f"💰 Касса мадам {name}: {rub(own.balance)}" + (f" · {salon.describe(own.items)}" if own.items else ""))
     return "\n".join(lines)
@@ -536,10 +536,11 @@ def render_daily_toast(daily: DailyCard) -> str:
 
 def render_seance_intro(view: SeanceView) -> str:
     return "\n".join((
-        f"🕯 Мадам {view.host} принимает одну клиентку. Торопиться некуда.",
+        f"🕯 Мадам {view.host} принимает одного клиента. Торопиться некуда.",
         "",
-        "Правильного ответа здесь нет. Слушай, связывай знаки с её словами и решай, что сказать и как: версией или утверждением. "
-        "От твоих слов зависит, как она поступит. Гадать не обязательно.",
+        "Правильного ответа здесь нет. Слушай, рассматривай знаки и решай, что сказать и как: осторожно или уверенно. "
+        "Клиент поступит по услышанному, а эпилог покажет, что из сказанного сбылось. Уклониться можно в любом гадании, "
+        "но за туманом сюда не ходят.",
         "",
         "Кнопки жмёт только мадам. 15 минут без хода — сеанс прерывается.",
     ))
@@ -551,13 +552,18 @@ def render_seance(view: SeanceView) -> tuple[str, Rows]:
     return (f"{view.screen}\n\n{prompt}" if view.screen else prompt), keyboard(view)
 
 
-def render_seance_result(view: SeanceView, seen: int, total: int) -> str:
-    icon = ENDING_ICONS.get(view.ending or "", "🕯")
-    return "\n".join((
-        f"{icon} Финал: «{view.ending_title}» · {signed_rub(view.fee)}",
+def render_seance_result(view: SeanceView, seen: int) -> str:
+    """Итог сеанса: развязка, деньги, счётчик развязок этой истории и разбор, что сбылось и почему."""
+    icon = CLIENT_STATE_ICONS.get(view.client_state, "🕯")
+    lines = [
+        f"🕯 Развязка: «{view.ending_title}» · {signed_rub(view.fee)}",
+        f"{icon} {view.client_text}",
         f"💰 В кассе мадам {view.host}: {rub(view.wallet)}",
-        f"Финалов этой истории открыто: {seen} из {total}. Скажешь иначе — суббота выйдет другой.",
-    ))
+        f"Развязок этой истории открыто: {seen} из {view.endings_total}. Скажешь иначе — выйдет иначе.",
+    ]
+    if view.epilogue:
+        lines += ["", view.epilogue]
+    return "\n".join(lines)
 
 
 def seance_done_keyboard() -> Rows:
