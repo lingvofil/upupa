@@ -3,8 +3,9 @@
 # `оживи`: Kandinsky 6.0 (HF ZeroGPU) -> Pollinations image-to-video.
 # `упупа сними`: Kandinsky 6.0 (T2V / I2V) -> Pollinations text/image-to-video.
 #
-# Обе команды работают только в Экспертной группе (SPECIAL_CHAT_ID): бесплатной
-# квоты ZeroGPU хватает на пару роликов в сутки, делить её на все чаты незачем.
+# `упупа сними` доступна только в Экспертной группе (SPECIAL_CHAT_ID).
+# `оживи` доступна во всех чатах: 2 запуска/день для Экспертной группы
+# и 1 общий запуск/день для всех остальных чатов.
 #
 # Kandinsky идёт через открытые веса на HF Spaces: у GigaChat API и FusionBrain
 # генерации видео нет (см. AI/hf_kandinsky_video.py).
@@ -24,12 +25,13 @@ import asyncio
 import logging
 import time
 import urllib.parse
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from aiogram import types
 
-from core.settings import POLLINATIONS_API_KEY, SPECIAL_CHAT_ID
+from core.settings import APP_TIMEZONE_NAME, POLLINATIONS_API_KEY, SPECIAL_CHAT_ID
 from AI.adddescribe import download_telegram_image
 from AI.hf_kandinsky_video import generate_kandinsky_video
 
@@ -58,27 +60,46 @@ _MODELS_CACHE_TTL = 3600
 
 VIDEO_DURATION_SECONDS = 5
 VIDEO_TIMEOUT_SECONDS = 420       # генерация видео идёт десятки секунд — минуты
-DAILY_LIMIT_PER_CHAT = 3
-DAILY_LIMIT_GLOBAL = 10
+DAILY_LIMIT_EXPERT = 2
+DAILY_LIMIT_OTHER_CHATS = 1
 
-# {(isodate, chat_id): count} — сбрасывается сменой даты, потеря при рестарте ок
-_usage: dict = {}
+# {(local_date, "expert" | "other"): count} — общие пулы для всех видео-команд.
+# После рестарта счётчики, как и раньше, сбрасываются.
+_usage: dict[tuple[str, str], int] = {}
 
 VIDEO_CHAT_ONLY_TEXT = "🎬 Видео снимаю только в Экспертной группе."
 
 
 def _video_allowed_in_chat(chat_id: int) -> bool:
+    """Только `упупа сними` ограничена Экспертной группой."""
     return chat_id == SPECIAL_CHAT_ID
 
 
+def _quota_day() -> str:
+    """Смена суток по часовому поясу бота, независимо от времени VPS."""
+    return datetime.now(ZoneInfo(APP_TIMEZONE_NAME)).date().isoformat()
+
+
+def _daily_limit_for_chat(chat_id: int) -> int:
+    return DAILY_LIMIT_EXPERT if _video_allowed_in_chat(chat_id) else DAILY_LIMIT_OTHER_CHATS
+
+
+def _limit_exceeded_text(chat_id: int) -> str:
+    if _video_allowed_in_chat(chat_id):
+        return f"🎬 Лимит видео на сегодня исчерпан ({DAILY_LIMIT_EXPERT}/день в Экспертной группе)."
+    return (
+        f"🎬 Лимит видео на сегодня исчерпан "
+        f"({DAILY_LIMIT_OTHER_CHATS}/день суммарно на все остальные чаты)."
+    )
+
+
 def _check_and_count_limit(chat_id: int) -> bool:
-    today = date.today().isoformat()
-    for k in [k for k in _usage if k[0] != today]:
-        del _usage[k]
-    if sum(_usage.values()) >= DAILY_LIMIT_GLOBAL:
-        return False
-    key = (today, chat_id)
-    if _usage.get(key, 0) >= DAILY_LIMIT_PER_CHAT:
+    today = _quota_day()
+    for key in [key for key in _usage if key[0] != today]:
+        del _usage[key]
+    pool = "expert" if _video_allowed_in_chat(chat_id) else "other"
+    key = (today, pool)
+    if _usage.get(key, 0) >= _daily_limit_for_chat(chat_id):
         return False
     _usage[key] = _usage.get(key, 0) + 1
     return True
@@ -237,7 +258,7 @@ async def process_video_generation(message: types.Message, bot) -> None:
         await message.reply("Что снимать-то? Напиши: упупа сними <описание>")
         return
     if not _check_and_count_limit(message.chat.id):
-        await message.reply(f"🎬 Лимит видео на сегодня исчерпан ({DAILY_LIMIT_PER_CHAT}/день на чат).")
+        await message.reply(_limit_exceeded_text(message.chat.id))
         return
 
     status = await message.reply("🎬 Снимаю через Кандинского... минуту-другую")
@@ -282,9 +303,6 @@ async def process_video_generation(message: types.Message, bot) -> None:
 
 async def process_animate_photo(message: types.Message, bot) -> None:
     """Команда 'оживи [промпт]' — Kandinsky 6 -> Pollinations."""
-    if not _video_allowed_in_chat(message.chat.id):
-        await message.reply(VIDEO_CHAT_ONLY_TEXT)
-        return
     if message.photo:
         photo = message.photo[-1]
     elif message.reply_to_message and message.reply_to_message.photo:
@@ -293,10 +311,10 @@ async def process_animate_photo(message: types.Message, bot) -> None:
         await message.reply("Оживить можно только фото — ответь командой на картинку или отправь фото с подписью 'оживи'.")
         return
     if not _check_and_count_limit(message.chat.id):
-        await message.reply(f"🎬 Лимит видео на сегодня исчерпан ({DAILY_LIMIT_PER_CHAT}/день на чат).")
+        await message.reply(_limit_exceeded_text(message.chat.id))
         return
 
-    prompt = _extract_prompt(message.text or message.caption or "", "оживи")
+    prompt = _extract_prompt(message.text or message.caption or "", "упупа, оживи", "упупа оживи", "оживи")
     animation_prompt = prompt or "make this image come alive, cinematic motion, smooth natural animation"
     status = await message.reply("🧟 Оживляю через Кандинского...")
 
