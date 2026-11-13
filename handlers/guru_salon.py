@@ -15,10 +15,14 @@
 
 «гуру карта» — карта дня: не партия, чату не мешает, доступна и во время чужого приёма.
 
-Справки салона — лавка, кассы, салон, полка подарков, салоны чата — это разделы одного меню:
+Справки салона — лавка, кассы, полка подарков, салоны чата — это разделы одного меню:
 кнопки ``guru:nav:*`` правят то же сообщение, а не шлют новое, и в каждом разделе есть «Меню».
 Раздел приходит новым сообщением только по команде или по кнопке под картинкой и в партии,
 потому что картинку и ход партии в текст раздела не превратить. Партии и рисунки всегда новые.
+«Мой салон» — не раздел, а рисунок с подписью: что куплено, что это даёт и что стоит на полке.
+
+«гуру сеанс» — один клиент по схеме Guru-Web (``games.guru.seance``): клиента выбирает салон,
+«гуру людмила» зовёт именно Людмилу. У каждой истории свой счётчик открытых развязок.
 
 Приём занимает одну текстовую панель и одну иллюстрацию. Ход целиком обновляет панель,
 а салон, расклад, ладонь и диплом сменяют друг друга в иллюстрации. Предыдущие реплики
@@ -63,7 +67,8 @@ START_COMMANDS = frozenset({"гуру смена", "гуру играть"})
 CARD_COMMANDS = frozenset({"гуру карта", "гуру карта дня"})
 STOP_COMMANDS = frozenset({"гуру стоп"})
 LIVE_COMMANDS = frozenset({"гуру приём", "гуру прием"})
-SEANCE_COMMANDS = frozenset({"гуру сеанс", "гуру людмила"})
+SEANCE_COMMANDS = frozenset({"гуру сеанс", "гуру клиент"})
+LUDMILA_COMMANDS = frozenset({"гуру людмила"})
 WALLET_COMMANDS = frozenset({"гуру касса"})
 SHOP_COMMANDS = frozenset({"гуру лавка", "гуру магазин"})
 SALON_COMMANDS = frozenset({"гуру салон", "гуру мой салон"})
@@ -71,6 +76,7 @@ SALONS_COMMANDS = frozenset({"гуру салоны"})
 SHELF_COMMANDS = frozenset({"гуру полка", "гуру подарки"})
 TAROT_ART_DIR = PROJECT_ROOT / "assets" / "guru_tarot"
 _DRAWINGS = {"palm": palm_art, "aura": aura_art}
+_PALM_PAINTERS = {"study": palm_art.render_study, "zones": palm_art.render_zones}  # ладонь для осмотра
 SWEEP_INTERVAL_S = 15
 MAX_NAME_LENGTH = 24
 MAX_CACHED_REPORTS = 300
@@ -125,6 +131,10 @@ def _is_live_command(message: types.Message) -> bool:
 
 def _is_seance_command(message: types.Message) -> bool:
     return _normalize(message.text) in SEANCE_COMMANDS
+
+
+def _is_ludmila_command(message: types.Message) -> bool:
+    return _normalize(message.text) in LUDMILA_COMMANDS
 
 
 def _is_wallet_command(message: types.Message) -> bool:
@@ -241,9 +251,9 @@ async def _play(bot: Any, session: Session | LiveSession | Seance, events: tuple
             kind, marks, *extra = bubble.drawing
             hand = extra[0] if extra else None
             key = f"{kind}:" + "+".join(sorted(marks)) + (f":{hand}" if hand else "")
-            painter = palm_art.render_study if kind == "study" else _DRAWINGS[kind].render
+            painter = _PALM_PAINTERS.get(kind) or _DRAWINGS[kind].render
             args = (marks, hand) if hand else (marks,)
-            await _illustration(bot, session, key, painter, args, "palm.jpg" if kind == "study" else f"{kind}.jpg")
+            await _illustration(bot, session, key, painter, args, "palm.jpg" if kind in _PALM_PAINTERS else f"{kind}.jpg")
     if _interrupted(session):
         return
     session.dialog.history.extend(parts)
@@ -272,7 +282,8 @@ async def _dialog_page(bot: Any, session: Session | LiveSession | Seance, mode: 
     else:
         pages = dialog.pages(session.dialog.history) if mode == "log" else session.dialog.pages
     page = min(max(page, 0), len(pages) - 1)
-    heading = "📜 Что сказала Людмила" if mode == "heard" else "📜 Диалог" if mode == "log" else f"🕯 Мадам {session.host.name}"
+    heading = (f"📜 {session.client}: что прозвучало" if mode == "heard" and isinstance(session, Seance)
+               else "📜 Диалог" if mode == "log" else f"🕯 Мадам {session.host.name}")
     if len(pages) > 1:
         heading += f" · {page + 1}/{len(pages)}"
     text = f"<b>{textui.escape(heading)}</b>\n\n{pages[page]}"
@@ -490,8 +501,9 @@ async def _start_live(bot: Any, chat_id: int, user: Any, thread_id: int | None, 
         return
 
 
-async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str) -> None:
-    """Сеанс с одной клиенткой: мадам сама толкует знаки и решает, что сказать."""
+async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, via: str,
+                        story_id: str | None = None) -> None:
+    """Сеанс с одним клиентом. Без ``story_id`` клиента выбирает салон: того, чьих развязок открыто меньше."""
     now = _clock()
     current, expired = _claim_chat(chat_id, now)
     if current is not None:
@@ -501,7 +513,8 @@ async def _start_seance(bot: Any, chat_id: int, user: Any, thread_id: int | None
     wallet = get_guru_wallets().get(chat_id, user.id)
     session = seance.new_session(
         session_id=new_session_id(), chat_id=chat_id, host_id=user.id, host_name=_player_name(user), now=now,
-        wallet=wallet.balance, items=tuple(wallet.items), gifts=tuple(wallet.gifts),
+        wallet=wallet.balance, items=tuple(wallet.items), gifts=tuple(wallet.gifts), story_id=story_id, rng=_rng,
+        endings=tuple(wallet.endings),
     )
     session.thread_id = thread_id
     _registry.add(session)
@@ -538,8 +551,6 @@ def _section(chat_id: int, user: Any, section: str) -> tuple[str, textui.Rows]:
         return textui.render_salons(wallets.top(chat_id), wallet), textui.section_keyboard(section)
     if section == "shelf":
         return textui.render_shelf(wallet.name or _player_name(user), wallet), textui.section_keyboard(section)
-    if section == "salon":
-        return textui.render_salon_card(wallet.name or _player_name(user), wallet), textui.section_keyboard(section)
     group = _is_group(chat_id)
     return textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group)
 
@@ -647,6 +658,11 @@ async def start_seance(message: types.Message) -> None:
     await _start_seance(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
 
 
+@router.message(_enabled, _is_ludmila_command)
+async def start_ludmila(message: types.Message) -> None:
+    await _start_seance(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command", story_id=seance.LUDMILA)
+
+
 @router.message(_enabled, _is_card_command)
 async def show_daily_card(message: types.Message) -> None:
     await _daily_card(message.bot, message.chat.id, message.from_user, _thread_id(message), via="command")
@@ -748,6 +764,11 @@ async def _nav(callback: types.CallbackQuery, parsed: textui.Callback) -> None:
     message = callback.message
     chat_id, user = message.chat.id, callback.from_user
     await callback.answer()
+    if parsed.action == "salon":
+        # Кнопка из старого сообщения: салон теперь всегда рисунок, отдельного текстового раздела нет.
+        await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="salon")
+        await _show_salon(callback.bot, chat_id, user, _thread_id(message))
+        return
     await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="back" if parsed.action == "menu" else parsed.action,
                     inplace=True)
     text, rows = _section(chat_id, user, parsed.action)
@@ -965,7 +986,9 @@ async def _seance_callback(callback: types.CallbackQuery, session: Seance, parse
     seen = 0
     if session.finished:
         _registry.remove(session)
-        seen = get_guru_wallets().see_ending(session.chat_id, user.id, session.host.name, session.ending or "")
+        wallets = get_guru_wallets()
+        wallets.see_ending(session.chat_id, user.id, session.host.name, seance.ending_key(session.story.id, session.ending or ""))
+        seen = seance.seen_endings(wallets.get(session.chat_id, user.id).endings, session.story.id)
         await _book_money(session, session.host, session.fee)
     await callback.answer()
     await _log_metrics(session, result.metrics)
@@ -982,7 +1005,7 @@ async def _seance_callback(callback: types.CallbackQuery, session: Seance, parse
             return
         if view.finished:
             await _play(bot, session, result.events, view, textui.seance_done_keyboard(),
-                        textui.render_seance_result(view, seen, len(seance.ENDINGS)))
+                        textui.render_seance_result(view, seen))
         else:
             await _play(bot, session, result.events, view, rows, text)
     except TelegramAPIError:

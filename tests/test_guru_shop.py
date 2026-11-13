@@ -132,8 +132,8 @@ def test_sections_lead_to_each_other_and_back_to_the_menu():
         ways = {door.action for door in doors if door.kind == "nav"}
         assert ways == textui.NAV_SECTIONS - {section}, f"{section}: из раздела видно все остальные и меню, но не он сам"
         assert textui.section_keyboard(section)[-1][-1] == (textui.NAV_MENU, textui.nav_data("menu"))
-    picture = [door for row in textui.section_keyboard("salon") for door in row if door[0] == textui.NAV_PICTURE]
-    assert picture == [(textui.NAV_PICTURE, textui.menu_data("salon"))], "рисунок салона приходит отдельной картинкой"
+        assert (textui.MENU_SALON, textui.menu_data("salon")) in textui.section_keyboard(section)[-1],             "салон — рисунок с подписью: он приходит отдельной картинкой, а не разделом"
+    assert textui.parse(textui.nav_data("salon")).kind == "nav", "кнопки из старых сообщений не умирают"
     assert textui.parse(textui.nav_data("nope")) is None and len(textui.nav_data("salons").encode()) <= 64
 
 

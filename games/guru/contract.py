@@ -138,7 +138,12 @@ class SeanceView:
     wallet: int  # касса мадам с учётом этого сеанса
     ending: str | None = None
     ending_title: str | None = None
-    voiced: int = 0  # сколько прочтений мадам произнесла
+    voiced: int = 0  # сколько раз мадам сказала что-то определённое
+    story: str = ""  # какая история играется: у каждой свой счётчик развязок
+    endings_total: int = 0  # до скольких развязок в этой истории можно дойти
+    client_state: str = ""  # content | mixed | displeased — каким клиент ушёл
+    client_text: str = ""
+    epilogue: str = ""  # разбор после развязки: что сбылось и почему так
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
