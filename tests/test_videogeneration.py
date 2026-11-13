@@ -4,14 +4,48 @@ from tests import test_smoke_imports  # noqa: F401  (env + моки)
 from AI import videogeneration as vg
 
 
-def test_daily_limit_per_chat():
+def test_expert_quota_is_two_and_other_chats_share_one():
     vg._usage.clear()
-    chat = 111
-    for _ in range(vg.DAILY_LIMIT_PER_CHAT):
-        assert vg._check_and_count_limit(chat)
-    assert not vg._check_and_count_limit(chat), "лимит должен сработать"
-    assert vg._check_and_count_limit(222), "другой чат не должен зависеть от первого"
+    expert = vg.SPECIAL_CHAT_ID
+    other_a, other_b = expert - 1, expert - 2
+
+    assert vg._check_and_count_limit(expert)
+    assert vg._check_and_count_limit(expert)
+    assert not vg._check_and_count_limit(expert)
+    assert vg._check_and_count_limit(other_a)
+    assert not vg._check_and_count_limit(other_b)
+    assert not vg._check_and_count_limit(other_a)
+    assert sum(vg._usage.values()) == 3
     vg._usage.clear()
+
+
+def test_other_chats_do_not_consume_expert_reservation():
+    vg._usage.clear()
+    assert vg._check_and_count_limit(vg.SPECIAL_CHAT_ID - 1)
+    assert not vg._check_and_count_limit(vg.SPECIAL_CHAT_ID - 2)
+    assert vg._check_and_count_limit(vg.SPECIAL_CHAT_ID)
+    assert vg._check_and_count_limit(vg.SPECIAL_CHAT_ID)
+    assert not vg._check_and_count_limit(vg.SPECIAL_CHAT_ID)
+    vg._usage.clear()
+
+
+def test_quota_resets_on_next_day(monkeypatch):
+    vg._usage.clear()
+    monkeypatch.setattr(vg, "_quota_day", lambda: "2026-11-13")
+    assert vg._check_and_count_limit(vg.SPECIAL_CHAT_ID - 1)
+    assert not vg._check_and_count_limit(vg.SPECIAL_CHAT_ID - 2)
+
+    monkeypatch.setattr(vg, "_quota_day", lambda: "2026-11-14")
+    assert vg._check_and_count_limit(vg.SPECIAL_CHAT_ID - 2)
+    assert len(vg._usage) == 1
+    vg._usage.clear()
+
+
+def test_limit_exceeded_messages_identify_shared_pool():
+    assert "2/день" in vg._limit_exceeded_text(vg.SPECIAL_CHAT_ID)
+    outside = vg._limit_exceeded_text(vg.SPECIAL_CHAT_ID - 1)
+    assert "1/день" in outside
+    assert "все остальные чаты" in outside
 
 
 def test_extract_prompt():
@@ -19,6 +53,17 @@ def test_extract_prompt():
     assert vg._extract_prompt("Упупа сними ЗАКАТ", "упупа сними") == "ЗАКАТ"
     assert vg._extract_prompt("оживи", "оживи") == ""
     assert vg._extract_prompt("оживи как в кино", "оживи") == "как в кино"
+    assert vg._extract_prompt("Упупа оживи улыбку", "упупа оживи", "оживи") == "улыбку"
+    assert vg._extract_prompt("Упупа, оживи улыбку", "упупа, оживи", "упупа оживи", "оживи") == "улыбку"
+
+
+def test_animate_handler_accepts_optional_upupa_prefix():
+    from handlers.video import _is_animate_command
+
+    assert _is_animate_command("оживи")
+    assert _is_animate_command("Упупа оживи")
+    assert _is_animate_command("Упупа, оживи плавно")
+    assert not _is_animate_command("упупа сними")
 
 
 def test_order_models_preference():
@@ -42,11 +87,3 @@ def test_extract_video_models_tolerates_shapes():
     assert vg._extract_video_models("совсем мусор") == []
 
 
-def test_global_daily_limit():
-    vg._usage.clear()
-    granted = 0
-    for chat in range(100, 100 + vg.DAILY_LIMIT_GLOBAL * 2):
-        if vg._check_and_count_limit(chat):
-            granted += 1
-    assert granted == vg.DAILY_LIMIT_GLOBAL, "глобальный лимит должен остановить выдачу"
-    vg._usage.clear()

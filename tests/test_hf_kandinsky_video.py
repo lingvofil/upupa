@@ -232,29 +232,69 @@ def test_animate_blames_kandinsky_quota_when_pollinations_is_empty(monkeypatch):
     assert "Wan" not in final
 
 
-def test_video_commands_only_work_in_expert_group(monkeypatch):
+def test_shoot_stays_expert_only(monkeypatch):
     async def forbidden(*args, **kwargs):
         raise AssertionError("в чужом чате генерация не должна начинаться")
 
     def forbidden_limit(chat_id):
-        raise AssertionError("в чужом чате не должен тратиться дневной лимит")
+        raise AssertionError("в чужом чате не должен тратиться лимит на съёмку")
 
     monkeypatch.setattr(vg, "_check_and_count_limit", forbidden_limit)
-    monkeypatch.setattr(vg, "download_telegram_image", forbidden)
     monkeypatch.setattr(vg, "generate_kandinsky_video", forbidden)
-    monkeypatch.setattr(vg, "upload_media", forbidden)
     monkeypatch.setattr(vg, "generate_video", forbidden)
 
-    other_chat = vg.SPECIAL_CHAT_ID - 1
-    animate, animate_sent = _message("оживи", chat_id=other_chat)
-    shoot, shoot_sent = _message("упупа сними кота", photo=False, chat_id=other_chat)
-
-    asyncio.run(vg.process_animate_photo(animate, bot=object()))
+    shoot, sent = _message("упупа сними кота", photo=False, chat_id=vg.SPECIAL_CHAT_ID - 1)
     asyncio.run(vg.process_video_generation(shoot, bot=object()))
 
-    assert animate.replies == [vg.VIDEO_CHAT_ONLY_TEXT]
     assert shoot.replies == [vg.VIDEO_CHAT_ONLY_TEXT]
-    assert animate_sent == shoot_sent == []
+    assert sent == []
+
+
+def test_animate_works_in_other_chat(monkeypatch):
+    other_chat = vg.SPECIAL_CHAT_ID - 1
+    quota_chats = []
+
+    def allow(chat_id):
+        quota_chats.append(chat_id)
+        return True
+
+    async def fake_download(bot, photo):
+        return b"telegram-image"
+
+    async def fake_kandinsky(image, prompt):
+        assert image == b"telegram-image"
+        assert prompt == "плавно"
+        return b"k-video", "ok"
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("резерв не требуется при успешной анимации")
+
+    monkeypatch.setattr(vg, "_check_and_count_limit", allow)
+    monkeypatch.setattr(vg, "download_telegram_image", fake_download)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", fake_kandinsky)
+    monkeypatch.setattr(vg, "upload_media", forbidden)
+
+    animate, sent = _message("упупа оживи плавно", chat_id=other_chat)
+    asyncio.run(vg.process_animate_photo(animate, bot=object()))
+
+    assert quota_chats == [other_chat]
+    assert len(sent) == 1
+    assert animate.status.deleted is True
+
+
+def test_animate_rejects_when_other_chats_pool_exhausted(monkeypatch):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("лимит должен остановить генерацию")
+
+    monkeypatch.setattr(vg, "_check_and_count_limit", lambda chat_id: False)
+    monkeypatch.setattr(vg, "download_telegram_image", forbidden)
+    monkeypatch.setattr(vg, "generate_kandinsky_video", forbidden)
+
+    animate, sent = _message("оживи", chat_id=vg.SPECIAL_CHAT_ID - 1)
+    asyncio.run(vg.process_animate_photo(animate, bot=object()))
+
+    assert animate.replies == [vg._limit_exceeded_text(vg.SPECIAL_CHAT_ID - 1)]
+    assert sent == []
 
 
 def test_shoot_text_to_video_uses_kandinsky_first(monkeypatch):

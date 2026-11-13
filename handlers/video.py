@@ -18,6 +18,10 @@ router = Router(name="video")
 VIDEO_BUSY_TEXT = "В этом чате уже снимается видео, дождитесь его."
 
 
+def _is_animate_command(text: str | None) -> bool:
+    return bool(text and text.lower().startswith(("оживи", "упупа оживи", "упупа, оживи")))
+
+
 @router.message(
     lambda message: message.text and (
         message.text.lower().startswith("упупа сними")
@@ -31,13 +35,11 @@ async def generate_video_command(message: types.Message):
 
 @router.message(
     lambda message: (
-        message.text
-        and message.text.lower().startswith("оживи")
+        _is_animate_command(message.text)
         and message.reply_to_message is not None
     ) or (
         message.photo
-        and message.caption
-        and message.caption.lower().startswith("оживи")
+        and _is_animate_command(message.caption)
     )
 )
 @single_flight("video", per="chat", busy_text=VIDEO_BUSY_TEXT)
