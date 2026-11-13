@@ -24,6 +24,8 @@ LEFT, TOP, RIGHT, BOTTOM = art.PICTURE
 CENTER = 369
 FLOOR = 772  # где стена встречается с полом
 SHELF = 232  # доска полки с подарками
+SHELF_LEFT, SHELF_RIGHT = 62, 676
+GIFT_ZOOM = 1.3  # подарки крупнее, чем нарисованы: иначе на полке их не разглядеть
 GUEST = salon.GUEST  # клиент без примет: живой человек из чата
 
 BRICK = (124, 62, 48)
@@ -94,6 +96,48 @@ class _Pen:
     def text(self, x: float, y: float, text: str, size: int, fill, anchor: str = "mm", stroke: float = 0, stroke_fill=None) -> None:
         self.draw.text((x * SCALE, y * SCALE), text, font=art.font(size), fill=fill, anchor=anchor,
                        stroke_width=round(stroke * SCALE), stroke_fill=stroke_fill)
+
+
+class _Zoom:
+    """Перо, которое рисует крупнее вокруг точки опоры: подарки на полке видны без лупы."""
+
+    def __init__(self, pen: _Pen, origin: Point, factor: float) -> None:
+        self.pen = pen
+        self.origin = origin
+        self.factor = factor
+
+    def _x(self, x: float) -> float:
+        return self.origin[0] + (x - self.origin[0]) * self.factor
+
+    def _y(self, y: float) -> float:
+        return self.origin[1] + (y - self.origin[1]) * self.factor
+
+    def _box(self, box: Sequence[float]) -> tuple[float, float, float, float]:
+        return self._x(box[0]), self._y(box[1]), self._x(box[2]), self._y(box[3])
+
+    def _points(self, points: Iterable[Point]) -> list[Point]:
+        return [(self._x(x), self._y(y)) for x, y in points]
+
+    def box(self, box: Sequence[float], fill=None, outline=None, width: float = 1, radius: float = 0) -> None:
+        self.pen.box(self._box(box), fill, outline, width * self.factor, radius * self.factor)
+
+    def oval(self, box: Sequence[float], fill=None, outline=None, width: float = 1) -> None:
+        self.pen.oval(self._box(box), fill, outline, width * self.factor)
+
+    def disc(self, x: float, y: float, radius: float, fill=None, outline=None, width: float = 1) -> None:
+        self.pen.disc(self._x(x), self._y(y), radius * self.factor, fill, outline, width * self.factor)
+
+    def poly(self, points: Iterable[Point], fill=None, outline=None) -> None:
+        self.pen.poly(self._points(points), fill, outline)
+
+    def line(self, points: Iterable[Point], fill, width: float = 1) -> None:
+        self.pen.line(self._points(points), fill, width * self.factor)
+
+    def arc(self, box: Sequence[float], start: float, end: float, fill, width: float = 1) -> None:
+        self.pen.arc(self._box(box), start, end, fill, width * self.factor)
+
+    def text(self, x: float, y: float, text: str, size: int, fill, anchor: str = "mm") -> None:
+        self.pen.text(self._x(x), self._y(y), text, round(size * self.factor), fill, anchor)
 
 
 class _Scene:
@@ -422,15 +466,18 @@ _GIFTS: dict[str, Callable[[_Pen, float, float], None]] = {
 
 
 def _shelf(scene: _Scene, gifts: Sequence[str]) -> None:
+    """Полка во всю стену. Подарки рисуются поверх теней и крупнее: это коллекция, её должно быть видно."""
     pen = scene.pen
-    pen.box((98, SHELF, 640, SHELF + 9), fill=WOOD)
-    pen.line([(98, SHELF + 9), (640, SHELF + 9)], WOOD_DARK, 2)
-    for x in (136, 602):
+    pen.box((SHELF_LEFT, SHELF, SHELF_RIGHT, SHELF + 9), fill=WOOD)
+    pen.line([(SHELF_LEFT, SHELF + 9), (SHELF_RIGHT, SHELF + 9)], WOOD_DARK, 2)
+    for x in (SHELF_LEFT + 38, SHELF_RIGHT - 38):
         pen.poly([(x - 8, SHELF + 9), (x + 8, SHELF + 9), (x, SHELF + 26)], fill=WOOD_DARK)
-    step = 520 / len(_GIFTS)
+    step = (SHELF_RIGHT - SHELF_LEFT - 16) / len(_GIFTS)
     for index, key in enumerate(_GIFTS):
         if key in gifts:
-            _GIFTS[key](pen, 109 + step / 2 + index * step, SHELF)
+            x = SHELF_LEFT + 8 + step / 2 + index * step
+            scene.lights.append((x, SHELF - 30, 70, (70, 56, 34)))  # тёплая подсветка: вещь не висит в темноте
+            scene.glowing.append(lambda glow, key=key, x=x: _GIFTS[key](_Zoom(glow, (x, SHELF), GIFT_ZOOM), x, SHELF))
 
 
 # --- кресло и клиент --------------------------------------------------------

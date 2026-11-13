@@ -116,9 +116,25 @@ def test_shop_text_and_keyboard():
     text = textui.render_shop("Зоя", 3000, ["tea"])
     assert "Лавка салона мадам Зоя" in text and "✅" in text and len(text) < textui.MESSAGE_LIMIT
     rows = textui.shop_keyboard(["tea"], 7)
-    assert all(len(row) <= 2 for row in rows) and sum(len(row) for row in rows) == len(salon.ITEMS) - 1
+    goods = [row for row in rows if textui.parse(row[0][1]).kind == "buy"]
+    assert all(len(row) <= 2 for row in goods) and sum(len(row) for row in goods) == len(salon.ITEMS) - 1
     parsed = textui.parse(rows[0][0][1])
     assert parsed.kind == "buy" and parsed.owner == 7 and parsed.item in salon.ITEMS
+    assert rows[len(goods):] == textui.section_keyboard("shop"), "под товарами — остальные разделы меню"
+    sold_out = textui.shop_keyboard(list(salon.ITEMS), 7)
+    assert sold_out == textui.section_keyboard("shop"), "всё куплено — из лавки всё равно есть выход"
+
+
+def test_sections_lead_to_each_other_and_back_to_the_menu():
+    for section in textui.NAV_SECTIONS - {"menu"}:
+        doors = [textui.parse(data) for row in textui.section_keyboard(section) for _, data in row]
+        assert all(door is not None and len(row) <= 3 for door in doors for row in textui.section_keyboard(section))
+        ways = {door.action for door in doors if door.kind == "nav"}
+        assert ways == textui.NAV_SECTIONS - {section}, f"{section}: из раздела видно все остальные и меню, но не он сам"
+        assert textui.section_keyboard(section)[-1][-1] == (textui.NAV_MENU, textui.nav_data("menu"))
+    picture = [door for row in textui.section_keyboard("salon") for door in row if door[0] == textui.NAV_PICTURE]
+    assert picture == [(textui.NAV_PICTURE, textui.menu_data("salon"))], "рисунок салона приходит отдельной картинкой"
+    assert textui.parse(textui.nav_data("nope")) is None and len(textui.nav_data("salons").encode()) <= 64
 
 
 # --- касса ------------------------------------------------------------------
@@ -329,3 +345,50 @@ def _expose_or_finish(session):
 def test_every_archetype_has_several_stories():
     counts = {archetype: sum(story.archetype == archetype for story in STORIES) for archetype in rules.ARCHETYPE_ORDER}
     assert min(counts.values()) >= 3 and len(STORIES) >= 37
+
+
+# --- полка подарков ---------------------------------------------------------
+
+def test_every_gift_has_a_giver_and_a_short_story():
+    assert set(salon.GIFTS) == set(C.ARCHETYPES), "подарок есть у каждого типа клиента"
+    for gift in salon.GIFTS.values():
+        assert gift.giver and gift.giver == gift.giver.lower(), f"{gift.key}: «от кого» идёт в середине строки"
+        assert 40 <= len(gift.story) <= 160 and gift.story.endswith("."), f"{gift.key}: история — одна-две фразы"
+        assert "{" not in gift.story, f"{gift.key}: имени клиента в истории нет, она одна на все его истории"
+    assert len({gift.story for gift in salon.GIFTS.values()}) == len(salon.GIFTS)
+    assert len({gift.giver for gift in salon.GIFTS.values()}) == len(salon.GIFTS)
+
+
+def test_shelf_keeps_every_place_in_order():
+    slots = salon.shelf(("student", "granny", "samovar"))
+    assert [gift.key for gift, _ in slots] == list(salon.GIFTS), "места на полке не зависят от порядка подарков в кассе"
+    assert [gift.key for gift, owned in slots if owned] == ["granny", "student"]
+    assert not any(owned for _, owned in salon.shelf(()))
+
+
+def test_shelf_text_tells_stories_and_does_not_spoil_missing_gifts():
+    from types import SimpleNamespace as Player
+
+    text = textui.render_shelf("Зоя", Player(gifts=["student", "granny"]))
+    assert text.startswith("🎁 Полка мадам Зоя: 2 из 10")
+    for key in ("granny", "student"):
+        assert salon.GIFTS[key].story in text
+    assert "🥒 Банка огурцов · от бабушки" in text and "📘 Зачётка · от студента" in text
+    assert text.index("Банка огурцов") < text.index("Зачётка"), "порядок полки, а не порядок получения"
+    for gift in salon.GIFTS.values():
+        if gift.key not in ("granny", "student"):
+            assert f"▫️ от {gift.giver}: ещё не подарили" in text
+            assert gift.name not in text and gift.emoji not in text and gift.story not in text, f"{gift.key}: спойлер"
+    assert textui.SHELF_HINT in text and salon.GIFTS_COMPLETE_LINE not in text
+
+
+def test_shelf_text_for_empty_and_full_collection():
+    from types import SimpleNamespace as Player
+
+    empty = textui.render_shelf("Гоша", Player(gifts=[]))
+    assert "Полка мадам Гоша: 0 из 10" in empty and empty.count("ещё не подарили") == len(salon.GIFTS)
+    assert textui.render_shelf("Гоша", Player()) == empty, "касса без подарков — та же пустая полка"
+    full = textui.render_shelf("Мадам с очень длинным именем", Player(gifts=list(salon.GIFTS)))
+    assert "10 из 10" in full and "ещё не подарили" not in full and textui.SHELF_HINT not in full
+    assert full.endswith(salon.GIFTS_COMPLETE_LINE) and len(full) < textui.MESSAGE_LIMIT
+    assert all(gift.story in full for gift in salon.GIFTS.values())

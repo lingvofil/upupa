@@ -47,6 +47,33 @@ def test_every_gift_stands_on_the_shelf(empty, key):
     assert difference(picture(gifts=(key,)), empty) > 5000
 
 
+def test_gifts_are_bright_and_large_enough_to_be_seen():
+    # Кольцевая лампа блогерши почти белая: в полумраке у потолка она была бы серой.
+    index = list(salon_art._GIFTS).index("blogger")
+    step = (salon_art.SHELF_RIGHT - salon_art.SHELF_LEFT - 16) / len(salon_art._GIFTS)
+    x = salon_art.SHELF_LEFT + 8 + step / 2 + index * step
+    top = salon_art.SHELF - 62 * salon_art.GIFT_ZOOM
+    lamp = picture(gifts=("blogger",)).crop((round(x - 30), round(top), round(x + 30), salon_art.SHELF))
+    assert max(min(pixel) for pixel in lamp.getdata()) > 200, "подарок рисуется поверх теней"
+    assert salon_art.GIFT_ZOOM > 1 and step > 44 * salon_art.GIFT_ZOOM, "соседние подарки не наезжают друг на друга"
+
+
+def test_zoom_enlarges_around_the_point_where_the_gift_stands():
+    calls = []
+
+    class Recorder:
+        def box(self, *args):
+            calls.append(args)
+
+        def disc(self, *args):
+            calls.append(args)
+
+    zoom = salon_art._Zoom(Recorder(), (100, 200), 2)
+    zoom.box((90, 180, 110, 200), "fill", None, 1, 3)
+    zoom.disc(100, 190, 5, "fill")
+    assert calls == [((80, 160, 120, 200), "fill", None, 2, 6), (100, 180, 10, "fill", None, 2)]
+
+
 @pytest.mark.parametrize("client", sorted(salon_art.CLIENTS))
 def test_every_client_sits_at_the_table(empty, client):
     assert difference(picture(client=client), empty) > 100000
