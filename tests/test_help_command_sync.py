@@ -73,6 +73,9 @@ def test_help_covers_current_public_command_families():
         # games
         "викторина", "викторина участники", "егра", "кракадил",
         "кракадил стоп", "кракадил наоборот", "кракадил художники",
+        "гуру", "гуру смена", "гуру сеанс", "гуру людмила", "гуру приём",
+        "гуру карта", "гуру касса", "гуру лавка", "гуру салон",
+        "гуру полка", "гуру салоны", "гуру стоп",
         "упупа днд", "днд старт", "герой", "днд герой", "инвентарь",
         "днд инвентарь", "передать [предмет]", "отдать [предмет]", "днд связи",
         "днд сюжет", "днд конец",
@@ -105,3 +108,15 @@ def test_help_does_not_advertise_disabled_chogovoryat_handler():
     from prompts.help_texts import HELP_TEXT
 
     assert "чоговорят" not in HELP_TEXT
+
+
+def test_help_explains_public_guru_game_and_group_only_live_mode():
+    from prompts.help_texts import HELP_DICT
+
+    creative = HELP_DICT["creative"]
+    assert "<b>🔮 ГУРУ" in creative
+    assert "<code>гуру</code>" in creative
+    assert "<code>гуру играть</code>" in creative
+    assert "Таро, ладонь и гороскоп" in creative
+    assert "только в группе" in creative
+    assert "Игра открыта в личке и чатах; одна партия на чат." in creative
