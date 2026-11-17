@@ -194,6 +194,7 @@ def test_yue2_generate_song_uses_runtime_api_contract(monkeypatch, tmp_path):
 
     monkeypatch.setattr(yue2, "HUGGINGFACE_TOKEN", "hf_test")
     monkeypatch.setattr(yue2, "Client", FakeClient)
+    monkeypatch.setattr(yue2, "_wait_for_space", lambda token: captured.setdefault("woke_with", token))
     monkeypatch.setattr(yue2.random, "SystemRandom", lambda: FakeRandom())
 
     output = yue2._generate_sync(
@@ -212,10 +213,78 @@ def test_yue2_generate_song_uses_runtime_api_contract(monkeypatch, tmp_path):
             "api_name": "/generate_song",
         }
         assert captured["timeout"] == yue2.YUE2_TIMEOUT_SECONDS
+        assert captured["woke_with"] == "hf_test"
         assert captured["closed"] is True
         assert output.read_bytes() == b"mp3-data"
     finally:
         output.unlink(missing_ok=True)
+
+
+class _FakeConfigResponse:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_yue2_waits_for_sleeping_space_to_wake(monkeypatch):
+    import features.song.hf_yue2 as yue2
+
+    responses = [
+        yue2.requests.exceptions.ReadTimeout("The read operation timed out"),
+        _FakeConfigResponse(503),
+        _FakeConfigResponse(200),  # waking HTML page, not Gradio config
+        _FakeConfigResponse(200, {"version": "5", "components": []}),
+    ]
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        item = responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    clock = _FakeClock()
+    monkeypatch.setattr(yue2.requests, "get", fake_get)
+    yue2._wait_for_space("hf_test", sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert len(calls) == 4
+    assert calls[0] == (f"{yue2.YUE2_SPACE_URL}/config", {"Authorization": "Bearer hf_test"})
+    assert clock.now == 3 * yue2.YUE2_WAKE_POLL_SECONDS
+
+
+def test_yue2_wake_gives_up_after_deadline(monkeypatch):
+    import features.song.hf_yue2 as yue2
+
+    clock = _FakeClock()
+    monkeypatch.setattr(yue2.requests, "get", lambda url, **kwargs: _FakeConfigResponse(503))
+    with pytest.raises(yue2.Yue2GenerationError, match="did not wake up"):
+        yue2._wait_for_space("hf_test", deadline_seconds=20, sleep=clock.sleep, monotonic=clock.monotonic)
+    assert clock.now < 20
+
+
+def test_yue2_wake_reports_rejected_token(monkeypatch):
+    import features.song.hf_yue2 as yue2
+
+    monkeypatch.setattr(yue2.requests, "get", lambda url, **kwargs: _FakeConfigResponse(401))
+    with pytest.raises(yue2.Yue2ConfigurationError):
+        yue2._wait_for_space("hf_bad", sleep=lambda _s: None)
 
 
 def test_yue2_result_uses_first_generate_song_output_as_mp3(tmp_path):
