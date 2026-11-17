@@ -10,6 +10,7 @@ import random
 import re
 import shutil
 import tempfile
+import time
 from typing import Any
 
 import requests
@@ -20,7 +21,12 @@ from core.settings import HUGGINGFACE_TOKEN
 
 YUE2_SPACE_ID = "lingvofil/upupa-yue2"
 YUE2_API_NAME = "/generate_song"
+YUE2_SPACE_URL = "https://lingvofil-upupa-yue2.hf.space"
 YUE2_TIMEOUT_SECONDS = 480
+# The Space sleeps after 48h idle; booting a ZeroGPU Space takes a minute or
+# more, while gradio_client's own config fetch gives it only httpx's 5s.
+YUE2_WAKE_TIMEOUT_SECONDS = 240
+YUE2_WAKE_POLL_SECONDS = 5
 YUE2_MAX_MP3_BYTES = 45 * 1024 * 1024
 YUE2_PLANNING_MODE = "off"
 YUE2_RENDER_QUALITY = 16
@@ -160,6 +166,57 @@ def _classify_exception(exc: Exception) -> Exception:
     return Yue2GenerationError(text or exc.__class__.__name__)
 
 
+def _space_config_ready(response: requests.Response) -> bool:
+    if response.status_code != 200:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and "components" in payload
+
+
+def _wait_for_space(
+    token: str,
+    *,
+    deadline_seconds: float = YUE2_WAKE_TIMEOUT_SECONDS,
+    poll_seconds: float = YUE2_WAKE_POLL_SECONDS,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+) -> None:
+    """Wake a sleeping Space and wait until Gradio serves its config."""
+    headers = {"Authorization": f"Bearer {token}"}
+    deadline = monotonic() + deadline_seconds
+    started = monotonic()
+    attempts = 0
+    last_problem = ""
+    while True:
+        attempts += 1
+        try:
+            response = requests.get(f"{YUE2_SPACE_URL}/config", headers=headers, timeout=(10, 60))
+            if _space_config_ready(response):
+                if attempts > 1:
+                    logging.info(
+                        "[song][yue2] space awake after %.0fs attempts=%s",
+                        monotonic() - started,
+                        attempts,
+                    )
+                return
+            if response.status_code in (401, 403):
+                raise Yue2ConfigurationError("Hugging Face rejected access to the private YuE2 Space")
+            last_problem = f"HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            last_problem = f"{exc.__class__.__name__}: {exc}"
+
+        if attempts == 1:
+            logging.info("[song][yue2] space not ready (%s), waiting for wake-up", last_problem)
+        if monotonic() + poll_seconds >= deadline:
+            raise Yue2GenerationError(
+                f"YuE2 Space did not wake up in {deadline_seconds:.0f}s: {last_problem}"
+            )
+        sleep(poll_seconds)
+
+
 def _generate_sync(lyrics: str, style_prompt: str) -> Path:
     token = (HUGGINGFACE_TOKEN or "").strip()
     if not token:
@@ -169,6 +226,7 @@ def _generate_sync(lyrics: str, style_prompt: str) -> Path:
     with tempfile.TemporaryDirectory(prefix="upupa_yue2_download_") as download_dir:
         client = None
         try:
+            _wait_for_space(token)
             client = Client(
                 YUE2_SPACE_ID,
                 token=token,
