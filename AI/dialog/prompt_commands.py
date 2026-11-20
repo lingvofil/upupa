@@ -17,7 +17,6 @@ from features.stat_rank_settings import (
 )
 from features.statistics import get_chat_participant_activity
 from prompts import (
-    CUSTOM_PROMPT_TEMPLATE,
     PROMPT_PIROZHOK,
     PROMPT_POROSHOK,
     PROMPTS_DICT,
@@ -34,7 +33,7 @@ from prompts import (
 
 from AI.dialog.generation import generate_simple_response
 from AI.dialog.participant_imitation import initialize_participant_profile
-from AI.dialog.settings import update_chat_settings
+from AI.dialog.settings import build_custom_prompt, update_chat_settings
 
 
 def _clear_participant_metadata(settings: dict) -> None:
@@ -445,8 +444,7 @@ async def handle_set_prompt_command(message: types.Message):
         current_settings["prompt_type"] = "standard"
         reply_message = f"{command_part.capitalize()} в здании."
     else:
-        full_custom_prompt = CUSTOM_PROMPT_TEMPLATE.format(personality=command_part)
-        current_settings["prompt"] = full_custom_prompt
+        current_settings["prompt"] = build_custom_prompt(command_part)
         current_settings["prompt_name"] = "кастомный"
         current_settings["prompt_type"] = "custom"
         reply_message = "Пошел нахуй! Ладно, принято"
