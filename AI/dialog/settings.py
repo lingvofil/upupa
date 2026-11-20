@@ -2,7 +2,25 @@
 
 from core.prompt_context import get_prompt_context
 from core.state import chat_settings
-from prompts import PROMPTS_DICT
+from prompts import CUSTOM_PROMPT_PERSONALITY_MARKER, CUSTOM_PROMPT_TEMPLATE, PROMPTS_DICT
+
+
+def build_custom_prompt(personality: str) -> str:
+    """Wrap a user-written persona from «промпт <текст>» into the current template."""
+    return CUSTOM_PROMPT_TEMPLATE.format(personality=personality)
+
+
+def _refresh_custom_prompt(stored_prompt: str) -> str:
+    """Rebuild a saved custom prompt so old chats drop outdated template text.
+
+    The chat settings keep the whole wrapped text, so without this a chat that
+    set its persona before a template change would keep the old wrapper forever.
+    The template part never contains user text, hence the first marker is ours.
+    """
+    _, marker, personality = stored_prompt.partition(CUSTOM_PROMPT_PERSONALITY_MARKER)
+    if not marker or not personality.strip():
+        return stored_prompt
+    return build_custom_prompt(personality)
 
 
 NO_CONFIDENCE_PERCENTAGES_INSTRUCTION = (
@@ -29,6 +47,8 @@ def get_current_chat_prompt(chat_id: str) -> tuple[str, str]:
     settings = chat_settings.get(chat_id, {})
     prompt_text = settings.get("prompt", PROMPTS_DICT.get("летописец", ""))
     prompt_name = settings.get("prompt_name", "летописец")
+    if settings.get("prompt_type") == "custom":
+        prompt_text = _refresh_custom_prompt(prompt_text)
     return prompt_text, prompt_name
 
 
