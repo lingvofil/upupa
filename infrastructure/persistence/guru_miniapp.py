@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from contextlib import closing
+from hashlib import blake2s
 import json
 import random
 import secrets
@@ -25,12 +26,45 @@ def _history(db, owner):
 
 
 def _interior(history, purchases):
-    items = salon.owned_items(purchases)
+    items = salon.owned_items(purchases, catalog=miniapp.ITEMS)
     earned = {row["archetype"] for row in history if row["keepsake"]}
     return {"balance": sum(row["fee"] for row in history) - sum(purchases.values()),
-            "items": [item.key for item in items], "rank": salon.rank(len(items)),
+            "items": [item.key for item in items], "rank": salon.rank(max(12, len(items)) if "orrery" in purchases else len(items)),
+            "picture": miniapp.room_picture(purchases),
+            "collection": [{"id": item.key, "name": item.name, "picture": f"object-{item.key}.jpg"} for item in items],
             "gifts": [{"id": gift.key, "emoji": gift.emoji, "name": gift.name, "giver": gift.giver,
                        "story": gift.story if owned else None} for gift, owned in salon.shelf(earned)]}
+
+
+def _leaderboard(db, owner, period):
+    rows = db.execute("""
+        WITH totals AS (
+            SELECT v.owner, sum(json_extract(v.record, '$.fee')) AS earned, count(*) AS visits
+            FROM visits v LEFT JOIN journey j ON j.id=v.id
+            WHERE ?='all' OR j.finished >= CAST(strftime('%s','now','-7 days') AS INTEGER)
+            GROUP BY v.owner
+        ), ranked AS (
+            SELECT *, rank() OVER (ORDER BY earned DESC) AS place FROM totals
+        ), top AS (
+            SELECT owner FROM ranked ORDER BY place, owner LIMIT 20
+        )
+        SELECT r.*, n.name, t.owner IS NOT NULL AS in_top,
+               (SELECT id FROM visits WHERE owner=r.owner ORDER BY rowid LIMIT 1) AS first_visit
+        FROM ranked r LEFT JOIN salon_names n ON n.owner=r.owner LEFT JOIN top t ON t.owner=r.owner
+        WHERE t.owner IS NOT NULL OR r.owner=?
+        ORDER BY r.place, r.owner
+    """, (period, owner))
+    leaders, own = [], None
+    for row in rows:
+        name = row["name"] or f"Салон {blake2s(row['first_visit'].encode(), digest_size=4).hexdigest().upper()}"
+        entry = {"name": name, "place": row["place"], "earned": row["earned"], "visits": row["visits"],
+                 "self": row["owner"] == owner}
+        if row["in_top"]:
+            leaders.append(entry)
+        if entry["self"]:
+            own = entry
+    alias = db.execute("SELECT name FROM salon_names WHERE owner=?", (owner,)).fetchone()
+    return {"leaders": leaders, "own": own, "alias": alias[0] if alias else ""}
 
 
 class GuruVisits:
@@ -51,8 +85,23 @@ class GuruVisits:
                 finished INTEGER, returned INTEGER, shared INTEGER, abandoned INTEGER)""")
             db.execute("""CREATE TABLE IF NOT EXISTS purchases (
                 owner INTEGER NOT NULL, item TEXT NOT NULL, price INTEGER NOT NULL, PRIMARY KEY(owner, item))""")
+            db.execute("CREATE TABLE IF NOT EXISTS salon_names (owner INTEGER PRIMARY KEY, name TEXT NOT NULL)")
             op = command.get("op", "home")
-            db.execute("BEGIN" if op in ("home", "catalog", "card", "record", "interior", "shop") else "BEGIN IMMEDIATE")
+            db.execute("BEGIN" if op in ("home", "catalog", "card", "record", "interior", "shop", "leaderboard")
+                       else "BEGIN IMMEDIATE")
+            if op in ("leaderboard", "rename"):
+                period = command.get("period", "week")
+                if period not in ("week", "all"):
+                    raise ValueError("Неизвестный период рейтинга.")
+                if op == "rename":
+                    raw = command.get("name")
+                    if not isinstance(raw, str):
+                        raise ValueError("Введите имя для рейтинга.")
+                    name = " ".join(raw.split())
+                    if name and (len(name) > 28 or not name.isprintable()):
+                        raise ValueError("Имя должно содержать до 28 печатных символов.")
+                    db.execute("INSERT OR REPLACE INTO salon_names VALUES (?, ?)", (user_id, name))
+                return _leaderboard(db, user_id, period)
             row = db.execute("SELECT * FROM salons WHERE owner=?", (user_id,)).fetchone()
             rev, active = (row["rev"], json.loads(row["active"])) if row else (0, None)
             if op == "catalog":
@@ -95,7 +144,7 @@ class GuruVisits:
                 if active:
                     raise ValueError("Сначала завершите текущий приём.")
                 story = seance.pick_least_visited(Counter(row["story"] for row in history), random.Random())
-                active = miniapp.new_visit(story, (item.key for item in salon.owned_items(purchases)))
+                active = miniapp.new_visit(story, (item.key for item in salon.owned_items(purchases, catalog=miniapp.ITEMS)))
                 db.execute("INSERT INTO journey(id,owner,story,started) VALUES (?,?,?,strftime('%s','now'))",
                            (active["id"], user_id, story))
             elif op == "leave":
@@ -134,10 +183,10 @@ class GuruVisits:
             elif op == "buy":
                 key = command.get("item")
                 balance = sum(row["fee"] for row in history) - sum(purchases.values())
-                refusal = salon.refusal(key, balance, purchases)
+                refusal = salon.refusal(key, balance, purchases, catalog=miniapp.ITEMS)
                 if refusal:
                     raise ValueError(refusal)
-                item = salon.ITEMS[key]
+                item = miniapp.ITEMS[key]
                 db.execute("INSERT INTO purchases VALUES (?, ?, ?)", (user_id, key, item.price))
                 purchases[key] = item.price
             elif op != "home":

@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from games.guru import ludmila_deck, miniapp, salon, seance
+from games.guru import ludmila_deck, miniapp, rules, salon, seance
+from games.guru.stories import STORIES_BY_ID
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
@@ -58,6 +59,10 @@ def test_every_guest_completes_a_visit_and_returns(tmp_path, story, draw_guest):
             break
         state = db.request(11, {"op": "move", "rev": state["rev"], "action": choose(state["current"], order)})
     record = state["record"]
+    payment = record["payment"]
+    assert payment["base"] == STORIES_BY_ID[story].fee
+    assert payment["rate"] in {-50, 20, 60, 100, 150}
+    assert record["fee"] == rules._round_money(payment["base"] * payment["rate"] / 100) + payment["bonus"]
     expected = list(hidden["catalog"])
     expected[slot] = {"id": story, "name": record["client"]}
     assert GuruVisits(db.path).request(11, {"op": "catalog"}) == {"catalog": expected}
@@ -105,7 +110,10 @@ def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path, draw_g
     store = GuruVisits(tmp_path / "salon.db")
     initial = store.request(11, {"op": "home"})
     assert initial["salon"]["balance"] == 0
-    assert {item["id"] for group in store.request(11, {"op": "shop"})["shop"] for item in group["items"]} == set(salon.ITEMS)
+    items = [item for group in store.request(11, {"op": "shop"})["shop"] for item in group["items"]]
+    assert {item["id"] for item in items} == set(miniapp.ITEMS)
+    assert set(salon.ITEMS) <= set(miniapp.ITEMS)
+    assert all((ASSETS / "art" / item["picture"]).is_file() for item in items)
     order = {"op": "buy", "item": "ledger", "rev": 0}
     with pytest.raises(ValueError, match="Не хватает"):
         store.request(11, order)
@@ -158,7 +166,8 @@ def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path, draw_guest)
         profiles.add(palm["picture"])
         assert len(palm["zones"]) == 6 and not any("finding" in zone for zone in palm["zones"])
         assert all(0 < p < 100 for zone in palm["zones"] for p in zone["point"])
-    assert profiles == {"palm.webp", *(f"palm-{hand}.jpg" for hand in miniapp.HAND_TYPES)}
+    assert len(profiles) == len(seance.STORY_IDS)
+    assert "palm.webp" in profiles
     assert all((ASSETS / "art" / picture).is_file() for picture in profiles)
     draw_guest("granny.balcony")
     state = store.request(11, {"op": "start", "rev": 0})
@@ -202,6 +211,27 @@ def test_ludmila_draw_varies_and_legacy_moves_replay(monkeypatch):
     legacy.pop("ludmila_deck")
     session, _ = miniapp.replay(legacy)
     assert [card.art for card in session.content.cards] == original
+
+
+def test_luxury_purchase_updates_room_but_not_ranking(tmp_path):
+    store = GuruVisits(tmp_path / "salon.db")
+    assert not store.request(1, {"op": "leaderboard"})["leaders"]
+    with sqlite3.connect(store.path) as db:
+        for owner, suffix, amount, days in ((1, "a", 170000, 1), (1, "b", -300, 1), (2, "c", 190000, 8), (3, "d", 5000, 0)):
+            db.execute("INSERT INTO visits VALUES (?, ?, ?, ?)", (suffix, owner, seance.LUDMILA, json.dumps({"fee": amount})))
+            db.execute("INSERT INTO journey(id, owner, finished) VALUES (?, ?, strftime('%s','now',?))",
+                       (suffix, owner, f"-{days} days"))
+    board = store.request(1, {"op": "rename", "name": "Салон  на чердаке"})
+    assert board["leaders"][0] == {"name": "Салон на чердаке", "earned": 169700, "visits": 2, "self": True, "place": 1}
+    before = store.request(1, {"op": "home"})
+    bought = store.request(1, {"op": "buy", "item": "orrery", "rev": before["rev"]})
+    assert bought["salon"]["balance"] == 29700
+    assert bought["salon"]["picture"] == "salon-grand.jpg" and bought["salon"]["rank"] == salon.rank(12)
+    assert bought["salon"]["collection"][0]["picture"] == "object-orrery.jpg"
+    assert store.request(1, {"op": "leaderboard"}) == board
+    all_time = store.request(1, {"op": "leaderboard", "period": "all"})
+    assert all_time["own"]["place"] == 2
+    assert all_time["leaders"][0]["earned"] == 190000 and "owner" not in all_time["leaders"][0]
 
 
 def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch, draw_guest):

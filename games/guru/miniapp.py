@@ -5,9 +5,8 @@ import random
 import secrets
 from copy import copy
 from dataclasses import replace
-from hashlib import blake2b
 
-from games.guru import ludmila_deck, palm_art, salon, seance, seance_engine as engine
+from games.guru import ludmila_deck, salon, seance, seance_engine as engine
 from games.guru.stories import STORIES_BY_ID
 
 
@@ -36,14 +35,36 @@ ITEM_NOTES = {
     "tea": "В начале встречи мадам угощает клиента чаем.",
     "armchair": "Клиент садится в новое кресло в начале встречи.",
 }
-SHOP_GROUPS = {salon.PROPS: "Реквизит", salon.PROMO: "Реклама", salon.COMFORT: "Уют"}
+COLLECTION = "collection"
+SHOP_GROUPS = {salon.PROPS: "Реквизит", salon.PROMO: "Реклама", salon.COMFORT: "Уют", COLLECTION: "Коллекционные вещи"}
+ITEMS = {**salon.ITEMS, **{key: salon.Item(key, "", name, name, price, COLLECTION, note, salon.NO_PERKS)
+         for key, name, price, note in (
+             ("atlas", "Атлас звёзд Байера", 18000, "Репринт с медных досок. На полях видны пометки прежней владелицы."),
+             ("silk", "Шёлковая скатерть для расклада", 24000, "Плотный шёлк цвета тёмного мха с вышивкой по краю."),
+             ("cabinet", "Ореховый шкаф для реликвий", 36000, "Стеклянные дверцы, старые латунные ключи и место для драгоценных мелочей."),
+             ("clock", "Каминные часы из бронзы", 48000, "Механизм заводится ключом. На четверть часа отбивает два негромких удара."),
+             ("tapestry", "Гобелен «Ночное небо»", 64000, "На тёмной шерсти вышиты созвездия и едва заметная линия горизонта."),
+             ("astrolabe", "Астролябия мастера из Толедо", 90000, "В бронзовом диске прорезаны дуги. Край отполирован пальцами прежних хозяев."),
+             ("orrery", "Механический планетарий", 140000, "Ручная заводка приводит в движение латунные планеты. Открывает большой кабинет."),
+         )}}
+
+
+def room_picture(owned):
+    if "orrery" in owned or len(owned) >= 12:
+        return "salon-grand.jpg"
+    if len(owned) >= 4:
+        return "salon-established.jpg"
+    if owned:
+        return "salon-comfort.jpg"
+    return "salon-modest.jpg"
 
 
 def shop():
     return [{"title": title, "items": [
-        {"id": item.key, "emoji": item.emoji, "name": item.name, "price": item.price,
-         "note": ITEM_NOTES.get(item.key, "Появится в интерьере салона.")}
-        for item in salon.ITEMS.values() if item.group == group
+        {"id": item.key, "name": item.name, "price": item.price,
+         "picture": f"object-{item.key}.jpg", "note": ITEM_NOTES.get(item.key, item.note if group == COLLECTION
+                                                                   else "Появится в коллекции салона.")}
+        for item in ITEMS.values() if item.group == group
     ]} for group, title in SHOP_GROUPS.items()]
 
 
@@ -80,16 +101,15 @@ def replay(visit):
 
 PORTRAIT_PALM = {"heart": (50, 43.5), "head": (57, 56.5), "mars": (71.5, 61),
                  "venus": (36, 58), "apollo": (66.5, 47), "fate": (50, 69)}
-HAND_TYPES = ("earth", "air", "fire", "water")
+PHOTO_PALM = {"heart": (68, 48), "head": (51, 55), "mars": (35, 45),
+              "venus": (38, 66), "apollo": (64, 33), "fate": (56, 71)}
 
 
 def palm_view(session):
     if session.story.id == seance.LUDMILA:
         picture, positions = "palm.webp", PORTRAIT_PALM
     else:
-        variant = blake2b(session.story.id.encode(), digest_size=1).digest()[0] % len(HAND_TYPES)
-        hand = HAND_TYPES[variant]
-        picture, positions = f"palm-{hand}.jpg", palm_art.zone_positions(hand)
+        picture, positions = f"palm-{session.story.id.replace('.', '-')}.webp", PHOTO_PALM
     inspected = session.state.draft.inspected
     zones = []
     for index, zone in enumerate(session.content.zones):
@@ -102,9 +122,9 @@ def palm_view(session):
 
 def scene(session, events):
     view = seance.build_view(session)
-    art = None
+    card = None
     if session.phase == "tarot" or (session.phase == "tone" and session.state.scene == "tarot"):
-        art = session.content.cards[session.card].art
+        card = session.content.cards[session.card]
     lines = [event.text for event in events if event.text and event.kind != "status"]
     if session.step == 0:
         lines = [session.content.arrival, session.heard[0]]
@@ -120,7 +140,8 @@ def scene(session, events):
         questions = STORIES_BY_ID[session.story.id].questions
         opening_ids = [f"q:{next(i for i, q in enumerate(questions) if q.kind == kind)}" for kind in ("check", "open")]
     result = {"client": view.client, "story": view.story, "archetype": session.content.archetype,
-            "phase": view.phase, "mood": session.state.mood, "art": art, "prompt": view.prompt,
+            "phase": view.phase, "mood": session.state.mood, "art": card.art if card else None,
+            "artTitle": card.title if card else None, "prompt": view.prompt,
             "screen": view.screen, "lines": lines, "heard": list(session.heard),
             "opening": opening_ids if session.step == 0 else [],
             "method": session.state.scene, "finishedMethods": list(session.state.done),
@@ -231,6 +252,8 @@ def close_visit(session, events):
     return {"id": session.session_id, "story": session.story.id, "client": session.client, "type": session.content.archetype,
             "ending": session.ending, "title": outcome.title, "text": outcome.text, "quote": outcome.quote,
             "afterword": outcome.afterword, "epilogue": seance.epilogue(outcome), "fee": fee,
+            "payment": {"base": session.content.fee, "rate": round(seance.fee_rate(outcome) * 100),
+                        "bonus": fee - session.fee},
             "events": [e.text for e in events if e.text and e.kind in ("hint", "answer")],
             "cards": reading_cards(session), "letter": invitation + "\n\n" + POSTSCRIPTS[session.story.id],
             "memory": memory, "spoken": spoken,

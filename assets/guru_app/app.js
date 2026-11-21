@@ -24,7 +24,6 @@ let tg,
   state,
   record,
   page,
-  roomUrl,
   palmFocus,
   palmZoom = false,
   wheelAngle,
@@ -47,6 +46,17 @@ function img(name, alt, cls) {
   el.src = asset(name);
   el.alt = alt;
   return el;
+}
+function tarotFace(art, title, cls = "") {
+  const face = node("span", "", "tarot-face " + cls),
+    ornament = node("span", "✧", "tarot-ornament");
+  ornament.setAttribute("aria-hidden", "true");
+  face.append(
+    ornament,
+    img("card-" + art + ".jpg", ""),
+    node("span", title, "tarot-title"),
+  );
+  return face;
 }
 function group(...items) {
   const el = node("div", "", "actions");
@@ -102,7 +112,7 @@ async function call(op, fields = {}) {
     err.status = res.status;
     throw err;
   }
-  return op === "interior" ? res.blob() : res.json();
+  return res.json();
 }
 function mount(name, el, keepScroll = false) {
   if (dialog.open) dialog.close();
@@ -160,8 +170,8 @@ function palmTool(s) {
     marks = group();
   const drawing = img(picture, "Ладонь клиента");
   drawing.draggable = false;
-  drawing.width = picture === "palm.webp" ? 1254 : 738;
-  drawing.height = picture === "palm.webp" ? 1254 : 1100;
+  drawing.width = 500;
+  drawing.height = 500;
   zoomer.append(drawing);
   const whole = button(
     "Вся ладонь",
@@ -301,6 +311,10 @@ function horoscopeWheel(s, animate) {
 
 function sceneArt(s, hand, keepScroll) {
   const art = node("aside", "", "stage-art");
+  art.style.setProperty(
+    "--salon-scene",
+    'url("' + asset(state.salon.picture) + '")',
+  );
   if (s.phase === "spread") {
     const spread = node("div", "", "card-backs");
     for (const a of s.actions) {
@@ -311,17 +325,15 @@ function sceneArt(s, hand, keepScroll) {
     }
     art.append(spread);
   } else if (s.art) {
+    art.classList.add("tarot-stage");
     const zoom = button(
       "",
       () =>
-        modal(
-          "Карта крупным планом",
-          img("card-" + s.art + ".jpg", "Карта на столе", "zoom-art"),
-        ),
+        modal("Карта крупным планом", tarotFace(s.art, s.artTitle, "zoom-art")),
       "zoom",
     );
     zoom.setAttribute("aria-label", "Рассмотреть рисунок карты");
-    zoom.append(img("card-" + s.art + ".jpg", "Карта на столе", "arcana"));
+    zoom.append(tarotFace(s.art, s.artTitle));
     art.append(zoom);
   } else if (hand) {
     art.classList.add("palm-stage");
@@ -462,26 +474,11 @@ function ticket(title, detail, action, picture) {
 }
 const rubles = (amount) => amount.toLocaleString("ru") + " ₽";
 
-async function drawRoom(frame) {
-  try {
-    const picture = await call("interior");
-    if (!frame.isConnected) return;
-    if (roomUrl) URL.revokeObjectURL(roomUrl);
-    roomUrl = URL.createObjectURL(picture);
-    const room = node("img");
-    room.src = roomUrl;
-    room.alt = "Интерьер салона с покупками и подарками";
-    frame.replaceChildren(room);
-  } catch {
-    frame.textContent = "Не удалось загрузить рисунок салона.";
-  }
-}
-
 function salon() {
   if (!state) return door();
   const el = panel("Мой салон"),
     room = node("section", "", "salon-room"),
-    frame = node("figure", "Зажигаем свет…", "salon-picture"),
+    frame = node("figure", "", "salon-picture"),
     summary = node("div", "", "salon-summary");
   summary.append(
     node("h2", state.salon.rank),
@@ -496,6 +493,7 @@ function salon() {
         "primary",
       ),
       button("Открыть лавку", shop),
+      button("Топ гадалок", () => leaderboard()),
       button(
         "Книга посетителей · " +
           new Set(state.history.map((visit) => visit.story)).size +
@@ -505,8 +503,11 @@ function salon() {
       ),
     ),
   );
+  frame.append(img(state.salon.picture, "Интерьер вашего салона"));
   room.append(frame, summary);
-  el.append(room, shelf());
+  el.append(room);
+  if (state.salon.collection.length) el.append(collection());
+  el.append(shelf());
   const letters = state.history.filter((r) => r.waiting);
   if (letters.length) {
     const box = node("section");
@@ -537,7 +538,25 @@ function salon() {
     el.append(box);
   }
   mount("salon", el);
-  drawRoom(frame);
+}
+
+function collection() {
+  const section = node("section", "", "salon-collection"),
+    list = node("div", "", "object-gallery");
+  section.append(node("h2", "Вещи в салоне"));
+  for (const item of state.salon.collection) {
+    const tile = button(
+      "",
+      () => modal(item.name, img(item.picture, item.name, "object-preview")),
+      "object-tile",
+    );
+    const portrait = img(item.picture, "");
+    portrait.loading = "lazy";
+    tile.append(portrait, node("span", item.name));
+    list.append(tile);
+  }
+  section.append(list);
+  return section;
 }
 function shelf() {
   const section = node("section", "", "gift-shelf"),
@@ -568,21 +587,34 @@ function shelf() {
 async function shop() {
   state = await call("home");
   const { shop: groups } = await call("shop"),
-    el = panel("Лавка");
+    el = panel("Лавка"),
+    navigation = group(button("← В салон", salon)),
+    scene = img(
+      "apothecary.jpg",
+      "Лавка со старинными книгами и инструментами",
+      "shop-scene",
+    );
   el.append(
+    scene,
     node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
-    group(button("← Вернуться в салон", salon)),
+    navigation,
   );
   for (const { title, items } of groups) {
     const box = node("section", "", "shop-section"),
       grid = node("div", "", "grid");
     box.append(node("h2", title));
+    navigation.append(
+      button(title, () => box.scrollIntoView({ block: "start" })),
+    );
     for (const item of items) {
       const tile = node("article", "", "shop-item"),
         owned = state.salon.items.includes(item.id),
         gap = item.price - Math.max(0, state.salon.balance);
+      const portrait = img(item.picture, "", "shop-object");
+      portrait.loading = "lazy";
       tile.append(
-        node("h3", item.emoji + " " + item.name),
+        portrait,
+        node("h3", item.name),
         node("p", item.note, "muted"),
       );
       if (owned) {
@@ -610,6 +642,7 @@ async function shop() {
 function confirmPurchase(item) {
   modal(
     item.name,
+    img(item.picture, item.name, "object-preview"),
     node("p", item.note),
     group(
       button(
@@ -624,6 +657,93 @@ function confirmPurchase(item) {
       button("Отмена", () => dialog.close()),
     ),
   );
+}
+
+async function leaderboard(period = "week") {
+  renderLeaderboard(period, await call("leaderboard", { period }));
+}
+
+function rankRow(entry) {
+  const row = node("li", "", entry.self ? "rank-row rank-self" : "rank-row"),
+    name = node("div", "", "rank-name");
+  name.append(
+    node("strong", entry.name),
+    node("small", "Приёмов: " + entry.visits + (entry.self ? " · Вы" : "")),
+  );
+  row.append(
+    node("span", String(entry.place), "rank-position"),
+    name,
+    node("strong", rubles(entry.earned), "rank-earned"),
+  );
+  return row;
+}
+
+function renderLeaderboard(period, board) {
+  const el = panel("Топ гадалок"),
+    tabs = group(),
+    ranks = node("ol", "", "rank-list");
+  for (const [id, title] of [
+    ["week", "Последние 7 дней"],
+    ["all", "За всё время"],
+  ]) {
+    const tab = button(
+      title,
+      () => leaderboard(id),
+      period === id ? "primary" : "",
+    );
+    tab.setAttribute("aria-pressed", period === id);
+    tabs.append(tab);
+  }
+  el.append(
+    node(
+      "p",
+      "По сумме гонораров с учётом возвратов. Покупки на место не влияют.",
+      "muted",
+    ),
+    tabs,
+  );
+  if (board.leaders.length) {
+    ranks.append(...board.leaders.map(rankRow));
+    el.append(ranks);
+  } else
+    el.append(
+      node("p", "За этот период ещё никто не завершил приём.", "muted"),
+    );
+  if (board.own && !board.leaders.some((entry) => entry.self)) {
+    const own = node("ol", "", "rank-list");
+    own.append(rankRow(board.own));
+    el.append(own);
+  }
+  el.append(
+    group(
+      button("Имя в рейтинге", () => changeRankName(period, board.alias)),
+      button("← В салон", salon),
+    ),
+  );
+  mount("leaderboard", el);
+}
+
+function changeRankName(period, alias) {
+  const form = node("form", "", "alias-form"),
+    label = node("label", "Публичное имя"),
+    input = node("input"),
+    save = node("button", "Сохранить", "primary");
+  input.value = alias;
+  input.maxLength = 28;
+  input.placeholder = "Оставить имя салона по умолчанию";
+  label.append(input);
+  form.append(label, save);
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    run(async () =>
+      renderLeaderboard(
+        period,
+        await call("rename", { period, name: input.value }),
+      ),
+    );
+  };
+  modal("Имя в рейтинге", form);
+  input.focus();
 }
 async function guests(revealedId) {
   const { catalog } = await call("catalog"),
@@ -690,11 +810,40 @@ function showRecord(r, firstVisit = false) {
   if (r.story === "jealous.vocal" && r.ending === "duet")
     body.append(img("ending-duet.webp", "Финал в ресторане", "arcana"));
   body.append(
-    node("div", r.client + " · " + r.fee + " ₽", "meta"),
+    node("div", r.client, "meta"),
     node("p", r.text),
     node("p", r.quote),
     node("p", r.afterword),
   );
+  const payment = node("section", "", "visit-payment");
+  payment.append(
+    node(
+      "strong",
+      (r.fee < 0 ? "Возврат · " : "Гонорар · ") + rubles(Math.abs(r.fee)),
+    ),
+  );
+  if (r.payment) {
+    const { base, rate, bonus } = r.payment;
+    const reason = {
+      150: "Клиент доволен и признал попадание",
+      100: "Клиент доволен",
+      60: "Клиент ушёл со смешанным впечатлением",
+      20: "Клиент недоволен",
+      "-50": "Совет привёл к неприятным последствиям",
+    }[rate];
+    payment.append(
+      node(
+        "p",
+        reason +
+          " · " +
+          Math.abs(rate) +
+          "% от " +
+          rubles(base) +
+          (bonus ? " · Реклама +" + rubles(bonus) : ""),
+      ),
+    );
+  }
+  body.append(payment);
   const breakdown = node("details");
   breakdown.append(
     node("summary", "Что сбылось и почему"),
@@ -708,16 +857,16 @@ function showRecord(r, firstVisit = false) {
   if (r.cards.length) {
     el.append(node("h2", "Карта для чата"));
     const list = node("div", "", "grid");
-    r.cards.forEach((c, slot) =>
-      list.append(
-        ticket(
-          c.title,
-          c.symbol,
-          () => compose(r.id, slot, c),
-          "card-" + c.art + ".jpg",
-        ),
-      ),
-    );
+    r.cards.forEach((c, slot) => {
+      const card = ticket(
+        c.title,
+        c.symbol,
+        () => compose(r.id, slot, c),
+        "card-" + c.art + ".jpg",
+      );
+      card.classList.add("tarot-ticket");
+      list.append(card);
+    });
     el.append(list);
   }
   el.append(group(button("В мой салон →", salon, "primary")));
@@ -754,7 +903,7 @@ function letter(r) {
 function compose(id, slot, c) {
   modal(
     c.title,
-    img("card-" + c.art + ".jpg", c.title, "arcana"),
+    tarotFace(c.art, c.title, "shared-face"),
     node("p", c.symbol + " · " + c.look),
     node("p", "«" + c.phrase + "»"),
     button(
@@ -865,14 +1014,22 @@ async function shared(token, sourceIndex) {
   }
   symbols();
   copy.append(options);
-  spread.append(img("card-" + c.art + ".jpg", c.title, "arcana"), copy);
+  spread.append(tarotFace(c.art, c.title, "shared-face"), copy);
   el.append(spread, button("Открыть свой салон →", salon, "primary"));
   mount("shared", el);
 }
 function back() {
   if (dialog.open) dialog.close();
   else if (
-    ["record", "guests", "letter", "session", "shared", "shop"].includes(page)
+    [
+      "record",
+      "guests",
+      "letter",
+      "session",
+      "shared",
+      "shop",
+      "leaderboard",
+    ].includes(page)
   )
     salon();
   else door();
