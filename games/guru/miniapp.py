@@ -59,12 +59,12 @@ def room_picture(owned):
     return "salon-modest.jpg"
 
 
-def shop():
+def shop(catalog=ITEMS):
     return [{"title": title, "items": [
         {"id": item.key, "name": item.name, "price": item.price,
          "picture": f"object-{item.key}.jpg", "note": ITEM_NOTES.get(item.key, item.note if group == COLLECTION
-                                                                   else "Появится в коллекции салона.")}
-        for item in ITEMS.values() if item.group == group
+                                                                   else "Появится на витрине лавки.")}
+        for item in catalog.values() if item.group == group
     ]} for group, title in SHOP_GROUPS.items()]
 
 

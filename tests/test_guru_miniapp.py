@@ -129,6 +129,7 @@ def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path, draw_g
     assert {item["id"] for item in items} == set(miniapp.ITEMS)
     assert set(salon.ITEMS) <= set(miniapp.ITEMS)
     assert all((ASSETS / "art" / item["picture"]).is_file() for item in items)
+    assert all((ASSETS / "art" / f"display-{item['id']}.webp").is_file() for item in items)
     order = {"op": "buy", "item": "ledger", "rev": 0}
     with pytest.raises(ValueError, match="Не хватает"):
         store.request(11, order)
@@ -159,6 +160,27 @@ def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path, draw_g
     for action in ("q:0", "q:1"):
         state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
     assert any(action["kind"] == "question" for action in state["current"]["actions"])
+
+
+def test_local_shop_can_place_every_item_without_affecting_regular_prices(tmp_path):
+    paid = GuruVisits(tmp_path / "paid.db")
+    with pytest.raises(ValueError, match="Не хватает"):
+        paid.request(11, {"op": "buy", "item": "orrery", "rev": 0, "freeShop": True})
+    assert not paid.request(11, {"op": "shop"})["freeShop"]
+    preview = GuruVisits(tmp_path / "preview.db", free_shop=True)
+    catalog = preview.request(11, {"op": "shop"})
+    assert catalog["freeShop"]
+    state = preview.request(11, {"op": "home"})
+    for group in catalog["shop"]:
+        for item in group["items"]:
+            assert item["price"] == 0
+            state = preview.request(11, {"op": "buy", "item": item["id"], "rev": state["rev"]})
+    assert {item["id"] for item in state["salon"]["collection"]} == set(miniapp.ITEMS)
+    assert state["salon"]["balance"] == 0
+    assert preview.request(11, {"op": "home"}) == state
+    assert not preview.request(22, {"op": "home"})["salon"]["collection"]
+    with pytest.raises(ValueError, match="уже"):
+        preview.request(11, {"op": "buy", "item": "orrery", "rev": state["rev"]})
 
 
 def test_miniapp_tools_expand_choices_without_mutating_the_original_story():

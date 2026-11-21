@@ -268,6 +268,6 @@ def refusal(key: str, balance: int, keys: Iterable[str], *, catalog: Mapping[str
         return "Такого в лавке нет."
     if key in set(keys):
         return f"{item.name} уже стоит в салоне."
-    if balance < item.price:
+    if max(balance, 0) < item.price:
         return f"Не хватает {item.price - max(balance, 0):,} ₽.".replace(",", " ")
     return None

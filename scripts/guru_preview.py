@@ -10,8 +10,8 @@ from games.guru_webapp import handle, serve_guru
 from infrastructure.persistence.guru_miniapp import GuruVisits
 
 
-def create_app(database):
-    store = GuruVisits(database)
+def create_app(database, *, free_shop=False):
+    store = GuruVisits(database, free_shop=free_shop)
 
     async def page(request):
         response = serve_guru(request)
@@ -38,5 +38,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8785)
     parser.add_argument("--db", type=Path, default=Path(tempfile.gettempdir()) / "upupa-guru-preview.db")
+    parser.add_argument("--free-shop", action="store_true", help="Buy props for 0 ₽ in the local preview.")
     args = parser.parse_args()
-    web.run_app(create_app(args.db), host="127.0.0.1", port=args.port)
+    web.run_app(create_app(args.db, free_shop=args.free_shop), host="127.0.0.1", port=args.port)

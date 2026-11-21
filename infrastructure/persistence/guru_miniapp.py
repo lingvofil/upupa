@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from contextlib import closing
+from dataclasses import replace
 from hashlib import blake2s
 import json
 import random
@@ -68,8 +69,11 @@ def _leaderboard(db, owner, period):
 
 
 class GuruVisits:
-    def __init__(self, path):
+    def __init__(self, path, *, free_shop=False):
         self.path = path
+        self.free_shop = free_shop
+        self.shop_items = ({key: replace(item, price=0) for key, item in miniapp.ITEMS.items()}
+                           if free_shop else miniapp.ITEMS)
 
     def request(self, user_id, command):
         with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
@@ -108,7 +112,7 @@ class GuruVisits:
                 completed = {entry[0] for entry in db.execute("SELECT DISTINCT story FROM visits WHERE owner=?", (user_id,))}
                 return {"catalog": miniapp.catalog(completed)}
             if op == "shop":
-                return {"shop": miniapp.shop()}
+                return {"shop": miniapp.shop(self.shop_items), "freeShop": self.free_shop}
             if op == "card":
                 shared = db.execute("SELECT card FROM shared WHERE token=?", (command.get("token"),)).fetchone()
                 if not shared:
@@ -188,10 +192,10 @@ class GuruVisits:
             elif op == "buy":
                 key = command.get("item")
                 balance = sum(row["fee"] for row in history) - sum(purchases.values())
-                refusal = salon.refusal(key, balance, purchases, catalog=miniapp.ITEMS)
+                refusal = salon.refusal(key, balance, purchases, catalog=self.shop_items)
                 if refusal:
                     raise ValueError(refusal)
-                item = miniapp.ITEMS[key]
+                item = self.shop_items[key]
                 db.execute("INSERT INTO purchases VALUES (?, ?, ?)", (user_id, key, item.price))
                 purchases[key] = item.price
             elif op != "home":
