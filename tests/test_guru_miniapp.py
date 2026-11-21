@@ -17,6 +17,13 @@ from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 ORDERS = list(permutations(("tarot", "palm", "horoscope")))
 
 
+@pytest.fixture
+def draw_guest(monkeypatch):
+    def draw(story):
+        monkeypatch.setattr(seance, "pick_least_visited", lambda counts, rng: story)
+    return draw
+
+
 def choose(view, order):
     actions = [a["id"] for a in view["actions"]]
     for method in order:
@@ -31,11 +38,15 @@ def choose(view, order):
 
 
 @pytest.mark.parametrize("story", seance.STORY_IDS)
-def test_every_guest_completes_a_visit_and_returns(tmp_path, story):
+def test_every_guest_completes_a_visit_and_returns(tmp_path, story, draw_guest):
     db = GuruVisits(tmp_path / "salon.db")
-    order = ORDERS[seance.STORY_IDS.index(story) % len(ORDERS)]
-    state = db.request(11, {"op": "start", "rev": 0, "story": story})
+    slot = seance.STORY_IDS.index(story)
+    order = ORDERS[slot % len(ORDERS)]
+    draw_guest(story)
+    hidden = {"catalog": [None] * len(seance.STORY_IDS)}
+    state = db.request(11, {"op": "start", "rev": 0})
     assert state["current"]["story"] == story
+    assert db.request(11, {"op": "catalog"}) == hidden
     picture = "base.webp" if story == seance.LUDMILA else "guest-" + story.replace(".", "-") + ".jpg"
     assert (ASSETS / "art" / picture).is_file()
     state = db.request(11, {"op": "move", "rev": state["rev"], "action": "q:0"})
@@ -47,6 +58,10 @@ def test_every_guest_completes_a_visit_and_returns(tmp_path, story):
             break
         state = db.request(11, {"op": "move", "rev": state["rev"], "action": choose(state["current"], order)})
     record = state["record"]
+    expected = list(hidden["catalog"])
+    expected[slot] = {"id": story, "name": record["client"]}
+    assert GuruVisits(db.path).request(11, {"op": "catalog"}) == {"catalog": expected}
+    assert db.request(22, {"op": "catalog"}) == hidden
     assert record["cards"] and record["epilogue"] and record["letter"]
     assert record["title"] == state["history"][0]["title"]
     assert state["history"][0]["waiting"]
@@ -74,17 +89,19 @@ def test_production_api_requires_telegram_identity():
         asyncio.run(guru_api(make_mocked_request("POST", "/game?view=guru"), None))
 
 
-def test_default_miniapp_visit_uses_the_same_selection_as_chat(tmp_path, monkeypatch):
+def test_miniapp_uses_server_draw_even_if_old_client_sends_story(tmp_path, monkeypatch):
     store = GuruVisits(tmp_path / "salon.db")
     def select(counts, rng):
         assert not counts
         return "granny.balcony"
     monkeypatch.setattr(seance, "pick_least_visited", select)
-    response = store.request(11, {"op": "start", "rev": 0})
+    response = store.request(11, {"op": "start", "rev": 0, "story": seance.LUDMILA})
     assert response["current"]["story"] == "granny.balcony"
+    store.request(11, {"op": "leave", "rev": response["rev"]})
+    assert store.request(11, {"op": "catalog"}) == {"catalog": [None] * len(seance.STORY_IDS)}
 
 
-def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path):
+def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path, draw_guest):
     store = GuruVisits(tmp_path / "salon.db")
     initial = store.request(11, {"op": "home"})
     assert initial["salon"]["balance"] == 0
@@ -95,7 +112,11 @@ def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path):
     old_record = {"fee": 15000, "type": "jealous", "keepsake": "бинокль", "reply": None}
     with sqlite3.connect(store.path) as db:
         db.execute("INSERT INTO visits VALUES (?, ?, ?, ?)", ("old", 11, seance.LUDMILA, json.dumps(old_record)))
-    started = store.request(11, {"op": "start", "rev": 0, "story": seance.LUDMILA})
+    draw_guest(seance.LUDMILA)
+    started = store.request(11, {"op": "start", "rev": 0})
+    assert [guest for guest in store.request(11, {"op": "catalog"})["catalog"] if guest] == [
+        {"id": seance.LUDMILA, "name": "Людмила"}
+    ]
     before = store.request(11, {"op": "interior"})["salon"]
     assert before["rank"] == salon.rank(0) and before["balance"] == 15000
     assert [gift["name"] for gift in before["gifts"] if gift["story"]] == ["бинокль"]
@@ -111,7 +132,7 @@ def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path):
     assert store.request(22, {"op": "home"})["salon"] == initial["salon"]
     assert GuruVisits(store.path).request(11, {"op": "home"}) == purchased
     state = store.request(11, {"op": "leave", "rev": purchased["rev"]})
-    state = store.request(11, {"op": "start", "rev": state["rev"], "story": seance.LUDMILA})
+    state = store.request(11, {"op": "start", "rev": state["rev"]})
     for action in ("q:0", "q:1"):
         state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
     assert any(action["kind"] == "question" for action in state["current"]["actions"])
@@ -128,7 +149,7 @@ def test_miniapp_tools_expand_choices_without_mutating_the_original_story():
     assert session.content.question_limit == base.content.question_limit + 1
 
 
-def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path):
+def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path, draw_guest):
     store = GuruVisits(tmp_path / "salon.db")
     profiles = set()
     for story in seance.STORY_IDS:
@@ -139,7 +160,8 @@ def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path):
         assert all(0 < p < 100 for zone in palm["zones"] for p in zone["point"])
     assert profiles == {"palm.webp", *(f"palm-{hand}.jpg" for hand in miniapp.HAND_TYPES)}
     assert all((ASSETS / "art" / picture).is_file() for picture in profiles)
-    state = store.request(11, {"op": "start", "rev": 0, "story": "granny.balcony"})
+    draw_guest("granny.balcony")
+    state = store.request(11, {"op": "start", "rev": 0})
     for action in ("begin:palm", "zn:0"):
         state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
     palm = state["current"]["palm"]
@@ -148,9 +170,10 @@ def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path):
     assert GuruVisits(store.path).request(11, {"op": "home"}) == state
 
 
-def test_horoscope_can_switch_planets_before_choosing_a_forecast(tmp_path):
+def test_horoscope_can_switch_planets_before_choosing_a_forecast(tmp_path, draw_guest):
     store = GuruVisits(tmp_path / "salon.db")
-    state = store.request(11, {"op": "start", "rev": 0, "story": "granny.balcony"})
+    draw_guest("granny.balcony")
+    state = store.request(11, {"op": "start", "rev": 0})
     for action in ("begin:horoscope", "pl:0", "pl:3"):
         state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
     scene = state["current"]
@@ -181,7 +204,7 @@ def test_ludmila_draw_varies_and_legacy_moves_replay(monkeypatch):
     assert [card.art for card in session.content.cards] == original
 
 
-def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
+def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch, draw_guest):
     from core import settings
     from games import guru_webapp
     from tests.test_webapp_auth import BOT_TOKEN, _signed_init_data
@@ -196,7 +219,8 @@ def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
     request.json.return_value = {"op": "interior"}
     response = asyncio.run(guru_webapp.guru_api(request, bot))
     assert response.content_type == "image/jpeg" and response.body.startswith(b"\xff\xd8")
-    state = store.request(424242, {"op": "start", "rev": 0, "story": seance.LUDMILA})
+    draw_guest(seance.LUDMILA)
+    state = store.request(424242, {"op": "start", "rev": 0})
     while state["current"]:
         state = store.request(424242, {"op": "move", "rev": state["rev"], "action": choose(state["current"], ORDERS[0])})
     shared = store.request(424242, {"op": "share", "id": state["record"]["id"], "slot": 0})

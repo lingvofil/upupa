@@ -11,9 +11,9 @@ from games.guru import ludmila_deck, palm_art, salon, seance, seance_engine as e
 from games.guru.stories import STORIES_BY_ID
 
 
-def catalog():
-    return [{"id": s.id, "name": s.names[0], "line": s.told[0].lstrip("— ")}
-            for s in STORIES_BY_ID.values()]
+def catalog(completed):
+    return [{"id": story.id, "name": story.names[0]} if story.id in completed else None
+            for story in STORIES_BY_ID.values()]
 
 
 def new_visit(story, items=()):

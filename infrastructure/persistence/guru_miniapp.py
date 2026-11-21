@@ -56,7 +56,8 @@ class GuruVisits:
             row = db.execute("SELECT * FROM salons WHERE owner=?", (user_id,)).fetchone()
             rev, active = (row["rev"], json.loads(row["active"])) if row else (0, None)
             if op == "catalog":
-                return {"catalog": miniapp.catalog()}
+                completed = {entry[0] for entry in db.execute("SELECT DISTINCT story FROM visits WHERE owner=?", (user_id,))}
+                return {"catalog": miniapp.catalog(completed)}
             if op == "shop":
                 return {"shop": miniapp.shop()}
             if op == "card":
@@ -93,9 +94,7 @@ class GuruVisits:
             if op == "start":
                 if active:
                     raise ValueError("Сначала завершите текущий приём.")
-                story = command.get("story")
-                if story is None:
-                    story = seance.pick_least_visited(Counter(row["story"] for row in history), random.Random())
+                story = seance.pick_least_visited(Counter(row["story"] for row in history), random.Random())
                 active = miniapp.new_visit(story, (item.key for item in salon.owned_items(purchases)))
                 db.execute("INSERT INTO journey(id,owner,story,started) VALUES (?,?,?,strftime('%s','now'))",
                            (active["id"], user_id, story))

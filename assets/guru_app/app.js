@@ -144,9 +144,9 @@ function door() {
   el.append(content);
   mount("door", el);
 }
-async function start(story) {
+async function start() {
   if (!state) state = await call("home");
-  if (!state.current) state = await call("start", story ? { story } : {});
+  if (!state.current) state = await call("start");
   session();
 }
 function palmTool(s) {
@@ -344,8 +344,13 @@ function sceneArt(s, hand, keepScroll) {
 async function move(id) {
   const previous = state.current;
   state = await call("move", { action: id });
-  if (state.record) showRecord(state.record);
-  else
+  if (state.record) {
+    const firstVisit = !state.history.some(
+      (visit) =>
+        visit.story === state.record.story && visit.id !== state.record.id,
+    );
+    showRecord(state.record, firstVisit);
+  } else
     session(
       Boolean(
         (previous.palm && state.current.palm) ||
@@ -491,7 +496,13 @@ function salon() {
         "primary",
       ),
       button("Открыть лавку", shop),
-      button("Книга посетителей · " + state.count, guests),
+      button(
+        "Книга посетителей · " +
+          new Set(state.history.map((visit) => visit.story)).size +
+          "/" +
+          state.count,
+        guests,
+      ),
     ),
   );
   room.append(frame, summary);
@@ -614,21 +625,65 @@ function confirmPurchase(item) {
     ),
   );
 }
-async function guests() {
+async function guests(revealedId) {
   const { catalog } = await call("catalog"),
     el = panel("Книга посетителей");
-  if (state.current)
-    el.append(button("Продолжить текущий приём", session, "primary"));
-  const grid = node("div", "", "grid");
-  for (const g of catalog) {
-    const guest = ticket(g.name, g.line, () => start(g.id), portraitFile(g.id));
-    guest.disabled = Boolean(state.current);
-    grid.append(guest);
+  const opened = catalog.filter(Boolean),
+    locked = catalog.length - opened.length;
+  el.append(
+    node(
+      "p",
+      "Открыто " + opened.length + " из " + catalog.length,
+      "salon-balance",
+    ),
+    node(
+      "p",
+      locked
+        ? "Портрет открывается после первой завершённой встречи."
+        : "Все портреты открыты.",
+      "muted",
+    ),
+    group(
+      button(
+        state.current ? "Продолжить текущий приём" : "Открыть дверь →",
+        start,
+        "primary",
+      ),
+    ),
+  );
+  const grid = node("ul", "", "guest-book");
+  let revealed;
+  for (const guest of [...opened, ...Array(locked).fill(null)]) {
+    const page = node("li", "", guest ? "guest-page" : "guest-page unopened"),
+      frame = node("div", "", "guest-frame");
+    if (guest) {
+      const portrait = img(portraitFile(guest.id), "");
+      portrait.loading = "lazy";
+      frame.append(portrait);
+      page.append(frame, node("strong", guest.name));
+      if (guest.id === revealedId) {
+        page.classList.add("new-portrait");
+        page.tabIndex = -1;
+        portrait.loading = "eager";
+        revealed = page;
+      }
+    } else {
+      frame.setAttribute("aria-hidden", "true");
+      page.append(
+        frame,
+        node("span", "Портрет закрыт", "guest-unopened-label"),
+      );
+    }
+    grid.append(page);
   }
   el.append(grid);
   mount("guests", el);
+  if (revealed) {
+    revealed.scrollIntoView({ block: "nearest" });
+    revealed.focus({ preventScroll: true });
+  }
 }
-function showRecord(r) {
+function showRecord(r, firstVisit = false) {
   record = r;
   const el = panel(r.title),
     body = node("article", "", "paper record");
@@ -648,6 +703,8 @@ function showRecord(r) {
   body.append(breakdown);
   if (r.keepsake) body.append(node("p", "На память · " + r.keepsake));
   el.append(body);
+  if (firstVisit)
+    el.append(group(button("Новый портрет в книге →", () => guests(r.story))));
   if (r.cards.length) {
     el.append(node("h2", "Карта для чата"));
     const list = node("div", "", "grid");
