@@ -94,6 +94,21 @@ def test_production_api_requires_telegram_identity():
         asyncio.run(guru_api(make_mocked_request("POST", "/game?view=guru"), None))
 
 
+def test_greeting_persists_until_player_starts_the_conversation(tmp_path, draw_guest):
+    store = GuruVisits(tmp_path / "salon.db")
+    draw_guest(seance.LUDMILA)
+    arrived = store.request(11, {"op": "start", "rev": 0})
+    assert arrived["current"]["greetingPending"]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == arrived
+    greeted = store.request(11, {"op": "greet", "rev": arrived["rev"]})
+    assert greeted["current"] == {**arrived["current"], "greetingPending": False}
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == greeted
+    with pytest.raises(StaleTurn):
+        store.request(11, {"op": "greet", "rev": arrived["rev"]})
+    answered = store.request(11, {"op": "move", "rev": greeted["rev"], "action": "q:0"})
+    assert not answered["current"]["greetingPending"]
+
+
 def test_miniapp_uses_server_draw_even_if_old_client_sends_story(tmp_path, monkeypatch):
     store = GuruVisits(tmp_path / "salon.db")
     def select(counts, rng):

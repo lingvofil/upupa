@@ -19,7 +19,7 @@ def new_visit(story, items=()):
     if story not in STORIES_BY_ID:
         raise ValueError("Такого посетителя нет.")
     visit = {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": [],
-             "items": list(items)}
+             "items": list(items), "greeting_pending": True}
     if story == seance.LUDMILA:
         visit["ludmila_deck"] = ludmila_deck.draw(random.Random(visit["seed"]))
     return visit
@@ -120,7 +120,7 @@ def palm_view(session):
     return {"picture": picture, "zones": zones, "inspected": list(inspected), "limit": session.content.inspect_limit}
 
 
-def scene(session, events):
+def scene(session, events, *, greeting_pending=False):
     view = seance.build_view(session)
     card = None
     if session.phase == "tarot" or (session.phase == "tone" and session.state.scene == "tarot"):
@@ -140,7 +140,8 @@ def scene(session, events):
         questions = STORIES_BY_ID[session.story.id].questions
         opening_ids = [f"q:{next(i for i, q in enumerate(questions) if q.kind == kind)}" for kind in ("check", "open")]
     result = {"client": view.client, "story": view.story, "archetype": session.content.archetype,
-            "phase": view.phase, "mood": session.state.mood, "art": card.art if card else None,
+            "phase": view.phase, "greetingPending": greeting_pending,
+            "mood": session.state.mood, "art": card.art if card else None,
             "artTitle": card.title if card else None, "prompt": view.prompt,
             "screen": view.screen, "lines": lines, "heard": list(session.heard),
             "opening": opening_ids if session.step == 0 else [],
