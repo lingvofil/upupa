@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 import re
 from urllib.parse import urlencode
 
 from aiohttp import web
 
 from core.paths import GURU_VISITS_PATH, PROJECT_ROOT
+from games.guru import salon_art
 from games.guru.miniapp import REPLIES
 from games.webapp_auth import WebAppAuthError, validate_telegram_init_data
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
 ASSETS = PROJECT_ROOT / "assets" / "guru_app"
 STORE = GuruVisits(GURU_VISITS_PATH)
+_render_interior = lru_cache(maxsize=48)(salon_art.render)
 
 
 def serve_guru(request):
@@ -46,6 +49,12 @@ async def handle(request, owner, store, *, link, public_url="", bot=None):
         if not isinstance(body, dict) or any(isinstance(v, (list, dict)) for v in body.values()):
             raise ValueError("Неверный запрос.")
         op = body.get("op", "home")
+        if op == "interior":
+            result = await asyncio.to_thread(store.request, owner, {"op": "interior"})
+            salon = result["salon"]
+            gifts = tuple(gift["id"] for gift in salon["gifts"] if gift["story"])
+            picture = await asyncio.to_thread(_render_interior, tuple(salon["items"]), None, gifts)
+            return web.Response(body=picture, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
         if op == "prepare":
             token = body.get("token", "")
             result = await asyncio.to_thread(store.request, owner, {"op": "card", "token": token})

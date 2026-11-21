@@ -184,6 +184,85 @@ p + p {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
 }
+.salon-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  gap: clamp(16px, 3vw, 34px);
+  padding: clamp(12px, 2.6vw, 25px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1d281f;
+}
+.salon-picture {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 738/1100;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #131913;
+  color: var(--gold);
+}
+.salon-picture img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.salon-summary {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+.salon-summary > p {
+  margin: 0;
+}
+.salon-summary .actions {
+  margin-top: 8px;
+}
+.salon-balance {
+  color: var(--gold);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.gift-shelf > p {
+  margin: 10px 0;
+}
+.gift-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+}
+.shop-section > .grid {
+  margin-top: 12px;
+}
+.shop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid #5a5841;
+  border-radius: 5px;
+  background: #242e26;
+}
+.shop-item p {
+  margin: 0;
+}
+.shop-item > :last-child {
+  margin-top: auto;
+}
+.owned-item {
+  color: #c2dbaf;
+}
+@media (max-width: 620px) {
+  .salon-room {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .salon-summary {
+    grid-row: 1;
+  }
+}
 .ticket {
   padding: 15px 17px;
   background: #242e26;

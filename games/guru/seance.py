@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from games.guru import rules, salon, seance_casebook, seance_ludmila
 from games.guru import seance_engine as E
@@ -65,13 +65,15 @@ def seen_endings(endings: Iterable[str], story_id: str) -> int:
 
 
 def pick_story(endings: Iterable[str], rng: random.Random) -> str:
-    """Кого принять: первой приходит Людмила, дальше — тот, чьих развязок открыто меньше всего."""
-    endings = list(endings)
+    """Выбрать случайного клиента среди тех, чьих развязок открыто меньше всего."""
+    endings = tuple(endings)
     counts = {story_id: seen_endings(endings, story_id) for story_id in STORY_IDS}
-    if not any(counts.values()):
-        return LUDMILA
-    fewest = min(counts.values())
-    return rng.choice([story_id for story_id, count in counts.items() if count == fewest])
+    return pick_least_visited(counts, rng)
+
+
+def pick_least_visited(counts: Mapping[str, int], rng: random.Random) -> str:
+    fewest = min(counts.get(story, 0) for story in STORY_IDS)
+    return rng.choice([story for story in STORY_IDS if counts.get(story, 0) == fewest])
 
 
 def make_story(story_id: str, rng: random.Random, client_name: str | None = None) -> E.Story:

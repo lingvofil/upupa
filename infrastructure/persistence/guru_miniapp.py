@@ -1,17 +1,36 @@
 """Transactional, user-scoped solo visits. The separate share table holds only a public card."""
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import closing
 import json
 import random
 import secrets
 import sqlite3
 
-from games.guru import miniapp, seance
+from games.guru import miniapp, salon, seance
 
 
 class StaleTurn(ValueError):
     pass
+
+
+def _history(db, owner):
+    return [dict(row) for row in db.execute("""
+        SELECT id, story, json_extract(record, '$.client') AS client, json_extract(record, '$.title') AS title,
+               json_extract(record, '$.keepsake') AS keepsake, json_extract(record, '$.type') AS archetype,
+               json_extract(record, '$.fee') AS fee, json_type(record, '$.reply')='null' AS waiting
+        FROM visits WHERE owner=? ORDER BY rowid DESC
+    """, (owner,))]
+
+
+def _interior(history, purchases):
+    items = salon.owned_items(purchases)
+    earned = {row["archetype"] for row in history if row["keepsake"]}
+    return {"balance": sum(row["fee"] for row in history) - sum(purchases.values()),
+            "items": [item.key for item in items], "rank": salon.rank(len(items)),
+            "gifts": [{"id": gift.key, "emoji": gift.emoji, "name": gift.name, "giver": gift.giver,
+                       "story": gift.story if owned else None} for gift, owned in salon.shelf(earned)]}
 
 
 class GuruVisits:
@@ -30,12 +49,16 @@ class GuruVisits:
             db.execute("""CREATE TABLE IF NOT EXISTS journey (
                 id TEXT PRIMARY KEY, owner INTEGER, story TEXT, started INTEGER, first_reading INTEGER,
                 finished INTEGER, returned INTEGER, shared INTEGER, abandoned INTEGER)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS purchases (
+                owner INTEGER NOT NULL, item TEXT NOT NULL, price INTEGER NOT NULL, PRIMARY KEY(owner, item))""")
             op = command.get("op", "home")
-            db.execute("BEGIN" if op in ("home", "catalog", "card", "record") else "BEGIN IMMEDIATE")
+            db.execute("BEGIN" if op in ("home", "catalog", "card", "record", "interior", "shop") else "BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM salons WHERE owner=?", (user_id,)).fetchone()
             rev, active = (row["rev"], json.loads(row["active"])) if row else (0, None)
             if op == "catalog":
                 return {"catalog": miniapp.catalog()}
+            if op == "shop":
+                return {"shop": miniapp.shop()}
             if op == "card":
                 shared = db.execute("SELECT card FROM shared WHERE token=?", (command.get("token"),)).fetchone()
                 if not shared:
@@ -59,22 +82,21 @@ class GuruVisits:
                     token = db.execute("SELECT token FROM shared WHERE visit=? AND slot=?", (record["id"], slot)).fetchone()[0]
                     db.execute("UPDATE journey SET shared=coalesce(shared,strftime('%s','now')) WHERE id=?", (record["id"],))
                     return {"token": token, "card": card}
-            changed = op in ("start", "move", "reply", "leave")
+            changed = op in ("start", "move", "reply", "leave", "buy")
             if changed and command.get("rev") != rev:
                 raise StaleTurn("Салон открыт ещё в одном окне. Показан последний ход.")
+            history = _history(db, user_id)
+            purchases = dict(db.execute("SELECT item, price FROM purchases WHERE owner=?", (user_id,)))
+            if op == "interior":
+                return {"salon": _interior(history, purchases)}
             current = None
             if op == "start":
                 if active:
                     raise ValueError("Сначала завершите текущий приём.")
-                played = [r[0] for r in db.execute("SELECT story FROM visits WHERE owner=?", (user_id,))]
                 story = command.get("story")
                 if story is None:
-                    if not played:
-                        story = seance.LUDMILA
-                    else:
-                        least = min(played.count(key) for key in seance.STORY_IDS)
-                        story = random.choice([key for key in seance.STORY_IDS if played.count(key) == least])
-                active = miniapp.new_visit(story)
+                    story = seance.pick_least_visited(Counter(row["story"] for row in history), random.Random())
+                active = miniapp.new_visit(story, (item.key for item in salon.owned_items(purchases)))
                 db.execute("INSERT INTO journey(id,owner,story,started) VALUES (?,?,?,strftime('%s','now'))",
                            (active["id"], user_id, story))
             elif op == "leave":
@@ -110,6 +132,15 @@ class GuruVisits:
                 db.execute("UPDATE visits SET record=? WHERE id=? AND owner=?",
                            (json.dumps(record, ensure_ascii=False), record["id"], user_id))
                 db.execute("UPDATE journey SET returned=strftime('%s','now') WHERE id=?", (record["id"],))
+            elif op == "buy":
+                key = command.get("item")
+                balance = sum(row["fee"] for row in history) - sum(purchases.values())
+                refusal = salon.refusal(key, balance, purchases)
+                if refusal:
+                    raise ValueError(refusal)
+                item = salon.ITEMS[key]
+                db.execute("INSERT INTO purchases VALUES (?, ?, ?)", (user_id, key, item.price))
+                purchases[key] = item.price
             elif op != "home":
                 raise ValueError("Неизвестное действие.")
             if changed:
@@ -117,12 +148,10 @@ class GuruVisits:
                 db.execute("INSERT OR REPLACE INTO salons VALUES (?, ?, ?)", (user_id, rev, json.dumps(active)))
             if active and current is None:
                 current = miniapp.scene(*miniapp.replay(active))
-            history = [dict(r) for r in db.execute("""
-                SELECT id, story, json_extract(record, '$.client') AS client, json_extract(record, '$.title') AS title,
-                       json_extract(record, '$.keepsake') AS keepsake, json_extract(record, '$.fee') AS fee,
-                       json_type(record, '$.reply')='null' AS waiting FROM visits WHERE owner=? ORDER BY rowid DESC
-                """, (user_id,))]
-            result = {"rev": rev, "current": current, "history": history, "count": len(seance.STORY_IDS)}
+            if op == "reply" or (op == "move" and active is None):
+                history = _history(db, user_id)
+            result = {"rev": rev, "current": current, "history": history, "count": len(seance.STORY_IDS),
+                      "salon": _interior(history, purchases)}
             if op == "reply" or (op == "move" and active is None):
                 result["record"] = record
             return result

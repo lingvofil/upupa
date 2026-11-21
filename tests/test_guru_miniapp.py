@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from games.guru import miniapp, seance
+from games.guru import miniapp, salon, seance
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
@@ -73,6 +73,60 @@ def test_production_api_requires_telegram_identity():
         asyncio.run(guru_api(make_mocked_request("POST", "/game?view=guru"), None))
 
 
+def test_default_miniapp_visit_uses_the_same_selection_as_chat(tmp_path, monkeypatch):
+    store = GuruVisits(tmp_path / "salon.db")
+    def select(counts, rng):
+        assert not counts
+        return "granny.balcony"
+    monkeypatch.setattr(seance, "pick_least_visited", select)
+    response = store.request(11, {"op": "start", "rev": 0})
+    assert response["current"]["story"] == "granny.balcony"
+
+
+def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path):
+    store = GuruVisits(tmp_path / "salon.db")
+    initial = store.request(11, {"op": "home"})
+    assert initial["salon"]["balance"] == 0
+    assert {item["id"] for group in store.request(11, {"op": "shop"})["shop"] for item in group["items"]} == set(salon.ITEMS)
+    order = {"op": "buy", "item": "ledger", "rev": 0}
+    with pytest.raises(ValueError, match="Не хватает"):
+        store.request(11, order)
+    old_record = {"fee": 15000, "type": "jealous", "keepsake": "бинокль", "reply": None}
+    with sqlite3.connect(store.path) as db:
+        db.execute("INSERT INTO visits VALUES (?, ?, ?, ?)", ("old", 11, seance.LUDMILA, json.dumps(old_record)))
+    started = store.request(11, {"op": "start", "rev": 0, "story": seance.LUDMILA})
+    before = store.request(11, {"op": "interior"})["salon"]
+    assert before["rank"] == salon.rank(0) and before["balance"] == 15000
+    assert [gift["name"] for gift in before["gifts"] if gift["story"]] == ["бинокль"]
+    purchased = store.request(11, {**order, "rev": started["rev"]})
+    assert purchased["salon"]["rank"] == salon.rank(1)
+    assert purchased["salon"]["items"] == ["ledger"]
+    assert purchased["salon"]["balance"] == 3000
+    assert purchased["current"] == started["current"]
+    with pytest.raises(StaleTurn):
+        store.request(11, {**order, "rev": started["rev"]})
+    with pytest.raises(ValueError, match="уже"):
+        store.request(11, {**order, "rev": purchased["rev"]})
+    assert store.request(22, {"op": "home"})["salon"] == initial["salon"]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == purchased
+    state = store.request(11, {"op": "leave", "rev": purchased["rev"]})
+    state = store.request(11, {"op": "start", "rev": state["rev"], "story": seance.LUDMILA})
+    for action in ("q:0", "q:1"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    assert any(action["kind"] == "question" for action in state["current"]["actions"])
+
+
+def test_miniapp_tools_expand_choices_without_mutating_the_original_story():
+    visit = miniapp.new_visit(seance.LUDMILA, ("deck", "loupe", "ledger", "tea"))
+    session, events = miniapp.replay(visit)
+    assert any("чабрецом" in line for line in miniapp.scene(session, events)["lines"])
+    visit.pop("items")
+    base, _ = miniapp.replay(visit)
+    assert session.content.study_limit == base.content.study_limit + 1
+    assert session.content.inspect_limit == base.content.inspect_limit + 1
+    assert session.content.question_limit == base.content.question_limit + 1
+
+
 def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
     from core import settings
     from games import guru_webapp
@@ -85,7 +139,10 @@ def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
                               json=AsyncMock(return_value={"op": "home"}))
     bot = SimpleNamespace(save_prepared_inline_message=AsyncMock(return_value=SimpleNamespace(id="prepared")))
     assert asyncio.run(guru_webapp.guru_api(request, bot)).status == 200
-    state = store.request(424242, {"op": "start", "rev": 0})
+    request.json.return_value = {"op": "interior"}
+    response = asyncio.run(guru_webapp.guru_api(request, bot))
+    assert response.content_type == "image/jpeg" and response.body.startswith(b"\xff\xd8")
+    state = store.request(424242, {"op": "start", "rev": 0, "story": seance.LUDMILA})
     while state["current"]:
         state = store.request(424242, {"op": "move", "rev": state["rev"], "action": choose(state["current"], ORDERS[0])})
     shared = store.request(424242, {"op": "share", "id": state["record"]["id"], "slot": 0})

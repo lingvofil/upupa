@@ -1697,7 +1697,7 @@ def test_gift_from_a_grateful_client_goes_to_the_shelf(bot, events, wallets):
 EVADE = ("begin", "hush", "next", "hush", "next", "hush", "next", "adv:0")  # уклониться во всех трёх гаданиях
 
 
-def start_seance(bot, user_id=PLAYER, chat_id=CHAT, text="гуру сеанс"):
+def start_seance(bot, user_id=PLAYER, chat_id=CHAT, text="гуру людмила"):
     handler = guru_salon.start_ludmila if text == "гуру людмила" else guru_salon.start_seance
     asyncio.run(handler(message(bot, text, user_id=user_id, chat_id=chat_id)))
     return current(chat_id)
@@ -1721,7 +1721,7 @@ def test_seance_command_matches(flags, text):
 def test_seance_starts_with_the_salon_and_a_long_story(bot, events):
     session = start_seance(bot)
     assert isinstance(session, seance.Seance) and session.host.user_id == PLAYER
-    assert session.story.id == seance.LUDMILA, "первой в салон приходит Людмила"
+    assert session.story.id == seance.LUDMILA
     (intro,) = bot.sent
     assert "принимает одного клиента" in intro.text and "Правильного ответа здесь нет" in intro.text
     (arrival,) = bot.scenes
@@ -1811,7 +1811,7 @@ def test_ludmila_can_be_called_by_name(bot, events, wallets):
     wallets.see_ending(CHAT, PLAYER, "Зоя", seance.ending_key(seance.LUDMILA, "own"))
     assert start_seance(bot, text="гуру людмила").story.id == seance.LUDMILA
     asyncio.run(guru_salon.stop_salon(message(bot, "гуру стоп")))
-    assert start_seance(bot).story.id != seance.LUDMILA
+    assert start_seance(bot, text="гуру сеанс").story.id != seance.LUDMILA
 
 
 def test_spectator_cannot_lead_the_seance(bot, events):

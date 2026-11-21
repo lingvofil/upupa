@@ -15,16 +15,39 @@ def catalog():
             for s in STORIES_BY_ID.values()]
 
 
-def new_visit(story):
+def new_visit(story, items=()):
     if story not in STORIES_BY_ID:
         raise ValueError("Такого посетителя нет.")
-    return {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": []}
+    return {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": [],
+            "items": list(items)}
+
+
+ITEM_NOTES = {
+    "deck": "Можно рассмотреть ещё одну деталь на каждой карте.",
+    "loupe": "Можно рассмотреть ещё один участок ладони.",
+    "ledger": "Можно задать ещё один вопрос в начале приёма.",
+    "flyers": "Положительный гонорар за приём увеличится на 10%.",
+    "neon": "Положительный гонорар за приём увеличится ещё на 15%.",
+    "candles": "Свечи горят на столе, когда входит клиент.",
+    "tea": "В начале встречи мадам угощает клиента чаем.",
+    "armchair": "Клиент садится в новое кресло в начале встречи.",
+}
+SHOP_GROUPS = {salon.PROPS: "Реквизит", salon.PROMO: "Реклама", salon.COMFORT: "Уют"}
+
+
+def shop():
+    return [{"title": title, "items": [
+        {"id": item.key, "emoji": item.emoji, "name": item.name, "price": item.price,
+         "note": ITEM_NOTES.get(item.key, "Появится в интерьере салона.")}
+        for item in salon.ITEMS.values() if item.group == group
+    ]} for group, title in SHOP_GROUPS.items()]
 
 
 def replay(visit):
+    items = tuple(visit.get("items", ()))
     session = seance.new_session(session_id=visit["id"], chat_id=0, host_id=1, host_name="Мадам", now=0,
                                  story_id=visit["story"], rng=random.Random(visit["seed"]),
-                                 client_name=STORIES_BY_ID[visit["story"]].names[0])
+                                 client_name=STORIES_BY_ID[visit["story"]].names[0], items=items)
     session.free_order = True
     if visit["story"] == seance.LUDMILA:
         # Keep the established fact IDs: later readings can resonate with either answer.
@@ -38,6 +61,13 @@ def replay(visit):
                                 "Собралась вчера. Он только сказал: «Ты услышишь и всё поймёшь». "
                                 "Я так и не решилась спросить, что именно услышу."),
             *questions[2:]))
+    if items:
+        if visit["story"] != seance.LUDMILA:
+            session.story = copy(session.story)
+        content = session.content
+        session.story.content = replace(content, question_limit=content.question_limit + ("ledger" in items),
+                                        study_limit=content.study_limit + ("deck" in items),
+                                        inspect_limit=content.inspect_limit + ("loupe" in items))
     events = seance.arrival_events(session)
     for index, move in enumerate(visit["moves"], 1):
         events = seance.act(session, 1, move, now=index).events
@@ -55,6 +85,9 @@ def scene(session, events):
         if session.story.id == seance.LUDMILA:
             lines = ["Людмила садится на самый край кресла. В руке сложенная вчетверо бумага.",
                      "— Можно, я сначала у вас спрошу? А то дома я уже один раз спросила."]
+        for key in ("candles", "tea", "armchair"):
+            if key in session.items:
+                lines.insert(-1, salon.ITEMS[key].perks.rituals[0].format(name=session.client))
     if session.story.id == seance.LUDMILA:
         opening_ids = ["q:0", "q:1"]
     else:
@@ -158,9 +191,12 @@ def close_visit(session, events):
         memory = outcome.afterword
     spoken = next((st.summary for st in reversed(session.state.statements) if st.alive and not st.hollow), "")
     gift = salon.GIFTS[session.content.archetype]
+    fee = session.fee
+    if fee > 0:
+        fee = round(fee * (1 + salon.perks_of(session.items).fee))
     return {"id": session.session_id, "story": session.story.id, "client": session.client, "type": session.content.archetype,
             "ending": session.ending, "title": outcome.title, "text": outcome.text, "quote": outcome.quote,
-            "afterword": outcome.afterword, "epilogue": seance.epilogue(outcome), "fee": session.fee,
+            "afterword": outcome.afterword, "epilogue": seance.epilogue(outcome), "fee": fee,
             "events": [e.text for e in events if e.text and e.kind in ("hint", "answer")],
             "cards": reading_cards(session), "letter": invitation + "\n\n" + POSTSCRIPTS[session.story.id],
             "memory": memory, "spoken": spoken,
