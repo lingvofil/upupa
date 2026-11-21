@@ -89,7 +89,7 @@ def events_of(session):
 # --- содержание ---------------------------------------------------------------
 
 def test_every_story_of_the_shift_plays_as_a_seance():
-    assert len(seance.STORY_IDS) == 37 and seance.LUDMILA in seance.STORY_IDS
+    assert len(seance.STORY_IDS) == 39 and seance.LUDMILA in seance.STORY_IDS
     for story_id in seance.STORY_IDS:
         story = seance.make_story(story_id, random.Random(3))
         content = story.content

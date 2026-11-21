@@ -11,6 +11,38 @@ from types import MappingProxyType as Map
 from games.guru.model import WHEN_TRUTH, Combo, Question, Story
 
 EXTRA_STORIES: tuple[Story, ...] = (
+    Story(
+        id="romantic.platform", archetype="romantic", theme="relationships", names=("Илья",),
+        arrival="🚪 {name} приносит картонную табличку. На ней его имя и нарисованный от руки паровоз.",
+        told=("— Каждую пятницу на платформе стоит девушка с моим именем на табличке. Поезд уходит, она остаётся.",
+              "— Моя бывшая рисовала такие паровозы. Я уехал без прощания. Она меня ждёт?"),
+        said=Map({"who": "ex", "what": "return"}), points=(("who", "ex"),),
+        questions=(
+            Question("face", "Вы узнали её лицо?", "— Только варежки. Я бабушке такие привозил. С кармашком на проездной.", "check", points=(("who", "relative"),)),
+            Question("train", "Какой поезд она встречает?", "— Наш дачный. Следующий — {when_mark}. Других на этом пути нет.", "check", points=(("when", WHEN_TRUTH),)),
+            Question("back", "А что на обороте?", "— «Дубль семь». И кружок от термоса. Кино у них там, что ли?", "open", points=(("what", "secret"),)),
+            Question("artist", "Кто нарисовал поезд?", "— Дед так дым рисовал, кудряшками. У меня в детском альбоме целая станция.", "open", points=(("who", "relative"),)),
+        ),
+        who="relative", what="secret", when_options=("week", "today"), who_decoys=("ex", "newbie", "self"),
+        reveal="{when_lead} бабушка прислала семейное кино. На платформе внучка играла её саму в день знакомства с дедом. Деда тоже звали Илья.",
+        fee=1500,
+    ),
+    Story(
+        id="granny.balcony", archetype="granny", theme="relationships", names=("Зоя",),
+        arrival="🚪 {name} ставит на стол горшок с геранью. К листику привязана крошечная записка.",
+        told=("— Сосед напротив двадцать лет со мной разговаривает про погоду. Теперь шлёт записки на бельевой верёвке.",
+              "— Вчера написал «решился». У меня уже и пирог испечён. Только зачем попросил рулетку?"),
+        said=Map({"who": "friend", "what": "propose"}), points=(("who", "friend"),),
+        questions=(
+            Question("sign", "Он подписывается?", "— Буквой В. Валентин. Правда, и внучка у него Варя.", "check", points=(("who", "relative"),)),
+            Question("meeting", "Когда назначена встреча?", "— На бумажке: «{when_mark}, после полива». Даже свидания у нас по графику.", "check", points=(("when", WHEN_TRUTH),)),
+            Question("pot", "Зачем он мерил горшок?", "— Подоконник узкий. Он выточил корзинку, чтобы растение доехало через двор.", "open", points=(("who", "friend"),)),
+            Question("note", "Можно развернуть записку?", "— Ой. Тут мелко: «Переезжайте ко мне. С цветами». А я только верхнюю строку читала.", "open", points=(("what", "propose"),)),
+        ),
+        who="friend", what="propose", when_options=("today", "week"), who_decoys=("relative", "ex", "self"),
+        reveal="{when_lead} через двор поехала плетёная корзинка. В ней были ключ от квартиры Валентина и записка: «С солнечной стороны вашей герани будет лучше».",
+        fee=1300,
+    ),
     # --- блогерша -----------------------------------------------------------
     Story(
         id="blogger.bots",

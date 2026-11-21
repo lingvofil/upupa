@@ -1334,10 +1334,12 @@ def test_commands_reach_their_handlers(flags, text, handler):
 def test_bare_guru_opens_the_menu_and_starts_nothing(bot, events):
     menu = open_menu(bot)
     assert current() is None, "меню не занимает чат"
-    assert "Салон «Гуру»" in menu.text and "Живой приём — гадаешь человеку из чата" in menu.text and menu.reply_to_message_id == 1
-    assert labels_of(menu) == [textui.MENU_SHIFT, textui.MENU_LIVE, textui.MENU_SEANCE, textui.MENU_CARD, textui.MENU_SHOP,
-                               textui.MENU_WALLET, textui.MENU_SALON, textui.MENU_SHELF, textui.MENU_SALONS]
-    assert all(len(button.callback_data.encode()) <= 64 for row in menu.reply_markup.inline_keyboard for button in row)
+    assert "Салон «Гуру»" in menu.text and menu.reply_to_message_id == 1
+    assert labels_of(menu) == ["Открыть дверь", "Мой салон", "Играть в чате"]
+    assert menu.reply_markup.inline_keyboard[0][0].url.endswith("?startapp=guru_door")
+    query = callback(bot, "guru:classic", user_id=PLAYER, message_id=42, chat_id=CHAT)
+    asyncio.run(guru_salon.salon_callback(query))
+    assert textui.MENU_LIVE in edited_labels(bot.edits[-1])
     (record,) = events()
     assert record["event"] == "menu" and record["data"]["action"] == "open"
 
@@ -1413,7 +1415,7 @@ def test_menu_section_returns_to_the_menu_in_the_same_message(bot, wallets, even
     press_nav(bot, "shop", menu.message_id)
     press_nav(bot, "menu", menu.message_id)
     back = bot.edits[-1]
-    assert back.text == menu.text and back.message_id == menu.message_id and edited_labels(back) == labels_of(menu)
+    assert back.message_id == menu.message_id and textui.MENU_SHIFT in edited_labels(back)
     assert len(bot.sent) == 1 and events()[-1]["data"]["action"] == "back"
 
 
@@ -1433,17 +1435,19 @@ def test_menu_section_belongs_to_whoever_pressed(bot, wallets):
 def test_my_salon_is_always_the_picture_with_its_caption(bot, wallets, events):
     wallets.add_gift(CHAT, PLAYER, "Зоя", "granny")
     menu = open_menu(bot)
-    button = next(button for row in menu.reply_markup.inline_keyboard for button in row if button.text == textui.MENU_SALON)
+    asyncio.run(guru_salon.salon_callback(callback(bot, "guru:classic", message_id=menu.message_id)))
+    classic = bot.edits[-1]
+    button = next(button for row in classic.reply_markup.inline_keyboard for button in row if button.text == textui.MENU_SALON)
     assert textui.parse(button.callback_data).kind == "menu", "«Мой салон» не раздел меню: это рисунок"
     asyncio.run(guru_salon.salon_callback(callback(bot, button.callback_data, message_id=menu.message_id)))
     (picture,) = bot.scenes
     assert "Салон мадам Зоя" in picture.caption and "Подарки клиентов, 1 из 10" in picture.caption
-    assert len(bot.sent) == 1 and bot.edits == [], "меню остаётся на месте, салон приходит одной картинкой с подписью"
+    assert len(bot.sent) == 1 and bot.edits == [classic], "салон приходит одной картинкой с подписью"
 
     press_nav(bot, "shop", menu.message_id)
     assert textui.MENU_SALON in edited_labels(bot.edits[-1]), "из любого раздела до салона одно нажатие"
     press_nav(bot, "salon", menu.message_id)  # кнопка из сообщения, отправленного до объединения
-    assert len(bot.scenes) == 2 and "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.edits) == 1
+    assert len(bot.scenes) == 2 and "Салон мадам Зоя" in bot.scenes[-1].caption and len(bot.edits) == 2
 
 
 def test_purchase_keeps_the_way_back_to_the_menu(bot, wallets):

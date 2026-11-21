@@ -4,6 +4,10 @@
 """
 import os
 
+# A registered named Mini App can point directly at /game?view=guru.
+GURU_APP_LINK = os.getenv("UPUPA_GURU_APP_LINK", "https://t.me/expertyebaniebot/upupadile").rstrip("/")
+GURU_PUBLIC_GAME_URL = os.getenv("UPUPA_GURU_PUBLIC_GAME_URL", "").strip()
+
 # Loopback only; use the same value for the service and the healthcheck CLI.
 HEALTHCHECK_PORT = int(os.getenv("UPUPA_HEALTHCHECK_PORT", "8766"))
 

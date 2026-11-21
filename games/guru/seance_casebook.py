@@ -322,11 +322,11 @@ class CasebookStory:
 
     initial_mood = "worried"
 
-    def __init__(self, tale: Tale, rng: random.Random) -> None:
+    def __init__(self, tale: Tale, rng: random.Random, name: str | None = None) -> None:
         self.id = tale.id
         self.tale = tale
         self.kind = tale.kind
-        self.name = rng.choice(tale.names)
+        self.name = name or rng.choice(tale.names)
         self.when = rng.choice(tale.when_options)
         self.sign = rng.choice(C.ZODIAC_SIGNS)
         self.traits = ARCHETYPE_TRAITS[tale.archetype]

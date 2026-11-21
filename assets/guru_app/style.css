@@ -1,0 +1,553 @@
+@font-face {
+  font-family: Salon;
+  src: url("?view=guru&asset=salon.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+:root {
+  color-scheme: dark;
+  --ink: #171b17;
+  --gold: #d7b47c;
+  --line: #6c5d43;
+  --cream: #f1e6ce;
+  --paper: #f0dfbf;
+  --serif: Salon, Georgia, "Times New Roman", serif;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #141915;
+  color: var(--cream);
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+}
+button,
+a {
+  font: inherit;
+  touch-action: manipulation;
+}
+button {
+  cursor: pointer;
+  color: inherit;
+  border: 1px solid var(--line);
+  background: #253129;
+  border-radius: 5px;
+  padding: 11px 17px;
+  min-height: 44px;
+  text-align: left;
+}
+button:hover {
+  border-color: var(--gold);
+  filter: brightness(1.09);
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #d78b44;
+  outline-offset: 2px;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+header {
+  max-width: 1480px;
+  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px clamp(16px, 5vw, 80px);
+  padding-top: max(12px, env(safe-area-inset-top));
+  border-bottom: 1px solid #514a37;
+  background: #181d18;
+}
+#brand,
+#cabinet {
+  background: transparent;
+  color: var(--cream);
+}
+#brand {
+  border: 0;
+  padding: 0;
+  font: 600 38px/1 var(--serif);
+  letter-spacing: -0.035em;
+}
+#brand i {
+  font: normal 28px Georgia;
+  color: var(--gold);
+  vertical-align: 3px;
+}
+#cabinet {
+  border-radius: 30px;
+  padding: 7px 16px;
+  font-size: 14px;
+}
+#cabinet span {
+  color: var(--gold);
+  margin-left: 8px;
+}
+main {
+  outline: none;
+  margin: auto;
+  max-width: 1480px;
+  min-height: 75vh;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  line-height: 1.02;
+}
+h1 {
+  font-size: clamp(46px, 7.2vw, 104px);
+  letter-spacing: -0.045em;
+}
+h2 {
+  font-size: clamp(32px, 4vw, 55px);
+  letter-spacing: -0.027em;
+}
+h3 {
+  font-size: 27px;
+}
+p + p {
+  margin-top: 0.7em;
+}
+.hero {
+  min-height: min(810px, calc(100svh - 76px));
+  display: flex;
+  align-items: flex-end;
+  padding: clamp(28px, 6vw, 88px);
+  background:
+    linear-gradient(90deg, #101812cc 0%, #11171140 63%),
+    linear-gradient(0deg, #101711f0, transparent 65%),
+    url("?view=guru&asset=room.webp") center 50% / cover;
+}
+.hero-copy {
+  max-width: 670px;
+}
+.hero h1 {
+  max-width: 10ch;
+  text-wrap: balance;
+}
+.hero-copy > p {
+  margin: 16px 0 28px;
+  max-width: 38ch;
+  color: #e3d4b9;
+  font-size: clamp(16px, 2vw, 20px);
+}
+.hero .actions {
+  margin-top: 24px;
+}
+.primary {
+  background: #ddbc85;
+  color: #1f2119;
+  border-color: #e6c99b;
+  font-weight: 650;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.actions button {
+  flex: 1 1 auto;
+}
+.hero .actions button {
+  flex: none;
+}
+.page {
+  max-width: 1024px;
+  margin: auto;
+  padding: clamp(23px, 5vw, 65px) clamp(16px, 4vw, 50px) 70px;
+}
+.page h1 {
+  font-size: clamp(40px, 6vw, 76px);
+}
+.page > p,
+.page > section,
+.page > .actions,
+.page > details,
+.page > .grid {
+  margin-top: 20px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+.ticket {
+  padding: 15px 17px;
+  background: #242e26;
+  border: 1px solid #5a5841;
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  text-align: left;
+}
+.ticket img {
+  width: 55px;
+  height: 67px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+.ticket small,
+.meta {
+  display: block;
+  color: #d6ba8c;
+  font-size: 13px;
+}
+.ticket strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 25px;
+  line-height: 1.12;
+}
+.session {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.85fr) minmax(340px, 1fr);
+  min-height: calc(100svh - 73px);
+}
+.stage-art {
+  position: relative;
+  min-height: 340px;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(0deg, #171c17cc, transparent 43%),
+    url("?view=guru&asset=room.webp") center/cover;
+}
+.stage-art .portrait {
+  max-width: 64%;
+  max-height: min(63vh, 600px);
+  align-self: end;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 24px #120e0cad);
+}
+.stage-art .cameo {
+  width: min(60%, 360px);
+  aspect-ratio: 4/5;
+  object-fit: cover;
+  border: 6px double #ae8c58;
+  border-radius: 45% 45% 43% 43%;
+  box-shadow: 0 15px 50px #171611;
+}
+.stage-art .instrument {
+  width: min(63%, 330px);
+  max-height: 55vh;
+  object-fit: contain;
+}
+.stage-art .arcana,
+.arcana {
+  width: min(80%, 260px);
+  border: 6px double #bda373;
+  border-radius: 9px;
+  box-shadow: 0 15px 35px #10130bb0;
+}
+.stage-art .plate {
+  position: absolute;
+  bottom: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: #18231ee8;
+  border: 1px solid #9b855d;
+  padding: 5px 16px;
+  color: var(--cream);
+  font: 600 21px var(--serif);
+  border-radius: 32px;
+}
+.wheel {
+  display: grid;
+  place-items: center;
+  width: 210px;
+  aspect-ratio: 1;
+  border: 8px double var(--gold);
+  border-radius: 100%;
+  outline: 1px solid #ac9466;
+  outline-offset: 6px;
+  background:
+    repeating-conic-gradient(
+      from 12deg,
+      #ddbd7926 0deg 1deg,
+      transparent 1deg 30deg
+    ),
+    radial-gradient(#28433b, #132b27);
+  color: #e6d4ae;
+  font-size: 86px;
+  box-shadow: 0 12px 32px #171a12;
+}
+.paper {
+  background:
+    linear-gradient(#f2e5ccee, #f0dfc0ed), url("?view=guru&asset=paper.webp");
+  color: #29271e;
+  padding: clamp(22px, 4vw, 58px);
+  min-width: 0;
+}
+.paper .meta {
+  color: #665036;
+}
+.paper h2 {
+  margin: 4px 0 18px;
+}
+.paper p,
+.record p,
+.letter p {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.speech {
+  font: 600 clamp(20px, 2.2vw, 27px)/1.26 var(--serif);
+  margin-bottom: 16px;
+}
+.speech p + p {
+  margin-top: 9px;
+}
+.screen {
+  font-size: 15px;
+  line-height: 1.55;
+  border-block: 1px solid #c4ae88;
+  padding: 14px 0;
+  margin: 14px 0;
+  white-space: pre-line;
+}
+.prompt {
+  margin: 18px 0 9px;
+  font-weight: 650;
+}
+.paper button {
+  background: #f6ebd7;
+  color: #342d24;
+  border-color: #b7a487;
+}
+.paper .method,
+.paper .primary {
+  background: #294538;
+  color: #f7edd7;
+  border-color: #385547;
+}
+.paper .actions {
+  align-items: stretch;
+}
+.paper .actions button {
+  font-size: 15px;
+  line-height: 1.3;
+}
+.paper details {
+  margin-top: 19px;
+}
+.paper summary,
+summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.letter,
+.record {
+  padding: clamp(18px, 4vw, 35px);
+  border-radius: 5px;
+}
+.record .arcana {
+  max-width: 200px;
+}
+.letter .signed {
+  font: 600 27px var(--serif);
+  margin: 16px 0;
+}
+.choice-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.shared-card {
+  display: grid;
+  grid-template-columns: minmax(140px, 210px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.shared-card .arcana {
+  width: 100%;
+}
+.muted {
+  color: #c8c0af;
+}
+.paper .muted {
+  color: #655747;
+}
+.quiet {
+  font-size: 14px;
+}
+.back {
+  margin-top: 25px;
+}
+dialog {
+  color: var(--cream);
+  background: #243027;
+  border: 1px solid #9e885f;
+  border-radius: 10px;
+  max-width: min(580px, 92vw);
+  max-height: 84svh;
+  padding: 26px;
+  box-shadow: 0 15px 60px #0008;
+}
+dialog::backdrop {
+  background: #090e0bba;
+}
+.stage-art .portrait {
+  object-position: center bottom;
+}
+.card-backs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+.card-back {
+  width: clamp(49px, 8vw, 100px);
+  aspect-ratio: 2/3;
+  text-align: center;
+  border: 5px double #b39056;
+  box-shadow: 0 7px 18px #10180dbb;
+  color: #ddbe82;
+  font: 32px var(--serif);
+  background:
+    repeating-linear-gradient(42deg, transparent 0px 7px, #a490641f 8px 9px),
+    #214037;
+}
+.zoom {
+  padding: 0;
+  border: none;
+  background: none;
+  max-width: 76%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.zoom-art {
+  display: block;
+  width: min(450px, 72vw);
+  margin: 18px auto 0;
+  border: 5px double #bda373;
+}
+.wheel {
+  position: relative;
+  text-align: center;
+}
+.planet {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  font-size: 23px;
+  text-align: center;
+  background: #203a31;
+  color: #ebd2a7;
+}
+#close {
+  float: right;
+  margin: 0 0 10px 12px;
+}
+dialog p {
+  margin: 12px 0;
+}
+#notice {
+  position: fixed;
+  z-index: 5;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 92vw;
+  padding: 12px 18px;
+  border-radius: 6px;
+  background: #422a1d;
+  color: white;
+  border: 1px solid #ac865b;
+}
+@media (max-width: 700px) {
+  header {
+    padding-inline: 16px;
+  }
+  #brand {
+    font-size: 32px;
+  }
+  .hero {
+    min-height: calc(100svh - 69px);
+    padding: 32px 22px 55px;
+    background-position: 56% center;
+  }
+  .hero h1 {
+    font-size: clamp(58px, 14vw, 84px);
+  }
+  .session {
+    display: block;
+  }
+  .stage-art {
+    min-height: 0;
+    height: clamp(145px, 24svh, 230px);
+    background-position: center 45%;
+  }
+  .stage-art .portrait {
+    position: absolute;
+    left: 50%;
+    top: 3%;
+    height: 165%;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    object-position: center top;
+    transform: translateX(-50%);
+  }
+  .stage-art .zoom {
+    height: 80%;
+  }
+  .stage-art .zoom .arcana {
+    height: 100%;
+    width: auto;
+  }
+  .stage-art .cameo {
+    height: 85%;
+    width: auto;
+  }
+  .stage-art .arcana,
+  .stage-art .instrument {
+    height: 83%;
+    width: auto;
+  }
+  .stage-art .plate {
+    left: 12px;
+    bottom: 9px;
+    transform: none;
+    font-size: 17px;
+  }
+  .wheel {
+    width: 105px;
+    font-size: 50px;
+  }
+  .paper {
+    padding: 20px 17px calc(28px + env(safe-area-inset-bottom));
+  }
+  .paper h2 {
+    margin-bottom: 12px;
+  }
+  .shared-card {
+    grid-template-columns: 1fr;
+  }
+  .shared-card > .arcana {
+    width: min(100%, 220px);
+  }
+}
