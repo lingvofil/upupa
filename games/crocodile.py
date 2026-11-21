@@ -30,6 +30,7 @@ from core.telegram_markup import escape_markdown, send_markdown_or_plain
 from core.settings import API_TOKEN
 from games.token_dashboard import serve_token_dashboard, token_dashboard_api
 from games.social_webapp import serve_social_app, social_api
+from games.guru_webapp import guru_api, serve_guru
 from games.webapp_auth import (
     WebAppAuthError,
     authorize_crocodile_drawer,
@@ -766,6 +767,8 @@ async def final_frame(sid, data):
 # ================== HTTP ==================
 async def serve_index(request: web.Request):
     view = str(request.query.get("view", "")).strip().lower()
+    if view == "guru" or str(request.query.get("tgWebAppStartParam", "")).startswith("guru_"):
+        return serve_guru(request)
     if view == "tokens":
         return await serve_token_dashboard(request)
     if view == "tokens-api":
@@ -781,6 +784,16 @@ async def serve_index(request: web.Request):
 
 app.router.add_get("/game", serve_index)
 app.router.add_get("/game/", serve_index)
+
+
+async def serve_guru_action(request: web.Request):
+    if request.query.get("view") != "guru":
+        raise web.HTTPNotFound()
+    return await guru_api(request, bot)
+
+
+app.router.add_post("/game", serve_guru_action)
+app.router.add_post("/game/", serve_guru_action)
 
 
 async def start_socket_server():

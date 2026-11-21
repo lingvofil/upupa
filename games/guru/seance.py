@@ -74,10 +74,10 @@ def pick_story(endings: Iterable[str], rng: random.Random) -> str:
     return rng.choice([story_id for story_id, count in counts.items() if count == fewest])
 
 
-def make_story(story_id: str, rng: random.Random) -> E.Story:
+def make_story(story_id: str, rng: random.Random, client_name: str | None = None) -> E.Story:
     if story_id == LUDMILA:
         return seance_ludmila.STORY
-    return seance_casebook.CasebookStory(STORIES_BY_ID[story_id], rng)
+    return seance_casebook.CasebookStory(STORIES_BY_ID[story_id], rng, client_name)
 
 
 @dataclass
@@ -110,6 +110,7 @@ class Seance:
     message_id: int | None = None
     thread_id: int | None = None
     dialog: Dialog = field(default_factory=Dialog)
+    free_order: bool = False
 
     @property
     def content(self) -> E.StoryContent:
@@ -125,9 +126,9 @@ class Seance:
 
 def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0,
                 items: tuple[str, ...] = (), gifts: tuple[str, ...] = (), story_id: str | None = None,
-                rng: random.Random | None = None, endings: Iterable[str] = ()) -> Seance:
+                rng: random.Random | None = None, endings: Iterable[str] = (), client_name: str | None = None) -> Seance:
     rng = rng or random.Random()
-    story = make_story(story_id or pick_story(endings, rng), rng)
+    story = make_story(story_id or pick_story(endings, rng), rng, client_name)
     session = Seance(
         session_id=session_id, chat_id=chat_id, host=Participant(host_id, host_name), started_at=now, last_activity=now,
         idle_limit=rules.IDLE_TIMEOUT_S, wallet_start=wallet, story=story, state=E.new_state(story), items=tuple(items),
@@ -158,6 +159,16 @@ def _questions_left(session: Seance) -> int:
     return session.content.question_limit - len(session.state.questions)
 
 
+def _practice_actions(session: Seance, head: str) -> tuple[Action, ...]:
+    if session.free_order:
+        choices = tuple(Action(f"{head}:{method}", METHOD_TITLES[method], "method")
+                        for method in E.METHODS if method not in session.state.done)
+        if choices:
+            return choices
+    label = "🃏 Разложить карты" if head == "begin" else NEXT_LABELS[E.next_method(session.state)]
+    return (Action(head, label, "control"),)
+
+
 def available_actions(session: Seance) -> tuple[Action, ...]:
     if session.finished:
         return ()
@@ -166,7 +177,10 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
     if phase == "questions":
         asks = [Action(f"q:{index}", question.label, "question") for index, question in enumerate(content.questions)
                 if question.id not in state.questions] if _questions_left(session) > 0 else []
-        return (*asks, Action("begin", "🃏 Разложить карты", "control"), Action("heard", "📜 Что прозвучало", "control"))
+        return (*asks, *_practice_actions(session, "begin"), Action("heard", "📜 Что прозвучало", "control"))
+    if phase == "spread":
+        return tuple(Action(f"turn:{i}", card.place, "card") for i, card in enumerate(content.cards)
+                     if card.id not in state.draft.readings)
     if phase == "tarot":
         card = content.cards[session.card]
         studied = E.studied_on(state, card)
@@ -177,6 +191,8 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
             elif len(studied) < content.study_limit:
                 actions.append(Action(f"st:{index}", f"🔎 {symbol.title}", "look"))
         back = [Action("prev", "↩ Прошлая карта", "control")] if session.card else []
+        if session.free_order:
+            back = [Action("spread", "Вернуться к раскладу", "control")]
         return (*actions, *back, hush)
     if phase == "tone":
         return (*(Action(f"tone:{tone}", label, "choice") for tone, label in TONE_LABELS.items()),
@@ -208,7 +224,7 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
             actions += [Action("sup", f"👍 {support}", "choice"), Action("hold", f"✋ {hold}", "choice")]
         if E.can_correct(state):
             actions += [Action(f"fix:{kind}", label, "fix") for kind, label in FIX_LABELS.items()]
-        return (*actions, Action("next", NEXT_LABELS[E.next_method(state)], "control"), Action("heard", "📜 Что прозвучало", "control"))
+        return (*actions, *_practice_actions(session, "next"), Action("heard", "📜 Что прозвучало", "control"))
     if phase == "final":
         return tuple(Action(f"adv:{index}", label, "choice") for index, (_, label, _) in enumerate(content.advice))
     return ()
@@ -255,6 +271,8 @@ def _open(session: Seance, events: list[DisplayEvent]) -> None:
     events += _fresh(session)
     events.append(_event("ritual", RITUALS[method]))
     if method == "tarot":
+        if session.free_order:
+            session.phase = "spread"
         events.append(_event("omen", "", rules.PACE_RITUAL, cards=[card.art for card in session.content.cards]))
     elif method == "palm":
         events.append(_event("omen", "", rules.PACE_RITUAL, drawing=("zones", ())))
@@ -356,14 +374,20 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         metrics.append(("action", {"kind": "question", "mode": "seance", "story": story.id, "question": question.id,
                                    "left": _questions_left(session)}))
     elif head == "begin":
-        E.begin(story, state)
+        E.begin(story, state, rest or "tarot")
         _open(session, events)
     elif head == "st":
         E.study(story, state, content.cards[session.card].symbols[int(rest)].id)
+    elif head == "turn":
+        session.card, session.phase = int(rest), "tarot"
+    elif head == "spread":
+        session.phase = "spread"
     elif head == "rd":
         symbol, _, reading = rest.partition(":")
         E.read(story, state, content.cards[session.card].symbols[int(symbol)].readings[int(reading)].id)
-        if session.card + 1 < len(content.cards):
+        if session.free_order:
+            session.phase = "tone" if E.tarot_ready(story, state) else "spread"
+        elif session.card + 1 < len(content.cards):
             session.card += 1
         else:
             session.phase = "tone"
@@ -371,6 +395,9 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         session.card -= 1
     elif head == "redo":
         session.phase, session.card, session.forecast = state.scene, 0, None
+        if session.free_order and state.scene == "tarot":
+            state.draft.readings.clear()
+            session.phase = "spread"
     elif head == "tone":
         st = (E.say_tarot(story, state, rest) if state.scene == "tarot" else E.say_forecast(story, state, session.forecast, rest))
         _said(session, st, events, metrics)
@@ -411,7 +438,7 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         metrics.append(("action", {"kind": "correct", "mode": "seance", "story": story.id, "correction": rest,
                                    "acted": bool(state.last.events)}))
     elif head == "next":
-        E.proceed(story, state)
+        E.proceed(story, state, rest or None)
         if state.scene == "final":
             session.phase = "final"
             events += _fresh(session)
@@ -471,8 +498,12 @@ def _screen(session: Seance) -> str:
 
 def _prompt(session: Seance) -> str:
     state, phase = session.state, session.phase
+    if phase == "spread":
+        return "Какую карту перевернуть?"
     if phase == "questions":
         left = _questions_left(session)
+        if session.free_order:
+            return "О чём спросите? Или выберите практику." if left else "С чего начнёте гадание?"
         return f"Что уточнить? Осталось вопросов: {left}" if left else "Вопросы заданы. Пора раскладывать карты."
     if phase == "tarot":
         card = session.content.cards[session.card]

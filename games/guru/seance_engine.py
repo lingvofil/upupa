@@ -351,9 +351,10 @@ def _start(story: Story, s: State, method: str) -> None:
     push(s, "client", story.content.client, story.open_line(s, method))
 
 
-def begin(story: Story, s: State) -> None:
+def begin(story: Story, s: State, method: str = "tarot") -> None:
     _need(s.scene == "questions", "гадания уже идут")
-    _start(story, s, METHODS[0])
+    _need(method in METHODS, "неизвестная практика")
+    _start(story, s, method)
 
 
 def study(story: Story, s: State, symbol_id: str) -> None:
@@ -471,10 +472,13 @@ def shown(s: State) -> str:
     return s.queue.pop(0)
 
 
-def proceed(story: Story, s: State) -> None:
+def proceed(story: Story, s: State, method: str | None = None) -> None:
     """Из реакции — к следующему гаданию или, после последнего, к напутствию."""
     _need(s.scene == "reaction" and not s.queue, "сначала досмотри, что она делает")
-    method = next_method(s)
+    if method is not None:
+        _need(method in METHODS and method not in s.done, "практика недоступна")
+    else:
+        method = next_method(s)
     if method is None:
         s.scene = "final"
         push(s, "client", story.content.client, story.final_line(s))

@@ -49,7 +49,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import BufferedInputFile, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
 from core.paths import PROJECT_ROOT
-from core.settings import ADMIN_ID
+from core.settings import ADMIN_ID, GURU_APP_LINK
 from features.guru_wallets import get_guru_wallets
 from features.lab.events import log_event, new_session_id
 from features.lab.filters import ExperimentEnabled
@@ -182,7 +182,8 @@ def _markup(rows: textui.Rows | None) -> InlineKeyboardMarkup | None:
     if not rows:
         return None
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=data) for label, data in row] for row in rows]
+        inline_keyboard=[[InlineKeyboardButton(text=label, url=data) if data.startswith("https://")
+                          else InlineKeyboardButton(text=label, callback_data=data) for label, data in row] for row in rows]
     )
 
 
@@ -552,7 +553,13 @@ def _section(chat_id: int, user: Any, section: str) -> tuple[str, textui.Rows]:
     if section == "shelf":
         return textui.render_shelf(wallet.name or _player_name(user), wallet), textui.section_keyboard(section)
     group = _is_group(chat_id)
-    return textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group)
+    if section != "entrance":
+        return textui.render_menu(_player_name(user), wallet, group), textui.menu_keyboard(group)
+    return ("🕯 Салон «Гуру»\n\nЗа дверью посетитель. Примите его, рассмотрите знаки и решите, что сказать.\n\n"
+            "В салоне остаются письма клиентов. В живом приёме в группе можно погадать друг другу.",
+            [[("Открыть дверь", f"{GURU_APP_LINK}?startapp=guru_door"),
+              ("Мой салон", f"{GURU_APP_LINK}?startapp=guru_salon")],
+             [("Играть в чате", "guru:classic")]])
 
 
 async def _open_section(bot: Any, chat_id: int, user: Any, thread_id: int | None, section: str, *,
@@ -564,7 +571,7 @@ async def _open_section(bot: Any, chat_id: int, user: Any, thread_id: int | None
 
 async def _show_menu(bot: Any, chat_id: int, user: Any, thread_id: int | None, *, reply_to: int | None = None) -> None:
     await log_event(EXPERIMENT, "menu", chat_id=chat_id, user_id=user.id, action="open")
-    await _open_section(bot, chat_id, user, thread_id, "menu", reply_to=reply_to)
+    await _open_section(bot, chat_id, user, thread_id, "entrance", reply_to=reply_to)
 
 
 async def _show_salon(bot: Any, chat_id: int, owner: Any, thread_id: int | None, *, visitor: bool = False) -> None:
@@ -822,6 +829,12 @@ async def _show_report(callback: types.CallbackQuery, parsed: textui.Callback) -
 
 @router.callback_query(_enabled, F.data.startswith(textui.CALLBACK_PREFIX))
 async def salon_callback(callback: types.CallbackQuery) -> None:
+    if callback.data == "guru:classic" and callback.message:
+        await callback.answer()
+        message = callback.message
+        text, rows = _section(message.chat.id, callback.from_user, "classic")
+        await _edit(callback.bot, message.chat.id, message.message_id, text, rows)
+        return
     parsed = textui.parse(callback.data)
     message = callback.message
     if parsed is None or message is None:

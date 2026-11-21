@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#181914" />
+    <title>Гуру · Кабинет гадалки</title>
+    <link rel="stylesheet" href="?view=guru&amp;asset=style.css" />
+    <script>
+      if (
+        location.hostname !== "127.0.0.1" &&
+        location.hostname !== "localhost"
+      ) {
+        const sdk = document.createElement("script");
+        sdk.src = "https://telegram.org/js/telegram-web-app.js";
+        sdk.async = false;
+        document.head.append(sdk);
+      }
+    </script>
+    <script defer src="?view=guru&amp;asset=app.js"></script>
+  </head>
+  <body>
+    <header>
+      <button id="brand" aria-label="На порог салона"><i>✴</i> Гуру</button>
+      <button id="cabinet">Мой салон <span aria-hidden="true">↗</span></button>
+    </header>
+    <main id="stage" tabindex="-1">
+      <section class="hero">
+        <div class="hero-copy">
+          <h1>Салон Гуру</h1>
+          <p>Зажигаем лампу…</p>
+        </div>
+      </section>
+    </main>
+    <div id="notice" role="status" hidden></div>
+    <dialog id="modal">
+      <button id="close" aria-label="Закрыть">×</button>
+      <section id="modal-body"></section>
+    </dialog>
+  </body>
+</html>
