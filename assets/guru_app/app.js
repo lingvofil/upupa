@@ -511,7 +511,6 @@ function salon() {
   summary.append(
     node("h2", state.salon.rank),
     node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
-    node("p", "Покупок в салоне: " + state.salon.items.length, "muted"),
     group(
       button(
         state.current
@@ -534,7 +533,6 @@ function salon() {
   frame.append(img(state.salon.picture, "Интерьер вашего салона"));
   room.append(frame, summary);
   el.append(room);
-  if (state.salon.collection.length) el.append(collection());
   el.append(shelf());
   const letters = state.history.filter((r) => r.waiting);
   if (letters.length) {
@@ -568,24 +566,6 @@ function salon() {
   mount("salon", el);
 }
 
-function collection() {
-  const section = node("section", "", "salon-collection"),
-    list = node("div", "", "object-gallery");
-  section.append(node("h2", "Вещи в салоне"));
-  for (const item of state.salon.collection) {
-    const tile = button(
-      "",
-      () => modal(item.name, img(item.picture, item.name, "object-preview")),
-      "object-tile",
-    );
-    const portrait = img(item.picture, "");
-    portrait.loading = "lazy";
-    tile.append(portrait, node("span", item.name));
-    list.append(tile);
-  }
-  section.append(list);
-  return section;
-}
 function shelf() {
   const section = node("section", "", "gift-shelf"),
     list = node("div", "", "gift-list"),
@@ -612,21 +592,117 @@ function shelf() {
   section.append(list);
   return section;
 }
+
+// Position of each object's base, then width and height, in % of the showroom artwork.
+const displayPositions = {
+  tapestry: [7, 62, 9.6, 23],
+  neon: [94, 45, 7.3, 15],
+  armchair: [9.5, 93, 16, 28],
+  cabinet: [92.5, 92, 9, 37],
+  clock: [25, 24.7, 9, 16.5],
+  mirror: [41, 24.7, 7, 16.2],
+  orrery: [58, 24.7, 13, 16.5],
+  astrolabe: [76, 24.7, 8, 16],
+  almanac: [24, 40.1, 10, 12.8],
+  deck: [37, 40.1, 10, 12.8],
+  bowl: [50, 40.1, 10, 12.8],
+  flyers: [63, 40.1, 9, 12.8],
+  reviews: [76, 40.1, 10, 12.8],
+  ball: [24, 54.5, 8, 12.5],
+  loupe: [37, 54.5, 11, 12.5],
+  silk: [50, 54.5, 10, 12.5],
+  atlas: [63, 54.5, 11, 12.5],
+  zina: [76, 54.5, 10, 12.5],
+  ledger: [25, 66.5, 10.5, 10.8],
+  candles: [41, 66.5, 9, 10.8],
+  tea: [57, 66.5, 12, 10.8],
+  cat: [76, 66.5, 14, 10.8],
+};
+
+function previewItem(item) {
+  modal(item.name, img(item.picture, "", "object-preview"));
+}
+
+function shopDisplay(total, featured) {
+  const section = node("section", "", "shop-display"),
+    viewport = node("div", "", "showroom-viewport"),
+    room = node("div", "", "showroom"),
+    owned = state.salon.collection,
+    background = img(
+      "showroom.jpg",
+      "Полки и прилавок лавки",
+      "showroom-backdrop",
+    );
+  background.width = 1500;
+  background.height = 844;
+  room.append(background);
+  let newItem;
+  for (const item of owned) {
+    const [x, bottom, width, height] = displayPositions[item.id];
+    const prop = button("", () => previewItem(item), "showroom-item");
+    prop.setAttribute("aria-label", item.name);
+    prop.title = item.name;
+    prop.dataset.item = item.id;
+    Object.assign(prop.style, {
+      left: x + "%",
+      top: bottom + "%",
+      width: width + "%",
+      height: height + "%",
+    });
+    prop.append(img("display-" + item.id + ".webp", ""));
+    if (item.id === featured) {
+      prop.classList.add("new-showroom-item");
+      newItem = prop;
+    }
+    room.append(prop);
+  }
+  const zoom = button(
+    "Приблизить витрину",
+    () => {
+      const enlarged = room.classList.toggle("showroom-enlarged");
+      zoom.textContent = enlarged
+        ? "Показать всю витрину"
+        : "Приблизить витрину";
+      zoom.setAttribute("aria-pressed", enlarged);
+      viewport.tabIndex = enlarged ? 0 : -1;
+      viewport.scrollLeft = enlarged
+        ? (viewport.scrollWidth - viewport.clientWidth) / 2
+        : 0;
+    },
+    "quiet",
+  );
+  zoom.setAttribute("aria-pressed", "false");
+  viewport.setAttribute("role", "region");
+  viewport.setAttribute("aria-label", "Витрина лавки");
+  viewport.append(room);
+  section.append(
+    viewport,
+    node("p", "На витрине " + owned.length + " из " + total, "muted"),
+    zoom,
+  );
+  return { section, newItem };
+}
+
 async function shop() {
   state = await call("home");
-  const { shop: groups } = await call("shop"),
+  renderShop(await call("shop"));
+}
+
+function renderShop(catalog, featured) {
+  const { shop: groups, freeShop } = catalog,
     el = panel("Лавка"),
     navigation = group(button("← В салон", salon)),
-    scene = img(
-      "apothecary.jpg",
-      "Лавка со старинными книгами и инструментами",
-      "shop-scene",
+    display = shopDisplay(
+      groups.reduce((sum, group) => sum + group.items.length, 0),
+      featured,
     );
   el.append(
-    scene,
+    display.section,
     node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
-    navigation,
   );
+  if (freeShop)
+    el.append(node("p", "Локальная проверка · покупки за 0 ₽", "muted"));
+  el.append(navigation);
   for (const { title, items } of groups) {
     const box = node("section", "", "shop-section"),
       grid = node("div", "", "grid");
@@ -646,7 +722,13 @@ async function shop() {
         node("p", item.note, "muted"),
       );
       if (owned) {
-        tile.append(node("p", "✓ Уже в салоне", "owned-item"));
+        tile.append(
+          button(
+            "На витрине · Рассмотреть",
+            () => previewItem(item),
+            "owned-item",
+          ),
+        );
       } else if (gap > 0) {
         tile.append(
           node(
@@ -657,7 +739,9 @@ async function shop() {
         );
       } else {
         tile.append(
-          button("Купить · " + rubles(item.price), () => confirmPurchase(item)),
+          button("Купить · " + rubles(item.price), () =>
+            confirmPurchase(item, catalog),
+          ),
         );
       }
       grid.append(tile);
@@ -666,8 +750,9 @@ async function shop() {
     el.append(box);
   }
   mount("shop", el);
+  display.newItem?.focus({ preventScroll: true });
 }
-function confirmPurchase(item) {
+function confirmPurchase(item, catalog) {
   modal(
     item.name,
     img(item.picture, item.name, "object-preview"),
@@ -677,8 +762,7 @@ function confirmPurchase(item) {
         "Купить за " + rubles(item.price),
         async () => {
           state = await call("buy", { item: item.id });
-          salon();
-          say("Покупка уже в салоне.");
+          renderShop(catalog, item.id);
         },
         "primary",
       ),
@@ -1085,6 +1169,7 @@ async function boot() {
   const card = /^guru_c_([a-f0-9]{24})(?:_(\d+))?$/.exec(key);
   if (card) await shared(card[1], card[2]);
   else if (key === "guru_salon") salon();
+  else if (key === "guru_shop") renderShop(await call("shop"));
   else if (key === "guru_door") await start();
   else door();
 }

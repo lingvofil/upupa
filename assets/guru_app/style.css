@@ -350,15 +350,63 @@ p + p {
 .shop-section > .grid {
   margin-top: 12px;
 }
-.shop-scene {
-  display: block;
-  width: 100%;
-  height: clamp(160px, 35vw, 320px);
-  margin-top: 18px;
-  object-fit: cover;
-  object-position: center 57%;
+.shop-display {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+}
+.showroom-viewport {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: #211810;
+}
+.showroom {
+  position: relative;
+  width: 100%;
+}
+.showroom.showroom-enlarged {
+  width: max(148%, 700px);
+}
+.showroom-backdrop {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.showroom-item {
+  position: absolute;
+  display: block;
+  transform: translate(-50%, -100%);
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 3px;
+}
+.showroom-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+  filter: drop-shadow(0 2px 2px #1a0e08bd);
+}
+.new-showroom-item img {
+  filter: drop-shadow(0 0 5px #e8bf77);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .new-showroom-item img {
+    animation: place-on-shelf 380ms ease-out both;
+  }
+}
+@keyframes place-on-shelf {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
 }
 .shop-item {
   display: flex;
@@ -374,7 +422,6 @@ p + p {
   margin: 0;
 }
 .shop-object,
-.object-tile img,
 .object-preview {
   display: block;
   width: 100%;
@@ -389,21 +436,6 @@ p + p {
 .object-preview {
   width: min(100%, 240px);
   margin: 14px 0;
-}
-.object-gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 130px), 1fr));
-  gap: 10px;
-  margin-top: 14px;
-}
-.object-tile {
-  display: grid;
-  align-content: start;
-  gap: 9px;
-  padding: 8px;
-}
-.object-tile span {
-  font-size: 13px;
 }
 .shop-item > :last-child {
   margin-top: auto;
