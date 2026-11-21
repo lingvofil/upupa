@@ -132,7 +132,7 @@ class GuruVisits:
                     token = db.execute("SELECT token FROM shared WHERE visit=? AND slot=?", (record["id"], slot)).fetchone()[0]
                     db.execute("UPDATE journey SET shared=coalesce(shared,strftime('%s','now')) WHERE id=?", (record["id"],))
                     return {"token": token, "card": card}
-            changed = op in ("start", "move", "reply", "leave", "buy")
+            changed = op in ("start", "greet", "move", "reply", "leave", "buy")
             if changed and command.get("rev") != rev:
                 raise StaleTurn("Салон открыт ещё в одном окне. Показан последний ход.")
             history = _history(db, user_id)
@@ -147,6 +147,10 @@ class GuruVisits:
                 active = miniapp.new_visit(story, (item.key for item in salon.owned_items(purchases, catalog=miniapp.ITEMS)))
                 db.execute("INSERT INTO journey(id,owner,story,started) VALUES (?,?,?,strftime('%s','now'))",
                            (active["id"], user_id, story))
+            elif op == "greet":
+                if not active:
+                    raise ValueError("Сеанс уже завершён.")
+                active.pop("greeting_pending", None)
             elif op == "leave":
                 if not active:
                     raise ValueError("Сеанс уже завершён.")
@@ -161,6 +165,7 @@ class GuruVisits:
                     raise ValueError("Журнал открыт отдельно.")
                 result = seance.act(session, 1, action, now=session.step + 1)
                 active["moves"].append(action)
+                active.pop("greeting_pending", None)
                 if action.startswith(("tone:", "wd:")):
                     db.execute("UPDATE journey SET first_reading=strftime('%s','now') WHERE id=? AND first_reading IS NULL",
                                (active["id"],))
@@ -195,7 +200,7 @@ class GuruVisits:
                 rev += 1
                 db.execute("INSERT OR REPLACE INTO salons VALUES (?, ?, ?)", (user_id, rev, json.dumps(active)))
             if active and current is None:
-                current = miniapp.scene(*miniapp.replay(active))
+                current = miniapp.scene(*miniapp.replay(active), greeting_pending=active.get("greeting_pending", False))
             if op == "reply" or (op == "move" and active is None):
                 history = _history(db, user_id)
             result = {"rev": rev, "current": current, "history": history, "count": len(seance.STORY_IDS),

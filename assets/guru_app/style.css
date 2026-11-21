@@ -164,6 +164,44 @@ p + p {
 .hero .actions button {
   flex: none;
 }
+.greeting {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  min-height: calc(100svh - 69px);
+}
+.greeting-art {
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 4vw, 45px);
+  background:
+    linear-gradient(0deg, #121812d9, #12181235 65%),
+    var(--salon-scene) center / cover;
+}
+.greeting-art img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 550px);
+  max-height: min(70svh, 640px);
+  object-fit: contain;
+  border-radius: 6px;
+  filter: drop-shadow(0 14px 30px #090c09a8);
+}
+.greeting-copy {
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  min-width: 0;
+  padding: clamp(22px, 5vw, 70px);
+  background: #1b261e;
+}
+.greeting-copy h1 {
+  font-size: clamp(43px, 6vw, 82px);
+  overflow-wrap: anywhere;
+}
+.greeting-copy .speech {
+  margin: 0;
+}
 .page {
   max-width: 1024px;
   margin: auto;
@@ -908,6 +946,24 @@ dialog p {
   .hero h1 {
     font-size: clamp(58px, 14vw, 84px);
   }
+  .greeting {
+    display: block;
+    min-height: calc(100svh - 69px);
+    background: #1b261e;
+  }
+  .greeting-art {
+    padding: 12px;
+  }
+  .greeting-art img {
+    max-height: min(52svh, 410px);
+  }
+  .greeting-copy {
+    padding: 17px 16px max(20px, env(safe-area-inset-bottom));
+    gap: 11px;
+  }
+  .greeting-copy h1 {
+    font-size: clamp(35px, 9vw, 60px);
+  }
   .session {
     display: block;
   }
@@ -916,16 +972,21 @@ dialog p {
     height: clamp(145px, 24svh, 230px);
     background-position: center 45%;
   }
-  .stage-art .portrait {
-    position: absolute;
-    left: 50%;
-    top: 3%;
-    height: 165%;
+  .stage-art.visitor-stage {
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    padding: 8px 12px;
+  }
+  .visitor-stage .portrait,
+  .visitor-stage .cameo {
     width: auto;
-    max-width: none;
-    max-height: none;
-    object-position: center top;
-    transform: translateX(-50%);
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    object-position: center;
+  }
+  .visitor-stage .plate {
+    display: none;
   }
   .stage-art.tarot-stage {
     height: auto;
@@ -934,10 +995,6 @@ dialog p {
   }
   .tarot-stage .tarot-face {
     width: clamp(138px, 26svh, 215px);
-  }
-  .stage-art .cameo {
-    height: 85%;
-    width: auto;
   }
   .stage-art .plate {
     left: 12px;
@@ -968,5 +1025,10 @@ dialog p {
   }
   .shared-card > .shared-face {
     width: min(100%, 220px);
+  }
+}
+@media (max-width: 700px) and (max-height: 630px) {
+  .greeting-art img {
+    max-height: 44svh;
   }
 }

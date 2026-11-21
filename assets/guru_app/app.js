@@ -309,12 +309,39 @@ function horoscopeWheel(s, animate) {
   return wheel;
 }
 
-function sceneArt(s, hand, keepScroll) {
-  const art = node("aside", "", "stage-art");
+function salonBackdrop(art) {
   art.style.setProperty(
     "--salon-scene",
     'url("' + asset(state.salon.picture) + '")',
   );
+  return art;
+}
+function greeting(s) {
+  const el = node("section", "", "greeting"),
+    art = salonBackdrop(node("div", "", "greeting-art")),
+    copy = node("article", "", "greeting-copy");
+  art.append(img(portraitFile(s.story), "Портрет гостя"));
+  copy.append(
+    node("h1", s.client),
+    node("p", "— Здравствуйте, мадам.", "speech"),
+    group(
+      button(
+        "Начать сеанс →",
+        async () => {
+          state = await call("greet");
+          session();
+        },
+        "primary",
+      ),
+      button("Выйти из приёма", pauseVisit, "quiet"),
+    ),
+  );
+  el.append(art, copy);
+  mount("greeting", el);
+}
+
+function sceneArt(s, hand, keepScroll) {
+  const art = salonBackdrop(node("aside", "", "stage-art"));
   if (s.phase === "spread") {
     const spread = node("div", "", "card-backs");
     for (const a of s.actions) {
@@ -343,13 +370,16 @@ function sceneArt(s, hand, keepScroll) {
     art.classList.add("wheel-stage");
     art.append(horoscopeWheel(s, keepScroll));
     return art;
-  } else if (s.story === "jealous.vocal") {
-    const portrait =
-      { angry: "irritated", hopeful: "relieved", tired: "suspicious" }[
-        s.mood
-      ] || "base";
-    art.append(img(portrait + ".webp", s.client, "portrait"));
-  } else art.append(img(portraitFile(s.story), s.client, "cameo"));
+  } else {
+    art.classList.add("visitor-stage");
+    if (s.story === "jealous.vocal") {
+      const portrait =
+        { angry: "irritated", hopeful: "relieved", tired: "suspicious" }[
+          s.mood
+        ] || "base";
+      art.append(img(portrait + ".webp", s.client, "portrait"));
+    } else art.append(img(portraitFile(s.story), s.client, "cameo"));
+  }
   art.append(node("span", s.client, "plate"));
   return art;
 }
@@ -375,6 +405,7 @@ async function move(id) {
 function session(keepScroll = false) {
   const s = state.current;
   if (!s) return salon();
+  if (s.greetingPending) return greeting(s);
   if (!s.palm) {
     palmFocus = undefined;
     palmZoom = false;
@@ -439,30 +470,27 @@ function session(keepScroll = false) {
     ),
     ...s.heard.map((line) => node("p", line)),
   );
-  const pause = button(
-    "Выйти из приёма",
-    () =>
-      modal(
-        "Закрыть дверь?",
-        node(
-          "p",
-          "Можно оставить встречу на паузе или проводить гостя без предсказания.",
-        ),
-        group(
-          button("Сохранить и выйти", salon, "primary"),
-          button("Проводить гостя", async () => {
-            state = await call("leave");
-            salon();
-          }),
-        ),
-      ),
-    "quiet back",
-  );
   text.append(choices);
   if (secondary.childElementCount) text.append(rest);
-  text.append(journal, pause);
+  text.append(journal, button("Выйти из приёма", pauseVisit, "quiet back"));
   el.append(sceneArt(s, hand, keepScroll), text);
   mount("session", el, keepScroll);
+}
+function pauseVisit() {
+  modal(
+    "Закрыть дверь?",
+    node(
+      "p",
+      "Можно оставить встречу на паузе или проводить гостя без предсказания.",
+    ),
+    group(
+      button("Сохранить и выйти", salon, "primary"),
+      button("Проводить гостя", async () => {
+        state = await call("leave");
+        salon();
+      }),
+    ),
+  );
 }
 function ticket(title, detail, action, picture) {
   const el = button("", action, "ticket"),
@@ -1024,6 +1052,7 @@ function back() {
     [
       "record",
       "guests",
+      "greeting",
       "letter",
       "session",
       "shared",
