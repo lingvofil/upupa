@@ -501,10 +501,10 @@ def test_random_seances_never_break_and_end_only_where_the_story_allows():
 
 # --- касса, выбор клиента и журнал ----------------------------------------------
 
-def test_the_first_client_is_ludmila_and_then_whoever_was_seen_least():
+def test_clients_are_random_among_the_least_seen_from_the_first_visit():
     rng = random.Random(5)
-    assert seance.pick_story((), rng) == seance.LUDMILA
-    assert seance.pick_story(("terms", "nothing"), rng) == seance.LUDMILA, "развязки прежней механики в счёт не идут"
+    assert {seance.pick_story((), rng) for _ in range(500)} == set(seance.STORY_IDS)
+    assert seance.pick_story(("terms", "nothing"), random.Random(5)) == seance.pick_story((), random.Random(5))
     done = [seance.ending_key(seance.LUDMILA, "own")]
     picked = {seance.pick_story(done, rng) for _ in range(200)}
     assert seance.LUDMILA not in picked and len(picked) > 20

@@ -184,6 +184,160 @@ p + p {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
 }
+.guest-book {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr));
+  gap: clamp(9px, 2vw, 16px);
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.guest-page {
+  overflow: hidden;
+  border: 1px solid #8e714a;
+  border-radius: 6px;
+  background: #232e25;
+}
+.guest-frame {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 4/5;
+  background: radial-gradient(ellipse at 50% 38%, #655440, #17211a 75%);
+}
+.guest-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 32%;
+}
+.guest-page > strong,
+.guest-unopened-label {
+  display: block;
+  padding: 7px 9px;
+  text-align: center;
+}
+.guest-page > strong {
+  font: 600 clamp(19px, 3vw, 25px)/1.05 var(--serif);
+}
+.guest-page.unopened {
+  border-color: #514a38;
+}
+.guest-page.new-portrait {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .new-portrait img {
+    animation: reveal-portrait 600ms ease-out both;
+  }
+}
+@keyframes reveal-portrait {
+  from {
+    filter: blur(9px);
+    opacity: 0.45;
+  }
+  to {
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+.unopened .guest-frame {
+  background: radial-gradient(ellipse at 50% 37%, #453b2c, #1b231c 76%);
+}
+.unopened .guest-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 17% 20% at 50% 36%, #93836a 90%, transparent),
+    radial-gradient(ellipse 33% 31% at 50% 79%, #7f735d 90%, transparent);
+  filter: blur(10px);
+  opacity: 0.57;
+}
+.guest-unopened-label {
+  color: #c8b99e;
+  font-size: 13px;
+}
+.salon-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  gap: clamp(16px, 3vw, 34px);
+  padding: clamp(12px, 2.6vw, 25px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1d281f;
+}
+.salon-picture {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 738/1100;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #131913;
+  color: var(--gold);
+}
+.salon-picture img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.salon-summary {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+.salon-summary > p {
+  margin: 0;
+}
+.salon-summary .actions {
+  margin-top: 8px;
+}
+.salon-balance {
+  color: var(--gold);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.gift-shelf > p {
+  margin: 10px 0;
+}
+.gift-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+}
+.shop-section > .grid {
+  margin-top: 12px;
+}
+.shop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid #5a5841;
+  border-radius: 5px;
+  background: #242e26;
+}
+.shop-item p {
+  margin: 0;
+}
+.shop-item > :last-child {
+  margin-top: auto;
+}
+.owned-item {
+  color: #c2dbaf;
+}
+@media (max-width: 620px) {
+  .salon-room {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .salon-summary {
+    grid-row: 1;
+  }
+}
 .ticket {
   padding: 15px 17px;
   background: #242e26;
@@ -242,10 +396,89 @@ p + p {
   border-radius: 45% 45% 43% 43%;
   box-shadow: 0 15px 50px #171611;
 }
-.stage-art .instrument {
-  width: min(63%, 330px);
-  max-height: 55vh;
-  object-fit: contain;
+.stage-art.palm-stage,
+.stage-art.wheel-stage {
+  background-color: #1b251d;
+  background-image:
+    linear-gradient(165deg, #101813a0, #101813df),
+    url("?view=guru&asset=room.webp");
+  padding: 20px 12px;
+}
+.palm-tool {
+  position: relative;
+  width: min(100%, 305px);
+  filter: drop-shadow(0 12px 24px #120e0c88);
+}
+.palm-frame {
+  overflow: hidden;
+  border-radius: 8px;
+}
+.palm-zoomer {
+  position: relative;
+  transform: scale(var(--palm-zoom, 1));
+  transition: transform 260ms ease;
+}
+.palm-zoomer img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+.palm-spot {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -50%) scale(var(--spot-zoom, 1));
+  place-items: center;
+  display: grid;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: radial-gradient(circle, #311f1dee 0 47%, transparent 51%);
+  color: #fbdfab;
+  border-radius: 50%;
+  border: 1px dashed #ffe09b;
+  font-weight: 650;
+  font-size: 14px;
+  text-align: center;
+  box-shadow: inset 0 0 0 1px #362a1d88;
+}
+.palm-spot.inspected {
+  background: #233b2eec;
+}
+.palm-spot[aria-pressed="true"] {
+  z-index: 2;
+  background: #f2d38a;
+  color: #282016;
+  border: 2px solid #52341b;
+  box-shadow: 0 0 16px #e7a74b;
+}
+.palm-reset {
+  position: absolute;
+  z-index: 3;
+  right: 6px;
+  bottom: 6px;
+}
+.palm-reading > div:not(:empty) {
+  padding: 14px;
+  margin: 9px 0;
+  border: 1px solid #b09870;
+  background: #fff2d94f;
+  border-radius: 5px;
+}
+.palm-reading h3 {
+  margin-bottom: 8px;
+}
+.paper .palm-reading details {
+  margin: 9px 0;
+}
+.palm-reading button[aria-pressed="true"] {
+  border-color: #895519;
+  box-shadow: inset 0 0 0 1px #895519;
+}
+.planet-list small {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.82;
 }
 .stage-art .arcana,
 .arcana {
@@ -268,24 +501,56 @@ p + p {
   border-radius: 32px;
 }
 .wheel {
-  display: grid;
-  place-items: center;
-  width: 210px;
+  position: relative;
+  width: min(90%, 342px);
   aspect-ratio: 1;
-  border: 8px double var(--gold);
-  border-radius: 100%;
-  outline: 1px solid #ac9466;
-  outline-offset: 6px;
+  border: 5px double #dcb26b;
+  border-radius: 50%;
   background:
-    repeating-conic-gradient(
-      from 12deg,
-      #ddbd7926 0deg 1deg,
-      transparent 1deg 30deg
-    ),
-    radial-gradient(#28433b, #132b27);
-  color: #e6d4ae;
-  font-size: 86px;
-  box-shadow: 0 12px 32px #171a12;
+    repeating-conic-gradient(#39261866 0deg 0.8deg, transparent 0.8deg 5deg),
+    url("?view=guru&asset=brass.webp") center / cover;
+  color: #302014;
+  box-shadow:
+    0 14px 46px #090905ad,
+    inset 0 0 18px #2c1b12;
+}
+.wheel-rotor {
+  position: absolute;
+  inset: 14%;
+  border: 4px double #b98c51;
+  border-radius: 50%;
+  background:
+    radial-gradient(transparent 45%, #d29b4940 45.5% 46%, transparent 46.5%),
+    repeating-conic-gradient(#bfa26522 0deg 1deg, transparent 1deg 36deg),
+    radial-gradient(#334b42, #15251f);
+  box-shadow: 0 2px 8px #211509;
+}
+.zodiac-tick {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: clamp(13px, 3vw, 22px);
+  font-weight: 650;
+  font-variant-emoji: text;
+  text-shadow: 0 1px #f2cc80;
+}
+.wheel-pointer {
+  position: absolute;
+  top: 34%;
+  left: calc(50% - 8px);
+  width: 16px;
+  height: 16%;
+  background: linear-gradient(90deg, #d09f56, #fae1a5, #ac6e33);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  pointer-events: none;
+}
+.wheel-pin {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-shadow: 0 0 7px #d9b774;
+  color: #f3d290;
+  pointer-events: none;
 }
 .paper {
   background:
@@ -438,10 +703,6 @@ dialog::backdrop {
   margin: 18px auto 0;
   border: 5px double #bda373;
 }
-.wheel {
-  position: relative;
-  text-align: center;
-}
 .planet {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -452,10 +713,18 @@ dialog::backdrop {
   height: 44px;
   min-height: 44px;
   border-radius: 50%;
-  font-size: 23px;
+  font-size: 22px;
   text-align: center;
   background: #203a31;
   color: #ebd2a7;
+  border: 1px solid #cca366;
+}
+.planet.selected {
+  z-index: 2;
+  background: #f0cb82;
+  border: 1px solid #6e4320;
+  color: #352318;
+  box-shadow: 0 0 14px #e8af69;
 }
 #close {
   float: right;
@@ -534,9 +803,17 @@ dialog p {
     transform: none;
     font-size: 17px;
   }
+  .stage-art.palm-stage,
+  .stage-art.wheel-stage {
+    height: auto;
+    min-height: 0;
+    padding: 12px;
+  }
+  .palm-tool {
+    width: min(100%, 250px);
+  }
   .wheel {
-    width: 105px;
-    font-size: 50px;
+    width: min(90%, 252px);
   }
   .paper {
     padding: 20px 17px calc(28px + env(safe-area-inset-bottom));

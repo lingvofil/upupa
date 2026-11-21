@@ -24,6 +24,10 @@ let tg,
   state,
   record,
   page,
+  roomUrl,
+  palmFocus,
+  palmZoom = false,
+  wheelAngle,
   busy = false,
   noticeTimer;
 
@@ -98,13 +102,13 @@ async function call(op, fields = {}) {
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  return op === "interior" ? res.blob() : res.json();
 }
-function mount(name, el) {
+function mount(name, el, keepScroll = false) {
   if (dialog.open) dialog.close();
   page = name;
   main.replaceChildren(el);
-  window.scrollTo(0, 0);
+  if (!keepScroll) window.scrollTo(0, 0);
   if (name === "door") tg?.BackButton?.hide();
   else tg?.BackButton?.show();
 }
@@ -140,12 +144,162 @@ function door() {
   el.append(content);
   mount("door", el);
 }
-async function start(story) {
+async function start() {
   if (!state) state = await call("home");
-  if (!state.current) state = await call("start", story ? { story } : {});
+  if (!state.current) state = await call("start");
   session();
 }
-function sceneArt(s) {
+function palmTool(s) {
+  const { picture, zones, inspected, limit } = s.palm,
+    art = node("div", "", "palm-tool"),
+    frame = node("div", "", "palm-frame"),
+    zoomer = node("div", "", "palm-zoomer"),
+    panel = node("section", "", "palm-reading"),
+    detail = node("div"),
+    list = node("details", "", "palm-list"),
+    marks = group();
+  const drawing = img(picture, "Ладонь клиента");
+  drawing.draggable = false;
+  drawing.width = picture === "palm.webp" ? 1254 : 738;
+  drawing.height = picture === "palm.webp" ? 1254 : 1100;
+  zoomer.append(drawing);
+  const whole = button(
+    "Вся ладонь",
+    () => {
+      palmZoom = false;
+      update();
+    },
+    "palm-reset",
+  );
+  palmFocus ||= inspected.at(-1);
+  const markers = zones.map((zone, i) => {
+    const choose = () => {
+      palmFocus = zone.id;
+      palmZoom = true;
+      update();
+    };
+    const inspectedZone = inspected.includes(zone.id);
+    const spot = button(
+      inspectedZone ? "✓" : String(i + 1),
+      choose,
+      "palm-spot",
+    );
+    spot.setAttribute("aria-label", "Участок: " + zone.title);
+    spot.title = zone.title;
+    if (inspectedZone) spot.classList.add("inspected");
+    spot.style.left = zone.point[0] + "%";
+    spot.style.top = zone.point[1] + "%";
+    const label = button(zone.title, choose);
+    zoomer.append(spot);
+    marks.append(label);
+    return { zone, spot, label };
+  });
+  function update() {
+    const zone = zones.find((z) => z.id === palmFocus);
+    zoomer.style.setProperty("--palm-zoom", palmZoom ? "1.45" : "1");
+    zoomer.style.setProperty("--spot-zoom", palmZoom ? String(1 / 1.45) : "1");
+    if (zone)
+      zoomer.style.transformOrigin = zone.point.map((p) => p + "%").join(" ");
+    whole.hidden = !palmZoom;
+    for (const marker of markers) {
+      marker.spot.setAttribute("aria-pressed", marker.zone === zone);
+      marker.label.setAttribute("aria-pressed", marker.zone === zone);
+    }
+    detail.replaceChildren();
+    if (!zone) return;
+    detail.append(node("h3", zone.title));
+    if (zone.finding) {
+      detail.append(node("p", zone.finding));
+      if (zone.remark) detail.append(node("p", "— " + zone.remark));
+    } else if (s.actions.some((a) => a.id === zone.action)) {
+      detail.append(
+        button("Осмотреть этот участок", () => move(zone.action), "primary"),
+      );
+    } else if (inspected.length >= limit) {
+      detail.append(node("p", "Клиент уже убирает руку."));
+    }
+  }
+  list.append(node("summary", "Список участков"), marks);
+  panel.append(
+    node(
+      "p",
+      "Осмотрено " +
+        inspected.length +
+        " из " +
+        limit +
+        " · Выберите участок на ладони.",
+      "meta",
+    ),
+    detail,
+    list,
+  );
+  frame.append(zoomer);
+  art.append(frame, whole);
+  update();
+  return { art, panel };
+}
+
+const zodiac = Array.from("♈♉♊♋♌♍♎♏♐♑♒♓");
+function positionOnWheel(el, angle, radius) {
+  el.style.left = 50 + radius * Math.sin((angle * Math.PI) / 180) + "%";
+  el.style.top = 50 - radius * Math.cos((angle * Math.PI) / 180) + "%";
+}
+
+function horoscopeWheel(s, animate) {
+  const { planets, selected } = s.horoscope,
+    wheel = node("div", "", "wheel"),
+    rotor = node("div", "", "wheel-rotor"),
+    step = 360 / planets.length,
+    previous = wheelAngle ?? step / 2,
+    target = selected === null ? step / 2 : -selected * step,
+    turn = previous + ((((target - previous + 180) % 360) + 360) % 360) - 180;
+  wheelAngle = turn;
+  const spin = (element, from, to) => {
+    element.style.transform = to;
+    if (
+      animate &&
+      turn !== previous &&
+      !matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      element.animate([{ transform: from }, { transform: to }], {
+        duration: 560,
+        easing: "cubic-bezier(.23,.72,.2,1)",
+      });
+    }
+  };
+  zodiac.forEach((glyph, i) => {
+    const tick = node("span", glyph + "\ufe0e", "zodiac-tick");
+    tick.setAttribute("aria-hidden", "true");
+    positionOnWheel(tick, i * 30, 44);
+    wheel.append(tick);
+  });
+  planets.forEach((p, i) => {
+    const active = s.actions.some((a) => a.id === p.id);
+    const planet = active
+      ? button(p.glyph, () => move(p.id), "planet")
+      : node("span", p.glyph, "planet");
+    const label = p.glyph + " " + p.name;
+    if (active) planet.setAttribute("aria-label", "На колесе: " + label);
+    else planet.setAttribute("aria-hidden", "true");
+    planet.title = label;
+    if (i === selected) planet.classList.add("selected");
+    positionOnWheel(planet, i * step, 35);
+    const orientation = (angle) =>
+      "translate(-50%, -50%) rotate(" + -angle + "deg)";
+    spin(planet, orientation(previous), orientation(turn));
+    rotor.append(planet);
+  });
+  const rotation = (angle) => "rotate(" + angle + "deg)";
+  spin(rotor, rotation(previous), rotation(turn));
+  wheel.append(
+    rotor,
+    node("i", "", "wheel-pointer"),
+    node("span", "✷", "wheel-pin"),
+  );
+  return wheel;
+}
+
+function sceneArt(s, hand, keepScroll) {
   const art = node("aside", "", "stage-art");
   if (s.phase === "spread") {
     const spread = node("div", "", "card-backs");
@@ -169,23 +323,14 @@ function sceneArt(s) {
     zoom.setAttribute("aria-label", "Рассмотреть рисунок карты");
     zoom.append(img("card-" + s.art + ".jpg", "Карта на столе", "arcana"));
     art.append(zoom);
-  } else if (["palm", "word"].includes(s.phase))
-    art.append(img("palm.webp", "Расположение линий ладони", "instrument"));
-  else if (
-    ["horoscope", "forecast"].includes(s.phase) ||
-    (s.phase === "tone" && s.method === "horoscope")
-  ) {
-    const wheel = node("div", "☽", "wheel");
-    const planets = s.actions.filter((a) => a.kind === "sign");
-    planets.forEach((a, i) => {
-      const angle = (i * 2 * Math.PI) / planets.length - Math.PI / 2,
-        planet = button(a.label.split(" ")[0], () => move(a.id), "planet");
-      planet.setAttribute("aria-label", "Рассмотреть · " + a.label);
-      planet.style.left = 50 + 48 * Math.cos(angle) + "%";
-      planet.style.top = 50 + 48 * Math.sin(angle) + "%";
-      wheel.append(planet);
-    });
-    art.append(wheel);
+  } else if (hand) {
+    art.classList.add("palm-stage");
+    art.append(hand.art);
+    return art;
+  } else if (s.horoscope) {
+    art.classList.add("wheel-stage");
+    art.append(horoscopeWheel(s, keepScroll));
+    return art;
   } else if (s.story === "jealous.vocal") {
     const portrait =
       { angry: "irritated", hopeful: "relieved", tired: "suspicious" }[
@@ -197,13 +342,33 @@ function sceneArt(s) {
   return art;
 }
 async function move(id) {
+  const previous = state.current;
   state = await call("move", { action: id });
-  if (state.record) showRecord(state.record);
-  else session();
+  if (state.record) {
+    const firstVisit = !state.history.some(
+      (visit) =>
+        visit.story === state.record.story && visit.id !== state.record.id,
+    );
+    showRecord(state.record, firstVisit);
+  } else
+    session(
+      Boolean(
+        (previous.palm && state.current.palm) ||
+        (previous.horoscope &&
+          state.current.horoscope &&
+          state.current.phase !== "tone"),
+      ),
+    );
 }
-function session() {
+function session(keepScroll = false) {
   const s = state.current;
   if (!s) return salon();
+  if (!s.palm) {
+    palmFocus = undefined;
+    palmZoom = false;
+  }
+  if (!s.horoscope) wheelAngle = undefined;
+  const hand = s.palm ? palmTool(s) : null;
   const el = node("section", "", "session"),
     text = node("article", "", "paper");
   text.append(
@@ -215,16 +380,21 @@ function session() {
     node("h2", labels[s.phase]),
   );
   const speech = node("div", "", "speech");
-  for (const line of s.lines)
+  for (const line of s.palm?.inspected.length ? [] : s.lines)
     speech.append(node("p", line.replace(/^🚪\s*/u, "")));
   text.append(speech);
-  if (s.screen) text.append(node("p", s.screen, "screen"));
+  if (hand) text.append(hand.panel);
+  if (s.horoscope)
+    text.append(node("p", s.horoscope.sign + " · Эта неделя", "meta"));
+  if (s.screen && !["palm", "horoscope"].includes(s.phase))
+    text.append(node("p", s.screen, "screen"));
   text.append(node("div", s.prompt, "prompt"));
   const choices = node("div", "", "actions");
   const rest = node("details"),
     secondary = node("div", "", "actions");
   rest.append(node("summary", "Другие вопросы и практики"), secondary);
   for (const a of s.actions) {
+    if (a.kind === "zone" || a.kind === "sign") continue;
     const container =
       s.opening.length && !s.opening.includes(a.id) ? secondary : choices;
     container.append(
@@ -234,6 +404,20 @@ function session() {
         a.kind === "method" ? "method" : a.id === "scene" ? "primary" : "",
       ),
     );
+  }
+  if (s.horoscope && s.phase !== "tone") {
+    const planets = node("details", "", "planet-list"),
+      rows = node("div", "", "choice-list");
+    planets.open = s.phase === "horoscope";
+    for (const p of s.horoscope.planets) {
+      if (s.actions.some((a) => a.id === p.id)) {
+        const option = button(p.glyph + " " + p.name, () => move(p.id));
+        option.append(node("small", p.theme));
+        rows.append(option);
+      }
+    }
+    planets.append(node("summary", "Планеты и тенденции"), rows);
+    text.append(planets);
   }
   const journal = node("details");
   journal.append(
@@ -265,8 +449,8 @@ function session() {
   text.append(choices);
   if (secondary.childElementCount) text.append(rest);
   text.append(journal, pause);
-  el.append(sceneArt(s), text);
-  mount("session", el);
+  el.append(sceneArt(s, hand, keepScroll), text);
+  mount("session", el, keepScroll);
 }
 function ticket(title, detail, action, picture) {
   const el = button("", action, "ticket"),
@@ -276,25 +460,33 @@ function ticket(title, detail, action, picture) {
   el.append(copy);
   return el;
 }
+const rubles = (amount) => amount.toLocaleString("ru") + " ₽";
+
+async function drawRoom(frame) {
+  try {
+    const picture = await call("interior");
+    if (!frame.isConnected) return;
+    if (roomUrl) URL.revokeObjectURL(roomUrl);
+    roomUrl = URL.createObjectURL(picture);
+    const room = node("img");
+    room.src = roomUrl;
+    room.alt = "Интерьер салона с покупками и подарками";
+    frame.replaceChildren(room);
+  } catch {
+    frame.textContent = "Не удалось загрузить рисунок салона.";
+  }
+}
+
 function salon() {
   if (!state) return door();
-  const el = panel("Мой салон");
-  el.append(
-    node(
-      "p",
-      state.history.length
-        ? "Приёмов в журнале: " +
-            state.history.length +
-            " · Касса: " +
-            state.history
-              .reduce((sum, r) => sum + r.fee, 0)
-              .toLocaleString("ru") +
-            " ₽"
-        : "Здесь будут письма посетителей и записи о ваших приёмах.",
-      "muted",
-    ),
-  );
-  el.append(
+  const el = panel("Мой салон"),
+    room = node("section", "", "salon-room"),
+    frame = node("figure", "Зажигаем свет…", "salon-picture"),
+    summary = node("div", "", "salon-summary");
+  summary.append(
+    node("h2", state.salon.rank),
+    node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
+    node("p", "Покупок в салоне: " + state.salon.items.length, "muted"),
     group(
       button(
         state.current
@@ -303,9 +495,18 @@ function salon() {
         () => start(),
         "primary",
       ),
-      button("Книга посетителей · " + state.count, guests),
+      button("Открыть лавку", shop),
+      button(
+        "Книга посетителей · " +
+          new Set(state.history.map((visit) => visit.story)).size +
+          "/" +
+          state.count,
+        guests,
+      ),
     ),
   );
+  room.append(frame, summary);
+  el.append(room, shelf());
   const letters = state.history.filter((r) => r.waiting);
   if (letters.length) {
     const box = node("section");
@@ -336,22 +537,153 @@ function salon() {
     el.append(box);
   }
   mount("salon", el);
+  drawRoom(frame);
 }
-async function guests() {
+function shelf() {
+  const section = node("section", "", "gift-shelf"),
+    list = node("div", "", "gift-list"),
+    gifts = state.salon.gifts,
+    owned = gifts.filter((gift) => gift.story);
+  section.append(
+    node("h2", "Полка подарков"),
+    node(
+      "p",
+      owned.length +
+        " из " +
+        gifts.length +
+        " · Подарки оставляют довольные клиенты.",
+      "muted",
+    ),
+  );
+  for (const gift of owned) {
+    list.append(
+      ticket(gift.name, gift.emoji + " · Подарок от " + gift.giver, () =>
+        modal(gift.name, node("p", gift.story)),
+      ),
+    );
+  }
+  section.append(list);
+  return section;
+}
+async function shop() {
+  state = await call("home");
+  const { shop: groups } = await call("shop"),
+    el = panel("Лавка");
+  el.append(
+    node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
+    group(button("← Вернуться в салон", salon)),
+  );
+  for (const { title, items } of groups) {
+    const box = node("section", "", "shop-section"),
+      grid = node("div", "", "grid");
+    box.append(node("h2", title));
+    for (const item of items) {
+      const tile = node("article", "", "shop-item"),
+        owned = state.salon.items.includes(item.id),
+        gap = item.price - Math.max(0, state.salon.balance);
+      tile.append(
+        node("h3", item.emoji + " " + item.name),
+        node("p", item.note, "muted"),
+      );
+      if (owned) {
+        tile.append(node("p", "✓ Уже в салоне", "owned-item"));
+      } else if (gap > 0) {
+        tile.append(
+          node(
+            "p",
+            rubles(item.price) + " · Не хватает " + rubles(gap),
+            "meta",
+          ),
+        );
+      } else {
+        tile.append(
+          button("Купить · " + rubles(item.price), () => confirmPurchase(item)),
+        );
+      }
+      grid.append(tile);
+    }
+    box.append(grid);
+    el.append(box);
+  }
+  mount("shop", el);
+}
+function confirmPurchase(item) {
+  modal(
+    item.name,
+    node("p", item.note),
+    group(
+      button(
+        "Купить за " + rubles(item.price),
+        async () => {
+          state = await call("buy", { item: item.id });
+          salon();
+          say("Покупка уже в салоне.");
+        },
+        "primary",
+      ),
+      button("Отмена", () => dialog.close()),
+    ),
+  );
+}
+async function guests(revealedId) {
   const { catalog } = await call("catalog"),
     el = panel("Книга посетителей");
-  if (state.current)
-    el.append(button("Продолжить текущий приём", session, "primary"));
-  const grid = node("div", "", "grid");
-  for (const g of catalog) {
-    const guest = ticket(g.name, g.line, () => start(g.id), portraitFile(g.id));
-    guest.disabled = Boolean(state.current);
-    grid.append(guest);
+  const opened = catalog.filter(Boolean),
+    locked = catalog.length - opened.length;
+  el.append(
+    node(
+      "p",
+      "Открыто " + opened.length + " из " + catalog.length,
+      "salon-balance",
+    ),
+    node(
+      "p",
+      locked
+        ? "Портрет открывается после первой завершённой встречи."
+        : "Все портреты открыты.",
+      "muted",
+    ),
+    group(
+      button(
+        state.current ? "Продолжить текущий приём" : "Открыть дверь →",
+        start,
+        "primary",
+      ),
+    ),
+  );
+  const grid = node("ul", "", "guest-book");
+  let revealed;
+  for (const guest of [...opened, ...Array(locked).fill(null)]) {
+    const page = node("li", "", guest ? "guest-page" : "guest-page unopened"),
+      frame = node("div", "", "guest-frame");
+    if (guest) {
+      const portrait = img(portraitFile(guest.id), "");
+      portrait.loading = "lazy";
+      frame.append(portrait);
+      page.append(frame, node("strong", guest.name));
+      if (guest.id === revealedId) {
+        page.classList.add("new-portrait");
+        page.tabIndex = -1;
+        portrait.loading = "eager";
+        revealed = page;
+      }
+    } else {
+      frame.setAttribute("aria-hidden", "true");
+      page.append(
+        frame,
+        node("span", "Портрет закрыт", "guest-unopened-label"),
+      );
+    }
+    grid.append(page);
   }
   el.append(grid);
   mount("guests", el);
+  if (revealed) {
+    revealed.scrollIntoView({ block: "nearest" });
+    revealed.focus({ preventScroll: true });
+  }
 }
-function showRecord(r) {
+function showRecord(r, firstVisit = false) {
   record = r;
   const el = panel(r.title),
     body = node("article", "", "paper record");
@@ -371,6 +703,8 @@ function showRecord(r) {
   body.append(breakdown);
   if (r.keepsake) body.append(node("p", "На память · " + r.keepsake));
   el.append(body);
+  if (firstVisit)
+    el.append(group(button("Новый портрет в книге →", () => guests(r.story))));
   if (r.cards.length) {
     el.append(node("h2", "Карта для чата"));
     const list = node("div", "", "grid");
@@ -537,7 +871,9 @@ async function shared(token, sourceIndex) {
 }
 function back() {
   if (dialog.open) dialog.close();
-  else if (["record", "guests", "letter", "session", "shared"].includes(page))
+  else if (
+    ["record", "guests", "letter", "session", "shared", "shop"].includes(page)
+  )
     salon();
   else door();
 }

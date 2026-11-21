@@ -1,6 +1,7 @@
 import asyncio
 from itertools import permutations
 import json
+import random
 import sqlite3
 import time
 from types import SimpleNamespace
@@ -8,12 +9,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from games.guru import miniapp, seance
+from games.guru import ludmila_deck, miniapp, salon, seance
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
 
 ORDERS = list(permutations(("tarot", "palm", "horoscope")))
+
+
+@pytest.fixture
+def draw_guest(monkeypatch):
+    def draw(story):
+        monkeypatch.setattr(seance, "pick_least_visited", lambda counts, rng: story)
+    return draw
 
 
 def choose(view, order):
@@ -30,11 +38,15 @@ def choose(view, order):
 
 
 @pytest.mark.parametrize("story", seance.STORY_IDS)
-def test_every_guest_completes_a_visit_and_returns(tmp_path, story):
+def test_every_guest_completes_a_visit_and_returns(tmp_path, story, draw_guest):
     db = GuruVisits(tmp_path / "salon.db")
-    order = ORDERS[seance.STORY_IDS.index(story) % len(ORDERS)]
-    state = db.request(11, {"op": "start", "rev": 0, "story": story})
+    slot = seance.STORY_IDS.index(story)
+    order = ORDERS[slot % len(ORDERS)]
+    draw_guest(story)
+    hidden = {"catalog": [None] * len(seance.STORY_IDS)}
+    state = db.request(11, {"op": "start", "rev": 0})
     assert state["current"]["story"] == story
+    assert db.request(11, {"op": "catalog"}) == hidden
     picture = "base.webp" if story == seance.LUDMILA else "guest-" + story.replace(".", "-") + ".jpg"
     assert (ASSETS / "art" / picture).is_file()
     state = db.request(11, {"op": "move", "rev": state["rev"], "action": "q:0"})
@@ -46,6 +58,10 @@ def test_every_guest_completes_a_visit_and_returns(tmp_path, story):
             break
         state = db.request(11, {"op": "move", "rev": state["rev"], "action": choose(state["current"], order)})
     record = state["record"]
+    expected = list(hidden["catalog"])
+    expected[slot] = {"id": story, "name": record["client"]}
+    assert GuruVisits(db.path).request(11, {"op": "catalog"}) == {"catalog": expected}
+    assert db.request(22, {"op": "catalog"}) == hidden
     assert record["cards"] and record["epilogue"] and record["letter"]
     assert record["title"] == state["history"][0]["title"]
     assert state["history"][0]["waiting"]
@@ -73,7 +89,122 @@ def test_production_api_requires_telegram_identity():
         asyncio.run(guru_api(make_mocked_request("POST", "/game?view=guru"), None))
 
 
-def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
+def test_miniapp_uses_server_draw_even_if_old_client_sends_story(tmp_path, monkeypatch):
+    store = GuruVisits(tmp_path / "salon.db")
+    def select(counts, rng):
+        assert not counts
+        return "granny.balcony"
+    monkeypatch.setattr(seance, "pick_least_visited", select)
+    response = store.request(11, {"op": "start", "rev": 0, "story": seance.LUDMILA})
+    assert response["current"]["story"] == "granny.balcony"
+    store.request(11, {"op": "leave", "rev": response["rev"]})
+    assert store.request(11, {"op": "catalog"}) == {"catalog": [None] * len(seance.STORY_IDS)}
+
+
+def test_shop_preserves_existing_fees_and_does_not_charge_twice(tmp_path, draw_guest):
+    store = GuruVisits(tmp_path / "salon.db")
+    initial = store.request(11, {"op": "home"})
+    assert initial["salon"]["balance"] == 0
+    assert {item["id"] for group in store.request(11, {"op": "shop"})["shop"] for item in group["items"]} == set(salon.ITEMS)
+    order = {"op": "buy", "item": "ledger", "rev": 0}
+    with pytest.raises(ValueError, match="Не хватает"):
+        store.request(11, order)
+    old_record = {"fee": 15000, "type": "jealous", "keepsake": "бинокль", "reply": None}
+    with sqlite3.connect(store.path) as db:
+        db.execute("INSERT INTO visits VALUES (?, ?, ?, ?)", ("old", 11, seance.LUDMILA, json.dumps(old_record)))
+    draw_guest(seance.LUDMILA)
+    started = store.request(11, {"op": "start", "rev": 0})
+    assert [guest for guest in store.request(11, {"op": "catalog"})["catalog"] if guest] == [
+        {"id": seance.LUDMILA, "name": "Людмила"}
+    ]
+    before = store.request(11, {"op": "interior"})["salon"]
+    assert before["rank"] == salon.rank(0) and before["balance"] == 15000
+    assert [gift["name"] for gift in before["gifts"] if gift["story"]] == ["бинокль"]
+    purchased = store.request(11, {**order, "rev": started["rev"]})
+    assert purchased["salon"]["rank"] == salon.rank(1)
+    assert purchased["salon"]["items"] == ["ledger"]
+    assert purchased["salon"]["balance"] == 3000
+    assert purchased["current"] == started["current"]
+    with pytest.raises(StaleTurn):
+        store.request(11, {**order, "rev": started["rev"]})
+    with pytest.raises(ValueError, match="уже"):
+        store.request(11, {**order, "rev": purchased["rev"]})
+    assert store.request(22, {"op": "home"})["salon"] == initial["salon"]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == purchased
+    state = store.request(11, {"op": "leave", "rev": purchased["rev"]})
+    state = store.request(11, {"op": "start", "rev": state["rev"]})
+    for action in ("q:0", "q:1"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    assert any(action["kind"] == "question" for action in state["current"]["actions"])
+
+
+def test_miniapp_tools_expand_choices_without_mutating_the_original_story():
+    visit = miniapp.new_visit(seance.LUDMILA, ("deck", "loupe", "ledger", "tea"))
+    session, events = miniapp.replay(visit)
+    assert any("чабрецом" in line for line in miniapp.scene(session, events)["lines"])
+    visit.pop("items")
+    base, _ = miniapp.replay(visit)
+    assert session.content.study_limit == base.content.study_limit + 1
+    assert session.content.inspect_limit == base.content.inspect_limit + 1
+    assert session.content.question_limit == base.content.question_limit + 1
+
+
+def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path, draw_guest):
+    store = GuruVisits(tmp_path / "salon.db")
+    profiles = set()
+    for story in seance.STORY_IDS:
+        session, _ = miniapp.replay(miniapp.new_visit(story))
+        palm = miniapp.palm_view(session)
+        profiles.add(palm["picture"])
+        assert len(palm["zones"]) == 6 and not any("finding" in zone for zone in palm["zones"])
+        assert all(0 < p < 100 for zone in palm["zones"] for p in zone["point"])
+    assert profiles == {"palm.webp", *(f"palm-{hand}.jpg" for hand in miniapp.HAND_TYPES)}
+    assert all((ASSETS / "art" / picture).is_file() for picture in profiles)
+    draw_guest("granny.balcony")
+    state = store.request(11, {"op": "start", "rev": 0})
+    for action in ("begin:palm", "zn:0"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    palm = state["current"]["palm"]
+    assert palm["inspected"] == [palm["zones"][0]["id"]]
+    assert palm["zones"][0]["finding"] and "finding" not in palm["zones"][1]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == state
+
+
+def test_horoscope_can_switch_planets_before_choosing_a_forecast(tmp_path, draw_guest):
+    store = GuruVisits(tmp_path / "salon.db")
+    draw_guest("granny.balcony")
+    state = store.request(11, {"op": "start", "rev": 0})
+    for action in ("begin:horoscope", "pl:0", "pl:3"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    scene = state["current"]
+    assert scene["phase"] == "forecast" and scene["horoscope"]["selected"] == 3
+    assert scene["horoscope"]["planets"][3]["name"] in scene["screen"]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == state
+    state = store.request(11, {"op": "move", "rev": state["rev"], "action": "fc:0"})
+    assert state["current"]["phase"] == "tone" and state["current"]["horoscope"]["selected"] == 3
+
+
+def test_ludmila_draw_varies_and_legacy_moves_replay(monkeypatch):
+    rng = random.Random(160)
+    monkeypatch.setattr(miniapp.secrets, "randbits", rng.getrandbits)
+    draws = [miniapp.new_visit(seance.LUDMILA) for _ in range(95)]
+    original = [card.art for card in ludmila_deck.CARDS]
+    for i, variants in enumerate(ludmila_deck.ALTERNATIVES):
+        assert {v["ludmila_deck"][i] for v in draws} == {original[i], *variants}
+    for visit in draws:
+        visit["moves"] = ["begin:tarot", "turn:1", "st:0", "rd:0:0", "turn:2", "st:0", "rd:0:0",
+                          "turn:0", "st:0", "rd:0:0", "tone:soft"]
+        session, _ = miniapp.replay(visit)
+        assert [c.art for c in session.content.cards] == visit["ludmila_deck"]
+        assert [c["art"] for c in miniapp.reading_cards(session)] == visit["ludmila_deck"]
+        assert all((ASSETS / "art" / f"card-{art}.jpg").is_file() for art in visit["ludmila_deck"])
+    legacy = draws[0]
+    legacy.pop("ludmila_deck")
+    session, _ = miniapp.replay(legacy)
+    assert [card.art for card in session.content.cards] == original
+
+
+def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch, draw_guest):
     from core import settings
     from games import guru_webapp
     from tests.test_webapp_auth import BOT_TOKEN, _signed_init_data
@@ -85,6 +216,10 @@ def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):
                               json=AsyncMock(return_value={"op": "home"}))
     bot = SimpleNamespace(save_prepared_inline_message=AsyncMock(return_value=SimpleNamespace(id="prepared")))
     assert asyncio.run(guru_webapp.guru_api(request, bot)).status == 200
+    request.json.return_value = {"op": "interior"}
+    response = asyncio.run(guru_webapp.guru_api(request, bot))
+    assert response.content_type == "image/jpeg" and response.body.startswith(b"\xff\xd8")
+    draw_guest(seance.LUDMILA)
     state = store.request(424242, {"op": "start", "rev": 0})
     while state["current"]:
         state = store.request(424242, {"op": "move", "rev": state["rev"], "action": choose(state["current"], ORDERS[0])})
