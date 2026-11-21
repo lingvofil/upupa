@@ -299,15 +299,17 @@ def _said(session: Seance, st: E.Statement, events: list[DisplayEvent], metrics:
 
 # --- развязка ---------------------------------------------------------------
 
+def fee_rate(outcome: E.Outcome) -> float:
+    if outcome.refund:
+        return REFUND_RATE
+    if outcome.client_state == "content" and outcome.recognized:
+        return RECOGNIZED_RATE
+    return FEE_RATE[outcome.client_state]
+
+
 def fee_of(base: int, outcome: E.Outcome) -> int:
     """Гонорар зависит от того, каким клиент ушёл, а не от угаданного ответа."""
-    if outcome.refund:
-        rate = REFUND_RATE
-    elif outcome.client_state == "content" and outcome.recognized:
-        rate = RECOGNIZED_RATE
-    else:
-        rate = FEE_RATE[outcome.client_state]
-    return rules._round_money(base * rate)
+    return rules._round_money(base * fee_rate(outcome))
 
 
 def epilogue(outcome: E.Outcome) -> str:

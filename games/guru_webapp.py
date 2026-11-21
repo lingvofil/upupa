@@ -9,14 +9,17 @@ from urllib.parse import urlencode
 from aiohttp import web
 
 from core.paths import GURU_VISITS_PATH, PROJECT_ROOT
-from games.guru import salon_art
 from games.guru.miniapp import REPLIES
 from games.webapp_auth import WebAppAuthError, validate_telegram_init_data
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
 ASSETS = PROJECT_ROOT / "assets" / "guru_app"
 STORE = GuruVisits(GURU_VISITS_PATH)
-_render_interior = lru_cache(maxsize=48)(salon_art.render)
+
+
+@lru_cache(maxsize=4)
+def _interior_picture(filename):
+    return (ASSETS / "art" / filename).read_bytes()
 
 
 def serve_guru(request):
@@ -51,9 +54,7 @@ async def handle(request, owner, store, *, link, public_url="", bot=None):
         op = body.get("op", "home")
         if op == "interior":
             result = await asyncio.to_thread(store.request, owner, {"op": "interior"})
-            salon = result["salon"]
-            gifts = tuple(gift["id"] for gift in salon["gifts"] if gift["story"])
-            picture = await asyncio.to_thread(_render_interior, tuple(salon["items"]), None, gifts)
+            picture = await asyncio.to_thread(_interior_picture, result["salon"]["picture"])
             return web.Response(body=picture, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
         if op == "prepare":
             token = body.get("token", "")

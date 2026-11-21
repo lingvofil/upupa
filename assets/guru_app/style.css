@@ -271,7 +271,8 @@ p + p {
 .salon-picture {
   display: grid;
   place-items: center;
-  aspect-ratio: 738/1100;
+  align-self: center;
+  aspect-ratio: 2/1;
   margin: 0;
   overflow: hidden;
   border-radius: 5px;
@@ -282,7 +283,7 @@ p + p {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
 }
 .salon-summary {
   display: grid;
@@ -311,6 +312,16 @@ p + p {
 .shop-section > .grid {
   margin-top: 12px;
 }
+.shop-scene {
+  display: block;
+  width: 100%;
+  height: clamp(160px, 35vw, 320px);
+  margin-top: 18px;
+  object-fit: cover;
+  object-position: center 57%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
 .shop-item {
   display: flex;
   flex-direction: column;
@@ -324,11 +335,101 @@ p + p {
 .shop-item p {
   margin: 0;
 }
+.shop-object,
+.object-tile img,
+.object-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: #282016;
+  border-radius: 4px;
+}
+.shop-object {
+  max-height: 210px;
+}
+.object-preview {
+  width: min(100%, 240px);
+  margin: 14px 0;
+}
+.object-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 130px), 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.object-tile {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  padding: 8px;
+}
+.object-tile span {
+  font-size: 13px;
+}
 .shop-item > :last-child {
   margin-top: auto;
 }
 .owned-item {
   color: #c2dbaf;
+}
+.rank-list {
+  display: grid;
+  gap: 7px;
+  padding: 0;
+  margin: 18px 0;
+  list-style: none;
+}
+.rank-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px clamp(10px, 2.5vw, 20px);
+  background: #232e25;
+  border: 1px solid #514a38;
+  border-radius: 5px;
+}
+.rank-self {
+  border-color: #c59b59;
+  background: #2b3c30;
+}
+.rank-name {
+  overflow-wrap: anywhere;
+}
+.rank-name small {
+  display: block;
+  color: #c8b99e;
+}
+.rank-position,
+.rank-earned {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.alias-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.alias-form input {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--cream);
+  background: #18231e;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.visit-payment {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  margin-top: 15px;
+  border-block: 1px solid #b09a75;
+  color: #4e3d28;
+  background: #fff4db90;
 }
 @media (max-width: 620px) {
   .salon-room {
@@ -379,7 +480,7 @@ p + p {
   place-items: center;
   background:
     linear-gradient(0deg, #171c17cc, transparent 43%),
-    url("?view=guru&asset=room.webp") center/cover;
+    var(--salon-scene, url("?view=guru&asset=room.webp")) center/cover;
 }
 .stage-art .portrait {
   max-width: 64%;
@@ -401,12 +502,12 @@ p + p {
   background-color: #1b251d;
   background-image:
     linear-gradient(165deg, #101813a0, #101813df),
-    url("?view=guru&asset=room.webp");
+    var(--salon-scene, url("?view=guru&asset=room.webp"));
   padding: 20px 12px;
 }
 .palm-tool {
   position: relative;
-  width: min(100%, 305px);
+  width: min(100%, 370px);
   filter: drop-shadow(0 12px 24px #120e0c88);
 }
 .palm-frame {
@@ -480,12 +581,56 @@ p + p {
   margin-top: 2px;
   opacity: 0.82;
 }
-.stage-art .arcana,
 .arcana {
   width: min(80%, 260px);
   border: 6px double #bda373;
   border-radius: 9px;
   box-shadow: 0 15px 35px #10130bb0;
+}
+.tarot-stage {
+  padding: 12px 12px 52px;
+}
+.tarot-face {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 4fr) minmax(0, 1fr);
+  justify-items: center;
+  align-items: center;
+  container-type: inline-size;
+  aspect-ratio: 2/3;
+  padding: 7px;
+  background: radial-gradient(ellipse at 50% 45%, #264739, #142c23);
+  border: 5px double #c6a873;
+  border-radius: 8px;
+  box-shadow: 0 12px 25px #1117108c;
+  color: #f3dab2;
+  text-align: center;
+}
+.tarot-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.tarot-ornament {
+  color: #d2af73;
+  font-size: clamp(16px, 13cqi, 30px);
+  line-height: 1;
+}
+.tarot-title {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: 100%;
+  padding: 3px 5px 0;
+  border-top: 1px solid #ae8c566f;
+  font: 600 clamp(13px, 8.5cqi, 21px)/1.04 var(--serif);
+}
+.tarot-stage .tarot-face {
+  width: clamp(135px, 36.6svh, 267px);
+}
+.tarot-ticket img {
+  object-fit: contain;
+  background: #142c22;
+  border: 1px solid #b79965;
 }
 .stage-art .plate {
   position: absolute;
@@ -639,8 +784,11 @@ summary {
   gap: 24px;
   align-items: start;
 }
-.shared-card .arcana {
+.shared-card .shared-face {
   width: 100%;
+}
+.shared-face {
+  width: min(100%, 230px);
 }
 .muted {
   color: #c8c0af;
@@ -692,16 +840,14 @@ dialog::backdrop {
   padding: 0;
   border: none;
   background: none;
-  max-width: 76%;
+  max-width: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
 }
 .zoom-art {
-  display: block;
-  width: min(450px, 72vw);
+  width: min(340px, 65vw);
   margin: 18px auto 0;
-  border: 5px double #bda373;
 }
 .planet {
   position: absolute;
@@ -781,20 +927,16 @@ dialog p {
     object-position: center top;
     transform: translateX(-50%);
   }
-  .stage-art .zoom {
-    height: 80%;
+  .stage-art.tarot-stage {
+    height: auto;
+    min-height: 0;
+    padding-bottom: 49px;
   }
-  .stage-art .zoom .arcana {
-    height: 100%;
-    width: auto;
+  .tarot-stage .tarot-face {
+    width: clamp(138px, 26svh, 215px);
   }
   .stage-art .cameo {
     height: 85%;
-    width: auto;
-  }
-  .stage-art .arcana,
-  .stage-art .instrument {
-    height: 83%;
     width: auto;
   }
   .stage-art .plate {
@@ -810,7 +952,7 @@ dialog p {
     padding: 12px;
   }
   .palm-tool {
-    width: min(100%, 250px);
+    width: min(100%, 302px);
   }
   .wheel {
     width: min(90%, 252px);
@@ -824,7 +966,7 @@ dialog p {
   .shared-card {
     grid-template-columns: 1fr;
   }
-  .shared-card > .arcana {
+  .shared-card > .shared-face {
     width: min(100%, 220px);
   }
 }

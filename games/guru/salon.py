@@ -165,10 +165,10 @@ RANKS = (
 )
 
 
-def owned_items(keys: Iterable[str]) -> tuple[Item, ...]:
+def owned_items(keys: Iterable[str], *, catalog: Mapping[str, Item] = ITEMS) -> tuple[Item, ...]:
     """Купленное в порядке витрины. Неизвестные ключи (старый файл) пропускаются."""
     wanted = set(keys)
-    return tuple(item for item in ITEMS.values() if item.key in wanted)
+    return tuple(item for item in catalog.values() if item.key in wanted)
 
 
 def owned_gifts(keys: Iterable[str]) -> tuple[Gift, ...]:
@@ -261,9 +261,9 @@ def effects(keys: Iterable[str]) -> list[str]:
     return result
 
 
-def refusal(key: str, balance: int, keys: Iterable[str]) -> str | None:
+def refusal(key: str, balance: int, keys: Iterable[str], *, catalog: Mapping[str, Item] = ITEMS) -> str | None:
     """Почему купить нельзя; ``None``, если можно."""
-    item = ITEMS.get(key)
+    item = catalog.get(key)
     if item is None:
         return "Такого в лавке нет."
     if key in set(keys):
