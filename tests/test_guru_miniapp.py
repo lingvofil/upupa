@@ -1,6 +1,7 @@
 import asyncio
 from itertools import permutations
 import json
+import random
 import sqlite3
 import time
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from games.guru import miniapp, salon, seance
+from games.guru import ludmila_deck, miniapp, salon, seance
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
@@ -125,6 +126,59 @@ def test_miniapp_tools_expand_choices_without_mutating_the_original_story():
     assert session.content.study_limit == base.content.study_limit + 1
     assert session.content.inspect_limit == base.content.inspect_limit + 1
     assert session.content.question_limit == base.content.question_limit + 1
+
+
+def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path):
+    store = GuruVisits(tmp_path / "salon.db")
+    profiles = set()
+    for story in seance.STORY_IDS:
+        session, _ = miniapp.replay(miniapp.new_visit(story))
+        palm = miniapp.palm_view(session)
+        profiles.add(palm["picture"])
+        assert len(palm["zones"]) == 6 and not any("finding" in zone for zone in palm["zones"])
+        assert all(0 < p < 100 for zone in palm["zones"] for p in zone["point"])
+    assert profiles == {"palm.webp", *(f"palm-{hand}.jpg" for hand in miniapp.HAND_TYPES)}
+    assert all((ASSETS / "art" / picture).is_file() for picture in profiles)
+    state = store.request(11, {"op": "start", "rev": 0, "story": "granny.balcony"})
+    for action in ("begin:palm", "zn:0"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    palm = state["current"]["palm"]
+    assert palm["inspected"] == [palm["zones"][0]["id"]]
+    assert palm["zones"][0]["finding"] and "finding" not in palm["zones"][1]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == state
+
+
+def test_horoscope_can_switch_planets_before_choosing_a_forecast(tmp_path):
+    store = GuruVisits(tmp_path / "salon.db")
+    state = store.request(11, {"op": "start", "rev": 0, "story": "granny.balcony"})
+    for action in ("begin:horoscope", "pl:0", "pl:3"):
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+    scene = state["current"]
+    assert scene["phase"] == "forecast" and scene["horoscope"]["selected"] == 3
+    assert scene["horoscope"]["planets"][3]["name"] in scene["screen"]
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == state
+    state = store.request(11, {"op": "move", "rev": state["rev"], "action": "fc:0"})
+    assert state["current"]["phase"] == "tone" and state["current"]["horoscope"]["selected"] == 3
+
+
+def test_ludmila_draw_varies_and_legacy_moves_replay(monkeypatch):
+    rng = random.Random(160)
+    monkeypatch.setattr(miniapp.secrets, "randbits", rng.getrandbits)
+    draws = [miniapp.new_visit(seance.LUDMILA) for _ in range(95)]
+    original = [card.art for card in ludmila_deck.CARDS]
+    for i, variants in enumerate(ludmila_deck.ALTERNATIVES):
+        assert {v["ludmila_deck"][i] for v in draws} == {original[i], *variants}
+    for visit in draws:
+        visit["moves"] = ["begin:tarot", "turn:1", "st:0", "rd:0:0", "turn:2", "st:0", "rd:0:0",
+                          "turn:0", "st:0", "rd:0:0", "tone:soft"]
+        session, _ = miniapp.replay(visit)
+        assert [c.art for c in session.content.cards] == visit["ludmila_deck"]
+        assert [c["art"] for c in miniapp.reading_cards(session)] == visit["ludmila_deck"]
+        assert all((ASSETS / "art" / f"card-{art}.jpg").is_file() for art in visit["ludmila_deck"])
+    legacy = draws[0]
+    legacy.pop("ludmila_deck")
+    session, _ = miniapp.replay(legacy)
+    assert [card.art for card in session.content.cards] == original
 
 
 def test_signed_telegram_request_and_group_share(tmp_path, monkeypatch):

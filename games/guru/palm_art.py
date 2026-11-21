@@ -376,14 +376,23 @@ ZONE_SPOTS = {"apollo": ((336, 506), 30.0), "mars": ((500, 622), 34.0), "venus":
 ZONE_LINES = {"heart": HEART, "head": HEAD, "fate": FATE}
 
 
-def render_zones(inspected: Iterable[str] = ()) -> bytes:
+def render_zones(inspected: Iterable[str] = (), *, hand: str = PLAIN_HAND, labels: bool = True) -> bytes:
     """Ладонь для сеанса: осмотренные участки подсвечены, остальные только подписаны."""
     seen = set(inspected)
     if unknown := seen - set(ZONES):
         raise ValueError(f"неизвестные участки: {sorted(unknown)}")
-    shape = HANDS[PLAIN_HAND]
+    shape = HANDS[hand]
     rng = random.Random(7)
     shapes: list[Shape] = [([art.catmull(_fit(shape, points))], key in seen) for key, points in ZONE_LINES.items()]
     shapes.append(([art.catmull(_fit(shape, LIFE))], False))
     spots = [(_fit(shape, (center,))[0], radius) for key, (center, radius) in ZONE_SPOTS.items() if key in seen]
-    return _paint(shape, shapes, [(zone, key in seen) for key, zone in ZONES.items()], rng, spots)
+    legends = [(zone, key in seen) for key, zone in ZONES.items()] if labels else ()
+    return _paint(shape, shapes, legends, rng, spots)
+
+
+def zone_positions(hand: str) -> dict[str, Point]:
+    """Координаты зон в процентах от полной карточки render_zones."""
+    anchors = {"heart": HEART[3], "head": HEAD[2], "fate": FATE[1],
+               **{zone: center for zone, (center, _) in ZONE_SPOTS.items()}}
+    return {zone: (round(x * 100 / art.WIDTH, 2), round(y * 100 / art.HEIGHT, 2))
+            for zone, (x, y) in zip(anchors, _fit(HANDS[hand], anchors.values()))}

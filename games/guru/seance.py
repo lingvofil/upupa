@@ -171,6 +171,11 @@ def _practice_actions(session: Seance, head: str) -> tuple[Action, ...]:
     return (Action(head, label, "control"),)
 
 
+def _planet_actions(session: Seance) -> tuple[Action, ...]:
+    return tuple(Action(f"pl:{i}", f"{tendency.planet} {tendency.name}", "sign")
+                 for i, tendency in enumerate(session.content.tendencies))
+
+
 def available_actions(session: Seance) -> tuple[Action, ...]:
     if session.finished:
         return ()
@@ -211,12 +216,13 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
         back = [Action("back", "🔎 Осмотреть ещё", "control")] if len(state.draft.inspected) < content.inspect_limit else []
         return (*words, *back, hush)
     if phase == "horoscope":
-        return (*(Action(f"pl:{index}", f"{tendency.planet} {tendency.name}", "sign") for index, tendency in enumerate(content.tendencies)),
-                hush)
+        return (*_planet_actions(session), hush)
     if phase == "forecast":
         tendency = content.tendencies[session.planet]
+        switch = (tuple(action for i, action in enumerate(_planet_actions(session)) if i != session.planet)
+                  if session.free_order else ())
         return (*(Action(f"fc:{index}", forecast.label, "choice") for index, forecast in enumerate(tendency.forecasts)),
-                Action("back", "↩ Другая планета", "control"))
+                *switch, Action("back", "↩ Другая планета", "control"))
     if phase == "reaction":
         if state.queue:
             return (Action("scene", f"👀 {content.events[state.queue[0]].teaser}…", "choice"),)

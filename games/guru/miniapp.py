@@ -5,8 +5,9 @@ import random
 import secrets
 from copy import copy
 from dataclasses import replace
+from hashlib import blake2b
 
-from games.guru import salon, seance, seance_engine as engine
+from games.guru import ludmila_deck, palm_art, salon, seance, seance_engine as engine
 from games.guru.stories import STORIES_BY_ID
 
 
@@ -18,12 +19,15 @@ def catalog():
 def new_visit(story, items=()):
     if story not in STORIES_BY_ID:
         raise ValueError("Такого посетителя нет.")
-    return {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": [],
-            "items": list(items)}
+    visit = {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": [],
+             "items": list(items)}
+    if story == seance.LUDMILA:
+        visit["ludmila_deck"] = ludmila_deck.draw(random.Random(visit["seed"]))
+    return visit
 
 
 ITEM_NOTES = {
-    "deck": "Можно рассмотреть ещё одну деталь на каждой карте.",
+    "deck": "Можно рассмотреть ещё одну деталь, если на карте остались неосмотренные.",
     "loupe": "Можно рассмотреть ещё один участок ладони.",
     "ledger": "Можно задать ещё один вопрос в начале приёма.",
     "flyers": "Положительный гонорар за приём увеличится на 10%.",
@@ -53,7 +57,7 @@ def replay(visit):
         # Keep the established fact IDs: later readings can resonate with either answer.
         session.story = copy(session.story)
         questions = session.content.questions
-        session.story.content = replace(session.content, questions=(
+        session.story.content = replace(session.content, cards=ludmila_deck.cards(visit.get("ludmila_deck")), questions=(
             engine.QuestionData("seen", "Что у вас в руке?",
                                 "Распечатка звонков. Вот, во вторник — Алла Борисовна, в четверг — опять она. "
                                 "На фотографии дама лет семидесяти. А я даже её фотографию увеличивала."),
@@ -72,6 +76,28 @@ def replay(visit):
     for index, move in enumerate(visit["moves"], 1):
         events = seance.act(session, 1, move, now=index).events
     return session, events
+
+
+PORTRAIT_PALM = {"heart": (50, 43.5), "head": (57, 56.5), "mars": (71.5, 61),
+                 "venus": (36, 58), "apollo": (66.5, 47), "fate": (50, 69)}
+HAND_TYPES = ("earth", "air", "fire", "water")
+
+
+def palm_view(session):
+    if session.story.id == seance.LUDMILA:
+        picture, positions = "palm.webp", PORTRAIT_PALM
+    else:
+        variant = blake2b(session.story.id.encode(), digest_size=1).digest()[0] % len(HAND_TYPES)
+        hand = HAND_TYPES[variant]
+        picture, positions = f"palm-{hand}.jpg", palm_art.zone_positions(hand)
+    inspected = session.state.draft.inspected
+    zones = []
+    for index, zone in enumerate(session.content.zones):
+        info = {"id": zone.id, "action": f"zn:{index}", "title": zone.title, "point": positions[zone.id]}
+        if zone.id in inspected:
+            info.update(finding=zone.finding, remark=zone.remark)
+        zones.append(info)
+    return {"picture": picture, "zones": zones, "inspected": list(inspected), "limit": session.content.inspect_limit}
 
 
 def scene(session, events):
@@ -93,12 +119,20 @@ def scene(session, events):
     else:
         questions = STORIES_BY_ID[session.story.id].questions
         opening_ids = [f"q:{next(i for i, q in enumerate(questions) if q.kind == kind)}" for kind in ("check", "open")]
-    return {"client": view.client, "story": view.story, "archetype": session.content.archetype,
+    result = {"client": view.client, "story": view.story, "archetype": session.content.archetype,
             "phase": view.phase, "mood": session.state.mood, "art": art, "prompt": view.prompt,
             "screen": view.screen, "lines": lines, "heard": list(session.heard),
             "opening": opening_ids if session.step == 0 else [],
             "method": session.state.scene, "finishedMethods": list(session.state.done),
             "actions": [{"id": a.id, "label": a.label, "kind": a.kind} for a in view.actions if a.id != "heard"]}
+    if session.phase in {"palm", "word"}:
+        result["palm"] = palm_view(session)
+    if session.state.scene == "horoscope" and session.phase in {"horoscope", "forecast", "tone"}:
+        result["horoscope"] = {"sign": session.content.sign,
+                               "selected": session.planet if session.phase != "horoscope" else None,
+                               "planets": [{"id": f"pl:{i}", "glyph": t.planet, "name": t.name, "theme": t.theme}
+                                           for i, t in enumerate(session.content.tendencies)]}
+    return result
 
 
 def reading_cards(session):

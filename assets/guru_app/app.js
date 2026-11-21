@@ -25,6 +25,9 @@ let tg,
   record,
   page,
   roomUrl,
+  palmFocus,
+  palmZoom = false,
+  wheelAngle,
   busy = false,
   noticeTimer;
 
@@ -101,11 +104,11 @@ async function call(op, fields = {}) {
   }
   return op === "interior" ? res.blob() : res.json();
 }
-function mount(name, el) {
+function mount(name, el, keepScroll = false) {
   if (dialog.open) dialog.close();
   page = name;
   main.replaceChildren(el);
-  window.scrollTo(0, 0);
+  if (!keepScroll) window.scrollTo(0, 0);
   if (name === "door") tg?.BackButton?.hide();
   else tg?.BackButton?.show();
 }
@@ -146,7 +149,157 @@ async function start(story) {
   if (!state.current) state = await call("start", story ? { story } : {});
   session();
 }
-function sceneArt(s) {
+function palmTool(s) {
+  const { picture, zones, inspected, limit } = s.palm,
+    art = node("div", "", "palm-tool"),
+    frame = node("div", "", "palm-frame"),
+    zoomer = node("div", "", "palm-zoomer"),
+    panel = node("section", "", "palm-reading"),
+    detail = node("div"),
+    list = node("details", "", "palm-list"),
+    marks = group();
+  const drawing = img(picture, "Ладонь клиента");
+  drawing.draggable = false;
+  drawing.width = picture === "palm.webp" ? 1254 : 738;
+  drawing.height = picture === "palm.webp" ? 1254 : 1100;
+  zoomer.append(drawing);
+  const whole = button(
+    "Вся ладонь",
+    () => {
+      palmZoom = false;
+      update();
+    },
+    "palm-reset",
+  );
+  palmFocus ||= inspected.at(-1);
+  const markers = zones.map((zone, i) => {
+    const choose = () => {
+      palmFocus = zone.id;
+      palmZoom = true;
+      update();
+    };
+    const inspectedZone = inspected.includes(zone.id);
+    const spot = button(
+      inspectedZone ? "✓" : String(i + 1),
+      choose,
+      "palm-spot",
+    );
+    spot.setAttribute("aria-label", "Участок: " + zone.title);
+    spot.title = zone.title;
+    if (inspectedZone) spot.classList.add("inspected");
+    spot.style.left = zone.point[0] + "%";
+    spot.style.top = zone.point[1] + "%";
+    const label = button(zone.title, choose);
+    zoomer.append(spot);
+    marks.append(label);
+    return { zone, spot, label };
+  });
+  function update() {
+    const zone = zones.find((z) => z.id === palmFocus);
+    zoomer.style.setProperty("--palm-zoom", palmZoom ? "1.45" : "1");
+    zoomer.style.setProperty("--spot-zoom", palmZoom ? String(1 / 1.45) : "1");
+    if (zone)
+      zoomer.style.transformOrigin = zone.point.map((p) => p + "%").join(" ");
+    whole.hidden = !palmZoom;
+    for (const marker of markers) {
+      marker.spot.setAttribute("aria-pressed", marker.zone === zone);
+      marker.label.setAttribute("aria-pressed", marker.zone === zone);
+    }
+    detail.replaceChildren();
+    if (!zone) return;
+    detail.append(node("h3", zone.title));
+    if (zone.finding) {
+      detail.append(node("p", zone.finding));
+      if (zone.remark) detail.append(node("p", "— " + zone.remark));
+    } else if (s.actions.some((a) => a.id === zone.action)) {
+      detail.append(
+        button("Осмотреть этот участок", () => move(zone.action), "primary"),
+      );
+    } else if (inspected.length >= limit) {
+      detail.append(node("p", "Клиент уже убирает руку."));
+    }
+  }
+  list.append(node("summary", "Список участков"), marks);
+  panel.append(
+    node(
+      "p",
+      "Осмотрено " +
+        inspected.length +
+        " из " +
+        limit +
+        " · Выберите участок на ладони.",
+      "meta",
+    ),
+    detail,
+    list,
+  );
+  frame.append(zoomer);
+  art.append(frame, whole);
+  update();
+  return { art, panel };
+}
+
+const zodiac = Array.from("♈♉♊♋♌♍♎♏♐♑♒♓");
+function positionOnWheel(el, angle, radius) {
+  el.style.left = 50 + radius * Math.sin((angle * Math.PI) / 180) + "%";
+  el.style.top = 50 - radius * Math.cos((angle * Math.PI) / 180) + "%";
+}
+
+function horoscopeWheel(s, animate) {
+  const { planets, selected } = s.horoscope,
+    wheel = node("div", "", "wheel"),
+    rotor = node("div", "", "wheel-rotor"),
+    step = 360 / planets.length,
+    previous = wheelAngle ?? step / 2,
+    target = selected === null ? step / 2 : -selected * step,
+    turn = previous + ((((target - previous + 180) % 360) + 360) % 360) - 180;
+  wheelAngle = turn;
+  const spin = (element, from, to) => {
+    element.style.transform = to;
+    if (
+      animate &&
+      turn !== previous &&
+      !matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      element.animate([{ transform: from }, { transform: to }], {
+        duration: 560,
+        easing: "cubic-bezier(.23,.72,.2,1)",
+      });
+    }
+  };
+  zodiac.forEach((glyph, i) => {
+    const tick = node("span", glyph + "\ufe0e", "zodiac-tick");
+    tick.setAttribute("aria-hidden", "true");
+    positionOnWheel(tick, i * 30, 44);
+    wheel.append(tick);
+  });
+  planets.forEach((p, i) => {
+    const active = s.actions.some((a) => a.id === p.id);
+    const planet = active
+      ? button(p.glyph, () => move(p.id), "planet")
+      : node("span", p.glyph, "planet");
+    const label = p.glyph + " " + p.name;
+    if (active) planet.setAttribute("aria-label", "На колесе: " + label);
+    else planet.setAttribute("aria-hidden", "true");
+    planet.title = label;
+    if (i === selected) planet.classList.add("selected");
+    positionOnWheel(planet, i * step, 35);
+    const orientation = (angle) =>
+      "translate(-50%, -50%) rotate(" + -angle + "deg)";
+    spin(planet, orientation(previous), orientation(turn));
+    rotor.append(planet);
+  });
+  const rotation = (angle) => "rotate(" + angle + "deg)";
+  spin(rotor, rotation(previous), rotation(turn));
+  wheel.append(
+    rotor,
+    node("i", "", "wheel-pointer"),
+    node("span", "✷", "wheel-pin"),
+  );
+  return wheel;
+}
+
+function sceneArt(s, hand, keepScroll) {
   const art = node("aside", "", "stage-art");
   if (s.phase === "spread") {
     const spread = node("div", "", "card-backs");
@@ -170,23 +323,14 @@ function sceneArt(s) {
     zoom.setAttribute("aria-label", "Рассмотреть рисунок карты");
     zoom.append(img("card-" + s.art + ".jpg", "Карта на столе", "arcana"));
     art.append(zoom);
-  } else if (["palm", "word"].includes(s.phase))
-    art.append(img("palm.webp", "Расположение линий ладони", "instrument"));
-  else if (
-    ["horoscope", "forecast"].includes(s.phase) ||
-    (s.phase === "tone" && s.method === "horoscope")
-  ) {
-    const wheel = node("div", "☽", "wheel");
-    const planets = s.actions.filter((a) => a.kind === "sign");
-    planets.forEach((a, i) => {
-      const angle = (i * 2 * Math.PI) / planets.length - Math.PI / 2,
-        planet = button(a.label.split(" ")[0], () => move(a.id), "planet");
-      planet.setAttribute("aria-label", "Рассмотреть · " + a.label);
-      planet.style.left = 50 + 48 * Math.cos(angle) + "%";
-      planet.style.top = 50 + 48 * Math.sin(angle) + "%";
-      wheel.append(planet);
-    });
-    art.append(wheel);
+  } else if (hand) {
+    art.classList.add("palm-stage");
+    art.append(hand.art);
+    return art;
+  } else if (s.horoscope) {
+    art.classList.add("wheel-stage");
+    art.append(horoscopeWheel(s, keepScroll));
+    return art;
   } else if (s.story === "jealous.vocal") {
     const portrait =
       { angry: "irritated", hopeful: "relieved", tired: "suspicious" }[
@@ -198,13 +342,28 @@ function sceneArt(s) {
   return art;
 }
 async function move(id) {
+  const previous = state.current;
   state = await call("move", { action: id });
   if (state.record) showRecord(state.record);
-  else session();
+  else
+    session(
+      Boolean(
+        (previous.palm && state.current.palm) ||
+        (previous.horoscope &&
+          state.current.horoscope &&
+          state.current.phase !== "tone"),
+      ),
+    );
 }
-function session() {
+function session(keepScroll = false) {
   const s = state.current;
   if (!s) return salon();
+  if (!s.palm) {
+    palmFocus = undefined;
+    palmZoom = false;
+  }
+  if (!s.horoscope) wheelAngle = undefined;
+  const hand = s.palm ? palmTool(s) : null;
   const el = node("section", "", "session"),
     text = node("article", "", "paper");
   text.append(
@@ -216,16 +375,21 @@ function session() {
     node("h2", labels[s.phase]),
   );
   const speech = node("div", "", "speech");
-  for (const line of s.lines)
+  for (const line of s.palm?.inspected.length ? [] : s.lines)
     speech.append(node("p", line.replace(/^🚪\s*/u, "")));
   text.append(speech);
-  if (s.screen) text.append(node("p", s.screen, "screen"));
+  if (hand) text.append(hand.panel);
+  if (s.horoscope)
+    text.append(node("p", s.horoscope.sign + " · Эта неделя", "meta"));
+  if (s.screen && !["palm", "horoscope"].includes(s.phase))
+    text.append(node("p", s.screen, "screen"));
   text.append(node("div", s.prompt, "prompt"));
   const choices = node("div", "", "actions");
   const rest = node("details"),
     secondary = node("div", "", "actions");
   rest.append(node("summary", "Другие вопросы и практики"), secondary);
   for (const a of s.actions) {
+    if (a.kind === "zone" || a.kind === "sign") continue;
     const container =
       s.opening.length && !s.opening.includes(a.id) ? secondary : choices;
     container.append(
@@ -235,6 +399,20 @@ function session() {
         a.kind === "method" ? "method" : a.id === "scene" ? "primary" : "",
       ),
     );
+  }
+  if (s.horoscope && s.phase !== "tone") {
+    const planets = node("details", "", "planet-list"),
+      rows = node("div", "", "choice-list");
+    planets.open = s.phase === "horoscope";
+    for (const p of s.horoscope.planets) {
+      if (s.actions.some((a) => a.id === p.id)) {
+        const option = button(p.glyph + " " + p.name, () => move(p.id));
+        option.append(node("small", p.theme));
+        rows.append(option);
+      }
+    }
+    planets.append(node("summary", "Планеты и тенденции"), rows);
+    text.append(planets);
   }
   const journal = node("details");
   journal.append(
@@ -266,8 +444,8 @@ function session() {
   text.append(choices);
   if (secondary.childElementCount) text.append(rest);
   text.append(journal, pause);
-  el.append(sceneArt(s), text);
-  mount("session", el);
+  el.append(sceneArt(s, hand, keepScroll), text);
+  mount("session", el, keepScroll);
 }
 function ticket(title, detail, action, picture) {
   const el = button("", action, "ticket"),
