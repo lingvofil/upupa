@@ -293,7 +293,9 @@ function palmTool(s) {
         inspected.length +
         " из " +
         limit +
-        " · Выберите участок на ладони.",
+        (s.phase === "word"
+          ? " · Выберите трактовку."
+          : " · Выберите участок на ладони."),
       "meta",
     ),
     detail,
