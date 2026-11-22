@@ -24,7 +24,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from games.guru import rules, salon, seance_casebook, seance_ludmila
+from games.guru import rules, salon, seance_casebook, seance_ludmila, seance_natal
 from games.guru import seance_engine as E
 from games.guru.contract import Action, DisplayEvent, SeanceResult, SeanceView
 from games.guru.dialog import Dialog
@@ -101,6 +101,8 @@ class Seance:
     card: int = 0  # какую карту расклада мадам сейчас читает
     planet: int | None = None
     forecast: str | None = None  # выбранный прогноз ждёт решения, как его сказать
+    natal_aspect: int | None = None
+    natal_quote: int | None = None
     heard: list[str] = field(default_factory=list)  # что сказал клиент: мадам может перечитать
     shown: int = 0  # сколько реплик хроники уже показано
     outcome: E.Outcome | None = None
@@ -165,6 +167,8 @@ def _practice_actions(session: Seance, head: str) -> tuple[Action, ...]:
     if session.free_order:
         choices = tuple(Action(f"{head}:{method}", METHOD_TITLES[method], "method")
                         for method in E.METHODS if method not in session.state.done)
+        if "horoscope" not in session.state.done and session.story.id in seance_natal.CHARTS:
+            choices += (Action(f"{head}:natal", "Натальная карта", "method"),)
         if choices:
             return choices
     label = "🃏 Разложить карты" if head == "begin" else NEXT_LABELS[E.next_method(session.state)]
@@ -174,6 +178,26 @@ def _practice_actions(session: Seance, head: str) -> tuple[Action, ...]:
 def _planet_actions(session: Seance) -> tuple[Action, ...]:
     return tuple(Action(f"pl:{i}", f"{tendency.planet} {tendency.name}", "sign")
                  for i, tendency in enumerate(session.content.tendencies))
+
+
+def natal_quotes(session: Seance) -> list[str]:
+    return [line for line, _ in session.content.intro] + [
+        question.answer for question in session.content.questions if question.id in session.state.questions
+    ]
+
+
+def _natal_actions(session: Seance) -> tuple[Action, ...]:
+    anchor, aspects = seance_natal.CHARTS[session.story.id]
+    actions = tuple(Action(f"na:{i}", seance_natal.names(anchor, aspect), "aspect")
+                    for i, aspect in enumerate(aspects))
+    if session.natal_aspect is None:
+        return actions
+    quotes = natal_quotes(session)
+    actions += tuple(Action(f"nq:{i}", line, "quote") for i, line in enumerate(quotes))
+    if session.natal_quote is not None:
+        actions += tuple(Action(f"nr:{i}", reading.question, "choice")
+                         for i, reading in enumerate(aspects[session.natal_aspect].readings))
+    return actions
 
 
 def available_actions(session: Seance) -> tuple[Action, ...]:
@@ -216,7 +240,11 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
         back = [Action("back", "🔎 Осмотреть ещё", "control")] if len(state.draft.inspected) < content.inspect_limit else []
         return (*words, *back, hush)
     if phase == "horoscope":
-        return (*_planet_actions(session), hush)
+        natal = (Action("natal", "Натальная карта", "control"),) if (
+            session.free_order and session.story.id in seance_natal.CHARTS) else ()
+        return (*_planet_actions(session), *natal, hush)
+    if phase == "natal":
+        return (*_natal_actions(session), Action("weekly", "Прогноз недели", "control"), hush)
     if phase == "forecast":
         tendency = content.tendencies[session.planet]
         switch = (tuple(action for i, action in enumerate(_planet_actions(session)) if i != session.planet)
@@ -272,10 +300,11 @@ def _status(session: Seance) -> DisplayEvent:
     return _event("status", session.content.moods[session.state.mood])
 
 
-def _open(session: Seance, events: list[DisplayEvent]) -> None:
+def _open(session: Seance, events: list[DisplayEvent], *, natal: bool = False) -> None:
     """Началось гадание: клиент что-то говорит, мадам берётся за реквизит."""
     method = session.state.scene
-    session.phase, session.card, session.planet, session.forecast = method, 0, None, None
+    session.phase, session.card, session.planet, session.forecast = "natal" if natal else method, 0, None, None
+    session.natal_aspect = session.natal_quote = None
     events += _fresh(session)
     events.append(_event("ritual", RITUALS[method]))
     if method == "tarot":
@@ -384,8 +413,8 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         metrics.append(("action", {"kind": "question", "mode": "seance", "story": story.id, "question": question.id,
                                    "left": _questions_left(session)}))
     elif head == "begin":
-        E.begin(story, state, rest or "tarot")
-        _open(session, events)
+        E.begin(story, state, "horoscope" if rest == "natal" else rest or "tarot")
+        _open(session, events, natal=rest == "natal")
     elif head == "st":
         E.study(story, state, content.cards[session.card].symbols[int(rest)].id)
     elif head == "turn":
@@ -427,6 +456,21 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         session.planet, session.phase = int(rest), "forecast"
     elif head == "fc":
         session.forecast, session.phase = content.tendencies[session.planet].forecasts[int(rest)].id, "tone"
+    elif head == "natal":
+        session.phase = "natal"
+    elif head == "weekly":
+        session.phase = "horoscope"
+    elif head == "na":
+        session.natal_aspect = int(rest)
+    elif head == "nq":
+        session.natal_quote = int(rest)
+    elif head == "nr":
+        anchor, aspects = seance_natal.CHARTS[story.id]
+        aspect = aspects[session.natal_aspect]
+        reading = aspect.readings[int(rest)]
+        natal = {"aspect": seance_natal.names(anchor, aspect), "quote": natal_quotes(session)[session.natal_quote],
+                 "question": reading.question, "reply": reading.reply, "afterword": reading.afterword}
+        _said(session, E.say_natal(story, state, natal), events, metrics)
     elif head == "back":
         session.phase = "palm" if session.phase == "word" else "horoscope"
     elif head == "scene":
@@ -448,12 +492,12 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
         metrics.append(("action", {"kind": "correct", "mode": "seance", "story": story.id, "correction": rest,
                                    "acted": bool(state.last.events)}))
     elif head == "next":
-        E.proceed(story, state, rest or None)
+        E.proceed(story, state, "horoscope" if rest == "natal" else rest or None)
         if state.scene == "final":
             session.phase = "final"
             events += _fresh(session)
         else:
-            _open(session, events)
+            _open(session, events, natal=rest == "natal")
     elif head == "adv":
         _finish(session, int(rest), now, events, metrics)
     return SeanceResult(tuple(events), tuple(metrics), build_view(session), fresh=bool(events))
@@ -499,8 +543,11 @@ def _screen(session: Seance) -> str:
         return "\n\n".join((f"{tendency.planet} {tendency.name} — {tendency.theme}\n{tendency.text}",
                             *(f"{MARKS[index]}. «{forecast.phrase}»." for index, forecast in enumerate(tendency.forecasts))))
     if phase == "final":
-        said = [f"{METHOD_TITLES[st.method]}: «{st.summary}»" + (f" — {TONE_WORDS[st.tone]}" if st.tone else "")
-                for st in state.statements]
+        said = [
+            f"Натальная карта: «{st.summary}»\nОтвет: «{st.data['natal']['reply']}»" if "natal" in st.data else
+            f"{METHOD_TITLES[st.method]}: «{st.summary}»" + (f" — {TONE_WORDS[st.tone]}" if st.tone else "")
+            for st in state.statements
+        ]
         advice = [f"{MARKS[index]}. {label}: {rules.quote(text)}" for index, (_, label, text) in enumerate(content.advice)]
         return "\n".join(("📜 Сказано за сеанс", *(said or ["Ничего определённого."]), "", *advice))
     return ""
@@ -531,6 +578,12 @@ def _prompt(session: Seance) -> str:
         return "Какую планету читать?"
     if phase == "forecast":
         return "Что предсказать?"
+    if phase == "natal":
+        if session.natal_aspect is None:
+            return "Какую связь между планетами вы хотите рассмотреть?"
+        if session.natal_quote is None:
+            return "Какая фраза посетителя напоминает вам об этой связи?"
+        return "Что вы хотите спросить у посетителя?"
     if phase == "reaction":
         return "Что там происходит?" if state.queue else "Что дальше?"
     if phase == "final":

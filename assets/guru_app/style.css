@@ -670,6 +670,36 @@ p + p {
   margin-top: 2px;
   opacity: 0.82;
 }
+.natal-aspects,
+.natal-quotes {
+  display: grid;
+  gap: 8px;
+  margin-block: 10px;
+}
+.natal-aspects {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.natal-aspects small {
+  display: block;
+  margin-top: 3px;
+}
+.paper .natal-aspects button[aria-pressed="true"] {
+  border-color: #895519;
+  background: #ebd6aa;
+}
+.natal-quotes button {
+  text-align: start;
+}
+.natal-tension {
+  margin-block: 12px 6px;
+  font-weight: 650;
+}
+.natal-quote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-inline-start: 2px solid #ab8854;
+  background: #fff2d94f;
+}
 .arcana {
   width: min(80%, 260px);
   border: 6px double #bda373;
@@ -775,6 +805,14 @@ p + p {
   height: 16%;
   background: linear-gradient(90deg, #d09f56, #fae1a5, #ac6e33);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  pointer-events: none;
+}
+.wheel-aspect {
+  position: absolute;
+  height: 2px;
+  transform-origin: left center;
+  background: #f5d28d;
+  box-shadow: 0 0 8px #f0c77d;
   pointer-events: none;
 }
 .wheel-pin {

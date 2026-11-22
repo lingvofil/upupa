@@ -1481,7 +1481,7 @@ class LudmilaStory:
         if accuse and w.flags["mends"]:
             afterword += " Мириться она пошла первой — как мадам и прочла по её руке."
 
-        predictions = tuple(_verify(s, st) for st in s.statements)
+        predictions = tuple(_verify(s, st) for st in s.statements if "natal" not in st.data)
         failed = any(p.verdict == "failed" and p.status != "admitted" for p in predictions)
         if accuse:
             client = ("displeased", "Людмила уходит с претензией: объясняться за сказанное пришлось ей.")

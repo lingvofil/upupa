@@ -6,7 +6,7 @@ import secrets
 from copy import copy
 from dataclasses import replace
 
-from games.guru import ludmila_deck, salon, seance, seance_engine as engine
+from games.guru import ludmila_deck, salon, seance, seance_engine as engine, seance_natal
 from games.guru.stories import STORIES_BY_ID
 
 
@@ -124,6 +124,24 @@ def palm_view(session):
     return {"picture": picture, "zones": zones, "inspected": list(inspected), "limit": session.content.inspect_limit}
 
 
+def natal_view(session):
+    anchor, aspects = seance_natal.CHARTS[session.story.id]
+    planets = []
+    for i, key in enumerate((anchor, *(aspect.planet for aspect in aspects))):
+        glyph, name = seance_natal.PLANETS[key]
+        planets.append({"id": f"na:{i - 1}" if i else None, "glyph": glyph, "name": name})
+    selected = session.natal_aspect
+    view = {"planets": planets, "selected": selected + 1 if selected is not None else None,
+            "aspects": [{"id": f"na:{i}", "label": seance_natal.names(anchor, aspect), "house": aspect.house}
+                        for i, aspect in enumerate(aspects)]}
+    if selected is not None:
+        aspect = aspects[selected]
+        view.update(tension=aspect.tension, note=aspect.note)
+    if session.natal_quote is not None:
+        view["quote"] = seance.natal_quotes(session)[session.natal_quote]
+    return view
+
+
 def scene(session, events, *, greeting_pending=False):
     view = seance.build_view(session)
     card = None
@@ -158,6 +176,8 @@ def scene(session, events, *, greeting_pending=False):
                                "selected": session.planet if session.phase != "horoscope" else None,
                                "planets": [{"id": f"pl:{i}", "glyph": t.planet, "name": t.name, "theme": t.theme}
                                            for i, t in enumerate(session.content.tendencies)]}
+    if session.phase == "natal":
+        result["natal"] = natal_view(session)
     return result
 
 
@@ -250,6 +270,7 @@ def close_visit(session, events):
         resolution = "Долгое молчание наконец заканчивается. На этот раз рассказ дослушан до конца."
         memory = outcome.afterword
     spoken = next((st.summary for st in reversed(session.state.statements) if st.alive and not st.hollow), "")
+    natal = next((st.data["natal"] for st in session.state.statements if "natal" in st.data), None)
     gift = salon.GIFTS[session.content.archetype]
     fee = session.fee
     if fee > 0:
@@ -261,7 +282,7 @@ def close_visit(session, events):
                         "bonus": fee - session.fee},
             "events": [e.text for e in events if e.text and e.kind in ("hint", "answer")],
             "cards": reading_cards(session), "letter": invitation + "\n\n" + POSTSCRIPTS[session.story.id],
-            "memory": memory, "spoken": spoken,
+            "memory": memory, "spoken": spoken, "natal": natal,
             "resolution": resolution, "thread": incident.id if incident else "visit",
             "reply": None, "keepsake": gift.name if outcome.client_state == "content" else None}
 
