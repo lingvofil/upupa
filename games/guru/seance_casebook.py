@@ -1013,9 +1013,10 @@ class CasebookStory:
         ending = s.ending or self.resolve_ending(s)
         name = self.name
         confront, bank = E.event_of(s, "confront"), E.event_of(s, "bank")
-        predictions = tuple(self._verify(s, st) for st in s.statements)
+        claims = [st for st in s.statements if "natal" not in st.data]
+        predictions = tuple(self._verify(s, st) for st in claims)
         hero = None if ending == "scandal" else next(
-            (st for st, prediction in zip(s.statements, predictions) if st.alive and prediction.verdict == "confirmed"
+            (st for st, prediction in zip(claims, predictions) if st.alive and prediction.verdict == "confirmed"
              and prediction.origin == "planned" and not st.data.get("contradicts")), None)
         mark, tail = "✧", ""
         if confront is not None:

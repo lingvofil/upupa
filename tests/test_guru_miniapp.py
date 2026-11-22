@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from games.guru import ludmila_deck, miniapp, rules, salon, seance
+from games.guru import ludmila_deck, miniapp, rules, salon, seance, seance_natal
 from games.guru.stories import STORIES_BY_ID
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
@@ -92,6 +92,78 @@ def test_production_api_requires_telegram_identity():
     from aiohttp.test_utils import make_mocked_request
     with pytest.raises(web.HTTPUnauthorized):
         asyncio.run(guru_api(make_mocked_request("POST", "/game?view=guru"), None))
+
+
+@pytest.mark.parametrize("story", seance.STORY_IDS)
+def test_each_guest_has_two_stable_aspects_with_two_distinct_readings(story):
+    anchor, aspects = seance_natal.CHARTS[story]
+    assert len({anchor, *(aspect.planet for aspect in aspects)}) == 3
+    visit = miniapp.new_visit(story)
+    visit["moves"] = ["begin:natal"]
+    chart = miniapp.scene(*miniapp.replay(visit))["natal"]
+    second_visit = {**visit, "seed": visit["seed"] + 1}
+    assert miniapp.scene(*miniapp.replay(second_visit))["natal"] == chart
+    assert "note" not in chart and "quote" not in chart
+    replies = set()
+    for i, aspect in enumerate(aspects):
+        visit["moves"] = ["begin:natal", f"na:{i}", "nq:0"]
+        current = miniapp.scene(*miniapp.replay(visit))
+        assert current["natal"]["selected"] == i + 1
+        assert current["natal"]["note"] == aspect.note
+        assert all(reading.reply not in json.dumps(current, ensure_ascii=False) for reading in aspect.readings)
+        for j, reading in enumerate(aspect.readings):
+            visit["moves"] = ["begin:natal", f"na:{i}", "nq:0", f"nr:{j}"]
+            session, events = miniapp.replay(visit)
+            assert session.state.done == {"horoscope": session.state.last.id}
+            assert any(event.text == f"— {reading.reply}" for event in events)
+            replies.add(reading.reply)
+    assert len(replies) == 4
+
+
+def test_natal_chart_resumes_switches_and_reaches_visit_record(tmp_path, draw_guest):
+    draw_guest(seance.LUDMILA)
+    store = GuruVisits(tmp_path / "salon.db")
+    state = store.request(11, {"op": "start", "rev": 0})
+
+    def move(action):
+        nonlocal state
+        state = store.request(11, {"op": "move", "rev": state["rev"], "action": action})
+        return state["current"]
+
+    move("q:0")
+    clue = state["current"]["lines"][-1].removeprefix("— ")
+    move("begin:horoscope")
+    move("natal")
+    move("na:0")
+    assert move("weekly")["phase"] == "horoscope"
+    move("natal")
+    quotes = [action for action in state["current"]["actions"] if action["kind"] == "quote"]
+    intro = seance.make_story(seance.LUDMILA, random.Random(0)).content.intro
+    assert len(quotes) == len(intro) + 1
+    assert clue in [action["label"] for action in quotes]
+    with pytest.raises(ValueError, match="действие недоступно"):
+        move("nr:1")
+    move(next(action["id"] for action in quotes if action["label"] == clue))
+    store = GuruVisits(store.path)
+    assert store.request(11, {"op": "home"}) == state
+    reading = seance_natal.CHARTS[seance.LUDMILA][1][0].readings[1]
+    reaction = move("nr:1")
+    assert f"— {reading.reply}" in reaction["lines"]
+    assert reaction["finishedMethods"] == ["horoscope"]
+    for action in ("next:natal", "next:horoscope", "nr:0", "fix:retract"):
+        with pytest.raises(ValueError, match="действие недоступно"):
+            move(action)
+    for action in ("next:palm", "hush", "next:tarot", "turn:0", "hush", "next"):
+        final = move(action)
+    assert reading.reply in final["screen"]
+    assert set(final["finishedMethods"]) == {"tarot", "palm", "horoscope"}
+    move("adv:0")
+    record = store.request(11, {"op": "record", "id": state["record"]["id"]})["record"]
+    assert record["natal"]["quote"] == clue
+    assert record["natal"]["question"] == reading.question
+    assert record["natal"]["reply"] == reading.reply
+    assert record["natal"]["afterword"] == reading.afterword
+    assert reading.question not in record["epilogue"]
 
 
 def test_greeting_persists_until_player_starts_the_conversation(tmp_path, draw_guest):

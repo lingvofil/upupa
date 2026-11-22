@@ -170,7 +170,7 @@ class GuruVisits:
                 result = seance.act(session, 1, action, now=session.step + 1)
                 active["moves"].append(action)
                 active.pop("greeting_pending", None)
-                if action.startswith(("tone:", "wd:")):
+                if action.startswith(("tone:", "wd:", "nr:")):
                     db.execute("UPDATE journey SET first_reading=strftime('%s','now') WHERE id=? AND first_reading IS NULL",
                                (active["id"],))
                 if session.finished:

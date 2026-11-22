@@ -402,7 +402,7 @@ def forecast_text(story: Story, forecast_id: str, tone: str | None) -> str:
 
 
 def _state(story: Story, s: State, method: str, parts: list[str], tone: str | None, hollow: bool, text: str,
-           summary: str) -> Statement:
+           summary: str, *, natal: dict[str, str] | None = None) -> Statement:
     statement = Statement(
         id=f"s{len(s.statements) + 1}", method=method, parts=parts, tone=tone, hollow=hollow, text=text, summary=summary,
         data={"studied": list(s.draft.studied), "inspected": list(s.draft.inspected)},
@@ -410,7 +410,12 @@ def _state(story: Story, s: State, method: str, parts: list[str], tone: str | No
     s.statements.append(statement)
     s.done[method] = statement.id
     push(s, "you", "Ты", text)
-    story.on_statement(s, statement)
+    if natal is None:
+        story.on_statement(s, statement)
+    else:
+        statement.data["natal"] = natal
+        s.mood = "thoughtful"
+        push(s, "client", story.content.client, natal["reply"])
     s.scene = "reaction"
     s.draft = Draft()
     return statement
@@ -437,6 +442,13 @@ def say_forecast(story: Story, s: State, forecast_id: str, tone: str) -> Stateme
     return _state(story, s, "horoscope", [forecast_id], tone, False, forecast_text(story, forecast_id, tone), found[1].label)
 
 
+def say_natal(story: Story, s: State, natal: dict[str, str]) -> Statement:
+    _need(s.scene == "horoscope", "натальная карта недоступна")
+    question = natal["question"]
+    text = f"Вы сказали: «{natal['quote']}» {question}"
+    return _state(story, s, "horoscope", [natal["aspect"]], None, False, text, question, natal=natal)
+
+
 def say_nothing(story: Story, s: State) -> Statement:
     """Уклончивый ответ: знаки перед мадам, а сказано ничего."""
     _need(s.scene in METHODS, "уклоняться не от чего")
@@ -452,7 +464,8 @@ def can_decide(s: State) -> bool:
 
 def can_correct(s: State) -> bool:
     """Исправить можно только последнее утверждение и только один раз."""
-    return s.scene == "reaction" and not s.queue and s.last is not None and not s.last.hollow and s.last.status == "stands"
+    return (s.scene == "reaction" and not s.queue and s.last is not None
+            and not s.last.hollow and s.last.status == "stands" and "natal" not in s.last.data)
 
 
 def decide(story: Story, s: State, decision: str) -> None:

@@ -16,6 +16,7 @@ const labels = {
   word: "Ладонь",
   horoscope: "Гороскоп",
   forecast: "Гороскоп",
+  natal: "Натальная карта",
   tone: "Предсказание",
   reaction: "После ваших слов",
   final: "Напутствие",
@@ -311,7 +312,7 @@ function positionOnWheel(el, angle, radius) {
 }
 
 function horoscopeWheel(s, animate) {
-  const { planets, selected } = s.horoscope,
+  const { planets, selected } = s.natal || s.horoscope,
     wheel = node("div", "", "wheel"),
     rotor = node("div", "", "wheel-rotor"),
     step = 360 / planets.length,
@@ -338,16 +339,29 @@ function horoscopeWheel(s, animate) {
     positionOnWheel(tick, i * 30, 44);
     wheel.append(tick);
   });
+  if (s.natal && selected !== null) {
+    const radians = (selected * step * Math.PI) / 180,
+      dx = 35 * Math.sin(radians),
+      dy = 35 * (1 - Math.cos(radians)),
+      link = node("span", "", "wheel-aspect");
+    positionOnWheel(link, 0, 35);
+    link.style.width = Math.hypot(dx, dy) + "%";
+    link.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+    rotor.append(link);
+  }
   planets.forEach((p, i) => {
     const active = s.actions.some((a) => a.id === p.id);
     const planet = active
       ? button(p.glyph, () => move(p.id), "planet")
       : node("span", p.glyph, "planet");
-    const label = p.glyph + " " + p.name;
+    const label =
+      s.natal?.aspects.find((aspect) => aspect.id === p.id)?.label ||
+      p.glyph + " " + p.name;
     if (active) planet.setAttribute("aria-label", "На колесе: " + label);
     else planet.setAttribute("aria-hidden", "true");
     planet.title = label;
-    if (i === selected) planet.classList.add("selected");
+    if (i === selected || (s.natal && selected !== null && i === 0))
+      planet.classList.add("selected");
     positionOnWheel(planet, i * step, 35);
     const orientation = (angle) =>
       "translate(-50%, -50%) rotate(" + -angle + "deg)";
@@ -362,6 +376,29 @@ function horoscopeWheel(s, animate) {
     node("span", "✷", "wheel-pin"),
   );
   return wheel;
+}
+
+function natalAspects(s) {
+  const list = node("div", "", "natal-aspects");
+  s.natal.aspects.forEach((aspect, index) => {
+    const option = button(aspect.label, () => move(aspect.id));
+    option.append(node("small", aspect.house));
+    option.setAttribute("aria-pressed", String(s.natal.selected === index + 1));
+    list.append(option);
+  });
+  return list;
+}
+
+function natalQuotes(s) {
+  const list = node("div", "", "natal-quotes");
+  for (const action of s.actions.filter((a) => a.kind === "quote"))
+    list.append(button("«" + action.label + "»", () => move(action.id)));
+  if (!s.natal.quote) return list;
+  const details = node("details");
+  details.append(node("summary", "Выбрать другую фразу"), list);
+  const panel = node("div");
+  panel.append(node("blockquote", s.natal.quote, "natal-quote"), details);
+  return panel;
 }
 
 function salonBackdrop(art) {
@@ -421,7 +458,7 @@ function sceneArt(s, hand, keepScroll) {
     art.classList.add("palm-stage");
     art.append(hand.art);
     return art;
-  } else if (s.horoscope) {
+  } else if (s.horoscope || s.natal) {
     art.classList.add("wheel-stage");
     art.append(horoscopeWheel(s, keepScroll));
     return art;
@@ -451,8 +488,8 @@ async function move(id) {
     session(
       Boolean(
         (previous.palm && state.current.palm) ||
-        (previous.horoscope &&
-          state.current.horoscope &&
+        ((previous.horoscope || previous.natal) &&
+          (state.current.horoscope || state.current.natal) &&
           state.current.phase !== "tone"),
       ),
     );
@@ -465,7 +502,7 @@ function session(keepScroll = false) {
     palmFocus = undefined;
     palmZoom = false;
   }
-  if (!s.horoscope) wheelAngle = undefined;
+  if (!s.horoscope && !s.natal) wheelAngle = undefined;
   const hand = s.palm ? palmTool(s) : null;
   const el = node("section", "", "session"),
     text = node("article", "", "paper");
@@ -495,20 +532,36 @@ function session(keepScroll = false) {
           ]
         : null;
   if (note) text.append(node("p", note, "ritual-note"));
+  if (s.natal) {
+    text.append(node("p", "Одна астрологическая практика за сеанс", "meta"));
+    if (s.natal.tension)
+      text.append(
+        natalAspects(s),
+        node("p", s.natal.tension, "natal-tension"),
+        node("p", s.natal.note, "ritual-note"),
+      );
+  }
   text.append(node("div", s.prompt, "prompt"));
+  if (s.natal) text.append(s.natal.tension ? natalQuotes(s) : natalAspects(s));
   const choices = node("div", "", "actions");
   const rest = node("details"),
     secondary = node("div", "", "actions");
   rest.append(node("summary", "Другие вопросы и практики"), secondary);
   for (const a of s.actions) {
-    if (a.kind === "zone" || a.kind === "sign") continue;
+    if (["zone", "sign", "aspect", "quote"].includes(a.kind)) continue;
     const container =
       s.opening.length && !s.opening.includes(a.id) ? secondary : choices;
     container.append(
       button(
         a.label,
         () => move(a.id),
-        a.kind === "method" ? "method" : a.id === "scene" ? "primary" : "",
+        a.kind === "method"
+          ? "method"
+          : a.id === "scene"
+            ? "primary"
+            : a.id === "weekly" || a.id === "natal"
+              ? "quiet"
+              : "",
       ),
     );
   }
@@ -997,6 +1050,17 @@ function showRecord(r, firstVisit = false) {
     node("p", r.quote),
     node("p", r.afterword),
   );
+  if (r.natal) {
+    const chart = node("details");
+    chart.append(
+      node("summary", "Натальная карта · " + r.natal.aspect),
+      node("blockquote", r.natal.quote, "natal-quote"),
+      node("p", r.natal.question),
+      node("p", "— " + r.natal.reply),
+    );
+    if (r.natal.afterword) chart.append(node("p", r.natal.afterword));
+    body.append(chart);
+  }
   const payment = node("section", "", "visit-payment");
   payment.append(
     node(
