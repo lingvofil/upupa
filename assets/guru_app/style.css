@@ -820,6 +820,14 @@ p + p {
   margin: 14px 0;
   white-space: pre-line;
 }
+.paper .ritual-note {
+  margin-block: 8px 12px;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid #ab8854;
+  color: #5e482d;
+  font-size: 14px;
+  font-style: italic;
+}
 .prompt {
   margin: 18px 0 9px;
   font-weight: 650;
