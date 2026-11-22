@@ -59,10 +59,14 @@ def room_picture(owned):
     return "salon-modest.jpg"
 
 
+def shop_picture(key):
+    return "display-zina.webp" if key == "zina" else f"object-{key}.jpg"
+
+
 def shop(catalog=ITEMS):
     return [{"title": title, "items": [
         {"id": item.key, "name": item.name, "price": item.price,
-         "picture": f"object-{item.key}.jpg", "note": ITEM_NOTES.get(item.key, item.note if group == COLLECTION
+         "picture": shop_picture(item.key), "note": ITEM_NOTES.get(item.key, item.note if group == COLLECTION
                                                                    else "Появится на витрине лавки.")}
         for item in catalog.values() if item.group == group
     ]} for group, title in SHOP_GROUPS.items()]

@@ -32,7 +32,7 @@ def _interior(history, purchases):
     return {"balance": sum(row["fee"] for row in history) - sum(purchases.values()),
             "items": [item.key for item in items], "rank": salon.rank(max(12, len(items)) if "orrery" in purchases else len(items)),
             "picture": miniapp.room_picture(purchases),
-            "collection": [{"id": item.key, "name": item.name, "picture": f"object-{item.key}.jpg"} for item in items],
+            "collection": [{"id": item.key, "name": item.name, "picture": miniapp.shop_picture(item.key)} for item in items],
             "gifts": [{"id": gift.key, "emoji": gift.emoji, "name": gift.name, "giver": gift.giver,
                        "story": gift.story if owned else None} for gift, owned in salon.shelf(earned)]}
 

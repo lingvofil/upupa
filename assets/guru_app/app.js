@@ -593,30 +593,35 @@ function shelf() {
   return section;
 }
 
-// Position of each object's base, then width and height, in % of the showroom artwork.
+// The item's base anchors it to the floor or the surface it rests on.
+// The four values are x, y, maximum width and maximum height, in room percentages.
 const displayPositions = {
-  tapestry: [7, 62, 9.6, 23],
-  neon: [94, 45, 7.3, 15],
-  armchair: [9.5, 93, 16, 28],
-  cabinet: [92.5, 92, 9, 37],
-  clock: [25, 24.7, 9, 16.5],
-  mirror: [41, 24.7, 7, 16.2],
-  orrery: [58, 24.7, 13, 16.5],
-  astrolabe: [76, 24.7, 8, 16],
-  almanac: [24, 40.1, 10, 12.8],
-  deck: [37, 40.1, 10, 12.8],
-  bowl: [50, 40.1, 10, 12.8],
-  flyers: [63, 40.1, 9, 12.8],
-  reviews: [76, 40.1, 10, 12.8],
-  ball: [24, 54.5, 8, 12.5],
-  loupe: [37, 54.5, 11, 12.5],
-  silk: [50, 54.5, 10, 12.5],
-  atlas: [63, 54.5, 11, 12.5],
-  zina: [76, 54.5, 10, 12.5],
-  ledger: [25, 66.5, 10.5, 10.8],
-  candles: [41, 66.5, 9, 10.8],
-  tea: [57, 66.5, 12, 10.8],
-  cat: [76, 66.5, 14, 10.8],
+  // The entrance and its ledge.
+  zina: [13, 85.5, 14, 62],
+  flyers: [21.1, 45.6, 3.8, 5.5],
+  neon: [21.1, 29, 4, 10],
+  // The short high shelf and the instruments below it.
+  clock: [27.4, 22, 5.1, 11.5],
+  almanac: [34.2, 22, 6.6, 6.7],
+  reviews: [40.2, 22, 4.6, 5.6],
+  astrolabe: [36.4, 33.7, 5.7, 10.5],
+  orrery: [48.1, 33.7, 12.3, 16.5],
+  ball: [58.2, 33.7, 6.6, 11],
+  cabinet: [69, 70.3, 10.2, 43],
+  // Far and near edges of the worktable.
+  candles: [26.5, 49.8, 7.3, 14],
+  bowl: [43.3, 49.2, 8.5, 7.4],
+  atlas: [55.9, 49.3, 10.4, 10.2],
+  deck: [32.7, 53.6, 7.5, 7.2],
+  ledger: [40, 53.8, 6.1, 8],
+  loupe: [48.7, 53.6, 8, 5.3],
+  silk: [57.5, 53.8, 10.3, 6.7],
+  // The wall, side table and rug in the waiting nook.
+  tapestry: [80.6, 44.2, 9.1, 28],
+  tea: [86.6, 47.6, 8.4, 9.2],
+  mirror: [94.4, 48.7, 8.3, 23.5],
+  armchair: [80.6, 81.9, 17.5, 38.5],
+  cat: [93.3, 89.5, 12.4, 13.8],
 };
 
 function previewItem(item) {
@@ -630,7 +635,7 @@ function shopDisplay(total, featured) {
     owned = state.salon.collection,
     background = img(
       "showroom.jpg",
-      "Полки и прилавок лавки",
+      "Вход, рабочий стол и уголок для гостей в лавке",
       "showroom-backdrop",
     );
   background.width = 1500;
@@ -648,6 +653,7 @@ function shopDisplay(total, featured) {
       top: bottom + "%",
       width: width + "%",
       height: height + "%",
+      zIndex: String(Math.round(bottom * 10)),
     });
     prop.append(img("display-" + item.id + ".webp", ""));
     if (item.id === featured) {
