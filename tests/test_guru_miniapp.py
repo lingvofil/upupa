@@ -289,6 +289,32 @@ def test_palm_profiles_and_findings_follow_the_saved_guest(tmp_path, draw_guest)
     assert GuruVisits(store.path).request(11, {"op": "home"}) == state
 
 
+@pytest.mark.parametrize("story, inspected, next_zone, word_count", [
+    (seance.LUDMILA, ("zn:1", "zn:2", "zn:4"), "zn:5", 8),
+    ("chat.mixtape", ("zn:0", "zn:1", "zn:4"), "zn:2", 7),
+])
+def test_loupe_resumes_at_three_inspections_and_accepts_the_fourth(tmp_path, story, inspected, next_zone, word_count):
+    store = GuruVisits(tmp_path / "salon.db")
+    store.request(11, {"op": "home"})
+    visit = miniapp.new_visit(story, ("loupe",))
+    visit.pop("greeting_pending")
+    visit["moves"] = ["begin:palm", *inspected]
+    with sqlite3.connect(store.path) as db:
+        db.execute("INSERT INTO salons VALUES (?, ?, ?)", (11, 4, json.dumps(visit)))
+
+    before = store.request(11, {"op": "home"})
+    assert before["current"]["phase"] == "palm" and len(before["current"]["palm"]["inspected"]) == 3
+    fourth = store.request(11, {"op": "move", "rev": before["rev"], "action": next_zone})
+    current = fourth["current"]
+    assert current["phase"] == "word" and len(current["palm"]["inspected"]) == current["palm"]["limit"] == 4
+    interpretations = [action for action in current["actions"] if action["id"].startswith("wd:")]
+    assert len(interpretations) == word_count
+    assert all(f"{i}. {action['label']}" in current["screen"] for i, action in enumerate(interpretations, 1))
+    assert GuruVisits(store.path).request(11, {"op": "home"}) == fourth
+    result = store.request(11, {"op": "move", "rev": fourth["rev"], "action": interpretations[-1]["id"]})
+    assert result["current"]["phase"] == "reaction" and result["current"]["finishedMethods"] == ["palm"]
+
+
 def test_horoscope_can_switch_planets_before_choosing_a_forecast(tmp_path, draw_guest):
     store = GuruVisits(tmp_path / "salon.db")
     draw_guest("granny.balcony")

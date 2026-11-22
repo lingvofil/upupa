@@ -547,7 +547,8 @@ def _screen(session: Seance) -> str:
                 f"осмотреть получится участков — {content.inspect_limit} из {len(content.zones)}.")
         return "\n".join((head, *_findings(session)))
     if phase == "word":
-        words = [f"{MARKS[index]}. {word.label}\n{rules.quote(word.text)}" for index, word in enumerate(E.available_words(session.story, state))]
+        words = [f"{number}. {word.label}\n{rules.quote(word.text)}"
+                 for number, word in enumerate(E.available_words(session.story, state), start=1)]
         return "\n\n".join(("\n".join(_findings(session)), *words))
     if phase == "horoscope":
         return "\n\n".join((f"{content.sign}. Тенденции недели",
