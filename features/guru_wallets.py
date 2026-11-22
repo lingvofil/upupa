@@ -1,9 +1,9 @@
-"""Касса игроков салона «Гуру»: копится от партии к партии и может уйти в минус.
+"""Прогресс текстового «Гуру» и доступ к общей кассе игрока.
 
 Формат файла: ``{"<chat_id>": {"<user_id>": {"name": ..., "balance": ..., "earned": ..., "lost": ..., "spent": ..., "items": [...],
 "gifts": [...], "endings": [...], "shifts": ..., "card_day": ..., "card_streak": ...}}}``.
-Касса своя в каждом чате: тренировки в личке с ботом не влияют на таблицу группы.
-Здесь же лежит то, что игрок копит помимо денег: счётчик смен и серия «карт дня».
+Деньги и покупки из старого файла импортируются в SQLite при загрузке.
+Здесь остаётся прогресс отдельных чатов: подарки, финалы, смены и карты дня.
 Файл читается на startup (``load_guru_wallets``), а не при импорте.
 """
 
@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from core.json_repository import JsonFileRepository, JsonRepository
-from core.paths import GURU_WALLETS_PATH
+from core.paths import GURU_VISITS_PATH, GURU_WALLETS_PATH
+from infrastructure.persistence.guru_miniapp import GuruVisits
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,9 @@ class Wallet:
 
 
 class WalletBook:
-    def __init__(self, repository: JsonRepository) -> None:
+    def __init__(self, repository: JsonRepository, *, economy: GuruVisits | None = None) -> None:
         self._repository = repository
+        self._economy = economy
         self._chats: dict[str, dict[str, Wallet]] = {}
         self._save_lock: asyncio.Lock | None = None
 
@@ -64,6 +66,8 @@ class WalletBook:
             for chat, users in data.items()
             if isinstance(users, dict)
         }
+        if self._economy is not None:
+            self._economy.import_chat_wallets(self._chats)
 
     @staticmethod
     def _parse(entry: dict) -> Wallet:
@@ -83,13 +87,20 @@ class WalletBook:
         )
 
     def get(self, chat_id: int | str, user_id: int | str) -> Wallet:
-        return self._chats.get(str(chat_id), {}).get(str(user_id), Wallet())
+        wallet = self._chats.get(str(chat_id), {}).get(str(user_id), Wallet())
+        if self._economy is not None:
+            return replace(wallet, **self._economy.wallet(user_id))
+        return wallet
 
     def balance(self, chat_id: int | str, user_id: int | str) -> int:
         return self.get(chat_id, user_id).balance
 
     def apply(self, chat_id: int | str, user_id: int | str, name: str, delta: int) -> int:
         """Зачислить или списать; вернуть новый баланс."""
+        if self._economy is not None:
+            balance = self._economy.credit_chat(chat_id, user_id, name, delta)
+            self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet()).name = name
+            return balance
         wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
         wallet.name = name
         wallet.balance += delta
@@ -101,6 +112,11 @@ class WalletBook:
 
     def buy(self, chat_id: int | str, user_id: int | str, name: str, item: str, price: int) -> bool:
         """Купить вещь. Без await: проверка и списание атомарны, двойное нажатие не спишет дважды."""
+        if self._economy is not None:
+            if not self._economy.buy_from_chat(user_id, name, item, price):
+                return False
+            self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet()).name = name
+            return True
         wallet = self._chats.setdefault(str(chat_id), {}).setdefault(str(user_id), Wallet())
         if item in wallet.items or wallet.balance < price:
             return False
@@ -148,9 +164,9 @@ class WalletBook:
         return wallet.card_streak
 
     def top(self, chat_id: int | str, limit: int = 10) -> list[Wallet]:
-        """Самые богатые кассы чата. Кассы без оборота (только счётчики) в таблицу не идут."""
-        wallets = [wallet for wallet in self._chats.get(str(chat_id), {}).values()
-                   if wallet.balance or wallet.earned or wallet.lost or wallet.items]
+        """Самые богатые кассы игроков, которые играли в этом чате."""
+        wallets = (self.get(chat_id, user) for user in self._chats.get(str(chat_id), {}))
+        wallets = [wallet for wallet in wallets if wallet.balance or wallet.earned or wallet.lost or wallet.items]
         return sorted(wallets, key=lambda wallet: wallet.balance, reverse=True)[:limit]
 
     def snapshot(self) -> dict[str, dict[str, dict]]:
@@ -171,7 +187,7 @@ class WalletBook:
                 logger.exception("[guru] не удалось сохранить кассы игроков")
 
 
-_wallets = WalletBook(JsonFileRepository(GURU_WALLETS_PATH))
+_wallets = WalletBook(JsonFileRepository(GURU_WALLETS_PATH), economy=GuruVisits(GURU_VISITS_PATH))
 
 
 def get_guru_wallets() -> WalletBook:

@@ -65,6 +65,7 @@ def test_telegram_reference_vector_validates():
     )
 
     assert identity.user_id == 279058397
+    assert identity.display_name == "Vladislav Kibenko"
 
 
 def test_modern_telegram_reference_vector_with_signature_validates():

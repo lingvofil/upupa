@@ -618,13 +618,13 @@ def render_live_abandoned(view: LiveView, reason: str) -> str:
 
 def render_wallets(top: list, own: object) -> str:
     """Таблица касс чата. ``top`` и ``own`` — записи с полями name, balance, earned, lost."""
-    if not top:
+    if not top and not (own.balance or own.earned or own.lost or own.items):
         return "💰 В кассах пусто. Открыть салон: «гуру»."
     lines = ["💰 Кассы мадам", ""]
     lines += [f"{place}. {wallet.name} — {rub(wallet.balance)}" + (f" · {salon.icons(wallet.items)}" if wallet.items else "")
               for place, wallet in enumerate(top, 1)]
     lines += ["", f"Твоя касса: {rub(own.balance)} · заработано {rub(own.earned)} · потеряно {rub(own.lost)}"]
-    lines += [f"🏠 {salon.rank(len(own.items))} · потрачено в лавке {rub(own.spent)}", "Лавка: «гуру лавка». Кто что купил: «гуру салон»."]
+    lines += [f"🏠 {salon.room_rank(own.items)} · потрачено в лавке {rub(own.spent)}", "Лавка: «гуру лавка». Кто что купил: «гуру салон»."]
     return "\n".join(lines)
 
 
@@ -635,26 +635,35 @@ def _gifts_of(player: object) -> tuple:
 def render_salons(players: list, own: object) -> str:
     """Что стоит в салонах этого чата и что приносит. ``players`` и ``own`` — записи с полями name, items и gifts."""
     equipped = [player for player in players if player.items]
-    if not equipped:
+    if not equipped and not own.items:
         return "🏠 Пока никто ничего не купил. Лавка: «гуру лавка»."
     lines = ["🏠 Салоны мадам"]
     for player in equipped:
         gifts = _gifts_of(player)
         shelf = f" · 🎁 {len(gifts)}" if gifts else ""
-        lines += ["", f"{player.name} · {salon.rank(len(player.items))} · {salon.icons(player.items)}{shelf}", " · ".join(salon.effects(player.items))]
+        lines += ["", f"{player.name} · {salon.room_rank(player.items)} · {salon.icons(player.items)}{shelf}"]
+        effects = salon.effects(player.items)
+        if effects:
+            lines.append(" · ".join(effects))
     if own.items:
         lines += ["", "Твой салон:"]
-        lines += [f"{item.emoji} {item.name} — {item.note}" for item in salon.owned_items(own.items)]
+        lines += [f"{item.emoji} {item.name} — {item.note}" for item in salon.owned_items(own.items, catalog=salon.ALL_ITEMS)]
     lines += ["", "Заглянуть в салон: «гуру салон». В чужой — той же командой в ответ на сообщение мадам."]
     return "\n".join(lines)[:MESSAGE_LIMIT]
 
 
 def render_salon_card(name: str, own: object, visitor: bool = False) -> str:
     """Подпись под рисунком салона: звание, что куплено, что это даёт и какие подарки стоят на полке."""
-    items, gifts = salon.owned_items(own.items), _gifts_of(own)
-    lines = [f"🏠 Салон мадам {name}", f"{salon.rank(len(items))} · куплено {len(items)} из {len(salon.ITEMS)}"]
+    items, gifts = salon.owned_items(own.items, catalog=salon.ALL_ITEMS), _gifts_of(own)
+    lines = [f"🏠 Салон мадам {name}", f"{salon.room_rank(own.items)} · куплено {len(items)} из {len(salon.ALL_ITEMS)}"]
     if items:
-        lines += ["", salon.icons(own.items), "Что даёт: " + " · ".join(salon.effects(own.items)) + "."]
+        lines += ["", salon.icons(own.items)]
+        collection = [item.name for item in items if item.group == salon.COLLECTION]
+        if collection:
+            lines.append("Коллекция: " + ", ".join(collection) + ".")
+        effects = salon.effects(own.items)
+        if effects:
+            lines.append("Что даёт: " + " · ".join(effects) + ".")
     elif visitor:
         lines += ["", "Пока тут только стол, стул и плафон от люстры."]
     else:
@@ -690,13 +699,16 @@ def render_shelf(name: str, own: object) -> str:
 
 def render_shop(name: str, balance: int, owned: list[str]) -> str:
     """Витрина: что есть, сколько стоит и что даёт."""
-    lines = [f"🏪 Лавка салона мадам {name}", f"🏠 {salon.rank(len(owned))} · 💰 В кассе: {rub(balance)}"]
+    lines = [f"🏪 Лавка салона мадам {name}", f"🏠 {salon.room_rank(owned)} · 💰 В кассе: {rub(balance)}"]
     for group, title in salon.GROUP_TITLES.items():
         lines += ["", title]
         for item in salon.ITEMS.values():
             if item.group == group:
                 state = "✅" if item.key in owned else rub(item.price)
                 lines.append(f"{item.emoji} {item.name} · {state} · {item.note}")
+    collection = salon.owned_items(owned, catalog=salon.COLLECTION_ITEMS)
+    if collection:
+        lines += ["", "Коллекционные вещи", *(f"{item.emoji} {item.name} · ✅" for item in collection)]
     lines += ["", "Покупка остаётся навсегда и работает со следующей партии.",
               "В живом приёме работают надбавка к гонорару, вопрос от тетрадки и повтор гадания от шара. "
               "Точность инструментов относится к одиночной смене; тайную анкету они не раскрывают."]

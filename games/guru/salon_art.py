@@ -922,14 +922,14 @@ def _shade(picture: Image.Image, lights: Sequence[Light]) -> Image.Image:
 
 
 def title(items: Iterable[str]) -> str:
-    return salon.rank(len(salon.owned_items(items))).upper()
+    return salon.room_rank(items).upper()
 
 
 def render(items: Iterable[str] = (), client: str | None = None, gifts: Iterable[str] = ()) -> bytes:
     """Нарисовать салон. ``items`` — купленное в лавке, ``client`` — кто сидит напротив, ``gifts`` — подарки на полке."""
     if client is not None and client not in CLIENTS:
         raise ValueError(f"неизвестный клиент: {client}")
-    owned = {item.key for item in salon.owned_items(items)}
+    owned = {item.key for item in salon.owned_items(items, catalog=salon.ALL_ITEMS)}
     shelf = [key for key in _GIFTS if key in set(gifts)]
     rng = random.Random(23)
     image, picture, box = art.canvas(title(owned), rng)

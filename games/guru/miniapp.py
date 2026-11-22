@@ -6,22 +6,31 @@ import secrets
 from copy import copy
 from dataclasses import replace
 
-from games.guru import ludmila_deck, salon, seance, seance_engine as engine, seance_natal
+from games.guru import ludmila_deck, salon, seance, seance_casebook, seance_engine as engine, seance_natal
+from games.guru.miniapp_guests import GUESTS
 from games.guru.stories import STORIES_BY_ID
+
+STORIES = {**STORIES_BY_ID, **{key: guest.tale for key, guest in GUESTS.items()}}
+BONUS_INTERVAL = 3
 
 
 def catalog(completed):
-    return [{"id": story.id, "name": story.names[0]} if story.id in completed else None
-            for story in STORIES_BY_ID.values()]
+    def portraits(stories):
+        return [{"id": key, "name": STORIES[key].names[0]} if key in completed else None for key in stories]
+
+    return {"catalog": portraits(STORIES_BY_ID), "bonusCatalog": portraits(GUESTS), "bonusInterval": BONUS_INTERVAL}
 
 
-def new_visit(story, items=()):
-    if story not in STORIES_BY_ID:
+def new_visit(story, items=(), *, recently_seen=()):
+    if story not in STORIES:
         raise ValueError("Такого посетителя нет.")
     visit = {"id": secrets.token_hex(12), "story": story, "seed": secrets.randbits(53), "moves": [],
              "items": list(items), "greeting_pending": True}
+    rng = random.Random(visit["seed"])
     if story == seance.LUDMILA:
-        visit["ludmila_deck"] = ludmila_deck.draw(random.Random(visit["seed"]))
+        visit["ludmila_deck"] = ludmila_deck.draw(rng, recently_seen)
+    else:
+        visit["deck"] = ludmila_deck.least_recent_first(ludmila_deck.TITLES, rng, recently_seen)[:3]
     return visit
 
 
@@ -35,18 +44,8 @@ ITEM_NOTES = {
     "tea": "В начале встречи мадам угощает клиента чаем.",
     "armchair": "Клиент садится в новое кресло в начале встречи.",
 }
-COLLECTION = "collection"
-SHOP_GROUPS = {salon.PROPS: "Реквизит", salon.PROMO: "Реклама", salon.COMFORT: "Уют", COLLECTION: "Коллекционные вещи"}
-ITEMS = {**salon.ITEMS, **{key: salon.Item(key, "", name, name, price, COLLECTION, note, salon.NO_PERKS)
-         for key, name, price, note in (
-             ("atlas", "Атлас звёзд Байера", 18000, "Репринт с медных досок. На полях видны пометки прежней владелицы."),
-             ("silk", "Шёлковая скатерть для расклада", 24000, "Плотный шёлк цвета тёмного мха с вышивкой по краю."),
-             ("cabinet", "Ореховый шкаф для реликвий", 36000, "Стеклянные дверцы, старые латунные ключи и место для драгоценных мелочей."),
-             ("clock", "Каминные часы из бронзы", 48000, "Механизм заводится ключом. На четверть часа отбивает два негромких удара."),
-             ("tapestry", "Гобелен «Ночное небо»", 64000, "На тёмной шерсти вышиты созвездия и едва заметная линия горизонта."),
-             ("astrolabe", "Астролябия мастера из Толедо", 90000, "В бронзовом диске прорезаны дуги. Край отполирован пальцами прежних хозяев."),
-             ("orrery", "Механический планетарий", 140000, "Ручная заводка приводит в движение латунные планеты. Открывает большой кабинет."),
-         )}}
+SHOP_GROUPS = {salon.PROPS: "Реквизит", salon.PROMO: "Реклама", salon.COMFORT: "Уют", salon.COLLECTION: "Коллекционные вещи"}
+ITEMS = salon.ALL_ITEMS
 
 
 def room_picture(owned):
@@ -66,7 +65,7 @@ def shop_picture(key):
 def shop(catalog=ITEMS):
     return [{"title": title, "items": [
         {"id": item.key, "name": item.name, "price": item.price,
-         "picture": shop_picture(item.key), "note": ITEM_NOTES.get(item.key, item.note if group == COLLECTION
+         "picture": shop_picture(item.key), "note": ITEM_NOTES.get(item.key, item.note if group == salon.COLLECTION
                                                                    else "Появится на витрине лавки.")}
         for item in catalog.values() if item.group == group
     ]} for group, title in SHOP_GROUPS.items()]
@@ -74,11 +73,29 @@ def shop(catalog=ITEMS):
 
 def replay(visit):
     items = tuple(visit.get("items", ()))
+    key = visit["story"]
+    rng = random.Random(visit["seed"])
+    guest = GUESTS.get(key)
+    tale = STORIES[key]
+    case = None if key == seance.LUDMILA else seance_casebook.CasebookStory(
+        tale, rng, tale.names[0], card_arts=visit.get("deck"), sign=guest.sign if guest else None,
+        client_lines=guest.voice if guest else None)
+    if guest and guest.word:
+        content = case.content
+        case.content = replace(
+            content, client_word=guest.word,
+            intro=tuple((line, note) for (line, _), note in zip(content.intro, guest.intro_observations, strict=True)),
+            questions=tuple(replace(q, observation=note) for q, note in zip(content.questions, guest.observations, strict=True)),
+            zones=tuple(replace(zone, remark=guest.word) if zone.remark else zone for zone in content.zones),
+        )
     session = seance.new_session(session_id=visit["id"], chat_id=0, host_id=1, host_name="Мадам", now=0,
-                                 story_id=visit["story"], rng=random.Random(visit["seed"]),
-                                 client_name=STORIES_BY_ID[visit["story"]].names[0], items=items)
+                                 story_id=key, rng=rng, items=items, story=case)
     session.free_order = True
-    if visit["story"] == seance.LUDMILA:
+    if guest:
+        session.natal_override = guest.chart
+        if guest.sign is None:
+            session.story.content = replace(session.content, sign="✧ Гороскоп бота")
+    if key == seance.LUDMILA:
         # Keep the established fact IDs: later readings can resonate with either answer.
         session.story = copy(session.story)
         questions = session.content.questions
@@ -91,8 +108,6 @@ def replay(visit):
                                 "Я так и не решилась спросить, что именно услышу."),
             *questions[2:]))
     if items:
-        if visit["story"] != seance.LUDMILA:
-            session.story = copy(session.story)
         content = session.content
         session.story.content = replace(content, question_limit=content.question_limit + ("ledger" in items),
                                         study_limit=content.study_limit + ("deck" in items),
@@ -113,7 +128,9 @@ def palm_view(session):
     if session.story.id == seance.LUDMILA:
         picture, positions = "palm.webp", PORTRAIT_PALM
     else:
-        picture, positions = f"palm-{session.story.id.replace('.', '-')}.webp", PHOTO_PALM
+        guest = GUESTS.get(session.story.id)
+        palm = guest.palm if guest else session.story.id.replace('.', '-')
+        picture, positions = f"palm-{palm}.webp", PHOTO_PALM
     inspected = session.state.draft.inspected
     zones = []
     for index, zone in enumerate(session.content.zones):
@@ -125,7 +142,7 @@ def palm_view(session):
 
 
 def natal_view(session):
-    anchor, aspects = seance_natal.CHARTS[session.story.id]
+    anchor, aspects = session.natal_chart
     planets = []
     for i, key in enumerate((anchor, *(aspect.planet for aspect in aspects))):
         glyph, name = seance_natal.PLANETS[key]
@@ -144,31 +161,35 @@ def natal_view(session):
 
 def scene(session, events, *, greeting_pending=False):
     view = seance.build_view(session)
+    guest = GUESTS.get(session.story.id)
     card = None
     if session.phase == "tarot" or (session.phase == "tone" and session.state.scene == "tarot"):
         card = session.content.cards[session.card]
     lines = [event.text for event in events if event.text and event.kind != "status"]
     if session.step == 0:
-        lines = [session.content.arrival, session.heard[0]]
+        lines = [session.content.arrival, *session.heard[:2 if session.content.client_word else 1]]
         if session.story.id == seance.LUDMILA:
             lines = ["Людмила садится на самый край кресла. В руке сложенная вчетверо бумага.",
                      "— Можно, я сначала у вас спрошу? А то дома я уже один раз спросила."]
         for key in ("candles", "tea", "armchair"):
             if key in session.items:
-                lines.insert(-1, salon.ITEMS[key].perks.rituals[0].format(name=session.client))
+                lines.insert(-2 if session.content.client_word else -1,
+                             salon.ITEMS[key].perks.rituals[0].format(name=session.client))
     if session.story.id == seance.LUDMILA:
         opening_ids = ["q:0", "q:1"]
     else:
-        questions = STORIES_BY_ID[session.story.id].questions
+        questions = STORIES[session.story.id].questions
         opening_ids = [f"q:{next(i for i, q in enumerate(questions) if q.kind == kind)}" for kind in ("check", "open")]
     result = {"client": view.client, "story": view.story, "archetype": session.content.archetype,
-            "phase": view.phase, "greetingPending": greeting_pending,
+            "phase": view.phase, "greetingPending": greeting_pending, "bonus": guest is not None,
             "mood": session.state.mood, "art": card.art if card else None,
             "artTitle": card.title if card else None, "prompt": view.prompt,
             "screen": view.screen, "lines": lines, "heard": list(session.heard),
             "opening": opening_ids if session.step == 0 else [],
             "method": session.state.scene, "finishedMethods": list(session.state.done),
             "actions": [{"id": a.id, "label": a.label, "kind": a.kind} for a in view.actions if a.id != "heard"]}
+    if guest:
+        result.update(greeting=guest.greeting, visualClues=bool(guest.word))
     if session.phase in {"palm", "word"}:
         result["palm"] = palm_view(session)
     if session.state.scene == "horoscope" and session.phase in {"horoscope", "forecast", "tone"}:
@@ -257,6 +278,7 @@ POSTSCRIPTS = {
 
 def close_visit(session, events):
     outcome = session.outcome
+    guest = GUESTS.get(session.story.id)
     incident = next((e for e in session.state.events if e.id in LETTERS), None)
     if incident:
         invitation, resolution = LETTERS[incident.id]
@@ -269,6 +291,10 @@ def close_visit(session, events):
         invitation = "Всё думаю о том, что вы сказали на прощание. Тогда мне не хватило слов. Сегодня хочу договорить."
         resolution = "Долгое молчание наконец заканчивается. На этот раз рассказ дослушан до конца."
         memory = outcome.afterword
+    if guest:
+        letter, resolution = guest.postscript, guest.return_scene
+    else:
+        letter = invitation + "\n\n" + POSTSCRIPTS[session.story.id]
     spoken = next((st.summary for st in reversed(session.state.statements) if st.alive and not st.hollow), "")
     natal = next((st.data["natal"] for st in session.state.statements if "natal" in st.data), None)
     gift = salon.GIFTS[session.content.archetype]
@@ -281,7 +307,8 @@ def close_visit(session, events):
             "payment": {"base": session.content.fee, "rate": round(seance.fee_rate(outcome) * 100),
                         "bonus": fee - session.fee},
             "events": [e.text for e in events if e.text and e.kind in ("hint", "answer")],
-            "cards": reading_cards(session), "letter": invitation + "\n\n" + POSTSCRIPTS[session.story.id],
+            "cards": reading_cards(session), "letter": letter,
+            "bonus": guest is not None,
             "memory": memory, "spoken": spoken, "natal": natal,
             "resolution": resolution, "thread": incident.id if incident else "visit",
             "reply": None, "keepsake": gift.name if outcome.client_state == "content" else None}
@@ -296,6 +323,17 @@ REPLIES = {
 
 def second_visit(record, choice):
     label, opening = REPLIES[choice]
+    guest = GUESTS.get(record["story"])
+    if guest and guest.word:
+        detail = {"listen": guest.return_scene,
+                  "admit": "Pepe ещё раз открывает исходный реплай и оставляет экран повёрнутым к вам.",
+                  "ask": "Pepe рисует на полях две стрелки. Теперь каждая указывает на свой стикер."}[choice]
+        response = guest.postscript if choice == "listen" else guest.voice[f"followup.{choice}"]
+        return [label, f"— {response}", detail]
+    if guest:
+        if choice == "listen":
+            return [label, guest.return_scene]
+        return [label, f"— {guest.voice[f'followup.{choice}']}", guest.return_scene]
     if choice == "listen":
         ending = record["resolution"]
     elif choice == "admit":

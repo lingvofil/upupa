@@ -41,6 +41,7 @@ import asyncio
 import logging
 import random
 import time
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -366,10 +367,12 @@ def _detach(session: Session | LiveSession, reason: str, now: float) -> dict[str
     return rules.abandon_summary(session, reason, now)
 
 
-async def _book_money(session: Session | LiveSession, player: Participant, amount: int) -> None:
+async def _book_money(session: Session | LiveSession | Seance, player: Participant, amount: int) -> int:
     wallets = get_guru_wallets()
-    wallets.apply(session.chat_id, player.user_id, player.name, amount)
+    balance = wallets.apply(session.chat_id, player.user_id, player.name, amount)
+    session.wallet_start = balance - (session.money if isinstance(session, Session) else session.fee)
     await wallets.persist()
+    return balance
 
 
 async def _log_abandon(session: Session | LiveSession, summary: dict[str, Any]) -> None:
@@ -917,7 +920,8 @@ async def salon_callback(callback: types.CallbackQuery) -> None:
             get_guru_wallets().count_shift(chat_id, session.host.user_id, session.host.name)
         if result.finished_client.report.gift:
             get_guru_wallets().add_gift(chat_id, session.host.user_id, session.host.name, result.finished_client.report.gift)
-        await _book_money(session, session.host, result.finished_client.report.fee)
+        balance = await _book_money(session, session.host, result.finished_client.report.fee)
+        result = replace(result, view=replace(result.view, wallet=balance))
     await callback.answer()
     await _log_metrics(session, result.metrics)
 
@@ -954,14 +958,15 @@ async def _live_callback(callback: types.CallbackQuery, session: LiveSession, pa
     except (ValueError, PermissionError):
         await callback.answer("Эта кнопка уже не работает.")
         return
+    view = result.view
     if session.finished:
         _registry.remove(session)
-        await _book_money(session, session.host, session.fee)
+        balance = await _book_money(session, session.host, session.fee)
+        view = replace(view, wallet=balance)
     await callback.answer(result.notice)
     await _log_metrics(session, result.metrics)
 
     bot = callback.bot
-    view = result.view
     if action.startswith("q:"):
         # Анкета заполняется в одном сообщении, как сборка предсказания в смене.
         text, rows = textui.render_intake(view)
@@ -996,17 +1001,17 @@ async def _seance_callback(callback: types.CallbackQuery, session: Seance, parse
     except (ValueError, PermissionError):
         await callback.answer("Эта кнопка уже не работает.")
         return
-    seen = 0
+    seen, view = 0, result.view
     if session.finished:
         _registry.remove(session)
         wallets = get_guru_wallets()
         wallets.see_ending(session.chat_id, user.id, session.host.name, seance.ending_key(session.story.id, session.ending or ""))
         seen = seance.seen_endings(wallets.get(session.chat_id, user.id).endings, session.story.id)
-        await _book_money(session, session.host, session.fee)
+        balance = await _book_money(session, session.host, session.fee)
+        view = replace(view, wallet=balance)
     await callback.answer()
     await _log_metrics(session, result.metrics)
 
-    view = result.view
     try:
         if action == "heard":
             # Перечитать без нового сообщения; назад вернётся тот же игровой экран.
