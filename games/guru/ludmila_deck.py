@@ -52,8 +52,16 @@ NEUTRAL_READINGS = {
 TITLES = {card.art: card.name for card in TAROT_CARDS.values()}
 
 
-def draw(rng):
-    return [rng.choice((card.art, *alternatives)) for card, alternatives in zip(CARDS, ALTERNATIVES)]
+def least_recent_first(arts, rng, recently_seen):
+    choices = list(arts)
+    rng.shuffle(choices)
+    recency = {art: -i for i, art in enumerate(recently_seen)}
+    return sorted(choices, key=lambda art: recency.get(art, -len(recency)))
+
+
+def draw(rng, recently_seen=()):
+    return [least_recent_first((card.art, *alternatives), rng, recently_seen)[0]
+            for card, alternatives in zip(CARDS, ALTERNATIVES)]
 
 
 def cards(arts):

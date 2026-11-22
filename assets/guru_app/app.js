@@ -392,10 +392,10 @@ function natalAspects(s) {
 function natalQuotes(s) {
   const list = node("div", "", "natal-quotes");
   for (const action of s.actions.filter((a) => a.kind === "quote"))
-    list.append(button("«" + action.label + "»", () => move(action.id)));
+    list.append(button(s.visualClues ? action.label : "«" + action.label + "»", () => move(action.id)));
   if (!s.natal.quote) return list;
   const details = node("details");
-  details.append(node("summary", "Выбрать другую фразу"), list);
+  details.append(node("summary", s.visualClues ? "Выбрать другую деталь" : "Выбрать другую фразу"), list);
   const panel = node("div");
   panel.append(node("blockquote", s.natal.quote, "natal-quote"), details);
   return panel;
@@ -409,13 +409,14 @@ function salonBackdrop(art) {
   return art;
 }
 function greeting(s) {
-  const el = node("section", "", "greeting"),
+  const el = node("section", "", s.bonus ? "greeting bonus-greeting" : "greeting"),
     art = salonBackdrop(node("div", "", "greeting-art")),
     copy = node("article", "", "greeting-copy");
   art.append(img(portraitFile(s.story), "Портрет гостя"));
+  if (s.bonus) copy.append(node("p", "✦ Гость из чата", "bonus-mark"));
   copy.append(
     node("h1", s.client),
-    node("p", "— Здравствуйте, мадам.", "speech"),
+    node("p", "— " + (s.greeting || "Здравствуйте, мадам."), "speech"),
     group(
       button(
         "Начать сеанс →",
@@ -583,7 +584,7 @@ function session(keepScroll = false) {
   journal.append(
     node(
       "summary",
-      s.opening.length ? "Выслушать весь рассказ" : "Что прозвучало",
+      s.visualClues ? "Что удалось заметить" : s.opening.length ? "Выслушать весь рассказ" : "Что прозвучало",
     ),
     ...s.heard.map((line) => node("p", line)),
   );
@@ -628,6 +629,17 @@ function salon() {
   summary.append(
     node("h2", state.salon.rank),
     node("p", "Касса · " + rubles(state.salon.balance), "salon-balance"),
+  );
+  if (state.history.length || state.salon.collection.length)
+    summary.append(
+      node(
+        "p",
+        "Доходы с учётом возвратов · " + rubles(state.salon.fees),
+        "cash-line",
+      ),
+      node("p", "Потрачено в лавке · " + rubles(state.salon.spent), "cash-line"),
+    );
+  summary.append(
     group(
       button(
         state.current
@@ -640,7 +652,7 @@ function salon() {
       button("Топ гадалок", () => leaderboard()),
       button(
         "Книга посетителей · " +
-          new Set(state.history.map((visit) => visit.story)).size +
+          state.openedCount +
           "/" +
           state.count,
         guests,
@@ -650,6 +662,14 @@ function salon() {
   frame.append(img(state.salon.picture, "Интерьер вашего салона"));
   room.append(frame, summary);
   el.append(room);
+  if (state.salon.collection.length) {
+    const purchases = node("details", "", "salon-purchases"),
+      list = node("div", "", "gift-list");
+    for (const item of state.salon.collection)
+      list.append(button(item.name, () => previewItem(item)));
+    purchases.append(node("summary", "Покупки салона · " + state.salon.collection.length), list);
+    el.append(purchases);
+  }
   el.append(shelf());
   const letters = state.history.filter((r) => r.waiting);
   if (letters.length) {
@@ -932,7 +952,7 @@ function renderLeaderboard(period, board) {
   el.append(
     node(
       "p",
-      "По сумме гонораров с учётом возвратов. Покупки на место не влияют.",
+      "В рейтинг входят гонорары за приёмы в Mini App за вычетом возвратов.",
       "muted",
     ),
     tabs,
@@ -951,21 +971,21 @@ function renderLeaderboard(period, board) {
   }
   el.append(
     group(
-      button("Имя в рейтинге", () => changeRankName(period, board.alias)),
+      button("Имя в рейтинге", () => changeRankName(period, board.alias, board.profileName)),
       button("← В салон", salon),
     ),
   );
   mount("leaderboard", el);
 }
 
-function changeRankName(period, alias) {
+function changeRankName(period, alias, profileName) {
   const form = node("form", "", "alias-form"),
     label = node("label", "Публичное имя"),
     input = node("input"),
     save = node("button", "Сохранить", "primary");
   input.value = alias;
   input.maxLength = 28;
-  input.placeholder = "Оставить имя салона по умолчанию";
+  input.placeholder = profileName || "Имя из Telegram";
   label.append(input);
   form.append(label, save);
   form.onsubmit = (event) => {
@@ -981,57 +1001,62 @@ function changeRankName(period, alias) {
   input.focus();
 }
 async function guests(revealedId) {
-  const { catalog } = await call("catalog"),
+  const { catalog, bonusCatalog, bonusInterval } = await call("catalog"),
     el = panel("Книга посетителей");
-  const opened = catalog.filter(Boolean),
-    locked = catalog.length - opened.length;
   el.append(
-    node(
-      "p",
-      "Открыто " + opened.length + " из " + catalog.length,
-      "salon-balance",
-    ),
-    node(
-      "p",
-      locked
-        ? "Портрет открывается после первой завершённой встречи."
-        : "Все портреты открыты.",
-      "muted",
-    ),
     group(
       button(
         state.current ? "Продолжить текущий приём" : "Открыть дверь →",
         start,
         "primary",
       ),
+      button("← В салон", salon),
     ),
   );
-  const grid = node("ul", "", "guest-book");
   let revealed;
-  for (const guest of [...opened, ...Array(locked).fill(null)]) {
-    const page = node("li", "", guest ? "guest-page" : "guest-page unopened"),
-      frame = node("div", "", "guest-frame");
-    if (guest) {
-      const portrait = img(portraitFile(guest.id), "");
-      portrait.loading = "lazy";
-      frame.append(portrait);
-      page.append(frame, node("strong", guest.name));
-      if (guest.id === revealedId) {
-        page.classList.add("new-portrait");
-        page.tabIndex = -1;
-        portrait.loading = "eager";
-        revealed = page;
+  for (const [entries, bonus] of [
+    [bonusCatalog, true],
+    [catalog, false],
+  ]) {
+    const opened = entries.filter(Boolean),
+      locked = entries.length - opened.length,
+      section = node("section", "", bonus ? "bonus-book" : ""),
+      grid = node("ul", "", "guest-book");
+    section.append(
+      node("h2", bonus ? "✦ Гости из чата" : "Посетители салона"),
+      node("p", "Открыто " + opened.length + " из " + entries.length, "salon-balance"),
+      node(
+        "p",
+        bonus
+          ? "Гость из чата приходит после каждых " + bonusInterval + " завершённых обычных приёмов. Портрет появляется при встрече."
+          : "Портрет открывается после первой завершённой встречи.",
+        "muted",
+      ),
+    );
+    for (const guest of [...opened, ...Array(locked).fill(null)]) {
+      const page = node("li", "", guest ? "guest-page" : "guest-page unopened"),
+        frame = node("div", "", "guest-frame");
+      if (guest) {
+        const portrait = img(portraitFile(guest.id), "");
+        portrait.loading = "lazy";
+        frame.append(portrait);
+        page.append(frame, node("strong", guest.name));
+        if (guest.id === revealedId) {
+          page.classList.add("new-portrait");
+          page.tabIndex = -1;
+          portrait.loading = "eager";
+          revealed = page;
+        }
+      } else {
+        frame.setAttribute("aria-hidden", "true");
+        if (bonus) frame.textContent = "✦";
+        page.append(frame, node("span", bonus ? "Тайный гость" : "Портрет закрыт", "guest-unopened-label"));
       }
-    } else {
-      frame.setAttribute("aria-hidden", "true");
-      page.append(
-        frame,
-        node("span", "Портрет закрыт", "guest-unopened-label"),
-      );
+      grid.append(page);
     }
-    grid.append(page);
+    section.append(grid);
+    el.append(section);
   }
-  el.append(grid);
   mount("guests", el);
   if (revealed) {
     revealed.scrollIntoView({ block: "nearest" });
@@ -1045,7 +1070,7 @@ function showRecord(r, firstVisit = false) {
   if (r.story === "jealous.vocal" && r.ending === "duet")
     body.append(img("ending-duet.webp", "Финал в ресторане", "arcana"));
   body.append(
-    node("div", r.client, "meta"),
+    node("div", r.bonus ? "✦ Гость из чата · " + r.client : r.client, "meta"),
     node("p", r.text),
     node("p", r.quote),
     node("p", r.afterword),
@@ -1098,7 +1123,7 @@ function showRecord(r, firstVisit = false) {
   body.append(breakdown);
   if (r.keepsake) body.append(node("p", "На память · " + r.keepsake));
   el.append(body);
-  if (firstVisit)
+  if (firstVisit && !r.bonus)
     el.append(group(button("Новый портрет в книге →", () => guests(r.story))));
   if (r.cards.length) {
     el.append(node("h2", "Карта для чата"));
@@ -1282,11 +1307,16 @@ function back() {
   else door();
 }
 document.getElementById("brand").onclick = () => run(door);
-document.getElementById("cabinet").onclick = () =>
-  run(async () => {
-    state = await call("home");
-    salon();
-  });
+async function refreshSalon() {
+  state = await call("home");
+  salon();
+}
+document.getElementById("cabinet").onclick = () => run(refreshSalon);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (page === "salon") run(refreshSalon);
+  else if (page === "shop") run(shop);
+});
 document.getElementById("close").onclick = () => dialog.close();
 async function boot() {
   tg = window.Telegram?.WebApp;

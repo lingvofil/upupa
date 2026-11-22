@@ -202,6 +202,18 @@ p + p {
 .greeting-copy .speech {
   margin: 0;
 }
+.bonus-greeting .greeting-copy {
+  background: #27291e;
+}
+.bonus-greeting .greeting-art img {
+  outline: 1px solid var(--gold);
+  outline-offset: 5px;
+}
+.bonus-mark {
+  color: var(--gold);
+  font-weight: 650;
+  margin: 0;
+}
 .page {
   max-width: 1024px;
   margin: auto;
@@ -297,6 +309,28 @@ p + p {
   color: #c8b99e;
   font-size: 13px;
 }
+.bonus-book {
+  padding: clamp(12px, 3vw, 24px);
+  border: 1px solid #8e714a;
+  border-radius: 8px;
+  background: #22261c;
+}
+.bonus-book .guest-page {
+  border-color: #a57d46;
+}
+.bonus-book .guest-book {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 116px), 1fr));
+}
+.bonus-book .unopened .guest-frame {
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at center, #554432, #211e16 78%);
+  color: var(--gold);
+  font-size: clamp(27px, 5vw, 44px);
+}
+.bonus-book .unopened .guest-frame::before {
+  content: none;
+}
 .salon-room {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
@@ -338,6 +372,14 @@ p + p {
   color: var(--gold);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+.cash-line {
+  color: #d6c9af;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.salon-purchases .gift-list {
+  margin-top: 10px;
 }
 .gift-shelf > p {
   margin: 10px 0;

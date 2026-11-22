@@ -22,7 +22,7 @@ import copy
 import random
 from dataclasses import dataclass, field
 from types import MappingProxyType as Map
-from typing import Any
+from typing import Any, Mapping
 
 from games.guru import content as C
 from games.guru import seance_engine as E
@@ -322,13 +322,16 @@ class CasebookStory:
 
     initial_mood = "worried"
 
-    def __init__(self, tale: Tale, rng: random.Random, name: str | None = None) -> None:
+    def __init__(self, tale: Tale, rng: random.Random, name: str | None = None, *,
+                 card_arts: list[str] | None = None, sign: str | None = None,
+                 client_lines: Mapping[str, str] | None = None) -> None:
         self.id = tale.id
         self.tale = tale
         self.kind = tale.kind
         self.name = name or rng.choice(tale.names)
+        self.client_lines = client_lines or {}
         self.when = rng.choice(tale.when_options)
-        self.sign = rng.choice(C.ZODIAC_SIGNS)
+        self.sign = sign or rng.choice(C.ZODIAC_SIGNS)
         self.traits = ARCHETYPE_TRAITS[tale.archetype]
         self.truth_who, self.truth_what = tale.who, tale.what
         self.claim_who, self.claim_what = tale.said.get("who"), tale.said.get("what")
@@ -336,7 +339,7 @@ class CasebookStory:
         # Не до всякой развязки можно дойти: разоблачить некого, если дело в самом клиенте, а сбыться может только доброе.
         faced = () if tale.who == "self" else ("early" if tale.what in GOOD else "caught",)
         self.endings = ("own", "scandal", "letdown", *faced, *(("jackpot",) if tale.what in GOOD else ()))
-        self.content = self._content(rng)
+        self.content = self._content(rng, card_arts)
 
     # --- данные ---------------------------------------------------------------
 
@@ -357,13 +360,17 @@ class CasebookStory:
         rng.shuffle(options)
         return options
 
-    def _cards(self, rng: random.Random) -> tuple[CardData, ...]:
+    def _cards(self, rng: random.Random, card_arts: list[str] | None) -> tuple[CardData, ...]:
         who = [self.truth_who, *self.tale.who_decoys]
         rng.shuffle(who)
         what = self._what_options(rng)
-        deck = rng.sample(list(C.TAROT_CARDS.values()), len(PLACES))
+        if card_arts is None:
+            deck = rng.sample(list(C.TAROT_CARDS.values()), len(PLACES))
+        else:
+            by_art = {card.art: card for card in C.TAROT_CARDS.values()}
+            deck = [by_art[art] for art in card_arts]
         cards = []
-        for (place, title, hint, lead), card in zip(PLACES, deck):
+        for (place, title, hint, lead), card in zip(PLACES, deck, strict=True):
             symbols = []
             for index, (symbol, look) in enumerate(CARD_SYMBOLS[card.art]):
                 prefix = f"{place}.{index}"
@@ -380,7 +387,7 @@ class CasebookStory:
             cards.append(CardData(place, card.art, card.name, title, hint, lead, tuple(symbols)))
         return tuple(cards)
 
-    def _content(self, rng: random.Random) -> StoryContent:
+    def _content(self, rng: random.Random, card_arts: list[str] | None) -> StoryContent:
         tale, name = self.tale, self.name
         zones = tuple(ZoneData(key, title, on if trait is None or trait in self.traits else off,
                                said_on if trait is None or trait in self.traits else said_off)
@@ -397,7 +404,7 @@ class CasebookStory:
             intro=tuple((self._render(line), "") for line in tale.told),
             questions=tuple(QuestionData(question.id, question.label, self._render(question.answer)) for question in tale.questions),
             question_limit=2,
-            cards=self._cards(rng),
+            cards=self._cards(rng, card_arts),
             study_limit=1,
             tarot_lead=Map({E.SOFT: "Вот что я читаю в раскладе. Это знак, а не приговор.", E.FIRM: "Карты легли ясно, и я говорю как есть."}),
             tarot_evasive="Карты сегодня ложатся туманно. Я вижу много дорог и ни одной ясной: всё ещё может повернуться по-всякому.",
@@ -441,7 +448,13 @@ class CasebookStory:
         variants = LINES[key]
         n = s.world.used.get(key, 0)
         s.world.used[key] = n + 1
-        push(s, "client", self.name, variants[n % len(variants)])
+        push(s, "client", self.name, self._client_line(key, variants[n % len(variants)]))
+
+    def _client_line(self, key: str, fallback: str) -> str:
+        for name in (key, key.rpartition(".")[0], key.partition(".")[0]):
+            if name in self.client_lines:
+                return self.client_lines[name]
+        return fallback
 
     def _react(self, s: State, warm: bool) -> None:
         """Как это выглядит со стороны: строка из архетипа, у каждого типа клиента своя."""
@@ -494,8 +507,9 @@ class CasebookStory:
         accusing = st is None or st.data.get("what") != "secret"
         beats = [
             ("narration", "", opening),
-            ("voice", self.name, "Мне всё известно. Объясняться начнёшь сразу или мне помочь?" if accusing
-             else "Мне тут кое-что нагадали. Ничего не хочешь мне рассказать?"),
+            ("voice", self.name, self._client_line("confront.accuse" if accusing else "confront.ask",
+             "Мне всё известно. Объясняться начнёшь сразу или мне помочь?" if accusing
+             else "Мне тут кое-что нагадали. Ничего не хочешь мне рассказать?")),
         ]
         if target == "animal":
             beats.append(("narration", "", "Фотография молчит. Подозрительно молчит."))
@@ -823,12 +837,12 @@ class CasebookStory:
     def open_line(self, s: State, method: str) -> str:
         w: World = s.world
         if method == "tarot":
-            return LINES["open.tarot"][0]
+            return self._client_line("open.tarot", LINES["open.tarot"][0])
         if method == "palm":
             key = ("open.palm.acted" if s.events else "open.palm.intent" if "confront" in w.intents
                    else "open.palm.hollow" if w.hollow else "open.palm")
-            return LINES[key][0]
-        return self.kind.sign_answer.format(sign=self.sign).strip("«»")
+            return self._client_line(key, LINES[key][0])
+        return self._client_line("open.horoscope", self.kind.sign_answer.format(sign=self.sign).strip("«»"))
 
     def on_statement(self, s: State, st: Statement) -> None:
         w: World = s.world
@@ -901,7 +915,7 @@ class CasebookStory:
         w: World = s.world
         key = ("final.acted" if has_event(s, "confront") else "final.intent" if "confront" in w.intents
                else "final.hollow" if w.hollow >= 2 else "final.hope" if has_event(s, "bank") or w.nerve == "calm" else "final.default")
-        return LINES[key][0]
+        return self._client_line(key, LINES[key][0])
 
     def resolve_ending(self, s: State) -> str:
         w: World = s.world
@@ -1030,7 +1044,10 @@ class CasebookStory:
                 "own-frustration": f"Определённого слова от мадам так и не прозвучало. Вечером разговор {WHO_WITH[w.target]} случился сам собой.",
             }[confront.how]
         elif bank is not None:
-            intro = f"{name}: все уже знают, что мадам нагадала — {WHAT_NEWS[w.banked]}."
+            if self.content.client_word:
+                intro = f"В чате уже обсуждают, что нагадали гостю {name}: {WHAT_NEWS[w.banked]}."
+            else:
+                intro = f"{name}: все уже знают, что мадам нагадала — {WHAT_NEWS[w.banked]}."
         else:
             intro = f"{name} уходит из салона без готового сценария."
         if ending == "scandal":
@@ -1091,6 +1108,12 @@ class CasebookStory:
         else:
             client = ("content", f"{name}: разговор понравился.")
 
+        if self.content.client_word:
+            gesture = {"content": "Обе распечатки остаются на столе мадам.",
+                       "mixed": "Одна распечатка остаётся на столе, другую гость уносит.",
+                       "displeased": "Гость собирает распечатки и убирает их в карман."}
+            client = (client[0], gesture[client[0]])
+        quote = self._client_line(f"outcome.{client[0]}", self.content.client_word or quote)
         corrections = []
         for st in s.statements:
             if st.status == "stands":

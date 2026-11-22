@@ -1,10 +1,13 @@
 """Касса игроков салона: накопление, потери, хранение."""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 from types import SimpleNamespace
 
 from features.guru_wallets import SEASONED_SHIFTS, Wallet, WalletBook
-from games.guru import textui
+from games.guru import salon, textui
+from infrastructure.persistence.guru_miniapp import GuruVisits
 
 CHAT = -100
 OTHER_CHAT = -200
@@ -47,6 +50,57 @@ def test_each_chat_has_its_own_wallet():
     wallets = book()
     wallets.apply(CHAT, 1, "Зоя", 1500)
     assert wallets.balance(OTHER_CHAT, 1) == 0 and wallets.balance(CHAT, 2) == 0
+
+
+def test_chat_and_miniapp_share_legacy_wallets_and_new_purchases(tmp_path):
+    store = GuruVisits(tmp_path / "visits.db")
+    store.request(1, {"op": "home"})
+    with sqlite3.connect(store.path) as db:
+        db.execute("INSERT INTO visits VALUES ('old', 1, 'granny.balcony', '{\"fee\": 20000}')")
+        db.execute("INSERT INTO purchases VALUES (1, 'almanac', 5000)")
+    repository = MemoryRepository({
+        str(CHAT): {"1": {"name": "Зоя", "balance": 5600, "earned": 8100, "spent": 2500, "items": ["loupe"], "shifts": 4}},
+        str(OTHER_CHAT): {"1": {"name": "Зоя", "balance": 1100, "earned": 6100, "spent": 5000, "items": ["almanac"]}},
+    })
+    wallets = WalletBook(repository, economy=store)
+    wallets.load()
+    home = store.request(1, {"op": "home"})
+    assert home["salon"]["balance"] == 21700 and home["salon"]["spent"] == 12500
+    assert home["salon"]["fees"] == 34200 and set(home["salon"]["items"]) == {"almanac", "loupe"}
+    assert store.request(1, {"op": "leaderboard", "period": "all"})["own"]["name"] == "Зоя"
+    assert wallets.get(CHAT, 1).shifts == 4 and wallets.get(OTHER_CHAT, 1).shifts == 99
+    assert wallets.balance(OTHER_CHAT, 1) == 21700 and wallets.balance(CHAT, 2) == 0
+
+    assert wallets.apply(CHAT, 1, "Зоя", 500) == 22200
+    assert store.request(1, {"op": "home"})["salon"]["balance"] == 22200
+    new = store.request(1, {"op": "buy", "item": "deck", "rev": home["rev"]})
+    assert wallets.balance(CHAT, 1) == 18700 and "deck" in wallets.get(CHAT, 1).items
+    assert wallets.buy(CHAT, 1, "Зоя", "tea", salon.ITEMS["tea"].price)
+    with sqlite3.connect(store.path) as db:
+        db.execute("INSERT INTO visits VALUES ('new-fee', 1, 'granny.balcony', '{\"fee\": 5000}')")
+    assert wallets.balance(CHAT, 1) == 20700
+    new = store.request(1, {"op": "buy", "item": "atlas", "rev": new["rev"]})
+    assert "Атлас звёзд Байера" in textui.render_salon_card("Зоя", wallets.get(CHAT, 1))
+
+    def buy_web():
+        try:
+            store.request(1, {"op": "buy", "item": "bowl", "rev": new["rev"]})
+        except ValueError as exc:
+            assert "уже стоит" in str(exc)
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        text_buy = pool.submit(wallets.buy, CHAT, 1, "Зоя", "bowl", salon.ITEMS["bowl"].price)
+        web_buy = pool.submit(buy_web)
+        assert text_buy.result() != web_buy.result()
+    assert store.request(1, {"op": "home"})["salon"]["balance"] == 200
+
+    asyncio.run(wallets.persist())
+    restarted = WalletBook(MemoryRepository(repository.saved[-1]), economy=GuruVisits(store.path))
+    restarted.load()
+    assert restarted.balance(CHAT, 1) == 200
+    assert set(restarted.get(CHAT, 1).items) == {"almanac", "loupe", "deck", "tea", "atlas", "bowl"}
 
 
 def test_top_is_sorted_and_limited():

@@ -46,7 +46,7 @@ async def _prepare(bot, owner, card, url, image):
                                                   allow_bot_chats=False)).id
 
 
-async def handle(request, owner, store, *, link, public_url="", bot=None):
+async def handle(request, owner, store, *, link, public_url="", bot=None, profile=None):
     try:
         body = await request.json()
         if not isinstance(body, dict) or any(isinstance(v, (list, dict)) for v in body.values()):
@@ -78,7 +78,7 @@ async def handle(request, owner, store, *, link, public_url="", bot=None):
                     # Older clients and unavailable preview origins still get the selectable share link.
                     pass
         else:
-            result = await asyncio.to_thread(store.request, owner, body)
+            result = await asyncio.to_thread(store.request, owner, body, profile=profile)
         if "history" in result:
             result["replies"] = {key: words[0] for key, words in REPLIES.items()}
     except StaleTurn as exc:
@@ -91,9 +91,10 @@ async def handle(request, owner, store, *, link, public_url="", bot=None):
 async def guru_api(request, bot):
     from core.settings import API_TOKEN, BLOCKED_USERS, GURU_APP_LINK, GURU_PUBLIC_GAME_URL
     try:
-        owner = validate_telegram_init_data(request.headers.get("X-Telegram-Init-Data", ""), API_TOKEN).user_id
+        identity = validate_telegram_init_data(request.headers.get("X-Telegram-Init-Data", ""), API_TOKEN)
     except WebAppAuthError as exc:
         raise web.HTTPUnauthorized(text="Откройте салон через Telegram.") from exc
-    if owner in BLOCKED_USERS:
+    if identity.user_id in BLOCKED_USERS:
         raise web.HTTPForbidden()
-    return await handle(request, owner, STORE, bot=bot, link=GURU_APP_LINK, public_url=GURU_PUBLIC_GAME_URL)
+    return await handle(request, identity.user_id, STORE, bot=bot, link=GURU_APP_LINK, public_url=GURU_PUBLIC_GAME_URL,
+                        profile=(identity.display_name, identity.auth_date) if identity.display_name else None)

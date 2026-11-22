@@ -57,6 +57,7 @@ TOOL_QUALITY = 0.6  # хороший инструмент почти всегд�
 PROPS = "props"
 PROMO = "promo"
 COMFORT = "comfort"
+COLLECTION = "collection"
 GROUP_TITLES = MappingProxyType({PROPS: "🔮 Реквизит: точнее гадать", PROMO: "📣 Реклама: больше клиентов и денег", COMFORT: "🛋 Уют: настроение клиента"})
 
 ITEMS: Mapping[str, Item] = MappingProxyType({item.key: item for item in (
@@ -94,6 +95,18 @@ ITEMS: Mapping[str, Item] = MappingProxyType({item.key: item for item in (
          "первое разоблачение за смену обходится без штрафа и потери легенды",
          Perks(forgive=1, rituals=("🐈‍⬛ Чёрный кот забирается клиенту на колени. Сопротивление бесполезно.",))),
 )})
+
+COLLECTION_ITEMS = MappingProxyType({key: Item(key, emoji, name, name, price, COLLECTION, note, NO_PERKS)
+         for key, emoji, name, price, note in (
+             ("atlas", "🌌", "Атлас звёзд Байера", 18000, "Репринт с медных досок. На полях видны пометки прежней владелицы."),
+             ("silk", "🪡", "Шёлковая скатерть для расклада", 24000, "Плотный шёлк цвета тёмного мха с вышивкой по краю."),
+             ("cabinet", "🗄", "Ореховый шкаф для реликвий", 36000, "Стеклянные дверцы, старые латунные ключи и место для драгоценных мелочей."),
+             ("clock", "🕰", "Каминные часы из бронзы", 48000, "Механизм заводится ключом. На четверть часа отбивает два негромких удара."),
+             ("tapestry", "🌠", "Гобелен «Ночное небо»", 64000, "На тёмной шерсти вышиты созвездия и едва заметная линия горизонта."),
+             ("astrolabe", "🧭", "Астролябия мастера из Толедо", 90000, "В бронзовом диске прорезаны дуги. Край отполирован пальцами прежних хозяев."),
+             ("orrery", "🪐", "Механический планетарий", 140000, "Ручная заводка приводит в движение латунные планеты. Открывает большой кабинет."),
+         )})
+ALL_ITEMS = MappingProxyType({**ITEMS, **COLLECTION_ITEMS})
 
 # Реплика в чат при покупке. Игрок для клиентов — «мадам» независимо от пола.
 PURCHASE_LINES: Mapping[str, str] = MappingProxyType({
@@ -218,16 +231,22 @@ def rank(count: int) -> str:
     return next(title for threshold, title in RANKS if count >= threshold)
 
 
+def room_rank(keys: Iterable[str]) -> str:
+    owned = set(keys) & ALL_ITEMS.keys()
+    return rank(max(12, len(owned)) if "orrery" in owned else len(owned))
+
+
 def describe(keys: Iterable[str]) -> str | None:
     """Строка о салоне для начала смены. Пока ничего не куплено, сказать нечего."""
-    items = owned_items(keys)
+    items = owned_items(keys, catalog=ALL_ITEMS)
     if not items:
         return None
-    return f"🏠 {rank(len(items))}: {icons(keys)}"
+    owned = [item.key for item in items]
+    return f"🏠 {room_rank(owned)}: {icons(owned)}"
 
 
 def icons(keys: Iterable[str]) -> str:
-    return " ".join(item.emoji for item in owned_items(keys))
+    return " ".join(item.emoji for item in owned_items(keys, catalog=ALL_ITEMS))
 
 
 def effects(keys: Iterable[str]) -> list[str]:

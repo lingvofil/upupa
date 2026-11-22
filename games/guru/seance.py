@@ -115,6 +115,7 @@ class Seance:
     thread_id: int | None = None
     dialog: Dialog = field(default_factory=Dialog)
     free_order: bool = False
+    natal_override: tuple[str, tuple[seance_natal.Aspect, seance_natal.Aspect]] | None = None
 
     @property
     def content(self) -> E.StoryContent:
@@ -124,21 +125,30 @@ class Seance:
     def client(self) -> str:
         return self.content.client
 
+    @property
+    def natal_chart(self):
+        return self.natal_override or seance_natal.CHARTS.get(self.story.id)
+
     def is_participant(self, user_id: int) -> bool:
         return self.host.user_id == user_id
 
 
 def new_session(*, session_id: str, chat_id: int, host_id: int, host_name: str, now: float, wallet: int = 0,
                 items: tuple[str, ...] = (), gifts: tuple[str, ...] = (), story_id: str | None = None,
-                rng: random.Random | None = None, endings: Iterable[str] = (), client_name: str | None = None) -> Seance:
+                rng: random.Random | None = None, endings: Iterable[str] = (), client_name: str | None = None,
+                story: E.Story | None = None) -> Seance:
     rng = rng or random.Random()
-    story = make_story(story_id or pick_story(endings, rng), rng, client_name)
+    if story is None:
+        story = make_story(story_id or pick_story(endings, rng), rng, client_name)
     session = Seance(
         session_id=session_id, chat_id=chat_id, host=Participant(host_id, host_name), started_at=now, last_activity=now,
         idle_limit=rules.IDLE_TIMEOUT_S, wallet_start=wallet, story=story, state=E.new_state(story), items=tuple(items),
         gifts=tuple(gift.key for gift in salon.owned_gifts(gifts)),
     )
-    session.heard.extend(f"— {line}" for line, _ in story.content.intro)
+    for line, direction in story.content.intro:
+        session.heard.append(f"— {line}")
+        if story.content.client_word and direction:
+            session.heard.append(direction)
     return session
 
 
@@ -167,7 +177,7 @@ def _practice_actions(session: Seance, head: str) -> tuple[Action, ...]:
     if session.free_order:
         choices = tuple(Action(f"{head}:{method}", METHOD_TITLES[method], "method")
                         for method in E.METHODS if method not in session.state.done)
-        if "horoscope" not in session.state.done and session.story.id in seance_natal.CHARTS:
+        if "horoscope" not in session.state.done and session.natal_chart:
             choices += (Action(f"{head}:natal", "Натальная карта", "method"),)
         if choices:
             return choices
@@ -181,13 +191,14 @@ def _planet_actions(session: Seance) -> tuple[Action, ...]:
 
 
 def natal_quotes(session: Seance) -> list[str]:
-    return [line for line, _ in session.content.intro] + [
-        question.answer for question in session.content.questions if question.id in session.state.questions
+    return [direction if session.content.client_word and direction else line for line, direction in session.content.intro] + [
+        question.observation or question.answer
+        for question in session.content.questions if question.id in session.state.questions
     ]
 
 
 def _natal_actions(session: Seance) -> tuple[Action, ...]:
-    anchor, aspects = seance_natal.CHARTS[session.story.id]
+    anchor, aspects = session.natal_chart
     actions = tuple(Action(f"na:{i}", seance_natal.names(anchor, aspect), "aspect")
                     for i, aspect in enumerate(aspects))
     if session.natal_aspect is None:
@@ -241,7 +252,7 @@ def available_actions(session: Seance) -> tuple[Action, ...]:
         return (*words, *back, hush)
     if phase == "horoscope":
         natal = (Action("natal", "Натальная карта", "control"),) if (
-            session.free_order and session.story.id in seance_natal.CHARTS) else ()
+            session.free_order and session.natal_chart) else ()
         return (*_planet_actions(session), *natal, hush)
     if phase == "natal":
         return (*_natal_actions(session), Action("weekly", "Прогноз недели", "control"), hush)
@@ -272,6 +283,9 @@ def _beat_event(session: Seance, beat: E.Beat) -> DisplayEvent:
     if beat.kind == "client":
         session.heard.append(f"— {beat.text}")
         return _event("answer", f"— {beat.text}")
+    if beat.kind == "observation":
+        session.heard.append(beat.text)
+        return _event("hint", beat.text)
     if beat.kind == "you":
         return _event("voice", f"— Ты: {rules.quote(beat.text)}")
     if beat.kind == "finding":
@@ -465,7 +479,7 @@ def act(session: Seance, actor_id: int, action_id: str, *, now: float) -> Seance
     elif head == "nq":
         session.natal_quote = int(rest)
     elif head == "nr":
-        anchor, aspects = seance_natal.CHARTS[story.id]
+        anchor, aspects = session.natal_chart
         aspect = aspects[session.natal_aspect]
         reading = aspect.readings[int(rest)]
         natal = {"aspect": seance_natal.names(anchor, aspect), "quote": natal_quotes(session)[session.natal_quote],
@@ -582,6 +596,8 @@ def _prompt(session: Seance) -> str:
         if session.natal_aspect is None:
             return "Какую связь между планетами вы хотите рассмотреть?"
         if session.natal_quote is None:
+            if session.content.client_word:
+                return "Какая деталь напоминает вам об этой связи?"
             return "Какая фраза посетителя напоминает вам об этой связи?"
         return "Что вы хотите спросить у посетителя?"
     if phase == "reaction":

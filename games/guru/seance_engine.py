@@ -94,6 +94,7 @@ class QuestionData:
     id: str
     label: str
     answer: str
+    observation: str = ""
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,7 @@ class StoryContent:
     moods: Mapping[str, str]
     endings: Mapping[str, str]  # развязка → название
     fee: int = 2000
+    client_word: str = ""
 
 
 # --- состояние партии -------------------------------------------------------
@@ -138,7 +140,7 @@ class StoryContent:
 class Beat:
     """Одна реплика или ремарка в хронологии сеанса."""
 
-    kind: str  # client | you | narration | message | voice | finding
+    kind: str  # client | you | narration | message | voice | finding | observation
     who: str
     text: str
     ev: str | None = None  # событие, сцене которого принадлежит реплика
@@ -195,6 +197,7 @@ class State:
     advice: str | None = None
     ending: str | None = None
     log: list[Beat] = field(default_factory=list)
+    restricted_voice: tuple[str, str] | None = None
 
     @property
     def last(self) -> Statement | None:
@@ -252,7 +255,9 @@ class Story(Protocol):
 # --- справочники ------------------------------------------------------------
 
 def new_state(story: Story) -> State:
-    return State(world=story.create_world(), mood=story.initial_mood)
+    content = story.content
+    return State(world=story.create_world(), mood=story.initial_mood,
+                 restricted_voice=(content.client, content.client_word) if content.client_word else None)
 
 
 def card_of(story: Story, card_id: str) -> CardData:
@@ -317,6 +322,11 @@ def next_method(s: State) -> str | None:
 # --- помощники для правил истории -------------------------------------------
 
 def push(s: State, kind: str, who: str, text: str, ev: str | None = None) -> None:
+    if s.restricted_voice:
+        client, word = s.restricted_voice
+        spoken_by_client = kind == "client" or (kind in ("voice", "message") and (who == client or who.startswith(f"{client} →")))
+        if spoken_by_client and set(text.split()) != {word}:
+            text = " ".join([word] * {"client": 1, "message": 2, "voice": 3}[kind])
     s.log.append(Beat(kind, who, text, ev))
 
 
@@ -343,6 +353,8 @@ def ask(story: Story, s: State, question_id: str) -> None:
     s.questions.append(question_id)
     push(s, "you", "Ты", question.label)
     push(s, "client", content.client, question.answer)
+    if question.observation:
+        push(s, "observation", "", question.observation)
 
 
 def _start(story: Story, s: State, method: str) -> None:
@@ -416,6 +428,8 @@ def _state(story: Story, s: State, method: str, parts: list[str], tone: str | No
         statement.data["natal"] = natal
         s.mood = "thoughtful"
         push(s, "client", story.content.client, natal["reply"])
+        if story.content.client_word and natal["afterword"]:
+            push(s, "observation", "", natal["afterword"])
     s.scene = "reaction"
     s.draft = Draft()
     return statement

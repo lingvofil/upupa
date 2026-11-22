@@ -28,6 +28,7 @@ class TelegramWebAppIdentity:
     user_id: int
     auth_date: int
     start_param: str | None = None
+    display_name: str = ""
 
 
 def validate_telegram_init_data(
@@ -93,6 +94,8 @@ def validate_telegram_init_data(
         user_id=user_id,
         auth_date=auth_date,
         start_param=fields.get("start_param") or None,
+        display_name=" ".join(" ".join(user[key].split()) for key in ("first_name", "last_name")
+                              if isinstance(user.get(key), str) and user[key].strip()),
     )
 
 
