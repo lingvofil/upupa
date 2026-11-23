@@ -768,7 +768,7 @@ async def final_frame(sid, data):
 async def serve_index(request: web.Request):
     view = str(request.query.get("view", "")).strip().lower()
     if view == "guru" or str(request.query.get("tgWebAppStartParam", "")).startswith("guru_"):
-        return serve_guru(request)
+        return await serve_guru(request)
     if view == "tokens":
         return await serve_token_dashboard(request)
     if view == "tokens-api":

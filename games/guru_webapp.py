@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from aiohttp import web
 
 from core.paths import GURU_VISITS_PATH, PROJECT_ROOT
+from games.guru import palm_art
 from games.guru.miniapp import REPLIES
 from games.webapp_auth import WebAppAuthError, validate_telegram_init_data
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
@@ -22,10 +23,19 @@ def _interior_picture(filename):
     return (ASSETS / "art" / filename).read_bytes()
 
 
-def serve_guru(request):
+@lru_cache(maxsize=5)
+def _live_palm(hand):
+    return palm_art.render_study(hand=hand)
+
+
+async def serve_guru(request):
     asset = request.query.get("asset", "index.html")
-    if asset in {"index.html", "app.js", "style.css", "salon.woff2"}:
+    if asset in {"index.html", "app.js", "live.js", "effects.js", "style.css", "salon.woff2"}:
         path = ASSETS / asset
+    elif match := re.fullmatch(r"live-palm-(standard|earth|air|fire|water)\.jpg", asset):
+        hand = match[1]
+        picture = await asyncio.to_thread(_live_palm, None if hand == "standard" else hand)
+        return web.Response(body=picture, content_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
     elif re.fullmatch(r"[a-z][a-z-]*\.(?:jpg|webp)", asset):
         path = ASSETS / "art" / asset
     else:
@@ -79,10 +89,16 @@ async def handle(request, owner, store, *, link, public_url="", bot=None, profil
                     pass
         else:
             result = await asyncio.to_thread(store.request, owner, body, profile=profile)
+            room = result.get("room")
+            if room and room["role"] == "host" and room["phase"] == "waiting" and room["status"] == "active":
+                start = f"guru_live_{room['id']}"
+                room["invite"] = f"{link}?startapp={start}" if bot else f"?view=guru&startapp={start}"
         if "history" in result:
             result["replies"] = {key: words[0] for key, words in REPLIES.items()}
     except StaleTurn as exc:
         return web.json_response({"error": str(exc)}, status=409)
+    except PermissionError:
+        return web.json_response({"error": "Этот ход делает другой игрок."}, status=403)
     except (ValueError, TypeError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response(result, headers={"Cache-Control": "no-store"})

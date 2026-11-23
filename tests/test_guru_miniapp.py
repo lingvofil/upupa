@@ -10,12 +10,107 @@ from unittest.mock import AsyncMock
 import pytest
 
 from games.guru import ludmila_deck, miniapp, rules, salon, seance, seance_engine, seance_natal
+from games.guru import live_readings
 from games.guru.stories import STORIES_BY_ID
 from games.guru_webapp import ASSETS, guru_api
 from infrastructure.persistence.guru_miniapp import GuruVisits, StaleTurn
 
 
 ORDERS = list(permutations(("tarot", "palm", "horoscope")))
+
+
+def test_live_reception_roles_resume_and_single_payment(tmp_path):
+    store = GuruVisits(tmp_path / "live.db")
+    room = store.request(11, {"op": "live_create"}, profile=("Алина", 1))["room"]
+    token = room["id"]
+
+    def view(owner):
+        return store.request(owner, {"op": "live_view", "id": token})["room"]
+
+    def move(owner, action, **extra):
+        return store.request(owner, {"op": "live_move", "id": token, "rev": view(owner)["rev"],
+                                     "action": action, **extra})["room"]
+
+    assert room["role"] == "host" and room["phase"] == "waiting"
+    assert view(22) == {"id": token, "role": "invite", "host": "Алина", "status": "active", "rev": 0}
+    assert store.request(11, {"op": "live_join", "id": token})["room"]["phase"] == "waiting"
+    client = store.request(22, {"op": "live_join", "id": token}, profile=("Дима", 1))["room"]
+    assert client["role"] == "client" and not view(11)["actions"][0]["id"].startswith("q:")
+    with pytest.raises(ValueError, match="закрыто"):
+        view(33)
+    with pytest.raises(PermissionError):
+        move(11, client["actions"][0]["id"])
+    intake_labels = []
+    for _ in range(3):
+        pick = view(22)["actions"][0]
+        intake_labels.append(pick["label"])
+        move(22, pick["id"])
+    assert all(label not in "\n".join(view(11)["lines"]) for label in intake_labels)
+    assert "intake" not in view(11) and len(view(22)["intake"]) == 3
+    assert view(22)["input"] == "introduce"
+    move(22, "introduce", text="Хочу разобраться, как начать разговор.")
+    assert "Хочу разобраться" in view(11)["lines"][-1]
+    move(11, "ask")
+    question = view(11)["actions"][0]["id"]
+    move(11, question)
+    assert view(22)["input"] == "said" and "screen" not in view(22)
+    with pytest.raises(ValueError, match="Напишите"):
+        move(22, "said", text="")
+    move(22, "said", text="До пятницы.")
+    move(11, "m:tarot")
+    assert len(view(11)["cards"]) == 3 and "cards" not in view(22)
+    move(11, "pair:ha")
+    pending = move(11, "r:t1")
+    assert live_readings.READINGS["t1"].voice in pending["screen"]
+    assert live_readings.READINGS["t1"].voice not in json.dumps(view(22), ensure_ascii=False)
+    with pytest.raises(PermissionError):
+        move(22, "r:t1")
+    move(11, "say:draft")
+    assert view(11)["drafts"] == [live_readings.READINGS["t1"].voice] and "drafts" not in view(22)
+    move(11, "m:palm")
+    move(22, "h:water")
+    assert view(11)["palm"] == "water"
+    move(11, "area:heart")
+    move(11, "area:head")
+    move(11, "r:l1")
+    move(11, "say:idea")
+    assert "Близость" not in str(view(22)["actions"])
+    assert live_readings.READINGS["l1"].voice in "\n".join(view(22)["lines"])
+    move(22, "feedback:yes")
+    move(11, "m:horoscope")
+    move(22, next(a["id"] for a in view(22)["actions"] if a["id"].startswith("z:")))
+    move(22, next(a["id"] for a in view(22)["actions"] if a["id"].startswith("d:")))
+    move(11, "r:g1")
+    move(11, "say:idea")
+    move(22, "feedback:maybe")
+
+    store = GuruVisits(store.path)
+    assert store.request(11, {"op": "live_home"})["room"] == view(11)
+    assert store.request(22, {"op": "live_view", "id": token, "status": "active", "rev": view(22)["rev"]}) == {"unchanged": True}
+    move(11, "go")
+    move(11, view(11)["actions"][0]["id"])
+    verdict = move(11, view(11)["actions"][0]["id"])
+    assert verdict["phase"] == "verdict" and not verdict["actions"]
+    final = move(22, "v:hit")
+    host = view(11)
+    assert final["status"] == "done" and "fee" not in final and host["fee"] > 0
+    before = store.wallet(11)["balance"]
+    assert before == host["fee"] and store.wallet(22)["balance"] == 0
+    with pytest.raises(ValueError, match="завершён"):
+        move(22, "v:hit")
+    assert store.wallet(11)["balance"] == before
+    assert store.request(22, {"op": "live_home"})["recent"] == token
+
+
+def test_live_reception_rejects_stale_turn_and_can_cancel(tmp_path):
+    store = GuruVisits(tmp_path / "live.db")
+    draft = store.request(1, {"op": "live_create"})["room"]
+    room = store.request(2, {"op": "live_join", "id": draft["id"]})["room"]
+    with pytest.raises(StaleTurn):
+        store.request(1, {"op": "live_cancel", "id": room["id"], "rev": draft["rev"]})
+    cancelled = store.request(2, {"op": "live_cancel", "id": room["id"], "rev": room["rev"]})["room"]
+    assert cancelled["status"] == "cancelled" and store.wallet(1)["balance"] == 0
+    assert store.request(1, {"op": "live_home"}) == {"room": None, "recent": None}
 
 
 @pytest.fixture

@@ -103,7 +103,7 @@ function img(name, alt, cls) {
   return el;
 }
 function tarotFace(art, title, cls = "") {
-  const face = node("span", "", "tarot-face " + cls),
+  const face = node("span", "", "tarot-face lamp-surface " + cls),
     ornament = node("span", "✧", "tarot-ornament");
   ornament.setAttribute("aria-hidden", "true");
   face.append(
@@ -135,8 +135,11 @@ async function run(action) {
   } catch (err) {
     if (err.status === 409) {
       try {
-        state = await call("home");
-        state.current ? session() : salon();
+        if (page === "live") await refreshLive(true);
+        else {
+          state = await call("home");
+          state.current ? session() : salon();
+        }
       } catch {
         /* show original error */
       }
@@ -173,6 +176,7 @@ function mount(name, el, keepScroll = false) {
   if (dialog.open) dialog.close();
   page = name;
   main.replaceChildren(el);
+  syncLamp();
   if (!keepScroll) window.scrollTo(0, 0);
   if (name === "door") tg?.BackButton?.hide();
   else tg?.BackButton?.show();
@@ -185,6 +189,7 @@ function panel(title) {
 function modal(title, ...children) {
   modalBody.replaceChildren(node("h2", title), ...children);
   if (!dialog.open) dialog.showModal();
+  syncLamp();
 }
 function door() {
   const el = node("section", "", "hero"),
@@ -204,6 +209,7 @@ function door() {
         () => start(),
         "primary",
       ),
+      button("Живой приём", liveIndex),
     ),
   );
   el.append(content);
@@ -217,7 +223,7 @@ async function start() {
 function palmTool(s) {
   const { picture, zones, inspected, limit } = s.palm,
     art = node("div", "", "palm-tool"),
-    frame = node("div", "", "palm-frame"),
+    frame = node("div", "", "palm-frame lamp-surface"),
     zoomer = node("div", "", "palm-zoomer"),
     panel = node("section", "", "palm-reading"),
     detail = node("div"),
@@ -481,6 +487,7 @@ function sceneArt(s, hand, keepScroll) {
 async function move(id) {
   const previous = state.current;
   state = await call("move", { action: id });
+  if (/^(turn|zn):/.test(id)) feel(id.startsWith("turn:") ? "medium" : "light");
   if (state.record) {
     const firstVisit = !state.history.some(
       (visit) =>
@@ -652,6 +659,7 @@ function salon() {
       ),
       button("Открыть лавку", shop),
       button("Топ гадалок", () => leaderboard()),
+      button("Живой приём", liveIndex),
       button(
         "Книга посетителей · " +
           state.openedCount +
@@ -954,7 +962,7 @@ function renderLeaderboard(period, board) {
   el.append(
     node(
       "p",
-      "В рейтинг входят гонорары за приёмы в Mini App за вычетом возвратов.",
+      "В рейтинг входят гонорары за одиночные приёмы в Mini App за вычетом возвратов.",
       "muted",
     ),
     tabs,
@@ -1303,6 +1311,8 @@ function back() {
       "shared",
       "shop",
       "leaderboard",
+      "live-index",
+      "live",
     ].includes(page)
   )
     salon();
@@ -1318,6 +1328,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   if (page === "salon") run(refreshSalon);
   else if (page === "shop") run(shop);
+  else if (page === "live") run(() => refreshLive());
 });
 document.getElementById("close").onclick = () => dialog.close();
 async function boot() {
@@ -1325,6 +1336,7 @@ async function boot() {
   tg?.ready();
   tg?.expand();
   tg?.BackButton?.onClick(back);
+  initEffects();
   state = await call("home");
   const q = new URLSearchParams(location.search);
   const key =
@@ -1333,7 +1345,9 @@ async function boot() {
     q.get("startapp") ||
     "";
   const card = /^guru_c_([a-f0-9]{24})(?:_(\d+))?$/.exec(key);
+  const invitation = /^guru_live_([a-f0-9]{32})$/.exec(key);
   if (card) await shared(card[1], card[2]);
+  else if (invitation) await liveCommand("live_view", { id: invitation[1], rev: null });
   else if (key === "guru_salon") salon();
   else if (key === "guru_shop") renderShop(await call("shop"));
   else if (key === "guru_door") await start();
