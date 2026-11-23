@@ -14,7 +14,7 @@ def create_app(database, *, free_shop=False):
     store = GuruVisits(database, free_shop=free_shop)
 
     async def page(request):
-        response = serve_guru(request)
+        response = await serve_guru(request)
         if not request.cookies.get("guru_demo"):
             response.set_cookie("guru_demo", str(secrets.randbits(61)), httponly=True, samesite="Strict",
                                 max_age=365 * 86400)

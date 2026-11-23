@@ -6,14 +6,20 @@ from contextlib import closing, contextmanager
 from dataclasses import replace
 import json
 import random
+import re
 import secrets
 import sqlite3
+import time
 
-from games.guru import miniapp, salon, seance
+from games.guru import miniapp, miniapp_live, salon, seance
 
 
 class StaleTurn(ValueError):
     pass
+
+
+LIVE_OPERATIONS = frozenset({"live_home", "live_view", "live_create", "live_join", "live_move", "live_cancel"})
+LIVE_TOKEN = re.compile(r"[a-f0-9]{32}")
 
 
 def _set_profile(db, owner, name, auth_date):
@@ -158,6 +164,10 @@ class GuruVisits:
             db.execute("""CREATE TABLE IF NOT EXISTS chat_balances (
                 owner INTEGER NOT NULL, chat TEXT NOT NULL, balance INTEGER NOT NULL,
                 earned INTEGER NOT NULL, lost INTEGER NOT NULL, spent INTEGER NOT NULL, PRIMARY KEY(owner, chat))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS live_rooms (
+                token TEXT PRIMARY KEY, host INTEGER NOT NULL, guest INTEGER, status TEXT NOT NULL, saved TEXT NOT NULL)""")
+            db.execute("CREATE INDEX IF NOT EXISTS live_room_host ON live_rooms(host, status)")
+            db.execute("CREATE INDEX IF NOT EXISTS live_room_guest ON live_rooms(guest, status)")
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield db
 
@@ -182,9 +192,7 @@ class GuruVisits:
 
     def credit_chat(self, chat, owner, name, amount):
         with self._database(write=True) as db:
-            db.execute("""INSERT INTO chat_balances VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(owner, chat) DO UPDATE SET
-                balance=balance+excluded.balance, earned=earned+excluded.earned, lost=lost+excluded.lost""",
-                       (owner, chat, amount, max(amount, 0), max(-amount, 0)))
+            _credit(db, chat, owner, amount)
             if name:
                 db.execute("INSERT OR IGNORE INTO salon_profiles VALUES (?, ?, 0)", (owner, name))
             return _money(db, owner, _history(db, owner), _purchases(db, owner))["balance"]
@@ -201,6 +209,8 @@ class GuruVisits:
 
     def request(self, user_id, command, *, profile=None):
         op = command.get("op", "home")
+        if op in LIVE_OPERATIONS:
+            return self._live_request(user_id, command, profile[0] if profile else None)
         update_profile = profile and op in ("home", "leaderboard", "rename")
         read_only = op in ("home", "catalog", "card", "record", "interior", "shop", "leaderboard")
         with self._database(write=update_profile or not read_only) as db:
@@ -330,3 +340,89 @@ class GuruVisits:
             if op == "reply" or (op == "move" and active is None):
                 result["record"] = record
             return result
+
+    def _live_request(self, owner, command, name):
+        op = command["op"]
+        with self._database(write=op not in ("live_home", "live_view")) as db:
+            if op in ("live_home", "live_create", "live_join"):
+                active = db.execute("""SELECT * FROM live_rooms WHERE status='active' AND (host=? OR guest=?)
+                    ORDER BY rowid DESC LIMIT 1""", (owner, owner)).fetchone()
+            if op == "live_home":
+                if active:
+                    return {"room": _live_view(active, owner)}
+                recent = db.execute("""SELECT token FROM live_rooms WHERE status='done' AND (host=? OR guest=?)
+                    ORDER BY rowid DESC LIMIT 1""", (owner, owner)).fetchone()
+                return {"room": None, "recent": recent["token"] if recent else None}
+            if op == "live_create":
+                if active:
+                    return {"room": _live_view(active, owner)}
+                token = secrets.token_hex(16)
+                purchases = _purchases(db, owner)
+                saved = {"seed": secrets.randbits(53), "started": int(time.time()), "host": name or "Мадам",
+                         "wallet": _money(db, owner, _history(db, owner), purchases)["balance"],
+                         "items": list(purchases), "moves": []}
+                db.execute("INSERT INTO live_rooms VALUES (?, ?, NULL, 'active', ?)",
+                           (token, owner, json.dumps(saved, ensure_ascii=False)))
+                room = db.execute("SELECT * FROM live_rooms WHERE token=?", (token,)).fetchone()
+                return {"room": _live_view(room, owner)}
+
+            token = command.get("id")
+            if not isinstance(token, str) or not LIVE_TOKEN.fullmatch(token):
+                raise ValueError("Приглашение не найдено.")
+            room = db.execute("SELECT * FROM live_rooms WHERE token=?", (token,)).fetchone()
+            if room is None:
+                raise ValueError("Приглашение не найдено.")
+            host, guest, status = room["host"], room["guest"], room["status"]
+            member = owner in (host, guest)
+            if not member and (status != "active" or guest is not None or op not in ("live_view", "live_join")):
+                raise ValueError("Это приглашение уже закрыто.")
+            saved = json.loads(room["saved"])
+            if op == "live_view":
+                if member and command.get("rev") == len(saved["moves"]) and command.get("status") == status:
+                    return {"unchanged": True}
+                return {"room": _live_view(room, owner, saved)}
+            if op == "live_join" and member:
+                return {"room": _live_view(room, owner, saved)}
+            if status != "active":
+                raise ValueError("Этот приём уже завершён.")
+            if op == "live_join" and active:
+                raise ValueError("Сначала завершите другой живой приём.")
+            if op != "live_join" and command.get("rev") != len(saved["moves"]):
+                raise StaleTurn("Приём уже продолжился. Показан последний ход.")
+            if op == "live_cancel":
+                status = "cancelled"
+            else:
+                session, rng, lines = miniapp_live.replay(token, host, guest, saved)
+                if op == "live_join":
+                    guest, action, reply = owner, "join", ""
+                    saved["guest"] = name or "Клиент"
+                else:
+                    action = command.get("action")
+                    if not isinstance(action, str) or action == "join":
+                        raise ValueError("Действие недоступно.")
+                    reply = miniapp_live.reply_text(command.get("text", "")) if action in ("said", "introduce") else ""
+                lines.extend(miniapp_live.apply_move(session, rng, saved["moves"], owner, action, reply, client=saved.get("guest")))
+                saved["moves"].append([action, owner == host, reply])
+                if session.finished:
+                    status = "done"
+                    _credit(db, "mini-live", host, session.fee)
+                result = miniapp_live.view(token, owner, host, guest, saved, status, session, lines)
+            db.execute("UPDATE live_rooms SET guest=?, status=?, saved=? WHERE token=?",
+                       (guest, status, json.dumps(saved, ensure_ascii=False), token))
+            if status == "cancelled":
+                return {"room": _live_view(db.execute("SELECT * FROM live_rooms WHERE token=?", (token,)).fetchone(), owner, saved)}
+            return {"room": result}
+
+
+def _credit(db, chat, owner, amount):
+    db.execute("""INSERT INTO chat_balances VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(owner, chat) DO UPDATE SET
+        balance=balance+excluded.balance, earned=earned+excluded.earned, lost=lost+excluded.lost""",
+               (owner, chat, amount, max(amount, 0), max(-amount, 0)))
+
+
+def _live_view(room, owner, saved=None):
+    if saved is None:
+        saved = json.loads(room["saved"])
+    token, host, guest = room["token"], room["host"], room["guest"]
+    session, _, lines = miniapp_live.replay(token, host, guest, saved)
+    return miniapp_live.view(token, owner, host, guest, saved, room["status"], session, lines)

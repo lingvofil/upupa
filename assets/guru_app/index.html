@@ -21,11 +21,17 @@
       }
     </script>
     <script defer src="?view=guru&amp;asset=app.js"></script>
+    <script defer src="?view=guru&amp;asset=effects.js"></script>
+    <script defer src="?view=guru&amp;asset=live.js"></script>
   </head>
   <body>
     <header>
       <button id="brand" aria-label="На порог салона"><i>✴</i> Гуру</button>
-      <button id="cabinet">Мой салон <span aria-hidden="true">↗</span></button>
+      <div class="header-actions">
+        <button id="tilt" aria-label="Свет наклоном" title="Свет наклоном" aria-pressed="false" hidden>☼</button>
+        <button id="fullscreen" aria-label="На весь экран" title="На весь экран" aria-pressed="false" hidden>⛶</button>
+        <button id="cabinet">Мой салон <span aria-hidden="true">↗</span></button>
+      </div>
     </header>
     <main id="stage" tabindex="-1">
       <section class="hero">
