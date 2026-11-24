@@ -38,10 +38,10 @@ def _is_present_member(chat_member) -> bool:
     return False
 
 
-def _is_member_leave_update(update: types.ChatMemberUpdated) -> bool:
+def _is_member_departure_update(update: types.ChatMemberUpdated) -> bool:
     return (
         _is_present_member(update.old_chat_member)
-        and getattr(update.new_chat_member, "status", None) == "left"
+        and update.new_chat_member.status in {"left", "kicked"}
     )
 
 
@@ -71,7 +71,7 @@ def _claim_leave_notification(chat_id: int, user_id: int) -> bool:
     return True
 
 
-async def _notify_member_left(chat_id: int, member, send_message) -> bool:
+async def _notify_member_departure(chat_id: int, member, actor, send_message) -> bool:
     if member is None or member.is_bot:
         return False
 
@@ -82,7 +82,11 @@ async def _notify_member_left(chat_id: int, member, send_message) -> bool:
     if not _claim_leave_notification(chat_id, member.id):
         return False
 
-    await send_message(f"этот пидорас {_member_display_name(member)} только что убежал")
+    member_name = _member_display_name(member)
+    if actor is not None and actor.id != member.id:
+        await send_message(f"{_member_display_name(actor)} пидорнул {member_name}")
+    else:
+        await send_message(f"этот пидорас {member_name} только что убежал")
     return True
 
 
@@ -171,24 +175,30 @@ async def handle_where_sits(message: types.Message):
 
 @router.message(F.left_chat_member)
 async def handle_left_chat_member(message: types.Message):
-    """Fallback для сервисного сообщения об уходе в небольших чатах."""
-    await _notify_member_left(
+    """Обработать служебное сообщение об уходе или исключении."""
+    await _notify_member_departure(
         message.chat.id,
         message.left_chat_member,
+        message.from_user,
         message.answer,
     )
 
 
 @router.chat_member()
 async def handle_chat_member_update(update: types.ChatMemberUpdated):
-    """Отследить реальный выход участника независимо от сервисного сообщения."""
-    if not _is_member_leave_update(update):
+    """Отследить уход или исключение даже без служебного сообщения."""
+    if not _is_member_departure_update(update):
         return
 
     member = update.new_chat_member.user
-    await _notify_member_left(
+    actor = update.from_user
+    if update.new_chat_member.status == "kicked" and actor.id == member.id:
+        return
+
+    await _notify_member_departure(
         update.chat.id,
         member,
+        actor,
         lambda text: bot.send_message(update.chat.id, text),
     )
 
