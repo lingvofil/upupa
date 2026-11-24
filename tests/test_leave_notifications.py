@@ -45,10 +45,12 @@ def _member(*, name="Иван Иванов", is_bot=False, username=None, user_i
     )
 
 
-def _message(chat_id=-1001, member=None):
+def _message(chat_id=-1001, member=None, *, actor=None):
+    member = member or _member()
     return SimpleNamespace(
         chat=SimpleNamespace(id=chat_id),
-        left_chat_member=member or _member(),
+        left_chat_member=member,
+        from_user=actor or member,
         answer=AsyncMock(),
     )
 
@@ -65,6 +67,7 @@ def _chat_member_update(
     *,
     chat_id=-1001,
     member=None,
+    actor=None,
     old_status="member",
     new_status="left",
     old_is_member=True,
@@ -72,6 +75,7 @@ def _chat_member_update(
     member = member or _member()
     return SimpleNamespace(
         chat=SimpleNamespace(id=chat_id),
+        from_user=actor or member,
         old_chat_member=_chat_member_state(
             old_status,
             member,
@@ -102,9 +106,10 @@ def test_leave_notifications_setting_shows_disable_action_when_enabled(monkeypat
     assert "Выкл. уходы" in _button_texts(markup)
 
 
-def test_leave_notification_is_silent_by_default():
+@pytest.mark.parametrize("actor", [None, _member(name="Админ", user_id=321)])
+def test_leave_notification_is_silent_by_default(actor):
     chat_settings.clear()
-    message = _message()
+    message = _message(actor=actor)
 
     _run(handle_left_chat_member(message))
 
@@ -175,24 +180,35 @@ def test_chat_member_update_sends_leave_notification_in_large_chat_path(monkeypa
     )
 
 
-def test_chat_member_update_ignores_kick(monkeypatch):
+@pytest.mark.parametrize("new_status", ["kicked", "left"])
+def test_chat_member_update_names_admin_who_removed_member(monkeypatch, new_status):
     chat_settings.clear()
     chat_settings["-1001"] = {"leave_notifications_enabled": True}
     fake_bot = SimpleNamespace(send_message=AsyncMock())
     monkeypatch.setattr(basic, "bot", fake_bot)
-    update = _chat_member_update(new_status="kicked")
+    update = _chat_member_update(new_status=new_status, actor=_member(name="Админ", user_id=321))
 
     _run(handle_chat_member_update(update))
 
-    fake_bot.send_message.assert_not_awaited()
+    fake_bot.send_message.assert_awaited_once_with(-1001, "Админ пидорнул Иван Иванов")
 
 
-def test_chat_member_update_ignores_already_absent_restricted_member(monkeypatch):
+@pytest.mark.parametrize("old_status, new_status", [
+    ("restricted", "left"),
+    ("left", "kicked"),
+    ("kicked", "left"),
+])
+def test_chat_member_update_ignores_already_absent_member(monkeypatch, old_status, new_status):
     chat_settings.clear()
     chat_settings["-1001"] = {"leave_notifications_enabled": True}
     fake_bot = SimpleNamespace(send_message=AsyncMock())
     monkeypatch.setattr(basic, "bot", fake_bot)
-    update = _chat_member_update(old_status="restricted", old_is_member=False)
+    update = _chat_member_update(
+        old_status=old_status,
+        new_status=new_status,
+        old_is_member=False,
+        actor=_member(name="Админ", user_id=321),
+    )
 
     _run(handle_chat_member_update(update))
 
@@ -212,6 +228,29 @@ def test_leave_notification_is_deduplicated_between_update_types(monkeypatch):
 
     fake_bot.send_message.assert_awaited_once()
     message.answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("service_message_first", [True, False])
+def test_kick_is_reported_once_in_either_update_order(monkeypatch, service_message_first):
+    chat_settings["-1001"] = {"leave_notifications_enabled": True}
+    actor = _member(name="Админ", user_id=321)
+    member = _member()
+    message = _message(member=member, actor=actor)
+    update = _chat_member_update(member=member, actor=actor, new_status="kicked")
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(basic, "bot", fake_bot)
+    text = "Админ пидорнул Иван Иванов"
+
+    if service_message_first:
+        _run(handle_left_chat_member(message))
+        _run(handle_chat_member_update(update))
+        message.answer.assert_awaited_once_with(text)
+        fake_bot.send_message.assert_not_awaited()
+    else:
+        _run(handle_chat_member_update(update))
+        _run(handle_left_chat_member(message))
+        fake_bot.send_message.assert_awaited_once_with(-1001, text)
+        message.answer.assert_not_awaited()
 
 
 def test_basic_router_subscribes_to_chat_member_updates():
