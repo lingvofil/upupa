@@ -449,4 +449,5 @@ def test_dream_probability_is_configurable_in_settings_menu():
 def test_help_mentions_dream_book():
     from prompts.help_texts import HELP_DICT
 
-    assert "сонник" in HELP_DICT["talking"]
+    assert "сонник" in HELP_DICT["utils"]
+    assert "сонник" not in HELP_DICT["talking"]

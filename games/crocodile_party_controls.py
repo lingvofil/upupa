@@ -760,7 +760,7 @@ def install_crocodile_help() -> None:
     try:
         from prompts import help_texts
 
-        section = help_texts.HELP_DICT.get("creative", "")
+        section = help_texts.HELP_DICT["crocodile"]
         if "<code>кракадил дуэль</code>" in section:
             return
         old = "<code>кракадил</code> - норисуй даунский рисунок\n"
@@ -774,7 +774,7 @@ def install_crocodile_help() -> None:
             section = section.replace(old, new, 1)
         else:
             section += "\n" + new
-        help_texts.HELP_DICT["creative"] = section
+        help_texts.HELP_DICT["crocodile"] = section
         help_texts.HELP_TEXT = "\n\n".join(help_texts.HELP_DICT.values())
         try:
             import prompts
