@@ -1,13 +1,18 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import wave
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, Update
 import pytest
 
 from features import dialogue_video as feature
+from infrastructure.subprocess_runner import run_subprocess
+from services import dialogue_video as renderer
 
 
 NOW = datetime(2026, 11, 25, 18, tzinfo=timezone.utc)
@@ -43,8 +48,8 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
     calls.return_value = None
     rendered = []
 
-    async def render(lines, directory):
-        rendered.extend(line.text for line in lines)
+    async def render(lines, directory, *, chat_title):
+        rendered.extend((line.text, line.reply_to_id) for line in lines)
         output = directory / "dialogue.mp4"
         output.write_bytes(b"video")
         return output
@@ -60,13 +65,15 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
         dispatcher.include_router(router)
         dispatcher.message.outer_middleware(feature.DialogueVideoHistoryMiddleware())
         async with Bot("123456:dialogue-test") as bot:
+            first = message(5, "Первая реплика")
+            second = message(6, "Вторая реплика", author=2).model_copy(update={"reply_to_message": first})
             updates = [
                 message(1, "Давно", date=NOW - timedelta(minutes=31)),
                 message(2, "Соседняя тема", topic=22),
                 message(3, "Другой чат", chat=-10002),
                 message(4, "Закрытое сообщение", protected=True),
-                message(5, "Первая реплика"),
-                message(6, "Вторая реплика", author=2),
+                first,
+                second,
                 message(7, "Упупа, диалог"),
                 message(8, "/dialog"),
             ]
@@ -74,7 +81,7 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
                 await dispatcher.feed_update(bot, Update(update_id=event.message_id, message=event))
 
     asyncio.run(run())
-    assert rendered == ["Первая реплика", "Вторая реплика"]
+    assert rendered == [("Первая реплика", None), ("Вторая реплика", 5)]
     assert len(calls.await_args_list) == 2
     video, cooldown = [call.args[0] for call in calls.await_args_list]
     assert video.__api_method__ == "sendVideo"
@@ -155,3 +162,46 @@ def test_admin_can_save_dialogue_chance_and_change_only_automatic_trigger(monkey
 
     asyncio.run(run())
     assert render.await_count == 2
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
+def test_voiced_video_keeps_last_bubble_on_screen_until_audio_ends(monkeypatch, tmp_path):
+    wav = BytesIO()
+    with wave.open(wav, "wb") as audio:
+        audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\x01\x00" * 48000)
+    gemini = AsyncMock(return_value=wav.getvalue())
+    fallback = AsyncMock()
+    monkeypatch.setattr(renderer, "synthesize_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "_espeak_utterances", fallback)
+
+    async def run():
+        lines = [
+            renderer.Line(1, 1, "Лена", "Первая", NOW),
+            renderer.Line(2, 2, "Илья", "Вторая", NOW),
+            renderer.Line(3, 1, "Лена", "Последняя", NOW),
+        ]
+        video = await renderer.render_dialogue_video(lines, tmp_path, chat_title="Чат")
+        frame = await run_subprocess(
+            ["ffmpeg", "-v", "error", "-ss", "7.4", "-i", str(video),
+             "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            timeout=10,
+        )
+        assert frame.ok and frame.stdout.startswith(b"\x89PNG")
+
+    asyncio.run(run())
+    profiles = [call.kwargs["voice_name"] for call in gemini.await_args_list]
+    assert len(profiles) == 3 and profiles[0] == profiles[2] != profiles[1]
+    assert gemini.await_args_list[0].args[0].endswith('"Первая"')
+    fallback.assert_not_awaited()
+
+
+def test_gemini_error_falls_back_for_the_entire_clip(monkeypatch, tmp_path):
+    lines = [renderer.Line(1, 1, "Лена", "Первая", NOW)]
+    gemini = AsyncMock(side_effect=renderer.SpeechSynthesisError("quota"))
+    local = AsyncMock(return_value=[])
+    monkeypatch.setattr(renderer, "synthesize_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "_espeak_utterances", local)
+
+    assert asyncio.run(renderer._voice(lines, tmp_path)) is None
+    local.assert_awaited_once_with(lines, tmp_path)
