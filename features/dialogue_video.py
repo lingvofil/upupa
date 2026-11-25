@@ -12,11 +12,13 @@ from time import monotonic
 from aiogram import BaseMiddleware
 from aiogram.types import FSInputFile, Message
 
+from core.state import chat_settings
 from services.dialogue_video import HEIGHT, WIDTH, Line, render_dialogue_video
 
 
 TEXT_COMMAND = re.compile(r"\s*(?:упупа[\s,]+)?диалог\s*", re.IGNORECASE)
-RANDOM_PROBABILITY = 0.001
+PROBABILITY_KEY = "dialogue_video_prob"
+DEFAULT_PROBABILITY = 0.001
 MANUAL_COOLDOWN = 60
 RANDOM_COOLDOWN = 3600
 _FRESHNESS = timedelta(minutes=30)
@@ -96,8 +98,10 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
             await message.answer("За последние 30 минут здесь нужно хотя бы по одной реплике от двух участников.")
         return False
 
-    if automatic and random.random() >= RANDOM_PROBABILITY:
-        return False
+    if automatic:
+        probability = chat_settings.get(str(chat_id), {}).get(PROBABILITY_KEY, DEFAULT_PROBABILITY)
+        if random.random() >= probability:
+            return False
     cooldown = RANDOM_COOLDOWN if automatic else MANUAL_COOLDOWN
     last_video = _last_video.get(chat_id)
     cooling_down = last_video is not None and monotonic() - last_video < cooldown
