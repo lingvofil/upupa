@@ -276,6 +276,10 @@ class UpupaApplication:
 
         self.dispatcher.message.outer_middleware(CrocodileChatRelayMiddleware())
 
+        from features.dialogue_video import DialogueVideoHistoryMiddleware
+
+        self.dispatcher.message.outer_middleware(DialogueVideoHistoryMiddleware())
+
         # dnd_router исторически подключён отдельно и раньше общего main router,
         # поэтому на него не распространяются middleware main router.
         main_router = get_main_router()

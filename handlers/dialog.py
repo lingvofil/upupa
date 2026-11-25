@@ -6,16 +6,23 @@
 
 import logging
 
-from aiogram import Router, types
+from aiogram import F, Router, types
+from aiogram.filters import Command, or_f
 
 import features.statistics as bot_statistics
 from features.crocodile_scoring import check_regular_answer
 from features.dialog_pipeline import process_dialog_pipeline
+from features.dialogue_video import TEXT_COMMAND, send_dialogue_video
 from games import crocodile_modes, reverse_crocodile, reverse_crocodile_guessing
 from services import memegenerator
 
 
 router = Router(name="dialog")
+
+
+@router.message(or_f(F.text.regexp(TEXT_COMMAND), Command("dialog", "диалог", ignore_case=True)))
+async def dialogue_video_command(message: types.Message):
+    await send_dialogue_video(message)
 
 
 @router.message()
