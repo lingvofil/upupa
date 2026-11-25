@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from aiogram import Bot, Dispatcher
@@ -104,3 +105,53 @@ def test_automatic_trigger_has_a_separate_longer_chat_cooldown(monkeypatch):
             assert calls.await_count == 2
 
     asyncio.run(run())
+
+
+def test_admin_can_save_dialogue_chance_and_change_only_automatic_trigger(monkeypatch, tmp_path):
+    from tests import test_smoke_imports  # noqa: F401  (env + mocks)
+    from core.json_repository import JsonFileRepository
+    from features import chat_settings as settings_store, interactive_settings as menu
+
+    monkeypatch.setitem(feature.chat_settings, "-10001", {})
+    repository = JsonFileRepository(tmp_path / "chat_settings.json")
+    monkeypatch.setattr(menu, "save_chat_settings", lambda: settings_store.save_chat_settings(repository))
+    monkeypatch.setattr(menu, "has_settings_permission", AsyncMock(return_value=True))
+    monkeypatch.setattr(Bot, "__call__", AsyncMock())
+    monkeypatch.setattr(feature.random, "random", lambda: 0.9)
+    render = AsyncMock(return_value="dialogue.mp4")
+    monkeypatch.setattr(feature, "render_dialogue_video", render)
+
+    query = SimpleNamespace(
+        message=SimpleNamespace(chat=SimpleNamespace(id=-10001), edit_text=AsyncMock()),
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+    )
+
+    async def press(callback):
+        query.data = callback
+        await menu.handle_settings_callback(query)
+        markup = query.message.edit_text.call_args.kwargs["reply_markup"]
+        return {button.callback_data: button.text for row in markup.inline_keyboard for button in row}
+
+    async def run():
+        prob_type = f"settings:prob_type:{feature.PROBABILITY_KEY}"
+        set_prob = f"settings:set_prob:{feature.PROBABILITY_KEY}"
+        assert (await press("settings:view:probs_menu"))[prob_type] == "🎬 Диалог (0.1%)"
+        assert (await press(prob_type))[f"{set_prob}:0"] == "0% (Выкл)"
+        assert (await press(f"{set_prob}:0"))[prob_type] == "🎬 Диалог (0%)"
+        assert repository.load()["-10001"][feature.PROBABILITY_KEY] == 0
+
+        async with Bot("123456:dialogue-test") as bot:
+            for index in range(1, 5):
+                event = message(index, f"Реплика {index}", author=index % 2 + 1).as_(bot)
+                feature._record(event)
+            assert not await feature.send_dialogue_video(event, automatic=True)
+            assert await feature.send_dialogue_video(message(5, "диалог").as_(bot))
+
+            feature._last_video.clear()
+            assert (await press(f"{set_prob}:1.0"))[prob_type] == "🎬 Диалог (100%)"
+            assert repository.load()["-10001"][feature.PROBABILITY_KEY] == 1
+            assert await feature.send_dialogue_video(event, automatic=True)
+
+    asyncio.run(run())
+    assert render.await_count == 2

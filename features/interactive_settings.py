@@ -8,6 +8,7 @@ from core.loader import bot
 from core.settings import ADMIN_ID
 from core.state import chat_settings, sms_disabled_chats
 from features.chat_settings import save_chat_settings
+from features.dialogue_video import DEFAULT_PROBABILITY, PROBABILITY_KEY
 from features.sms_settings import save_sms_disabled_chats
 from prompts import PROMPTS_DICT, HELP_DICT
 from features.content_filter import ANTISPAM_ENABLED_CHATS, save_antispam_settings
@@ -36,7 +37,8 @@ REACTION_TYPES = {
     "voice_prob": "🗣 Голосовые",
     "regular_prob": "👖 Штаны",
     "rhyme_prob": "📝 Рифмы",
-    "dream_prob": "🔮 Сонник"
+    "dream_prob": "🔮 Сонник",
+    PROBABILITY_KEY: "🎬 Диалог",
 }
 
 DEFAULT_PROBS = {
@@ -47,7 +49,8 @@ DEFAULT_PROBS = {
     "voice_prob": 0.0001,
     "regular_prob": 0.008,
     "rhyme_prob": 0.008,
-    "dream_prob": 1.0
+    "dream_prob": 1.0,
+    PROBABILITY_KEY: DEFAULT_PROBABILITY,
 }
 
 YTP_PRESETS = {
@@ -163,6 +166,8 @@ async def get_probs_menu_markup(chat_id: str):
 async def get_prob_value_markup(chat_id: str, prob_type: str):
     label = REACTION_TYPES.get(prob_type, "Реакция")
     text = f"🎯 *Настройка: {label}*\nВыберите новый шанс срабатывания:"
+    if prob_type == PROBABILITY_KEY:
+        text += "\n\n_0% отключает случайные ролики. Команда «диалог» доступна при любом шансе._"
 
     builder = InlineKeyboardBuilder()
     for val in PROBABILITY_OPTIONS:
