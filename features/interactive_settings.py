@@ -446,9 +446,29 @@ async def handle_settings_callback(query: types.CallbackQuery):
         await query.answer(answer_text)
 
 
+GAME_HELP_PAGES = {
+    "crocodile": "🦎 Кракадил",
+    "guru": "🔮 Гуру",
+    "dnd": "🧙‍♂️ ДНД",
+    "quiz": "🎓 Векторины",
+}
+
+
 def get_help_keyboard(current_section="main"):
     """Генерация клавиатуры для навигации по справке."""
     builder = InlineKeyboardBuilder()
+
+    if current_section == "creative":
+        for section, label in GAME_HELP_PAGES.items():
+            builder.button(text=label, callback_data=f"help:{section}")
+        builder.adjust(2)
+        builder.row(types.InlineKeyboardButton(text="🔙 В ночало", callback_data="help:main"))
+        return builder.as_markup()
+
+    if current_section in GAME_HELP_PAGES:
+        builder.row(types.InlineKeyboardButton(text="🔙 Игры", callback_data="help:creative"))
+        builder.row(types.InlineKeyboardButton(text="🔙 В ночало", callback_data="help:main"))
+        return builder.as_markup()
 
     builder.row(
         types.InlineKeyboardButton(text="🗣 Говорилка", callback_data="help:talking"),
@@ -456,7 +476,7 @@ def get_help_keyboard(current_section="main"):
     )
     builder.row(
         types.InlineKeyboardButton(text="🕸 Соцграф", callback_data="help:social"),
-        types.InlineKeyboardButton(text="🎮 Векторины и игры", callback_data="help:creative")
+        types.InlineKeyboardButton(text="🎮 Игры", callback_data="help:creative")
     )
     builder.row(
         types.InlineKeyboardButton(text="🎨 Медиа", callback_data="help:media"),

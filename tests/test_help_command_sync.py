@@ -1,4 +1,6 @@
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from tests import test_smoke_imports  # noqa: F401  (env + heavy-library mocks)
 
@@ -30,6 +32,7 @@ def test_help_main_page_links_to_site():
     from prompts.help_texts import HELP_DICT
 
     assert '<a href="https://lingvofil.github.io/upupa/">' in HELP_DICT["main"]
+    assert "мой сайд" in HELP_DICT["main"]
 
 
 def test_help_uses_short_birthday_example_without_placeholder_brackets():
@@ -47,11 +50,10 @@ def test_help_covers_current_public_command_families():
         # main / SMS
         "справка", "упупа настройки", "где сидишь", "смс [номер] [текст]",
         "ммс [номер] [текст]", "отключи смс", "включи смс",
-        # talking / models / court
+        # talking / court
         "упупа не болтай", "упупа говори", "какой промпт", "поменяй промпт",
         "случайный промпт", "расскажи промпт",
-        "промпт участник", "какая модель", "упупа гемини", "упупа гигачат",
-        "упупа грок", "упупа опен", "упупа силикон", "упупа нушо",
+        "промпт участник",
         "упупа скажи", "упупа умоляю", "переведи на", "упупа когда мы говорили",
         "упупа рассуди", "упупа суд", "судебная практика", "пиздиш",
         "чо по телеку", "новости футбола", "праздники", "очистка", "пирожок",
@@ -60,9 +62,7 @@ def test_help_covers_current_public_command_families():
         "мой лексикон", "лексикон чат", "моя статистика", "статистика чат",
         "кто я", "что за чат", "чобыло", "что я пропустил", "комикс",
         "радио упупы", "соцграф", "мои связи", "центровой", "летопись",
-        "отношения @user", "отношения @user1 @user2", "мои отношения",
-        "отношения чата", "история @user", "история @user1 @user2",
-        "история отношений",
+        "отношения @user", "мои отношения", "отношения чата", "история @user",
         # World
         "упупа миры", "государство", "государства", "дипломатия", "карта мира",
         "мировые новости", "хроника", "санкции", "упупа санкции",
@@ -80,8 +80,7 @@ def test_help_covers_current_public_command_families():
         "днд инвентарь", "передать [предмет]", "отдать [предмет]", "днд связи",
         "днд сюжет", "днд конец",
         # media
-        "чотам", "опиши", "опиши сильно", "нарисуй", "сгенерируй",
-        "отредактируй", "перерисуй", "добавь", "скаламбурь", "магшот",
+        "чотам", "опиши", "нарисуй", "перерисуй", "добавь", "скаламбурь", "магшот",
         "нвидиа", "мем", "дисторшн", "пуп", "быстрее", "медленнее",
         "наоборот", "упупа сними", "оживи", "котогиф", "гиф [запрос]",
         "найди [запрос]",
@@ -113,10 +112,72 @@ def test_help_does_not_advertise_disabled_chogovoryat_handler():
 def test_help_explains_public_guru_game_and_group_only_live_mode():
     from prompts.help_texts import HELP_DICT
 
-    creative = HELP_DICT["creative"]
-    assert "<b>🔮 ГУРУ" in creative
-    assert "<code>гуру</code>" in creative
-    assert "<code>гуру играть</code>" in creative
-    assert "Таро, ладонь и гороскоп" in creative
-    assert "только в группе" in creative
-    assert "Игра открыта в личке и чатах; одна партия на чат." in creative
+    section = HELP_DICT["guru"]
+    assert "<b>🔮 ГУРУ" in section
+    assert "<code>гуру</code>" in section
+    assert "<code>гуру играть</code>" in section
+    assert "Таро, ладонь и гороскоп" in section
+    assert "только в группе" in section
+    assert "Игра открыта в личке и чатах; одна партия на чат." in section
+
+
+def test_help_relocates_sections_and_hides_selected_commands():
+    from prompts.help_texts import HELP_DICT, HELP_TEXT
+
+    assert "<code>гуру</code>" in HELP_DICT["main"]
+    assert "<code>упупа миры</code>" not in HELP_DICT["main"]
+    assert "упупа настройки</code> → «Вкл. Мир»" in HELP_DICT["world"].splitlines()[1]
+    assert "<code>упупа миры</code>" in HELP_DICT["world"].splitlines()[2]
+    for command in ("чо по телеку", "новости футбола", "праздники",
+                    "упупа рассуди", "упупа суд", "судебная практика"):
+        assert f"<code>{command}</code>" in HELP_DICT["utils"]
+        assert f"<code>{command}</code>" not in HELP_DICT["talking"]
+    for command in ("какая модель", "упупа гемини", "упупа гигачат", "упупа грок",
+                    "упупа опен", "упупа силикон", "упупа нушо", "опиши сильно",
+                    "сгенерируй [промпт]", "отредактируй [что сделать]"):
+        assert f"<code>{command}</code>" not in HELP_TEXT
+
+
+def test_help_navigates_from_main_through_each_game_and_back():
+    from features.interactive_settings import handle_help_callback, send_help_menu
+    from prompts import HELP_DICT
+
+    message = SimpleNamespace(
+        answer=AsyncMock(), text=None, caption=None, edit_text=AsyncMock()
+    )
+    query = SimpleNamespace(message=message, answer=AsyncMock())
+
+    def buttons(sent):
+        return [
+            button.callback_data
+            for row in sent.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+
+    asyncio.run(send_help_menu(message))
+    assert message.answer.call_args.kwargs["text"] == HELP_DICT["main"]
+    assert "help:creative" in buttons(message.answer.call_args)
+
+    query.data = "help:creative"
+    asyncio.run(handle_help_callback(query))
+    games_page = message.edit_text.call_args
+    assert games_page.kwargs["text"] == HELP_DICT["creative"]
+    assert games_page.kwargs["text"].count("<code>") == 5
+    assert buttons(games_page) == [
+        "help:crocodile", "help:guru", "help:dnd", "help:quiz", "help:main"
+    ]
+
+    for path in buttons(games_page)[:-1]:
+        query.data = path
+        asyncio.run(handle_help_callback(query))
+        game_page = message.edit_text.call_args
+        assert game_page.kwargs["text"] == HELP_DICT[path.split(":")[1]]
+        assert buttons(game_page) == ["help:creative", "help:main"]
+
+        query.data = "help:creative"
+        asyncio.run(handle_help_callback(query))
+        assert message.edit_text.call_args == games_page
+
+    query.data = "help:main"
+    asyncio.run(handle_help_callback(query))
+    assert message.edit_text.call_args.kwargs["text"] == HELP_DICT["main"]

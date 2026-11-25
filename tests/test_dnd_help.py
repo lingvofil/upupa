@@ -2,7 +2,7 @@ from prompts import HELP_DICT, HELP_TEXT
 
 
 def test_dnd_help_lists_current_commands():
-    section = HELP_DICT["creative"]
+    section = HELP_DICT["dnd"]
 
     assert "<code>упупа днд</code>" in section
     assert "<code>днд</code>" in section
@@ -21,7 +21,7 @@ def test_dnd_help_lists_current_commands():
 
 
 def test_dnd_help_stops_advertising_replaced_triggers():
-    section = HELP_DICT["creative"]
+    section = HELP_DICT["dnd"]
 
     assert "<code>мой герой</code>" in section
     assert "<code>мой инвентарь</code>" in section

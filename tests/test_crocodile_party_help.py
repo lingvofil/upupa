@@ -7,8 +7,8 @@ def test_party_commands_are_added_to_help():
 
     controls.install_crocodile_help()
 
-    creative = help_texts.HELP_DICT["creative"]
-    assert "<code>кракадил</code> - единое меню" in creative
-    assert "<code>кракадил дуэль</code>" in creative
-    assert "<code>кракадил телефон</code>" in creative
-    assert "<code>кракадил галерея</code>" in creative
+    section = help_texts.HELP_DICT["crocodile"]
+    assert "<code>кракадил</code> - единое меню" in section
+    assert "<code>кракадил дуэль</code>" in section
+    assert "<code>кракадил телефон</code>" in section
+    assert "<code>кракадил галерея</code>" in section
