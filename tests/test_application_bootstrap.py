@@ -161,6 +161,7 @@ def test_dispatcher_keeps_dnd_before_main_router(monkeypatch):
     ]
     assert [type(middleware).__name__ for middleware in dispatcher.message.outer_middlewares] == [
         "CrocodileChatRelayMiddleware",
+        "DialogueVideoHistoryMiddleware",
     ]
 
 

@@ -27,6 +27,7 @@ from core.loader import bot
 from core.state import chat_settings
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import add_chat, save_chat_settings
+from features.dialogue_video import send_dialogue_video
 from features.lexicon_settings import save_user_message
 from features.stat_rank_settings import track_message_statistics
 from prompts import KEYWORDS
@@ -178,6 +179,8 @@ async def process_random_reactions_once(message: Message) -> bool:
             await message.reply(regular)
             return True
 
+    if message.text and message.chat.type in {"group", "supergroup"}:
+        return await send_dialogue_video(message, automatic=True)
     return False
 
 
