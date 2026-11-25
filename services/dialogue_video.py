@@ -3,20 +3,30 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
+import json
 import logging
 import os
 from pathlib import Path
+from random import Random
 import re
 import shutil
 import wave
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pytz import timezone
 
 from infrastructure.subprocess_runner import run_subprocess
+from services.speech import SpeechSynthesisError, synthesize_gemini_wav
 
 WIDTH, HEIGHT = 720, 1280
-_COLORS = ("#80E2CC", "#FFB985", "#C9ACFF", "#F6DB83", "#90C6FF")
+_COLORS = ("#81E0FC", "#FFAA88", "#C8AAFF", "#87E2B2", "#FFD58B", "#F6A8DB", "#A5B5FB")
+_GEMINI_VOICES = ("Kore", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Puck")
+_LOCAL_VOICES = (
+    ("ru+m3", 42, 165), ("ru+f2", 59, 178), ("ru+m1", 34, 154),
+    ("ru+f4", 68, 165), ("ru+m5", 52, 184), ("ru+f1", 53, 158),
+    ("ru+m2", 46, 174),
+)
 _MOSCOW = timezone("Europe/Moscow")
 _logger = logging.getLogger(__name__)
 _EMOJI = re.compile(
@@ -33,6 +43,7 @@ class Line:
     author: str
     text: str
     date: datetime
+    reply_to_id: int | None = None
 
 
 def _font(size: int, *, bold: bool = False):
@@ -77,8 +88,68 @@ def _wrap(text, measure, width):
     return rows
 
 
-def _draw_frames(lines: list[Line], directory: Path) -> None:
-    title, body, name, small = _font(57, bold=True), _font(31), _font(24, bold=True), _font(19)
+def _shorten(text, font, width):
+    if font.getlength(text) <= width:
+        return text
+    while text and font.getlength(text + "…") > width:
+        text = text[:-1]
+    return text.rstrip() + "…"
+
+
+def _gradient(width, height, top, bottom):
+    start, end = ImageColor.getrgb(top), ImageColor.getrgb(bottom)
+    gradient = Image.new("RGB", (1, height))
+    gradient.putdata([
+        tuple(round(first + (last - first) * y / max(1, height - 1)) for first, last in zip(start, end))
+        for y in range(height)
+    ])
+    return gradient.resize((width, height))
+
+
+def _chat_background(chat_title: str) -> Image.Image:
+    base = _gradient(WIDTH, HEIGHT, "#130B17", "#070B16")
+    draw = ImageDraw.Draw(base)
+
+    rng = Random(724)
+    for y in range(110, HEIGHT, 71):
+        for x in range(12, WIDTH, 73):
+            left, top = x + rng.randint(-18, 18), y + rng.randint(-18, 18)
+            motif = rng.randrange(5)
+            palette = ("#35213A", "#282038", "#33284A") if y < 640 else ("#23233B", "#252439", "#202D45")
+            ink = rng.choice(palette)
+            if motif == 0:
+                draw.line([(left, top + 10), (left + 27, top), (left + 19, top + 25),
+                           (left + 13, top + 15), (left, top + 10)], fill=ink, width=2, joint="curve")
+                draw.line((left + 13, top + 15, left + 27, top), fill=ink, width=2)
+            elif motif == 1:
+                draw.rounded_rectangle((left, top, left + 30, top + 23), radius=8, outline=ink, width=2)
+                draw.line([(left + 7, top + 21), (left + 7, top + 29), (left + 15, top + 23)], fill=ink, width=2)
+            elif motif == 2:
+                draw.line([(left, top + 10), (left + 8, top + 8), (left + 10, top),
+                           (left + 12, top + 8), (left + 20, top + 10), (left + 12, top + 12),
+                           (left + 10, top + 20), (left + 8, top + 12), (left, top + 10)], fill=ink, width=2)
+            elif motif == 3:
+                draw.ellipse((left + 4, top, left + 27, top + 23), outline=ink, width=2)
+                draw.arc((left, top + 6, left + 33, top + 19), 0, 355, fill=ink, width=2)
+            else:
+                draw.rounded_rectangle((left + 5, top + 2, left + 24, top + 22), radius=7, outline=ink, width=2)
+                draw.arc((left, top + 8, left + 29, top + 28), 0, 180, fill=ink, width=2)
+                draw.line((left + 14, top + 29, left + 14, top + 34), fill=ink, width=2)
+                draw.line((left + 8, top + 34, left + 20, top + 34), fill=ink, width=2)
+    draw.rounded_rectangle((31, 27, WIDTH - 31, 113), radius=39, fill="#241D2E", outline="#3E3248", width=2)
+    draw.ellipse((47, 42, 103, 98), fill="#6744AF")
+    for x, height in ((62, 12), (69, 20), (76, 29), (83, 18), (90, 10)):
+        draw.rounded_rectangle((x - 1, 70 - height // 2, x + 1, 70 + height // 2), radius=1, fill="#F3E7FF")
+    title = _font(31, bold=True)
+    heading = _shorten(chat_title or "Диалог", title, 530)
+    draw.text((119, 41), heading, fill="#FCF4FF", font=title)
+    draw.text((120, 80), "Диалог Упупы" if chat_title else "Упупа", fill="#C5ADEF", font=_font(19))
+    return base
+
+
+def _draw_frames(lines: list[Line], directory: Path, chat_title: str) -> None:
+    body, name, small = _font(31), _font(23, bold=True), _font(18)
+    quote_font, quote_name = _font(22), _font(21, bold=True)
     emoji_font = _emoji_font()
     emoji_images = {}
 
@@ -101,94 +172,171 @@ def _draw_frames(lines: list[Line], directory: Path) -> None:
                 frame.paste(glyph, (round(x), y + 5), glyph)
                 x += 34
             else:
-                draw.text((x, y), part, fill="#FAF4E6", font=body)
+                draw.text((x, y), part, fill="#FCF5FF", font=body)
                 x += body.getlength(part)
 
-    base = Image.new("RGB", (WIDTH, HEIGHT), "#101C25")
-    background = ImageDraw.Draw(base)
-    for y in range(22, HEIGHT, 34):
-        for x in range(17, WIDTH, 34):
-            background.ellipse((x, y, x + 2, y + 2), fill="#233542")
-    background.rectangle((0, 0, WIDTH, 166), fill="#142630")
-    background.rectangle((0, 164, WIDTH, 166), fill="#2F535C")
-    background.text((40, 28), "УПУПА", fill="#80E2CC", font=small)
-    background.text((38, 56), "Диалог", fill="#F7F1DD", font=title)
-
+    base = _chat_background(chat_title)
     colors = {
         author_id: _COLORS[index % len(_COLORS)]
         for index, author_id in enumerate(dict.fromkeys(line.author_id for line in lines))
     }
-    layouts = []
+    wrapped = [_wrap(line.text, body_width, 522) for line in lines]
+    replies = []
+    earlier = {}
     for line in lines:
-        rows = _wrap(line.text, body_width, 524)
-        height = 77 + len(rows) * 39
-        layouts.append((line, rows, height))
+        replies.append(earlier.get(line.reply_to_id))
+        earlier[line.message_id] = line
+    right_author = lines[-1].author_id
 
     for index in range(len(lines)):
         frame = base.copy()
         draw = ImageDraw.Draw(frame)
-        draw.rounded_rectangle((545, 109, 680, 115), radius=3, fill="#2F535C")
-        draw.rounded_rectangle((545, 109, 545 + 135 * (index + 1) // len(lines), 115), radius=3, fill="#80E2CC")
-        visible = layouts[:index + 1]
-        while sum(height + 14 for _, _, height in visible) > HEIGHT - 228:
-            visible = visible[1:]
-        y = 194
-        for line, rows, height in visible:
+        draw.rounded_rectangle((31, 1237, 689, 1242), radius=2, fill="#342940")
+        draw.rounded_rectangle((31, 1237, 31 + 658 * (index + 1) // len(lines), 1242), radius=2, fill="#AA7BFA")
+        visible = []
+        remaining = HEIGHT - 215
+        for pos in range(index, -1, -1):
+            line, rows = lines[pos], wrapped[pos]
+            same_author_before = pos > 0 and lines[pos - 1].author_id == line.author_id
+            footer = 23 if body_width(rows[-1]) > 451 else 0
+            height = 29 + 38 * len(rows) + footer + (0 if same_author_before else 28)
+            if replies[pos]:
+                height += 73
+            if height + 12 > remaining:
+                break
+            visible.append((pos, height, same_author_before, footer))
+            remaining -= height + (4 if same_author_before else 12)
+        y = 147
+        for pos, height, same_author_before, footer in reversed(visible):
+            line, rows = lines[pos], wrapped[pos]
+            reply = replies[pos]
+            last_in_group = pos == index or lines[pos + 1].author_id != line.author_id
+            active = pos == index
+            right_aligned = line.author_id == right_author
             color = colors[line.author_id]
-            author = _wrap(line.author, name.getlength, 500)[0]
-            if author != line.author:
-                author = _wrap(line.author, name.getlength, 460)[0].rstrip() + "…"
+            author = _shorten(line.author, name, 480)
             time = line.date.astimezone(_MOSCOW).strftime("%H:%M")
-            initial = next((char.upper() for char in line.author if char.isalnum()), "•")
-            draw.ellipse((38, y + 4, 84, y + 50), fill=color)
-            draw.text((61, y + 27), initial, fill="#142630", font=name, anchor="mm")
-            draw.rounded_rectangle((99, y, 681, y + height), radius=22, fill="#203540")
-            draw.text((122, y + 12), author, fill=color, font=name)
+            show_author = not same_author_before or pos == visible[-1][0]
+            if show_author and same_author_before:
+                height += 28
+            text_width = max(max(map(body_width, rows)), name.getlength(author) if show_author else 0)
+            if not footer:
+                text_width = max(text_width, body_width(rows[-1]) + 70)
+            if reply:
+                text_width = max(text_width, min(522, max(260, quote_font.getlength(reply.text) + 31)))
+            width = round(text_width) + 36
+            left = WIDTH - 38 - width if right_aligned else 83
+            right = left + width
+            if right_aligned:
+                top_color, bubble = ("#9948D8", "#4D55DB") if active else ("#8338C2", "#4447B7")
+                mask = Image.new("L", (width + 1, height + 1))
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, width, height), radius=25, fill=255)
+                frame.paste(_gradient(width + 1, height + 1, top_color, bubble), (left, y), mask)
+                if last_in_group:
+                    draw.polygon([(right, y + height - 19), (right - 12, y + height - 6),
+                                  (right + 9, y + height - 5)], fill=bubble)
+            else:
+                bubble = "#382842" if active else "#2D2332"
+                draw.rounded_rectangle((left, y, right, y + height), radius=25, fill=bubble)
+            if last_in_group:
+                if not right_aligned:
+                    draw.polygon([(left, y + height - 18), (left + 14, y + height - 6),
+                                  (left - 9, y + height - 4)], fill=bubble)
+                    initial = next((char.upper() for char in line.author if char.isalnum()), "•")
+                    draw.ellipse((21, y + height - 47, 66, y + height - 2), fill="#36264A", outline=color, width=2)
+                    draw.text((44, y + height - 24), initial, fill=color, font=name, anchor="mm")
+            text_left = left + 18
+            if show_author:
+                draw.text((text_left, y + 10), author, fill="#F4DFFF" if right_aligned else color, font=name)
+            body_y = y + (37 if show_author else 9)
+            if reply:
+                quote_color = "#EAD3FF" if right_aligned else colors[reply.author_id]
+                panel = "#5F38A2" if right_aligned else "#403047"
+                draw.rounded_rectangle((text_left, body_y, right - 18, body_y + 63), radius=9, fill=panel)
+                draw.rounded_rectangle((text_left, body_y, text_left + 4, body_y + 63), radius=2, fill=quote_color)
+                quote_width = width - 59
+                draw.text((text_left + 14, body_y + 6), _shorten(reply.author, quote_name, quote_width),
+                          fill=quote_color, font=quote_name)
+                draw.text((text_left + 14, body_y + 32), _shorten(reply.text, quote_font, quote_width),
+                          fill="#F6EAF9", font=quote_font)
+                body_y += 73
             for row_index, row in enumerate(rows):
-                draw_body(frame, draw, 122, y + 43 + 39 * row_index, row)
-            draw.text((656, y + height - 11), time, fill="#A0B5BC", font=small, anchor="rd")
-            y += height + 14
+                draw_body(frame, draw, text_left, body_y + 38 * row_index, row)
+            draw.text((right - 15, y + height - 11), time, fill="#DDCBE5", font=small, anchor="rd")
+            y += height + (12 if last_in_group else 4)
         frame.save(directory / f"frame-{index}.png")
 
 
-async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
+async def _espeak_utterances(lines: list[Line], directory: Path) -> list[bytes]:
     executable = shutil.which("espeak-ng") or shutil.which("espeak")
     if executable is None:
-        return None
+        return []
+    voices = dict(zip(dict.fromkeys(line.author_id for line in lines), _LOCAL_VOICES))
+    wavs = []
+    source = directory / "speech.txt"
+    clip = directory / "speech.wav"
+    for line in lines:
+        source.write_text(line.text, encoding="utf-8")
+        variant, pitch, speed = voices[line.author_id]
+        result = await run_subprocess(
+            [executable, "-v", variant, "-p", str(pitch), "-s", str(speed), "-b", "1",
+             "-z", "-w", str(clip), "-f", str(source)],
+            timeout=4,
+        )
+        if not result.ok:
+            raise SpeechSynthesisError("Local speech synthesis process failed")
+        wavs.append(clip.read_bytes())
+    return wavs
 
+
+def _write_soundtrack(wavs: list[bytes], directory: Path) -> list[float]:
     durations = []
-    try:
-        with wave.open(str(directory / "voice.wav"), "wb") as voice:
-            for index, line in enumerate(lines):
-                source = directory / "speech.txt"
-                source.write_text(line.text, encoding="utf-8")
-                clip = directory / "speech.wav"
-                result = await run_subprocess(
-                    [executable, "-v", "ru", "-b", "1", "-s", "169", "-w", str(clip), "-f", str(source)],
-                    timeout=4,
-                )
-                if not result.ok:
-                    raise RuntimeError("speech synthesis process failed")
-                with wave.open(str(clip), "rb") as spoken:
-                    if index == 0:
-                        voice.setparams(spoken.getparams())
-                    if spoken.getnchannels() != 1 or spoken.getsampwidth() != 2:
-                        raise ValueError("unexpected speech WAV format")
-                    rate = spoken.getframerate()
-                    frames = spoken.getnframes()
-                    duration = max(1.28, (frames / rate) + (1.12 if index == len(lines) - 1 else 0.28))
-                    duration = round(duration * 25) / 25
-                    voice.writeframesraw(spoken.readframes(frames))
-                    voice.writeframesraw(b"\0\0" * max(0, round(duration * rate) - frames))
-                    durations.append(duration)
-    except (EOFError, OSError, RuntimeError, ValueError, wave.Error):
-        _logger.warning("Dialogue video voice synthesis failed; rendering captions only")
-        return None
+    with wave.open(str(directory / "voice.wav"), "wb") as voice:
+        for index, wav_bytes in enumerate(wavs):
+            with wave.open(BytesIO(wav_bytes), "rb") as spoken:
+                if index == 0:
+                    voice.setparams(spoken.getparams())
+                rate = spoken.getframerate()
+                if (spoken.getnchannels(), spoken.getsampwidth(), rate) != (1, 2, voice.getframerate()):
+                    raise ValueError("Unexpected speech WAV format")
+                frames = spoken.getnframes()
+                if not frames:
+                    raise ValueError("Empty speech WAV")
+                pause = 1.12 if index == len(wavs) - 1 else 0.28
+                duration = round(max(1.28, frames / rate + pause) * 25) / 25
+                voice.writeframesraw(spoken.readframes(frames))
+                voice.writeframesraw(b"\0\0" * max(0, round(duration * rate) - frames))
+                durations.append(duration)
     return durations
 
 
-async def render_dialogue_video(lines: list[Line], directory: Path) -> Path:
-    frames = asyncio.create_task(asyncio.to_thread(_draw_frames, lines, directory))
+async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
+    voices = dict(zip(dict.fromkeys(line.author_id for line in lines), _GEMINI_VOICES))
+    try:
+        async with asyncio.timeout(50):
+            wavs = [
+                await synthesize_gemini_wav(
+                    "Прочитай дословно только реплику в кавычках, без пояснений: "
+                    + json.dumps(line.text, ensure_ascii=False),
+                    voice_name=voices[line.author_id],
+                    attempts=1,
+                )
+                for line in lines
+            ]
+        return _write_soundtrack(wavs, directory)
+    except (EOFError, OSError, SpeechSynthesisError, ValueError, wave.Error) as exc:
+        _logger.warning("Gemini dialogue TTS unavailable (%s); checking local synthesis", type(exc).__name__)
+
+    try:
+        wavs = await _espeak_utterances(lines, directory)
+        return _write_soundtrack(wavs, directory) if wavs else None
+    except (EOFError, OSError, SpeechSynthesisError, ValueError, wave.Error) as exc:
+        _logger.warning("Local dialogue TTS unavailable (%s); rendering captions only", type(exc).__name__)
+        return None
+
+
+async def render_dialogue_video(lines: list[Line], directory: Path, *, chat_title: str = "") -> Path:
+    frames = asyncio.create_task(asyncio.to_thread(_draw_frames, lines, directory, chat_title))
     try:
         durations = await _voice(lines, directory)
     finally:
@@ -218,7 +366,8 @@ async def render_dialogue_video(lines: list[Line], directory: Path) -> Path:
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
             "-f", "concat", "-safe", "1", "-i", str(playlist), *audio,
-            "-t", f"{sum(durations):.2f}", "-r", "25", "-c:v", "libx264", "-threads", "2",
+            "-vf", "fps=25", "-frames:v", str(round(sum(durations) * 25)),
+            "-c:v", "libx264", "-threads", "2",
             "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
         ],
         timeout=30,

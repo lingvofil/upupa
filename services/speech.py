@@ -146,7 +146,7 @@ def _merge_wav_chunks_to_mp3(wav_chunks: list[bytes]) -> bytes:
     return output.getvalue()
 
 
-def _gemini_tts_sync(text: str, voice_name: str) -> tuple[bytes, str]:
+def _gemini_tts_sync(text: str, voice_name: str, *, attempts: int = 3) -> tuple[bytes, str]:
     generation_config = {
         "response_modalities": ["AUDIO"],
         "speech_config": {
@@ -159,7 +159,7 @@ def _gemini_tts_sync(text: str, voice_name: str) -> tuple[bytes, str]:
     last_error: Exception | None = None
     for model_name in TTS_MODELS_QUEUE:
         tts_model = GeminiModel(gemini_client, model_name)
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
                 logging.info(
                     "[speech][tts] Gemini model=%s voice=%s attempt=%s",
@@ -186,7 +186,7 @@ def _gemini_tts_sync(text: str, voice_name: str) -> tuple[bytes, str]:
                 if is_missing:
                     logging.warning("[speech][tts] Gemini model %s is unavailable: %s", model_name, exc)
                     break
-                if is_quota and attempt < 2:
+                if is_quota and attempt < attempts - 1:
                     delay = 15 * (attempt + 1) + random.uniform(1, 5)
                     logging.warning(
                         "[speech][tts] Gemini quota for %s; retrying after %.1fs",
@@ -195,7 +195,7 @@ def _gemini_tts_sync(text: str, voice_name: str) -> tuple[bytes, str]:
                     )
                     time.sleep(delay)
                     continue
-                if attempt < 2 and not is_quota:
+                if attempt < attempts - 1 and not is_quota:
                     time.sleep(5)
                     continue
                 logging.warning("[speech][tts] Gemini model %s failed: %s", model_name, exc)
@@ -204,9 +204,14 @@ def _gemini_tts_sync(text: str, voice_name: str) -> tuple[bytes, str]:
     raise SpeechSynthesisError(f"Gemini TTS failed: {last_error}")
 
 
-async def _synthesize_gemini_chunk(text: str, voice_name: str) -> bytes:
-    wav_bytes, _model_name = await asyncio.to_thread(_gemini_tts_sync, text, voice_name)
+async def synthesize_gemini_wav(text: str, *, voice_name: str, attempts: int = 3) -> bytes:
+    """Use the bot's standard Gemini TTS queue with an explicit voice."""
+    wav_bytes, _model_name = await asyncio.to_thread(_gemini_tts_sync, text, voice_name, attempts=attempts)
     return wav_bytes
+
+
+async def _synthesize_gemini_chunk(text: str, voice_name: str) -> bytes:
+    return await synthesize_gemini_wav(text, voice_name=voice_name)
 
 
 def _groq_tts_sync(text: str, voice_name: str) -> bytes:

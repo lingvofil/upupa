@@ -61,7 +61,10 @@ def _record(message: Message) -> None:
         _history.popitem(last=False)
     if any(line.message_id == message.message_id for line in history):
         return
-    history.append(Line(message.message_id, user.id, _clean(user.full_name, 45) or "Участник", text, message.date))
+    reply = message.reply_to_message
+    reply_to_id = reply.message_id if reply and _topic(reply) == key and not reply.has_protected_content else None
+    history.append(Line(message.message_id, user.id, _clean(user.full_name, 45) or "Участник",
+                        text, message.date, reply_to_id))
 
 
 class DialogueVideoHistoryMiddleware(BaseMiddleware):
@@ -113,7 +116,8 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
     _active_chats.add(chat_id)
     try:
         with TemporaryDirectory(prefix="upupa-dialogue-") as directory:
-            video = await render_dialogue_video(lines, Path(directory))
+            chat_title = _clean(getattr(message.chat, "title", None) or "", 80)
+            video = await render_dialogue_video(lines, Path(directory), chat_title=chat_title)
             await message.answer_video(
                 FSInputFile(video),
                 width=WIDTH,
