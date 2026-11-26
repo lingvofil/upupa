@@ -106,26 +106,46 @@ def test_confidence_percentage_sanitizer_removes_common_forms():
     assert strip_confidence_percentages(text) == "это роутер.\nПроверь питание и кабель."
 
 
-def test_unknown_bot_message_uses_full_dialog_generation():
+def test_rich_bot_reply_uses_text_from_aiogram_extra_fields(monkeypatch):
+    from aiogram.types import Update
     from AI.dialog import generation
 
     generation.conversation_history.clear()
-    generation.chat_settings["12345"] = {
+    monkeypatch.setitem(generation.chat_settings, "12345", {
         "dialog_enabled": True,
         "prompt": "base prompt",
         "prompt_name": "упупа",
         "active_model": "gemini",
-    }
+    })
+
+    message = Update.model_validate({
+        "update_id": 1,
+        "message": {
+            "message_id": 42,
+            "date": 1780000000,
+            "chat": {"id": 12345, "type": "supergroup"},
+            "from": {"id": 111, "is_bot": True, "first_name": "OtherBot"},
+            "rich_message": {"blocks": [
+                {"type": "paragraph", "text": ["Температура: ", {"type": "bold", "text": "+3 °C"}]},
+                {"type": "list", "items": [
+                    {"blocks": [{"type": "paragraph", "text": "Возможен снег"}]},
+                ]},
+            ]},
+        },
+    }).message
+    assert message.content_type == ContentType.UNKNOWN
+    assert message.text is None and message.caption is None
 
     captured = {}
 
     async def fake_generate_response(prompt, chat_id, bot_name, user_input=""):
+        captured["prompt"] = prompt
         captured["user_input"] = user_input
         return "generated dialog reply"
 
     response = asyncio.run(
         generation.handle_bot_conversation(
-            _message(None, sender_is_bot=True, content_type=ContentType.UNKNOWN),
+            message,
             "OtherBot",
             generate_response_func=fake_generate_response,
             needs_web_search_func=lambda _: False,
@@ -133,7 +153,14 @@ def test_unknown_bot_message_uses_full_dialog_generation():
     )
 
     assert response == "generated dialog reply"
-    assert captured["user_input"] == "[сообщение другого бота без доступного текста]"
+    assert captured["user_input"] == "Температура: +3 °C\nВозможен снег"
+    assert captured["user_input"] in captured["prompt"]
+
+    follow_up = _message("уточни", reply_to_message=message)
+    assert captured["user_input"] in generation.format_reply_context(follow_up)
+
+    no_content = _message(None, sender_is_bot=True, content_type=ContentType.UNKNOWN)
+    assert asyncio.run(generation.handle_bot_conversation(no_content, "OtherBot")) == ""
 
 
 def test_reply_to_analysis_result_is_added_as_immediate_context():

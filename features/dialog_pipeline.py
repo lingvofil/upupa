@@ -10,7 +10,6 @@ from collections import deque
 from functools import partial
 import logging
 
-from aiogram.enums import ContentType
 from aiogram.types import Message
 
 from core.telegram_markup import send_markdown_or_plain
@@ -25,6 +24,7 @@ from AI.dialog.serious_mode import handle_serious_mode_reply
 from AI.dialog.settings import update_chat_settings
 from core.loader import bot
 from core.state import chat_settings
+from core.telegram_message_text import telegram_message_text
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import add_chat, save_chat_settings
 from features.dialogue_video import send_dialogue_video
@@ -187,8 +187,11 @@ async def process_random_reactions_once(message: Message) -> bool:
 async def process_general_dialog_message(message: Message) -> None:
     """Handle serious/direct dialogue without launching reactions again."""
     chat_id = str(message.chat.id)
+    sender = message.from_user
+    if not sender:
+        return
 
-    if await handle_serious_mode_reply(message):
+    if not sender.is_bot and await handle_serious_mode_reply(message):
         return
 
     update_chat_settings(chat_id)
@@ -196,13 +199,8 @@ async def process_general_dialog_message(message: Message) -> None:
 
     is_direct_appeal = False
     is_private_chat = message.chat.type == "private"
-    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
-    is_unknown_bot_message = (
-        message.from_user
-        and message.from_user.is_bot
-        and message.content_type == ContentType.UNKNOWN
-        and not (message.text or message.caption)
-    )
+    replied_user = getattr(message.reply_to_message, "from_user", None)
+    is_reply_to_bot = replied_user is not None and replied_user.id == bot.id
 
     if message.text:
         if message.text.lower().startswith("упупа"):
@@ -229,13 +227,11 @@ async def process_general_dialog_message(message: Message) -> None:
                     is_direct_appeal = True
                     break
 
-    if (
-        is_private_chat
-        or is_reply_to_bot
-        or is_direct_appeal
-        or is_unknown_bot_message
-    ) and current_settings.get("dialog_enabled", True):
-        user_first_name = message.from_user.first_name or "Пользователь"
+    should_reply = is_private_chat or is_reply_to_bot or is_direct_appeal
+    if should_reply and current_settings.get("dialog_enabled", True):
+        if sender.is_bot and (sender.id == bot.id or not telegram_message_text(message)):
+            return
+        user_first_name = sender.first_name or "Пользователь"
         await bot.send_chat_action(chat_id=chat_id, action="typing")
         response = await handle_bot_conversation(message, user_first_name)
         await send_dialog_response(
@@ -248,7 +244,7 @@ async def process_general_dialog_message(message: Message) -> None:
 
     logging.info(
         "Сообщение от %s в чате %s не вызвало реакции: %r",
-        message.from_user.full_name,
+        sender.full_name,
         chat_id,
         message.text,
     )
