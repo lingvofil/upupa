@@ -91,7 +91,7 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
     assert "ещё готовится" in cooldown.text
 
 
-def test_automatic_trigger_has_a_separate_longer_chat_cooldown(monkeypatch):
+def test_automatic_trigger_accepts_one_line_and_keeps_chat_cooldown(monkeypatch):
     calls = AsyncMock()
     monkeypatch.setattr(Bot, "__call__", calls)
     monkeypatch.setattr(feature.random, "random", lambda: 0)
@@ -101,10 +101,9 @@ def test_automatic_trigger_has_a_separate_longer_chat_cooldown(monkeypatch):
 
     async def run():
         async with Bot("123456:dialogue-test") as bot:
-            for index in range(1, 5):
-                event = message(index, f"Реплика {index}", author=index % 2 + 1).as_(bot)
-                feature._record(event)
-                assert await feature.send_dialogue_video(event, automatic=True) is (index == 4)
+            event = message(1, "Единственная реплика").as_(bot)
+            feature._record(event)
+            assert await feature.send_dialogue_video(event, automatic=True)
             now[0] += feature.MANUAL_COOLDOWN
             assert not await feature.send_dialogue_video(event, automatic=True)
             now[0] += feature.RANDOM_COOLDOWN
@@ -149,11 +148,10 @@ def test_admin_can_save_dialogue_chance_and_change_only_automatic_trigger(monkey
         assert repository.load()["-10001"][feature.PROBABILITY_KEY] == 0
 
         async with Bot("123456:dialogue-test") as bot:
-            for index in range(1, 5):
-                event = message(index, f"Реплика {index}", author=index % 2 + 1).as_(bot)
-                feature._record(event)
+            event = message(1, "Единственная реплика").as_(bot)
+            feature._record(event)
             assert not await feature.send_dialogue_video(event, automatic=True)
-            assert await feature.send_dialogue_video(message(5, "диалог").as_(bot))
+            assert await feature.send_dialogue_video(message(2, "диалог").as_(bot))
 
             feature._last_video.clear()
             assert (await press(f"{set_prob}:1.0"))[prob_type] == "🎬 Диалог (100%)"
