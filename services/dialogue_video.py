@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from random import Random, sample, uniform
+from random import Random, uniform
 import re
 import shutil
 import wave
@@ -25,6 +25,7 @@ from services.speech import SpeechSynthesisError, _pcm_to_wav_bytes, synthesize_
 WIDTH, HEIGHT = 720, 1280
 _COLORS = ("#81E0FC", "#FFAA88", "#C8AAFF", "#87E2B2", "#FFD58B", "#F6A8DB", "#A5B5FB")
 _GEMINI_VOICES = ("Kore", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Puck")
+_ELEVENLABS_VOICE_PRIORITY = {"древний дед": 0, "вахтерша": 1, "шиз": 2}
 _LOCAL_VOICES = (
     ("ru+m3", 42, 165), ("ru+f2", 59, 178), ("ru+m1", 34, 154),
     ("ru+f4", 68, 165), ("ru+m5", 52, 184), ("ru+f1", 53, 158),
@@ -319,7 +320,13 @@ async def _elevenlabs_utterances(lines: list[Line]) -> list[bytes]:
     if not available:
         raise ElevenLabsNoVoicesError("No account voices for dialogue")
     authors = dict.fromkeys(line.author_id for line in lines)
-    voices = sample(available, min(len(authors), len(available)))
+    voices = sorted(
+        available,
+        key=lambda voice: _ELEVENLABS_VOICE_PRIORITY.get(
+            " ".join(voice.name.casefold().replace("ё", "е").split()),
+            len(_ELEVENLABS_VOICE_PRIORITY),
+        ),
+    )
     voice_ids = {author: voices[i % len(voices)].voice_id for i, author in enumerate(authors)}
     return [
         _pcm_to_wav_bytes(await client.text_to_speech(voice_ids[line.author_id], line.text))

@@ -203,30 +203,35 @@ def test_voiced_video_keeps_last_bubble_on_screen_until_audio_ends(monkeypatch, 
     fallback.assert_not_awaited()
 
 
-def test_gemini_error_uses_elevenlabs_for_the_entire_clip(monkeypatch, tmp_path):
+def test_gemini_error_prefers_named_elevenlabs_voices_for_the_entire_clip(monkeypatch, tmp_path):
     lines = [
         renderer.Line(1, 1, "Лена", "Первая", NOW),
         renderer.Line(2, 2, "Илья", "Вторая", NOW),
-        renderer.Line(3, 1, "Лена", "Последняя", NOW),
+        renderer.Line(3, 3, "Ника", "Третья", NOW),
+        renderer.Line(4, 4, "Мила", "Четвёртая", NOW),
+        renderer.Line(5, 1, "Лена", "Последняя", NOW),
     ]
     gemini = AsyncMock(side_effect=renderer.SpeechSynthesisError("quota"))
     speech = AsyncMock(return_value=b"\x01\x00" * 24000)
     client = SimpleNamespace(
         get_available_voices=AsyncMock(return_value=[
-            SimpleNamespace(voice_id="one"), SimpleNamespace(voice_id="two"),
+            SimpleNamespace(voice_id="extra", name="Другой голос"),
+            SimpleNamespace(voice_id="shiz", name="Шиз"),
+            SimpleNamespace(voice_id="watch", name="ВАХТЁРША"),
+            SimpleNamespace(voice_id="old", name="Древний  дед"),
         ]),
         text_to_speech=speech,
     )
     local = AsyncMock()
     monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
     monkeypatch.setattr(renderer, "get_elevenlabs_client", lambda _key: client)
-    monkeypatch.setattr(renderer, "sample", lambda voices, count: voices[:count])
     monkeypatch.setattr(renderer, "_espeak_utterances", local)
 
     durations = asyncio.run(renderer._voice(lines, tmp_path))
-    assert durations == [1.28, 1.28, 2.12]
+    assert durations == [1.28, 1.28, 1.28, 1.28, 2.12]
     assert [call.args for call in speech.await_args_list] == [
-        ("one", "Первая"), ("two", "Вторая"), ("one", "Последняя"),
+        ("old", "Первая"), ("watch", "Вторая"), ("shiz", "Третья"),
+        ("extra", "Четвёртая"), ("old", "Последняя"),
     ]
     local.assert_not_awaited()
 
