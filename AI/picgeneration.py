@@ -253,168 +253,6 @@ async def send_generated_photo(message: types.Message, data: bytes, filename: st
 # Реальный список и цены берём из живого каталога /image/models — он
 # динамический. Премиум-модели (seedream, nanobanana, gptimage и т.п.)
 # сюда не попадают: в очередь идут только модели ценой 0 поллена.
-def _find_nvidia_label_box(image: Image.Image, x0: int, x1: int, mode: str) -> Optional[Tuple[int, int, int, int]]:
-    width, height = image.size
-    y_search_start = int(height * 0.55)
-    min_row_pixels = max(8, int((x1 - x0) * 0.18))
-    row_hits = []
-
-    for y in range(y_search_start, height):
-        hits = 0
-        for x in range(x0, x1, 2):
-            r, g, b = image.getpixel((x, y))[:3]
-            if mode == "light":
-                matched = r > 230 and g > 230 and b > 230 and max(r, g, b) - min(r, g, b) < 35
-            else:
-                matched = r < 45 and g < 45 and b < 45
-            if matched:
-                hits += 2
-        row_hits.append(hits >= min_row_pixels)
-
-    runs = []
-    run_start = None
-    for index, hit in enumerate(row_hits + [False]):
-        if hit and run_start is None:
-            run_start = index
-        elif not hit and run_start is not None:
-            runs.append((y_search_start + run_start, y_search_start + index - 1))
-            run_start = None
-
-    min_height = max(18, int(height * 0.045))
-    runs = [(top, bottom) for top, bottom in runs if bottom - top + 1 >= min_height]
-    if not runs:
-        return None
-
-    top, bottom = max(runs, key=lambda run: (run[1] - run[0], run[1]))
-    min_col_pixels = max(6, int((bottom - top + 1) * 0.45))
-    columns = []
-
-    for x in range(x0, x1):
-        hits = 0
-        for y in range(top, bottom + 1):
-            r, g, b = image.getpixel((x, y))[:3]
-            if mode == "light":
-                matched = r > 230 and g > 230 and b > 230 and max(r, g, b) - min(r, g, b) < 35
-            else:
-                matched = r < 55 and g < 55 and b < 55
-            if matched:
-                hits += 1
-        columns.append(hits >= min_col_pixels)
-
-    col_runs = []
-    col_start = None
-    for index, hit in enumerate(columns + [False]):
-        if hit and col_start is None:
-            col_start = index
-        elif not hit and col_start is not None:
-            col_runs.append((x0 + col_start, x0 + index - 1))
-            col_start = None
-
-    min_width = max(40, int(width * 0.12))
-    col_runs = [(left, right) for left, right in col_runs if right - left + 1 >= min_width]
-    if not col_runs:
-        return None
-
-    left, right = max(col_runs, key=lambda run: run[1] - run[0])
-    return (left, top, right + 1, bottom + 1)
-
-
-def _load_nvidia_label_font(size: int) -> ImageFont.ImageFont:
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "arial.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
-    for path in font_paths:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
-
-
-def _draw_centered_nvidia_label(
-    draw: ImageDraw.ImageDraw,
-    box: Tuple[int, int, int, int],
-    text: str,
-    fill: Tuple[int, int, int],
-) -> None:
-    left, top, right, bottom = box
-    max_width = int((right - left) * 0.78)
-    max_height = int((bottom - top) * 0.62)
-    font_size = max(20, int((bottom - top) * 0.5))
-
-    while font_size > 16:
-        font = _load_nvidia_label_font(font_size)
-        text_box = draw.textbbox((0, 0), text, font=font)
-        text_width = text_box[2] - text_box[0]
-        text_height = text_box[3] - text_box[1]
-        if text_width <= max_width and text_height <= max_height:
-            break
-        font_size -= 2
-
-    x = left + (right - left - text_width) / 2
-    y = top + (bottom - top - text_height) / 2 - text_box[1]
-    draw.text((x, y), text, font=font, fill=fill)
-
-
-def add_nvidia_comparison_labels_below_image(image_bytes: bytes) -> bytes:
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    width, height = image.size
-    left_box = _find_nvidia_label_box(image, 0, width // 2, "dark")
-    right_box = _find_nvidia_label_box(image, width // 2, width, "light")
-
-    # The upstream DLSS demo draws its own comparison labels over the image.
-    # Remove only that horizontal label strip when both halves are detected.
-    # Never crop everything below the labels: on tall images that used to cut
-    # off real source content (for example, the last panel of a comic).
-    if left_box and right_box:
-        strip_top = min(left_box[1], right_box[1])
-        strip_bottom = max(left_box[3], right_box[3])
-        strip_height = strip_bottom - strip_top
-        labels_overlap = min(left_box[3], right_box[3]) - max(left_box[1], right_box[1])
-
-        if (
-            strip_height > 0
-            and strip_height <= int(height * 0.25)
-            and labels_overlap > 0
-        ):
-            upper = image.crop((0, 0, width, strip_top))
-            lower = image.crop((0, strip_bottom, width, height))
-            preserved_height = height - strip_height
-            preserved = Image.new("RGB", (width, preserved_height))
-            preserved.paste(upper, (0, 0))
-            preserved.paste(lower, (0, strip_top))
-            image = preserved
-
-    content_height = image.height
-    label_height = max(90, int(content_height * 0.16))
-    green_height = max(8, int(label_height * 0.12))
-    output_image = Image.new("RGB", (width, content_height + label_height), (255, 255, 255))
-    output_image.paste(image, (0, 0))
-
-    draw = ImageDraw.Draw(output_image)
-    label_top = content_height
-    label_bottom = content_height + label_height
-    half_width = width // 2
-    draw.rectangle((0, label_top, half_width, label_bottom), fill=(0, 0, 0))
-    draw.rectangle((half_width, label_top, width, label_bottom), fill=(255, 255, 255))
-    draw.rectangle((half_width, label_bottom - green_height, width, label_bottom), fill=(118, 185, 0))
-
-    _draw_centered_nvidia_label(draw, (0, label_top, half_width, label_bottom), "DLSS 5 OFF", (255, 255, 255))
-    _draw_centered_nvidia_label(
-        draw,
-        (half_width, label_top, width, label_bottom - green_height),
-        "DLSS 5 On",
-        (0, 0, 0),
-    )
-
-    output = BytesIO()
-    output_image.save(output, format="PNG")
-    return output.getvalue()
-
-
 IMAGE_MODEL_PREFERENCE = ["flux", "zimage", "turbo", "klein", "qwen-image"]
 _IMAGE_FALLBACK_QUEUE = ["flux", "zimage"]
 
@@ -1050,9 +888,12 @@ async def handle_nvidia_command(message: types.Message):
             await msg.edit_text("Nvidia недоступна, генерирую через Flux...")
             await robust_image_generation(message, prompt or "enhance, upscale, detailed", msg)
             return
-        generated_bytes = add_nvidia_comparison_labels_below_image(generated_bytes)
+        # The provider returns the comparison with labels already drawn over it.
+        with Image.open(BytesIO(generated_bytes)) as comparison:
+            output = BytesIO()
+            comparison.convert("RGB").save(output, format="PNG")
         await msg.delete()
-        await send_generated_photo(message, generated_bytes, "nvidia.png")
+        await send_generated_photo(message, output.getvalue(), "nvidia.png")
     except Exception as e:
         logging.error(f"Nvidia img2img error: {e}")
         if "GPU quota" in str(e):
