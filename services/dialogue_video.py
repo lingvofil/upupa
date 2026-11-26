@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from random import Random
+from random import Random, uniform
 import re
 import shutil
 import wave
@@ -16,6 +16,7 @@ import wave
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pytz import timezone
 
+from core.paths import DIALOGUE_BACKGROUND_MUSIC_PATH
 from infrastructure.subprocess_runner import run_subprocess
 from services.speech import SpeechSynthesisError, synthesize_pooled_gemini_wav
 
@@ -29,6 +30,7 @@ _LOCAL_VOICES = (
 )
 _MOSCOW = timezone("Europe/Moscow")
 _logger = logging.getLogger(__name__)
+_MEDIA_DURATION = re.compile(r"Duration:\s+(\d+):(\d+):(\d+(?:\.\d+)?)")
 _EMOJI = re.compile(
     r"([\U0001f1e6-\U0001f1ff]{2}|"
     r"[\u2600-\u27bf\U0001f300-\U0001faff][\ufe0e\ufe0f\U0001f3fb-\U0001f3ff]*"
@@ -333,6 +335,63 @@ async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
         return None
 
 
+async def _mix_background(track: Path, voice: Path | None, directory: Path, duration: float) -> Path | None:
+    """Mix a random part of the configured track, keeping speech in front."""
+    if not track.is_file():
+        return voice
+
+    probe = await run_subprocess(
+        ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(track), "-map", "0:a:0", "-t", "0", "-f", "null", "-"],
+        timeout=8,
+    )
+    match = _MEDIA_DURATION.search(probe.stderr_text)
+    if not probe.ok or not match:
+        _logger.warning("Could not read dialogue background music duration")
+        return voice
+    hours, minutes, seconds = match.groups()
+    track_duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    if track_duration <= 0:
+        return voice
+
+    start = uniform(0, max(0, track_duration - duration))
+    inputs = []
+    if track_duration < duration:
+        inputs += ["-stream_loop", "-1"]
+    inputs += ["-ss", f"{start:.3f}", "-i", str(track)]
+    fade = min(0.6, duration / 3)
+    music = (
+        f"[0:a:0]aresample=44100,aformat=channel_layouts=stereo,volume=-9dB,"
+        f"afade=t=in:d=0.22,afade=t=out:st={duration - fade:.3f}:d={fade:.3f}"
+    )
+    if voice:
+        inputs += ["-i", str(voice)]
+        filters = (
+            music + "[music];"
+            "[1:a:0]aresample=44100,aformat=channel_layouts=stereo,asplit=2[guide][speech];"
+            "[music][guide]sidechaincompress=threshold=0.03:ratio=5:attack=10:release=250[ducked];"
+            "[speech][ducked]amix=inputs=2:duration=first:normalize=0,"
+            "alimiter=limit=0.94:level=0:latency=1[mix]"
+        )
+    else:
+        filters = music + "[mix]"
+
+    output = directory / "soundtrack.wav"
+    mixed = await run_subprocess(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", *inputs,
+         "-filter_complex", filters, "-map", "[mix]", "-t", f"{duration:.3f}", str(output)],
+        timeout=20,
+    )
+    if mixed.ok:
+        try:
+            with wave.open(str(output), "rb") as audio:
+                if audio.getnframes():
+                    return output
+        except (EOFError, OSError, wave.Error):
+            pass
+    _logger.warning("Could not mix dialogue background music; keeping the original audio")
+    return voice
+
+
 async def render_dialogue_video(lines: list[Line], directory: Path, *, chat_title: str = "") -> Path:
     frames = asyncio.create_task(asyncio.to_thread(_draw_frames, lines, directory, chat_title))
     try:
@@ -345,12 +404,12 @@ async def render_dialogue_video(lines: list[Line], directory: Path, *, chat_titl
             await frames
             raise
 
-    audio = []
+    voice = directory / "voice.wav" if durations is not None else None
     if durations is None:
         durations = [min(5.6, max(1.6, round((0.9 + len(line.text) / 22) * 25) / 25)) for line in lines]
         durations[-1] += 1.0
-    else:
-        audio = ["-i", str(directory / "voice.wav"), "-c:a", "aac", "-b:a", "80k"]
+    soundtrack = await _mix_background(DIALOGUE_BACKGROUND_MUSIC_PATH, voice, directory, sum(durations))
+    audio = ["-i", str(soundtrack), "-c:a", "aac", "-b:a", "112k"] if soundtrack else []
 
     playlist = directory / "frames.ffconcat"
     playlist.write_text(

@@ -64,6 +64,7 @@ lab_events.jsonl
 guru_wallets.json
 guru_visits.db*
 sasulka_ranking.db*
+/dialogue_background.mp3
 
 # Static site build output (scripts/build_site.py)
 _site/
