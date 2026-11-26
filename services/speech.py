@@ -19,9 +19,9 @@ from io import BytesIO
 
 from pydub import AudioSegment
 
-from core.settings import GROQ_TTS_MODEL, TTS_MODELS_QUEUE
-from infrastructure.ai.clients import gemini_client, groq_ai
-from infrastructure.ai.gemini import GeminiModel
+from core.settings import GEMINI_KEYS_POOL, GROQ_TTS_MODEL, TTS_MODELS_QUEUE
+from infrastructure.ai.clients import LazyResource, gemini_client, groq_ai
+from infrastructure.ai.gemini import GeminiModel, ModelFallbackWrapper
 
 
 AVAILABLE_GEMINI_VOICES = [
@@ -54,6 +54,45 @@ class SpeechAudio:
 
 class SpeechSynthesisError(RuntimeError):
     pass
+
+
+def _build_gemini_tts_pool() -> ModelFallbackWrapper:
+    return ModelFallbackWrapper(
+        list(TTS_MODELS_QUEUE), list(TTS_MODELS_QUEUE), keys_pool=GEMINI_KEYS_POOL,
+    )
+
+
+gemini_tts_pool = LazyResource("gemini_tts_pool", _build_gemini_tts_pool)
+
+
+def _extract_gemini_wav(response) -> bytes:
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        raise SpeechSynthesisError("Gemini TTS returned no candidates")
+    content = getattr(candidates[0], "content", None)
+    for part in getattr(content, "parts", None) or ():
+        inline_data = getattr(part, "inline_data", None)
+        if inline_data and getattr(inline_data, "data", None):
+            return _pcm_to_wav_bytes(inline_data.data)
+    raise SpeechSynthesisError("Gemini TTS returned no inline audio")
+
+
+def generate_pooled_gemini_wav(text: str, speech_config: dict) -> bytes:
+    """Generate one audio chunk with the common pool used by radio and video."""
+    response = gemini_tts_pool.generate_content(
+        text,
+        generation_config={"response_modalities": ["AUDIO"], "speech_config": speech_config},
+        require_text=False,
+    )
+    return _extract_gemini_wav(response)
+
+
+async def synthesize_pooled_gemini_wav(text: str, *, voice_name: str) -> bytes:
+    speech_config = {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_name}}}
+    try:
+        return await asyncio.to_thread(generate_pooled_gemini_wav, text, speech_config)
+    except Exception as exc:
+        raise SpeechSynthesisError("Pooled Gemini TTS failed") from exc
 
 
 def split_text_for_tts(text: str, max_chars: int) -> list[str]:
@@ -168,14 +207,7 @@ def _gemini_tts_sync(text: str, voice_name: str, *, attempts: int = 3) -> tuple[
                     attempt + 1,
                 )
                 response = tts_model.generate_content(text, generation_config=generation_config)
-                if not response or not getattr(response, "candidates", None):
-                    raise SpeechSynthesisError("Gemini TTS returned no candidates")
-
-                part = response.candidates[0].content.parts[0]
-                inline_data = getattr(part, "inline_data", None)
-                if not inline_data or not getattr(inline_data, "data", None):
-                    raise SpeechSynthesisError("Gemini TTS returned no inline audio")
-                return _pcm_to_wav_bytes(inline_data.data), model_name
+                return _extract_gemini_wav(response), model_name
             except Exception as exc:  # provider errors vary by google SDK version
                 last_error = exc
                 text_error = str(exc)

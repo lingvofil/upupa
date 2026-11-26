@@ -234,6 +234,7 @@ def test_application_run_executes_startup_and_shutdown(monkeypatch):
     assert events == [
         ("middleware",),
         ("middleware",),
+        ("middleware",),
         ("state",),
         ("background",),
         ("dispatcher",),

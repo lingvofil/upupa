@@ -8,9 +8,7 @@ import logging
 import random
 import re
 
-from core.settings import GEMINI_KEYS_POOL, TTS_MODELS_QUEUE
-from infrastructure.ai.clients import LazyResource
-from infrastructure.ai.gemini import ModelFallbackWrapper
+from core.settings import TTS_MODELS_QUEUE
 import services.speech as speech
 
 
@@ -30,18 +28,6 @@ class SpeakerTurn:
 
 class RadioTTSQuotaError(speech.SpeechSynthesisError):
     """All Gemini keys available to the shared fallback pool are quota-exhausted."""
-
-
-def _build_radio_gemini_pool() -> ModelFallbackWrapper:
-    """Build one persistent TTS-only pool so key round-robin survives chunks."""
-    return ModelFallbackWrapper(
-        list(TTS_MODELS_QUEUE),
-        list(TTS_MODELS_QUEUE),
-        keys_pool=GEMINI_KEYS_POOL,
-    )
-
-
-radio_gemini_model = LazyResource("radio_tts_model", _build_radio_gemini_pool)
 
 
 def parse_speaker_turns(script: str) -> tuple[SpeakerTurn, ...]:
@@ -71,17 +57,6 @@ def _looks_like_quota_error(error: Exception) -> bool:
     )
 
 
-def _extract_radio_wav(response) -> bytes:
-    if not response or not getattr(response, "candidates", None):
-        raise speech.SpeechSynthesisError("Gemini radio TTS returned no candidates")
-    parts = getattr(response.candidates[0].content, "parts", None) or []
-    for part in parts:
-        inline_data = getattr(part, "inline_data", None)
-        if inline_data and getattr(inline_data, "data", None):
-            return speech._pcm_to_wav_bytes(inline_data.data)
-    raise speech.SpeechSynthesisError("Gemini radio TTS returned no inline audio")
-
-
 def _generate_radio_tts_sync(text: str, speech_config: dict) -> bytes:
     """Generate one bounded radio chunk through a persistent Gemini key pool."""
     try:
@@ -90,15 +65,7 @@ def _generate_radio_tts_sync(text: str, speech_config: dict) -> bytes:
             ",".join(TTS_MODELS_QUEUE),
             len(text),
         )
-        response = radio_gemini_model.generate_content(
-            text,
-            generation_config={
-                "response_modalities": ["AUDIO"],
-                "speech_config": speech_config,
-            },
-            require_text=False,
-        )
-        return _extract_radio_wav(response)
+        return speech.generate_pooled_gemini_wav(text, speech_config)
     except Exception as exc:
         logging.warning("[radio][tts] pooled Gemini chunk failed: %s", exc)
         if _looks_like_quota_error(exc):
