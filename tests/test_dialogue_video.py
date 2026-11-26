@@ -1,9 +1,11 @@
 import asyncio
+from array import array
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from math import sin, tau
 import shutil
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import wave
 
 from aiogram import Bot, Dispatcher, F
@@ -207,6 +209,45 @@ def test_gemini_error_falls_back_for_the_entire_clip(monkeypatch, tmp_path):
 
     assert asyncio.run(renderer._voice(lines, tmp_path)) is None
     local.assert_awaited_once_with(lines, tmp_path)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
+def test_background_seeks_randomly_and_ducks_under_speech(monkeypatch, tmp_path):
+    rate = 44100
+    track = tmp_path / "music.wav"
+    voice = tmp_path / "voice.wav"
+
+    def write_tone(path, seconds, frequency, amplitude_at_second):
+        with wave.open(str(path), "wb") as audio:
+            audio.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+            samples = array("h", (
+                round(amplitude_at_second(i / rate) * sin(tau * frequency * i / rate))
+                for i in range(rate * seconds)
+            ))
+            audio.writeframes(samples.tobytes())
+
+    write_tone(track, 8, 250, lambda t: 4500 if t < 3 else 11000)
+    write_tone(voice, 3, 1000, lambda t: 14000 if 1 <= t < 2 else 0)
+    random_start = Mock(return_value=4.0)
+    monkeypatch.setattr(renderer, "uniform", random_start)
+    output = asyncio.run(renderer._mix_background(track, voice, tmp_path, 3))
+    assert output is not None and output != voice
+    random_start.assert_called_once_with(0, 5)
+
+    with wave.open(str(output), "rb") as audio:
+        assert audio.getnchannels() == 2
+        samples = array("h", audio.readframes(audio.getnframes()))[::2]
+
+    def amplitude(start, stop, frequency):
+        indexes = range(round(start * rate), round(stop * rate))
+        return abs(2 * sum(samples[i] * sin(tau * frequency * i / rate) for i in indexes) / len(indexes))
+
+    music_without_speech = amplitude(0.4, 0.8, 250)
+    music_with_speech = amplitude(1.2, 1.8, 250)
+    spoken = amplitude(1.2, 1.8, 1000)
+    assert music_without_speech > 2000  # The louder half proves the input was actually seeked.
+    assert music_without_speech > 3 * music_with_speech > 0
+    assert spoken > 8 * music_with_speech
 
 
 def test_history_includes_bots_and_own_sent_messages_without_triggering_bot_updates():
