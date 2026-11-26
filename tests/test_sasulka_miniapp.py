@@ -45,6 +45,7 @@ def test_sasulka_launch_and_authenticated_ranking(tmp_path, monkeypatch):
     from games import crocodile, sasulka_webapp
     from infrastructure.persistence.sasulka_ranking import SasulkaRanking
 
+    monkeypatch.setattr(settings, "API_TOKEN", test_smoke_imports.FAKE_ENV["API_TOKEN"])
     db_path = tmp_path / "ranking.db"
     monkeypatch.setattr(sasulka_webapp, "STORE", SasulkaRanking(db_path))
     signed = signed_headers(settings, "actual_player", age=10)
