@@ -91,11 +91,11 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
         ),
         key=lambda line: line.message_id,
     )
-    if automatic and (len(lines) < 4 or lines[-1].message_id != message.message_id):
-        return False
-    if len({line.author_id for line in lines}) < 2:
+    if not lines:
         if not automatic:
-            await message.answer("Для диалога нужны реплики хотя бы от двух участников.")
+            await message.answer("Здесь пока нет текстовых реплик для видео.")
+        return False
+    if automatic and lines[-1].message_id != message.message_id:
         return False
 
     if automatic:
