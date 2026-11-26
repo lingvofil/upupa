@@ -38,7 +38,7 @@ def test_dual_voice_radio_uses_one_pooled_gemini_request_for_short_script(monkey
             calls.append((text, kwargs))
             return _audio_response()
 
-    monkeypatch.setattr(voices, "radio_gemini_model", FakeGeminiModel())
+    monkeypatch.setattr(speech, "gemini_tts_pool", FakeGeminiModel())
     monkeypatch.setattr(voices.random, "sample", lambda _items, _count: ["Leda", "Puck"])
     monkeypatch.setattr(speech, "_pcm_to_wav_bytes", lambda pcm: b"wav-" + pcm)
     monkeypatch.setattr(speech, "_merge_wav_chunks_to_mp3", lambda chunks: b"mp3-" + b"".join(chunks))
@@ -62,6 +62,10 @@ def test_dual_voice_radio_uses_one_pooled_gemini_request_for_short_script(monkey
     speakers = config["multi_speaker_voice_config"]["speaker_voice_configs"]
     assert [speaker["speaker"] for speaker in speakers] == ["HOST", "EXPERT"]
     assert kwargs["require_text"] is False
+    assert asyncio.run(speech.synthesize_pooled_gemini_wav("Реплика из ролика.", voice_name="Kore")) == b"wav-pcm"
+    assert calls[1][1]["generation_config"]["speech_config"]["voice_config"] == {
+        "prebuilt_voice_config": {"voice_name": "Kore"},
+    }
 
 
 def test_long_dual_voice_radio_is_split_into_bounded_requests(monkeypatch):
@@ -75,7 +79,7 @@ def test_long_dual_voice_radio_is_split_into_bounded_requests(monkeypatch):
             calls.append((text, kwargs))
             return _audio_response(str(len(calls)).encode())
 
-    monkeypatch.setattr(voices, "radio_gemini_model", FakeGeminiModel())
+    monkeypatch.setattr(speech, "gemini_tts_pool", FakeGeminiModel())
     monkeypatch.setattr(voices.random, "sample", lambda _items, _count: ["Leda", "Puck"])
     monkeypatch.setattr(speech, "_pcm_to_wav_bytes", lambda pcm: b"wav-" + pcm)
     monkeypatch.setattr(speech, "_merge_wav_chunks_to_mp3", lambda chunks: b"mp3-" + b"".join(chunks))
@@ -128,7 +132,7 @@ def test_radio_single_voice_fallback_uses_persistent_pool(monkeypatch):
             calls.append((text, kwargs))
             return _audio_response(b"single")
 
-    monkeypatch.setattr(voices, "radio_gemini_model", FakeGeminiModel())
+    monkeypatch.setattr(speech, "gemini_tts_pool", FakeGeminiModel())
     monkeypatch.setattr(voices.random, "choice", lambda _items: "Erinome")
     monkeypatch.setattr(speech, "_pcm_to_wav_bytes", lambda pcm: b"wav-" + pcm)
     monkeypatch.setattr(speech, "_merge_wav_chunks_to_mp3", lambda chunks: b"mp3-" + b"".join(chunks))
@@ -156,7 +160,7 @@ def test_long_single_voice_fallback_is_split_into_bounded_requests(monkeypatch):
             calls.append((text, kwargs))
             return _audio_response(b"single")
 
-    monkeypatch.setattr(voices, "radio_gemini_model", FakeGeminiModel())
+    monkeypatch.setattr(speech, "gemini_tts_pool", FakeGeminiModel())
     monkeypatch.setattr(voices.random, "choice", lambda _items: "Erinome")
     monkeypatch.setattr(speech, "_pcm_to_wav_bytes", lambda pcm: b"wav-" + pcm)
     monkeypatch.setattr(speech, "_merge_wav_chunks_to_mp3", lambda chunks: b"mp3-" + b"".join(chunks))

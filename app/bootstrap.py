@@ -306,9 +306,12 @@ class UpupaApplication:
         )
 
     async def run(self) -> None:
+        from features.dialogue_video import DialogueVideoSentMessagesMiddleware
+
         readiness = self.create_readiness_server()
         self.bot.session.middleware(self.polling_health.observe)
         self.bot.session.middleware(RetryAfterMiddleware())
+        self.bot.session.middleware(DialogueVideoSentMessagesMiddleware())
         try:
             self.initialize_state()
             self.start_background_tasks()

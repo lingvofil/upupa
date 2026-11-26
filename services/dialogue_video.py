@@ -17,7 +17,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pytz import timezone
 
 from infrastructure.subprocess_runner import run_subprocess
-from services.speech import SpeechSynthesisError, synthesize_gemini_wav
+from services.speech import SpeechSynthesisError, synthesize_pooled_gemini_wav
 
 WIDTH, HEIGHT = 720, 1280
 _COLORS = ("#81E0FC", "#FFAA88", "#C8AAFF", "#87E2B2", "#FFD58B", "#F6A8DB", "#A5B5FB")
@@ -314,11 +314,10 @@ async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
     try:
         async with asyncio.timeout(50):
             wavs = [
-                await synthesize_gemini_wav(
+                await synthesize_pooled_gemini_wav(
                     "Прочитай дословно только реплику в кавычках, без пояснений: "
                     + json.dumps(line.text, ensure_ascii=False),
                     voice_name=voices[line.author_id],
-                    attempts=1,
                 )
                 for line in lines
             ]

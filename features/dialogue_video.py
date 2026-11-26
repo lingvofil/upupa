@@ -1,5 +1,6 @@
 """Capture recent group exchanges and deliver a replay to the originating topic."""
 
+import asyncio
 from collections import OrderedDict, deque
 import logging
 from pathlib import Path
@@ -9,6 +10,8 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 
 from aiogram import BaseMiddleware
+from aiogram.client.session.middlewares.base import BaseRequestMiddleware
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile, Message
 
 from core.state import chat_settings
@@ -23,6 +26,7 @@ RANDOM_COOLDOWN = 3600
 _MAX_CONTEXTS = 512
 _LINES = 7
 _GROUPS = {"group", "supergroup"}
+_PREPARATION_ACTIONS = ("typing", "record_video")
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
 _history: OrderedDict[tuple[int, int | None], deque[Line]] = OrderedDict()
 _last_video: OrderedDict[int, float] = OrderedDict()
@@ -41,15 +45,16 @@ def _clean(text: str, limit: int) -> str:
 
 def _record(message: Message) -> None:
     user = message.from_user
+    content = message.text or message.caption
     if (
         message.chat.type not in _GROUPS
-        or not user or user.is_bot or message.sender_chat
+        or not user or message.sender_chat
         or message.has_protected_content or message.chat.has_protected_content
-        or not message.text or message.text.lstrip().startswith("/")
-        or TEXT_COMMAND.fullmatch(message.text)
+        or not content or content.lstrip().startswith("/")
+        or TEXT_COMMAND.fullmatch(content)
     ):
         return
-    text = _clean(message.text, 140)
+    text = _clean(content, 140)
     if not text:
         return
     key = _topic(message)
@@ -61,14 +66,54 @@ def _record(message: Message) -> None:
         return
     reply = message.reply_to_message
     reply_to_id = reply.message_id if reply and _topic(reply) == key and not reply.has_protected_content else None
-    history.append(Line(message.message_id, user.id, _clean(user.full_name, 45) or "Участник",
-                        text, message.date, reply_to_id))
+    line = Line(message.message_id, user.id, _clean(user.full_name, 45) or "Участник",
+                text, message.date, reply_to_id)
+    if history and message.message_id < history[-1].message_id:
+        # A reply can expose an older bot message. It must not evict a newer one.
+        ordered = sorted([*history, line], key=lambda item: item.message_id)
+        _history[key] = deque(ordered[-_LINES:], maxlen=_LINES)
+    else:
+        history.append(line)
 
 
 class DialogueVideoHistoryMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        reply = event.reply_to_message
+        if reply and reply.from_user and reply.from_user.is_bot and _topic(reply) == _topic(event):
+            if not event.has_protected_content and not event.chat.has_protected_content:
+                _record(reply)
         _record(event)
+        if event.chat.type in _GROUPS and event.from_user and event.from_user.is_bot:
+            # Bot messages contribute to history, but cannot set off bot-to-bot responses.
+            return None
         return await handler(event, data)
+
+
+class DialogueVideoSentMessagesMiddleware(BaseRequestMiddleware):
+    async def __call__(self, make_request, bot, method):
+        result = await make_request(bot, method)
+        if method.__api_method__.startswith("send"):
+            for item in result if isinstance(result, list) else (result,):
+                if isinstance(item, Message) and item.from_user and item.from_user.id == bot.id:
+                    _record(item)
+        return result
+
+
+async def _show_chat_action(message: Message, action: str) -> None:
+    chat_id, thread_id = _topic(message)
+    try:
+        async with asyncio.timeout(2):
+            await message.bot.send_chat_action(chat_id, action, message_thread_id=thread_id)
+    except (TelegramAPIError, TimeoutError):
+        # A missing status indicator must never interrupt the video itself.
+        pass
+
+
+async def _show_preparation(message: Message) -> None:
+    action = random.choice(_PREPARATION_ACTIONS)
+    while True:
+        await _show_chat_action(message, action)
+        await asyncio.sleep(4)
 
 
 async def send_dialogue_video(message: Message, *, automatic: bool = False) -> bool:
@@ -81,7 +126,7 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
         if not automatic:
             await message.answer("В этом чате включена защита содержимого.")
         return False
-    if automatic and not message.text:
+    if automatic and (not message.text or not message.from_user or message.from_user.is_bot):
         return False
 
     lines = sorted(
@@ -114,7 +159,13 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
     try:
         with TemporaryDirectory(prefix="upupa-dialogue-") as directory:
             chat_title = _clean(getattr(message.chat, "title", None) or "", 80)
-            video = await render_dialogue_video(lines, Path(directory), chat_title=chat_title)
+            progress = asyncio.create_task(_show_preparation(message))
+            try:
+                video = await render_dialogue_video(lines, Path(directory), chat_title=chat_title)
+            finally:
+                progress.cancel()
+                await asyncio.gather(progress, return_exceptions=True)
+            await _show_chat_action(message, "upload_video")
             await message.answer_video(
                 FSInputFile(video),
                 width=WIDTH,

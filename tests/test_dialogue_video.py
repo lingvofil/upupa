@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import wave
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
+from aiogram.methods import SendMessage
 from aiogram.types import Message, Update
 import pytest
 
@@ -18,12 +19,12 @@ from services import dialogue_video as renderer
 NOW = datetime(2026, 11, 25, 18, tzinfo=timezone.utc)
 
 
-def message(index, text, *, topic=11, chat=-10001, author=1, date=NOW, protected=False):
+def message(index, text, *, topic=11, chat=-10001, author=1, date=NOW, protected=False, is_bot=False):
     return Message.model_validate({
         "message_id": index,
         "date": date,
         "chat": {"id": chat, "type": "supergroup"},
-        "from": {"id": author, "is_bot": False, "first_name": f"Участник {author}"},
+        "from": {"id": author, "is_bot": is_bot, "first_name": f"Участник {author}"},
         "message_thread_id": topic,
         "is_topic_message": True,
         "text": text,
@@ -47,8 +48,10 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
     monkeypatch.setattr(Bot, "__call__", calls)
     calls.return_value = None
     rendered = []
+    monkeypatch.setattr(feature.random, "choice", lambda _options: "record_video")
 
     async def render(lines, directory, *, chat_title):
+        await asyncio.sleep(0)
         rendered.extend((line.text, line.reply_to_id) for line in lines)
         output = directory / "dialogue.mp4"
         output.write_bytes(b"video")
@@ -82,8 +85,9 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
 
     asyncio.run(run())
     assert rendered == [("Давно", None), ("Первая реплика", None), ("Вторая реплика", 5)]
-    assert len(calls.await_args_list) == 2
-    video, cooldown = [call.args[0] for call in calls.await_args_list]
+    prepare, upload, video, cooldown = [call.args[0] for call in calls.await_args_list]
+    assert prepare.action == "record_video" and upload.action == "upload_video"
+    assert prepare.message_thread_id == upload.message_thread_id == 11
     assert video.__api_method__ == "sendVideo"
     assert video.chat_id == -10001
     assert video.message_thread_id == 11
@@ -108,7 +112,7 @@ def test_automatic_trigger_accepts_one_line_and_keeps_chat_cooldown(monkeypatch)
             assert not await feature.send_dialogue_video(event, automatic=True)
             now[0] += feature.RANDOM_COOLDOWN
             assert await feature.send_dialogue_video(event, automatic=True)
-            assert calls.await_count == 2
+            assert sum(call.args[0].__api_method__ == "sendVideo" for call in calls.await_args_list) == 2
 
     asyncio.run(run())
 
@@ -170,7 +174,7 @@ def test_voiced_video_keeps_last_bubble_on_screen_until_audio_ends(monkeypatch, 
         audio.writeframes(b"\x01\x00" * 48000)
     gemini = AsyncMock(return_value=wav.getvalue())
     fallback = AsyncMock()
-    monkeypatch.setattr(renderer, "synthesize_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
     monkeypatch.setattr(renderer, "_espeak_utterances", fallback)
 
     async def run():
@@ -198,8 +202,44 @@ def test_gemini_error_falls_back_for_the_entire_clip(monkeypatch, tmp_path):
     lines = [renderer.Line(1, 1, "Лена", "Первая", NOW)]
     gemini = AsyncMock(side_effect=renderer.SpeechSynthesisError("quota"))
     local = AsyncMock(return_value=[])
-    monkeypatch.setattr(renderer, "synthesize_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
     monkeypatch.setattr(renderer, "_espeak_utterances", local)
 
     assert asyncio.run(renderer._voice(lines, tmp_path)) is None
     local.assert_awaited_once_with(lines, tmp_path)
+
+
+def test_history_includes_bots_and_own_sent_messages_without_triggering_bot_updates():
+    from aiogram import Router
+
+    async def run():
+        received = []
+
+        async def on_text(event: Message):
+            received.append(event.message_id)
+
+        router = Router()
+        router.message.register(on_text, F.text)
+        dispatcher = Dispatcher()
+        dispatcher.include_router(router)
+        dispatcher.message.outer_middleware(feature.DialogueVideoHistoryMiddleware())
+
+        async with Bot("123456:dialogue-test") as bot:
+            own = message(5, "Ответ Упупы", author=bot.id, is_bot=True)
+            outgoing = feature.DialogueVideoSentMessagesMiddleware()
+            assert await outgoing(AsyncMock(return_value=own), bot, SendMessage(chat_id=-10001, text=own.text)) is own
+
+            other = message(7, "Реплика другого бота", author=22, is_bot=True)
+            await dispatcher.feed_update(bot, Update(update_id=7, message=other))
+            assert received == []
+
+            quoted = message(4, "Бот в цитате", author=33, is_bot=True)
+            human = message(8, "Ответ человека").model_copy(update={"reply_to_message": quoted})
+            await dispatcher.feed_update(bot, Update(update_id=8, message=human))
+
+        history = feature._history[(-10001, 11)]
+        assert [line.text for line in history] == [quoted.text, own.text, other.text, human.text]
+        assert history[-1].reply_to_id == 4
+        assert received == [8]
+
+    asyncio.run(run())
