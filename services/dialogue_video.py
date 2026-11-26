@@ -142,8 +142,7 @@ def _chat_background(chat_title: str) -> Image.Image:
         draw.rounded_rectangle((x - 1, 70 - height // 2, x + 1, 70 + height // 2), radius=1, fill="#F3E7FF")
     title = _font(31, bold=True)
     heading = _shorten(chat_title or "Диалог", title, 530)
-    draw.text((119, 41), heading, fill="#FCF4FF", font=title)
-    draw.text((120, 80), "Диалог Упупы" if chat_title else "Упупа", fill="#C5ADEF", font=_font(19))
+    draw.text((119, 70), heading, fill="#FCF4FF", font=title, anchor="lm")
     return base
 
 

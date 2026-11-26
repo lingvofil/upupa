@@ -81,7 +81,7 @@ def test_manual_command_routes_through_middleware_and_sends_only_current_topic(m
                 await dispatcher.feed_update(bot, Update(update_id=event.message_id, message=event))
 
     asyncio.run(run())
-    assert rendered == [("Первая реплика", None), ("Вторая реплика", 5)]
+    assert rendered == [("Давно", None), ("Первая реплика", None), ("Вторая реплика", 5)]
     assert len(calls.await_args_list) == 2
     video, cooldown = [call.args[0] for call in calls.await_args_list]
     assert video.__api_method__ == "sendVideo"

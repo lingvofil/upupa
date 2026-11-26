@@ -1,7 +1,6 @@
 """Capture recent group exchanges and deliver a replay to the originating topic."""
 
 from collections import OrderedDict, deque
-from datetime import timedelta
 import logging
 from pathlib import Path
 import random
@@ -21,7 +20,6 @@ PROBABILITY_KEY = "dialogue_video_prob"
 DEFAULT_PROBABILITY = 0.001
 MANUAL_COOLDOWN = 60
 RANDOM_COOLDOWN = 3600
-_FRESHNESS = timedelta(minutes=30)
 _MAX_CONTEXTS = 512
 _LINES = 7
 _GROUPS = {"group", "supergroup"}
@@ -89,8 +87,7 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
     lines = sorted(
         (
             line for line in _history.get(_topic(message), ())
-            if message.date - _FRESHNESS <= line.date <= message.date
-            and (line.message_id < message.message_id or (automatic and line.message_id == message.message_id))
+            if line.message_id < message.message_id or (automatic and line.message_id == message.message_id)
         ),
         key=lambda line: line.message_id,
     )
@@ -98,7 +95,7 @@ async def send_dialogue_video(message: Message, *, automatic: bool = False) -> b
         return False
     if len({line.author_id for line in lines}) < 2:
         if not automatic:
-            await message.answer("За последние 30 минут здесь нужно хотя бы по одной реплике от двух участников.")
+            await message.answer("Для диалога нужны реплики хотя бы от двух участников.")
         return False
 
     if automatic:
