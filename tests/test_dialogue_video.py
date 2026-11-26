@@ -175,8 +175,10 @@ def test_voiced_video_keeps_last_bubble_on_screen_until_audio_ends(monkeypatch, 
         audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
         audio.writeframes(b"\x01\x00" * 48000)
     gemini = AsyncMock(return_value=wav.getvalue())
+    elevenlabs = AsyncMock()
     fallback = AsyncMock()
     monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "_elevenlabs_utterances", elevenlabs)
     monkeypatch.setattr(renderer, "_espeak_utterances", fallback)
 
     async def run():
@@ -197,17 +199,49 @@ def test_voiced_video_keeps_last_bubble_on_screen_until_audio_ends(monkeypatch, 
     profiles = [call.kwargs["voice_name"] for call in gemini.await_args_list]
     assert len(profiles) == 3 and profiles[0] == profiles[2] != profiles[1]
     assert gemini.await_args_list[0].args[0].endswith('"Первая"')
+    elevenlabs.assert_not_awaited()
     fallback.assert_not_awaited()
 
 
-def test_gemini_error_falls_back_for_the_entire_clip(monkeypatch, tmp_path):
+def test_gemini_error_uses_elevenlabs_for_the_entire_clip(monkeypatch, tmp_path):
+    lines = [
+        renderer.Line(1, 1, "Лена", "Первая", NOW),
+        renderer.Line(2, 2, "Илья", "Вторая", NOW),
+        renderer.Line(3, 1, "Лена", "Последняя", NOW),
+    ]
+    gemini = AsyncMock(side_effect=renderer.SpeechSynthesisError("quota"))
+    speech = AsyncMock(return_value=b"\x01\x00" * 24000)
+    client = SimpleNamespace(
+        get_available_voices=AsyncMock(return_value=[
+            SimpleNamespace(voice_id="one"), SimpleNamespace(voice_id="two"),
+        ]),
+        text_to_speech=speech,
+    )
+    local = AsyncMock()
+    monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "get_elevenlabs_client", lambda _key: client)
+    monkeypatch.setattr(renderer, "sample", lambda voices, count: voices[:count])
+    monkeypatch.setattr(renderer, "_espeak_utterances", local)
+
+    durations = asyncio.run(renderer._voice(lines, tmp_path))
+    assert durations == [1.28, 1.28, 2.12]
+    assert [call.args for call in speech.await_args_list] == [
+        ("one", "Первая"), ("two", "Вторая"), ("one", "Последняя"),
+    ]
+    local.assert_not_awaited()
+
+
+def test_elevenlabs_error_uses_local_synthesis_last(monkeypatch, tmp_path):
     lines = [renderer.Line(1, 1, "Лена", "Первая", NOW)]
     gemini = AsyncMock(side_effect=renderer.SpeechSynthesisError("quota"))
+    elevenlabs = AsyncMock(side_effect=renderer.ElevenLabsError("quota"))
     local = AsyncMock(return_value=[])
     monkeypatch.setattr(renderer, "synthesize_pooled_gemini_wav", gemini)
+    monkeypatch.setattr(renderer, "_elevenlabs_utterances", elevenlabs)
     monkeypatch.setattr(renderer, "_espeak_utterances", local)
 
     assert asyncio.run(renderer._voice(lines, tmp_path)) is None
+    elevenlabs.assert_awaited_once_with(lines)
     local.assert_awaited_once_with(lines, tmp_path)
 
 

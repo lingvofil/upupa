@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from random import Random, uniform
+from random import Random, sample, uniform
 import re
 import shutil
 import wave
@@ -17,8 +17,10 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pytz import timezone
 
 from core.paths import DIALOGUE_BACKGROUND_MUSIC_PATH
+from core.settings import ELEVENLABS_API_KEY
 from infrastructure.subprocess_runner import run_subprocess
-from services.speech import SpeechSynthesisError, synthesize_pooled_gemini_wav
+from services.elevenlabs import ElevenLabsError, ElevenLabsNoVoicesError, get_elevenlabs_client
+from services.speech import SpeechSynthesisError, _pcm_to_wav_bytes, synthesize_pooled_gemini_wav
 
 WIDTH, HEIGHT = 720, 1280
 _COLORS = ("#81E0FC", "#FFAA88", "#C8AAFF", "#87E2B2", "#FFD58B", "#F6A8DB", "#A5B5FB")
@@ -311,6 +313,20 @@ def _write_soundtrack(wavs: list[bytes], directory: Path) -> list[float]:
     return durations
 
 
+async def _elevenlabs_utterances(lines: list[Line]) -> list[bytes]:
+    client = get_elevenlabs_client(ELEVENLABS_API_KEY)
+    available = await client.get_available_voices()
+    if not available:
+        raise ElevenLabsNoVoicesError("No account voices for dialogue")
+    authors = dict.fromkeys(line.author_id for line in lines)
+    voices = sample(available, min(len(authors), len(available)))
+    voice_ids = {author: voices[i % len(voices)].voice_id for i, author in enumerate(authors)}
+    return [
+        _pcm_to_wav_bytes(await client.text_to_speech(voice_ids[line.author_id], line.text))
+        for line in lines
+    ]
+
+
 async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
     voices = dict(zip(dict.fromkeys(line.author_id for line in lines), _GEMINI_VOICES))
     try:
@@ -325,7 +341,14 @@ async def _voice(lines: list[Line], directory: Path) -> list[float] | None:
             ]
         return _write_soundtrack(wavs, directory)
     except (EOFError, OSError, SpeechSynthesisError, ValueError, wave.Error) as exc:
-        _logger.warning("Gemini dialogue TTS unavailable (%s); checking local synthesis", type(exc).__name__)
+        _logger.warning("Gemini dialogue TTS unavailable (%s); trying ElevenLabs", type(exc).__name__)
+
+    try:
+        async with asyncio.timeout(35):
+            wavs = await _elevenlabs_utterances(lines)
+        return _write_soundtrack(wavs, directory)
+    except (EOFError, OSError, ElevenLabsError, ValueError, wave.Error) as exc:
+        _logger.warning("ElevenLabs dialogue TTS unavailable (%s); trying eSpeak", type(exc).__name__)
 
     try:
         wavs = await _espeak_utterances(lines, directory)
