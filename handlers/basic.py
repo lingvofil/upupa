@@ -11,7 +11,7 @@ from time import monotonic
 from aiogram import F, types
 from aiogram.filters import CommandStart
 from core.loader import bot
-from core.settings import ADMIN_ID, BLOCKED_USERS
+from core.settings import ADMIN_ID, BLOCKED_USERS, SASULKA_APP_LINK
 from core.state import chat_settings, conversation_history
 from core.upupa_utils import normalize_upupa_command
 from features.common_settings import process_leave_chat, process_leave_empty_chats
@@ -115,6 +115,16 @@ async def holidays_command_handler(message: types.Message):
 async def handle_chooumeesh(message: types.Message):
     await send_help_menu(message)
     
+@router.message(F.text.func(lambda text: bool(text) and text.strip().casefold() == "сасулька"))
+async def open_sasulka(message: types.Message):
+    if message.from_user is None or message.from_user.id in BLOCKED_USERS:
+        return
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(text="🧊 Сасулька", url=f"{SASULKA_APP_LINK}?startapp=drop")
+    ]])
+    await message.reply("сасулька - пасасеш, ок?", reply_markup=keyboard)
+
+
 @router.callback_query(F.data.startswith("help:"))
 async def help_callback_handler(query: types.CallbackQuery):
     await handle_help_callback(query)
