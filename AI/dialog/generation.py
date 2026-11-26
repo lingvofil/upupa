@@ -9,7 +9,6 @@ from difflib import SequenceMatcher
 from collections.abc import Awaitable, Callable
 
 from aiogram import types
-from aiogram.enums import ContentType
 
 from core.state import MAX_HISTORY_LENGTH, chat_settings, conversation_history
 from infrastructure.ai.execution import ai_feature
@@ -22,6 +21,7 @@ from infrastructure.ai.clients import (
 )
 from core.settings import MODEL_QUEUE_PLEADING
 from core.history_engine import load_and_find_answer
+from core.telegram_message_text import telegram_message_text, telegram_quote_text
 from core.upupa_utils import normalize_upupa_command
 from features.chat_settings import save_chat_settings
 from prompts import DIALOG_TRIGGER_KEYWORDS
@@ -297,7 +297,7 @@ def format_reply_context(message: types.Message) -> str:
         )
 
     quote = getattr(message, "quote", None)
-    quote_text = (getattr(quote, "text", None) or "").strip()
+    quote_text = telegram_quote_text(quote)
     if quote_text:
         if getattr(quote, "is_manual", False):
             parts.append(
@@ -313,7 +313,7 @@ def format_reply_context(message: types.Message) -> str:
                 "сообщения ниже — фон."
             )
 
-    text = (getattr(replied, "text", None) or getattr(replied, "caption", None) or "").strip()
+    text = telegram_message_text(replied)
     if text:
         label = "Полный текст исходного сообщения (фон)" if quote_text else "Текст сообщения"
         parts.append(f"{label}:\n{text}")
@@ -532,8 +532,9 @@ async def handle_bot_conversation(
     """
     chat_id = str(message.chat.id)
 
-    original_user_input = message.text or ""
-    user_input = message.text
+    is_bot_sender = bool(message.from_user and message.from_user.is_bot)
+    original_user_input = telegram_message_text(message) if is_bot_sender else message.text or ""
+    user_input = original_user_input
     if not user_input or not isinstance(user_input, str):
         user_input = ""
 
@@ -557,13 +558,11 @@ async def handle_bot_conversation(
                 user_input = user_input[len(keyword):].lstrip(" ,")
                 break
 
-    if not user_input.strip() and message.from_user and message.from_user.is_bot:
+    if not user_input.strip() and is_bot_sender:
         user_input = original_user_input.strip()
-        if not user_input and message.content_type == ContentType.UNKNOWN:
-            user_input = "[сообщение другого бота без доступного текста]"
 
     if not user_input.strip():
-        return "Хули?"
+        return "" if is_bot_sender else "Хули?"
 
     update_conversation_history(chat_id, user_first_name, user_input, role="user")
 

@@ -16,6 +16,7 @@ from core.settings import (
     BLOCKED_USERS_PATH,
     MAX_UPDATE_AGE_SECONDS,
 )
+from core.telegram_message_text import telegram_message_text
 from infrastructure.ai.execution import ai_request_context
 
 
@@ -226,7 +227,7 @@ class IncomingMessageLogMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         if isinstance(event, Message) and event.from_user:
-            message_text = event.text or event.caption
+            message_text = event.text or event.caption or telegram_message_text(event)
             preview = _message_preview(message_text)
             logging.info(
                 "Входящее сообщение: чат=%s, пользователь_id=%s, тип=%s, "
@@ -239,10 +240,14 @@ class IncomingMessageLogMiddleware(BaseMiddleware):
             )
             if event.content_type == ContentType.UNKNOWN:
                 logging.info(
-                    "UNKNOWN message metadata: chat=%s user_id=%s message_id=%s",
+                    "UNKNOWN message metadata: chat=%s user_id=%s message_id=%s "
+                    "sender_is_bot=%s reply_to=%s extra_fields=%s",
                     event.chat.id,
                     event.from_user.id,
                     event.message_id,
+                    event.from_user.is_bot,
+                    getattr(event.reply_to_message, "message_id", None),
+                    sorted(event.model_extra or {}),
                 )
 
         return await handler(event, data)

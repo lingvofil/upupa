@@ -168,15 +168,15 @@ def test_reaction_stage_is_idempotent_by_message_id(monkeypatch):
     assert calls == ["save", "participant-cache", "stats", "chat"]
 
 
-def test_general_dialog_stage_handles_unknown_bot_message(monkeypatch):
+def test_general_dialog_stage_handles_consecutive_textual_bot_replies(monkeypatch):
     from features import dialog_pipeline as pipeline
 
-    pipeline.chat_settings["77"] = {
+    monkeypatch.setitem(pipeline.chat_settings, "77", {
         "dialog_enabled": True,
         "prompt": "base",
         "prompt_name": "упупа",
         "active_model": "gemini",
-    }
+    })
     captured = {}
 
     async def fake_serious(message):
@@ -198,12 +198,26 @@ def test_general_dialog_stage_handles_unknown_bot_message(monkeypatch):
         SimpleNamespace(id=999, send_chat_action=fake_send_chat_action),
     )
 
-    message, _, replies = _message(text=None, sender_is_bot=True)
-    message.content_type = ContentType.UNKNOWN
+    async def exchange():
+        message, _, replies = _message(text=None, sender_is_bot=True)
+        message.content_type = ContentType.UNKNOWN
+        replied = SimpleNamespace(from_user=SimpleNamespace(id=999))
+        message.reply_to_message = replied
+        await pipeline.process_general_dialog_message(message)
+        assert replies == []
 
-    asyncio.run(pipeline.process_general_dialog_message(message))
+        message.rich_message = {"blocks": [{"type": "paragraph", "text": "Ответ другого бота"}]}
+        message.reply_to_message = None
+        await pipeline.process_general_dialog_message(message)
+        assert replies == []
 
-    assert replies == ["generated"]
+        message.reply_to_message = replied
+        for message_id in (101, 102, 103):
+            message.message_id = message_id
+            await pipeline.process_general_dialog_message(message)
+        assert replies == ["generated", "generated", "generated"]
+
+    asyncio.run(exchange())
     assert captured["user_first_name"] == "Детектор"
     assert captured["chat_action"] == ("77", "typing")
 
