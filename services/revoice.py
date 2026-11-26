@@ -27,6 +27,7 @@ from services.elevenlabs import (
     ElevenLabsQuotaError,
     ElevenLabsTemporaryError,
     ElevenLabsTimeoutError,
+    get_elevenlabs_client,
 )
 
 
@@ -46,8 +47,6 @@ _recent_updates: set[tuple[int, int]] = set()
 _recent_update_order: deque[tuple[int, int]] = deque()
 _recent_update_limit = 2048
 _inflight_lock = asyncio.Lock()
-_default_client: ElevenLabsClient | None = None
-_default_client_key: str | None = None
 
 
 def parse_revoice_command(text: str | None) -> str | None:
@@ -139,22 +138,9 @@ async def trim_voice_to_seconds(
         return result
 
 
-def _get_default_client() -> ElevenLabsClient:
-    global _default_client, _default_client_key
-
-    api_key = str(ELEVENLABS_API_KEY or "").strip()
-    if not api_key:
-        raise ElevenLabsConfigurationError("ELEVENLABS_API_KEY is not configured")
-
-    if _default_client is None or _default_client_key != api_key:
-        _default_client = ElevenLabsClient(api_key)
-        _default_client_key = api_key
-    return _default_client
-
-
 async def get_revoice_voices(*, force_refresh: bool = False):
     """Return every ElevenLabs voice currently available to this API key."""
-    return await _get_default_client().get_available_voices(
+    return await get_elevenlabs_client(ELEVENLABS_API_KEY).get_available_voices(
         force_refresh=force_refresh
     )
 
@@ -297,7 +283,7 @@ async def handle_revoice_command(
                     max_seconds=MAX_REVOICE_SECONDS,
                 )
 
-            resolved_client = client or _get_default_client()
+            resolved_client = client or get_elevenlabs_client(ELEVENLABS_API_KEY)
 
             if configured_voice_id == REVOICE_RANDOM_VOICE_ID:
                 selected_voice = await resolved_client.choose_random_voice()

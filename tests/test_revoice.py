@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -8,6 +9,7 @@ from services.elevenlabs import (
     ElevenLabsAuthenticationError,
     ElevenLabsAuthorizationError,
     ElevenLabsClient,
+    ElevenLabsInvalidResponseError,
     ElevenLabsNoVoicesError,
     ElevenLabsQuotaError,
     ElevenLabsTemporaryError,
@@ -262,8 +264,6 @@ def test_fixed_voice_from_chat_settings_is_used(monkeypatch):
 
 def test_missing_api_key_does_not_crash_bot(monkeypatch):
     monkeypatch.setattr(revoice, "ELEVENLABS_API_KEY", None)
-    monkeypatch.setattr(revoice, "_default_client", None)
-    monkeypatch.setattr(revoice, "_default_client_key", None)
     message = FakeMessage(reply_to_message=voice_reply())
 
     asyncio.run(revoice.handle_revoice_command(message, FakeBot()))
@@ -294,6 +294,29 @@ def test_http_status_errors_are_mapped(status_code, expected_error):
                 await client.get_available_voices(force_refresh=True)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("content_type", ["audio/pcm", "application/json"])
+def test_elevenlabs_text_to_speech_requests_pcm_and_rejects_json(content_type):
+    def handler(request):
+        assert request.method == "POST"
+        assert request.url.path == "/v1/text-to-speech/voice-one"
+        assert request.url.params["output_format"] == "pcm_24000"
+        assert json.loads(request.content) == {
+            "text": "Проверка голоса", "model_id": "eleven_multilingual_v2",
+        }
+        return httpx.Response(200, content=b"\x01\x00", headers={"content-type": content_type})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = ElevenLabsClient("fake-key", http_client=http)
+            if content_type == "audio/pcm":
+                assert await client.text_to_speech("voice-one", "Проверка голоса") == b"\x01\x00"
+            else:
+                with pytest.raises(ElevenLabsInvalidResponseError):
+                    await client.text_to_speech("voice-one", "Проверка голоса")
+
+    asyncio.run(run())
 
 
 def test_http_403_preserves_safe_provider_metadata(caplog):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import logging
 import random
 import secrets
@@ -25,6 +26,8 @@ STOCK_VOICE_CATEGORIES = frozenset({"premade"})
 VOICE_CHANGER_MODEL = "eleven_multilingual_sts_v2"
 VOICE_DESIGN_MODEL = "eleven_multilingual_ttv_v2"
 VOICE_OUTPUT_FORMAT = "mp3_44100_128"
+TEXT_TO_SPEECH_MODEL = "eleven_multilingual_v2"
+TEXT_TO_SPEECH_FORMAT = "pcm_24000"
 
 # Voice Design requires preview text of at least 100 chars when text is supplied.
 # A fixed short sample keeps preview-credit use bounded and predictable.
@@ -362,6 +365,22 @@ class ElevenLabsClient:
             )
         return result
 
+    async def text_to_speech(self, voice_id: str, text: str) -> bytes:
+        """Return mono signed 16-bit PCM at 24 kHz for the selected account voice."""
+        if not text.strip():
+            raise ElevenLabsInvalidResponseError("Cannot synthesize empty text")
+        response = await self._request(
+            "POST",
+            f"/v1/text-to-speech/{quote(voice_id, safe='')}",
+            params={"output_format": TEXT_TO_SPEECH_FORMAT},
+            json={"text": text, "model_id": TEXT_TO_SPEECH_MODEL},
+        )
+        pcm = response.content
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if not pcm or len(pcm) % 2 or content_type not in ("audio/pcm", "application/octet-stream"):
+            raise ElevenLabsInvalidResponseError("ElevenLabs text-to-speech returned invalid PCM audio")
+        return pcm
+
     async def design_voice(self, voice_description: str) -> list[str]:
         response = await self._request(
             "POST",
@@ -486,6 +505,11 @@ class ElevenLabsClient:
             )
 
 
+@lru_cache(maxsize=1)
+def get_elevenlabs_client(api_key: str | None) -> ElevenLabsClient:
+    return ElevenLabsClient(api_key or "")
+
+
 __all__ = [
     "ELEVENLABS_BASE_URL",
     "TEMP_VOICE_PREFIX",
@@ -500,4 +524,5 @@ __all__ = [
     "ElevenLabsTemporaryError",
     "ElevenLabsTimeoutError",
     "ElevenLabsVoice",
+    "get_elevenlabs_client",
 ]
