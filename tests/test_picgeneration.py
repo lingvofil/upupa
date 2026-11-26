@@ -1,5 +1,7 @@
 """Юнит-тесты подбора бесплатных image-моделей из каталога Pollinations."""
 from io import BytesIO
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image, ImageDraw
@@ -46,7 +48,8 @@ def test_fallback_queue_when_empty():
     assert pg._IMAGE_FALLBACK_QUEUE[0] == "flux"
 
 
-def test_add_nvidia_comparison_labels_preserves_content_below_source_labels():
+@pytest.mark.anyio
+async def test_nvidia_command_sends_provider_comparison_intact(monkeypatch):
     image = Image.new("RGB", (800, 400), (90, 100, 110))
     draw = ImageDraw.Draw(image)
     draw.rectangle((90, 280, 310, 340), fill=(0, 0, 0))
@@ -55,34 +58,32 @@ def test_add_nvidia_comparison_labels_preserves_content_below_source_labels():
     draw.rectangle((0, 360, 799, 399), fill=(180, 70, 60))
 
     buffer = BytesIO()
-    image.save(buffer, format="PNG")
+    image.save(buffer, format="WEBP")
+    comparison = buffer.getvalue()
+    status = SimpleNamespace(delete=AsyncMock())
+    photo = object()
+    message = SimpleNamespace(
+        caption="нвидиа",
+        text=None,
+        photo=[photo],
+        reply_to_message=None,
+        from_user=SimpleNamespace(id=123),
+        reply=AsyncMock(return_value=status),
+        reply_photo=AsyncMock(),
+    )
+    monkeypatch.setattr(pg, "_nvidia_last_used", pg._nvidia_last_used.copy())
+    monkeypatch.setattr(pg, "_nvidia_global_calls", [])
+    monkeypatch.setattr(pg, "download_telegram_image", AsyncMock(return_value=comparison))
+    monkeypatch.setattr(pg, "generate_gradio_img2img", AsyncMock(return_value=comparison))
 
-    result = Image.open(BytesIO(pg.add_nvidia_comparison_labels_below_image(buffer.getvalue()))).convert("RGB")
+    await pg.handle_nvidia_command(message)
 
-    # Only the upstream label strip is removed. Content that was below it is
-    # shifted upward instead of being discarded.
-    assert result.size == (800, 424)
-    assert result.getpixel((10, 324)) == (180, 70, 60)
-
-    label_start = 334
-    assert result.getpixel((10, label_start + 10)) == (0, 0, 0)
-    assert result.getpixel((790, label_start + 10)) == (255, 255, 255)
-    assert result.getpixel((790, result.height - 2)) == (118, 185, 0)
-
-
-def test_add_nvidia_comparison_labels_never_crops_when_source_labels_are_missing():
-    image = Image.new("RGB", (320, 800), (90, 100, 110))
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 760, 319, 799), fill=(180, 70, 60))
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-
-    result = Image.open(BytesIO(pg.add_nvidia_comparison_labels_below_image(buffer.getvalue()))).convert("RGB")
-
-    assert result.size == (320, 928)
-    assert result.getpixel((10, 799)) == (180, 70, 60)
-    assert result.getpixel((10, 810)) == (0, 0, 0)
+    message.reply_photo.assert_awaited_once()
+    sent = message.reply_photo.await_args.args[0]
+    with Image.open(BytesIO(comparison)) as expected, Image.open(BytesIO(sent.data)) as actual:
+        assert actual.format == "PNG"
+        assert actual.size == expected.size
+        assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.anyio
