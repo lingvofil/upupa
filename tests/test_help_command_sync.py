@@ -157,14 +157,15 @@ def test_help_navigates_from_main_through_each_game_and_back():
     asyncio.run(send_help_menu(message))
     assert message.answer.call_args.kwargs["text"] == HELP_DICT["main"]
     assert "help:creative" in buttons(message.answer.call_args)
+    assert buttons(message.answer.call_args)[-2:] == ["help:guru", "help:sasulka"]
 
     query.data = "help:creative"
     asyncio.run(handle_help_callback(query))
     games_page = message.edit_text.call_args
     assert games_page.kwargs["text"] == HELP_DICT["creative"]
-    assert games_page.kwargs["text"].count("<code>") == 5
+    assert games_page.kwargs["text"].count("<code>") == 6
     assert buttons(games_page) == [
-        "help:crocodile", "help:guru", "help:dnd", "help:quiz", "help:main"
+        "help:crocodile", "help:guru", "help:sasulka", "help:dnd", "help:quiz", "help:main"
     ]
 
     for path in buttons(games_page)[:-1]:

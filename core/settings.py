@@ -6,6 +6,8 @@ import os
 
 # A registered named Mini App can point directly at /game?view=guru.
 GURU_APP_LINK = os.getenv("UPUPA_GURU_APP_LINK", "https://t.me/expertyebaniebot/upupadile").rstrip("/")
+# Sasulka uses the same registered entry point with its own startapp parameter.
+SASULKA_APP_LINK = os.getenv("UPUPA_SASULKA_APP_LINK", GURU_APP_LINK).rstrip("/")
 GURU_PUBLIC_GAME_URL = os.getenv("UPUPA_GURU_PUBLIC_GAME_URL", "").strip()
 
 # Loopback only; use the same value for the service and the healthcheck CLI.

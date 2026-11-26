@@ -63,6 +63,7 @@ lab_experiments.json
 lab_events.jsonl
 guru_wallets.json
 guru_visits.db*
+sasulka_ranking.db*
 
 # Static site build output (scripts/build_site.py)
 _site/
